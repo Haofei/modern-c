@@ -1,335 +1,330 @@
 # Refactoring plan
 
-This plan translates the open risks in
-[`review-risk-register.yaml`](review-risk-register.yaml) into code-facing
-refactoring work. It is intentionally narrower than the product roadmap in
-[`todo.md`](todo.md): the goal is to reduce duplicate authority and make later
-feature work cheaper, not to add new surface area.
+This is the active code-facing refactoring plan for `modern-c`. It translates
+the open items in [`review-risk-register.yaml`](review-risk-register.yaml) into
+an ordered execution plan.
 
-## Ground rules
+The goal is not to add features. The goal is to remove duplicate authority,
+make compiler requests isolated, make backend semantics mechanically verifiable,
+and keep experimental product surfaces out of production claims.
 
-1. Do not expand language, kernel, Agent, selfhost, or LSP scope while a phase is
-   removing duplicate semantic authority in that area.
+## Current position
+
+| Area | Status | Decision |
+|---|---|---|
+| Compiler request state | Closed for the admitted subset | Keep `CompilationSession` as the request boundary and extend it only through tests. |
+| Typed MIR identity | In progress | Continue migrating type/value/symbol/span identity from strings and AST side channels into typed MIR tables. |
+| Backend semantic authority | Open | Backends must become consumers of verified facts, not secondary semantic analyzers. |
+| HIR authority | Open | Either promote HIR to the production semantic boundary or keep it as a generated inspection view. |
+| Artifact/source-map provenance | Open | Bind emitted bytes, source maps, options, toolchain identity, and MIR/fact digests together. |
+| Build gate governance | Open | Move stringly gate lists into one generated manifest. |
+| Product/TCB scope | Open | Keep selfhost, LLVM parity, kernel production, Agent runtime, and vendored runtimes profile-scoped until their blockers close. |
+| Kernel secure loading | Open | Production loading must consume exact-byte `VerifiedBundle` capabilities, not raw bytes plus metadata. |
+
+## Non-negotiable rules
+
+1. Do not expand language, kernel, Agent, selfhost, LSP, or release surface while
+   a phase is removing duplicate authority in that area.
 2. Keep the C backend as the reference release path until typed MIR/fact
    boundaries are enforced.
-3. Treat LLVM, selfhost, secure boot, and advanced LSP as profile-scoped work
-   until their blockers in `review-risk-register.yaml` close.
-4. Every phase must end with a mechanical check, fixture, or gate. A design note
-   alone does not close a refactor.
-5. When a typed fact is introduced, delete or quarantine the old backend-local
-   inference path in the same slice. Do not leave two live authorities.
+3. Keep LLVM useful for differential testing, but do not treat it as equal
+   production authority while backend-local inference remains.
+4. A refactor closes only when code, tests, inventory/gate checks, and docs agree.
+5. When a typed fact lands, delete, quarantine, or register the old inference
+   path in the same slice. Do not leave two live authorities.
+6. Markdown documents summarize state; [`review-risk-register.yaml`](review-risk-register.yaml)
+   is the source of truth for open/closed blocker status.
 
-## Phase 0: freeze and measure the current seams
+## Phase 0 — Scope freeze and risk-register discipline
 
-Purpose: make the current implicit seams visible before moving code.
+Purpose: stop new product breadth from masking compiler-core work.
 
-Current status:
+Deliverables:
 
-- The existing typed-semantic-fact register in
-  [`typed-semantic-facts.md`](typed-semantic-facts.md) is enforced by
-  `semantic-facts-inventory-test`.
-- The gate is part of `m0`, `fast`, and `c0`, so backend semantic authority
-  drift is no longer only a manual review check.
+- Keep [`review-risk-register.yaml`](review-risk-register.yaml) as the only
+  open/closed blocker ledger.
+- Keep [`scope-control-plan.md`](scope-control-plan.md) as the profile policy.
+- Keep this file as the only ordered refactoring plan.
+- Archive or demote stale remediation/status documents when they duplicate these
+  three files.
 
-Work:
+Closure criteria:
 
-- Add a small inventory for each backend semantic decision:
-  optional/result representation, ABI shape, pointer provenance, layout,
-  ownership/move effect, runtime check choice, and source span mapping.
-- Mark each decision as one of:
-  `typed-fact-consumer`, `verified-mir-consumer`, `diagnostic-fallback`,
-  `backend-local-inference`, or `mechanics-only`.
-- Add a check that no new `backend-local-inference` row is introduced without an
-  explicit entry in the inventory.
-- Keep the existing `m0` and differential gates green.
+- No markdown file carries independent open-blocker counters that conflict with
+  `review-risk-register.yaml`.
+- New work declares its blocking profile before it is added to release gates.
 
-Acceptance:
+Risk links:
 
-- Inventory exists in a machine-readable or generated form.
-- Every C/LLVM semantic helper is mapped to an inventory row.
-- New semantic backend helper additions fail review or CI unless registered.
+- `SCOPE-PRODUCT-SURFACE`
+- `GATE-MANIFEST`
 
-Risk register links:
+## Phase 1 — Request-scoped compiler session
 
-- `ARCH-BACKEND-FACTS`
-- `ARCH-TYPED-MIR`
-- `BACKEND-LLVM-PROFILE`
+Purpose: make one compiler invocation an explicit object instead of process-global mutable state.
 
-## Phase 1: introduce `CompilationSession`
+Status: closed for the admitted subset.
 
-Purpose: make one compiler request a real object instead of process-global state.
+Completed baseline:
 
-Current status:
+- `src/main.zig` creates request-scoped `CompilationSession` helpers for compile-like commands.
+- File-boundary, module-graph, visibility, IO, parse/check, MIR build, and
+  `VerifiedProgram` admission are session-owned instead of file-scope globals.
+- `compilation-session-inventory-test` anchors the seam.
 
-- `src/main.zig` now creates a request-scoped `CompilationSession` for allocator,
-  IO, file-boundary, module-graph, and visibility state.
-- The old `combined_boundaries`, `combined_module_graph`,
-  `active_visibility_mode`, and `stdout_io` module globals are removed.
-- `CompilationSession` owns the shared parse/name/transform/check and
-  MIR-build/`VerifiedProgram` admission helpers for compile-like CLI commands.
-- The in-process request-scoped context test covers two different visibility and
-  file-boundary contexts in one process.
-- `compilation-session-inventory-test` gates the session shape in `m0`, `fast`,
-  and `c0`, including the centralized sema checker, MIR build, and
-  `VerifiedProgram` construction points.
+Remaining maintenance:
 
-Work:
+- Any new compile-like command must enter through `CompilationSession`.
+- Any new request state must be a session field or an explicit parameter.
+- Add reentrancy coverage when a new pipeline stage is introduced.
 
-- Add `CompilationSession` with allocator, IO handles, source manager,
-  module graph, visibility mode, target/config, diagnostics, budgets, and
-  artifact sink.
-- Move `combined_boundaries`, `combined_module_graph`, `active_visibility_mode`,
-  and stdout state behind the session.
-- Convert `check`, `lower-mir`, `verify`, `emit-c`, `emit-llvm`, `emit-map`, and
-  `build` to call the same session pipeline.
-- Keep CLI behavior byte-compatible except for error messages that become more
-  specific.
-- Add a parallel reentrancy test that compiles two different roots with different
-  visibility/module graph state in the same process.
-
-Acceptance:
-
-- No compiler phase reads mutable request state from `src/main.zig` globals.
-- Compile-like CLI commands share session-owned entries for
-  parse/name/transform/sema and MIR/`VerifiedProgram` admission.
-- Reentrancy test passes under both serial and parallel test runners.
-
-Risk register links:
+Risk links:
 
 - `ARCH-COMPILATION-SESSION`
 - `LSP-COMPILER-SERVICE`
 
-## Phase 2: make typed MIR identity explicit
+## Phase 2 — Typed MIR identity
 
-Purpose: stop treating type/value/symbol spelling as semantic identity.
+Purpose: stop using strings, AST `TypeExpr`, nullable side fields, or source
+spelling as semantic identity in codegen-admitted MIR.
 
-Current status:
+Current baseline:
 
-- Block identity now has a typed `BlockId` seed in `src/mir_model.zig`.
-  The legacy numeric `Block.id` remains for compatibility, but built MIR blocks
-  also carry `typed_id = BlockId.fromIndex(block.id)` and typed successor
-  mirrors for CFG edges.
-- Function symbol identity now has a typed `SymbolId` seed. Built MIR functions
-  carry `typed_symbol_id`, the module owns a `SymbolIdentity` table, `lower-mir`
-  dumps both, and the MIR verifier rejects symbol/table drift.
-- Representation-sensitive instructions and `RepresentationFact` rows now
-  double-write typed `ValueId` identities and typed `TypeId` result identities
-  plus typed `SpanId` source identities through per-function interners. The
-  function owns `ValueIdentity`, `TypeIdentity`, and `SpanIdentity` tables for
-  audit/debug dumps. The legacy textual `value_id`, `ValueType` spelling, and
-  source line/column fields remain for dumps and compatibility, while backend
-  admission rejects typed identity drift.
-- `mir-identity-inventory-test` gates the typed ID definitions, `BlockId`
-  builder assignment, typed successor mirrors, function `SymbolId` identities,
-  typed `ValueId` representation facts, typed representation result identities,
-  typed representation span identities, verifier/admission drift checks, and
-  the unit tests that check the public model.
-- The MIR verifier now validates any instruction-carried typed result, span, and
-  value identity against the owning function tables, so a prebuilt MIR artifact
-  cannot silently retarget those IDs before later backend admission.
+- MIR already has typed seeds for block, function symbol, value, type, and span
+  identity.
+- Representation-sensitive instructions and facts mirror typed value/type/span
+  IDs and verifier/admission checks reject drift.
+- Inventory checks anchor the current typed identity surface.
 
-Work:
+Next slices, in order:
 
-- Introduce stable `SourceId`, `NodeId`, `SymbolId`, `TypeId`, `ValueId`, and
-  `BlockId` tables.
-- Migrate MIR instructions toward tagged unions with correlated fields enforced
-  by the type shape instead of optional side fields.
-- Remove `unknown` from verified MIR. Unknown facts may exist in builder/debug
-  states, not in codegen-admitted MIR.
-- Move optional/result representation, ABI type, layout, pointer provenance, and
-  effect facts into typed tables consumed by MIR and backends.
-- Keep string spelling only for diagnostics, debug dumps, and output symbol
-  spelling.
+1. Add typed `SymbolId` mirrors to target-type owner facts and direct-call instruction metadata.
+2. Move optional/result representation facts fully behind typed IDs.
+3. Move ABI/layout-sensitive facts behind `TypeId`/layout-table IDs.
+4. Remove `unknown` from verified MIR admission; allow it only in builder/debug states.
+5. Replace instruction `kind + optional fields` with tagged instruction variants for
+   the highest-risk families first: calls, optional tests, representation checks,
+   loads/stores, and traps.
 
-Acceptance:
+Closure criteria:
 
-- Verified MIR contains no string identity for types, values, symbols, or
-  optional/result representation.
-- MIR verifier rejects missing fact table entries before codegen.
-- At least optional/result and ABI-shape lowering no longer call backend-local
-  classification helpers.
+- Verified MIR contains no string identity for types, values, symbols, optional/result representation, ABI shape, or provenance.
+- MIR verifier rejects missing or stale fact-table entries before backend admission.
+- C and LLVM no longer reconstruct migrated facts from AST or type spelling.
 
-Risk register links:
+Risk links:
 
 - `ARCH-TYPED-MIR`
-- `ARCH-BACKEND-FACTS`
 - `ARCH-HIR-AUTHORITY`
+- `ARCH-BACKEND-FACTS`
 
-## Phase 3: shrink backend authority
+## Phase 3 — Backend authority reduction
 
-Purpose: turn C and LLVM backends into consumers of verified facts.
+Purpose: turn C and LLVM backends into mechanical consumers of verified facts.
 
-Work:
+Deliverables:
 
-- Change the backend interface so production lowering receives:
-  verified MIR, symbol table, type table, layout table, ABI table, source map
-  builder, and backend-specific config.
-- Remove `ast.Module` from the production `VerifiedProgram` boundary. If source
-  spelling is still needed, pass a narrow `SourceSpelling`/`NameTable` view.
-- Delete or fail-close backend inference paths as each typed fact lands.
-- Split large emitters by responsibility:
-  module collection, function lowering, type projection, ABI lowering,
-  expression/statement lowering, runtime checks, and artifact writing.
-- Keep LLVM in differential/experimental profile until the same fact inventory is
-  enforced for it.
+- Replace the production backend boundary with a narrow `VerifiedProgram` that
+  exposes typed MIR, symbol table, type table, layout table, ABI table, source
+  spelling table, and backend-specific config.
+- Remove `ast.Module` and `TypeExpr` from production backend entrypoints.
+- Split backend logic into module collection, function lowering, type projection,
+  ABI lowering, control flow, runtime checks, source-map emission, and artifact writing.
+- Delete backend-local semantic helpers as their corresponding typed facts land.
+- Keep backend fallback policies explicit: conservative lowering, source-spanned
+  diagnostic, or verifier failure.
 
-Acceptance:
+Closure criteria:
 
-- Production backend entrypoints cannot access AST nodes or `TypeExpr`.
-- Missing required semantic facts produce a source-spanned diagnostic or verifier
-  failure, not backend reconstruction.
-- C/LLVM differential gates still pass for the admitted subset.
+- Production backend code cannot access AST nodes for semantic decisions.
+- Every remaining backend semantic helper is registered as a temporary exception
+  or eliminated.
+- C/LLVM differential gates pass for the admitted subset using the same verified facts.
 
-Risk register links:
+Risk links:
 
 - `ARCH-BACKEND-FACTS`
 - `BACKEND-LLVM-PROFILE`
 
-## Phase 4: bind artifacts and source maps
+## Phase 4 — HIR decision
 
-Purpose: make emitted bytes, maps, options, and toolchain identity auditable as
-one object.
+Purpose: remove the current half-authoritative HIR state.
 
-Work:
+Decision required:
 
-- Add an `ArtifactBundle` or equivalent metadata object containing:
-  artifact digest, source map digest, source digest, MIR/fact digest, compiler
+- Option A: promote HIR to the production boundary:
+  `Syntax AST -> Resolved/Typed HIR -> Typed MIR -> Backend`.
+- Option B: keep HIR as a generated inspection/debug view derived from semantic data.
+
+Preferred direction:
+
+- Promote only if it reduces backend/MIR access to AST.
+- Otherwise keep it non-authoritative and make that explicit in docs and tests.
+
+Closure criteria:
+
+- There is no second semantic path where HIR says one thing and production MIR/codegen consumes another.
+- `mcc lower-hir` / `verify-hir` output is documented as either production input or inspection output.
+
+Risk links:
+
+- `ARCH-HIR-AUTHORITY`
+
+## Phase 5 — Artifact and source-map binding
+
+Purpose: make emitted artifacts, source maps, options, and toolchain identity one auditable object.
+
+Deliverables:
+
+- Add an `ArtifactBundle` metadata object containing:
+  artifact digest, source-map digest, source digest, MIR/fact digest, compiler
   version/commit, target, backend config, checks mode, and toolchain identity.
-- Produce source maps during the same lowering pass that writes the artifact.
-- Make map consumers verify the artifact digest before using the map.
-- Make `mcc build` use the same atomic artifact transaction shape as `emit-*`.
+- Produce source maps during the same lowering transaction that writes the artifact.
+- Make source-map consumers verify artifact digest before use.
+- Make `mcc build` use exclusive temp files and atomic final replacement.
 
-Acceptance:
+Closure criteria:
 
 - `emit-c`, `emit-llvm`, `emit-map`, and `build` share artifact metadata code.
-- A source map for one artifact is rejected for a different artifact digest.
-- Failed `build` cannot corrupt an existing output.
+- A source map for artifact A is rejected for artifact B.
+- Failed or interrupted build does not corrupt an existing output.
 
-Risk register links:
+Risk links:
 
 - `ARCH-SOURCE-MAP-DIGEST`
 
-## Phase 5: consolidate gate and evidence plumbing
+## Phase 6 — Gate manifest consolidation
 
-Purpose: stop maintaining the build/test/release truth in several string lists.
+Purpose: stop maintaining build, CI, release, and documentation gate truth in
+several string lists.
 
-Work:
+Deliverables:
 
-- Create one gate manifest with `id`, owner, category, tier, required tools,
-  blocking profiles, and skip policy.
-- Generate Zig build registrations, CI pass assertions, release evidence, and
-  documentation summaries from that manifest.
-- Collapse execution tiers to `pr`, `nightly`, and `release`.
-- Keep existing anti-vacuity checks until generated manifests fully replace
-  hand-written lists.
+- Create one gate manifest with:
+  `id`, owner, category, tier, required tools, blocking profiles, and skip policy.
+- Generate Zig build registration, CI pass assertions, release evidence, and doc summaries from the manifest.
+- Collapse execution tiers to:
+  `pr`, `nightly`, and `release`.
+- Keep current anti-vacuity checks until the generated manifest fully replaces hand-written lists.
 
-Acceptance:
+Closure criteria:
 
-- Adding or renaming a gate requires editing one manifest row.
-- `m0`, `fast`, CI, and release evidence consume generated gate data.
+- Adding, renaming, or deleting a blocking gate requires editing exactly one manifest row.
 - Deleted or skipped blocking gates fail CI with a clear error.
+- Release evidence names the same gate IDs as local builds.
 
-Risk register links:
+Risk links:
 
 - `GATE-MANIFEST`
 
-## Phase 6: split product profiles and TCBs
+## Phase 7 — Profile and TCB minimization
 
-Purpose: prevent every experimental subsystem from becoming part of one implied
-production claim.
+Purpose: prevent every experimental subsystem from becoming part of one implied production TCB.
 
-Work:
+Deliverables:
 
-- Define minimal TCB manifests for `compiler-subset`, `llvm-experimental`,
-  `selfhost-experimental`, `kernel-qemu`, `production-kernel`, and
-  `developer-tools`.
-- Move profile-specific vendored dependencies into explicit manifests:
-  BearSSL, QuickJS, WAMR, openlibm, firmware, and trust anchors.
-- Add advisory/CVE intake status and waiver fields to each vendored component.
-- Ensure release notes state which profiles are qualified and which TCBs are in
-  scope.
+- Define profile manifests for:
+  `compiler-subset`, `llvm-experimental`, `selfhost-experimental`,
+  `kernel-qemu`, `production-kernel`, and `developer-tools`.
+- For each profile, list in-scope source directories, gates, toolchain components,
+  vendored dependencies, and release blockers.
+- Give BearSSL, QuickJS, WAMR, openlibm, firmware, and trust anchors explicit
+  component metadata: upstream, revision, patch set, license, PURL/CPE where
+  available, advisory status, owner, and review date.
 
-Acceptance:
+Closure criteria:
 
-- A compiler-only release does not implicitly claim QuickJS/WAMR/production
-  kernel TCBs.
-- Vendored dependency metadata is complete enough for release qualification.
-- High/Critical advisory status is release-blocking or explicitly waived.
+- A compiler-only release does not include QuickJS/WAMR/production kernel claims by accident.
+- High/Critical advisories are release-blocking or explicitly waived for affected profiles.
+- Release notes state which profiles are qualified and which are experimental.
 
-Risk register links:
+Risk links:
 
 - `SCOPE-PRODUCT-SURFACE`
+- `SELFHOST-PROFILE`
 - `SUPPLY-TCB-CVE-INTAKE`
 - `TCB-PROFILE-MINIMIZATION`
-- `SELFHOST-PROFILE`
 
-## Phase 7: close production-kernel trust boundaries
+## Phase 8 — Kernel trust-boundary closure
 
-Purpose: move secure boot and Agent loading from component demos to one typed
-trust chain.
+Purpose: move secure boot and Agent loading from component demos to one typed trust chain.
 
-Work:
+Deliverables:
 
-- Introduce an opaque exact-byte `VerifiedBundle` created only by crypto +
-  policy verification.
-- Make production ELF/Agent loading consume `VerifiedBundle`, not raw bytes plus
-  a separate verified flag.
+- Introduce an opaque exact-byte `VerifiedBundle` created only by crypto and policy verification.
+- Make production ELF/Agent loading consume `VerifiedBundle`, not raw bytes plus a verified flag.
 - Bind loaded image identity to bundle digest, payload digest, signer/key ID,
-  version, policy version, rollback state, and runtime audit record.
-- Make privileged capability/right mint require an unforgeable root token or
-  become module-private.
-- Wire policy/audit persistence through the production block-backed path.
+  version, policy version, rollback state, and runtime audit event.
+- Make privileged capability/right mint require an unforgeable root token or module-private constructor.
+- Wire policy/audit persistence through the production storage path.
 
-Acceptance:
+Closure criteria:
 
+- Public production APIs cannot express “verify A, load B”.
 - Production loader has no raw-byte admission path.
-- Tests cannot express “verify A, load B” through the public API.
 - Unauthorized modules cannot mint privileged capabilities.
-- Tampered, unsigned, rollback, wrong-key, wrong-platform, and replaced-buffer
-  bundles are rejected before load.
+- Tampered, unsigned, rollback, wrong-key, wrong-platform, and replaced-buffer bundles are rejected before load.
 
-Risk register links:
+Risk links:
 
 - `KERNEL-VERIFIED-BUNDLE`
 - `KERNEL-CAPABILITY-MINT`
 
-## Phase 8: real-board qualification
+## Phase 9 — Real-board production qualification
 
-Purpose: separate QEMU surrogate evidence from production hardware evidence.
+Purpose: separate QEMU surrogate evidence from hardware production evidence.
 
-Work:
+Deliverables:
 
-- Bring the selected VisionFive 2 profile to real board boot in the intended
-  privilege mode.
-- Validate timer, external interrupts, UART, storage, network, watchdog,
-  brokered Agent runtime, and reboot reason handling.
-- Run storage-full, crash, power-loss, rollback, and long soak tests.
-- Record board firmware, DTB, toolchain, artifact digest, and test duration in
-  qualification evidence.
+- Boot the selected VisionFive 2 profile on real hardware in the intended privilege mode.
+- Validate timer, external interrupts, UART, storage, network, watchdog, Agent runtime, reboot reason, and rollback behavior.
+- Run storage-full, crash, power-loss, rollback, and long-soak tests.
+- Record firmware, DTB, toolchain, artifact digest, board identity, and duration in qualification evidence.
 
-Acceptance:
+Closure criteria:
 
 - `production-kernel` profile has hardware evidence, not only QEMU evidence.
-- Real-board failures are tracked separately from QEMU surrogate failures.
-- Production checklist in `todo.md` has no unchecked item for the claimed
-  profile.
+- Hardware failures are tracked separately from QEMU surrogate failures.
+- Production checklist has no unchecked item for the claimed hardware profile.
 
-Risk register links:
+Risk links:
 
 - `HARDWARE-PRODUCTION-QUALIFICATION`
 
-## Suggested execution order
+## Execution order
 
-1. Phase 0: inventory current seams.
-2. Phase 1: `CompilationSession`.
-3. Phase 2: typed MIR identity for optional/result + ABI first.
-4. Phase 3: delete backend inference for migrated facts.
-5. Phase 4: artifact/source-map metadata.
-6. Phase 5: generated gate manifest.
-7. Phase 6: profile/TCB manifests.
-8. Phase 7: `VerifiedBundle` + capability root.
-9. Phase 8: real-board qualification.
+Do the phases in this order unless a release profile explicitly narrows the scope:
 
-Phases 6-8 can start in parallel only after their profile boundaries are
-explicit. They should not block compiler-core cleanup unless a release profile
-requires them.
+1. Phase 0: scope/risk-register discipline.
+2. Phase 1: `CompilationSession` maintenance only.
+3. Phase 2: typed MIR identity.
+4. Phase 3: backend authority reduction.
+5. Phase 4: HIR authority decision.
+6. Phase 5: artifact/source-map binding.
+7. Phase 6: generated gate manifest.
+8. Phase 7: profile and TCB minimization.
+9. Phase 8: kernel trust-boundary closure.
+10. Phase 9: real-board qualification.
+
+Phases 7-9 can be prepared in parallel only as profile-manifest work. They
+should not consume compiler-core implementation time until Phases 2-4 are closed
+or a release profile explicitly requires them.
+
+## Near-term implementation backlog
+
+Use this backlog for the next engineering slices:
+
+1. Mirror target-type owner identity with `SymbolId` and make admission reject
+   stale direct-call owner facts.
+2. Move optional/result representation lowering to typed fact consumers only.
+3. Add a backend-surface inventory row for every remaining C/LLVM semantic helper.
+4. Remove or quarantine the first migrated backend-local inference helper.
+5. Add artifact digest metadata to source-map output.
+6. Introduce the first generated gate manifest for a small subset of existing gates.
+
+Each slice should end with:
+
+- a focused regression test;
+- the relevant inventory check;
+- `zig build test-unit` or a narrower equivalent when appropriate;
+- docs/risk-register update if blocker status changes.

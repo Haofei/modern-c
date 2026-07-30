@@ -91,6 +91,13 @@ fn valueIdentityBySpelling(function: mir.Function, spelling: []const u8) ?mir.Va
     return null;
 }
 
+fn targetOwnerIdentityBySpelling(function: mir.Function, spelling: []const u8) ?mir.SymbolIdentity {
+    for (function.target_owner_identities) |identity| {
+        if (std.mem.eql(u8, identity.spelling, spelling)) return identity;
+    }
+    return null;
+}
+
 fn typeIdentityBySpelling(function: mir.Function, spelling: []const u8) ?mir.TypeIdentity {
     for (function.type_identities) |identity| {
         if (std.mem.eql(u8, identity.spelling, spelling)) return identity;
@@ -184,6 +191,127 @@ test "MIR verifier rejects instruction typed identity drift" {
     try mir.verifyBuiltMir(span_drift_mir, &span_reporter);
     try std.testing.expect(span_reporter.has_errors);
     try std.testing.expect(std.mem.indexOf(u8, span_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
+}
+
+test "MIR target-type owner identities mirror direct calls" {
+    const source =
+        \\fn callee(x: u32) -> u32 {
+        \\    return x;
+        \\}
+        \\
+        \\fn caller() -> u32 {
+        \\    return callee(7);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_target_owner_id.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+
+    const caller = functionByName(module_mir, "caller").?;
+    const owner = targetOwnerIdentityBySpelling(caller, "callee") orelse return error.TestUnexpectedResult;
+    const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("callee", result_fact.target_owner.?);
+    try std.testing.expect(result_fact.typed_target_owner_id.eql(owner.id));
+
+    var saw_instruction = false;
+    for (caller.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind != .target_type) continue;
+        if (!std.mem.eql(u8, instruction.detail, @tagName(mir.TargetTypeKind.direct_call_result))) continue;
+        try std.testing.expectEqualStrings("callee", instruction.target_owner.?);
+        try std.testing.expect(instruction.typed_target_owner_id.?.eql(owner.id));
+        saw_instruction = true;
+    };
+    try std.testing.expect(saw_instruction);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir target_owner_identity fn=caller id=0 spelling=callee") != null);
+}
+
+test "MIR verifier rejects target owner instruction identity drift" {
+    const source =
+        \\fn callee(x: u32) -> u32 {
+        \\    return x;
+        \\}
+        \\
+        \\fn caller() -> u32 {
+        \\    return callee(7);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_target_owner_instruction_id.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+
+    const caller = functionByNameMut(&module_mir, "caller").?;
+    var mutated = false;
+    for (caller.blocks) |*block| {
+        for (block.instructions) |*instruction| {
+            if (instruction.kind != .target_type) continue;
+            if (!std.mem.eql(u8, instruction.detail, @tagName(mir.TargetTypeKind.direct_call_result))) continue;
+            instruction.typed_target_owner_id = SymbolId.fromIndex(4096);
+            mutated = true;
+            break;
+        }
+        if (mutated) break;
+    }
+    try std.testing.expect(mutated);
+
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_target_owner_instruction_id.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(module_mir, &verifier_reporter);
+    try std.testing.expect(verifier_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
+}
+
+test "MIR target-type admission rejects target owner fact identity drift" {
+    const source =
+        \\fn callee(x: u32) -> u32 {
+        \\    return x;
+        \\}
+        \\
+        \\fn caller() -> u32 {
+        \\    return callee(7);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_target_owner_fact_id.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+    const caller = functionByNameMut(&module_mir, "caller").?;
+    for (caller.target_type_facts) |*fact| {
+        if (fact.kind != .direct_call_result) continue;
+        fact.typed_target_owner_id = SymbolId.fromIndex(4096);
+        break;
+    } else return error.TestUnexpectedResult;
+
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(module_mir));
 }
 
 test "MIR dump exposes bounded FFI parameter contracts" {

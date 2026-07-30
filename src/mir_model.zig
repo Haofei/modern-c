@@ -158,6 +158,7 @@ pub const Instruction = struct {
     const_index: ?usize = null,
     target_index: ?usize = null,
     target_owner: ?[]const u8 = null,
+    typed_target_owner_id: ?SymbolId = null,
     value_id: ?[]const u8 = null,
     contract_region_id: ?usize = null,
     typed_value_id: ?ValueId = null,
@@ -467,6 +468,7 @@ pub const TargetTypeFact = struct {
     aggregate_construction: ?AggregateConstructionKind = null,
     target_index: ?usize = null,
     target_owner: ?[]const u8 = null,
+    typed_target_owner_id: SymbolId = .invalid,
     source: SourcePoint,
 };
 
@@ -604,6 +606,7 @@ pub const Function = struct {
     span_identities: []SpanIdentity = &.{},
     type_identities: []TypeIdentity = &.{},
     value_identities: []ValueIdentity = &.{},
+    target_owner_identities: []SymbolIdentity = &.{},
     generated_type_expr_nodes: []*ast.TypeExpr = &.{},
     generated_type_expr_args: [][]ast.TypeExpr = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
@@ -642,6 +645,7 @@ pub const Module = struct {
             if (function.span_identities.len != 0) self.allocator.free(function.span_identities);
             if (function.type_identities.len != 0) self.allocator.free(function.type_identities);
             if (function.value_identities.len != 0) self.allocator.free(function.value_identities);
+            if (function.target_owner_identities.len != 0) self.allocator.free(function.target_owner_identities);
             if (function.ffi_param_contracts.len != 0) self.allocator.free(function.ffi_param_contracts);
             for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);
             if (function.generated_type_expr_nodes.len != 0) self.allocator.free(function.generated_type_expr_nodes);

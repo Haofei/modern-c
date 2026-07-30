@@ -597,6 +597,13 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                 .{ function.name, identity.id.index(), identity.spelling },
             );
         }
+        for (function.target_owner_identities) |identity| {
+            try out.print(
+                allocator,
+                "mir target_owner_identity fn={s} id={} spelling={s}\n",
+                .{ function.name, identity.id.index(), identity.spelling },
+            );
+        }
         for (function.ffi_param_contracts) |fact| {
             if (fact.kind == .address) {
                 const address_class = switch (fact.address_class.?) {
@@ -1229,6 +1236,15 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         const spelling = instruction.value_id orelse return false;
         if (!std.mem.eql(u8, function.value_identities[index].spelling, spelling)) return false;
     }
+    if (instruction.typed_target_owner_id) |owner_id| {
+        if (!owner_id.isValid()) return false;
+        const index = owner_id.index();
+        if (index >= function.target_owner_identities.len) return false;
+        const spelling = instruction.target_owner orelse return false;
+        if (!std.mem.eql(u8, function.target_owner_identities[index].spelling, spelling)) return false;
+    } else if (instruction.target_owner != null) {
+        return false;
+    }
     return true;
 }
 
@@ -1380,6 +1396,21 @@ fn optionalTextEql(left: ?[]const u8, right: ?[]const u8) bool {
     return std.mem.eql(u8, left.?, right.?);
 }
 
+fn targetTypeTypedOwnerCompatible(instruction: Instruction, fact: TargetTypeFact) bool {
+    if (instruction.typed_target_owner_id) |owner_id| {
+        return fact.typed_target_owner_id.isValid() and fact.typed_target_owner_id.eql(owner_id);
+    }
+    return !fact.typed_target_owner_id.isValid();
+}
+
+fn targetTypeInstructionOwnersCompatible(left: Instruction, right: Instruction) bool {
+    if (left.typed_target_owner_id) |left_owner_id| {
+        const right_owner_id = right.typed_target_owner_id orelse return false;
+        return right_owner_id.eql(left_owner_id);
+    }
+    return right.typed_target_owner_id == null;
+}
+
 fn targetTypeSourceMatches(kind: TargetTypeKind, fact: TargetTypeFact, instruction: Instruction) bool {
     if (fact.source.line != instruction.line or fact.source.column != instruction.column) return false;
     return kind != .expression_result or (fact.source.offset == instruction.source_offset and fact.source.len == instruction.source_len);
@@ -1400,6 +1431,7 @@ fn hasStaleTargetTypeFact(function: Function, kind: TargetTypeKind, instruction:
         if (fact.kind != kind) continue;
         if (fact.target_index != instruction.target_index) continue;
         if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
+        if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) return true;
@@ -1419,6 +1451,7 @@ fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instru
         if (fact.kind != kind) continue;
         if (fact.target_index != instruction.target_index) continue;
         if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
+        if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
@@ -1433,6 +1466,7 @@ fn countMatchingTargetTypeInstructions(function: Function, fact: TargetTypeFact)
         if (kind != fact.kind) continue;
         if (instruction.target_index != fact.target_index) continue;
         if (!optionalTextEql(instruction.target_owner, fact.target_owner)) continue;
+        if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
@@ -1447,6 +1481,7 @@ fn countMatchingTargetTypeInstructionsForInstruction(function: Function, kind: T
         if (instruction_kind != kind) continue;
         if (instruction.target_index != target.target_index) continue;
         if (!optionalTextEql(instruction.target_owner, target.target_owner)) continue;
+        if (!targetTypeInstructionOwnersCompatible(instruction, target)) continue;
         if (!sameRepresentationValueType(instruction.result_ty, target.result_ty)) continue;
         if (!targetTypeInstructionsSyntaxMatch(target, instruction)) continue;
         if (targetTypeInstructionSourceMatches(kind, target, instruction)) count += 1;
@@ -1460,6 +1495,7 @@ fn countMatchingTargetTypeFactsForFact(function: Function, target: TargetTypeFac
         if (fact.kind != target.kind) continue;
         if (fact.target_index != target.target_index) continue;
         if (!optionalTextEql(fact.target_owner, target.target_owner)) continue;
+        if (!fact.typed_target_owner_id.eql(target.typed_target_owner_id)) continue;
         if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
         if (fact.source.line == target.source.line and fact.source.column == target.source.column and (target.kind != .expression_result or (fact.source.offset == target.source.offset and fact.source.len == target.source.len))) count += 1;
     }
@@ -1472,6 +1508,7 @@ fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instru
         if (fact.kind != kind) continue;
         if (fact.target_index != instruction.target_index) continue;
         if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
+        if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
@@ -3642,6 +3679,7 @@ const FunctionBuilder = struct {
     span_ids: std.AutoHashMap(SourcePoint, SpanId),
     type_ids: std.StringHashMap(TypeId),
     value_ids: std.StringHashMap(ValueId),
+    target_owner_ids: std.StringHashMap(SymbolId),
     // Bindings introduced by a successful nullable-pointer pattern are
     // non-null by construction for that arm. Keep the representation fact for
     // backend admission, but do not invent a runtime trap edge for their use.
@@ -3739,6 +3777,7 @@ const FunctionBuilder = struct {
             .span_ids = std.AutoHashMap(SourcePoint, SpanId).init(allocator),
             .type_ids = std.StringHashMap(TypeId).init(allocator),
             .value_ids = std.StringHashMap(ValueId).init(allocator),
+            .target_owner_ids = std.StringHashMap(SymbolId).init(allocator),
             .proven_nonnull_bindings = std.StringHashMap(void).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
@@ -3813,6 +3852,7 @@ const FunctionBuilder = struct {
             .span_ids = std.AutoHashMap(SourcePoint, SpanId).init(allocator),
             .type_ids = std.StringHashMap(TypeId).init(allocator),
             .value_ids = std.StringHashMap(ValueId).init(allocator),
+            .target_owner_ids = std.StringHashMap(SymbolId).init(allocator),
             .proven_nonnull_bindings = std.StringHashMap(void).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
@@ -3867,6 +3907,7 @@ const FunctionBuilder = struct {
         self.span_ids.deinit();
         self.type_ids.deinit();
         self.value_ids.deinit();
+        self.target_owner_ids.deinit();
         self.proven_nonnull_bindings.deinit();
         self.local_function_aliases.deinit();
         self.local_aggregate_pointer_aliases.deinit();
@@ -3931,6 +3972,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(type_identities);
         const value_identities = try self.buildValueIdentities();
         errdefer self.allocator.free(value_identities);
+        const target_owner_identities = try self.buildTargetOwnerIdentities();
+        errdefer self.allocator.free(target_owner_identities);
         const generated_type_expr_nodes = try self.generated_type_expr_nodes.toOwnedSlice(self.allocator);
         errdefer {
             for (generated_type_expr_nodes) |node| self.allocator.destroy(node);
@@ -3971,6 +4014,8 @@ const FunctionBuilder = struct {
         self.type_ids = std.StringHashMap(TypeId).init(self.allocator);
         self.value_ids.deinit();
         self.value_ids = std.StringHashMap(ValueId).init(self.allocator);
+        self.target_owner_ids.deinit();
+        self.target_owner_ids = std.StringHashMap(SymbolId).init(self.allocator);
         self.proven_nonnull_bindings.deinit();
         self.proven_nonnull_bindings = std.StringHashMap(void).init(self.allocator);
         self.local_function_aliases.deinit();
@@ -4013,6 +4058,7 @@ const FunctionBuilder = struct {
             .span_identities = span_identities,
             .type_identities = type_identities,
             .value_identities = value_identities,
+            .target_owner_identities = target_owner_identities,
             .generated_type_expr_nodes = generated_type_expr_nodes,
             .generated_type_expr_args = generated_type_expr_args,
             .pointer_provenance_facts = pointer_provenance_facts,
@@ -6796,16 +6842,19 @@ const FunctionBuilder = struct {
 
     fn appendOwnedTargetTypeFact(self: *FunctionBuilder, kind: TargetTypeKind, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span, target_owner: []const u8, target_index: ?usize) !void {
         try self.addInstr(.target_type, @tagName(kind), result_ty, span);
+        const typed_target_owner_id = try self.internTargetOwnerId(target_owner);
         const instructions = &self.blocks.items[self.current].instructions;
         instructions.items[instructions.items.len - 1].target_ty = target_ty;
         instructions.items[instructions.items.len - 1].target_index = target_index;
         instructions.items[instructions.items.len - 1].target_owner = target_owner;
+        instructions.items[instructions.items.len - 1].typed_target_owner_id = typed_target_owner_id;
         try self.target_type_facts.append(self.allocator, .{
             .kind = kind,
             .target_ty = target_ty,
             .result_ty = result_ty,
             .target_index = target_index,
             .target_owner = target_owner,
+            .typed_target_owner_id = typed_target_owner_id,
             .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
         });
     }
@@ -7130,6 +7179,14 @@ const FunctionBuilder = struct {
         return entry.value_ptr.*;
     }
 
+    fn internTargetOwnerId(self: *FunctionBuilder, spelling: []const u8) !SymbolId {
+        const entry = try self.target_owner_ids.getOrPut(spelling);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = SymbolId.fromIndex(self.target_owner_ids.count() - 1);
+        }
+        return entry.value_ptr.*;
+    }
+
     fn buildSpanIdentities(self: *FunctionBuilder) ![]SpanIdentity {
         const identities = try self.allocator.alloc(SpanIdentity, self.span_ids.count());
         errdefer self.allocator.free(identities);
@@ -7164,6 +7221,21 @@ const FunctionBuilder = struct {
         const identities = try self.allocator.alloc(ValueIdentity, self.value_ids.count());
         errdefer self.allocator.free(identities);
         var it = self.value_ids.iterator();
+        while (it.next()) |entry| {
+            const id = entry.value_ptr.*;
+            std.debug.assert(id.index() < identities.len);
+            identities[id.index()] = .{
+                .id = id,
+                .spelling = entry.key_ptr.*,
+            };
+        }
+        return identities;
+    }
+
+    fn buildTargetOwnerIdentities(self: *FunctionBuilder) ![]SymbolIdentity {
+        const identities = try self.allocator.alloc(SymbolIdentity, self.target_owner_ids.count());
+        errdefer self.allocator.free(identities);
+        var it = self.target_owner_ids.iterator();
         while (it.next()) |entry| {
             const id = entry.value_ptr.*;
             std.debug.assert(id.index() < identities.len);
@@ -9784,6 +9856,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.span_identities.len != 0) allocator.free(function.span_identities);
     if (function.type_identities.len != 0) allocator.free(function.type_identities);
     if (function.value_identities.len != 0) allocator.free(function.value_identities);
+    if (function.target_owner_identities.len != 0) allocator.free(function.target_owner_identities);
     if (function.ffi_param_contracts.len != 0) allocator.free(function.ffi_param_contracts);
     for (function.generated_type_expr_nodes) |node| allocator.destroy(node);
     if (function.generated_type_expr_nodes.len != 0) allocator.free(function.generated_type_expr_nodes);

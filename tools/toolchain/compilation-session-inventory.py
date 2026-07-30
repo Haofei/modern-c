@@ -104,7 +104,7 @@ def main() -> int:
         ("build/tiers.zig", 'c0_step.dependOn(ctx.cmd("compilation-session-inventory-test"))'),
         ("tools/dev-gates.py", "compilation-session-inventory-test"),
         ("tools/toolchain/dev-gates-test.py", "compilation-session-inventory-test"),
-        ("docs/refactoring-plan.md", "The old `combined_boundaries`, `combined_module_graph`,"),
+        ("docs/refactoring-plan.md", "File-boundary, module-graph, visibility, IO, parse/check, MIR build, and"),
     ):
         require_contains(path, needle)
 
