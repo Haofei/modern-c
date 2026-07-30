@@ -2,8 +2,8 @@
 
 Status: **internally qualification-gated supported subset, not an unrestricted or externally audited production language**.
 Current assessment: **updated 2026-07-25, evaluated per checked-out revision and pinned toolchain**.
-Evidence register: **778 bounded implementation or regression entries for the
-supported subset**. Open/closed blocker state is not counted here; use
+Evidence register: **778 bounded implementation or regression entries, 0 active slices, 0 open architectural workstreams**.
+This count is scoped to the supported subset. Open/closed blocker state is not counted here; use
 [`review-risk-register.yaml`](review-risk-register.yaml) and
 [`profile-manifest.json`](profile-manifest.json) as the current machine-readable
 sources for architectural blockers and product-profile claims.
