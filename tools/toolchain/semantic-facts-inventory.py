@@ -1474,7 +1474,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "slice_return_type_for_call": 0,
         "array_return_type_for_expr": 0,
         "DirectIndexBaseTypeFn": 2,
-        "direct_index_base_type": 5,
+        "direct_index_base_type": 4,
         "mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .const_get": 1,
         "mir_target_type(ctx.emit_ctx, .const_get_base": 1,
         "mir_target_type(ctx.emit_ctx, .const_get_result": 1,

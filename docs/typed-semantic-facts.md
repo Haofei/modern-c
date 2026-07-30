@@ -407,7 +407,8 @@ inference helpers must be explicitly registered before the inventory can pass.
 Direct-call index lowering now
 uses one `direct_index_base_type` callback for both array and slice base typing,
 instead of separate access-context callbacks named as slice/array return-type
-classifiers.
+classifiers. Direct-call index address lowering also queries that base type once
+per address expression before choosing slice or fixed-array emission mechanics.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|

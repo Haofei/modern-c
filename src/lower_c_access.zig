@@ -715,23 +715,18 @@ pub fn emitLocalIndexAddressValueTemp(ctx: EmitContext, expr: ast.Expr, locals: 
 }
 
 pub fn emitDirectCallIndexAddressValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    const base_ty = ctx.direct_index_base_type(ctx.emit_ctx, index.base.*) orelse return null;
     if (callExpr(index.base.*) != null) {
-        if (ctx.direct_index_base_type(ctx.emit_ctx, index.base.*)) |slice_ty| {
-            if (sliceElementType(slice_ty) != null) {
-                const temps = try emitDirectCallIndexTemps(ctx, index, locals, slice_ty);
-                return try emitDirectCallSliceIndexAddressValueTemp(ctx, target_ty, temps.base.name, temps.index.name);
-            }
+        if (sliceElementType(base_ty) != null) {
+            const temps = try emitDirectCallIndexTemps(ctx, index, locals, base_ty);
+            return try emitDirectCallSliceIndexAddressValueTemp(ctx, target_ty, temps.base.name, temps.index.name);
         }
     }
 
-    if (ctx.direct_index_base_type(ctx.emit_ctx, index.base.*)) |array_ty| {
-        if (arrayElementType(array_ty) == null) return null;
-        const len = (try ctx.array_len_text(ctx.emit_ctx, array_ty)) orelse return error.UnsupportedCEmission;
-        const temps = try emitDirectCallIndexTemps(ctx, index, locals, array_ty);
-        return try emitDirectCallArrayIndexAddressValueTemp(ctx, target_ty, len, temps.base.name, temps.index.name);
-    }
-
-    return null;
+    if (arrayElementType(base_ty) == null) return null;
+    const len = (try ctx.array_len_text(ctx.emit_ctx, base_ty)) orelse return error.UnsupportedCEmission;
+    const temps = try emitDirectCallIndexTemps(ctx, index, locals, base_ty);
+    return try emitDirectCallArrayIndexAddressValueTemp(ctx, target_ty, len, temps.base.name, temps.index.name);
 }
 
 pub fn emitDirectCallSliceIndexValueTemp(ctx: EmitContext, value_ty: ast.TypeExpr, base_temp: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
