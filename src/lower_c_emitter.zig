@@ -2716,7 +2716,7 @@ const CEmitter = struct {
     // such a call dispatches through the vtable. Null otherwise.
     fn dynCalleeTrait(self: *CEmitter, callee: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
         const member = memberExpr(callee) orelse return null;
-        const base_ty = self.operandEmitType(member.base.*, locals) orelse self.exprSourceTypeForEmission(member.base.*, locals) orelse return null;
+        const base_ty = self.memberBaseTypeForEmission(member.base.*, locals) orelse return null;
         return switch (self.resolveAliasType(base_ty).kind) {
             .dyn_trait => |d| d.trait_name.text,
             .pointer => |p| switch (self.resolveAliasType(p.child.*).kind) {
@@ -4077,7 +4077,7 @@ const CEmitter = struct {
     fn emitMemberExpr(self: *CEmitter, node: anytype, member_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
         if (try self.emitEnumVariantPath(node, locals)) return true;
         if (self.sliceAccessForBase(node.base.*, locals)) |slice| {
-            const base_ty = self.operandEmitType(node.base.*, locals) orelse self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
+            const base_ty = self.arrayOrSliceBaseTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
             if (self.resolveAliasType(base_ty).kind == .slice and std.mem.eql(u8, node.name.text, "len")) {
                 const usize_ty = simpleNameType("usize", member_span);
                 const field_ty = self.memberResultTypeOrGenerated(member_span, usize_ty) orelse return error.UnsupportedCEmission;
