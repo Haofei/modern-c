@@ -132,8 +132,12 @@ Current baseline:
   facts; stale pointer-vs-value optional representation facts are rejected
   before emission.
 - C and LLVM backend entrypoints now share `mir.validateLoweringAdmission()`;
-  target-type, representation, integer, range, function-return, and terminator
-  fact positions reject the `.unknown` type placeholder before lowering.
+  call-target, target-type, representation, integer, range, function-return,
+  and terminator fact positions reject the `.unknown` type placeholder before
+  lowering.
+- Scalar/domain conversion call-target result types are MIR-owned, including
+  `try_from` as `Result<T, ConversionError>`, rather than falling back through
+  generic call inference.
 - Inventory checks anchor the migrated surface.
 
 Implementation order:

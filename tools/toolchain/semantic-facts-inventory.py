@@ -1007,6 +1007,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn mmioCallTarget(": 1,
         "fn mmioMapCallTarget(": 1,
         "try self.addCallTargetFact(target.kind": 11,
+        "fn conversionCallResultValueType(": 1,
+        "try self.addCallTargetFact(conversion.kind, conversion_result_ty": 1,
         "try self.addCallTargetFact(target, .never": 1,
         "appendTargetTypeFact(.domain_type": 1,
         "appendTargetTypeFact(.domain_payload": 1,
@@ -1565,6 +1567,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "MIR owns ordinary direct call result and fixed argument types": 1,
         "MIR records typed call target facts for atomic member calls": 1,
         "MIR owns discard call identities and argument types": 1,
+        "MIR lowering admission rejects unknown call-target result facts": 1,
     },
     "src/lower_c_tests.zig": {
         "lower-c DMA calls consume MIR identities and complete types": 1,

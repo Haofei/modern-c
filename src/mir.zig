@@ -1415,6 +1415,9 @@ pub fn validateKnownFactTypesForLowering(module: Module) error{UnknownMirLowerin
         for (function.integer_facts) |fact| {
             if (valueTypeIsUnknownPlaceholder(fact.target_ty)) return error.UnknownMirLoweringType;
         }
+        for (function.call_target_facts) |fact| {
+            if (valueTypeIsUnknownPlaceholder(fact.result_ty)) return error.UnknownMirLoweringType;
+        }
         for (function.target_type_facts) |fact| {
             if (valueTypeIsUnknownPlaceholder(fact.result_ty)) return error.UnknownMirLoweringType;
         }
@@ -5721,6 +5724,7 @@ const FunctionBuilder = struct {
                 const va_target = try self.vaCallTarget(node);
                 const wrapping_target = self.wrappingCallTarget(node);
                 const unchecked_target = self.uncheckedCallTarget(node);
+                const conversion_target = self.conversionCallFactInfo(node);
                 const discard_target = self.discardCallTargetKind(node);
                 const explicit_trap_target = explicitTrapCallTargetKind(node);
                 const call_ty: ValueType = if (dyn_dispatch_target) |target|
@@ -5751,6 +5755,8 @@ const FunctionBuilder = struct {
                     target.result_ty
                 else if (unchecked_target) |target|
                     target.result_ty
+                else if (conversion_target) |target|
+                    self.conversionCallResultValueType(target)
                 else if (reduceCallKind(node.callee.*) != null)
                     self.exprType(expr)
                 else if (self.atomicCallValueType(node)) |ty|
@@ -5962,9 +5968,10 @@ const FunctionBuilder = struct {
                         try self.addCallTargetFact(fence_kind, .void, expr.span);
                     }
                 }
-                if (self.conversionCallFactInfo(node)) |conversion| {
+                if (conversion_target) |conversion| {
+                    const conversion_result_ty = self.conversionCallResultValueType(conversion);
                     try self.addInstr(.call_target, @tagName(conversion.kind), call_ty, expr.span);
-                    try self.addCallTargetFact(conversion.kind, call_ty, expr.span);
+                    try self.addCallTargetFact(conversion.kind, conversion_result_ty, expr.span);
                     try self.appendTargetTypeFact(.conversion_source, conversion.source_ty, valueTypeFromTypeAlias(conversion.source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                     try self.appendTargetTypeFact(.conversion_target, conversion.target_ty, valueTypeFromTypeAlias(conversion.target_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
@@ -9341,6 +9348,16 @@ const FunctionBuilder = struct {
             .source_ty = source_ty,
             .target_ty = target_ty,
         };
+    }
+
+    fn conversionCallResultValueType(self: *FunctionBuilder, conversion: ConversionCallFactInfo) ValueType {
+        if (conversion.kind == .conversion_try_from) {
+            return .{ .result = .{
+                .ok = typeText(aggregateTargetTypeAlias(conversion.target_ty, self.aliases)),
+                .err = "ConversionError",
+            } };
+        }
+        return valueTypeFromTypeAlias(conversion.target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
     }
 
     fn conversionSourceTypeExpr(self: *FunctionBuilder, expr: ast.Expr) ?ast.TypeExpr {

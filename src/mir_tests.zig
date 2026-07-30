@@ -610,25 +610,62 @@ test "MIR owns all scalar conversion builtin call targets" {
     defer typed_mir.deinit();
     try mir.validateCallTargetFactsForLowering(typed_mir);
 
-    const cases = [_]struct { name: []const u8, kind: mir.CallTargetKind }{
-        .{ .name = "from_value", .kind = .conversion_from },
-        .{ .name = "try_value", .kind = .conversion_try_from },
-        .{ .name = "trap_value", .kind = .conversion_trap_from },
-        .{ .name = "wrap_value", .kind = .conversion_wrap_from },
-        .{ .name = "sat_value", .kind = .conversion_sat_from },
-        .{ .name = "mod_value", .kind = .conversion_from_mod },
-        .{ .name = "adapted_binary", .kind = .conversion_trap_from },
+    const cases = [_]struct { name: []const u8, kind: mir.CallTargetKind, result_name: []const u8 }{
+        .{ .name = "from_value", .kind = .conversion_from, .result_name = "u64" },
+        .{ .name = "try_value", .kind = .conversion_try_from, .result_name = "Result" },
+        .{ .name = "trap_value", .kind = .conversion_trap_from, .result_name = "u8" },
+        .{ .name = "wrap_value", .kind = .conversion_wrap_from, .result_name = "u8" },
+        .{ .name = "sat_value", .kind = .conversion_sat_from, .result_name = "u8" },
+        .{ .name = "mod_value", .kind = .conversion_from_mod, .result_name = "value" },
+        .{ .name = "adapted_binary", .kind = .conversion_trap_from, .result_name = "u8" },
     };
     for (cases) |case| {
         const function = functionByName(typed_mir, case.name).?;
         try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
         try std.testing.expectEqual(case.kind, function.call_target_facts[0].kind);
+        try std.testing.expectEqualStrings(case.result_name, function.call_target_facts[0].result_ty.name());
         try std.testing.expect(function.target_type_facts.len >= 2);
         try std.testing.expectEqual(mir.TargetTypeKind.conversion_source, function.target_type_facts[0].kind);
         try std.testing.expectEqual(mir.TargetTypeKind.conversion_target, function.target_type_facts[1].kind);
     }
+    try mir.validateLoweringAdmission(typed_mir);
     try std.testing.expectEqualStrings("u32", valueTypeName(functionByName(typed_mir, "mod_value").?.target_type_facts[0].result_ty));
     try std.testing.expectEqualStrings("u64", valueTypeName(functionByName(typed_mir, "adapted_binary").?.target_type_facts[0].result_ty));
+}
+
+test "MIR lowering admission rejects unknown call-target result facts" {
+    const source =
+        \\fn from_value(x: u8) -> u64 { return u64.from(x); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_unknown_call_target_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "from_value").?;
+    for (function.call_target_facts) |*fact| {
+        if (fact.kind != .conversion_from) continue;
+        fact.result_ty = .unknown;
+        break;
+    } else return error.TestUnexpectedResult;
+    for (function.blocks) |*block| {
+        for (block.instructions) |*instruction| {
+            if (instruction.kind != .call_target or !std.mem.eql(u8, instruction.detail, @tagName(mir.CallTargetKind.conversion_from))) continue;
+            instruction.result_ty = .unknown;
+            break;
+        } else continue;
+        break;
+    } else return error.TestUnexpectedResult;
+
+    try mir.validateCallTargetFactsForLowering(typed_mir);
+    try std.testing.expectError(error.UnknownMirLoweringType, mir.validateKnownFactTypesForLowering(typed_mir));
+    try std.testing.expectError(error.UnknownMirLoweringType, mir.validateLoweringAdmission(typed_mir));
 }
 
 test "MIR owns inferred local types for conversion results" {
