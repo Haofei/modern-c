@@ -1605,7 +1605,6 @@ const CEmitter = struct {
             .emit_arg_temp = emitSequencedArgTempForCall,
             .c_type = cTypeForCall,
             .c_ident = cIdentForCall,
-            .expr_source_type = exprSourceTypeForCall,
             .local_info_from_type = localInfoFromTypeForArith,
             .global_assignment_target = globalAssignmentTargetForArith,
             .emit_assign_target = emitAssignTargetForArith,
@@ -4559,6 +4558,7 @@ const CEmitter = struct {
         if (try self.ambiguousPointerMemberAggregateValueCopy(expr, locals)) return error.UnsupportedCEmission;
         if (try self.ambiguousIndexedMemberAggregateValueCopy(expr, locals)) return error.UnsupportedCEmission;
         if (try self.emitValueOptionalCoercion(expr, locals, semantic_target_ty)) return;
+        if (try self.emitPointerToPAddrTargetCast(expr, locals, semantic_target_ty)) return;
         if (try self.emitTargetPreludeExpr(expr, locals, semantic_target_ty)) return;
         switch (expr.kind) {
             .array_literal, .struct_literal => try self.emitAggregateLiteralWithTarget(expr, locals),
@@ -4600,6 +4600,17 @@ const CEmitter = struct {
         try self.out.print(self.allocator, "({s}){{ .present = true, .value = ", .{opt_name});
         try self.emitExprWithTarget(expr, locals, child);
         try self.out.appendSlice(self.allocator, " }");
+        return true;
+    }
+
+    fn emitPointerToPAddrTargetCast(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!bool {
+        const ty = target_ty orelse return false;
+        if (!lower_c_type.isPAddrType(ty)) return false;
+        const source_ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse return false;
+        if (!lower_c_type.isPointerLikeAddressType(source_ty)) return false;
+        try self.out.appendSlice(self.allocator, "((uintptr_t)(");
+        try self.emitExpr(expr, locals);
+        try self.out.appendSlice(self.allocator, "))");
         return true;
     }
 

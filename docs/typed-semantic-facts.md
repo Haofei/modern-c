@@ -340,12 +340,11 @@ requires the row and its code anchors to remain present. Closing a family means
 either migrating it to typed facts / MIR-owned state, or documenting it as an
 accepted conservative fallback with missing-fact or diagnostic evidence.
 
-Current C call-expression source typing quarantine: `lower_c_convert` no longer
-exposes an expression-source-type callback. `lower_c_call` still exposes one
-callback slot and one exact-count-gated use: pointer-to-`paddr` cast
-detection for sequenced temps. Variadic direct-call tail argument type selection
-now consumes owned MIR `direct_call_argument` facts. The remaining use is a
-migration target, not expandable authority.
+Current C call-expression source typing quarantine: `lower_c_convert` and
+`lower_c_call` no longer expose expression-source-type callbacks. Variadic
+direct-call tail argument type selection now consumes owned MIR
+`direct_call_argument` facts. Pointer-to-`paddr` target casts for sequenced temps
+are handled by the shared C target-expression emitter instead of the call helper.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|

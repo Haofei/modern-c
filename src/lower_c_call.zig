@@ -19,8 +19,6 @@ const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
 const rawScalarSuffix = lower_c_type.rawScalarSuffix;
 const isNonNullPointerType = lower_c_type.isNonNullPointerType;
-const isPAddrType = lower_c_type.isPAddrType;
-const isPointerLikeAddressType = lower_c_type.isPointerLikeAddressType;
 const isVaListType = lower_c_type.isVaListType;
 const isVoidType = lower_c_type.isVoidType;
 const uncheckedNoOverflowOperator = lower_c_expr.uncheckedNoOverflowOperator;
@@ -32,7 +30,6 @@ const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;
-pub const ExprSourceTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
 pub const EmitOptionalSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp;
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
@@ -85,7 +82,6 @@ pub const TempContext = struct {
     emit_arg_temp: EmitSequencedArgTempFn,
     c_type: CTypeFn,
     c_ident: CIdentFn,
-    expr_source_type: ExprSourceTypeFn,
     local_info_from_type: LocalInfoFromTypeFn,
     global_assignment_target: GlobalAssignmentTargetFn,
     emit_assign_target: EmitAssignTargetFn,
@@ -410,17 +406,7 @@ pub fn emitPlainSequencedArgTemp(ctx: TempContext, arg: ast.Expr, locals: *std.S
     ctx.temp_index.* += 1;
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = ", .{ try ctx.c_type(ctx.emit_ctx, target_ty), temp_name });
-    const cast_pointer_to_paddr = isPAddrType(target_ty) and blk: {
-        const source_ty = ctx.expr_source_type(ctx.emit_ctx, arg, locals) orelse break :blk false;
-        break :blk isPointerLikeAddressType(source_ty);
-    };
-    if (cast_pointer_to_paddr) {
-        try ctx.out.appendSlice(ctx.allocator, "((uintptr_t)(");
-        try ctx.emit_expr(ctx.emit_ctx, arg, locals);
-        try ctx.out.appendSlice(ctx.allocator, "))");
-    } else {
-        try ctx.emit_expr_with_target(ctx.emit_ctx, arg, locals, target_ty);
-    }
+    try ctx.emit_expr_with_target(ctx.emit_ctx, arg, locals, target_ty);
     try ctx.out.appendSlice(ctx.allocator, ";\n");
     return .{ .name = temp_name, .ty = target_ty };
 }

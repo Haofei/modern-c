@@ -748,11 +748,12 @@ fn directNullableTryOperandIsNullable(ctx_ptr: *anyopaque, operand: ast.Expr) an
 fn emitResultTryCallArgTemps(ctx: TryCallEmitContext, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!std.ArrayList(SequencedArgTemp) {
     var temps: std.ArrayList(SequencedArgTemp) = .empty;
     errdefer temps.deinit(ctx.replacement.scratch);
+    const target_owner = calleeIdentName(call.callee.*) orelse return error.UnsupportedCEmission;
     for (call.args, 0..) |arg, i| {
-        const target_ty = if (i < fn_info.params.len)
-            fn_info.params[i].ty
-        else
-            ctx.call_ctx.expr_source_type(ctx.call_ctx.emit_ctx, arg, locals) orelse return error.UnsupportedCEmission;
+        const target_ty = ctx.call_ctx.mir_owned_target_type(ctx.call_ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
+        if (i < fn_info.params.len) {
+            if (!std.meta.eql(target_ty, fn_info.params[i].ty)) return error.UnsupportedCEmission;
+        } else if (!fn_info.is_variadic) return error.UnsupportedCEmission;
         try temps.append(ctx.replacement.scratch, try emitResultTryCallArgTempWithMode(ctx, arg, locals, target_ty, return_ty, mode));
     }
     return temps;
@@ -788,11 +789,12 @@ fn emitNullableTryCallArgTemp(ctx: TryCallEmitContext, arg: ast.Expr, locals: *s
 fn emitNullableTryCallArgTemps(ctx: TryCallEmitContext, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo) anyerror!std.ArrayList(SequencedArgTemp) {
     var temps: std.ArrayList(SequencedArgTemp) = .empty;
     errdefer temps.deinit(ctx.replacement.scratch);
+    const target_owner = calleeIdentName(call.callee.*) orelse return error.UnsupportedCEmission;
     for (call.args, 0..) |arg, i| {
-        const target_ty = if (i < fn_info.params.len)
-            fn_info.params[i].ty
-        else
-            ctx.call_ctx.expr_source_type(ctx.call_ctx.emit_ctx, arg, locals) orelse return error.UnsupportedCEmission;
+        const target_ty = ctx.call_ctx.mir_owned_target_type(ctx.call_ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
+        if (i < fn_info.params.len) {
+            if (!std.meta.eql(target_ty, fn_info.params[i].ty)) return error.UnsupportedCEmission;
+        } else if (!fn_info.is_variadic) return error.UnsupportedCEmission;
         try temps.append(ctx.replacement.scratch, try emitNullableTryCallArgTemp(ctx, arg, locals, target_ty));
     }
     return temps;
