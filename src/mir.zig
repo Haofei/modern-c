@@ -1410,7 +1410,7 @@ pub fn validateKnownFactTypesForLowering(module: Module) error{UnknownMirLowerin
             }
             for (block.instructions) |instruction| {
                 if (instruction.kind == .assign and valueTypeIsUnknownPlaceholder(instruction.result_ty)) return error.UnknownMirLoweringType;
-                if (contextualConstructorCallRequiresKnownType(instruction) and valueTypeIsUnknownPlaceholder(instruction.result_ty)) return error.UnknownMirLoweringType;
+                if (callInstructionRequiresKnownType(function, instruction) and valueTypeIsUnknownPlaceholder(instruction.result_ty)) return error.UnknownMirLoweringType;
             }
         }
         for (function.range_facts) |fact| {
@@ -1438,11 +1438,12 @@ fn valueTypeIsUnknownPlaceholder(ty: ValueType) bool {
     };
 }
 
-fn contextualConstructorCallRequiresKnownType(instruction: Instruction) bool {
+fn callInstructionRequiresKnownType(function: Function, instruction: Instruction) bool {
     if (instruction.kind != .call) return false;
-    return std.mem.eql(u8, instruction.detail, "bind") or
+    if (std.mem.eql(u8, instruction.detail, "bind") or
         std.mem.eql(u8, instruction.detail, "ok") or
-        std.mem.eql(u8, instruction.detail, "err");
+        std.mem.eql(u8, instruction.detail, "err")) return true;
+    return hasTargetTypeFactAt(function, .qualified_union_result, instruction.line, instruction.column);
 }
 
 pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTargetTypeFacts, StaleMirTargetTypeFacts }!void {
@@ -1467,6 +1468,13 @@ pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTarge
 
 fn targetTypeHasSourcePoint(line: usize, column: usize) bool {
     return line != 0 and column != 0;
+}
+
+fn hasTargetTypeFactAt(function: Function, kind: TargetTypeKind, line: usize, column: usize) bool {
+    for (function.target_type_facts) |fact| {
+        if (fact.kind == kind and fact.source.line == line and fact.source.column == column) return true;
+    }
+    return false;
 }
 
 fn targetTypeKindForInstruction(instruction: Instruction) ?TargetTypeKind {
@@ -5742,6 +5750,8 @@ const FunctionBuilder = struct {
                 const explicit_trap_target = explicitTrapCallTargetKind(node);
                 const call_ty: ValueType = if (dyn_dispatch_target) |target|
                     target.result_ty
+                else if (self.qualifiedUnionConstructorCallValueType(node)) |ty|
+                    ty
                 else if (self.targetTypedCallResultValueType(node)) |ty|
                     ty
                 else if (is_dyn_dispatch)
@@ -7058,6 +7068,11 @@ const FunctionBuilder = struct {
         if (result_ty == .result and resultConstructorCallTag(call) != null) return result_ty;
         if (self.isTargetTypedUnionConstructor(call, target_ty)) return result_ty;
         return null;
+    }
+
+    fn qualifiedUnionConstructorCallValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
+        const ty = self.qualifiedUnionConstructorTypeExpr(call) orelse return null;
+        return valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases);
     }
 
     fn targetTypeForTargetTypedCallArg(self: *FunctionBuilder, call: anytype, index: usize) ?ast.TypeExpr {

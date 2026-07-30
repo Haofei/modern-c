@@ -143,6 +143,9 @@ Current baseline:
 - Target-typed `bind`, `ok`, and `err` call instructions now carry the
   contextual result type already owned by their MIR call-target/target-type
   facts.
+- Qualified tagged-union constructor call instructions, such as
+  `Token.number(...)` / `Token.eof()`, now carry the self-typed union result
+  already owned by `qualified_union_result` facts.
 - Inventory checks anchor the migrated surface.
 
 Implementation order:

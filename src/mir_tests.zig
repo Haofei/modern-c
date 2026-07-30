@@ -775,6 +775,38 @@ test "MIR lowering admission rejects unknown contextual call instruction types" 
     return error.TestUnexpectedResult;
 }
 
+test "MIR lowering admission rejects unknown qualified union constructor call instruction types" {
+    const source =
+        \\union Token { number: i64, eof }
+        \\fn make(value: i64) -> Token {
+        \\    return Token.number(value);
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_unknown_qualified_union_call_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "make").?;
+    for (function.blocks) |*block| {
+        for (block.instructions) |*instruction| {
+            if (instruction.kind != .call or !std.mem.eql(u8, instruction.detail, "number")) continue;
+            instruction.result_ty = .unknown;
+            try mir.validateTargetTypeFactsForLowering(typed_mir);
+            try std.testing.expectError(error.UnknownMirLoweringType, mir.validateKnownFactTypesForLowering(typed_mir));
+            try std.testing.expectError(error.UnknownMirLoweringType, mir.validateLoweringAdmission(typed_mir));
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
 test "MIR owns inferred local types for conversion results" {
     const source =
         \\fn inferred_conversion(value: u64) -> u8 {
@@ -1128,6 +1160,7 @@ test "MIR owns qualified union and enum variant path result types" {
         qualified_count += 1;
     };
     try std.testing.expectEqual(@as(usize, 1), qualified_count);
+    try std.testing.expect(callInstructionByDetail(make, "number").?.result_ty != .unknown);
 
     const variant = functionByName(typed_mir, "variant").?;
     var variant_count: usize = 0;
