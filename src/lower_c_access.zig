@@ -32,7 +32,6 @@ const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
-pub const DirectIndexBaseTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr) ?ast.TypeExpr;
 pub const ArrayLenTextFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8;
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
 pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void;
@@ -67,7 +66,6 @@ pub const EmitContext = struct {
     global_assignment_target: GlobalAssignmentTargetFn,
     emit_assign_target: EmitAssignTargetFn,
     emit_race_load_temp: EmitRaceLoadTempFn,
-    direct_index_base_type: DirectIndexBaseTypeFn,
     array_len_text: ArrayLenTextFn,
     mir_call_target_kind: MirCallTargetKindFn,
     mir_target_type: MirTargetTypeFn,
@@ -641,7 +639,7 @@ pub fn emitDirectCallSliceIndexAssignmentStmt(ctx: EmitContext, assignment: anyt
 pub fn emitDirectCallSliceIndexExprValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!?SequencedArgTemp {
     const index = indexExpr(expr) orelse return null;
     _ = callExpr(index.base.*) orelse return null;
-    const slice_ty = ctx.direct_index_base_type(ctx.emit_ctx, index.base.*) orelse return null;
+    const slice_ty = directIndexBaseType(ctx, index.base.*) orelse return null;
     const element_ty = sliceElementType(slice_ty) orelse return null;
     const temps = try emitDirectCallIndexTemps(ctx, index, locals, slice_ty);
     const value_ty = target_ty orelse element_ty;
@@ -672,7 +670,7 @@ pub fn emitDirectCallArrayIndexAssignmentStmt(ctx: EmitContext, assignment: anyt
 
 pub fn emitDirectCallArrayIndexExprValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!?SequencedArgTemp {
     const index = indexExpr(expr) orelse return null;
-    const array_ty = ctx.direct_index_base_type(ctx.emit_ctx, index.base.*) orelse return null;
+    const array_ty = directIndexBaseType(ctx, index.base.*) orelse return null;
     const base_element_ty = arrayElementType(array_ty) orelse return null;
     const element_ty = target_ty orelse base_element_ty;
     const len = (try ctx.array_len_text(ctx.emit_ctx, array_ty)) orelse return error.UnsupportedCEmission;
@@ -715,7 +713,7 @@ pub fn emitLocalIndexAddressValueTemp(ctx: EmitContext, expr: ast.Expr, locals: 
 }
 
 pub fn emitDirectCallIndexAddressValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
-    const base_ty = ctx.direct_index_base_type(ctx.emit_ctx, index.base.*) orelse return null;
+    const base_ty = directIndexBaseType(ctx, index.base.*) orelse return null;
     if (callExpr(index.base.*) != null) {
         if (sliceElementType(base_ty) != null) {
             const temps = try emitDirectCallIndexTemps(ctx, index, locals, base_ty);
@@ -727,6 +725,30 @@ pub fn emitDirectCallIndexAddressValueTemp(ctx: EmitContext, index: anytype, loc
     const len = (try ctx.array_len_text(ctx.emit_ctx, base_ty)) orelse return error.UnsupportedCEmission;
     const temps = try emitDirectCallIndexTemps(ctx, index, locals, base_ty);
     return try emitDirectCallArrayIndexAddressValueTemp(ctx, target_ty, len, temps.base.name, temps.index.name);
+}
+
+fn directIndexBaseType(ctx: EmitContext, base: ast.Expr) ?ast.TypeExpr {
+    return switch (base.kind) {
+        .grouped => |inner| directIndexBaseType(ctx, inner.*),
+        .call => |call| blk: {
+            if (directIndexBaseExpressionResultType(ctx, base)) |ty| break :blk ty;
+            const fn_name = calleeIdentName(call.callee.*) orelse break :blk null;
+            const ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_result, call.callee.*.span, fn_name, null) orelse break :blk null;
+            break :blk directIndexBaseShape(ty);
+        },
+        else => null,
+    };
+}
+
+fn directIndexBaseExpressionResultType(ctx: EmitContext, base: ast.Expr) ?ast.TypeExpr {
+    const base_ty = ctx.mir_target_type(ctx.emit_ctx, .expression_result, base.span) orelse return null;
+    return directIndexBaseShape(base_ty);
+}
+
+fn directIndexBaseShape(base_ty: ast.TypeExpr) ?ast.TypeExpr {
+    if (sliceElementType(base_ty) != null) return base_ty;
+    if (arrayElementType(base_ty) != null) return base_ty;
+    return null;
 }
 
 pub fn emitDirectCallSliceIndexValueTemp(ctx: EmitContext, value_ty: ast.TypeExpr, base_temp: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
