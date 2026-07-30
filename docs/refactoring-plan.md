@@ -29,7 +29,7 @@ phase or are explicitly scoped to an experimental profile.
 | HIR authority | Closed as inspection-only | Keep `lower-hir` / `verify-hir` as inspection commands; MIR verification remains the backend production boundary. |
 | Artifact/source-map provenance | Partially remediated | Bind artifact bytes, source maps, options, toolchain identity, and MIR/fact digests in one metadata object. |
 | Gate governance | Open | Replace hand-maintained gate string lists with one manifest. |
-| Product/TCB scope | Open | Keep selfhost, production kernel, Agent runtime, and vendored runtimes profile-scoped. |
+| Product/TCB scope | In progress | Keep selfhost, production kernel, Agent runtime, and vendored runtimes profile-scoped through `profile-manifest.json`. |
 | Kernel secure loading | Open | Production loaders must accept opaque exact-byte `VerifiedBundle` capabilities, not raw bytes plus metadata. |
 
 ## 2026-07 execution policy
@@ -318,6 +318,17 @@ Deliverables:
 - Give BearSSL, QuickJS, WAMR, openlibm, firmware, and trust anchors explicit
   component metadata: upstream, revision, patch set, license, PURL/CPE where
   available, advisory status, owner, and review date.
+
+Current baseline:
+
+- `docs/profile-manifest.json` defines the six product profiles and ties each
+  one to blocking risks, registered gates, and TCB components.
+- `profile-manifest-test` validates the manifest against
+  `review-risk-register.yaml` and the registered Zig build gates.
+- `fast`, `m0`, and `c0` run the profile manifest gate; focused dev-gates route
+  profile/risk/scope edits to that gate.
+- Full per-component advisory metadata for every vendored TCB remains open
+  under `SUPPLY-TCB-CVE-INTAKE` and `TCB-PROFILE-MINIMIZATION`.
 
 Closure criteria:
 

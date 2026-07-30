@@ -1,0 +1,252 @@
+{
+  "schema_version": 1,
+  "source_of_truth": "docs/profile-manifest.json",
+  "risk_register": "docs/review-risk-register.yaml",
+  "profiles": [
+    {
+      "id": "compiler-subset",
+      "status": "qualified-subset",
+      "production_claim": false,
+      "summary": "The admitted language/compiler subset: loader, parser, sema, MIR verification, C reference backend, diagnostics, source maps, CLI, and backend parity for covered fixtures.",
+      "scope": {
+        "blocking": [
+          "src/",
+          "std/",
+          "tests/spec/",
+          "tests/c_emit/",
+          "tools/toolchain/"
+        ],
+        "experimental_or_excluded": [
+          "selfhost/",
+          "production-kernel claims",
+          "secure-boot runtime admission",
+          "advanced incremental LSP",
+          "QuickJS/WAMR runtime profiles"
+        ]
+      },
+      "blocking_risks": [
+        "ARCH-TYPED-MIR",
+        "ARCH-BACKEND-FACTS",
+        "ARCH-SOURCE-MAP-DIGEST",
+        "GATE-MANIFEST"
+      ],
+      "blocking_gates": [
+        "test",
+        "test-lint",
+        "bad-diagnostics-test",
+        "diagnostics-reference-test",
+        "diagnostic-code-inventory-test",
+        "compilation-session-inventory-test",
+        "mir-identity-inventory-test",
+        "semantic-facts-inventory-test",
+        "c-test",
+        "sweep",
+        "diff-backend",
+        "mcc-cli-test",
+        "mcc-build-test",
+        "path-remap-test",
+        "mcmap-test"
+      ],
+      "tcb_components": [
+        "zig-compiler",
+        "clang-for-c-artifact-checks",
+        "llvm-for-differential-checks"
+      ]
+    },
+    {
+      "id": "llvm-experimental",
+      "status": "experimental",
+      "production_claim": false,
+      "summary": "LLVM backend coverage is used for verifier/object/parity evidence, but it is not a separate production semantic authority until typed MIR/fact boundaries are complete.",
+      "scope": {
+        "blocking": [
+          "src/lower_llvm*.zig",
+          "tests/llvm/",
+          "LLVM differential fixtures"
+        ],
+        "experimental_or_excluded": [
+          "full backend parity claim",
+          "third-party backend API claim",
+          "independent production compiler claim"
+        ]
+      },
+      "blocking_risks": [
+        "BACKEND-LLVM-PROFILE",
+        "ARCH-TYPED-MIR",
+        "ARCH-BACKEND-FACTS"
+      ],
+      "blocking_gates": [
+        "llvm-test",
+        "llvm-obj-test",
+        "llvm-sweep",
+        "llvm-c-sweep",
+        "llvm-opt-sweep",
+        "llvm-cc-test",
+        "diff-backend"
+      ],
+      "tcb_components": [
+        "llvm-as",
+        "llc",
+        "clang"
+      ]
+    },
+    {
+      "id": "selfhost-experimental",
+      "status": "experimental",
+      "production_claim": false,
+      "summary": "Selfhost is a bootstrap experiment and must not become a second semantic authority while the main compiler IR/fact boundary is still moving.",
+      "scope": {
+        "blocking": [
+          "selfhost/",
+          "tests/selfhost/",
+          "tools/toolchain/full-selfhost-manifest.tsv"
+        ],
+        "experimental_or_excluded": [
+          "production compiler replacement",
+          "language specification authority",
+          "release-blocking compiler-subset claim"
+        ]
+      },
+      "blocking_risks": [
+        "SELFHOST-PROFILE",
+        "ARCH-TYPED-MIR",
+        "ARCH-BACKEND-FACTS"
+      ],
+      "blocking_gates": [
+        "selfhost-lex-test",
+        "selfhost-parse-test",
+        "selfhost-sema-test",
+        "selfhost-emit-test",
+        "full-selfhost-diff",
+        "full-selfhost-stage"
+      ],
+      "tcb_components": [
+        "stage0-mcc",
+        "selfhost-c-emitter",
+        "clang-for-stage-link"
+      ]
+    },
+    {
+      "id": "developer-tools",
+      "status": "supported-tools",
+      "production_claim": false,
+      "summary": "Developer tooling is supported for diagnostics, formatting, symbols, editor smoke, and LSP resource-limit behavior; low-latency incremental service remains future work.",
+      "scope": {
+        "blocking": [
+          "tools/lsp/",
+          "editors/vscode/",
+          "formatter and symbol CLI paths"
+        ],
+        "experimental_or_excluded": [
+          "persistent compiler-service claim",
+          "type-directed completion as production API",
+          "low-latency incremental workspace claim"
+        ]
+      },
+      "blocking_risks": [
+        "LSP-COMPILER-SERVICE"
+      ],
+      "blocking_gates": [
+        "fmt-test",
+        "mcc-symbols-test",
+        "lsp-test",
+        "editor-client-test",
+        "mcc-cli-test",
+        "dev-gates-test"
+      ],
+      "tcb_components": [
+        "python3",
+        "workspace-local-mcc",
+        "vscode-extension-runtime"
+      ]
+    },
+    {
+      "id": "kernel-qemu",
+      "status": "qemu-surrogate",
+      "production_claim": false,
+      "summary": "Kernel and Agent runtime evidence is QEMU/OpenSBI surrogate evidence. It is useful for regression, not a real-board production claim.",
+      "scope": {
+        "blocking": [
+          "kernel/",
+          "user/",
+          "tests/qemu/",
+          "tools/arch/",
+          "tools/proc/",
+          "tools/fs/",
+          "tools/net/"
+        ],
+        "experimental_or_excluded": [
+          "real hardware production support",
+          "power-loss durability claim",
+          "external security audit claim"
+        ]
+      },
+      "blocking_risks": [
+        "KERNEL-VERIFIED-BUNDLE",
+        "KERNEL-CAPABILITY-MINT",
+        "HARDWARE-PRODUCTION-QUALIFICATION"
+      ],
+      "blocking_gates": [
+        "arch-emit-test",
+        "qemu-test",
+        "kmain-test",
+        "agentos-test",
+        "production-ops-test",
+        "bundle-metadata-test",
+        "rsa-verify-test",
+        "app-run-test",
+        "qjs-confined-test",
+        "agent-e2e-test"
+      ],
+      "tcb_components": [
+        "qemu",
+        "opensbi",
+        "bearssl",
+        "quickjs",
+        "wamr"
+      ]
+    },
+    {
+      "id": "production-kernel",
+      "status": "blocked",
+      "production_claim": false,
+      "summary": "Production kernel support is blocked until exact-byte bundle admission, privileged capability mint isolation, persistent policy/audit, minimal TCB, real hardware, soak, and external security evidence are complete.",
+      "scope": {
+        "blocking": [
+          "kernel/",
+          "platform profile",
+          "secure bundle loader",
+          "policy/audit persistence",
+          "real-board validation"
+        ],
+        "experimental_or_excluded": [
+          "QEMU-only qualification",
+          "metadata-only secure-boot demos",
+          "unreviewed third-party kernel components"
+        ]
+      },
+      "blocking_risks": [
+        "KERNEL-VERIFIED-BUNDLE",
+        "KERNEL-CAPABILITY-MINT",
+        "SUPPLY-TCB-CVE-INTAKE",
+        "TCB-PROFILE-MINIMIZATION",
+        "HARDWARE-PRODUCTION-QUALIFICATION"
+      ],
+      "blocking_gates": [
+        "visionfive2-readiness-test",
+        "production-ops-test",
+        "bundle-metadata-test",
+        "rsa-verify-test",
+        "agent-e2e-test",
+        "agentos-test"
+      ],
+      "tcb_components": [
+        "real-board-firmware",
+        "opensbi",
+        "bearssl",
+        "kernel-core",
+        "selected-agent-runtime"
+      ]
+    }
+  ]
+}

@@ -188,6 +188,16 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         (
+            "docs/profile-manifest.json",
+            "docs/scope-control-plan.md",
+            "docs/review-risk-register.yaml",
+            "tools/toolchain/profile-manifest-test.py",
+        ),
+        ("profile-manifest-test",),
+        "profile and risk-governance changes need the profile manifest gate",
+    ),
+    Rule(
+        (
             "tools/toolchain/lowering-coverage.sh",
             "tools/toolchain/lowering-coverage-inventory.py",
             "tools/toolchain/lowering-coverage-baseline.tsv",

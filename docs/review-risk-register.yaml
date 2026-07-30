@@ -133,10 +133,10 @@ risks:
     severity: medium
     scope: supply-chain
     status: open
-    admitted_subset_status: documented-tcb
+    admitted_subset_status: profile-manifest-gated
     blocks:
       - production-profile-minimal-tcb-claim
-    summary: Third-party TCB should be minimized per product profile so QuickJS/WAMR/BearSSL/openlibm are not implicitly included in every production claim.
+    summary: Product profiles now name their TCB components in profile-manifest.json; full vendored component metadata and advisory policy remain open before any minimal production TCB claim.
 
   - id: HARDWARE-PRODUCTION-QUALIFICATION
     severity: high

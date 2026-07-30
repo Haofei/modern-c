@@ -26,6 +26,9 @@ profile while the following core items remain open:
 ## Profile policy
 
 Use these profiles when deciding whether a gate or subsystem is release-blocking.
+The machine-readable source for profile status, blocking risks, blocking gates,
+and TCB components is [`profile-manifest.json`](profile-manifest.json); this
+table is the prose policy summary.
 
 | Profile | Blocking scope | Non-blocking / experimental scope |
 |---|---|---|
@@ -82,6 +85,13 @@ required_tools:
 
 Build steps, CI, documentation, and release evidence should be generated from
 that manifest rather than maintained as separate string lists.
+
+The current bridge state is:
+
+- profile ownership is machine-readable in `docs/profile-manifest.json`;
+- `profile-manifest-test` verifies every profile references known risks and
+  registered build gates;
+- gate generation itself remains open under `GATE-MANIFEST`.
 
 ## Non-goals
 
