@@ -110,7 +110,10 @@ pub fn enumNameForValueExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std
     }
     return switch (expr.kind) {
         .ident => |ident| enumNameForIdentValue(ctx, ident.text, locals),
-        .call => |node| enumNameForCallValue(ctx, node),
+        .call => |node| blk: {
+            const ret_ty = callReturnType(ctx, node) orelse break :blk null;
+            break :blk enumNameForType(ctx, ret_ty);
+        },
         .cast => |node| enumNameForType(ctx, node.ty.*),
         .member => |node| enumNameForVariantPath(ctx, node, locals),
         .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
@@ -147,11 +150,6 @@ fn enumNameForIdentValue(ctx: TypeQueryContext, name_text: []const u8, locals: ?
         if (ctx.enums.contains(global.type_name)) return global.type_name;
     }
     return null;
-}
-
-fn enumNameForCallValue(ctx: TypeQueryContext, node: anytype) ?[]const u8 {
-    const ret_ty = callReturnType(ctx, node) orelse return null;
-    return enumNameForType(ctx, ret_ty);
 }
 
 pub fn exprIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {

@@ -384,6 +384,9 @@ the remaining slice-call path uses the common call-result query directly. The
 private tagged-union call wrapper has likewise been folded into the single
 public tagged-union expression query, leaving the qualified-union MIR fact and
 common call-result query as the only call-specific inputs for that path. The
+private enum-call wrapper has also been inlined into the enum value query, so
+enum-valued calls use the same common call-result query before checking enum
+identity. The
 remaining `lower_c_infer` public entrypoints are now individually exact-count
 gated in the semantic-facts inventory so this registered inference surface
 cannot grow without an explicit inventory update. Direct-call index lowering now
