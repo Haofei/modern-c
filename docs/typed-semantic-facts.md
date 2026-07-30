@@ -375,7 +375,10 @@ compiler-generated zero-span bases.
 Direct slice-call index bases now use the same MIR-owned direct-call result
 helper as array direct-call bases and inferred locals; `lower_c_infer` no
 longer exposes public slice/array/enum/nullable/tagged-union/Result call
-return-type classifier helpers that are only used inside the infer module.
+return-type classifier helpers that are only used inside the infer module. The
+remaining `lower_c_infer` public entrypoints are now individually exact-count
+gated in the semantic-facts inventory so this registered inference surface
+cannot grow without an explicit inventory update.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|
