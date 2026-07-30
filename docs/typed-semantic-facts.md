@@ -401,9 +401,10 @@ locals without a source type before considering globals. The
 compound numeric-expression missing-fact predicate has likewise been folded into
 the numeric result admission path, so source compound numeric expressions have a
 single local `expression_result` requirement. The
-remaining `lower_c_infer` public entrypoints are now individually exact-count
-gated in the semantic-facts inventory so this registered inference surface
-cannot grow without an explicit inventory update. Direct-call index lowering now
+remaining private `lower_c_infer` helper surface is now exact-count gated as
+well as the remaining public entrypoints, so new backend-local expression
+inference helpers must be explicitly registered before the inventory can pass.
+Direct-call index lowering now
 uses one `direct_index_base_type` callback for both array and slice base typing,
 instead of separate access-context callbacks named as slice/array return-type
 classifiers.
