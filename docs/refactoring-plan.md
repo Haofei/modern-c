@@ -26,7 +26,7 @@ phase or are explicitly scoped to an experimental profile.
 | Compiler request state | Closed for the admitted subset | Keep all compile-like commands on `CompilationSession`; add reentrancy tests when new state is introduced. |
 | Typed MIR identity | In progress | Continue moving type/value/symbol/span/representation identity out of strings, AST side channels, and backend-local maps. |
 | Backend authority | In progress | Treat C/LLVM as consumers of verified facts; delete or register every remaining semantic inference helper. |
-| HIR authority | Open decision | Either promote HIR into the production path or document/test it as inspection-only. |
+| HIR authority | Closed as inspection-only | Keep `lower-hir` / `verify-hir` as inspection commands; MIR verification remains the backend production boundary. |
 | Artifact/source-map provenance | Partially remediated | Bind artifact bytes, source maps, options, toolchain identity, and MIR/fact digests in one metadata object. |
 | Gate governance | Open | Replace hand-maintained gate string lists with one manifest. |
 | Product/TCB scope | Open | Keep selfhost, production kernel, Agent runtime, and vendored runtimes profile-scoped. |
@@ -207,24 +207,31 @@ Purpose: remove the current half-authoritative HIR state.
 
 Decision:
 
-- Option A: promote HIR into the production path:
-  `Syntax AST -> Resolved/Typed HIR -> Typed MIR -> Backend`.
-- Option B: keep HIR as a generated inspection/debug view derived from semantic
-  data.
+- Option B is selected for the current architecture: HIR stays an inspection and
+  verification projection, not the production input to MIR or backend lowering.
 
-Preferred rule:
+Completed baseline:
 
-- Promote HIR only if it reduces MIR/backend access to AST.
-- Otherwise keep it inspection-only and test/document that explicitly.
+- `README.md` documents HIR as inspection-only.
+- `mcc --help` states that HIR commands are inspection-only and MIR
+  verification remains the backend production boundary.
+- `lower-hir` and `verify-hir` outputs begin with an inspection-only contract
+  header.
+- `hir_tests.zig` and `mcc-cli-test` anchor the contract.
+
+Re-entry rule:
+
+- Promote HIR only if it reduces MIR/backend access to AST. Until then, it must
+  remain a generated inspection/debug view and must not be cited as codegen
+  admission evidence.
 
 Closure criteria:
 
-- There is no second semantic path where HIR says one thing and production
-  MIR/codegen consumes another.
-- `mcc lower-hir` and `verify-hir` are documented as either production-boundary
-  commands or inspection commands.
-- Backends and MIR builder have one declared upstream semantic source for every
-  type/control/effect/layout/provenance fact.
+- There is no production claim that treats HIR as codegen admission.
+- `mcc lower-hir` and `verify-hir` are documented and tested as inspection
+  commands.
+- Backends and MIR builder continue to name MIR/facts, not HIR, as the upstream
+  semantic source for type/control/effect/layout/provenance facts.
 
 Risk link: `ARCH-HIR-AUTHORITY`
 
@@ -403,11 +410,10 @@ reviewable; do not merge rows merely because the files overlap.
 | 2 | Move one optional/result lowering decision from backend inference to typed representation facts. | `src/mir_representation.zig`, `src/lower_c_*`, `src/lower_llvm_*` | C/LLVM focused optional/result fixtures plus semantic-facts inventory. | One backend-local optional/result classifier. |
 | 3 | Reject verified MIR with `unknown` runtime instruction type identity at backend admission. | `src/mir.zig`, `src/mir_model.zig`, `src/mir_tests.zig` | Malformed MIR/admission regression and `test-unit`. | Backend fallback behavior for unknown runtime instruction types. |
 | 4 | Narrow `VerifiedProgram` by moving backend-needed spelling into explicit source/symbol tables. | `src/backend.zig`, backend entrypoints | `VerifiedProgram` exposes and validates MIR-owned source spelling; backend registry path and CLI path use the same admission object. | Direct AST access for symbol spelling mechanics. |
-| 5 | Decide HIR authority. Either promote it into the production path or mark it inspection-only with tests. | `src/hir.zig`, `src/main.zig`, `README.md`, `docs/` | `lower-hir`/`verify-hir` contract tests and docs agree. | Half-authoritative HIR drift. |
-| 6 | Convert the first MIR instruction family to tagged-union shape. Start with calls or optional tests. | `src/mir_model.zig`, `src/mir.zig`, verifier, both backends | Malformed-field combinations become unrepresentable or rejected. | `kind + optional fields` illegal states for that family. |
-| 7 | Introduce a small generated gate manifest for 5-10 existing compiler-core gates. | `build/`, `tools/ci/`, `docs/` | Generated build rows match the old hand-written rows; dev-gates test covers it. | Stringly gate drift for the pilot subset. |
-| 8 | Add profile manifests for `compiler-subset`, `llvm-experimental`, and `selfhost-experimental`. | `docs/`, optional `tools/ci/` | Profile docs can be generated from the manifest and name their blocking risks. | Accidental promotion of LLVM/selfhost into broad production claims. |
-| 9 | Prototype exact-byte `VerifiedBundle` admission as a new production-shaped API. | `kernel/core/production_ops.mc`, `kernel/core/elf_loader.mc`, `kernel/crypto/` | Tamper/substitution tests prove raw bytes cannot reach the production loader path. | “verify A, load B” API shape. |
+| 5 | Convert the first MIR instruction family to tagged-union shape. Start with calls or optional tests. | `src/mir_model.zig`, `src/mir.zig`, verifier, both backends | Malformed-field combinations become unrepresentable or rejected. | `kind + optional fields` illegal states for that family. |
+| 6 | Introduce a small generated gate manifest for 5-10 existing compiler-core gates. | `build/`, `tools/ci/`, `docs/` | Generated build rows match the old hand-written rows; dev-gates test covers it. | Stringly gate drift for the pilot subset. |
+| 7 | Add profile manifests for `compiler-subset`, `llvm-experimental`, and `selfhost-experimental`. | `docs/`, optional `tools/ci/` | Profile docs can be generated from the manifest and name their blocking risks. | Accidental promotion of LLVM/selfhost into broad production claims. |
+| 8 | Prototype exact-byte `VerifiedBundle` admission as a new production-shaped API. | `kernel/core/production_ops.mc`, `kernel/core/elf_loader.mc`, `kernel/crypto/` | Tamper/substitution tests prove raw bytes cannot reach the production loader path. | “verify A, load B” API shape. |
 
 Every slice must end with:
 

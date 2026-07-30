@@ -4,6 +4,7 @@ const diagnostics = @import("diagnostics.zig");
 const hir = @import("hir.zig");
 const parser = @import("parser.zig");
 
+const appendDump = hir.appendDump;
 const appendVerificationFacts = hir.appendVerificationFacts;
 const build = hir.build;
 const verify = hir.verify;
@@ -37,6 +38,34 @@ test "builds HIR CFG for branches and loops" {
 
     try std.testing.expectEqual(@as(usize, 1), module_hir.functions.len);
     try std.testing.expect(module_hir.functions[0].blocks.len >= 5);
+}
+
+test "HIR dump and verification facts declare inspection-only contract" {
+    const source =
+        \\fn answer() -> u32 {
+        \\    return 42;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "hir_inspection_only.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try appendDump(std.testing.allocator, module, &dump);
+    try std.testing.expect(std.mem.startsWith(u8, dump.items, hir.inspection_only_header));
+
+    var facts: std.ArrayList(u8) = .empty;
+    defer facts.deinit(std.testing.allocator);
+    try appendVerificationFacts(std.testing.allocator, module, &facts);
+    try std.testing.expect(std.mem.startsWith(u8, facts.items, hir.inspection_only_header));
 }
 
 test "HIR verifier reports fallthrough and no_lang_trap trap edges" {

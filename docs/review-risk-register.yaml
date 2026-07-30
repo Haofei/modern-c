@@ -38,12 +38,10 @@ risks:
   - id: ARCH-HIR-AUTHORITY
     severity: medium
     scope: compiler-architecture
-    status: open
-    admitted_subset_status: inspection-only
-    blocks:
-      - hir-as-production-boundary-claim
-      - unrestricted-production-compiler
-    summary: HIR exists as an inspection/verification projection but is not yet the authoritative production input to MIR/codegen.
+    status: closed
+    admitted_subset_status: inspection-only-gated
+    blocks: []
+    summary: HIR is explicitly documented and tested as an inspection-only projection; MIR verification remains the backend production boundary.
 
   - id: ARCH-BACKEND-FACTS
     severity: high

@@ -18,6 +18,8 @@ const isWrapPreservingBinary = ast_query.isWrapPreservingBinary;
 const isWrapType = ast_query.isWrapType;
 const patternText = mir_syntax.patternText;
 
+pub const inspection_only_header = "hir mode=inspection-only production_boundary=false\n";
+
 pub const Instruction = struct {
     kind: []const u8,
     detail: []const u8,
@@ -115,6 +117,7 @@ pub fn appendDump(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
     var hir = try build(allocator, module);
     defer hir.deinit();
 
+    try out.appendSlice(allocator, inspection_only_header);
     for (hir.functions) |function| {
         try out.print(
             allocator,
@@ -143,6 +146,7 @@ pub fn appendVerificationFacts(allocator: std.mem.Allocator, module: ast.Module,
     var hir = try build(allocator, module);
     defer hir.deinit();
 
+    try out.appendSlice(allocator, inspection_only_header);
     for (hir.functions) |function| {
         if (!std.mem.eql(u8, function.return_ty, "void")) {
             if (functionFallsThrough(function)) |span| {

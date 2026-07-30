@@ -135,6 +135,7 @@ fn functionByNameMut(module: *mir.Module, name: []const u8) ?*mir.Function {
 }
 
 test "MIR verifier rejects function symbol identity drift" {
+    // DIAGNOSTIC_UNIT: E_MIR_SYMBOL_ID
     const source =
         \\fn main() -> u32 {
         \\    return 1;
@@ -163,6 +164,7 @@ test "MIR verifier rejects function symbol identity drift" {
 }
 
 test "MIR verifier rejects instruction typed identity drift" {
+    // DIAGNOSTIC_UNIT: E_MIR_IDENTITY
     const source =
         \\fn main() -> u32 {
         \\    let x: u32 = 1;

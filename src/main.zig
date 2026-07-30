@@ -67,6 +67,8 @@ const usage =
     \\  mcc symbols <file.mc>
     \\  mcc list-tests <file.mc>
     \\
+    \\HIR commands are inspection-only; MIR verification remains the backend production boundary.
+    \\
     \\input:
     \\  Use <file.mc> for normal file input, or - to read MC source from stdin.
     \\

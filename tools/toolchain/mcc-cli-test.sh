@@ -128,6 +128,7 @@ assert_stdout_contains "mcc emit-c-struct <file.mc> --structs=A,B,C" "--help emi
 assert_stdout_contains "mcc fmt <file.mc> [--check]" "--help fmt command"
 assert_stdout_contains "mcc symbols <file.mc>" "--help symbols command"
 assert_stdout_contains "mcc build <file.mc> -o <exe>" "--help build command"
+assert_stdout_contains "HIR commands are inspection-only; MIR verification remains the backend production boundary." "--help HIR inspection-only contract"
 assert_stdout_contains "--remap-prefix=FROM=TO" "--help remap-prefix option"
 assert_stdout_contains "--std-dir=<dir>" "--help installed std-dir option"
 assert_stdout_contains "--visibility=legacy|explicit" "--help visibility mode option"
