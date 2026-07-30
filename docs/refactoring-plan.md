@@ -140,6 +140,9 @@ Current baseline:
   generic call inference.
 - Assignment MIR instructions now carry the resolved target/source lowering
   type instead of a debug-only `.unknown` placeholder.
+- Target-typed `bind`, `ok`, and `err` call instructions now carry the
+  contextual result type already owned by their MIR call-target/target-type
+  facts.
 - Inventory checks anchor the migrated surface.
 
 Implementation order:

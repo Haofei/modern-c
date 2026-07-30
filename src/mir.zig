@@ -1410,6 +1410,7 @@ pub fn validateKnownFactTypesForLowering(module: Module) error{UnknownMirLowerin
             }
             for (block.instructions) |instruction| {
                 if (instruction.kind == .assign and valueTypeIsUnknownPlaceholder(instruction.result_ty)) return error.UnknownMirLoweringType;
+                if (contextualConstructorCallRequiresKnownType(instruction) and valueTypeIsUnknownPlaceholder(instruction.result_ty)) return error.UnknownMirLoweringType;
             }
         }
         for (function.range_facts) |fact| {
@@ -1435,6 +1436,13 @@ fn valueTypeIsUnknownPlaceholder(ty: ValueType) bool {
         .unknown => true,
         else => false,
     };
+}
+
+fn contextualConstructorCallRequiresKnownType(instruction: Instruction) bool {
+    if (instruction.kind != .call) return false;
+    return std.mem.eql(u8, instruction.detail, "bind") or
+        std.mem.eql(u8, instruction.detail, "ok") or
+        std.mem.eql(u8, instruction.detail, "err");
 }
 
 pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTargetTypeFacts, StaleMirTargetTypeFacts }!void {
@@ -5734,6 +5742,8 @@ const FunctionBuilder = struct {
                 const explicit_trap_target = explicitTrapCallTargetKind(node);
                 const call_ty: ValueType = if (dyn_dispatch_target) |target|
                     target.result_ty
+                else if (self.targetTypedCallResultValueType(node)) |ty|
+                    ty
                 else if (is_dyn_dispatch)
                     .unknown
                 else if (semantic_escape_target) |target|
@@ -7039,6 +7049,15 @@ const FunctionBuilder = struct {
             return call.args.len == expected_args;
         }
         return false;
+    }
+
+    fn targetTypedCallResultValueType(self: *FunctionBuilder, call: anytype) ?ValueType {
+        const target_ty = self.assignment_target_type_expr orelse return null;
+        const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        if (isBindCallNode(call)) return if (target_ty.kind == .closure_type) result_ty else null;
+        if (result_ty == .result and resultConstructorCallTag(call) != null) return result_ty;
+        if (self.isTargetTypedUnionConstructor(call, target_ty)) return result_ty;
+        return null;
     }
 
     fn targetTypeForTargetTypedCallArg(self: *FunctionBuilder, call: anytype, index: usize) ?ast.TypeExpr {

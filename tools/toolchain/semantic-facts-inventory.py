@@ -1012,6 +1012,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "try self.addCallTargetFact(target, .never": 1,
         "const assignment_target_ty = self.typeForAssignmentTarget(node.target);": 1,
         "instruction.kind == .assign and valueTypeIsUnknownPlaceholder": 1,
+        "fn targetTypedCallResultValueType(": 1,
+        "fn contextualConstructorCallRequiresKnownType(": 1,
         "appendTargetTypeFact(.domain_type": 1,
         "appendTargetTypeFact(.domain_payload": 1,
         "appendTargetTypeFact(.domain_result": 1,
@@ -1572,6 +1574,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "MIR lowering admission rejects unknown call-target result facts": 1,
         "MIR assign instructions carry known lowering types": 1,
         "MIR lowering admission rejects unknown assign instruction types": 1,
+        "MIR lowering admission rejects unknown contextual call instruction types": 1,
     },
     "src/lower_c_tests.zig": {
         "lower-c DMA calls consume MIR identities and complete types": 1,

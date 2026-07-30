@@ -71,6 +71,15 @@ fn functionByName(module: mir.Module, name: []const u8) ?mir.Function {
     return null;
 }
 
+fn callInstructionByDetail(function: mir.Function, detail: []const u8) ?mir.Instruction {
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, detail)) return instruction;
+        }
+    }
+    return null;
+}
+
 fn targetTypeFactByKind(function: mir.Function, kind: mir.TargetTypeKind) ?mir.TargetTypeFact {
     for (function.target_type_facts) |fact| if (fact.kind == kind) return fact;
     return null;
@@ -733,6 +742,39 @@ test "MIR lowering admission rejects unknown assign instruction types" {
     return error.TestUnexpectedResult;
 }
 
+test "MIR lowering admission rejects unknown contextual call instruction types" {
+    const source =
+        \\enum E { bad }
+        \\fn make_ok(value: u32) -> Result<u32, E> {
+        \\    return ok(value);
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_unknown_contextual_call_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "make_ok").?;
+    for (function.blocks) |*block| {
+        for (block.instructions) |*instruction| {
+            if (instruction.kind != .call or !std.mem.eql(u8, instruction.detail, "ok")) continue;
+            instruction.result_ty = .unknown;
+            try mir.validateCallTargetFactsForLowering(typed_mir);
+            try mir.validateTargetTypeFactsForLowering(typed_mir);
+            try std.testing.expectError(error.UnknownMirLoweringType, mir.validateKnownFactTypesForLowering(typed_mir));
+            try std.testing.expectError(error.UnknownMirLoweringType, mir.validateLoweringAdmission(typed_mir));
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
 test "MIR owns inferred local types for conversion results" {
     const source =
         \\fn inferred_conversion(value: u64) -> u8 {
@@ -855,6 +897,7 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(@as(usize, 1), bind_fn.target_type_facts.len);
     try std.testing.expectEqual(mir.TargetTypeKind.bind, bind_fn.target_type_facts[0].kind);
     try std.testing.expect(bind_fn.target_type_facts[0].target_ty.kind == .closure_type);
+    try std.testing.expect(callInstructionByDetail(bind_fn, "bind").?.result_ty != .unknown);
 
     const ok_fn = functionByName(typed_mir, "make_ok").?;
     try std.testing.expectEqual(@as(usize, 1), ok_fn.call_target_facts.len);
@@ -862,12 +905,14 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(mir.TargetTypeKind.result_ok, ok_fn.target_type_facts[0].kind);
     try std.testing.expect(ok_fn.target_type_facts[0].target_ty.kind == .generic);
     try std.testing.expectEqualStrings("Result", ok_fn.target_type_facts[0].target_ty.kind.generic.base.text);
+    try std.testing.expectEqualStrings("Result", valueTypeName(callInstructionByDetail(ok_fn, "ok").?.result_ty));
 
     const err_fn = functionByName(typed_mir, "make_err").?;
     try std.testing.expectEqual(@as(usize, 1), err_fn.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.result_err, err_fn.call_target_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.result_err, err_fn.target_type_facts[0].kind);
     try std.testing.expectEqual(mir.TargetTypeKind.enum_literal, err_fn.target_type_facts[1].kind);
+    try std.testing.expectEqualStrings("Result", valueTypeName(callInstructionByDetail(err_fn, "err").?.result_ty));
     const arg_fn = functionByName(typed_mir, "pass_ok").?;
     try std.testing.expect(targetTypeFactByKind(arg_fn, .result_ok) != null);
     const slot_fn = functionByName(typed_mir, "make_slot").?;
