@@ -531,6 +531,7 @@ pub const Block = struct {
     kind: []const u8,
     instructions: []Instruction,
     successors: []usize,
+    typed_successors: []BlockId = &.{},
     terminator: Terminator,
 };
 
@@ -592,6 +593,7 @@ pub const Module = struct {
             for (function.blocks) |block| {
                 self.allocator.free(block.instructions);
                 self.allocator.free(block.successors);
+                if (block.typed_successors.len != 0) self.allocator.free(block.typed_successors);
             }
             self.allocator.free(function.blocks);
             self.allocator.free(function.trap_edges);

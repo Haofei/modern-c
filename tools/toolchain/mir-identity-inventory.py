@@ -43,12 +43,16 @@ def main() -> int:
         "pub const BlockId = TypedIndex(\"BlockId\");",
         "pub const SpanId = TypedIndex(\"SpanId\");",
         "typed_id: BlockId = .invalid,",
+        "typed_successors: []BlockId = &.{},",
     ):
         require_contains("src/mir_model.zig", needle)
 
     for needle in (
         "pub const BlockId = mir_model.BlockId;",
         ".typed_id = BlockId.fromIndex(block.id),",
+        ".typed_successors = typed_successors,",
+        "if (block.typed_id.isValid() and block.typed_id.index() != block.id) return blockLastSpan(block);",
+        "if (block.typed_successors.len != 0) {",
         "pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: *std.ArrayList(u8)) !void {",
     ):
         require_contains("src/mir.zig", needle)
@@ -56,7 +60,9 @@ def main() -> int:
     for needle in (
         "const BlockId = mir.BlockId;",
         'test "MIR block model carries typed block identity"',
+        'test "MIR verifier rejects typed successor drift in CFG"',
         "try std.testing.expectEqual(BlockId.fromIndex(block.id), block.typed_id);",
+        "try std.testing.expectEqual(block.successors.len, block.typed_successors.len);",
     ):
         require_contains("src/mir_tests.zig", needle)
 

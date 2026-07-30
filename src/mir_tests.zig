@@ -41,6 +41,11 @@ test "MIR block model carries typed block identity" {
         try std.testing.expect(block.typed_id.isValid());
         try std.testing.expectEqual(block.id, block.typed_id.index());
         try std.testing.expectEqual(BlockId.fromIndex(block.id), block.typed_id);
+        try std.testing.expectEqual(block.successors.len, block.typed_successors.len);
+        for (block.successors, 0..) |successor, index| {
+            try std.testing.expect(block.typed_successors[index].isValid());
+            try std.testing.expectEqual(successor, block.typed_successors[index].index());
+        }
     }
 }
 
@@ -4112,6 +4117,66 @@ test "MIR verifier rejects block id mismatch in CFG" {
     defer facts.deinit(std.testing.allocator);
     try mir.appendVerificationFactsFromMir(std.testing.allocator, module, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=bad_block_id pass=cfg finding=malformed_cfg") != null);
+}
+
+test "MIR verifier rejects typed successor drift in CFG" {
+    var instructions = [_]Instruction{};
+    var entry_successors = [_]usize{1};
+    var entry_typed_successors = [_]BlockId{BlockId.fromIndex(2)};
+    var empty_successors = [_]usize{};
+    var trap_edges = [_]TrapEdge{};
+    var contract_regions = [_]ContractRegion{};
+    var range_facts = [_]RangeFact{};
+    var blocks = [_]Block{
+        .{
+            .id = 0,
+            .typed_id = BlockId.fromIndex(0),
+            .kind = "entry",
+            .instructions = instructions[0..],
+            .successors = entry_successors[0..],
+            .typed_successors = entry_typed_successors[0..],
+            .terminator = .{ .jump = 1 },
+        },
+        .{
+            .id = 1,
+            .typed_id = BlockId.fromIndex(1),
+            .kind = "target",
+            .instructions = instructions[0..],
+            .successors = empty_successors[0..],
+            .terminator = .{ .return_ = .void },
+        },
+        .{
+            .id = 2,
+            .typed_id = BlockId.fromIndex(2),
+            .kind = "wrong",
+            .instructions = instructions[0..],
+            .successors = empty_successors[0..],
+            .terminator = .{ .return_ = .void },
+        },
+    };
+    var functions = [_]Function{
+        .{
+            .name = "bad_typed_successor",
+            .return_ty = .void,
+            .no_lang_trap = false,
+            .irq_context = false,
+            .blocks = blocks[0..],
+            .trap_edges = trap_edges[0..],
+            .contract_regions = contract_regions[0..],
+            .range_facts = range_facts[0..],
+            .pointer_provenance_facts = &.{},
+            .representation_facts = &.{},
+            .elided_bounds = &.{},
+        },
+    };
+    const module = Module{ .allocator = std.testing.allocator, .functions = functions[0..] };
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_typed_successor.mc", "");
+    defer reporter.deinit();
+    try mir.verifyBuiltMir(module, &reporter);
+
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, reporter.diagnostics.items[0].message, "E_MIR_CFG") != null);
 }
 
 test "MIR verifier rejects fallthrough successors and trap kind mismatch" {

@@ -107,9 +107,11 @@ Current status:
 
 - Block identity now has a typed `BlockId` seed in `src/mir_model.zig`.
   The legacy numeric `Block.id` remains for compatibility, but built MIR blocks
-  also carry `typed_id = BlockId.fromIndex(block.id)`.
+  also carry `typed_id = BlockId.fromIndex(block.id)` and typed successor
+  mirrors for CFG edges.
 - `mir-identity-inventory-test` gates the typed ID definitions, `BlockId`
-  builder assignment, and the unit test that checks the public block model.
+  builder assignment, typed successor mirrors, verifier drift checks, and the
+  unit tests that check the public block model.
 
 Work:
 

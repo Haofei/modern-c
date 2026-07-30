@@ -3696,17 +3696,26 @@ const FunctionBuilder = struct {
             for (blocks.items) |block| {
                 self.allocator.free(block.instructions);
                 self.allocator.free(block.successors);
+                if (block.typed_successors.len != 0) self.allocator.free(block.typed_successors);
             }
             blocks.deinit(self.allocator);
         }
 
         for (self.blocks.items) |*block| {
+            const legacy_successors = try block.successors.toOwnedSlice(self.allocator);
+            errdefer self.allocator.free(legacy_successors);
+            const typed_successors = try self.allocator.alloc(BlockId, legacy_successors.len);
+            errdefer self.allocator.free(typed_successors);
+            for (legacy_successors, 0..) |successor, index| {
+                typed_successors[index] = BlockId.fromIndex(successor);
+            }
             try blocks.append(self.allocator, .{
                 .id = block.id,
                 .typed_id = BlockId.fromIndex(block.id),
                 .kind = block.kind,
                 .instructions = try block.instructions.toOwnedSlice(self.allocator),
-                .successors = try block.successors.toOwnedSlice(self.allocator),
+                .successors = legacy_successors,
+                .typed_successors = typed_successors,
                 .terminator = block.terminator,
             });
         }
@@ -9670,6 +9679,13 @@ fn cfgHasStructuralError(function: Function) ?SourcePoint {
     if (function.blocks.len == 0) return null;
     for (function.blocks, 0..) |block, block_index| {
         if (block.id != block_index) return blockLastSpan(block);
+        if (block.typed_id.isValid() and block.typed_id.index() != block.id) return blockLastSpan(block);
+        if (block.typed_successors.len != 0) {
+            if (block.typed_successors.len != block.successors.len) return blockLastSpan(block);
+            for (block.typed_successors, 0..) |successor, successor_index| {
+                if (!successor.isValid() or successor.index() != block.successors[successor_index]) return blockLastSpan(block);
+            }
+        }
         for (block.successors) |successor| {
             if (successor >= function.blocks.len) return blockLastSpan(block);
         }
