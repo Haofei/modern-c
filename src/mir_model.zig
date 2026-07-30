@@ -149,6 +149,7 @@ pub const ValueType = union(enum) {
 pub const Instruction = struct {
     kind: Kind,
     result_ty: ValueType,
+    typed_result_ty: TypeId = .invalid,
     detail: []const u8,
     // Target-type instructions retain the complete semantic type separately
     // from their runtime representation.
@@ -526,9 +527,15 @@ pub const RepresentationFact = struct {
     kind: Instruction.Kind,
     detail: []const u8,
     result_ty: ValueType,
+    typed_result_ty: TypeId = .invalid,
     value_id: []const u8,
     typed_value_id: ValueId = .invalid,
     source: SourcePoint,
+};
+
+pub const TypeIdentity = struct {
+    id: TypeId,
+    spelling: []const u8,
 };
 
 pub const ValueIdentity = struct {
@@ -581,6 +588,7 @@ pub const Function = struct {
     const_get_facts: []ConstGetFact = &.{},
     call_target_facts: []CallTargetFact = &.{},
     target_type_facts: []TargetTypeFact = &.{},
+    type_identities: []TypeIdentity = &.{},
     value_identities: []ValueIdentity = &.{},
     generated_type_expr_nodes: []*ast.TypeExpr = &.{},
     generated_type_expr_args: [][]ast.TypeExpr = &.{},
@@ -616,6 +624,7 @@ pub const Module = struct {
             if (function.const_get_facts.len != 0) self.allocator.free(function.const_get_facts);
             if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);
             if (function.target_type_facts.len != 0) self.allocator.free(function.target_type_facts);
+            if (function.type_identities.len != 0) self.allocator.free(function.type_identities);
             if (function.value_identities.len != 0) self.allocator.free(function.value_identities);
             if (function.ffi_param_contracts.len != 0) self.allocator.free(function.ffi_param_contracts);
             for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);

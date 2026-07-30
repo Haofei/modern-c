@@ -110,14 +110,15 @@ Current status:
   also carry `typed_id = BlockId.fromIndex(block.id)` and typed successor
   mirrors for CFG edges.
 - Representation-sensitive instructions and `RepresentationFact` rows now
-  double-write typed `ValueId` identities through a per-function interner. The
-  function owns a `ValueIdentity` table for audit/debug dumps. The legacy
-  textual `value_id` remains for dumps and compatibility, while backend
+  double-write typed `ValueId` identities and typed `TypeId` result identities
+  through per-function interners. The function owns `ValueIdentity` and
+  `TypeIdentity` tables for audit/debug dumps. The legacy textual `value_id` and
+  `ValueType` spelling remain for dumps and compatibility, while backend
   admission rejects typed identity drift.
 - `mir-identity-inventory-test` gates the typed ID definitions, `BlockId`
   builder assignment, typed successor mirrors, typed `ValueId` representation
-  facts, verifier/admission drift checks, and the unit tests that check the
-  public block model.
+  facts, typed representation result identities, verifier/admission drift
+  checks, and the unit tests that check the public block model.
 
 Work:
 

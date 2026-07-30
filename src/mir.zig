@@ -161,6 +161,7 @@ pub const ConstGetFact = mir_model.ConstGetFact;
 pub const AggregateReturnSummaryFact = mir_model.AggregateReturnSummaryFact;
 pub const AggregateReturnPointerFact = mir_model.AggregateReturnPointerFact;
 pub const RepresentationFact = mir_model.RepresentationFact;
+pub const TypeIdentity = mir_model.TypeIdentity;
 pub const ValueIdentity = mir_model.ValueIdentity;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
@@ -525,6 +526,13 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             "mir function name={s} return={s} no_lang_trap={} irq_context={} extern={} c_abi={} params={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
             .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.is_extern, function.c_abi, function.param_count, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.const_get_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
+        for (function.type_identities) |identity| {
+            try out.print(
+                allocator,
+                "mir type_identity fn={s} id={} spelling={s}\n",
+                .{ function.name, identity.id.index(), identity.spelling },
+            );
+        }
         for (function.value_identities) |identity| {
             try out.print(
                 allocator,
@@ -1441,6 +1449,7 @@ fn functionHasMatchingRepresentationFact(function: Function, instruction: Instru
         if (fact.source.line != instruction.line or fact.source.column != instruction.column) continue;
         if (!std.mem.eql(u8, fact.detail, instruction.detail)) continue;
         if (!std.mem.eql(u8, fact.value_id, value_id)) continue;
+        if (!representationTypedResultTypesCompatible(instruction, fact)) continue;
         if (!representationTypedValueIdsCompatible(instruction, fact)) continue;
         return true;
     }
@@ -1456,6 +1465,7 @@ fn functionHasMatchingRepresentationInstruction(function: Function, fact: Repres
             if (instruction.line != fact.source.line or instruction.column != fact.source.column) continue;
             if (!std.mem.eql(u8, instruction.detail, fact.detail)) continue;
             if (!std.mem.eql(u8, instruction.value_id orelse "none", fact.value_id)) continue;
+            if (!representationTypedResultTypesCompatible(instruction, fact)) continue;
             if (!representationTypedValueIdsCompatible(instruction, fact)) continue;
             return true;
         }
@@ -1468,6 +1478,13 @@ fn representationTypedValueIdsCompatible(instruction: Instruction, fact: Represe
         return fact.typed_value_id.isValid() and fact.typed_value_id.eql(typed_value_id);
     }
     return !fact.typed_value_id.isValid();
+}
+
+fn representationTypedResultTypesCompatible(instruction: Instruction, fact: RepresentationFact) bool {
+    if (instruction.typed_result_ty.isValid()) {
+        return fact.typed_result_ty.isValid() and fact.typed_result_ty.eql(instruction.typed_result_ty);
+    }
+    return !fact.typed_result_ty.isValid();
 }
 
 fn sameRepresentationValueType(left: ValueType, right: ValueType) bool {
@@ -3479,6 +3496,7 @@ const FunctionBuilder = struct {
     local_types: std.StringHashMap(ValueType),
     local_type_exprs: std.StringHashMap(ast.TypeExpr),
     local_mutability: std.StringHashMap(bool),
+    type_ids: std.StringHashMap(TypeId),
     value_ids: std.StringHashMap(ValueId),
     // Bindings introduced by a successful nullable-pointer pattern are
     // non-null by construction for that arm. Keep the representation fact for
@@ -3574,6 +3592,7 @@ const FunctionBuilder = struct {
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
+            .type_ids = std.StringHashMap(TypeId).init(allocator),
             .value_ids = std.StringHashMap(ValueId).init(allocator),
             .proven_nonnull_bindings = std.StringHashMap(void).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
@@ -3646,6 +3665,7 @@ const FunctionBuilder = struct {
             .local_types = std.StringHashMap(ValueType).init(allocator),
             .local_type_exprs = std.StringHashMap(ast.TypeExpr).init(allocator),
             .local_mutability = std.StringHashMap(bool).init(allocator),
+            .type_ids = std.StringHashMap(TypeId).init(allocator),
             .value_ids = std.StringHashMap(ValueId).init(allocator),
             .proven_nonnull_bindings = std.StringHashMap(void).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
@@ -3698,6 +3718,7 @@ const FunctionBuilder = struct {
         self.local_types.deinit();
         self.local_type_exprs.deinit();
         self.local_mutability.deinit();
+        self.type_ids.deinit();
         self.value_ids.deinit();
         self.proven_nonnull_bindings.deinit();
         self.local_function_aliases.deinit();
@@ -3757,6 +3778,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(call_target_facts);
         const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(target_type_facts);
+        const type_identities = try self.buildTypeIdentities();
+        errdefer self.allocator.free(type_identities);
         const value_identities = try self.buildValueIdentities();
         errdefer self.allocator.free(value_identities);
         const generated_type_expr_nodes = try self.generated_type_expr_nodes.toOwnedSlice(self.allocator);
@@ -3793,6 +3816,8 @@ const FunctionBuilder = struct {
         self.local_type_exprs = std.StringHashMap(ast.TypeExpr).init(self.allocator);
         self.local_mutability.deinit();
         self.local_mutability = std.StringHashMap(bool).init(self.allocator);
+        self.type_ids.deinit();
+        self.type_ids = std.StringHashMap(TypeId).init(self.allocator);
         self.value_ids.deinit();
         self.value_ids = std.StringHashMap(ValueId).init(self.allocator);
         self.proven_nonnull_bindings.deinit();
@@ -3834,6 +3859,7 @@ const FunctionBuilder = struct {
             .const_get_facts = const_get_facts,
             .call_target_facts = call_target_facts,
             .target_type_facts = target_type_facts,
+            .type_identities = type_identities,
             .value_identities = value_identities,
             .generated_type_expr_nodes = generated_type_expr_nodes,
             .generated_type_expr_args = generated_type_expr_args,
@@ -6900,10 +6926,12 @@ const FunctionBuilder = struct {
 
     fn addInstrWithValue(self: *FunctionBuilder, kind: Instruction.Kind, detail: []const u8, ty: ValueType, span: ast.Span, value_id: ?[]const u8) !void {
         const resolved_value_id = value_id orelse defaultInstructionValueId(kind, detail);
+        const typed_result_ty = try self.internTypeId(ty);
         const typed_value_id = if (resolved_value_id) |id| try self.internValueId(id) else null;
         try self.blocks.items[self.current].instructions.append(self.allocator, .{
             .kind = kind,
             .result_ty = ty,
+            .typed_result_ty = typed_result_ty,
             .detail = detail,
             .value_id = resolved_value_id,
             .contract_region_id = if (kind == .unchecked_assume) self.active_contract_region_id else null,
@@ -6918,11 +6946,21 @@ const FunctionBuilder = struct {
                 .kind = kind,
                 .detail = detail,
                 .result_ty = ty,
+                .typed_result_ty = typed_result_ty,
                 .value_id = resolved_value_id orelse "none",
                 .typed_value_id = typed_value_id orelse .invalid,
                 .source = .{ .line = span.line, .column = span.column },
             });
         }
+    }
+
+    fn internTypeId(self: *FunctionBuilder, ty: ValueType) !TypeId {
+        const spelling = ty.name();
+        const entry = try self.type_ids.getOrPut(spelling);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = TypeId.fromIndex(self.type_ids.count() - 1);
+        }
+        return entry.value_ptr.*;
     }
 
     fn internValueId(self: *FunctionBuilder, spelling: []const u8) !ValueId {
@@ -6931,6 +6969,21 @@ const FunctionBuilder = struct {
             entry.value_ptr.* = ValueId.fromIndex(self.value_ids.count() - 1);
         }
         return entry.value_ptr.*;
+    }
+
+    fn buildTypeIdentities(self: *FunctionBuilder) ![]TypeIdentity {
+        const identities = try self.allocator.alloc(TypeIdentity, self.type_ids.count());
+        errdefer self.allocator.free(identities);
+        var it = self.type_ids.iterator();
+        while (it.next()) |entry| {
+            const id = entry.value_ptr.*;
+            std.debug.assert(id.index() < identities.len);
+            identities[id.index()] = .{
+                .id = id,
+                .spelling = entry.key_ptr.*,
+            };
+        }
+        return identities;
     }
 
     fn buildValueIdentities(self: *FunctionBuilder) ![]ValueIdentity {
