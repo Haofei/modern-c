@@ -918,25 +918,13 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     defer hosted_c.deinit(allocator);
     try appendHostedBuildWrapper(allocator, raw_c.items, &hosted_c, path);
 
-    const tmp_c = try std.fmt.allocPrint(allocator, "{s}.mc-build-{d}.c", .{ output_path, std.Thread.getCurrentId() });
+    const tmp_c = try writeExclusiveBuildTemp(allocator, io, output_path, "c", hosted_c.items);
     defer allocator.free(tmp_c);
     defer std.Io.Dir.cwd().deleteFile(io, tmp_c) catch {};
-    try session.writeOutputPath(tmp_c, hosted_c.items);
 
-    const tmp_exe = try std.fmt.allocPrint(allocator, "{s}.mc-build-{d}-{d}.out", .{
-        output_path,
-        std.posix.system.getpid(),
-        std.Thread.getCurrentId(),
-    });
+    const tmp_exe = try reserveExclusiveBuildTemp(allocator, io, output_path, "out");
     defer allocator.free(tmp_exe);
     defer std.Io.Dir.cwd().deleteFile(io, tmp_exe) catch {};
-    {
-        var reserved = std.Io.Dir.cwd().createFile(io, tmp_exe, .{ .exclusive = true }) catch |err| {
-            std.debug.print("mcc build: unable to reserve temporary executable {s}: {s}\n", .{ tmp_exe, @errorName(err) });
-            return error.BuildFailed;
-        };
-        reserved.close(io);
-    }
 
     const argv = [_][]const u8{
         clang_bin,
@@ -980,6 +968,67 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     try session.writeStdout("mcc build: wrote ");
     try session.writeStdout(output_path);
     try session.writeStdout("\n");
+}
+
+fn buildTempPath(allocator: std.mem.Allocator, output_path: []const u8, suffix: []const u8, attempt: usize) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}.mc-build-{d}-{d}-{d}.{s}", .{
+        output_path,
+        std.posix.system.getpid(),
+        std.Thread.getCurrentId(),
+        attempt,
+        suffix,
+    });
+}
+
+fn isExistingPathError(err: anyerror) bool {
+    const name = @errorName(err);
+    return std.mem.eql(u8, name, "PathAlreadyExists") or
+        std.mem.eql(u8, name, "FileAlreadyExists");
+}
+
+fn reserveExclusiveBuildTemp(allocator: std.mem.Allocator, io: std.Io, output_path: []const u8, suffix: []const u8) ![]const u8 {
+    for (0..64) |attempt| {
+        const path = try buildTempPath(allocator, output_path, suffix, attempt);
+        var file = std.Io.Dir.cwd().createFile(io, path, .{ .exclusive = true }) catch |err| {
+            if (isExistingPathError(err)) {
+                allocator.free(path);
+                continue;
+            }
+            std.debug.print("mcc build: unable to reserve temporary {s} artifact {s}: {s}\n", .{ suffix, path, @errorName(err) });
+            allocator.free(path);
+            return error.BuildFailed;
+        };
+        file.close(io);
+        return path;
+    }
+    std.debug.print("mcc build: unable to reserve unique temporary {s} artifact for {s}\n", .{ suffix, output_path });
+    return error.BuildFailed;
+}
+
+fn writeExclusiveBuildTemp(allocator: std.mem.Allocator, io: std.Io, output_path: []const u8, suffix: []const u8, bytes: []const u8) ![]const u8 {
+    for (0..64) |attempt| {
+        const path = try buildTempPath(allocator, output_path, suffix, attempt);
+        var file = std.Io.Dir.cwd().createFile(io, path, .{ .exclusive = true }) catch |err| {
+            if (isExistingPathError(err)) {
+                allocator.free(path);
+                continue;
+            }
+            std.debug.print("mcc build: unable to reserve temporary {s} artifact {s}: {s}\n", .{ suffix, path, @errorName(err) });
+            allocator.free(path);
+            return error.BuildFailed;
+        };
+        file.writeStreamingAll(io, bytes) catch |err| {
+            file.close(io);
+            std.Io.Dir.cwd().deleteFile(io, path) catch {};
+            std.debug.print("mcc build: unable to write temporary {s}: {s}\n", .{ path, @errorName(err) });
+            allocator.free(path);
+            return error.BuildFailed;
+        };
+        file.close(io);
+        return path;
+    }
+    std.debug.print("mcc build: unable to reserve unique temporary {s} artifact for {s}\n", .{ suffix, output_path });
+    return error.BuildFailed;
 }
 
 fn appendHostedBuildWrapper(allocator: std.mem.Allocator, raw_c: []const u8, out: *std.ArrayList(u8), source_path: []const u8) !void {

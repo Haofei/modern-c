@@ -75,6 +75,11 @@ if [ "$RC" -ne 1 ] || [ "$OLD_RC" -ne 7 ]; then
     cat "$WORK/fail-clang.err"
     exit 1
 fi
+if find "$WORK" -maxdepth 1 -name '*.mc-build-*' | grep -q .; then
+    echo "FAIL: mcc-build-test - failing clang leaked temporary build artifacts"
+    find "$WORK" -maxdepth 1 -name '*.mc-build-*' -print
+    exit 1
+fi
 
 if ! grep -Fq "mcc build: wrote $WORK/ok" "$WORK/build.out"; then
     echo "FAIL: mcc-build-test - build output did not report the executable path"

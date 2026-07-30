@@ -257,6 +257,10 @@ Current baseline:
 - `tools/toolchain/mcmap-verify.py` verifies map-payload and generated-artifact
   digests, and `mcmap-test` proves tampered map bodies and wrong artifacts are
   rejected.
+- `mcc build` writes the generated hosted C through an exclusive sibling
+  temporary file, reserves the linked executable path with exclusive create,
+  links to that temporary executable, and commits the final output with an
+  atomic rename.
 - Full toolchain identity and shared artifact metadata across `emit-c`,
   `emit-llvm`, `emit-map`, and `build` remain open.
 
@@ -403,8 +407,7 @@ reviewable; do not merge rows merely because the files overlap.
 | 6 | Convert the first MIR instruction family to tagged-union shape. Start with calls or optional tests. | `src/mir_model.zig`, `src/mir.zig`, verifier, both backends | Malformed-field combinations become unrepresentable or rejected. | `kind + optional fields` illegal states for that family. |
 | 7 | Introduce a small generated gate manifest for 5-10 existing compiler-core gates. | `build/`, `tools/ci/`, `docs/` | Generated build rows match the old hand-written rows; dev-gates test covers it. | Stringly gate drift for the pilot subset. |
 | 8 | Add profile manifests for `compiler-subset`, `llvm-experimental`, and `selfhost-experimental`. | `docs/`, optional `tools/ci/` | Profile docs can be generated from the manifest and name their blocking risks. | Accidental promotion of LLVM/selfhost into broad production claims. |
-| 9 | Make `mcc build` final executable output transactional. | `src/main.zig`, toolchain tests | Interrupted/failed build does not corrupt the previous output; concurrent temp names do not collide. | Non-atomic build artifact writes. |
-| 10 | Prototype exact-byte `VerifiedBundle` admission as a new production-shaped API. | `kernel/core/production_ops.mc`, `kernel/core/elf_loader.mc`, `kernel/crypto/` | Tamper/substitution tests prove raw bytes cannot reach the production loader path. | “verify A, load B” API shape. |
+| 9 | Prototype exact-byte `VerifiedBundle` admission as a new production-shaped API. | `kernel/core/production_ops.mc`, `kernel/core/elf_loader.mc`, `kernel/crypto/` | Tamper/substitution tests prove raw bytes cannot reach the production loader path. | “verify A, load B” API shape. |
 
 Every slice must end with:
 
