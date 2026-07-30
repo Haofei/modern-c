@@ -62,6 +62,12 @@ fact row. `lower-mir` also prints representation fact `typed_result_ty_id`,
 still leave unrelated typed fields invalid, but built MIR cannot retarget a
 typed instruction identity without a verifier diagnostic.
 
+`VerifiedProgram` now exposes a `SourceSpellingView` backed by the verified MIR
+`SymbolIdentity` table. Backend entrypoints can resolve function symbol spelling
+through this explicit view instead of treating the AST as the source-spelling
+table. Legacy `syntax_module` remains present for declaration metadata that has
+not yet been normalized, so this is a boundary seed rather than AST removal.
+
 The completed backend AST-inference budget sets the current shrinking budget to
 eight registered backend families. This closes the budget action slice; each
 budgeted family still needs a later migration, reduction, or accepted limitation

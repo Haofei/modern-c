@@ -92,10 +92,46 @@ pub const LowerOptions = struct {
     linux_kernel: bool = false,
 };
 
+/// Backend-facing source spelling view. This is intentionally backed by
+/// verified MIR identities, not by an AST rescan. It is the first explicit
+/// source/symbol table that backend entrypoints can consume while legacy
+/// lowerers still carry `syntax_module` for not-yet-normalized declarations.
+pub const SourceSpellingView = struct {
+    symbols: []const mir.SymbolIdentity,
+
+    pub fn symbolSpelling(self: SourceSpellingView, id: mir.SymbolId) ?[]const u8 {
+        if (!id.isValid()) return null;
+        const index = id.index();
+        if (index >= self.symbols.len) return null;
+        const identity = self.symbols[index];
+        if (!identity.id.eql(id)) return null;
+        return identity.spelling;
+    }
+
+    pub fn functionSpelling(self: SourceSpellingView, function: mir.Function) ?[]const u8 {
+        return self.symbolSpelling(function.typed_symbol_id);
+    }
+
+    pub fn validateAgainstMir(self: SourceSpellingView, typed_mir: mir.Module) bool {
+        if (self.symbols.len != typed_mir.symbol_identities.len) return false;
+        for (self.symbols, typed_mir.symbol_identities) |left, right| {
+            if (!left.id.eql(right.id)) return false;
+            if (!std.mem.eql(u8, left.spelling, right.spelling)) return false;
+        }
+        for (typed_mir.functions) |function| {
+            const spelling = self.functionSpelling(function) orelse return false;
+            if (!std.mem.eql(u8, spelling, function.name)) return false;
+        }
+        return true;
+    }
+};
+
 /// The only code-generation input accepted by a Backend. Construction runs the
-/// MIR verifier; syntax remains attached solely for source spelling and
-/// declaration metadata that MIR emission has not yet normalized.
+/// MIR verifier and exposes MIR-owned source spelling before legacy syntax. The
+/// syntax module remains attached solely for declaration metadata that MIR
+/// emission has not yet normalized.
 pub const VerifiedProgram = struct {
+    source_spelling: SourceSpellingView,
     syntax_module: ast.Module,
     typed_mir: *const mir.Module,
 
@@ -107,7 +143,9 @@ pub const VerifiedProgram = struct {
         try mir.verifyBuiltMir(typed_mir.*, reporter);
         if (reporter.has_errors) return error.InvalidMir;
         try mir.validateLoweringAdmission(typed_mir.*);
-        return .{ .syntax_module = syntax_module, .typed_mir = typed_mir };
+        const source_spelling = SourceSpellingView{ .symbols = typed_mir.symbol_identities };
+        if (!source_spelling.validateAgainstMir(typed_mir.*)) return error.InvalidMir;
+        return .{ .source_spelling = source_spelling, .syntax_module = syntax_module, .typed_mir = typed_mir };
     }
 };
 
@@ -202,4 +240,33 @@ pub fn byName(name: []const u8) ?Backend {
         if (std.mem.eql(u8, b.name, name)) return b;
     }
     return null;
+}
+
+test "VerifiedProgram exposes MIR-owned source spelling view" {
+    const source =
+        \\fn add_one(value: u32) -> u32 {
+        \\    return value + 1;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "backend_source_spelling.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const parser_mod = @import("parser.zig");
+    var p = parser_mod.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+
+    const program = try VerifiedProgram.init(module, &module_mir, &reporter);
+    try std.testing.expect(program.source_spelling.validateAgainstMir(module_mir));
+    try std.testing.expect(module_mir.functions.len != 0);
+    try std.testing.expectEqualStrings(
+        "add_one",
+        program.source_spelling.functionSpelling(module_mir.functions[0]).?,
+    );
 }

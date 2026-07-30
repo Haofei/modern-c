@@ -946,6 +946,12 @@ ANCHORS: dict[str, list[str]] = {
 }
 
 EXACT_COUNTS: dict[str, dict[str, int]] = {
+    "src/backend.zig": {
+        "pub const SourceSpellingView = struct": 1,
+        "source_spelling: SourceSpellingView": 1,
+        "source_spelling.validateAgainstMir(typed_mir.*)": 1,
+        "VerifiedProgram exposes MIR-owned source spelling view": 1,
+    },
     "src/mir.zig": {
         "appendTargetTypeFact(.assert_condition": 1,
         "appendTargetTypeFact(.loop_condition": 1,

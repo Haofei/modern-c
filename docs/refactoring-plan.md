@@ -173,6 +173,9 @@ Current baseline:
   and backend source-surface classification.
 - New backend modules must be classified as a registered semantic family,
   MIR/fact consumer, or mechanics-only code.
+- `VerifiedProgram` exposes a MIR-backed `SourceSpellingView` for symbol
+  spelling. Legacy `syntax_module` remains only because declaration metadata has
+  not yet been fully normalized.
 
 Deliverables:
 
@@ -394,7 +397,7 @@ reviewable; do not merge rows merely because the files overlap.
 | 1 | Add standalone `.mcmap` consumer verification and mismatch rejection. | `tools/toolchain/`, `build/qemu.zig` if a new gate is needed, `docs/refactoring-plan.md` | `mcmap-test` proves payload and artifact tampering are rejected. | Source-map consumers trusting unrelated artifacts or substituted map bodies. |
 | 2 | Move one optional/result lowering decision from backend inference to typed representation facts. | `src/mir_representation.zig`, `src/lower_c_*`, `src/lower_llvm_*` | C/LLVM focused optional/result fixtures plus semantic-facts inventory. | One backend-local optional/result classifier. |
 | 3 | Reject verified MIR with `unknown` runtime instruction type identity at backend admission. | `src/mir.zig`, `src/mir_model.zig`, `src/mir_tests.zig` | Malformed MIR/admission regression and `test-unit`. | Backend fallback behavior for unknown runtime instruction types. |
-| 4 | Narrow `VerifiedProgram` by moving backend-needed spelling into explicit source/symbol tables. | `src/backend.zig`, `src/main.zig`, backend entrypoints | Backend registry path and CLI path use the same admission object. | Direct AST access for symbol spelling mechanics. |
+| 4 | Narrow `VerifiedProgram` by moving backend-needed spelling into explicit source/symbol tables. | `src/backend.zig`, backend entrypoints | `VerifiedProgram` exposes and validates MIR-owned source spelling; backend registry path and CLI path use the same admission object. | Direct AST access for symbol spelling mechanics. |
 | 5 | Decide HIR authority. Either promote it into the production path or mark it inspection-only with tests. | `src/hir.zig`, `src/main.zig`, `README.md`, `docs/` | `lower-hir`/`verify-hir` contract tests and docs agree. | Half-authoritative HIR drift. |
 | 6 | Convert the first MIR instruction family to tagged-union shape. Start with calls or optional tests. | `src/mir_model.zig`, `src/mir.zig`, verifier, both backends | Malformed-field combinations become unrepresentable or rejected. | `kind + optional fields` illegal states for that family. |
 | 7 | Introduce a small generated gate manifest for 5-10 existing compiler-core gates. | `build/`, `tools/ci/`, `docs/` | Generated build rows match the old hand-written rows; dev-gates test covers it. | Stringly gate drift for the pilot subset. |
