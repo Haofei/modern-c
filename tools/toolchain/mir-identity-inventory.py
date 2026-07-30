@@ -148,6 +148,7 @@ def main() -> int:
         "try std.testing.expectEqual(block.successors.len, block.typed_successors.len);",
         "try std.testing.expect(read_fn.representation_facts[0].typed_span_id.eql(read_load_span_identity.id));",
         "try std.testing.expect(result_fact.typed_span_id.eql(result_span.id));",
+        "typed_span_id={}",
         "try std.testing.expectEqual(read_fn.representation_facts[0].typed_result_ty, read_fn.representation_facts[2].typed_result_ty);",
         "try std.testing.expectEqual(read_fn.representation_facts[0].typed_value_id, read_fn.representation_facts[2].typed_value_id);",
         'try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir span_identity fn=read_ptr_param id=") != null);',

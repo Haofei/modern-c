@@ -741,8 +741,19 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             const aggregate_construction = if (fact.aggregate_construction) |kind| @tagName(kind) else "none";
             try out.print(
                 allocator,
-                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} aggregate_construction={s} target_owner={s} target_index={s} recorded=true line={} column={}\n",
-                .{ function.name, @tagName(fact.kind), typeText(fact.target_ty), fact.result_ty.name(), aggregate_construction, target_owner, target_index, fact.source.line, fact.source.column },
+                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} aggregate_construction={s} target_owner={s} target_index={s} recorded=true line={} column={} typed_span_id={}\n",
+                .{
+                    function.name,
+                    @tagName(fact.kind),
+                    typeText(fact.target_ty),
+                    fact.result_ty.name(),
+                    aggregate_construction,
+                    target_owner,
+                    target_index,
+                    fact.source.line,
+                    fact.source.column,
+                    if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize),
+                },
             );
         }
         for (function.pointer_provenance_facts) |fact| {
