@@ -271,6 +271,9 @@ Current baseline:
 
 - `emit-map` builds an `ArtifactBundle` header for the generated source-map
   payload.
+- `ArtifactBundle` and the bundle-header writer now live at the backend seam in
+  `src/backend.zig`; `lower_c_map` consumes the shared object instead of owning
+  a private source-map-only metadata contract.
 - The bundle records the SHA-256 digest of the same generated C bytes used for
   the map.
 - `emit-map` also records the exact source SHA-256 supplied by the request layer
@@ -286,8 +289,8 @@ Current baseline:
   temporary file, reserves the linked executable path with exclusive create,
   links to that temporary executable, and commits the final output with an
   atomic rename.
-- Full toolchain identity and shared artifact metadata across `emit-c`,
-  `emit-llvm`, `emit-map`, and `build` remain open.
+- Full toolchain identity and emission of the shared artifact metadata from
+  `emit-c`, `emit-llvm`, and `build` remain open.
 
 Closure criteria:
 

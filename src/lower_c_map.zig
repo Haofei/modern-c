@@ -7,33 +7,9 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const backend = @import("backend.zig");
 const mir = @import("mir.zig");
 const mir_syntax = @import("mir_syntax.zig");
-
-const Sha256 = std.crypto.hash.sha2.Sha256;
-
-pub const Metadata = struct {
-    source_sha256: ?[Sha256.digest_length]u8 = null,
-    profile: ?[]const u8 = null,
-    checks_optimize: ?bool = null,
-    checks_ksan: ?bool = null,
-    checks_msan: ?bool = null,
-    checks_csan: ?bool = null,
-    stub_asm: ?bool = null,
-};
-
-pub const ArtifactBundle = struct {
-    generated_artifact_sha256: [Sha256.digest_length]u8,
-    source_map_payload_sha256: [Sha256.digest_length]u8,
-    mir_facts_sha256: [Sha256.digest_length]u8,
-    source_sha256: ?[Sha256.digest_length]u8,
-    profile: ?[]const u8,
-    checks_optimize: ?bool,
-    checks_ksan: ?bool,
-    checks_msan: ?bool,
-    checks_csan: ?bool,
-    stub_asm: ?bool,
-};
 
 pub fn appendSourceMap(
     allocator: std.mem.Allocator,
@@ -43,7 +19,7 @@ pub fn appendSourceMap(
     mir_module: *const mir.Module,
     source_path: []const u8,
     generated_c_path: ?[]const u8,
-    metadata: Metadata,
+    opts: backend.LowerOptions,
 ) !void {
     var line_index = try buildGeneratedLineIndex(allocator, generated_c);
     defer line_index.deinit(allocator);
@@ -66,21 +42,10 @@ pub fn appendSourceMap(
     defer mir_facts_input.deinit(allocator);
     try appendMirFactsDigestInput(allocator, &mir_facts_input, mir_module);
 
-    const bundle = ArtifactBundle{
-        .generated_artifact_sha256 = sha256Bytes(generated_c),
-        .source_map_payload_sha256 = sha256Bytes(payload.items),
-        .mir_facts_sha256 = sha256Bytes(mir_facts_input.items),
-        .source_sha256 = metadata.source_sha256,
-        .profile = metadata.profile,
-        .checks_optimize = metadata.checks_optimize,
-        .checks_ksan = metadata.checks_ksan,
-        .checks_msan = metadata.checks_msan,
-        .checks_csan = metadata.checks_csan,
-        .stub_asm = metadata.stub_asm,
-    };
+    const bundle = backend.ArtifactBundle.forSourceMap(generated_c, payload.items, mir_facts_input.items, opts);
 
     try out.appendSlice(allocator, "# mcmap v1\n");
-    try appendArtifactBundleHeaders(allocator, out, bundle);
+    try backend.appendArtifactBundleHeaders(allocator, out, bundle);
     try out.appendSlice(allocator, payload.items);
 }
 
@@ -95,31 +60,6 @@ pub fn appendLineDirective(
     try out.print(allocator, "#line {d} \"", .{span.line});
     try appendEscapedString(out, allocator, path);
     try out.appendSlice(allocator, "\"\n");
-}
-
-fn appendArtifactBundleHeaders(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bundle: ArtifactBundle) !void {
-    try appendDigestValueHeader(allocator, out, "generated_artifact_sha256", bundle.generated_artifact_sha256);
-    try appendDigestValueHeader(allocator, out, "source_map_payload_sha256", bundle.source_map_payload_sha256);
-    try appendDigestValueHeader(allocator, out, "mir_facts_sha256", bundle.mir_facts_sha256);
-    try appendOptionalDigestHeader(allocator, out, "source_sha256", bundle.source_sha256);
-    try appendOptionalStringHeader(allocator, out, "lower_profile", bundle.profile);
-    try appendOptionalBoolHeader(allocator, out, "lower_checks_optimize", bundle.checks_optimize);
-    try appendOptionalBoolHeader(allocator, out, "lower_checks_ksan", bundle.checks_ksan);
-    try appendOptionalBoolHeader(allocator, out, "lower_checks_msan", bundle.checks_msan);
-    try appendOptionalBoolHeader(allocator, out, "lower_checks_csan", bundle.checks_csan);
-    try appendOptionalBoolHeader(allocator, out, "lower_stub_asm", bundle.stub_asm);
-}
-
-fn sha256Bytes(bytes: []const u8) [Sha256.digest_length]u8 {
-    var digest: [Sha256.digest_length]u8 = undefined;
-    Sha256.hash(bytes, &digest, .{});
-    return digest;
-}
-
-fn appendDigestValueHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, digest: [Sha256.digest_length]u8) !void {
-    try out.print(allocator, "# {s}=", .{name});
-    try appendHexBytes(allocator, out, &digest);
-    try out.appendSlice(allocator, "\n");
 }
 
 fn appendMirFactsDigestInput(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: *const mir.Module) !void {
@@ -310,50 +250,6 @@ fn optionalTypedIndexOrMax(index: anytype) usize {
 
 fn optionalUsizeOrMax(value: ?usize) usize {
     return value orelse std.math.maxInt(usize);
-}
-
-fn appendOptionalDigestHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, maybe_digest: ?[Sha256.digest_length]u8) !void {
-    const digest = maybe_digest orelse return;
-    try out.print(allocator, "# {s}=", .{name});
-    try appendHexBytes(allocator, out, &digest);
-    try out.appendSlice(allocator, "\n");
-}
-
-fn appendOptionalStringHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, maybe_value: ?[]const u8) !void {
-    const value = maybe_value orelse return;
-    try out.print(allocator, "# {s}=", .{name});
-    try appendEscapedMetadataValue(out, allocator, value);
-    try out.appendSlice(allocator, "\n");
-}
-
-fn appendOptionalBoolHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, maybe_value: ?bool) !void {
-    const value = maybe_value orelse return;
-    try out.print(allocator, "# {s}={s}\n", .{ name, if (value) "true" else "false" });
-}
-
-fn appendHexBytes(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) !void {
-    const hex = "0123456789abcdef";
-    for (bytes) |byte| {
-        try out.append(allocator, hex[byte >> 4]);
-        try out.append(allocator, hex[byte & 0x0f]);
-    }
-}
-
-fn appendEscapedMetadataValue(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: []const u8) !void {
-    for (value) |ch| switch (ch) {
-        '\\', '\n', '\r', '\t', ' ' => {
-            try out.append(allocator, '\\');
-            switch (ch) {
-                '\\' => try out.append(allocator, '\\'),
-                '\n' => try out.append(allocator, 'n'),
-                '\r' => try out.append(allocator, 'r'),
-                '\t' => try out.append(allocator, 't'),
-                ' ' => try out.append(allocator, 's'),
-                else => unreachable,
-            }
-        },
-        else => try out.append(allocator, ch),
-    };
 }
 
 // The source module name a symbol belongs to: the file basename without directory or

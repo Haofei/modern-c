@@ -8,6 +8,108 @@ const lower_llvm = @import("lower_llvm.zig");
 
 pub const Sha256Digest = [std.crypto.hash.sha2.Sha256.digest_length]u8;
 
+/// Shared artifact/source-map provenance metadata. The first consumer is
+/// `emit-map`, but this type deliberately lives at the backend seam so `emit-c`,
+/// `emit-llvm`, and `build` can converge on the same digest/header contract
+/// instead of each artifact path inventing local metadata.
+pub const ArtifactBundle = struct {
+    generated_artifact_sha256: Sha256Digest,
+    source_map_payload_sha256: ?Sha256Digest = null,
+    mir_facts_sha256: ?Sha256Digest = null,
+    source_sha256: ?Sha256Digest = null,
+    profile: ?[]const u8 = null,
+    checks_optimize: ?bool = null,
+    checks_ksan: ?bool = null,
+    checks_msan: ?bool = null,
+    checks_csan: ?bool = null,
+    stub_asm: ?bool = null,
+
+    pub fn forSourceMap(
+        generated_artifact: []const u8,
+        source_map_payload: []const u8,
+        mir_facts_input: []const u8,
+        opts: LowerOptions,
+    ) ArtifactBundle {
+        return .{
+            .generated_artifact_sha256 = sha256Bytes(generated_artifact),
+            .source_map_payload_sha256 = sha256Bytes(source_map_payload),
+            .mir_facts_sha256 = sha256Bytes(mir_facts_input),
+            .source_sha256 = opts.source_sha256,
+            .profile = @tagName(opts.profile),
+            .checks_optimize = opts.checks.optimize,
+            .checks_ksan = opts.checks.ksan,
+            .checks_msan = opts.checks.msan,
+            .checks_csan = opts.checks.csan,
+            .stub_asm = opts.stub_asm,
+        };
+    }
+};
+
+pub fn sha256Bytes(bytes: []const u8) Sha256Digest {
+    var digest: Sha256Digest = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    return digest;
+}
+
+pub fn appendArtifactBundleHeaders(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bundle: ArtifactBundle) !void {
+    try appendDigestValueHeader(allocator, out, "generated_artifact_sha256", bundle.generated_artifact_sha256);
+    try appendOptionalDigestHeader(allocator, out, "source_map_payload_sha256", bundle.source_map_payload_sha256);
+    try appendOptionalDigestHeader(allocator, out, "mir_facts_sha256", bundle.mir_facts_sha256);
+    try appendOptionalDigestHeader(allocator, out, "source_sha256", bundle.source_sha256);
+    try appendOptionalStringHeader(allocator, out, "lower_profile", bundle.profile);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_optimize", bundle.checks_optimize);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_ksan", bundle.checks_ksan);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_msan", bundle.checks_msan);
+    try appendOptionalBoolHeader(allocator, out, "lower_checks_csan", bundle.checks_csan);
+    try appendOptionalBoolHeader(allocator, out, "lower_stub_asm", bundle.stub_asm);
+}
+
+fn appendDigestValueHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, digest: Sha256Digest) !void {
+    try out.print(allocator, "# {s}=", .{name});
+    try appendHexBytes(allocator, out, &digest);
+    try out.appendSlice(allocator, "\n");
+}
+
+fn appendOptionalDigestHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, maybe_digest: ?Sha256Digest) !void {
+    const digest = maybe_digest orelse return;
+    try appendDigestValueHeader(allocator, out, name, digest);
+}
+
+fn appendOptionalStringHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, value: ?[]const u8) !void {
+    const text = value orelse return;
+    try out.print(allocator, "# {s}=", .{name});
+    try appendEscapedMetadataValue(allocator, out, text);
+    try out.appendSlice(allocator, "\n");
+}
+
+fn appendOptionalBoolHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, value: ?bool) !void {
+    const flag = value orelse return;
+    try out.print(allocator, "# {s}={s}\n", .{ name, if (flag) "true" else "false" });
+}
+
+fn appendHexBytes(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) !void {
+    for (bytes) |byte| {
+        try out.print(allocator, "{x:0>2}", .{byte});
+    }
+}
+
+fn appendEscapedMetadataValue(allocator: std.mem.Allocator, out: *std.ArrayList(u8), value: []const u8) !void {
+    for (value) |ch| switch (ch) {
+        '\\', '\n', '\r', '\t', ' ' => {
+            try out.append(allocator, '\\');
+            switch (ch) {
+                '\\' => try out.append(allocator, '\\'),
+                '\n' => try out.append(allocator, 'n'),
+                '\r' => try out.append(allocator, 'r'),
+                '\t' => try out.append(allocator, 't'),
+                ' ' => try out.append(allocator, 's'),
+                else => unreachable,
+            }
+        },
+        else => try out.append(allocator, ch),
+    };
+}
+
 /// Code-generation profile. Re-exported from `lower_c.zig`, which owns the
 /// definition (`kernel`/`hosted`). Only profile-aware backends (currently the C
 /// backend) act on it; profile-agnostic backends ignore it.
@@ -284,4 +386,30 @@ test "VerifiedProgram exposes MIR-owned source spelling view" {
     );
     try std.testing.expect(program.source_spelling.definesFunctionSpelling(module_mir, "add_one"));
     try std.testing.expect(!program.source_spelling.definesFunctionSpelling(module_mir, "missing"));
+}
+
+test "ArtifactBundle emits shared source-map provenance headers" {
+    const source_digest = sha256Bytes("source");
+    const bundle = ArtifactBundle.forSourceMap("artifact", "payload", "mir-facts", .{
+        .profile = .hosted,
+        .source_path = "source.mc",
+        .checks = .{ .optimize = true, .ksan = true },
+        .stub_asm = true,
+        .source_sha256 = source_digest,
+    });
+
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try appendArtifactBundleHeaders(std.testing.allocator, &out, bundle);
+
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "# generated_artifact_sha256=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "# source_map_payload_sha256=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "# mir_facts_sha256=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "# source_sha256=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "# lower_profile=hosted\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "# lower_checks_optimize=true\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "# lower_checks_ksan=true\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "# lower_checks_msan=false\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "# lower_checks_csan=false\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "# lower_stub_asm=true\n") != null);
 }
