@@ -16,6 +16,7 @@ const PointerProvenanceInvalidationReason = mir.PointerProvenanceInvalidationRea
 const RangeFact = mir.RangeFact;
 const TrapEdge = mir.TrapEdge;
 const TrapKind = mir.TrapKind;
+const SymbolId = mir.SymbolId;
 const TypeId = mir.TypeId;
 const ValueId = mir.ValueId;
 const ValueType = mir.ValueType;
@@ -38,6 +39,9 @@ test "MIR block model carries typed block identity" {
     defer module_mir.deinit();
 
     const main_fn = functionByName(module_mir, "main").?;
+    const main_symbol = symbolIdentityBySpelling(module_mir, "main").?;
+    try std.testing.expect(main_fn.typed_symbol_id.isValid());
+    try std.testing.expect(main_fn.typed_symbol_id.eql(main_symbol.id));
     try std.testing.expect(main_fn.blocks.len > 0);
     for (main_fn.blocks) |block| {
         try std.testing.expect(block.typed_id.isValid());
@@ -49,6 +53,13 @@ test "MIR block model carries typed block identity" {
             try std.testing.expectEqual(successor, block.typed_successors[index].index());
         }
     }
+}
+
+fn symbolIdentityBySpelling(module: mir.Module, spelling: []const u8) ?mir.SymbolIdentity {
+    for (module.symbol_identities) |identity| {
+        if (std.mem.eql(u8, identity.spelling, spelling)) return identity;
+    }
+    return null;
 }
 
 fn functionByName(module: mir.Module, name: []const u8) ?mir.Function {
@@ -92,6 +103,34 @@ fn functionByNameMut(module: *mir.Module, name: []const u8) ?*mir.Function {
     return null;
 }
 
+test "MIR verifier rejects function symbol identity drift" {
+    const source =
+        \\fn main() -> u32 {
+        \\    return 1;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_symbol_id.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+    try std.testing.expect(module_mir.symbol_identities.len > 0);
+    module_mir.functions[0].typed_symbol_id = SymbolId.fromIndex(4096);
+
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_symbol_id.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(module_mir, &verifier_reporter);
+    try std.testing.expect(verifier_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_SYMBOL_ID") != null);
+}
+
 test "MIR dump exposes bounded FFI parameter contracts" {
     const source =
         \\extern "C" fn dma_submit(cpu: [*]mut u8, dma: DmaAddr, len: usize) -> i32;
@@ -109,7 +148,8 @@ test "MIR dump exposes bounded FFI parameter contracts" {
     defer dump.deinit(std.testing.allocator);
     try mir.appendDump(std.testing.allocator, module, &dump);
 
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=dma_submit return=i32 no_lang_trap=false irq_context=false extern=true c_abi=true params=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=dma_submit symbol_id=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "return=i32 no_lang_trap=false irq_context=false extern=true c_abi=true params=3") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "fn=dma_submit index=0 name=cpu kind=raw_many_pointer nonnull=true access=read_write extent=extern_contract alignment=type provenance=extern_unknown stable_until=call_return") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "fn=dma_submit index=1 name=dma kind=address address_class=dma conversion=explicit") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "fn=inspect index=0 name=bytes kind=slice nonnull=when_nonempty access=read extent=slice_length") != null);
@@ -4696,7 +4736,8 @@ test "MIR records typed pointer provenance facts for direct globals and pointer 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
     try mir.appendDump(std.testing.allocator, module, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=direct_pointer_and_array return=void no_lang_trap=false irq_context=false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=direct_pointer_and_array symbol_id=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "return=void no_lang_trap=false irq_context=false") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "pointer_provenance_facts=") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=p element=none provenance=global_storage storage=shared_counter") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=direct_pointer_and_array subject=noalias_global element=none provenance=global_storage storage=shared_counter") != null);

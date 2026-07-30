@@ -538,6 +538,11 @@ pub const TypeIdentity = struct {
     spelling: []const u8,
 };
 
+pub const SymbolIdentity = struct {
+    id: SymbolId,
+    spelling: []const u8,
+};
+
 pub const ValueIdentity = struct {
     id: ValueId,
     spelling: []const u8,
@@ -570,6 +575,7 @@ pub const FfiParamContract = struct {
 
 pub const Function = struct {
     name: []const u8,
+    typed_symbol_id: SymbolId = .invalid,
     return_ty: ValueType,
     // Signature obligations are produced once as typed MIR facts. Consumers
     // must not reconstruct them by rescanning source declarations.
@@ -604,6 +610,7 @@ pub const Function = struct {
 
 pub const Module = struct {
     allocator: std.mem.Allocator,
+    symbol_identities: []SymbolIdentity = &.{},
     functions: []Function,
     aggregate_return_summaries: []AggregateReturnSummaryFact = &.{},
     aggregate_return_pointer_facts: []AggregateReturnPointerFact = &.{},
@@ -638,6 +645,7 @@ pub const Module = struct {
             self.allocator.free(function.representation_facts);
             self.allocator.free(function.elided_bounds);
         }
+        if (self.symbol_identities.len != 0) self.allocator.free(self.symbol_identities);
         self.allocator.free(self.functions);
         if (self.aggregate_return_summaries.len != 0) self.allocator.free(self.aggregate_return_summaries);
         for (self.aggregate_return_pointer_facts) |fact| self.allocator.free(fact.field_path);

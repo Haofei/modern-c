@@ -109,6 +109,9 @@ Current status:
   The legacy numeric `Block.id` remains for compatibility, but built MIR blocks
   also carry `typed_id = BlockId.fromIndex(block.id)` and typed successor
   mirrors for CFG edges.
+- Function symbol identity now has a typed `SymbolId` seed. Built MIR functions
+  carry `typed_symbol_id`, the module owns a `SymbolIdentity` table, `lower-mir`
+  dumps both, and the MIR verifier rejects symbol/table drift.
 - Representation-sensitive instructions and `RepresentationFact` rows now
   double-write typed `ValueId` identities and typed `TypeId` result identities
   through per-function interners. The function owns `ValueIdentity` and
@@ -116,9 +119,10 @@ Current status:
   `ValueType` spelling remain for dumps and compatibility, while backend
   admission rejects typed identity drift.
 - `mir-identity-inventory-test` gates the typed ID definitions, `BlockId`
-  builder assignment, typed successor mirrors, typed `ValueId` representation
-  facts, typed representation result identities, verifier/admission drift
-  checks, and the unit tests that check the public block model.
+  builder assignment, typed successor mirrors, function `SymbolId` identities,
+  typed `ValueId` representation facts, typed representation result identities,
+  verifier/admission drift checks, and the unit tests that check the public
+  model.
 
 Work:
 

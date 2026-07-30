@@ -161,6 +161,7 @@ pub const ConstGetFact = mir_model.ConstGetFact;
 pub const AggregateReturnSummaryFact = mir_model.AggregateReturnSummaryFact;
 pub const AggregateReturnPointerFact = mir_model.AggregateReturnPointerFact;
 pub const RepresentationFact = mir_model.RepresentationFact;
+pub const SymbolIdentity = mir_model.SymbolIdentity;
 pub const TypeIdentity = mir_model.TypeIdentity;
 pub const ValueIdentity = mir_model.ValueIdentity;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
@@ -382,6 +383,8 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
         for (functions.items) |function| freeFunction(allocator, function);
         functions.deinit(allocator);
     }
+    var symbol_ids = std.StringHashMap(SymbolId).init(allocator);
+    defer symbol_ids.deinit();
 
     for (module.decls) |decl| {
         switch (decl.kind) {
@@ -392,7 +395,12 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                         builder.optimize = options.optimize;
                         errdefer builder.deinit();
                         try builder.buildGlobalInitializer(ty, initializer);
-                        try functions.append(allocator, try builder.finish());
+                        {
+                            var function = try builder.finish();
+                            errdefer freeFunction(allocator, function);
+                            function.typed_symbol_id = try internSymbolId(&symbol_ids, function.name);
+                            try functions.append(allocator, function);
+                        }
                     }
                 }
             },
@@ -402,10 +410,17 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                     builder.optimize = options.optimize;
                     errdefer builder.deinit();
                     try builder.buildBody(body);
-                    try functions.append(allocator, try builder.finish());
+                    {
+                        var function = try builder.finish();
+                        errdefer freeFunction(allocator, function);
+                        function.typed_symbol_id = try internSymbolId(&symbol_ids, function.name);
+                        try functions.append(allocator, function);
+                    }
                 } else if (std.meta.activeTag(decl.kind) == .extern_fn) {
+                    const typed_symbol_id = try internSymbolId(&symbol_ids, fn_decl.name.text);
                     try functions.append(allocator, .{
                         .name = fn_decl.name.text,
+                        .typed_symbol_id = typed_symbol_id,
                         .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
                         .param_count = fn_decl.params.len,
                         .is_extern = true,
@@ -431,12 +446,39 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
         }
     }
 
+    const symbol_identities = try buildSymbolIdentities(allocator, &symbol_ids);
+    errdefer allocator.free(symbol_identities);
+
     return .{
         .allocator = allocator,
+        .symbol_identities = symbol_identities,
         .functions = try functions.toOwnedSlice(allocator),
         .aggregate_return_summaries = aggregate_return_facts.summaries,
         .aggregate_return_pointer_facts = aggregate_return_facts.pointer_facts,
     };
+}
+
+fn internSymbolId(symbol_ids: *std.StringHashMap(SymbolId), spelling: []const u8) !SymbolId {
+    const entry = try symbol_ids.getOrPut(spelling);
+    if (!entry.found_existing) {
+        entry.value_ptr.* = SymbolId.fromIndex(symbol_ids.count() - 1);
+    }
+    return entry.value_ptr.*;
+}
+
+fn buildSymbolIdentities(allocator: std.mem.Allocator, symbol_ids: *std.StringHashMap(SymbolId)) ![]SymbolIdentity {
+    const identities = try allocator.alloc(SymbolIdentity, symbol_ids.count());
+    errdefer allocator.free(identities);
+    var it = symbol_ids.iterator();
+    while (it.next()) |entry| {
+        const id = entry.value_ptr.*;
+        std.debug.assert(id.index() < identities.len);
+        identities[id.index()] = .{
+            .id = id,
+            .spelling = entry.key_ptr.*,
+        };
+    }
+    return identities;
 }
 
 pub fn appendDump(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
@@ -520,11 +562,18 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
 }
 
 pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: *std.ArrayList(u8)) !void {
+    for (module_mir.symbol_identities) |identity| {
+        try out.print(
+            allocator,
+            "mir symbol_identity id={} spelling={s}\n",
+            .{ identity.id.index(), identity.spelling },
+        );
+    }
     for (module_mir.functions) |function| {
         try out.print(
             allocator,
-            "mir function name={s} return={s} no_lang_trap={} irq_context={} extern={} c_abi={} params={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
-            .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.is_extern, function.c_abi, function.param_count, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.const_get_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
+            "mir function name={s} symbol_id={} return={s} no_lang_trap={} irq_context={} extern={} c_abi={} params={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
+            .{ function.name, if (function.typed_symbol_id.isValid()) function.typed_symbol_id.index() else std.math.maxInt(usize), function.return_ty.name(), function.no_lang_trap, function.irq_context, function.is_extern, function.c_abi, function.param_count, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.const_get_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
         for (function.type_identities) |identity| {
             try out.print(
@@ -922,6 +971,7 @@ pub fn verifyOpt(allocator: std.mem.Allocator, module: ast.Module, reporter: *di
 }
 
 pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
+    verifyModuleSymbolIdentities(mir, reporter);
     for (mir.functions) |function| {
         verifyFunctionCfg(function, reporter);
 
@@ -1103,6 +1153,36 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
                 }
             }
         }
+    }
+}
+
+fn verifyModuleSymbolIdentities(module: Module, reporter: *diagnostics.Reporter) void {
+    var malformed = false;
+    for (module.symbol_identities, 0..) |identity, index| {
+        if (!identity.id.isValid() or identity.id.index() != index) malformed = true;
+        for (module.symbol_identities[0..index]) |prior| {
+            if (std.mem.eql(u8, prior.spelling, identity.spelling)) malformed = true;
+            if (prior.id.eql(identity.id)) malformed = true;
+        }
+    }
+    for (module.functions) |function| {
+        if (!function.typed_symbol_id.isValid()) {
+            if (module.symbol_identities.len != 0) malformed = true;
+            continue;
+        }
+        const index = function.typed_symbol_id.index();
+        if (index >= module.symbol_identities.len) {
+            malformed = true;
+            continue;
+        }
+        if (!std.mem.eql(u8, module.symbol_identities[index].spelling, function.name)) malformed = true;
+    }
+    if (malformed) {
+        reporter.err(
+            sourcePointSpan(.{ .line = 1, .column = 1 }),
+            "E_MIR_SYMBOL_ID: MIR verifier found malformed symbol identity table",
+            .{},
+        );
     }
 }
 
@@ -9596,6 +9676,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     for (function.blocks) |block| {
         allocator.free(block.instructions);
         allocator.free(block.successors);
+        if (block.typed_successors.len != 0) allocator.free(block.typed_successors);
     }
     allocator.free(function.blocks);
     allocator.free(function.trap_edges);
@@ -9606,6 +9687,8 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.const_get_facts.len != 0) allocator.free(function.const_get_facts);
     if (function.call_target_facts.len != 0) allocator.free(function.call_target_facts);
     if (function.target_type_facts.len != 0) allocator.free(function.target_type_facts);
+    if (function.type_identities.len != 0) allocator.free(function.type_identities);
+    if (function.value_identities.len != 0) allocator.free(function.value_identities);
     if (function.ffi_param_contracts.len != 0) allocator.free(function.ffi_param_contracts);
     for (function.generated_type_expr_nodes) |node| allocator.destroy(node);
     if (function.generated_type_expr_nodes.len != 0) allocator.free(function.generated_type_expr_nodes);
