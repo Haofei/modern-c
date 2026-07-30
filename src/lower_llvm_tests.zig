@@ -2980,6 +2980,13 @@ test "LLVM switches require MIR subject types" {
     var stale_nullable_repr_output: std.ArrayList(u8) = .empty;
     defer stale_nullable_repr_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_nullable_repr, &stale_nullable_repr_output, "llvm_switch_subject_type_facts.mc", .{}, false, .riscv64, null));
+
+    var unknown_subject_repr = try mir.build(std.testing.allocator, parsed.module);
+    defer unknown_subject_repr.deinit();
+    try retargetTargetTypeResultForFunction(&unknown_subject_repr, "nullable_subject", .switch_subject, .unknown);
+    var unknown_subject_repr_output: std.ArrayList(u8) = .empty;
+    defer unknown_subject_repr_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnknownMirLoweringType, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &unknown_subject_repr, &unknown_subject_repr_output, "llvm_switch_subject_type_facts.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM if-let statements require MIR subject types" {

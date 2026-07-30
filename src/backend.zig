@@ -106,6 +106,7 @@ pub const VerifiedProgram = struct {
     ) !VerifiedProgram {
         try mir.verifyBuiltMir(typed_mir.*, reporter);
         if (reporter.has_errors) return error.InvalidMir;
+        try mir.validateLoweringAdmission(typed_mir.*);
         return .{ .syntax_module = syntax_module, .typed_mir = typed_mir };
     }
 };

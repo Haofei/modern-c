@@ -176,7 +176,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
     "llvm-representation-fact-consumption": {
         "docs/typed-semantic-facts.md": ["| `llvm-representation-fact-consumption` |"],
         "src/mir.zig": ["pub fn validateRepresentationFactsForLowering"],
-        "src/lower_llvm.zig": ["try mir.validateRepresentationFactsForLowering(module_mir.*)"],
+        "src/lower_llvm.zig": ["mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)"],
     },
     "mir-pointer-provenance-production": {
         "docs/typed-semantic-facts.md": ["| `mir-pointer-provenance-production` |"],
@@ -630,7 +630,7 @@ INTEGER_DEFAULT_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
         "| MIR integer literal facts |",
         "target-typed integer literal conversion",
-        "validateIntegerFactsForLowering",
+        "validateLoweringAdmission",
     ],
     "docs/compiler-production-readiness.md": [
         "Integer/default fact family is gated",
@@ -658,10 +658,10 @@ INTEGER_DEFAULT_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
         "mir integer_fact fn=integer_literals literal=255 target_type=u8 recorded=true",
     ],
     "src/lower_c.zig": [
-        "try mir.validateIntegerFactsForLowering(typed_mir.*);",
+        "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)",
     ],
     "src/lower_llvm.zig": [
-        "try mir.validateIntegerFactsForLowering(module_mir.*);",
+        "mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)",
     ],
     "src/lower_c_tests.zig": [
         "lower-c rejects prebuilt MIR with missing integer facts",
@@ -694,10 +694,10 @@ REPRESENTATION_FACT_HARDENING_AUDIT: dict[str, list[str]] = {
         "fn representationFactKind",
     ],
     "src/lower_c.zig": [
-        "try mir.validateRepresentationFactsForLowering(typed_mir.*);",
+        "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)",
     ],
     "src/lower_llvm.zig": [
-        "try mir.validateRepresentationFactsForLowering(module_mir.*);",
+        "mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)",
     ],
     "src/lower_c_tests.zig": [
         "lower-c rejects prebuilt MIR with missing representation facts",
@@ -895,7 +895,7 @@ ANCHORS: dict[str, list[str]] = {
         "if (self.mirCheckElided(slice_span))",
     ],
     "src/lower_c.zig": [
-        "try mir.validateIntegerFactsForLowering(typed_mir.*);",
+        "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)",
     ],
     "src/lower_c_global.zig": [
         "pub fn appendGlobalLoadExpr",
@@ -914,7 +914,7 @@ ANCHORS: dict[str, list[str]] = {
         '"lower contract_scope',
     ],
     "src/lower_llvm.zig": [
-        "try mir.validateIntegerFactsForLowering(module_mir.*);",
+        "mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)",
         "pointer_local_provenance: std.StringHashMap(mir.PointerProvenance)",
         "local_aggregate_pointer_aliases: std.StringHashMap([]const u8)",
         "local_array_global_pointer_elements: std.StringHashMap(mir.PointerProvenance)",
@@ -1053,9 +1053,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "magnitude = std.math.mul(u128, magnitude, radix) catch return null;": 1,
     },
     "src/lower_c.zig": {
-        "try mir.validateIntegerFactsForLowering(typed_mir.*);": 1,
-        "try mir.validateConstGetFactsForLowering(typed_mir.*);": 1,
-        "mir.validateTargetTypeFactsForLowering(typed_mir.*) catch |err| switch (err)": 1,
+        "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)": 1,
     },
     "src/sema.zig": {
         "fn checkIntegerLiteralInitializer": 1,
@@ -1365,9 +1363,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_llvm.zig": {
         'ast_query.isIdentNamed(call.callee.*, "trap")': 0,
-        "try mir.validateIntegerFactsForLowering(module_mir.*);": 1,
-        "try mir.validateConstGetFactsForLowering(module_mir.*);": 1,
-        "mir.validateTargetTypeFactsForLowering(module_mir.*) catch |err| switch (err)": 1,
+        "mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)": 1,
         "fn mirTargetTypeFactAt(": 1,
         "fn mirTargetTypeFactAtOwned(": 1,
         "mirTargetTypeFactAtOwned(.direct_call_result": 3,

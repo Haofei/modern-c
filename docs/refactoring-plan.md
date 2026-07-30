@@ -131,6 +131,9 @@ Current baseline:
   MIR-owned subject representation from `.switch_subject` / `.if_let_subject`
   facts; stale pointer-vs-value optional representation facts are rejected
   before emission.
+- C and LLVM backend entrypoints now share `mir.validateLoweringAdmission()`;
+  target-type, representation, integer, range, function-return, and terminator
+  fact positions reject the `.unknown` type placeholder before lowering.
 - Inventory checks anchor the migrated surface.
 
 Implementation order:

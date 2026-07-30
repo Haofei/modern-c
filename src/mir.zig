@@ -1378,6 +1378,59 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
     }
 }
 
+pub const LoweringAdmissionError = error{
+    InvalidMirRepresentationFacts,
+    InvalidMirIntegerFacts,
+    InvalidMirConstGetFacts,
+    InvalidMirCallTargetFacts,
+    InvalidMirTargetTypeFacts,
+    StaleMirTargetTypeFacts,
+    UnknownMirLoweringType,
+};
+
+/// Backends consume this single admission seam before lowering.  Conservative
+/// facts such as pointer provenance may still be `unknown`, but codegen-owned
+/// type facts must not use the `.unknown` ValueType placeholder.
+pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
+    try validateRepresentationFactsForLowering(module);
+    try validateIntegerFactsForLowering(module);
+    try validateConstGetFactsForLowering(module);
+    try validateCallTargetFactsForLowering(module);
+    try validateTargetTypeFactsForLowering(module);
+    try validateKnownFactTypesForLowering(module);
+}
+
+pub fn validateKnownFactTypesForLowering(module: Module) error{UnknownMirLoweringType}!void {
+    for (module.functions) |function| {
+        if (valueTypeIsUnknownPlaceholder(function.return_ty)) return error.UnknownMirLoweringType;
+        for (function.blocks) |block| {
+            switch (block.terminator) {
+                .return_ => |ty| if (valueTypeIsUnknownPlaceholder(ty)) return error.UnknownMirLoweringType,
+                else => {},
+            }
+        }
+        for (function.range_facts) |fact| {
+            if (valueTypeIsUnknownPlaceholder(fact.result_ty)) return error.UnknownMirLoweringType;
+        }
+        for (function.integer_facts) |fact| {
+            if (valueTypeIsUnknownPlaceholder(fact.target_ty)) return error.UnknownMirLoweringType;
+        }
+        for (function.target_type_facts) |fact| {
+            if (valueTypeIsUnknownPlaceholder(fact.result_ty)) return error.UnknownMirLoweringType;
+        }
+        for (function.representation_facts) |fact| {
+            if (valueTypeIsUnknownPlaceholder(fact.result_ty)) return error.UnknownMirLoweringType;
+        }
+    }
+}
+
+fn valueTypeIsUnknownPlaceholder(ty: ValueType) bool {
+    return switch (ty) {
+        .unknown => true,
+        else => false,
+    };
+}
+
 pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTargetTypeFacts, StaleMirTargetTypeFacts }!void {
     for (module.functions) |function| {
         for (function.blocks) |block| for (block.instructions) |instruction| {

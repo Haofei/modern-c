@@ -266,11 +266,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
 }
 
 pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    try mir.validateRepresentationFactsForLowering(module_mir.*);
-    try mir.validateIntegerFactsForLowering(module_mir.*);
-    try mir.validateConstGetFactsForLowering(module_mir.*);
-    try mir.validateCallTargetFactsForLowering(module_mir.*);
-    mir.validateTargetTypeFactsForLowering(module_mir.*) catch |err| switch (err) {
+    mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err) {
         error.StaleMirTargetTypeFacts => return error.UnsupportedLlvmEmission,
         else => return err,
     };

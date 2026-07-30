@@ -394,6 +394,49 @@ test "MIR target-type admission rejects target span identity drift" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(module_mir));
 }
 
+test "MIR lowering admission rejects unknown target-type result facts" {
+    const source =
+        \\fn callee(x: u32) -> u32 {
+        \\    return x;
+        \\}
+        \\
+        \\fn caller() -> u32 {
+        \\    return callee(7);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "unknown_target_result_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+    const caller = functionByNameMut(&module_mir, "caller").?;
+    var fact_count: usize = 0;
+    for (caller.target_type_facts) |*fact| {
+        if (fact.kind != .direct_call_result) continue;
+        fact.result_ty = .unknown;
+        fact_count += 1;
+    }
+    var instruction_count: usize = 0;
+    for (caller.blocks) |*block| for (block.instructions) |*instruction| {
+        if (instruction.kind != .target_type or !std.mem.eql(u8, instruction.detail, @tagName(mir.TargetTypeKind.direct_call_result))) continue;
+        instruction.result_ty = .unknown;
+        instruction_count += 1;
+    };
+    try std.testing.expect(fact_count != 0);
+    try std.testing.expect(instruction_count != 0);
+
+    try mir.validateTargetTypeFactsForLowering(module_mir);
+    try std.testing.expectError(error.UnknownMirLoweringType, mir.validateKnownFactTypesForLowering(module_mir));
+    try std.testing.expectError(error.UnknownMirLoweringType, mir.validateLoweringAdmission(module_mir));
+}
+
 test "MIR dump exposes bounded FFI parameter contracts" {
     const source =
         \\extern "C" fn dma_submit(cpu: [*]mut u8, dma: DmaAddr, len: usize) -> i32;
