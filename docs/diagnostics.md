@@ -37,7 +37,7 @@ Total codes: **244**.
 | `E_ATOMIC_OPERATION` | atomic fetch_add/fetch_sub requires an integer payload type<br>unknown atomic operation | `src/mir_verify_util.zig:189`<br>`src/sema.zig:3721`<br>`src/sema.zig:3748` |
 | `E_ATOMIC_ORDERING` | atomic load ordering must be .relaxed, .acquire, or .seq_cst<br>atomic read-modify-write ordering must be a valid atomic memory order<br>atomic store ordering must be .relaxed, .release, or .seq_cst | `src/mir_verify_util.zig:191`<br>`src/sema.zig:3794`<br>`src/sema.zig:3798`<br>`src/sema.zig:3804`<br>`src/sema.zig:3808`<br>`src/sema.zig:3814`<br>_+1 more_ |
 | `E_AWAIT_OUTSIDE_ASYNC` | \`await\` is only valid inside an \`async fn\` (in '{s}') | `src/async_lower.zig:255` |
-| `E_BACKEND_UNSUPPORTED` | C backend does not yet support {s}<br>LLVM backend does not yet support {s}<br>{s} backend does not yet support this construct | `src/lower_c_emitter.zig:3440`<br>`src/lower_c_emitter.zig:3905`<br>`src/lower_llvm.zig:1409`<br>`src/lower_llvm.zig:1416`<br>`src/main.zig:1189` |
+| `E_BACKEND_UNSUPPORTED` | C backend does not yet support {s}<br>LLVM backend does not yet support {s}<br>{s} backend does not yet support this construct | `src/lower_c_emitter.zig:3440`<br>`src/lower_c_emitter.zig:3905`<br>`src/lower_llvm.zig:1409`<br>`src/lower_llvm.zig:1416`<br>`src/main.zig:1281` |
 | `E_BITCAST_TYPE` | bitcast pointer-reinterpret may not cross into or out of an opaque/secret/userptr class<br>bitcast source must have a fixed scalar, pointer, or address-class layout<br>bitcast source type must be known<br>_+1 more_ | `src/mir_verify_util.zig:194`<br>`src/sema.zig:4107`<br>`src/sema.zig:4117`<br>`src/sema.zig:4120`<br>`src/sema.zig:4135` |
 | `E_BITWISE_ARITH_DOMAIN_OPERAND` | bitwise operations are not defined on this arithmetic domain | `src/mir_verify_util.zig:144`<br>`src/sema.zig:2886`<br>`src/sema.zig:2967` |
 | `E_BITWISE_BOOL_OPERAND` | bitwise operations are not defined on bool operands | `src/mir_verify_util.zig:155`<br>`src/sema.zig:2877`<br>`src/sema.zig:2961` |
@@ -180,7 +180,7 @@ Total codes: **244**.
 | `E_PARSE` | _see source_ | `src/parser.zig:2168` |
 | `E_PARSE_EXPECTED_EXPRESSION` | _see source_ | `src/parser.zig:2166` |
 | `E_PARSE_EXPECTED_PARAMETER_NAME` | _see source_ | `src/parser.zig:2167` |
-| `E_PARSE_FAILED` | _see source_ | `src/main.zig:616` |
+| `E_PARSE_FAILED` | _see source_ | `src/main.zig:637` |
 | `E_PHYS_PTR_DEREF` | _see source_ | `src/mir_verify_util.zig:173`<br>`src/sema.zig:7609` |
 | `E_POINTER_ARITH_SINGLE_OBJECT` | single-object pointers do not support arithmetic | `src/mir_verify_util.zig:161`<br>`src/sema.zig:2944` |
 | `E_POINTER_ORDERING` | optional values support only equality comparisons against null<br>pointer and view values support only equality comparisons | `src/mir_verify_util.zig:162`<br>`src/sema.zig:6028`<br>`src/sema.zig:6044` |
@@ -215,7 +215,7 @@ Total codes: **244**.
 | `E_SWITCH_MULTI_BINDING_ARM` | switch arms with multiple patterns cannot introduce bindings | `src/mir_verify_util.zig:121`<br>`src/sema.zig:6714` |
 | `E_SWITCH_RESULT_REQUIRED` | switch ok or err patterns require a Result value<br>switch ok(...) or err(...) binding requires a Result value | `src/mir_verify_util.zig:120`<br>`src/sema.zig:6689`<br>`src/sema.zig:6703` |
 | `E_SWITCH_RESULT_TAG` | switch result binding supports only ok(...) or err(...)<br>switch result patterns support only ok or err tags | `src/mir_verify_util.zig:119`<br>`src/sema.zig:6687`<br>`src/sema.zig:6701` |
-| `E_SYMBOLS_INTERNAL` | _see source_ | `src/main.zig:620` |
+| `E_SYMBOLS_INTERNAL` | _see source_ | `src/main.zig:641` |
 | `E_TRAIT_BOUND_MEMBER` | generic type-parameter member calls require a \`where\` bound whose trait declares that member | `src/sema.zig:3449` |
 | `E_TRAIT_EFFECT_MISMATCH` | impl method's effect annotations (#[may_sleep]) do not match the trait signature | `src/sema.zig:6351` |
 | `E_TRAIT_INCOHERENT` | duplicate \`impl Trait for Type\` (coherence: at most one impl per (Trait, Type) pair) | `src/sema.zig:6299` |

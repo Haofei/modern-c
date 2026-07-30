@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Verify an MC source-map artifact bundle.
+"""Verify an MC source-map or artifact metadata bundle.
 
 The `.mcmap` header records the generated artifact digest and the digest of the
 source-map payload (`# columns:` plus `entry` rows). This tool is the consumer
 side of that contract: it rejects a map whose body was substituted and rejects a
-map paired with the wrong generated artifact.
+map or metadata sidecar paired with the wrong generated artifact.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def read_file(path: Path) -> bytes:
         raise VerifyError(f"cannot read {path}: {exc}") from exc
 
 
-def parse_mcmap(data: bytes) -> tuple[dict[str, str], bytes]:
+def parse_bundle(data: bytes, *, require_payload: bool) -> tuple[dict[str, str], bytes]:
     headers: dict[str, str] = {}
     lines = data.splitlines(keepends=True)
     payload_start: int | None = None
@@ -57,10 +57,10 @@ def parse_mcmap(data: bytes) -> tuple[dict[str, str], bytes]:
         except UnicodeDecodeError as exc:
             raise VerifyError("mcmap header contains non-ASCII key or value") from exc
 
-    if payload_start is None:
+    if payload_start is None and require_payload:
         raise VerifyError("missing source-map payload marker '# columns:'")
 
-    payload = b"".join(lines[payload_start:])
+    payload = b"".join(lines[payload_start:]) if payload_start is not None else b""
     return headers, payload
 
 
@@ -79,18 +79,23 @@ def require_sha256_header(headers: dict[str, str], name: str) -> str:
 
 
 def verify(args: argparse.Namespace) -> None:
-    map_data = read_file(args.map)
-    headers, payload = parse_mcmap(map_data)
+    input_path = args.map if args.map is not None else args.metadata
+    if input_path is None:
+        raise VerifyError("one of --map or --metadata is required")
 
-    expected_payload_digest = require_sha256_header(headers, "source_map_payload_sha256")
-    actual_payload_digest = sha256_bytes(payload)
-    if actual_payload_digest != expected_payload_digest:
-        raise VerifyError(
-            "source-map payload digest mismatch: "
-            f"header={expected_payload_digest} actual={actual_payload_digest}"
-        )
+    map_data = read_file(input_path)
+    headers, payload = parse_bundle(map_data, require_payload=args.map is not None)
 
-    require_sha256_header(headers, "mir_facts_sha256")
+    if args.map is not None:
+        expected_payload_digest = require_sha256_header(headers, "source_map_payload_sha256")
+        actual_payload_digest = sha256_bytes(payload)
+        if actual_payload_digest != expected_payload_digest:
+            raise VerifyError(
+                "source-map payload digest mismatch: "
+                f"header={expected_payload_digest} actual={actual_payload_digest}"
+            )
+
+        require_sha256_header(headers, "mir_facts_sha256")
 
     if args.artifact is not None:
         expected_artifact_digest = require_sha256_header(headers, "generated_artifact_sha256")
@@ -113,9 +118,11 @@ def verify(args: argparse.Namespace) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify an MC .mcmap bundle header against its payload and optional paired files.",
+        description="Verify an MC .mcmap or .mcmeta bundle header against optional paired files.",
     )
-    parser.add_argument("--map", required=True, type=Path, help="Path to the .mcmap file")
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--map", type=Path, help="Path to the .mcmap file")
+    inputs.add_argument("--metadata", type=Path, help="Path to the .mcmeta sidecar")
     parser.add_argument(
         "--artifact",
         type=Path,

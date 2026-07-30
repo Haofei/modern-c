@@ -7,6 +7,8 @@ case "$MCC" in
     /*) ;;
     *) MCC="$PWD/$MCC" ;;
 esac
+HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
+MCMAP_VERIFY="$HERE/tools/toolchain/mcmap-verify.py"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -229,6 +231,17 @@ if ! grep -Fq "mc-profile: kernel" "$WORK/ok.c"; then
     cat "$WORK/ok.c"
     exit 1
 fi
+if [ ! -s "$WORK/ok.c.mcmeta" ]; then
+    echo "FAIL: mcc-cli-test — emit-c -o did not create artifact metadata sidecar"
+    exit 1
+fi
+python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.mcmeta" --artifact "$WORK/ok.c" >/dev/null
+grep -Fq "# artifact_kind=c" "$WORK/ok.c.mcmeta" || {
+    echo "FAIL: mcc-cli-test — emit-c metadata missing artifact kind"; cat "$WORK/ok.c.mcmeta"; exit 1;
+}
+grep -Fq "# backend=c" "$WORK/ok.c.mcmeta" || {
+    echo "FAIL: mcc-cli-test — emit-c metadata missing backend"; cat "$WORK/ok.c.mcmeta"; exit 1;
+}
 
 run_case emit-map "$WORK/ok.mc" -o "$WORK/ok.mcmap"
 assert_rc 0 "emit-map output path"
@@ -249,6 +262,17 @@ if ! grep -Fq "define" "$WORK/ok.ll"; then
     cat "$WORK/ok.ll"
     exit 1
 fi
+if [ ! -s "$WORK/ok.ll.mcmeta" ]; then
+    echo "FAIL: mcc-cli-test — emit-llvm -o did not create artifact metadata sidecar"
+    exit 1
+fi
+python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.ll.mcmeta" --artifact "$WORK/ok.ll" >/dev/null
+grep -Fq "# artifact_kind=llvm-ir" "$WORK/ok.ll.mcmeta" || {
+    echo "FAIL: mcc-cli-test — emit-llvm metadata missing artifact kind"; cat "$WORK/ok.ll.mcmeta"; exit 1;
+}
+grep -Fq "# backend=llvm" "$WORK/ok.ll.mcmeta" || {
+    echo "FAIL: mcc-cli-test — emit-llvm metadata missing backend"; cat "$WORK/ok.ll.mcmeta"; exit 1;
+}
 
 run_case emit-c "$WORK/ok.mc" -o
 assert_rc 1 "missing output path"

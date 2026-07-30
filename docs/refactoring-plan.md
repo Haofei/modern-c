@@ -289,8 +289,13 @@ Current baseline:
   temporary file, reserves the linked executable path with exclusive create,
   links to that temporary executable, and commits the final output with an
   atomic rename.
-- Full toolchain identity and emission of the shared artifact metadata from
-  `emit-c`, `emit-llvm`, and `build` remain open.
+- `emit-c`, `emit-llvm`, and `build` now write sibling `.mcmeta` sidecars for
+  `-o` outputs using the same `ArtifactBundle` header code as `emit-map`.
+- `build` computes the metadata digest from the linked executable bytes and
+  records the clang identity used for that link step.
+- Producing source maps in the same artifact-writing transaction, recording a
+  full toolchain digest, and making release evidence consume `.mcmeta` remain
+  open.
 
 Closure criteria:
 

@@ -4,6 +4,8 @@ set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
 CLANG="${CLANG:-clang}"
+HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
+MCMAP_VERIFY="$HERE/tools/toolchain/mcmap-verify.py"
 
 command -v "$CLANG" >/dev/null 2>&1 || { echo "SKIP: mcc-build-test (clang not found)"; exit 0; }
 
@@ -39,6 +41,17 @@ if [ "$RC" -ne 7 ]; then
     cat "$WORK/build.err"
     exit 1
 fi
+if [ ! -s "$WORK/ok.mcmeta" ]; then
+    echo "FAIL: mcc-build-test - build did not create executable metadata sidecar"
+    exit 1
+fi
+python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.mcmeta" --artifact "$WORK/ok" >/dev/null
+grep -Fq "# artifact_kind=host-executable" "$WORK/ok.mcmeta" || {
+    echo "FAIL: mcc-build-test - build metadata missing artifact kind"; cat "$WORK/ok.mcmeta"; exit 1;
+}
+grep -Fq "# toolchain_identity=" "$WORK/ok.mcmeta" || {
+    echo "FAIL: mcc-build-test - build metadata missing toolchain identity"; cat "$WORK/ok.mcmeta"; exit 1;
+}
 
 "$MCC" build "$WORK/void_main.mc" -o "$WORK/void-main" >"$WORK/void-build.out" 2>"$WORK/void-build.err"
 set +e

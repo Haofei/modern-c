@@ -125,6 +125,7 @@ const usage =
 ;
 
 const max_input_bytes = 64 * 1024 * 1024;
+const max_artifact_metadata_bytes = 512 * 1024 * 1024;
 
 const CompilationSession = struct {
     allocator: std.mem.Allocator,
@@ -176,6 +177,22 @@ const CompilationSession = struct {
     fn writeArtifact(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8) !void {
         if (output_path) |path| return self.writeOutputPath(path, bytes);
         return self.writeStdout(bytes);
+    }
+
+    fn writeArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !void {
+        const metadata_path = try artifactMetadataPath(self.allocator, output_path);
+        defer self.allocator.free(metadata_path);
+
+        var metadata: std.ArrayList(u8) = .empty;
+        defer metadata.deinit(self.allocator);
+        try backend.appendArtifactMetadata(self.allocator, &metadata, bundle);
+        try self.writeOutputPath(metadata_path, metadata.items);
+    }
+
+    fn writeArtifactWithMetadata(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8, bundle: backend.ArtifactBundle) !void {
+        const path = output_path orelse return self.writeStdout(bytes);
+        try self.writeOutputPath(path, bytes);
+        try self.writeArtifactMetadataSidecar(path, bundle);
     }
 
     fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {
@@ -288,6 +305,10 @@ fn readStdinAlloc(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
 fn readRootSource(io: std.Io, path: []const u8, allocator: std.mem.Allocator) ![]u8 {
     if (std.mem.eql(u8, path, "-")) return readStdinAlloc(io, allocator);
     return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_input_bytes));
+}
+
+fn artifactMetadataPath(allocator: std.mem.Allocator, output_path: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(allocator, "{s}.mcmeta", .{output_path});
 }
 
 fn stdinLoaderRootPath(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
@@ -428,15 +449,15 @@ fn runMain(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "emit-c")) {
         const remapped_source_path = try options.remappedSourcePath(allocator, path);
         defer if (remapped_source_path) |p| allocator.free(p);
-        try runEmitC(&session, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.output_path);
+        try runEmitC(&session, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.targetArch(), options.output_path);
     } else if (std.mem.eql(u8, command, "build")) {
         const remapped_source_path = try options.remappedSourcePath(allocator, path);
         defer if (remapped_source_path) |p| allocator.free(p);
-        try runBuild(&session, path, remapped_source_path orelse path, source, options.output_path.?, init.environ_map.get("CLANG") orelse "clang");
+        try runBuild(&session, path, remapped_source_path orelse path, source, options.targetArch(), options.output_path.?, init.environ_map.get("CLANG") orelse "clang");
     } else if (std.mem.eql(u8, command, "emit-map")) {
         const remapped_source_path = try options.remappedSourcePath(allocator, path);
         defer if (remapped_source_path) |p| allocator.free(p);
-        try runEmitMap(&session, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.output_path);
+        try runEmitMap(&session, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.targetArch(), options.output_path);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
         try runEmitLlvm(&session, path, source, options.checks, options.stub_asm, options.targetArch(), options.linux_kernel, options.output_path);
     } else if (std.mem.eql(u8, command, "list-tests")) {
@@ -846,9 +867,10 @@ fn runLowerC(session: *CompilationSession, path: []const u8, source: []const u8)
     try session.writeStdout(output.items);
 }
 
-fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, output_path: ?[]const u8) !void {
+fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
     const allocator = session.allocator;
     const optimize = checks.optimize;
+    const source_sha256 = backend.sha256Bytes(source);
     var diag = session.initReporter(path, source);
     defer diag.deinit();
 
@@ -866,13 +888,17 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     const be = backend.byName("c").?;
-    be.lower(allocator, program, &output, .{
+    const lower_opts = backend.LowerOptions{
         .profile = profile,
         .source_path = artifact_source_path,
+        .target_arch = target_arch,
         .checks = checks,
         .stub_asm = stub_asm,
         .reporter = &diag,
-    }) catch |err| switch (err) {
+        .source_sha256 = source_sha256,
+        .compiler_version = build_options.version,
+    };
+    be.lower(allocator, program, &output, lower_opts) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
             diag.render();
@@ -880,12 +906,17 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         },
         else => return err,
     };
-    try session.writeArtifact(output.items, output_path);
+    const bundle = backend.ArtifactBundle.forArtifact(output.items, lower_opts, .{
+        .artifact_kind = "c",
+        .backend_name = "c",
+    });
+    try session.writeArtifactWithMetadata(output.items, output_path, bundle);
 }
 
-fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, output_path: []const u8, clang_bin: []const u8) !void {
+fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, target_arch: backend.TargetArch, output_path: []const u8, clang_bin: []const u8) !void {
     const allocator = session.allocator;
     const io = session.io;
+    const source_sha256 = backend.sha256Bytes(source);
     var diag = session.initReporter(path, source);
     defer diag.deinit();
 
@@ -903,11 +934,15 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     var raw_c: std.ArrayList(u8) = .empty;
     defer raw_c.deinit(allocator);
     const be = backend.byName("c").?;
-    be.lower(allocator, program, &raw_c, .{
+    const lower_opts = backend.LowerOptions{
         .profile = .hosted,
         .source_path = artifact_source_path,
+        .target_arch = target_arch,
         .reporter = &diag,
-    }) catch |err| switch (err) {
+        .source_sha256 = source_sha256,
+        .compiler_version = build_options.version,
+    };
+    be.lower(allocator, program, &raw_c, lower_opts) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
             diag.render();
@@ -963,10 +998,24 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         std.debug.print("mcc build: clang failed while linking {s}\n", .{output_path});
         return error.BuildFailed;
     }
+
+    const executable_bytes = std.Io.Dir.cwd().readFileAlloc(io, tmp_exe, allocator, .limited(max_artifact_metadata_bytes)) catch |err| {
+        std.debug.print("mcc build: unable to read linked temporary executable {s}: {s}\n", .{ tmp_exe, @errorName(err) });
+        return error.BuildFailed;
+    };
+    defer allocator.free(executable_bytes);
+    const toolchain_identity = try clangToolchainIdentity(allocator, io, clang_bin);
+    defer allocator.free(toolchain_identity);
+    const bundle = backend.ArtifactBundle.forArtifact(executable_bytes, lower_opts, .{
+        .artifact_kind = "host-executable",
+        .backend_name = "c",
+        .toolchain_identity = toolchain_identity,
+    });
     std.Io.Dir.cwd().rename(tmp_exe, std.Io.Dir.cwd(), output_path, io) catch |err| {
         std.debug.print("mcc build: unable to commit {s}: {s}\n", .{ output_path, @errorName(err) });
         return error.BuildFailed;
     };
+    try session.writeArtifactMetadataSidecar(output_path, bundle);
     try session.writeStdout("mcc build: wrote ");
     try session.writeStdout(output_path);
     try session.writeStdout("\n");
@@ -1033,6 +1082,37 @@ fn writeExclusiveBuildTemp(allocator: std.mem.Allocator, io: std.Io, output_path
     return error.BuildFailed;
 }
 
+fn clangToolchainIdentity(allocator: std.mem.Allocator, io: std.Io, clang_bin: []const u8) ![]const u8 {
+    const fallback = struct {
+        fn make(a: std.mem.Allocator, bin: []const u8) ![]const u8 {
+            return std.fmt.allocPrint(a, "clang={s}", .{bin});
+        }
+    }.make;
+
+    const argv = [_][]const u8{ clang_bin, "--version" };
+    const result = std.process.run(allocator, io, .{
+        .argv = &argv,
+        .stdout_limit = .limited(4096),
+        .stderr_limit = .limited(4096),
+        .expand_arg0 = .expand,
+    }) catch {
+        return fallback(allocator, clang_bin);
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    const ok = switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!ok or result.stdout.len == 0) return fallback(allocator, clang_bin);
+
+    const first_line_end = std.mem.indexOfScalar(u8, result.stdout, '\n') orelse result.stdout.len;
+    const first_line = std.mem.trim(u8, result.stdout[0..first_line_end], "\r\n\t ");
+    if (first_line.len == 0) return fallback(allocator, clang_bin);
+    return std.fmt.allocPrint(allocator, "clang={s};version={s}", .{ clang_bin, first_line });
+}
+
 fn appendHostedBuildWrapper(allocator: std.mem.Allocator, raw_c: []const u8, out: *std.ArrayList(u8), source_path: []const u8) !void {
     const entry_ret = findHostedMainReturnType(raw_c) orelse {
         std.debug.print("mcc build: expected exported no-argument main() entry point in {s}\n", .{source_path});
@@ -1095,7 +1175,7 @@ fn isCIdentifierContinue(ch: u8) bool {
     return isCIdentifierStart(ch) or (ch >= '0' and ch <= '9');
 }
 
-fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, output_path: ?[]const u8) !void {
+fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
     const allocator = session.allocator;
     const optimize = checks.optimize;
     var source_sha256: backend.Sha256Digest = undefined;
@@ -1120,10 +1200,12 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     be.lower(allocator, program, &generated_c, .{
         .profile = profile,
         .source_path = artifact_source_path,
+        .target_arch = target_arch,
         .checks = checks,
         .stub_asm = stub_asm,
         .reporter = &diag,
         .source_sha256 = source_sha256,
+        .compiler_version = build_options.version,
     }) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
@@ -1138,10 +1220,12 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     try be.emitMap(allocator, program, &output, generated_c.items, .{
         .profile = profile,
         .source_path = artifact_source_path,
+        .target_arch = target_arch,
         .checks = checks,
         .stub_asm = stub_asm,
         .reporter = &diag,
         .source_sha256 = source_sha256,
+        .compiler_version = build_options.version,
     });
     try session.writeArtifact(output.items, output_path);
 }
@@ -1149,6 +1233,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
 fn runEmitLlvm(session: *CompilationSession, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, linux_kernel: bool, output_path: ?[]const u8) !void {
     const allocator = session.allocator;
     const optimize = checks.optimize;
+    const source_sha256 = backend.sha256Bytes(source);
     var diag = session.initReporter(path, source);
     defer diag.deinit();
 
@@ -1166,7 +1251,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, source: []const u
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     const be = backend.byName("llvm").?;
-    be.lower(allocator, program, &output, .{
+    const lower_opts = backend.LowerOptions{
         .profile = .kernel,
         .source_path = path,
         .target_arch = target_arch,
@@ -1174,7 +1259,10 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, source: []const u
         .stub_asm = stub_asm,
         .reporter = &diag,
         .linux_kernel = linux_kernel,
-    }) catch |err| switch (err) {
+        .source_sha256 = source_sha256,
+        .compiler_version = build_options.version,
+    };
+    be.lower(allocator, program, &output, lower_opts) catch |err| switch (err) {
         error.UnsupportedLlvmEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "LLVM");
             diag.render();
@@ -1182,7 +1270,11 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, source: []const u
         },
         else => return err,
     };
-    try session.writeArtifact(output.items, output_path);
+    const bundle = backend.ArtifactBundle.forArtifact(output.items, lower_opts, .{
+        .artifact_kind = "llvm-ir",
+        .backend_name = "llvm",
+    });
+    try session.writeArtifactWithMetadata(output.items, output_path, bundle);
 }
 
 fn reportBackendUnsupportedFallback(diag: *diagnostics.Reporter, module: ast.Module, backend_name: []const u8) void {
