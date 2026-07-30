@@ -374,7 +374,8 @@ The old recursive source-type fallback is retained only for
 compiler-generated zero-span bases.
 Direct slice-call index bases now use the same MIR-owned direct-call result
 helper as array direct-call bases and inferred locals; `lower_c_infer` no
-longer exposes a public slice-call return-type helper.
+longer exposes public slice/array/enum/nullable/tagged-union/Result call
+return-type classifier helpers that are only used inside the infer module.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|

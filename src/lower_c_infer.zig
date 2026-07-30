@@ -77,7 +77,7 @@ fn sliceBaseTypeForZeroSpanSlice(ctx: TypeQueryContext, expr: ast.Expr, locals: 
     };
 }
 
-pub fn sliceReturnTypeForIndexBase(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
+fn sliceReturnTypeForIndexBase(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |call| callSliceResultType(ctx, call),
         .grouped => |inner| blk: {
@@ -103,7 +103,7 @@ pub fn sliceTypeForBase(ctx: TypeQueryContext, ty: ast.TypeExpr, span: ast.Span)
     };
 }
 
-pub fn arrayReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
+fn arrayReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |node| blk: {
             const ret_ty = callReturnType(ctx, node) orelse break :blk null;
@@ -118,7 +118,7 @@ pub fn arrayReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeEx
     };
 }
 
-pub fn enumReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
+fn enumReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |node| blk: {
             const ret_ty = callReturnType(ctx, node) orelse break :blk null;
@@ -252,7 +252,7 @@ fn binaryOpProducesBool(op: ast.BinaryOp) bool {
     };
 }
 
-pub fn nullableReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
+fn nullableReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |node| blk: {
             const ret_ty = callReturnType(ctx, node) orelse break :blk null;
@@ -267,7 +267,7 @@ pub fn nullableReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.Typ
     };
 }
 
-pub fn taggedUnionReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
+fn taggedUnionReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
     return switch (expr.kind) {
         .call => |node| blk: {
             // A qualified constructor `Union.variant(...)` is self-typed to its owner,
@@ -301,13 +301,13 @@ pub fn taggedUnionTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
     return if (ctx.tagged_unions.contains(type_name)) ty else null;
 }
 
-pub fn resultReturnTypeForCall(ctx: TypeQueryContext, call: anytype) ?ast.TypeExpr {
+fn resultReturnTypeForCall(ctx: TypeQueryContext, call: anytype) ?ast.TypeExpr {
     const ret_ty = callReturnType(ctx, call) orelse return null;
     const resolved = resolveAliasType(ctx, ret_ty);
     return if (resultPayloadTypeForTag(resolved, "ok") != null and resultPayloadTypeForTag(resolved, "err") != null) ret_ty else null;
 }
 
-pub fn resultTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+fn resultTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     if (resultTypeFromSourceExpr(ctx, expr, locals)) |ty| return ty;
     return switch (expr.kind) {
         .ident => |ident| blk: {
@@ -324,7 +324,7 @@ pub fn resultTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: *std.Str
     };
 }
 
-pub fn resultTypeFromSourceExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+fn resultTypeFromSourceExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     const ty = switch (expr.kind) {
         .cast => |node| node.ty.*,
         else => operandEmitType(ctx, expr, locals) orelse return null,
