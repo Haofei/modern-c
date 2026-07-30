@@ -4008,7 +4008,7 @@ const CEmitter = struct {
                 return error.UnsupportedCEmission;
             }
         }
-        const base_ty = self.operandEmitType(node.base.*, locals) orelse self.exprSourceTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
+        const base_ty = self.arrayOrSliceBaseTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
         const inferred_element_ty = switch (self.resolveAliasType(base_ty).kind) {
             .array => |array| array.child.*,
             .slice => |slice| slice.child.*,
@@ -5097,7 +5097,7 @@ const CEmitter = struct {
     }
 
     fn emitSliceExpr(self: *CEmitter, node: anytype, slice_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !void {
-        const base_ty = self.sliceBaseTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
+        const base_ty = self.arrayOrSliceBaseTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
         const inferred_slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedCEmission;
         const slice_ty = (self.mirTargetTypeFactAt(.expression_result, slice_span) orelse return error.UnsupportedCEmission).target_ty;
         if (!sema_type.sameTypeSyntax(self.resolveAliasType(slice_ty), self.resolveAliasType(inferred_slice_ty))) return error.UnsupportedCEmission;
@@ -5112,7 +5112,7 @@ const CEmitter = struct {
         try self.out.print(self.allocator, " + mc_start{d}, .len = mc_end{d} - mc_start{d} }}; }})", .{ n, n, n });
     }
 
-    fn sliceBaseTypeForEmission(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn arrayOrSliceBaseTypeForEmission(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         if (self.arrayTypeForExpr(base, locals)) |ty| return ty;
         if (self.sliceReturnTypeForExpr(base, locals)) |ty| return ty;
         if (self.operandEmitType(base, locals)) |ty| return ty;
@@ -7733,7 +7733,7 @@ const CEmitter = struct {
             .slice => |node| if (expr.span.line != 0 and expr.span.column != 0)
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
-                self.sliceTypeForBase(self.sliceBaseTypeForEmission(node.base.*, locals) orelse return null, node.base.*.span),
+                self.sliceTypeForBase(self.arrayOrSliceBaseTypeForEmission(node.base.*, locals) orelse return null, node.base.*.span),
             .grouped => |inner| blk: {
                 const inferred = self.exprSourceTypeForEmission(inner.*, locals) orelse break :blk null;
                 if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
