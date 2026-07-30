@@ -156,10 +156,18 @@ def metadata_escape(value: str) -> str:
 
 def toolchain_identity() -> str:
     try:
-        raw = subprocess.check_output(["zig", "version"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL).strip()
+        version = subprocess.check_output(["zig", "version"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL).strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
-        raw = "unknown"
-    return f"zig={raw or 'unknown'}"
+        version = "unknown"
+    resolved = shutil.which("zig")
+    if resolved is None:
+        return f"zig={version or 'unknown'};path=unknown;sha256=unknown"
+    resolved_path = pathlib.Path(resolved)
+    try:
+        digest = sha256_file(resolved_path)
+    except OSError:
+        digest = "unknown"
+    return f"zig={version or 'unknown'};path={resolved_path};sha256={digest}"
 
 
 def write_release_metadata(

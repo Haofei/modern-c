@@ -173,7 +173,11 @@ def require_metadata_sidecar(out_dir: pathlib.Path, target: str) -> None:
     require(headers.get("target_arch") == target, f"{sidecar.name} target mismatch")
     require(headers.get("release_commit") == COMMIT, f"{sidecar.name} release commit mismatch")
     require(headers.get("source_date_epoch") == str(SOURCE_DATE_EPOCH), f"{sidecar.name} source_date_epoch mismatch")
-    require("toolchain_identity" in headers, f"{sidecar.name} lacks toolchain identity")
+    toolchain_identity = headers.get("toolchain_identity")
+    require(isinstance(toolchain_identity, str), f"{sidecar.name} lacks toolchain identity")
+    require("zig=" in toolchain_identity, f"{sidecar.name} toolchain identity lacks Zig version")
+    require("path=" in toolchain_identity, f"{sidecar.name} toolchain identity lacks Zig path")
+    require("sha256=" in toolchain_identity, f"{sidecar.name} toolchain identity lacks Zig digest")
 
 
 def require_checksums(out_dir: pathlib.Path) -> None:

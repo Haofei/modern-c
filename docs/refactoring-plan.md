@@ -296,9 +296,11 @@ Current baseline:
 - Release packaging now emits `.tar.gz.mcmeta` sidecars for release tarballs and
   records them in `SHA256SUMS`, release inventory, CycloneDX SBOM, workflow
   upload/publish paths, and release-process documentation.
+- Release tarball sidecars record the Zig toolchain version, resolved path, and
+  executable SHA-256 digest used by the packaging helper.
 - Producing source maps in the same artifact-writing transaction, recording a
-  full toolchain digest, and replacing all release evidence prose with generated
-  manifest rows remain open.
+  full toolchain digest for every downstream tool invocation, and replacing all
+  release evidence prose with generated manifest rows remain open.
 
 Closure criteria:
 
