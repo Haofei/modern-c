@@ -28,7 +28,7 @@ phase or are explicitly scoped to an experimental profile.
 | Backend authority | In progress | Treat C/LLVM as consumers of verified facts; delete or register every remaining semantic inference helper. |
 | HIR authority | Closed as inspection-only | Keep `lower-hir` / `verify-hir` as inspection commands; MIR verification remains the backend production boundary. |
 | Artifact/source-map provenance | Partially remediated | Bind artifact bytes, source maps, options, toolchain identity, and MIR/fact digests in one metadata object. |
-| Gate governance | Open | Replace hand-maintained gate string lists with one manifest. |
+| Gate governance | Pilot manifest | Expand `gate-manifest.json` from the compiler-core pilot to generated build/CI/doc rows. |
 | Product/TCB scope | In progress | Keep selfhost, production kernel, Agent runtime, and vendored runtimes profile-scoped through `profile-manifest.json`. |
 | Kernel secure loading | Open | Production loaders must accept opaque exact-byte `VerifiedBundle` capabilities, not raw bytes plus metadata. |
 
@@ -292,6 +292,19 @@ Deliverables:
   summaries from the manifest.
 - Collapse execution tiers to `pr`, `nightly`, and `release`.
 - Keep anti-vacuity checks until the manifest fully replaces hand-written lists.
+
+Current baseline:
+
+- `docs/gate-manifest.json` defines a pilot set of compiler-core gates with
+  owner, category, execution tier, required tools, blocking profiles, build
+  tiers, and skip policy.
+- `gate-manifest-test` validates those gate IDs are registered in `build/*.zig`,
+  reference known profiles, and appear in each declared `m0` / `fast` / `c0`
+  dependency list.
+- `fast`, `m0`, and `c0` run the pilot manifest gate; focused dev-gates route
+  manifest edits to that gate.
+- Full build registration, CI pass assertions, release evidence, and docs are
+  still hand-maintained outside the pilot.
 
 Closure criteria:
 

@@ -84,10 +84,10 @@ risks:
     severity: medium
     scope: build-governance
     status: open
-    admitted_subset_status: anti-vacuity-checked
+    admitted_subset_status: compiler-core-pilot-manifest-gated
     blocks:
       - generated-release-evidence
-    summary: Gate inventory is still maintained through large stringly build lists; PR/Nightly/Release profiles should be generated from one manifest.
+    summary: A pilot compiler-core gate manifest is checked against build tiers; full build/CI/release/docs generation from one manifest remains open.
 
   - id: LSP-COMPILER-SERVICE
     severity: medium

@@ -423,6 +423,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("third-party-licenses-test"));
     // profile-manifest-test keeps product/profile claims tied to known risks and gates.
     m0_step.dependOn(ctx.cmd("profile-manifest-test"));
+    // gate-manifest-test pilots machine-readable gate ownership for compiler-core gates.
+    m0_step.dependOn(ctx.cmd("gate-manifest-test"));
     // mcc-cli-test pins documented top-level help/version/usage behavior.
     m0_step.dependOn(ctx.cmd("mcc-cli-test"));
     // mcc-build-test validates the installed `mcc build` hosted executable driver.
@@ -957,6 +959,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("vendoring-test"));
     fast_step.dependOn(ctx.cmd("third-party-licenses-test"));
     fast_step.dependOn(ctx.cmd("profile-manifest-test"));
+    fast_step.dependOn(ctx.cmd("gate-manifest-test"));
     fast_step.dependOn(ctx.cmd("mcc-cli-test"));
     fast_step.dependOn(ctx.cmd("mcc-build-test"));
     fast_step.dependOn(ctx.cmd("path-remap-test"));
@@ -1020,6 +1023,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("vendoring-test")); // third_party provenance and CVE/advisory process stay documented
     c0_step.dependOn(ctx.cmd("third-party-licenses-test")); // aggregated third-party license manifest stays complete
     c0_step.dependOn(ctx.cmd("profile-manifest-test")); // product/profile claims stay tied to known risks and gates
+    c0_step.dependOn(ctx.cmd("gate-manifest-test")); // pilot compiler-core gate manifest stays tied to build tiers
     c0_step.dependOn(ctx.cmd("mcc-cli-test")); // top-level CLI help/version/usage behavior stays documented
     c0_step.dependOn(ctx.cmd("mcc-build-test")); // installed mcc build hosted executable driver remains functional
     c0_step.dependOn(ctx.cmd("path-remap-test")); // generated C/source-map source paths can be remapped for reproducibility

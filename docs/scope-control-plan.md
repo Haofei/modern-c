@@ -89,8 +89,12 @@ that manifest rather than maintained as separate string lists.
 The current bridge state is:
 
 - profile ownership is machine-readable in `docs/profile-manifest.json`;
+- the first compiler-core gate subset is machine-readable in
+  `docs/gate-manifest.json`;
 - `profile-manifest-test` verifies every profile references known risks and
   registered build gates;
+- `gate-manifest-test` verifies the pilot gate subset is registered and present
+  in its declared build tiers;
 - gate generation itself remains open under `GATE-MANIFEST`.
 
 ## Non-goals

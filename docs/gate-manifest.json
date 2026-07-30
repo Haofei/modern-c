@@ -1,0 +1,285 @@
+{
+  "schema_version": 1,
+  "source_of_truth": "docs/gate-manifest.json",
+  "profiles": "docs/profile-manifest.json",
+  "scope": "pilot-compiler-core",
+  "tiers": {
+    "pr": {
+      "intent": "fast deterministic compiler-core feedback"
+    },
+    "nightly": {
+      "intent": "broader differential, fuzz, and platform sweeps"
+    },
+    "release": {
+      "intent": "full qualification and provenance"
+    }
+  },
+  "gates": [
+    {
+      "id": "test-lint",
+      "owner": "test-infra",
+      "category": "fixture-contract",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "bad-diagnostics-test",
+      "owner": "diagnostics",
+      "category": "negative-fixture-contract",
+      "tier": "pr",
+      "required_tools": [
+        "python3",
+        "mcc"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "diagnostics-reference-test",
+      "owner": "diagnostics",
+      "category": "generated-reference",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "diagnostic-code-inventory-test",
+      "owner": "diagnostics",
+      "category": "diagnostic-ownership",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "semantic-facts-inventory-test",
+      "owner": "backend-authority",
+      "category": "semantic-fact-inventory",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "compilation-session-inventory-test",
+      "owner": "compiler-session",
+      "category": "request-state-inventory",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "mir-identity-inventory-test",
+      "owner": "mir",
+      "category": "typed-identity-inventory",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "c-test",
+      "owner": "c-backend",
+      "category": "emit-c-compile",
+      "tier": "pr",
+      "required_tools": [
+        "bash",
+        "mcc",
+        "clang"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "tool-required"
+    },
+    {
+      "id": "sweep",
+      "owner": "c-backend",
+      "category": "spec-emit-c-sweep",
+      "tier": "pr",
+      "required_tools": [
+        "python3",
+        "mcc",
+        "clang"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "tool-required"
+    },
+    {
+      "id": "diff-backend",
+      "owner": "backend-parity",
+      "category": "semantic-equivalence",
+      "tier": "pr",
+      "required_tools": [
+        "bash",
+        "mcc",
+        "clang",
+        "llvm"
+      ],
+      "blocking_profiles": [
+        "compiler-subset",
+        "llvm-experimental"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast"
+      ],
+      "skip_policy": "tool-required"
+    },
+    {
+      "id": "mcc-cli-test",
+      "owner": "cli",
+      "category": "cli-contract",
+      "tier": "pr",
+      "required_tools": [
+        "bash",
+        "mcc"
+      ],
+      "blocking_profiles": [
+        "compiler-subset",
+        "developer-tools"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "mcc-build-test",
+      "owner": "cli",
+      "category": "hosted-build-contract",
+      "tier": "pr",
+      "required_tools": [
+        "bash",
+        "mcc",
+        "clang"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "tool-required"
+    },
+    {
+      "id": "path-remap-test",
+      "owner": "artifact-provenance",
+      "category": "reproducible-paths",
+      "tier": "pr",
+      "required_tools": [
+        "bash",
+        "mcc"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "mcmap-test",
+      "owner": "artifact-provenance",
+      "category": "source-map-integrity",
+      "tier": "pr",
+      "required_tools": [
+        "bash",
+        "mcc",
+        "clang",
+        "llvm"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0"
+      ],
+      "skip_policy": "tool-required"
+    }
+  ]
+}

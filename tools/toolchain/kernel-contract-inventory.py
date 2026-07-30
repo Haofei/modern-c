@@ -47,7 +47,7 @@ REQUIRED = {
         "Machine-readable FFI metadata",
         "facts may not persist",
     ),
-    "docs/virtio-rng-comparison-evidence.md": (
+    "docs/archive/virtio-rng-comparison-evidence.md": (
         "resolves the bounded protocol-core performance blocker",
         "K2 remains unsatisfied",
         "run-contract-mutations.sh",

@@ -198,6 +198,14 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         (
+            "docs/gate-manifest.json",
+            "tools/toolchain/gate-manifest-test.py",
+        ),
+        ("gate-manifest-test",),
+        "gate manifest changes need the pilot gate manifest contract",
+    ),
+    Rule(
+        (
             "tools/toolchain/lowering-coverage.sh",
             "tools/toolchain/lowering-coverage-inventory.py",
             "tools/toolchain/lowering-coverage-baseline.tsv",

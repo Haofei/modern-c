@@ -44,6 +44,7 @@
         "diff-backend",
         "mcc-cli-test",
         "mcc-build-test",
+        "gate-manifest-test",
         "path-remap-test",
         "mcmap-test"
       ],

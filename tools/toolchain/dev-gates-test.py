@@ -225,6 +225,8 @@ def main() -> None:
     assert_gates(module, ["docs/profile-manifest.json"], ["profile-manifest-test"])
     assert_route(module, ["docs/scope-control-plan.md"], ["profile-manifest-test"], ["git diff --check"])
     assert_gates(module, ["docs/review-risk-register.yaml"], ["profile-manifest-test"])
+    assert_gates(module, ["tools/toolchain/gate-manifest-test.py"], ["gate-manifest-test"])
+    assert_gates(module, ["docs/gate-manifest.json"], ["gate-manifest-test"])
     assert_gates(module, ["tools/toolchain/lowering-coverage.sh"], ["lowering-coverage-inventory-test", "lowering-coverage"])
     assert_gates(module, ["tools/toolchain/lowering-coverage-inventory.py"], ["lowering-coverage-inventory-test", "lowering-coverage"])
     assert_gates(module, ["tools/toolchain/lowering-coverage-baseline.tsv"], ["lowering-coverage-inventory-test", "lowering-coverage"])
