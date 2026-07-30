@@ -973,7 +973,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "appendTargetTypeFact(.for_iterable": 1,
         "appendTargetTypeFact(.for_element": 1,
         "appendOwnedTargetTypeFact(.direct_call_result": 1,
-        ".direct_call_argument,": 1,
+        ".direct_call_argument,": 2,
         "appendTargetTypeFact(.indirect_call_callee": 1,
         "fn indirectCallTarget(": 1,
         "fn appendOwnedTargetTypeFact(": 1,
@@ -1370,7 +1370,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/lower_c_call.zig": {
         'isIdentNamed(call.callee.*, "trap")': 0,
         "expr_source_type: ExprSourceTypeFn": 1,
-        "ctx.expr_source_type(ctx.emit_ctx": 2,
+        "ctx.expr_source_type(ctx.emit_ctx": 1,
         "ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_result": 2,
         "ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_argument": 1,
         "mir.explicitTrapHelperForTarget(kind)": 1,
@@ -1608,7 +1608,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/mir_tests.zig": {
         "MIR owns DMA call identities and complete types": 1,
         "MIR owns runtime assert condition types": 1,
-        "MIR owns ordinary direct call result and fixed argument types": 1,
+        "MIR owns ordinary direct call result and argument types": 1,
         "MIR records typed call target facts for atomic member calls": 1,
         "MIR owns discard call identities and argument types": 1,
         "MIR lowering admission rejects unknown call-target result facts": 1,

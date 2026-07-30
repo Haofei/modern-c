@@ -2395,7 +2395,7 @@ test "MIR owns inferred local dyn dispatch call types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
-test "MIR owns ordinary direct call result and fixed argument types" {
+test "MIR owns ordinary direct call result and argument types" {
     const source =
         \\trait Width { fn widen(self: *Self) -> u32; }
         \\struct Narrow { value: u32 }
@@ -2433,14 +2433,18 @@ test "MIR owns ordinary direct call result and fixed argument types" {
         .direct_call_argument => {
             argument_count += 1;
             try std.testing.expect(fact.target_owner != null);
-            try std.testing.expectEqual(@as(?usize, 0), fact.target_index);
             try std.testing.expect(std.mem.eql(u8, fact.target_owner.?, "log") or std.mem.eql(u8, fact.target_owner.?, "widen"));
+            if (std.mem.eql(u8, fact.target_owner.?, "log")) {
+                try std.testing.expect(fact.target_index == @as(?usize, 0) or fact.target_index == @as(?usize, 1));
+            } else {
+                try std.testing.expectEqual(@as(?usize, 0), fact.target_index);
+            }
             try std.testing.expect(std.mem.eql(u8, fact.target_ty.kind.name.text, "u32") or std.mem.eql(u8, fact.target_ty.kind.name.text, "u64"));
         },
         else => {},
     };
     try std.testing.expectEqual(@as(usize, 2), result_count);
-    try std.testing.expectEqual(@as(usize, 2), argument_count);
+    try std.testing.expectEqual(@as(usize, 3), argument_count);
     const method_caller = functionByName(typed_mir, "method_caller").?;
     try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(method_caller, .direct_call_result));
     try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(method_caller, .direct_call_argument));

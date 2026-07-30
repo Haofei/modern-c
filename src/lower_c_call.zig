@@ -128,14 +128,10 @@ pub fn collectSequencedArgTemps(
 
     const target_owner = calleeIdentName(call.callee.*) orelse return error.UnsupportedCEmission;
     for (call.args, 0..) |arg, i| {
-        const target_ty = if (i < fn_info.params.len) blk: {
-            const fixed_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
-            if (!std.meta.eql(fixed_ty, fn_info.params[i].ty)) return error.UnsupportedCEmission;
-            break :blk fixed_ty;
-        } else blk: {
-            if (!fn_info.is_variadic) return error.UnsupportedCEmission;
-            break :blk ctx.expr_source_type(ctx.emit_ctx, arg, locals) orelse return error.UnsupportedCEmission;
-        };
+        const target_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_argument, arg.span, target_owner, i) orelse return error.UnsupportedCEmission;
+        if (i < fn_info.params.len) {
+            if (!std.meta.eql(target_ty, fn_info.params[i].ty)) return error.UnsupportedCEmission;
+        } else if (!fn_info.is_variadic) return error.UnsupportedCEmission;
         try temps.append(ctx.scratch, try ctx.emit_arg_temp(ctx.emit_ctx, arg, locals, target_ty));
     }
 

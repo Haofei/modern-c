@@ -341,6 +341,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                 try summaries.put(fn_decl.name.text, .{
                     .no_lang_trap = hasAttr(decl.attrs, "no_lang_trap"),
                     .irq_context = hasAttr(decl.attrs, "irq_context"),
+                    .is_variadic = fn_decl.is_variadic,
                     .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
                     .return_type_expr = fn_decl.return_type,
                     .params = fn_decl.params,
@@ -5849,6 +5850,19 @@ const FunctionBuilder = struct {
                             callee_name,
                             index,
                         );
+                    }
+                    if (summary.is_variadic and node.args.len > fixed_arg_count) {
+                        for (node.args[fixed_arg_count..], fixed_arg_count..) |arg, index| {
+                            const arg_ty = self.typeExprForExpr(arg) orelse return error.UnsupportedMirConstruction;
+                            try self.appendOwnedTargetTypeFact(
+                                .direct_call_argument,
+                                arg_ty,
+                                valueTypeFromTypeAlias(arg_ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                                arg.span,
+                                callee_name,
+                                index,
+                            );
+                        }
                     }
                 }
                 if (dyn_dispatch_target) |target| {

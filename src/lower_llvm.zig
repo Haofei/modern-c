@@ -7195,6 +7195,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitDirectCall(self: *LlvmEmitter, callee: []const u8, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+        _ = expected_ty;
         const sig = self.fn_sigs.get(callee) orelse return error.UnsupportedLlvmEmission;
         const ret_ast_ty = (self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, callee, null) orelse return error.UnsupportedLlvmEmission).target_ty;
         if (!directCallFactMatchesDeclared(ret_ast_ty, sig.ret)) return error.UnsupportedLlvmEmission;
@@ -7203,11 +7204,14 @@ const LlvmEmitter = struct {
         var args: std.ArrayList(ArgValue) = .empty;
         defer args.deinit(self.allocator);
         for (call.args, 0..) |arg, i| {
+            const fact_ty = (self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, callee, i) orelse return error.UnsupportedLlvmEmission).target_ty;
             const arg_ty = if (i < sig.params.len) blk: {
-                const fact_ty = (self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, callee, i) orelse return error.UnsupportedLlvmEmission).target_ty;
                 if (!directCallFactMatchesDeclared(fact_ty, sig.params[i].ty)) return error.UnsupportedLlvmEmission;
                 break :blk fact_ty;
-            } else self.exprType(arg) orelse expected_ty;
+            } else blk: {
+                if (!sig.is_variadic) return error.UnsupportedLlvmEmission;
+                break :blk fact_ty;
+            };
             const arg_value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg");
             const lowered_arg = if (i >= sig.params.len and sig.is_variadic and sig.c_abi)
                 try self.promoteCVariadicArgument(arg_ty, arg_value)
@@ -7609,11 +7613,14 @@ const LlvmEmitter = struct {
         var args: std.ArrayList(ArgValue) = .empty;
         defer args.deinit(self.allocator);
         for (call.args, 0..) |arg, i| {
+            const fact_ty = (self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, callee, i) orelse return error.UnsupportedLlvmEmission).target_ty;
             const arg_ty = if (i < sig.params.len) blk: {
-                const fact_ty = (self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, callee, i) orelse return error.UnsupportedLlvmEmission).target_ty;
                 if (!std.meta.eql(fact_ty, sig.params[i].ty)) return error.UnsupportedLlvmEmission;
                 break :blk fact_ty;
-            } else self.exprType(arg) orelse return error.UnsupportedLlvmEmission;
+            } else blk: {
+                if (!sig.is_variadic) return error.UnsupportedLlvmEmission;
+                break :blk fact_ty;
+            };
             const arg_value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg");
             const lowered_arg = if (i >= sig.params.len and sig.is_variadic and sig.c_abi)
                 try self.promoteCVariadicArgument(arg_ty, arg_value)
