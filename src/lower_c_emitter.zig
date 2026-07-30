@@ -3485,7 +3485,7 @@ const CEmitter = struct {
         }
         if (resolved_subject_ty.kind == .nullable) {
             const representation = subject_info.nullable_representation orelse return error.UnsupportedCEmission;
-            if (try self.emitNullableSwitch(node, locals, return_ty, representation)) return;
+            if (try self.emitNullableSwitch(node, locals, return_ty, subject_ty, representation)) return;
             return error.UnsupportedCEmission;
         }
         if (typeName(resolved_subject_ty)) |name| {
@@ -3562,8 +3562,8 @@ const CEmitter = struct {
         return lower_c_switch.emitResultSwitch(self.switchEmitContext(), node, locals, return_ty, subject);
     }
 
-    fn emitNullableSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, representation: NullableRepresentation) anyerror!bool {
-        const subject = if (try lower_c_switch.nullableSubjectForExpr(self.switchEmitContext(), node.subject, locals, representation)) |subject|
+    fn emitNullableSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_ty: ast.TypeExpr, representation: NullableRepresentation) anyerror!bool {
+        const subject = if (try lower_c_switch.nullableSubjectForExprWithType(self.switchEmitContext(), node.subject, locals, subject_ty, representation)) |subject|
             subject
         else
             return false;
@@ -3594,8 +3594,29 @@ const CEmitter = struct {
                 if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
                 break :blk fact.target_ty;
             },
-            else => self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals),
+            else => self.nullableExpressionResultTypeOrGenerated(expr, locals),
         };
+    }
+
+    fn nullableExpressionResultTypeOrGenerated(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| {
+            return if (self.resolveAliasType(fact.target_ty).kind == .nullable) fact.target_ty else null;
+        }
+        if (self.directNullableLocalTypeForEmission(expr, locals)) |ty| return ty;
+        if (expr.span.line != 0 or expr.span.column != 0) return null;
+        const inferred = self.operandEmitType(expr, locals) orelse blk: {
+            if (self.exprSourceTypeForEmission(expr, locals)) |ty| break :blk ty;
+            return null;
+        };
+        return if (self.resolveAliasType(inferred).kind == .nullable) inferred else null;
+    }
+
+    fn directNullableLocalTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const local_set = locals orelse return null;
+        const name = directLocalName(expr) orelse return null;
+        const info = local_set.get(name) orelse return null;
+        const ty = info.source_ty orelse return null;
+        return if (self.resolveAliasType(ty).kind == .nullable) ty else null;
     }
 
     fn taggedUnionReturnTypeForExpr(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
@@ -4543,7 +4564,7 @@ const CEmitter = struct {
 
     fn emitExprWithTargetInner(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
         const semantic_target_ty = if (expr.kind == .null_literal)
-            if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedCEmission
+            self.nullLiteralTargetTypeForEmission(expr, target_ty) orelse return error.UnsupportedCEmission
         else
             target_ty;
         if (try self.emitRaceTolerantAggregateDerefExpr(expr, locals, semantic_target_ty)) return;
@@ -4568,6 +4589,12 @@ const CEmitter = struct {
             .address_of => try self.emitAddressOfExprWithTarget(expr, locals, semantic_target_ty),
             else => try self.emitExpr(expr, locals),
         }
+    }
+
+    fn nullLiteralTargetTypeForEmission(self: *CEmitter, expr: ast.Expr, target_ty: ?ast.TypeExpr) ?ast.TypeExpr {
+        if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact| return fact.target_ty;
+        const ty = target_ty orelse return null;
+        return if (self.resolveAliasType(ty).kind == .nullable) ty else null;
     }
 
     // Coerce a `null` (absent) or a payload value (present) into a value optional `?T`'s

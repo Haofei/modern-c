@@ -32,6 +32,88 @@ phase or are explicitly scoped to an experimental profile.
 | Product/TCB scope | In progress | Keep selfhost, production kernel, Agent runtime, and vendored runtimes profile-scoped through `profile-manifest.json`. |
 | Kernel secure loading | Prototype in progress | A production-shaped exact-byte `VerifiedBundle` admission path exists; crypto SHA-256/signature policy, raw production loader removal, persistence, audit, and hardware qualification remain open. |
 
+## Immediate execution plan
+
+The active refactor should run as a sequence of small authority-reduction
+slices. Do not mix compiler semantic-boundary work with kernel, LSP, selfhost, or
+release-polish work in the same patch unless the files are already touched for
+the same invariant.
+
+### Track A — close backend semantic fallback first
+
+Goal: make the C backend stop rebuilding source types, nullable/result
+representation, provenance, ABI, and layout from AST/type spelling.
+
+| Order | Slice | Required proof | Done when |
+|---:|---|---|---|
+| A1 | Finish nullable source typing in C lowering. Replace broad `operandEmitType(...) orelse exprSourceTypeForEmission(...)` fallback with MIR `.expression_result` / direct local typed facts and generated-node-only fallback. | `semantic-facts-inventory-test`, `test-unit`, `c-test`, `sweep`, `diff-backend`. | The direct nullable fallback search is zero, nullable pointer/value fixtures pass, and any remaining fallback is explicitly generated-node scoped. |
+| A2 | Move optional/result representation emission behind typed MIR facts for all C nullable `if let` / `switch` / coercion paths. | C/LLVM nullable differential fixtures plus malformed stale-representation tests. | Backend does not decide pointer-vs-value optional representation from C type spelling. |
+| A3 | Remove the next backend-local semantic helper from `semantic-facts-inventory.py`; do not add replacement inference in another file. | Inventory count decreases or the exception is renamed as a temporary exact-count entry with a focused test. | The inventory shows net authority reduction. |
+| A4 | Normalize call-target and conversion source/result typing into MIR facts for both backends. | Conversion, `try_from`, extern call, and result/optional fixture matrix. | C/LLVM consume the same call/result facts and do not use AST call shape as semantic authority. |
+| A5 | Convert one high-risk MIR instruction family to a tagged-union model; start with optional tests or calls. | Malformed MIR construction tests and backend admission rejection tests. | Illegal `kind + optional fields` states for that family are unrepresentable or rejected before backend lowering. |
+
+### Track B — shrink backend admission surface
+
+Goal: make `VerifiedProgram` mean “verified semantic input”, not “verified MIR
+plus raw AST escape hatch”.
+
+| Order | Slice | Required proof | Done when |
+|---:|---|---|---|
+| B1 | Replace backend `syntax_module` reads with typed symbol/source-spelling views where possible. | `backend-inventory` / `semantic-facts-inventory-test`, C/LLVM parity smoke. | Production backend entrypoints do not gain new AST reads. |
+| B2 | Split backend config into common options plus backend-specific tagged configs. | CLI contract tests and backend option tests. | Unsupported backend options are rejected or absent from that backend config, not silently ignored. |
+| B3 | Move source-map generation into the same lowering transaction as artifact emission. | `mcmap-test`, wrong-artifact rejection, digest smoke. | A map generated for artifact A is rejected for artifact B. |
+
+### Track C — governance/documentation convergence
+
+Goal: keep docs as navigational material, not competing status ledgers.
+
+| Order | Slice | Required proof | Done when |
+|---:|---|---|---|
+| C1 | Keep `review-risk-register.yaml`, `profile-manifest.json`, `tcb-components.json`, and `gate-manifest.json` as machine-readable truth. | `profile-manifest-test`, `gate-manifest-test`, `vendoring-test`. | Markdown pages summarize these files and do not carry independent open/closed counters. |
+| C2 | Move stale status/remediation pages to `docs/archive/` or fold them into this plan/risk register. | Documentation link check or `rg` audit for duplicated “open blockers” claims. | `docs/README.md` has one clear path for status, roadmap, security, tests, release, and specs. |
+| C3 | Generate or validate build/CI/release gate rows from `gate-manifest.json`. | Generated projection matches hand-written build tiers before replacement. | Adding/renaming a blocking gate requires one manifest edit, not multiple string-list edits. |
+
+### Track D — kernel trust chain stays profile-scoped
+
+Goal: prevent kernel/Agent/security-boot work from consuming compiler-core
+capacity while still keeping the production blockers explicit.
+
+| Order | Slice | Required proof | Done when |
+|---:|---|---|---|
+| D1 | Keep `VerifiedBundle` as an exact-byte prototype and close raw production-loader admission only when SHA-256/signature policy is wired. | Tamper/substitution tests. | Public production APIs cannot express verify-A/load-B. |
+| D2 | Move capability/right minting behind an unforgeable root token or module-private constructor. | Compile-fail tests for non-bootstrap minting. | Ordinary kernel components cannot mint privileged authority by import convention. |
+| D3 | Treat QEMU as `kernel-qemu` evidence only. | Profile manifest and release checklist. | No doc claims production hardware support without board/soak/power-loss evidence. |
+
+## Freeze rules during the refactor
+
+- No new language surface unless it removes or validates an existing semantic
+  fallback.
+- No new backend feature unless the required MIR/semantic facts already exist.
+- No selfhost expansion until Track A and the first B slice are closed for the
+  relevant feature family.
+- No advanced LSP expansion until compiler requests are served through a stable
+  session/query API.
+- No production-kernel claim until Track D has typed APIs and hardware evidence.
+- No new status Markdown; update the risk register, manifests, or this plan.
+
+## Default verification ladder
+
+Use the smallest ladder that proves the touched invariant, but a completed
+compiler authority slice normally needs:
+
+```text
+git diff --check
+zig build semantic-facts-inventory-test --summary all
+zig build test-unit --summary all
+zig build c-test --summary all
+zig build sweep --summary all
+zig build diff-backend --summary all
+```
+
+Governance-only slices normally need the relevant manifest tests plus
+`git diff --check`. Kernel trust-boundary slices need focused tamper/substitution
+or capability compile-fail tests before they can change risk-register status.
+
 ## Milestone cut lines
 
 Use these milestones to decide what belongs in the active refactor branch. A

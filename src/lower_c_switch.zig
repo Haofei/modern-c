@@ -569,14 +569,6 @@ pub fn taggedUnionSubjectForValueExpr(ctx: EmitContext, expr: ast.Expr, locals: 
     return taggedUnionSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp.name, .span = expr.span } }, .span = expr.span }, locals, ctx.tagged_unions);
 }
 
-pub fn nullableSubjectForExpr(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), representation: NullableRepresentation) !?NullableSwitchSubject {
-    if (nullableSourceName(expr)) |name| {
-        if (nullableSubjectForLocalName(name, locals, representation)) |subject| return subject;
-        if (locals.contains(name)) return null;
-    }
-    return try materializeNullableSubject(ctx, expr, locals, representation);
-}
-
 pub fn nullableSubjectForExprWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast.TypeExpr, representation: NullableRepresentation) !?NullableSwitchSubject {
     if (nullableSourceName(expr)) |name| {
         if (nullableSubjectForLocalName(name, locals, representation)) |subject| return subject;
@@ -603,11 +595,6 @@ fn nullableSubjectForLocalName(name: []const u8, locals: *std.StringHashMap(Loca
         .inner_ty = inner_ty,
         .representation = representation,
     };
-}
-
-fn materializeNullableSubject(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), representation: NullableRepresentation) !?NullableSwitchSubject {
-    const nullable_ty = ctx.nullable_type_for_expr(ctx.emit_ctx, expr, locals) orelse return null;
-    return materializeNullableSubjectWithType(ctx, expr, locals, nullable_ty, representation);
 }
 
 fn materializeNullableSubjectWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast.TypeExpr, representation: NullableRepresentation) !?NullableSwitchSubject {
