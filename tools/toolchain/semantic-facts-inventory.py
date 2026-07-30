@@ -1377,6 +1377,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mir_target_type(ctx.source_ctx, .raw_many_offset_result": 1,
         "fn rawManyOffsetExprTypeForEmission(": 0,
         "fn rawManyOffsetReturnTypeForCall(": 0,
+        "fn sourceTypeForIdentNoLocalFallback(": 0,
     },
     "src/lower_c_reflect.zig": {
         "mir.reflectionCallTargetKind(call)": 0,

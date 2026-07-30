@@ -276,7 +276,7 @@ pub fn arrayTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
             return if (resolved.kind == .array) resolved else null;
         },
         .ident => |ident| {
-            const resolved_source_ty = sourceTypeForIdentNoLocalFallback(ctx, ident.text, locals) orelse return null;
+            const resolved_source_ty = sourceTypeForIdent(ctx, ident.text, locals) orelse return null;
             const resolved = resolveAliasType(ctx, resolved_source_ty);
             return if (resolved.kind == .array) resolved else null;
         },
@@ -357,7 +357,7 @@ fn pointeeTypeFromPointerLike(ctx: TypeQueryContext, ty: ast.TypeExpr) ?ast.Type
 pub fn structTypeNameForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |id| blk: {
-            const ty = sourceTypeForIdentNoLocalFallback(ctx, id.text, locals) orelse break :blk null;
+            const ty = sourceTypeForIdent(ctx, id.text, locals) orelse break :blk null;
             break :blk structNameFromType(ctx, ty);
         },
         .member => |m| blk: {
@@ -530,15 +530,6 @@ fn sourceTypeForIdent(ctx: TypeQueryContext, name: []const u8, locals: ?*std.Str
     }
     if (ctx.globals.get(name)) |global| return global.source_ty;
     return null;
-}
-
-fn sourceTypeForIdentNoLocalFallback(ctx: TypeQueryContext, name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    const local_ty = if (locals) |local_set| blk: {
-        if (local_set.get(name)) |info| break :blk info.source_ty orelse return null;
-        if (local_set.contains(name)) return null;
-        break :blk null;
-    } else null;
-    return local_ty orelse if (ctx.globals.get(name)) |global| global.source_ty else null;
 }
 
 fn structNameFromType(ctx: TypeQueryContext, ty: ast.TypeExpr) ?[]const u8 {

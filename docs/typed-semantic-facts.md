@@ -395,6 +395,9 @@ classifier, leaving `operandEmitType` as the single local query before checking
 the bool storage type. The source-expression bool wrapper and its binary-op
 predicate have also been folded into the boolean classifier, so user-source
 boolean-producing syntax reaches one local MIR `expression_result` check. The
+duplicate no-local-fallback identifier type helper has been merged into the
+single identifier source-type query because both paths already reject shadowed
+locals without a source type before considering globals. The
 remaining `lower_c_infer` public entrypoints are now individually exact-count
 gated in the semantic-facts inventory so this registered inference surface
 cannot grow without an explicit inventory update. Direct-call index lowering now
