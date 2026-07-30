@@ -51,7 +51,6 @@ pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, loc
 pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
-pub const NumericExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const UnderlyingIntTypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) ?[]const u8;
 pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8;
 pub const MirCheckElidedFn = *const fn (ctx: *anyopaque, span: ast.Span) bool;
@@ -78,7 +77,6 @@ pub const Context = struct {
     emit_sequenced_arg_temp: EmitSequencedArgTempFn,
     c_type: CTypeFn,
     c_ident: CIdentFn,
-    numeric_expr_type: NumericExprTypeFn,
     underlying_int_type_name: UnderlyingIntTypeNameFn,
     result_type_name: ResultTypeNameFn,
     mir_check_elided: MirCheckElidedFn,
@@ -394,17 +392,12 @@ fn uncheckedInferredLocalType(ctx: Context, initializer: ast.Expr, locals: *std.
     return switch (initializer.kind) {
         .grouped => |inner| try uncheckedInferredLocalType(ctx, inner.*, locals, range_target),
         .call => |call| try uncheckedCallResultType(ctx, call, initializer.span, locals, range_target),
-        else => sourceExpressionResultType(ctx, initializer) orelse generatedUncheckedNumericType(ctx, initializer, locals),
+        else => sourceExpressionResultType(ctx, initializer),
     };
 }
 
 fn sourceExpressionResultType(ctx: Context, initializer: ast.Expr) ?ast.TypeExpr {
     return ctx.mir_target_type(ctx.emit_ctx, .expression_result, initializer.span);
-}
-
-fn generatedUncheckedNumericType(ctx: Context, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-    if (initializer.span.line != 0 and initializer.span.column != 0) return null;
-    return ctx.numeric_expr_type(ctx.emit_ctx, initializer, locals);
 }
 
 fn uncheckedCallResultType(ctx: Context, call: anytype, call_span: ast.Span, locals: *std.StringHashMap(LocalInfo), range_target: []const u8) !?ast.TypeExpr {

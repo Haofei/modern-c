@@ -478,7 +478,10 @@ the alias table for bitcast temporaries; `bitcast_target` is now consumed as the
 MIR-owned target type and C spelling remains delegated to the emitter's type
 view. The direct C conversion bitcast emitter follows the same rule: it consumes
 the MIR `bitcast_target` row directly instead of re-resolving that target through
-the backend alias table.
+the backend alias table. C unchecked inferred-local arithmetic no longer carries
+the numeric expression type callback for generated fallback recovery; source
+expressions use `expression_result`, unchecked calls use their MIR result facts,
+and other generated numeric fallback shapes now fail closed.
 
 | Family | Budget class | Reduction condition |
 |---|---|---|

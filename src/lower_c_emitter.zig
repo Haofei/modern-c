@@ -1683,7 +1683,6 @@ const CEmitter = struct {
             .emit_sequenced_arg_temp = emitSequencedArgTempForCall,
             .c_type = cTypeForCall,
             .c_ident = cIdentForCall,
-            .numeric_expr_type = numericExprTypeForConvert,
             .underlying_int_type_name = underlyingIntTypeNameForConvert,
             .result_type_name = resultTypeNameForConvert,
             .mir_check_elided = mirCheckElidedForArith,
