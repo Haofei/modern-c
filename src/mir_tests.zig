@@ -218,9 +218,11 @@ test "MIR target-type owner identities mirror direct calls" {
 
     const caller = functionByName(module_mir, "caller").?;
     const owner = targetOwnerIdentityBySpelling(caller, "callee") orelse return error.TestUnexpectedResult;
+    const result_type = typeIdentityBySpelling(caller, "u32") orelse return error.TestUnexpectedResult;
     const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("callee", result_fact.target_owner.?);
     try std.testing.expect(result_fact.typed_target_owner_id.eql(owner.id));
+    try std.testing.expect(result_fact.typed_result_ty.eql(result_type.id));
 
     var saw_instruction = false;
     for (caller.blocks) |block| for (block.instructions) |instruction| {
@@ -228,6 +230,7 @@ test "MIR target-type owner identities mirror direct calls" {
         if (!std.mem.eql(u8, instruction.detail, @tagName(mir.TargetTypeKind.direct_call_result))) continue;
         try std.testing.expectEqualStrings("callee", instruction.target_owner.?);
         try std.testing.expect(instruction.typed_target_owner_id.?.eql(owner.id));
+        try std.testing.expect(instruction.typed_result_ty.eql(result_type.id));
         saw_instruction = true;
     };
     try std.testing.expect(saw_instruction);
@@ -308,6 +311,38 @@ test "MIR target-type admission rejects target owner fact identity drift" {
     for (caller.target_type_facts) |*fact| {
         if (fact.kind != .direct_call_result) continue;
         fact.typed_target_owner_id = SymbolId.fromIndex(4096);
+        break;
+    } else return error.TestUnexpectedResult;
+
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(module_mir));
+}
+
+test "MIR target-type admission rejects target result type identity drift" {
+    const source =
+        \\fn callee(x: u32) -> u32 {
+        \\    return x;
+        \\}
+        \\
+        \\fn caller() -> u32 {
+        \\    return callee(7);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_target_result_type_id.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+    const caller = functionByNameMut(&module_mir, "caller").?;
+    for (caller.target_type_facts) |*fact| {
+        if (fact.kind != .direct_call_result) continue;
+        fact.typed_result_ty = TypeId.fromIndex(4096);
         break;
     } else return error.TestUnexpectedResult;
 

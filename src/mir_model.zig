@@ -465,6 +465,7 @@ pub const TargetTypeFact = struct {
     kind: TargetTypeKind,
     target_ty: ast.TypeExpr,
     result_ty: ValueType,
+    typed_result_ty: TypeId = .invalid,
     aggregate_construction: ?AggregateConstructionKind = null,
     target_index: ?usize = null,
     target_owner: ?[]const u8 = null,

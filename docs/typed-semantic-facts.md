@@ -44,7 +44,9 @@ also double-writes typed `TypeId` result identities for representation-sensitive
 instructions/facts and typed `SpanId` source identities for those rows, each
 function owns `ValueIdentity`, `TypeIdentity`, and `SpanIdentity` tables for
 those typed ids, target-type owner rows now double-write a typed `SymbolId`
-mirror backed by a function-owned `target_owner_identity` table, and
+mirror backed by a function-owned `target_owner_identity` table, target-type
+facts now double-write typed `TypeId` result identities alongside their
+metadata instructions, and
 `mir-identity-inventory-test` gates those seeds. This is a migration anchor only;
 legacy string/value/type identity remains live until the later Phase 2 slices
 move those domains onto typed IDs.

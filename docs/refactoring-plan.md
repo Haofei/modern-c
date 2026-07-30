@@ -93,7 +93,8 @@ Current baseline:
 - MIR already has typed seeds for block, function symbol, value, type, and span
   identity.
 - Representation-sensitive instructions and facts mirror typed value/type/span
-  IDs and verifier/admission checks reject drift.
+  IDs; target-type facts mirror typed result types and owner symbols where an
+  owner exists. Verifier/admission checks reject drift.
 - Inventory checks anchor the current typed identity surface.
 
 Next slices, in order:

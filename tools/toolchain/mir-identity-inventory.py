@@ -50,6 +50,7 @@ def main() -> int:
         "pub const SpanIdentity = struct {",
         "typed_result_ty: TypeId = .invalid,",
         "typed_result_ty: TypeId = .invalid,",
+        "typed_result_ty: TypeId = .invalid,",
         "pub const TypeIdentity = struct {",
         "typed_value_id: ?ValueId = null,",
         "typed_value_id: ValueId = .invalid,",
@@ -103,6 +104,7 @@ def main() -> int:
         ".typed_value_id = typed_value_id,",
         ".typed_target_owner_id = typed_target_owner_id,",
         "fn targetTypeTypedOwnerCompatible(instruction: Instruction, fact: TargetTypeFact) bool {",
+        "fn targetTypeTypedResultCompatible(instruction: Instruction, fact: TargetTypeFact) bool {",
         "fn representationTypedSpansCompatible(instruction: Instruction, fact: RepresentationFact) bool {",
         "fn representationSourceMatches(instruction: Instruction, fact: RepresentationFact) bool {",
         "fn representationTypedResultTypesCompatible(instruction: Instruction, fact: RepresentationFact) bool {",
@@ -129,6 +131,7 @@ def main() -> int:
         'test "MIR target-type owner identities mirror direct calls"',
         'test "MIR verifier rejects target owner instruction identity drift"',
         'test "MIR target-type admission rejects target owner fact identity drift"',
+        'test "MIR target-type admission rejects target result type identity drift"',
         'test "MIR verifier rejects typed successor drift in CFG"',
         "try std.testing.expect(main_fn.typed_symbol_id.eql(main_symbol.id));",
         "module_mir.functions[0].typed_symbol_id = SymbolId.fromIndex(4096);",
@@ -149,6 +152,7 @@ def main() -> int:
         "read_fn.representation_facts[0].typed_result_ty = TypeId.fromIndex(4096);",
         "read_fn.representation_facts[0].typed_value_id = ValueId.fromIndex(4096);",
         "fact.typed_target_owner_id = SymbolId.fromIndex(4096);",
+        "fact.typed_result_ty = TypeId.fromIndex(4096);",
     ):
         require_contains("src/mir_tests.zig", needle)
 

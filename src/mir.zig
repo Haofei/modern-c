@@ -1403,6 +1403,13 @@ fn targetTypeTypedOwnerCompatible(instruction: Instruction, fact: TargetTypeFact
     return !fact.typed_target_owner_id.isValid();
 }
 
+fn targetTypeTypedResultCompatible(instruction: Instruction, fact: TargetTypeFact) bool {
+    if (instruction.typed_result_ty.isValid()) {
+        return fact.typed_result_ty.isValid() and fact.typed_result_ty.eql(instruction.typed_result_ty);
+    }
+    return !fact.typed_result_ty.isValid();
+}
+
 fn targetTypeInstructionOwnersCompatible(left: Instruction, right: Instruction) bool {
     if (left.typed_target_owner_id) |left_owner_id| {
         const right_owner_id = right.typed_target_owner_id orelse return false;
@@ -1432,6 +1439,7 @@ fn hasStaleTargetTypeFact(function: Function, kind: TargetTypeKind, instruction:
         if (fact.target_index != instruction.target_index) continue;
         if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
+        if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) return true;
@@ -1452,6 +1460,7 @@ fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instru
         if (fact.target_index != instruction.target_index) continue;
         if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
+        if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
@@ -1467,6 +1476,7 @@ fn countMatchingTargetTypeInstructions(function: Function, fact: TargetTypeFact)
         if (instruction.target_index != fact.target_index) continue;
         if (!optionalTextEql(instruction.target_owner, fact.target_owner)) continue;
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
+        if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
@@ -1496,6 +1506,7 @@ fn countMatchingTargetTypeFactsForFact(function: Function, target: TargetTypeFac
         if (fact.target_index != target.target_index) continue;
         if (!optionalTextEql(fact.target_owner, target.target_owner)) continue;
         if (!fact.typed_target_owner_id.eql(target.typed_target_owner_id)) continue;
+        if (!fact.typed_result_ty.eql(target.typed_result_ty)) continue;
         if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
         if (fact.source.line == target.source.line and fact.source.column == target.source.column and (target.kind != .expression_result or (fact.source.offset == target.source.offset and fact.source.len == target.source.len))) count += 1;
     }
@@ -1509,6 +1520,7 @@ fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instru
         if (fact.target_index != instruction.target_index) continue;
         if (!optionalTextEql(fact.target_owner, instruction.target_owner)) continue;
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
+        if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
@@ -6824,11 +6836,13 @@ const FunctionBuilder = struct {
     fn appendTargetTypeFact(self: *FunctionBuilder, kind: TargetTypeKind, target_ty: ast.TypeExpr, result_ty: ValueType, span: ast.Span) !void {
         try self.addInstr(.target_type, @tagName(kind), result_ty, span);
         const instructions = &self.blocks.items[self.current].instructions;
+        const typed_result_ty = instructions.items[instructions.items.len - 1].typed_result_ty;
         instructions.items[instructions.items.len - 1].target_ty = target_ty;
         try self.target_type_facts.append(self.allocator, .{
             .kind = kind,
             .target_ty = target_ty,
             .result_ty = result_ty,
+            .typed_result_ty = typed_result_ty,
             .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
         });
     }
@@ -6844,6 +6858,7 @@ const FunctionBuilder = struct {
         try self.addInstr(.target_type, @tagName(kind), result_ty, span);
         const typed_target_owner_id = try self.internTargetOwnerId(target_owner);
         const instructions = &self.blocks.items[self.current].instructions;
+        const typed_result_ty = instructions.items[instructions.items.len - 1].typed_result_ty;
         instructions.items[instructions.items.len - 1].target_ty = target_ty;
         instructions.items[instructions.items.len - 1].target_index = target_index;
         instructions.items[instructions.items.len - 1].target_owner = target_owner;
@@ -6852,6 +6867,7 @@ const FunctionBuilder = struct {
             .kind = kind,
             .target_ty = target_ty,
             .result_ty = result_ty,
+            .typed_result_ty = typed_result_ty,
             .target_index = target_index,
             .target_owner = target_owner,
             .typed_target_owner_id = typed_target_owner_id,
