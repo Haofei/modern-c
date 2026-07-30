@@ -107,18 +107,16 @@ Current baseline:
   identity.
 - Representation-sensitive instructions and facts mirror typed value/type/span
   IDs.
-- Target-type facts mirror typed result types and owner symbols where an owner
-  exists. Verifier/admission checks reject result/owner drift.
+- Target-type facts mirror typed result types, source spans, and owner symbols
+  where an owner exists. Verifier/admission checks reject result/span/owner drift.
 - Inventory checks anchor the current typed identity surface.
 
 Next slices, in order:
 
-1. Mirror target-type source identity with `SpanId` and make admission reject
-   stale source-span fact drift.
-2. Move optional/result representation facts fully behind typed IDs.
-3. Move ABI/layout-sensitive facts behind `TypeId`/layout-table IDs.
-4. Remove `unknown` from verified MIR admission; allow it only in builder/debug states.
-5. Replace instruction `kind + optional fields` with tagged instruction variants for
+1. Move optional/result representation facts fully behind typed IDs.
+2. Move ABI/layout-sensitive facts behind `TypeId`/layout-table IDs.
+3. Remove `unknown` from verified MIR admission; allow it only in builder/debug states.
+4. Replace instruction `kind + optional fields` with tagged instruction variants for
    the highest-risk families first: calls, optional tests, representation checks,
    loads/stores, and traps.
 
@@ -355,14 +353,12 @@ Close it only when production code can no longer express the bad state.
 
 Use this backlog for the next engineering slices:
 
-1. Mirror target-type source identity with `SpanId` and make admission reject
-   stale target-type source facts.
-2. Move optional/result representation lowering to typed fact consumers only.
-3. Add a backend-surface inventory row for every remaining C/LLVM semantic helper.
-4. Remove or quarantine the first migrated backend-local inference helper.
-5. Add artifact digest metadata to source-map output.
-6. Introduce the first generated gate manifest for a small subset of existing gates.
-7. Decide HIR authority explicitly and update `mcc lower-hir` / `verify-hir`
+1. Move optional/result representation lowering to typed fact consumers only.
+2. Add a backend-surface inventory row for every remaining C/LLVM semantic helper.
+3. Remove or quarantine the first migrated backend-local inference helper.
+4. Add artifact digest metadata to source-map output.
+5. Introduce the first generated gate manifest for a small subset of existing gates.
+6. Decide HIR authority explicitly and update `mcc lower-hir` / `verify-hir`
    documentation to match the decision.
 
 Each slice should end with:

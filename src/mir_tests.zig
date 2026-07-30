@@ -220,9 +220,11 @@ test "MIR target-type owner identities mirror direct calls" {
     const owner = targetOwnerIdentityBySpelling(caller, "callee") orelse return error.TestUnexpectedResult;
     const result_type = typeIdentityBySpelling(caller, "u32") orelse return error.TestUnexpectedResult;
     const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
+    const result_span = spanIdentityBySource(caller, result_fact.source) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("callee", result_fact.target_owner.?);
     try std.testing.expect(result_fact.typed_target_owner_id.eql(owner.id));
     try std.testing.expect(result_fact.typed_result_ty.eql(result_type.id));
+    try std.testing.expect(result_fact.typed_span_id.eql(result_span.id));
 
     var saw_instruction = false;
     for (caller.blocks) |block| for (block.instructions) |instruction| {
@@ -231,6 +233,7 @@ test "MIR target-type owner identities mirror direct calls" {
         try std.testing.expectEqualStrings("callee", instruction.target_owner.?);
         try std.testing.expect(instruction.typed_target_owner_id.?.eql(owner.id));
         try std.testing.expect(instruction.typed_result_ty.eql(result_type.id));
+        try std.testing.expect(instruction.typed_span_id.eql(result_span.id));
         saw_instruction = true;
     };
     try std.testing.expect(saw_instruction);
@@ -343,6 +346,38 @@ test "MIR target-type admission rejects target result type identity drift" {
     for (caller.target_type_facts) |*fact| {
         if (fact.kind != .direct_call_result) continue;
         fact.typed_result_ty = TypeId.fromIndex(4096);
+        break;
+    } else return error.TestUnexpectedResult;
+
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(module_mir));
+}
+
+test "MIR target-type admission rejects target span identity drift" {
+    const source =
+        \\fn callee(x: u32) -> u32 {
+        \\    return x;
+        \\}
+        \\
+        \\fn caller() -> u32 {
+        \\    return callee(7);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_target_span_id.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+    const caller = functionByNameMut(&module_mir, "caller").?;
+    for (caller.target_type_facts) |*fact| {
+        if (fact.kind != .direct_call_result) continue;
+        fact.typed_span_id = SpanId.fromIndex(4096);
         break;
     } else return error.TestUnexpectedResult;
 

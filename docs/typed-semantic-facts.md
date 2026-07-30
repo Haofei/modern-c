@@ -45,17 +45,19 @@ instructions/facts and typed `SpanId` source identities for those rows, each
 function owns `ValueIdentity`, `TypeIdentity`, and `SpanIdentity` tables for
 those typed ids, target-type owner rows now double-write a typed `SymbolId`
 mirror backed by a function-owned `target_owner_identity` table, target-type
-facts now double-write typed `TypeId` result identities alongside their
-metadata instructions, and
+facts now double-write typed `TypeId` result identities and typed `SpanId`
+source identities alongside their metadata instructions, and
 `mir-identity-inventory-test` gates those seeds. This is a migration anchor only;
 legacy string/value/type identity remains live until the later Phase 2 slices
 move those domains onto typed IDs.
 
 The MIR verifier also checks instruction-carried `TypeId`, `SpanId`, and
 `ValueId` rows plus target-type owner `SymbolId` rows against the owning
-function identity tables when those IDs are present. Hand-built compatibility
-MIR may still leave unrelated typed fields invalid, but built MIR cannot retarget
-a typed instruction identity without a verifier diagnostic.
+function identity tables when those IDs are present. Target-type admission also
+requires fact-carried `TypeId`, `SpanId`, and owner `SymbolId` mirrors to match
+their corresponding metadata instruction. Hand-built compatibility MIR may still
+leave unrelated typed fields invalid, but built MIR cannot retarget a typed
+instruction identity without a verifier diagnostic.
 
 The completed backend AST-inference budget sets the current shrinking budget to
 eight registered backend families. This closes the budget action slice; each
