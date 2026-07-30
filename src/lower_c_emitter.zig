@@ -5270,15 +5270,16 @@ const CEmitter = struct {
     }
 
     fn emitNullableCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const nullable_ty = self.directCallResultTypeForExpr(initializer, isNullableDirectCallResultType) orelse return false;
+        const nullable_ty = self.nullableCallReturnTypeForInferredLocal(initializer, locals) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, nullable_ty)) orelse nullable_ty;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
     }
 
-    fn isNullableDirectCallResultType(self: *CEmitter, ty: ast.TypeExpr) bool {
-        return self.resolveAliasType(ty).kind == .nullable;
+    fn nullableCallReturnTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        const ty = self.callReturnTypeForExpr(initializer, locals) orelse return null;
+        return if (self.resolveAliasType(ty).kind == .nullable) ty else null;
     }
 
     fn directCallResultTypeForExpr(self: *CEmitter, expr: ast.Expr, comptime matches: fn (*CEmitter, ast.TypeExpr) bool) ?ast.TypeExpr {
