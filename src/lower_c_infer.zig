@@ -115,7 +115,12 @@ pub fn enumNameForValueExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std
             break :blk enumNameForType(ctx, ret_ty);
         },
         .cast => |node| enumNameForType(ctx, node.ty.*),
-        .member => |node| enumNameForVariantPath(ctx, node, locals),
+        .member => |node| blk: {
+            // A variant-path literal `Enum.variant` has the enum's own type;
+            // its MIR fact, not declaration scanning, authorizes enum identity.
+            const ty = ctx.mir_target_type(ctx.source_ctx, .enum_variant_path_result, node.base.*.span) orelse break :blk null;
+            break :blk typeName(ty);
+        },
         .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
             enumNameForValueExpr(ctx, inner.*, locals)
         else if (ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span)) |ty|
@@ -124,15 +129,6 @@ pub fn enumNameForValueExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std
             null,
         else => null,
     };
-}
-
-// A variant-path literal `Enum.variant` has the enum's own type; return the enum
-// name so `Enum.variant.raw()` resolves. The base must name an enum TYPE, not a
-// local/global value shadowing it, and the member must be one of its cases.
-fn enumNameForVariantPath(ctx: TypeQueryContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
-    _ = locals;
-    const ty = ctx.mir_target_type(ctx.source_ctx, .enum_variant_path_result, node.base.*.span) orelse return null;
-    return typeName(ty);
 }
 
 pub fn enumNameForType(ctx: TypeQueryContext, ty: ast.TypeExpr) ?[]const u8 {
