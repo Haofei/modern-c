@@ -197,6 +197,12 @@ Deliverables:
 - Make source-map consumers verify artifact digest before use.
 - Make `mcc build` use exclusive temp files and atomic final replacement.
 
+Current baseline:
+
+- `emit-map` consumes the same generated C bytes used for the map and records
+  their SHA-256 digest in the map header. Full source/MIR/toolchain metadata
+  remains open until `ArtifactBundle` exists.
+
 Closure criteria:
 
 - `emit-c`, `emit-llvm`, `emit-map`, and `build` share artifact metadata code.

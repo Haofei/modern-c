@@ -27,6 +27,14 @@ CLANG="${CLANG:-clang}"
 LLC="${LLC:-llc}"
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
 # 1. Stability: two emissions are byte-identical (stable IDs).
 "$MCC" emit-map "$SRC" > "$W/a.mcmap" 2>/dev/null
 "$MCC" emit-map "$SRC" > "$W/b.mcmap" 2>/dev/null
@@ -34,6 +42,19 @@ if ! cmp -s "$W/a.mcmap" "$W/b.mcmap"; then
     echo "FAIL: mcmap-test — emit-map is not deterministic (typed-AST/MIR IDs are not stable)"; exit 1
 fi
 MAP="$W/a.mcmap"
+
+"$MCC" emit-c "$SRC" > "$W/generated.c" 2>/dev/null
+map_artifact_sha="$(grep -m1 '^# generated_artifact_sha256=' "$MAP" | sed 's/^# generated_artifact_sha256=//')"
+actual_artifact_sha="$(sha256_file "$W/generated.c")"
+printf '%s\n' "$map_artifact_sha" | grep -Eq '^[0-9a-f]{64}$' || {
+    echo "FAIL: mcmap-test — generated_artifact_sha256 header is missing or malformed"; exit 1;
+}
+if [ "$map_artifact_sha" != "$actual_artifact_sha" ]; then
+    echo "FAIL: mcmap-test — generated_artifact_sha256 does not match emit-c output"
+    echo "map:    $map_artifact_sha"
+    echo "emit-c: $actual_artifact_sha"
+    exit 1
+fi
 
 # 2. Every entry row has a non-empty typed_ast_node and mir_block, and the AST IDs are unique.
 rows="$(grep -c '^entry ' "$MAP" || true)"
@@ -90,4 +111,4 @@ esac
 grep -qx "mc_renamed_export" "$W/c.syms"   || { echo "FAIL: mcmap-test — renamed symbol absent from C object"; exit 1; }
 grep -qx "mc_renamed_export" "$W/l.syms"   || { echo "FAIL: mcmap-test — renamed symbol absent from LLVM object"; exit 1; }
 
-echo "PASS: mcmap-test — stable typed-AST/MIR IDs, and every exported object_symbol (incl. the #[backend_name] rename) matches the real C and LLVM object symbols"
+echo "PASS: mcmap-test — stable typed-AST/MIR IDs, generated-artifact digest binding, and every exported object_symbol (incl. the #[backend_name] rename) matches the real C and LLVM object symbols"

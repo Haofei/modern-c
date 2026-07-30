@@ -9,6 +9,8 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const mir = @import("mir.zig");
 
+const Sha256 = std.crypto.hash.sha2.Sha256;
+
 pub fn appendSourceMap(
     allocator: std.mem.Allocator,
     module: ast.Module,
@@ -22,6 +24,7 @@ pub fn appendSourceMap(
     defer line_index.deinit(allocator);
 
     try out.appendSlice(allocator, "# mcmap v1\n");
+    try appendDigestHeader(allocator, out, "generated_artifact_sha256", generated_c);
     try out.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol source_module source_qualname symbol_kind visibility backend_name origin\n");
     var mapper = SourceMapEmitter{
         .allocator = allocator,
@@ -46,6 +49,22 @@ pub fn appendLineDirective(
     try out.print(allocator, "#line {d} \"", .{span.line});
     try appendEscapedString(out, allocator, path);
     try out.appendSlice(allocator, "\"\n");
+}
+
+fn appendDigestHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, bytes: []const u8) !void {
+    var digest: [Sha256.digest_length]u8 = undefined;
+    Sha256.hash(bytes, &digest, .{});
+    try out.print(allocator, "# {s}=", .{name});
+    try appendHexBytes(allocator, out, &digest);
+    try out.appendSlice(allocator, "\n");
+}
+
+fn appendHexBytes(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) !void {
+    const hex = "0123456789abcdef";
+    for (bytes) |byte| {
+        try out.append(allocator, hex[byte >> 4]);
+        try out.append(allocator, hex[byte & 0x0f]);
+    }
 }
 
 // The source module name a symbol belongs to: the file basename without directory or
