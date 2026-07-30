@@ -223,6 +223,25 @@ const CompilationSession = struct {
             return err;
         };
     }
+
+    fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {
+        var checker = sema.Checker.init(diag);
+        checker.file_boundaries = self.file_boundaries;
+        checker.optimize = optimize;
+        checker.checkModule(module);
+    }
+
+    fn buildVerifiedProgram(
+        self: *CompilationSession,
+        module: ast.Module,
+        diag: *diagnostics.Reporter,
+        optimize: bool,
+        module_mir: *mir.Module,
+    ) !backend.VerifiedProgram {
+        module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });
+        errdefer module_mir.deinit();
+        return backend.VerifiedProgram.init(module, module_mir, diag);
+    }
 };
 
 fn readStdinAlloc(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
@@ -527,10 +546,7 @@ fn runVerify(session: *CompilationSession, path: []const u8, source: []const u8,
         return error.VerifyFailed;
     }
 
-    var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = session.file_boundaries;
-    checker.optimize = optimize;
-    checker.checkModule(module);
+    session.checkModule(module, &diag, optimize);
     if (diag.has_errors) {
         diag.render();
         return error.VerifyFailed;
@@ -643,9 +659,7 @@ fn runCheck(session: *CompilationSession, path: []const u8, source: []const u8, 
         return error.CheckFailed;
     }
 
-    var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = session.file_boundaries;
-    checker.checkModule(module);
+    session.checkModule(module, &diag, false);
     if (diag.has_errors) {
         try emitCheckDiagnostics(session, &diag, json_diagnostics);
         return error.CheckFailed;
@@ -843,24 +857,15 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         return error.EmitCFailed;
     }
 
-    var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = session.file_boundaries;
-    checker.optimize = optimize;
-    checker.checkModule(module);
+    session.checkModule(module, &diag, optimize);
     if (diag.has_errors) {
         diag.render();
         return error.EmitCFailed;
     }
 
-    var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
+    var module_mir: mir.Module = undefined;
+    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir);
     defer module_mir.deinit();
-    try mir.verifyBuiltMir(module_mir, &diag);
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitCFailed;
-    }
-
-    const program = try backend.VerifiedProgram.init(module, &module_mir, &diag);
     if (diag.has_errors) {
         diag.render();
         return error.EmitCFailed;
@@ -904,17 +909,15 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         return error.BuildFailed;
     }
 
-    var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = session.file_boundaries;
-    checker.checkModule(module);
+    session.checkModule(module, &diag, false);
     if (diag.has_errors) {
         diag.render();
         return error.BuildFailed;
     }
 
-    var module_mir = try mir.build(allocator, module);
+    var module_mir: mir.Module = undefined;
+    const program = try session.buildVerifiedProgram(module, &diag, false, &module_mir);
     defer module_mir.deinit();
-    const program = try backend.VerifiedProgram.init(module, &module_mir, &diag);
     if (diag.has_errors) {
         diag.render();
         return error.BuildFailed;
@@ -1084,18 +1087,15 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
         return error.EmitCFailed;
     }
 
-    var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = session.file_boundaries;
-    checker.optimize = optimize;
-    checker.checkModule(module);
+    session.checkModule(module, &diag, optimize);
     if (diag.has_errors) {
         diag.render();
         return error.EmitCFailed;
     }
 
-    var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
+    var module_mir: mir.Module = undefined;
+    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir);
     defer module_mir.deinit();
-    const program = try backend.VerifiedProgram.init(module, &module_mir, &diag);
     if (diag.has_errors) {
         diag.render();
         return error.EmitCFailed;
@@ -1149,24 +1149,15 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, source: []const u
         return error.EmitLlvmFailed;
     }
 
-    var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = session.file_boundaries;
-    checker.optimize = optimize;
-    checker.checkModule(module);
+    session.checkModule(module, &diag, optimize);
     if (diag.has_errors) {
         diag.render();
         return error.EmitLlvmFailed;
     }
 
-    var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
+    var module_mir: mir.Module = undefined;
+    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir);
     defer module_mir.deinit();
-    try mir.verifyBuiltMir(module_mir, &diag);
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitLlvmFailed;
-    }
-
-    const program = try backend.VerifiedProgram.init(module, &module_mir, &diag);
     if (diag.has_errors) {
         diag.render();
         return error.EmitLlvmFailed;
@@ -1235,9 +1226,7 @@ fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []const
         return error.EmitLayoutFailed;
     }
 
-    var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = session.file_boundaries;
-    checker.checkModule(module);
+    session.checkModule(module, &diag, false);
     if (diag.has_errors) {
         diag.render();
         return error.EmitLayoutFailed;
@@ -1292,9 +1281,7 @@ fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []cons
         return error.EmitCStructFailed;
     }
 
-    var checker = sema.Checker.init(&diag);
-    checker.file_boundaries = session.file_boundaries;
-    checker.checkModule(module);
+    session.checkModule(module, &diag, false);
     if (diag.has_errors) {
         diag.render();
         return error.EmitCStructFailed;

@@ -48,6 +48,8 @@ def main() -> int:
         "fn writeArtifact(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8) !void {",
         "fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {",
         "fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
+        "fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
+        "fn buildVerifiedProgram(",
         "var session = CompilationSession.init(allocator, init.io);",
         "session.visibility_mode = options.visibility_mode;",
         "session.file_boundaries = loaded.boundaries;",
@@ -56,12 +58,23 @@ def main() -> int:
         "name_resolve.transformWithGraph(allocator, module, self.module_graph)",
         "generic_precheck.check(allocator, lowered, diag, self.file_boundaries)",
         "mangle_private.transform(allocator, specialized, self.file_boundaries)",
-        "checker.file_boundaries = session.file_boundaries;",
+        "checker.file_boundaries = self.file_boundaries;",
+        "module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });",
+        "return backend.VerifiedProgram.init(module, module_mir, diag);",
+        "const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir);",
         'test "CompilationSession keeps parse context request scoped"',
         "try std.testing.expectEqual(ast.VisibilityMode.explicit_public, module_a.visibility_mode);",
         "try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, module_b.visibility_mode);",
     ):
         require_contains(main_zig, needle)
+
+    main_text = read(main_zig)
+    if main_text.count("var checker = sema.Checker.init") != 1:
+        fail("sema checker construction must stay centralized in CompilationSession.checkModule")
+    if main_text.count("mir.buildOpt(") != 1:
+        fail("MIR build must stay centralized in CompilationSession.buildVerifiedProgram")
+    if main_text.count("backend.VerifiedProgram.init(") != 1:
+        fail("VerifiedProgram construction must stay centralized in CompilationSession.buildVerifiedProgram")
 
     for pattern, description in (
         (r"^var\s+combined_boundaries\s*:", "combined_boundaries module global"),
