@@ -1353,7 +1353,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn nullableReturnTypeForExpr(": 0,
         "fn nullableReturnTypeForExpr(": 0,
         "pub fn taggedUnionReturnTypeForExpr(": 0,
-        "fn taggedUnionReturnTypeForExpr(": 1,
+        "fn taggedUnionReturnTypeForExpr(": 0,
         "pub fn resultReturnTypeForCall(": 0,
         "fn resultReturnTypeForCall(": 0,
         "pub fn resultTypeForExpr(": 0,

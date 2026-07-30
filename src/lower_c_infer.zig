@@ -205,28 +205,17 @@ fn binaryOpProducesBool(op: ast.BinaryOp) bool {
     };
 }
 
-fn taggedUnionReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
-    return switch (expr.kind) {
-        .call => |node| blk: {
-            // A qualified constructor `Union.variant(...)` is self-typed to its owner,
-            // so an untyped `let t = Token.number(9)` infers `Token`.
-            if (ctx.mir_target_type(ctx.source_ctx, .qualified_union_result, expr.span)) |ty| break :blk ty;
-            const ret_ty = callReturnType(ctx, node) orelse break :blk null;
-            const type_name = typeName(resolveAliasType(ctx, ret_ty)) orelse break :blk null;
-            break :blk if (ctx.tagged_unions.contains(type_name)) ret_ty else null;
-        },
-        .grouped => |inner| blk: {
-            const inferred = taggedUnionReturnTypeForExpr(ctx, inner.*) orelse break :blk null;
-            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
-            break :blk requireExpressionResultType(ctx, expr, inferred);
-        },
-        else => null,
-    };
-}
-
 pub fn taggedUnionTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     const ty = switch (expr.kind) {
-        .call => taggedUnionReturnTypeForExpr(ctx, expr) orelse return null,
+        .call => |node| blk: {
+            // A qualified constructor `Union.variant(...)` is self-typed to its
+            // owner, so an untyped `let t = Token.number(9)` infers `Token`.
+            if (ctx.mir_target_type(ctx.source_ctx, .qualified_union_result, expr.span)) |ty| break :blk ty;
+            const ret_ty = callReturnType(ctx, node) orelse return null;
+            const type_name = typeName(resolveAliasType(ctx, ret_ty)) orelse return null;
+            if (!ctx.tagged_unions.contains(type_name)) return null;
+            break :blk ret_ty;
+        },
         .cast => |node| node.ty.*,
         .grouped => |inner| {
             const inferred = taggedUnionTypeForExpr(ctx, inner.*, locals) orelse return null;
