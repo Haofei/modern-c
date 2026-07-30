@@ -1313,6 +1313,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn derefPointerHasProvenLocalStorage(": 1,
     },
     "src/lower_c_convert.zig": {
+        'const lower_c_expr = @import("lower_c_expr.zig");': 0,
         "mir.conversionCallTargetKindForName(op)": 1,
         "ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_target": 1,
         "ctx.mir_target_type(ctx.emit_ctx, .conversion_source": 1,
