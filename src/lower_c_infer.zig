@@ -445,7 +445,7 @@ pub fn derefPointeeType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
         .address_of => |inner| if (expr.span.line != 0 and expr.span.column != 0)
             pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null)
         else
-            operandEmitType(ctx, inner.*, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, inner.*, locals),
+            operandEmitType(ctx, inner.*, locals),
         .call => |node| pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .raw_many_offset_result, node.callee.*.span) orelse callReturnType(ctx, node) orelse return null),
         .cast => |node| pointeeTypeFromPointerLike(ctx, node.ty.*),
         .member, .index => pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null),
