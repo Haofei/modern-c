@@ -564,10 +564,24 @@ fn numericExprTypeForEmissionInferred(ctx: TypeQueryContext, expr: ast.Expr, loc
 }
 
 fn expressionResultTypeOptional(ctx: TypeQueryContext, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {
-    const fact = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return inferred;
+    const fact = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse {
+        // Source compound numeric expressions have MIR-owned result types.
+        // Direct names, calls, and casts still carry their own source facts;
+        // generated zero-span expressions have no unique source fact key.
+        if (sourceCompoundNumericExpressionRequiresResultFact(expr)) return null;
+        return inferred;
+    };
     const expected = inferred orelse return fact;
     if (!sameCStorageType(resolveAliasType(ctx, fact), resolveAliasType(ctx, expected))) return null;
     return fact;
+}
+
+fn sourceCompoundNumericExpressionRequiresResultFact(expr: ast.Expr) bool {
+    if (expr.span.line == 0 or expr.span.column == 0) return false;
+    return switch (expr.kind) {
+        .grouped, .unary, .member, .index, .deref => true,
+        else => false,
+    };
 }
 
 fn numericExpressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {

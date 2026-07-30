@@ -28,6 +28,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "User-source boolean-producing expressions have complete MIR result",
             "A user-source grouping has its own complete MIR result fact.",
             "Source numeric value expressions have MIR-owned result types.",
+            "Source compound numeric expressions have MIR-owned result types.",
         ],
         "src/lower_c_emitter.zig": [
             "fn indirectCallCalleeType(",
