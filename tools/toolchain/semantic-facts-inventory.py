@@ -1328,6 +1328,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "const FnInfo = lower_c_model.FnInfo": 0,
         "functions: *const std.StringHashMap(FnInfo)": 0,
         "ctx.functions": 0,
+        "pub const MirOwnedTargetTypeFn": 0,
+        "mir_owned_target_type:": 0,
         "source_type_for_expr": 0,
         "SourceTypeFn": 0,
         "pub fn sliceReturnTypeForExpr(": 1,

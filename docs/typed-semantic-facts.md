@@ -468,7 +468,9 @@ zero-span casts. C inference call-result queries now use the shared emitter
 hook that consumes direct, indirect, dynamic-dispatch, and migrated builtin call
 facts; the private direct-call-only helper is exact-zero gated. The C inference
 context no longer carries the function declaration map, so call-result
-authority cannot be reintroduced there without changing the inventory.
+authority cannot be reintroduced there without changing the inventory. The same
+context also no longer carries the owned-target hook; owned fact consumption
+stays in the emitter/lowering contexts that explicitly need ownership identity.
 
 | Family | Budget class | Reduction condition |
 |---|---|---|

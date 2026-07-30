@@ -7649,7 +7649,6 @@ const CEmitter = struct {
             .source_ctx = self,
             .call_return_type_for_expr = callReturnTypeForInfer,
             .mir_target_type = mirTargetTypeForLowering,
-            .mir_owned_target_type = mirOwnedTargetTypeForLowering,
         };
     }
 

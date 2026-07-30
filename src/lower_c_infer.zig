@@ -24,7 +24,6 @@ const typeName = ast_query.typeName;
 
 pub const CallReturnTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
-pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?ast.TypeExpr;
 
 pub const TypeQueryContext = struct {
     type_aliases: *const std.StringHashMap(ast.TypeExpr),
@@ -35,7 +34,6 @@ pub const TypeQueryContext = struct {
     source_ctx: *anyopaque,
     call_return_type_for_expr: CallReturnTypeFn,
     mir_target_type: MirTargetTypeFn,
-    mir_owned_target_type: MirOwnedTargetTypeFn,
 };
 
 pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
