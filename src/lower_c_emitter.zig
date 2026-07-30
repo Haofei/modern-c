@@ -7484,8 +7484,20 @@ const CEmitter = struct {
             };
             return self.memberFieldTypeFromAggregate(element_ty, field_name);
         }
-        const base_ty = self.operandEmitType(base, locals) orelse self.exprSourceTypeForEmission(base, locals) orelse return null;
+        const base_ty = self.memberBaseTypeForEmission(base, locals) orelse return null;
         return self.memberFieldTypeFromAggregate(base_ty, field_name);
+    }
+
+    fn memberBaseTypeForEmission(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (self.operandEmitType(base, locals)) |ty| return ty;
+        if (self.callReturnTypeForExpr(base, locals)) |ty| return ty;
+        // Compiler-generated zero-span member bases can lack source-keyed
+        // expression_result rows. Keep the legacy recursive path bounded to
+        // those synthetic expressions.
+        if (base.span.line == 0 and base.span.column == 0) {
+            return self.exprSourceTypeForEmission(base, locals);
+        }
+        return null;
     }
 
     fn memberFieldTypeFromAggregate(self: *CEmitter, aggregate_ty: ast.TypeExpr, field_name: []const u8) ?ast.TypeExpr {
