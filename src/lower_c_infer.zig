@@ -285,7 +285,7 @@ pub fn taggedUnionTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
             if (expr.span.line == 0 and expr.span.column == 0) return inferred;
             return requireExpressionResultType(ctx, expr, inferred);
         },
-        else => operandEmitType(ctx, expr, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, expr, locals) orelse return null,
+        else => operandEmitType(ctx, expr, locals) orelse return null,
     };
     const type_name = typeName(resolveAliasType(ctx, ty)) orelse return null;
     return if (ctx.tagged_unions.contains(type_name)) ty else null;
