@@ -2304,7 +2304,7 @@ const CEmitter = struct {
 
     fn sliceReturnTypeForAccess(ctx: *anyopaque, call: ast_query.CallExpr) ?ast.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.sliceReturnTypeForCall(call);
+        return self.directCallResultTypeForCall(call, isSliceDirectCallResultType);
     }
 
     fn arrayReturnTypeForAccess(ctx: *anyopaque, expr: ast.Expr) ?ast.TypeExpr {
@@ -5296,13 +5296,15 @@ const CEmitter = struct {
     fn directCallResultTypeForExpr(self: *CEmitter, expr: ast.Expr, comptime matches: fn (*CEmitter, ast.TypeExpr) bool) ?ast.TypeExpr {
         return switch (expr.kind) {
             .grouped => |inner| self.directCallResultTypeForExpr(inner.*, matches),
-            .call => |call| blk: {
-                const fn_name = calleeIdentName(call.callee.*) orelse break :blk null;
-                const fact = self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null) orelse break :blk null;
-                break :blk if (matches(self, fact.target_ty)) fact.target_ty else null;
-            },
+            .call => |call| self.directCallResultTypeForCall(call, matches),
             else => null,
         };
+    }
+
+    fn directCallResultTypeForCall(self: *CEmitter, call: anytype, comptime matches: fn (*CEmitter, ast.TypeExpr) bool) ?ast.TypeExpr {
+        const fn_name = calleeIdentName(call.callee.*) orelse return null;
+        const fact = self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null) orelse return null;
+        return if (matches(self, fact.target_ty)) fact.target_ty else null;
     }
 
     fn emitInferredCallLocalInitValue(self: *CEmitter, name: []const u8, inferred_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
@@ -7521,10 +7523,6 @@ const CEmitter = struct {
         _ = ctx.locals;
         const fact = ctx.emitter.mirTargetTypeFactAt(.try_operand, operand.span) orelse return false;
         return ctx.emitter.resolveAliasType(fact.target_ty).kind == .nullable;
-    }
-
-    fn sliceReturnTypeForCall(self: *CEmitter, call: anytype) ?ast.TypeExpr {
-        return lower_c_infer.sliceReturnTypeForCall(self.inferTypeContext(), call);
     }
 
     fn sliceReturnTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {

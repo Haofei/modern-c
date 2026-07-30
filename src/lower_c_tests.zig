@@ -3377,6 +3377,9 @@ test "lower-c inferred local array and slice calls require MIR types" {
         \\    let values = make_slice();
         \\    return values[0];
         \\}
+        \\fn direct_slice_index() -> u32 {
+        \\    return make_slice()[0];
+        \\}
     ;
     var parsed = try test_support.parseCheckedModule("c_inferred_local_array_slice_call_types.mc", source);
     defer parsed.deinit();
@@ -3388,6 +3391,7 @@ test "lower-c inferred local array and slice calls require MIR types" {
     try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_array_u32_2 values = make_array()") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_slice_const_u32 values = make_slice()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "direct_slice_index") != null);
 
     var missing_array = try mir.build(std.testing.allocator, parsed.module);
     defer missing_array.deinit();
@@ -3437,6 +3441,20 @@ test "lower-c inferred local array and slice calls require MIR types" {
     var stale_slice_result_output: std.ArrayList(u8) = .empty;
     defer stale_slice_result_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_slice_result, &stale_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+
+    var missing_direct_slice_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_direct_slice_result.deinit();
+    try removeTargetTypeKindForFunction(&missing_direct_slice_result, "direct_slice_index", .direct_call_result);
+    var missing_direct_slice_result_output: std.ArrayList(u8) = .empty;
+    defer missing_direct_slice_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_direct_slice_result, &missing_direct_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+
+    var stale_direct_slice_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_direct_slice_result.deinit();
+    try renameTargetTypeFactForFunction(&stale_direct_slice_result, "direct_slice_index", .direct_call_result, "u64");
+    var stale_direct_slice_result_output: std.ArrayList(u8) = .empty;
+    defer stale_direct_slice_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_direct_slice_result, &stale_direct_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local enum and tagged-union calls require MIR types" {

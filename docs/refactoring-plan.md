@@ -19,6 +19,57 @@ This plan is not a feature roadmap. New language, kernel, Agent, selfhost, LSP,
 or release features should be deferred unless they directly close a listed
 phase or are explicitly scoped to an experimental profile.
 
+## Active refactor plan
+
+This is the execution order for the next refactor cycle. It is intentionally
+narrow: finish the compiler semantic boundary before spending broad
+implementation time on kernel, Agent, selfhost, advanced LSP, or release polish.
+
+| Priority | Workstream | Concrete next work | Done when |
+|---:|---|---|---|
+| P0 | Backend semantic authority | Retire the next C/LLVM backend-local source/type inference helper and replace it with verified MIR facts, typed IDs, or an explicitly generated-node-only fallback. | `semantic-facts-inventory-test` shows no authority expansion; C/LLVM differential and fixture gates pass for the touched family. |
+| P0 | Typed MIR admission | Convert one high-risk MIR family, starting with calls or optional tests, away from `kind + optional fields` and toward typed variants or verifier-rejected stale facts. | Malformed states are unrepresentable or rejected before backend admission. |
+| P0 | `VerifiedProgram` narrowing | Remove one remaining production backend AST ingress point by replacing it with typed symbol/source-spelling/layout facts. | Backends gain no new `ast.Module`/`TypeExpr` semantic reads; inventory exact counts decrease or stay locked. |
+| P1 | Artifact provenance | Finish the shared `ArtifactBundle` path for emitted bytes, source maps, options, MIR/fact digests, and downstream tool identity. | `emit-c`, `emit-llvm`, `emit-map`, and `build` emit comparable metadata; wrong-artifact/map pairing is rejected. |
+| P1 | Gate/profile truth | Expand manifest-backed gate/profile/TCB validation and remove manual open/closed counters from active Markdown. | Adding a blocking gate/profile/TCB component requires one manifest edit plus generated or checked projections. |
+| P2 | Kernel trust chain | Keep `VerifiedBundle` and capability-root work profile-scoped until compiler P0 closes; only accept kernel patches that reduce verify/load or authority-mint ambiguity. | Production-shaped APIs cannot express verify-A/load-B or ordinary-module privileged minting. |
+
+### Immediate patch queue
+
+Use this queue unless a failing gate forces a narrower repair:
+
+1. Pick one remaining backend-local semantic helper from
+   `semantic-facts-inventory.py`.
+2. Replace it with an existing MIR fact or add the minimal new typed fact.
+3. Delete the old helper, quarantine it behind a generated-node-only path, or
+   register an exact temporary exception in the inventory.
+4. Add one focused regression that would fail if the backend rebuilt the fact
+   from AST/type spelling.
+5. Run the compiler authority ladder:
+
+   ```text
+   git diff --check
+   zig build semantic-facts-inventory-test --summary all
+   zig build test-unit --summary all
+   zig build c-test --summary all
+   zig build sweep --summary all
+   zig build diff-backend --summary all
+   ```
+
+6. Commit only that invariant slice. Do not mix in doc cleanup, kernel work, or
+   LSP changes unless they are required by the same invariant.
+
+### Refactor stop rules
+
+Pause and split the patch if it starts doing any of the following:
+
+- changes more than one semantic family at once;
+- adds a new abstraction while leaving the old authority path untracked;
+- modifies selfhost/kernel/LSP/release files for convenience rather than for the
+  selected invariant;
+- updates Markdown status without changing the risk register, manifest, code, or
+  tests that own the claim.
+
 ## Current position
 
 | Area | Status | Required direction |
