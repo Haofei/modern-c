@@ -85,6 +85,10 @@ const usage =
     \\source artifact reproducibility (emit-c and emit-map only):
     \\  --remap-prefix=FROM=TO replace a matching source path prefix in emitted C
     \\                         #line directives and emit-map source_path metadata.
+    \\  -o artifacts            emit-c, emit-llvm, and build also write a sibling
+    \\                         <output>.mcmeta sidecar with artifact/source/options
+    \\                         provenance. emit-map embeds the same metadata in the
+    \\                         .mcmap header.
     \\
     \\build-safety profile (orthogonal to the --profile target axis):
     \\  --checks=all           SAFE build (DEFAULT): keep every runtime trap check.
