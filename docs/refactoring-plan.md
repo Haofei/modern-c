@@ -65,8 +65,13 @@ Current status:
   IO, file-boundary, module-graph, and visibility state.
 - The old `combined_boundaries`, `combined_module_graph`,
   `active_visibility_mode`, and `stdout_io` module globals are removed.
-- Remaining Phase 1 work is pipeline de-duplication and an explicit in-process
-  reentrancy test.
+- `CompilationSession` owns the shared parse/name/transform/check and
+  MIR-build/`VerifiedProgram` admission helpers for compile-like CLI commands.
+- The in-process request-scoped context test covers two different visibility and
+  file-boundary contexts in one process.
+- `compilation-session-inventory-test` gates the session shape in `m0`, `fast`,
+  and `c0`, including the centralized sema checker, MIR build, and
+  `VerifiedProgram` construction points.
 
 Work:
 
@@ -85,7 +90,8 @@ Work:
 Acceptance:
 
 - No compiler phase reads mutable request state from `src/main.zig` globals.
-- CLI commands share one pipeline entry for parse/name/transform/sema/MIR/verify.
+- Compile-like CLI commands share session-owned entries for
+  parse/name/transform/sema and MIR/`VerifiedProgram` admission.
 - Reentrancy test passes under both serial and parallel test runners.
 
 Risk register links:

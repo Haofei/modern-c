@@ -49,6 +49,7 @@ def main() -> int:
         "fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {",
         "fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
         "fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
+        "fn parseCheckedModuleOrReport(",
         "fn buildVerifiedProgram(",
         "var session = CompilationSession.init(allocator, init.io);",
         "session.visibility_mode = options.visibility_mode;",
@@ -60,8 +61,11 @@ def main() -> int:
         "mangle_private.transform(allocator, specialized, self.file_boundaries)",
         "checker.file_boundaries = self.file_boundaries;",
         "module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });",
-        "return backend.VerifiedProgram.init(module, module_mir, diag);",
-        "const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir);",
+        "const program = backend.VerifiedProgram.init(module, module_mir, diag) catch |err| {",
+        "const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);",
+        "_ = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.LowerMirFailed);",
+        "try mir.appendDumpFromMir(allocator, module_mir, &output);",
+        "const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.EmitCFailed);",
         'test "CompilationSession keeps parse context request scoped"',
         "try std.testing.expectEqual(ast.VisibilityMode.explicit_public, module_a.visibility_mode);",
         "try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, module_b.visibility_mode);",
@@ -75,6 +79,11 @@ def main() -> int:
         fail("MIR build must stay centralized in CompilationSession.buildVerifiedProgram")
     if main_text.count("backend.VerifiedProgram.init(") != 1:
         fail("VerifiedProgram construction must stay centralized in CompilationSession.buildVerifiedProgram")
+    if main_text.count("session.parseCheckedModuleOrReport(") < 7:
+        fail("compile-like CLI commands must share CompilationSession.parseCheckedModuleOrReport")
+    if main_text.count("session.checkModule(") != 0:
+        fail("compile-like CLI commands must not bypass parseCheckedModuleOrReport")
+    require_contains("src/mir.zig", "pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: *std.ArrayList(u8)) !void {")
 
     for pattern, description in (
         (r"^var\s+combined_boundaries\s*:", "combined_boundaries module global"),

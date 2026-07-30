@@ -231,16 +231,44 @@ const CompilationSession = struct {
         checker.checkModule(module);
     }
 
+    fn parseCheckedModuleOrReport(
+        self: *CompilationSession,
+        source: []const u8,
+        allocator: std.mem.Allocator,
+        diag: *diagnostics.Reporter,
+        optimize: bool,
+        render_errors: bool,
+        failure_error: anyerror,
+    ) !ast.Module {
+        const module = try self.parseModuleOrReportMode(source, allocator, diag, render_errors);
+        if (diag.has_errors) {
+            if (render_errors) diag.render();
+            return failure_error;
+        }
+        self.checkModule(module, diag, optimize);
+        if (diag.has_errors) {
+            if (render_errors) diag.render();
+            return failure_error;
+        }
+        return module;
+    }
+
     fn buildVerifiedProgram(
         self: *CompilationSession,
         module: ast.Module,
         diag: *diagnostics.Reporter,
         optimize: bool,
         module_mir: *mir.Module,
+        failure_error: anyerror,
     ) !backend.VerifiedProgram {
         module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });
         errdefer module_mir.deinit();
-        return backend.VerifiedProgram.init(module, module_mir, diag);
+        const program = backend.VerifiedProgram.init(module, module_mir, diag) catch |err| {
+            if (diag.has_errors) return failure_error;
+            return err;
+        };
+        if (diag.has_errors) return failure_error;
+        return program;
     }
 };
 
@@ -515,17 +543,16 @@ fn runLowerMir(session: *CompilationSession, path: []const u8, source: []const u
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);
     defer module.deinit(parse_allocator);
 
-    if (diag.has_errors) {
-        diag.render();
-        return error.LowerMirFailed;
-    }
+    var module_mir: mir.Module = undefined;
+    _ = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.LowerMirFailed);
+    defer module_mir.deinit();
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try mir.appendDumpOpt(allocator, module, &output, .{ .optimize = optimize });
+    try mir.appendDumpFromMir(allocator, module_mir, &output);
     try session.writeStdout(output.items);
 }
 
@@ -538,19 +565,8 @@ fn runVerify(session: *CompilationSession, path: []const u8, source: []const u8,
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.VerifyFailed);
     defer module.deinit(parse_allocator);
-
-    if (diag.has_errors) {
-        diag.render();
-        return error.VerifyFailed;
-    }
-
-    session.checkModule(module, &diag, optimize);
-    if (diag.has_errors) {
-        diag.render();
-        return error.VerifyFailed;
-    }
 
     try mir.verifyOpt(allocator, module, &diag, .{ .optimize = optimize });
     if (diag.has_errors) {
@@ -646,24 +662,13 @@ fn runCheck(session: *CompilationSession, path: []const u8, source: []const u8, 
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = session.parseModuleOrReportMode(source, parse_allocator, &diag, false) catch |err| {
+    const module = session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, false, error.CheckFailed) catch |err| {
         if (diag.has_errors) {
             try emitCheckDiagnostics(session, &diag, json_diagnostics);
         }
         return err;
     };
     defer module.deinit(parse_allocator);
-
-    if (diag.has_errors) {
-        try emitCheckDiagnostics(session, &diag, json_diagnostics);
-        return error.CheckFailed;
-    }
-
-    session.checkModule(module, &diag, false);
-    if (diag.has_errors) {
-        try emitCheckDiagnostics(session, &diag, json_diagnostics);
-        return error.CheckFailed;
-    }
 
     if (json_diagnostics) {
         try emitCheckDiagnostics(session, &diag, true);
@@ -849,27 +854,12 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.EmitCFailed);
     defer module.deinit(parse_allocator);
 
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitCFailed;
-    }
-
-    session.checkModule(module, &diag, optimize);
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitCFailed;
-    }
-
     var module_mir: mir.Module = undefined;
-    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir);
+    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.EmitCFailed);
     defer module_mir.deinit();
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitCFailed;
-    }
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
@@ -901,27 +891,12 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, true, error.BuildFailed);
     defer module.deinit(parse_allocator);
 
-    if (diag.has_errors) {
-        diag.render();
-        return error.BuildFailed;
-    }
-
-    session.checkModule(module, &diag, false);
-    if (diag.has_errors) {
-        diag.render();
-        return error.BuildFailed;
-    }
-
     var module_mir: mir.Module = undefined;
-    const program = try session.buildVerifiedProgram(module, &diag, false, &module_mir);
+    const program = try session.buildVerifiedProgram(module, &diag, false, &module_mir, error.BuildFailed);
     defer module_mir.deinit();
-    if (diag.has_errors) {
-        diag.render();
-        return error.BuildFailed;
-    }
 
     var raw_c: std.ArrayList(u8) = .empty;
     defer raw_c.deinit(allocator);
@@ -1079,27 +1054,12 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.EmitCFailed);
     defer module.deinit(parse_allocator);
 
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitCFailed;
-    }
-
-    session.checkModule(module, &diag, optimize);
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitCFailed;
-    }
-
     var module_mir: mir.Module = undefined;
-    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir);
+    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.EmitCFailed);
     defer module_mir.deinit();
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitCFailed;
-    }
 
     const be = backend.byName("c").?;
     var generated_c: std.ArrayList(u8) = .empty;
@@ -1141,27 +1101,12 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, source: []const u
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.EmitLlvmFailed);
     defer module.deinit(parse_allocator);
 
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitLlvmFailed;
-    }
-
-    session.checkModule(module, &diag, optimize);
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitLlvmFailed;
-    }
-
     var module_mir: mir.Module = undefined;
-    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir);
+    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.EmitLlvmFailed);
     defer module_mir.deinit();
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitLlvmFailed;
-    }
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
@@ -1218,19 +1163,8 @@ fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []const
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, true, error.EmitLayoutFailed);
     defer module.deinit(parse_allocator);
-
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitLayoutFailed;
-    }
-
-    session.checkModule(module, &diag, false);
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitLayoutFailed;
-    }
 
     // Split `A,B,C` into struct names (arena-allocated so they outlive the loop).
     var names: std.ArrayList([]const u8) = .empty;
@@ -1273,19 +1207,8 @@ fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []cons
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, true, error.EmitCStructFailed);
     defer module.deinit(parse_allocator);
-
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitCStructFailed;
-    }
-
-    session.checkModule(module, &diag, false);
-    if (diag.has_errors) {
-        diag.render();
-        return error.EmitCStructFailed;
-    }
 
     var names: std.ArrayList([]const u8) = .empty;
     defer names.deinit(allocator);

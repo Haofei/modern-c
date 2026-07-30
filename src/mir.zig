@@ -505,10 +505,13 @@ fn buildFfiParamContracts(
 }
 
 pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), options: BuildOptions) !void {
-    var mir = try buildOpt(allocator, module, options);
-    defer mir.deinit();
+    var module_mir = try buildOpt(allocator, module, options);
+    defer module_mir.deinit();
+    try appendDumpFromMir(allocator, module_mir, out);
+}
 
-    for (mir.functions) |function| {
+pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: *std.ArrayList(u8)) !void {
+    for (module_mir.functions) |function| {
         try out.print(
             allocator,
             "mir function name={s} return={s} no_lang_trap={} irq_context={} extern={} c_abi={} params={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
@@ -686,14 +689,14 @@ pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std
             );
         }
     }
-    for (mir.aggregate_return_summaries) |summary| {
+    for (module_mir.aggregate_return_summaries) |summary| {
         try out.print(
             allocator,
             "mir aggregate_return_summary_fact callee={s} recorded=true line={} column={}\n",
             .{ summary.callee, summary.source.line, summary.source.column },
         );
     }
-    for (mir.aggregate_return_pointer_facts) |fact| {
+    for (module_mir.aggregate_return_pointer_facts) |fact| {
         try out.print(
             allocator,
             "mir aggregate_return_pointer_fact callee={s} field={s} provenance={s} pointer_kind={s} mutability={s} child={s} recorded=true line={} column={}\n",
