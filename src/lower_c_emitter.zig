@@ -3527,7 +3527,7 @@ const CEmitter = struct {
     }
 
     fn requireMirSwitchSubjectType(self: *CEmitter, subject: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !MirSubjectType {
-        const known_ty = self.operandEmitType(subject, locals) orelse self.resultTypeForExpr(subject, locals) orelse self.nullableTypeForExpr(subject, locals) orelse self.taggedUnionTypeForExpr(subject, locals);
+        const known_ty = self.operandEmitType(subject, locals) orelse self.taggedUnionTypeForExpr(subject, locals);
         const fact = if (known_ty) |ty|
             self.mirTargetTypeFactMatchingType(.switch_subject, subject.span, ty)
         else
@@ -3686,7 +3686,7 @@ const CEmitter = struct {
     fn requireMirIfLetSubjectType(self: *CEmitter, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !MirSubjectType {
         const fact = self.mirTargetTypeFactAt(.if_let_subject, value.span) orelse return error.UnsupportedCEmission;
         const fact_ty = fact.target_ty;
-        const known_ty = self.operandEmitType(value, locals) orelse self.resultTypeForExpr(value, locals) orelse self.nullableTypeForExpr(value, locals);
+        const known_ty = self.operandEmitType(value, locals);
         if (known_ty) |ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
         }
