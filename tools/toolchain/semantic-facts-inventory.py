@@ -1228,8 +1228,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "numeric_expr_type:": 0,
     },
     "src/lower_c_infer.zig": {
-        "source_type_for_expr: SourceTypeFn": 1,
-        "ctx.source_type_for_expr(ctx.source_ctx": 0,
+        "source_type_for_expr": 0,
+        "SourceTypeFn": 0,
         "pub fn numericExprTypeForEmission(": 1,
         "mir_owned_target_type(ctx.source_ctx, .direct_call_result": 1,
         "mir_target_type(ctx.source_ctx, .qualified_union_result": 1,

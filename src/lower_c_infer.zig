@@ -26,7 +26,6 @@ const isNumericStorageType = lower_c_type.isNumericStorageType;
 const sameCStorageType = lower_c_type.sameCStorageType;
 const typeName = ast_query.typeName;
 
-pub const SourceTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const CallReturnTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
 pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?ast.TypeExpr;
@@ -39,7 +38,6 @@ pub const TypeQueryContext = struct {
     enums: *const std.StringHashMap(ast.EnumDecl),
     tagged_unions: *const std.StringHashMap(ast.UnionDecl),
     source_ctx: *anyopaque,
-    source_type_for_expr: SourceTypeFn,
     call_return_type_for_expr: CallReturnTypeFn,
     mir_target_type: MirTargetTypeFn,
     mir_owned_target_type: MirOwnedTargetTypeFn,
@@ -629,8 +627,8 @@ pub fn conditionOperandTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, lo
         .binary => numericExprTypeForEmission(ctx, expr, locals),
         .index => operandEmitType(ctx, expr, locals),
         // A struct-field read — including one off a call result (`mk(x).v == 7`) —
-        // resolves through operandEmitType, which walks the base (calls included via
-        // source_type_for_expr) to the field's declared type. Without this a sequenced
+        // resolves through operandEmitType, which walks the base to the field's
+        // declared type. Without this a sequenced
         // comparison in a value context (return / let-init) could not recover the
         // operand type and failed UnsupportedCEmission.
         .member => operandEmitType(ctx, expr, locals),

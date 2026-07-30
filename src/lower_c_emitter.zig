@@ -7529,16 +7529,10 @@ const CEmitter = struct {
             .enums = &self.enums,
             .tagged_unions = &self.tagged_unions,
             .source_ctx = self,
-            .source_type_for_expr = sourceTypeForInfer,
             .call_return_type_for_expr = callReturnTypeForInfer,
             .mir_target_type = mirTargetTypeForLowering,
             .mir_owned_target_type = mirOwnedTargetTypeForLowering,
         };
-    }
-
-    fn sourceTypeForInfer(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.exprSourceTypeForEmission(expr, locals);
     }
 
     fn callReturnTypeForInfer(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
