@@ -10,6 +10,8 @@ historical plans, but the active source of truth should be small:
   source for open review blockers and profile-blocking status.
 - [`scope-control-plan.md`](scope-control-plan.md) — profile policy for keeping
   experimental surface area separate from production claims.
+- [`refactoring-plan.md`](refactoring-plan.md) — ordered refactoring phases that
+  turn the open risks into code-facing work with closure criteria.
 - [`spec/MC_0.7_Final_Design.md`](spec/MC_0.7_Final_Design.md) — normative language
   and backend contract.
 - [`spec/MC_Kernel_Design.md`](spec/MC_Kernel_Design.md) — source-faithful kernel
@@ -24,6 +26,7 @@ These are still useful as day-to-day references or rationale companions:
 | Language interop | [`c-abi-interop.md`](c-abi-interop.md) | C ABI, symbols, strings, trap ABI, boundary diagnostics. |
 | Backend seam | [`backend-abstraction.md`](backend-abstraction.md) | Where C/LLVM backends plug into `mcc`. |
 | Compiler readiness | [`compiler-production-readiness.md`](compiler-production-readiness.md) | Code-grounded gap assessment + phased roadmap for making `mcc` itself production grade (compiler-side complement to `production-readiness-plan.md`). |
+| Refactoring | [`refactoring-plan.md`](refactoring-plan.md) | Ordered code-facing refactoring phases derived from the risk register. |
 | Kernel-language comparison | [`kernel-language-comparison-plan.md`](kernel-language-comparison-plan.md) | Evidence plan for narrow, fair C/Rust/MC machine-contract comparisons; consumes compiler qualification without redefining it. |
 | Release/process | [`../SECURITY.md`](../SECURITY.md), [`../STABILITY.md`](../STABILITY.md), [`../CHANGELOG.md`](../CHANGELOG.md), [`release-process.md`](release-process.md) | Security reporting, compatibility expectations, development-line changes, and the release checklist. |
 | Scope/profile control | [`review-risk-register.yaml`](review-risk-register.yaml), [`scope-control-plan.md`](scope-control-plan.md) | Single-source open blocker state and rules for separating experimental subsystems from production profiles. |
