@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the pilot gate manifest against build registration and tiers."""
+"""Validate the gate manifest against build registration and tiers."""
 
 from __future__ import annotations
 
@@ -29,6 +29,15 @@ REQUIRED_FIELDS = {
 KNOWN_EXECUTION_TIERS = {"pr", "nightly", "release"}
 KNOWN_BUILD_TIERS = {"m0", "fast", "c0"}
 KNOWN_SKIP_POLICIES = {"no-skip", "tool-required", "documented-skip"}
+REQUIRED_GOVERNANCE_GATES = {
+    "gate-manifest-test",
+    "profile-manifest-test",
+    "vendoring-test",
+    "third-party-licenses-test",
+    "release-metadata-test",
+    "package-release-test",
+    "ci-pass-gates-test",
+}
 
 
 def fail(message: str) -> None:
@@ -96,6 +105,8 @@ def main() -> None:
         fail("schema_version must be 1")
     if manifest.get("profiles") != "docs/profile-manifest.json":
         fail("profiles must point at docs/profile-manifest.json")
+    if manifest.get("scope") != "compiler-core-and-governance":
+        fail("scope must be compiler-core-and-governance")
 
     profiles_manifest = load_json(PROFILE_MANIFEST)
     known_profiles = {
@@ -157,14 +168,17 @@ def main() -> None:
             if gate_id not in dependencies[build_tier]:
                 fail(f"gate {gate_id} is missing from {build_tier}_step dependencies")
 
-    if len(gates) < 10:
-        fail("pilot manifest must cover at least 10 existing compiler-core gates")
+    if len(gates) < 20:
+        fail("gate manifest must cover at least 20 compiler-core/governance gates")
     if len(owners) < 5:
-        fail("pilot manifest should cover multiple ownership domains")
+        fail("gate manifest should cover multiple ownership domains")
+    missing_governance = sorted(REQUIRED_GOVERNANCE_GATES - seen)
+    if missing_governance:
+        fail(f"manifest missing governance/provenance gates: {', '.join(missing_governance)}")
 
     print(
         "PASS: gate-manifest-test - "
-        f"{len(gates)} pilot gates, {len(owners)} owners, {len(known_profiles)} profiles"
+        f"{len(gates)} manifest gates, {len(owners)} owners, {len(known_profiles)} profiles"
     )
 
 

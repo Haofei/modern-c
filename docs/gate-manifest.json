@@ -2,7 +2,7 @@
   "schema_version": 1,
   "source_of_truth": "docs/gate-manifest.json",
   "profiles": "docs/profile-manifest.json",
-  "scope": "pilot-compiler-core",
+  "scope": "compiler-core-and-governance",
   "tiers": {
     "pr": {
       "intent": "fast deterministic compiler-core feedback"
@@ -280,6 +280,139 @@
         "m0"
       ],
       "skip_policy": "tool-required"
+    },
+    {
+      "id": "gate-manifest-test",
+      "owner": "test-infra",
+      "category": "gate-manifest-integrity",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset",
+        "developer-tools"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "profile-manifest-test",
+      "owner": "scope-control",
+      "category": "profile-risk-binding",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset",
+        "developer-tools"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "vendoring-test",
+      "owner": "supply-chain",
+      "category": "vendored-provenance",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset",
+        "developer-tools"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "third-party-licenses-test",
+      "owner": "supply-chain",
+      "category": "license-manifest",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset",
+        "developer-tools"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "release-metadata-test",
+      "owner": "release",
+      "category": "release-metadata-integrity",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset",
+        "developer-tools"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "package-release-test",
+      "owner": "release",
+      "category": "release-artifact-packaging",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset",
+        "developer-tools"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "ci-pass-gates-test",
+      "owner": "ci",
+      "category": "ci-anti-vacuity",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset",
+        "developer-tools"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
     }
   ]
 }

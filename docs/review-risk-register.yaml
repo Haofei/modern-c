@@ -84,10 +84,10 @@ risks:
     severity: medium
     scope: build-governance
     status: open
-    admitted_subset_status: compiler-core-pilot-manifest-gated
+    admitted_subset_status: compiler-core-governance-manifest-gated
     blocks:
       - generated-release-evidence
-    summary: A pilot compiler-core gate manifest is checked against build tiers; full build/CI/release/docs generation from one manifest remains open.
+    summary: Compiler-core, governance, provenance, release, profile, vendoring, license, and CI anti-vacuity gates are checked against build tiers; full build/CI/release/docs generation from one manifest remains open.
 
   - id: LSP-COMPILER-SERVICE
     severity: medium

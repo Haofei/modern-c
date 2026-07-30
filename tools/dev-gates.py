@@ -207,7 +207,7 @@ RULES: tuple[Rule, ...] = (
             "tools/toolchain/gate-manifest-test.py",
         ),
         ("gate-manifest-test",),
-        "gate manifest changes need the pilot gate manifest contract",
+        "gate manifest changes need the gate manifest contract",
     ),
     Rule(
         (

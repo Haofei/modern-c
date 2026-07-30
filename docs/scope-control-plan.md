@@ -98,7 +98,7 @@ The current bridge state is:
   `docs/gate-manifest.json`;
 - `profile-manifest-test` verifies every profile references known risks and
   registered build gates and known TCB component IDs;
-- `gate-manifest-test` verifies the pilot gate subset is registered and present
+- `gate-manifest-test` verifies the gate manifest subset is registered and present
   in its declared build tiers;
 - gate generation itself remains open under `GATE-MANIFEST`.
 

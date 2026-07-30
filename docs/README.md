@@ -13,8 +13,8 @@ historical plans, but the active source of truth should be small:
 - [`tcb-components.json`](tcb-components.json) — machine-readable TCB component
   manifest tying profile component IDs to owners, provenance, advisory status,
   and vendored dependency metadata.
-- [`gate-manifest.json`](gate-manifest.json) — pilot machine-readable gate
-  manifest for compiler-core ownership, tiers, profiles, and skip policy.
+- [`gate-manifest.json`](gate-manifest.json) — machine-readable gate manifest
+  for compiler-core/governance ownership, tiers, profiles, and skip policy.
 - [`scope-control-plan.md`](scope-control-plan.md) — profile policy for keeping
   experimental surface area separate from production claims.
 - [`refactoring-plan.md`](refactoring-plan.md) — ordered refactoring phases that
