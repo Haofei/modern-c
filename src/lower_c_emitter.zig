@@ -3636,7 +3636,7 @@ const CEmitter = struct {
     }
 
     fn iterableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse return null;
+        const ty = self.arrayOrSliceBaseTypeForEmission(expr, locals) orelse return null;
         const resolved = self.resolveAliasType(ty);
         return switch (resolved.kind) {
             .array, .slice => ty,

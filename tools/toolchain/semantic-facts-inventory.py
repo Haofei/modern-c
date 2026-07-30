@@ -1188,6 +1188,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn sliceBaseTypeForEmission(": 0,
         "fn arrayOrSliceBaseTypeForEmission(": 1,
         "const base_ty = self.arrayOrSliceBaseTypeForEmission(index.base.*, locals) orelse return null;": 1,
+        "const ty = self.arrayOrSliceBaseTypeForEmission(expr, locals) orelse return null;": 1,
         "fn emitPointerToPAddrTargetCast(": 1,
         "fn mirConstGetIndexAt(": 1,
         "rawMethodReturnTypeForCall": 0,
