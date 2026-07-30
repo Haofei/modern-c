@@ -464,7 +464,9 @@ gated to generated zero-span nodes that cannot be keyed by source span. C cast
 target inference for enum values, tagged-union values, pointer pointees, and
 numeric emission now consumes `explicit_cast_target` for source casts before
 checking the requested shape; the AST cast target remains only for generated
-zero-span casts.
+zero-span casts. C inference call-result queries now use the shared emitter
+hook that consumes direct, indirect, dynamic-dispatch, and migrated builtin call
+facts; the private direct-call-only helper is exact-zero gated.
 
 | Family | Budget class | Reduction condition |
 |---|---|---|

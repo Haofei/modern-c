@@ -16,7 +16,6 @@ const mir = @import("mir.zig");
 const FnInfo = lower_c_model.FnInfo;
 const GlobalInfo = lower_c_model.GlobalInfo;
 const LocalInfo = lower_c_model.LocalInfo;
-const calleeIdentName = ast_query.calleeIdentName;
 const exprIsNumericLiteral = lower_c_expr.exprIsNumericLiteral;
 const isNumericValueBinaryOp = lower_c_expr.isNumericValueBinaryOp;
 const isBoolType = lower_c_type.isBoolType;
@@ -43,8 +42,8 @@ pub const TypeQueryContext = struct {
 
 pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |call| blk: {
-            const return_ty = callReturnType(ctx, call) orelse break :blk null;
+        .call => blk: {
+            const return_ty = ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals) orelse break :blk null;
             break :blk if (return_ty.kind == .slice) return_ty else null;
         },
         // Real source slices have an exact MIR result type. Generated
@@ -68,7 +67,7 @@ pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
 
 fn sliceBaseTypeForZeroSpanSlice(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |call| callReturnType(ctx, call),
+        .call => ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals),
         .grouped => |inner| blk: {
             const inferred = sliceBaseTypeForZeroSpanSlice(ctx, inner.*, locals) orelse break :blk null;
             if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
@@ -110,8 +109,8 @@ pub fn enumNameForValueExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std
     }
     return switch (expr.kind) {
         .ident => |ident| enumNameForIdentValue(ctx, ident.text, locals),
-        .call => |node| blk: {
-            const ret_ty = callReturnType(ctx, node) orelse break :blk null;
+        .call => blk: {
+            const ret_ty = ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals) orelse break :blk null;
             break :blk enumNameForType(ctx, ret_ty);
         },
         .cast => |node| blk: {
@@ -193,11 +192,11 @@ pub fn exprIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
 
 pub fn taggedUnionTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     const ty = switch (expr.kind) {
-        .call => |node| blk: {
+        .call => blk: {
             // A qualified constructor `Union.variant(...)` is self-typed to its
             // owner, so an untyped `let t = Token.number(9)` infers `Token`.
             if (ctx.mir_target_type(ctx.source_ctx, .qualified_union_result, expr.span)) |ty| break :blk ty;
-            const ret_ty = callReturnType(ctx, node) orelse return null;
+            const ret_ty = ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals) orelse return null;
             const type_name = typeName(resolveAliasType(ctx, ret_ty)) orelse return null;
             if (!ctx.tagged_unions.contains(type_name)) return null;
             break :blk ret_ty;
@@ -273,8 +272,8 @@ fn requireExpressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: 
 
 pub fn arrayTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     switch (expr.kind) {
-        .call => |node| {
-            const return_ty = callReturnType(ctx, node) orelse return null;
+        .call => {
+            const return_ty = ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals) orelse return null;
             const resolved = resolveAliasType(ctx, return_ty);
             return if (resolved.kind == .array) resolved else null;
         },
@@ -337,7 +336,7 @@ pub fn derefPointeeType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
             pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null)
         else
             operandEmitType(ctx, inner.*, locals),
-        .call => |node| pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .raw_many_offset_result, node.callee.*.span) orelse callReturnType(ctx, node) orelse return null),
+        .call => |node| pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .raw_many_offset_result, node.callee.*.span) orelse ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals) orelse return null),
         .cast => |node| pointeeTypeFromPointerLike(ctx, castTargetTypeForInference(ctx, expr, node) orelse return null),
         .member, .index => pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null),
         .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
@@ -520,16 +519,6 @@ pub fn conditionOperandTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, lo
         .member => operandEmitType(ctx, expr, locals),
         else => null,
     };
-}
-
-fn callReturnType(ctx: TypeQueryContext, call: anytype) ?ast.TypeExpr {
-    const fn_name = calleeIdentName(call.callee.*) orelse return null;
-    const info = ctx.functions.get(fn_name) orelse return null;
-    const fact_ty = ctx.mir_owned_target_type(ctx.source_ctx, .direct_call_result, call.callee.*.span, fn_name, null) orelse return null;
-    if (info.return_type) |declared_ty| {
-        if (!std.meta.eql(fact_ty, declared_ty)) return null;
-    } else if (!lower_c_type.isVoidType(fact_ty)) return null;
-    return fact_ty;
 }
 
 fn sourceTypeForIdent(ctx: TypeQueryContext, name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
