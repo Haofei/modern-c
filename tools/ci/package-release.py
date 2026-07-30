@@ -54,6 +54,10 @@ class PackageResult:
     sha256: str
     size: int
     included_paths: tuple[str, ...]
+    metadata_name: str
+    metadata_path: pathlib.Path
+    metadata_sha256: str
+    metadata_size: int
 
 
 def fail(message: str) -> None:
@@ -140,6 +144,49 @@ def sha256_file(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def metadata_escape(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+        .replace(" ", "\\s")
+    )
+
+
+def toolchain_identity() -> str:
+    try:
+        raw = subprocess.check_output(["zig", "version"], cwd=ROOT, text=True, stderr=subprocess.DEVNULL).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        raw = "unknown"
+    return f"zig={raw or 'unknown'}"
+
+
+def write_release_metadata(
+    *,
+    artifact_path: pathlib.Path,
+    artifact_sha256: str,
+    version: str,
+    commit: str,
+    target: str,
+    epoch: int,
+) -> pathlib.Path:
+    path = artifact_path.with_name(artifact_path.name + ".mcmeta")
+    lines = [
+        "# mcmeta v1\n",
+        "# artifact_kind=release-tarball\n",
+        "# backend=package-release\n",
+        f"# generated_artifact_sha256={artifact_sha256}\n",
+        f"# compiler_version={metadata_escape(version)}\n",
+        f"# target_arch={metadata_escape(target)}\n",
+        f"# toolchain_identity={metadata_escape(toolchain_identity())}\n",
+        f"# release_commit={metadata_escape(commit)}\n",
+        f"# source_date_epoch={epoch}\n",
+    ]
+    path.write_text("".join(lines), encoding="ascii")
+    return path
+
+
 def package_files(prefix: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
     files: list[tuple[pathlib.Path, str]] = []
     mcc = prefix / "bin" / "mcc"
@@ -200,6 +247,7 @@ def make_tarball(
     *,
     target: str,
     version: str,
+    commit: str,
     prefix: pathlib.Path,
     out_dir: pathlib.Path,
     epoch: int,
@@ -225,19 +273,34 @@ def make_tarball(
                 for source, dest in files:
                     add_file(tar, source, f"{root_name}/{dest}", epoch)
 
+    artifact_sha256 = sha256_file(artifact_path)
+    metadata_path = write_release_metadata(
+        artifact_path=artifact_path,
+        artifact_sha256=artifact_sha256,
+        version=version,
+        commit=commit,
+        target=target,
+        epoch=epoch,
+    )
+
     return PackageResult(
         target=target,
         artifact_name=artifact_name,
         artifact_path=artifact_path,
-        sha256=sha256_file(artifact_path),
+        sha256=artifact_sha256,
         size=artifact_path.stat().st_size,
         included_paths=included_paths,
+        metadata_name=metadata_path.name,
+        metadata_path=metadata_path,
+        metadata_sha256=sha256_file(metadata_path),
+        metadata_size=metadata_path.stat().st_size,
     )
 
 
 def write_checksums(out_dir: pathlib.Path, packages: list[PackageResult], metadata_paths: list[pathlib.Path]) -> pathlib.Path:
     path = out_dir / "SHA256SUMS"
     lines = [f"{package.sha256}  {package.artifact_name}\n" for package in sorted(packages, key=lambda p: p.artifact_name)]
+    lines.extend(f"{package.metadata_sha256}  {package.metadata_name}\n" for package in sorted(packages, key=lambda p: p.metadata_name))
     for metadata_path in sorted(metadata_paths, key=lambda p: p.name):
         lines.append(f"{sha256_file(metadata_path)}  {metadata_path.name}\n")
     path.write_text("".join(lines), encoding="utf-8")
@@ -275,6 +338,11 @@ def write_inventory(
                 "sha256": package.sha256,
                 "size": package.size,
                 "included_paths": list(package.included_paths),
+                "metadata_sidecar": {
+                    "name": package.metadata_name,
+                    "sha256": package.metadata_sha256,
+                    "size": package.metadata_size,
+                },
             }
             for package in sorted(packages, key=lambda p: p.artifact_name)
         ],
@@ -314,6 +382,19 @@ def write_sbom(
                 "properties": [{"name": "modern-c.target", "value": package.target}],
             }
             for package in sorted(packages, key=lambda p: p.artifact_name)
+        ]
+        + [
+            {
+                "type": "file",
+                "name": package.metadata_name,
+                "version": version,
+                "hashes": [{"alg": "SHA-256", "content": package.metadata_sha256}],
+                "properties": [
+                    {"name": "modern-c.target", "value": package.target},
+                    {"name": "modern-c.metadata-for", "value": package.artifact_name},
+                ],
+            }
+            for package in sorted(packages, key=lambda p: p.metadata_name)
         ],
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -345,6 +426,7 @@ def release(args: argparse.Namespace) -> None:
             make_tarball(
                 target=target,
                 version=args.version,
+                commit=commit,
                 prefix=prefix,
                 out_dir=out_dir,
                 epoch=epoch,

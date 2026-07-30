@@ -293,9 +293,12 @@ Current baseline:
   `-o` outputs using the same `ArtifactBundle` header code as `emit-map`.
 - `build` computes the metadata digest from the linked executable bytes and
   records the clang identity used for that link step.
+- Release packaging now emits `.tar.gz.mcmeta` sidecars for release tarballs and
+  records them in `SHA256SUMS`, release inventory, CycloneDX SBOM, workflow
+  upload/publish paths, and release-process documentation.
 - Producing source maps in the same artifact-writing transaction, recording a
-  full toolchain digest, and making release evidence consume `.mcmeta` remain
-  open.
+  full toolchain digest, and replacing all release evidence prose with generated
+  manifest rows remain open.
 
 Closure criteria:
 

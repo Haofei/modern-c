@@ -2,7 +2,7 @@
 
 Status: draft release process with an implemented Linux and macOS artifact
 workflow. Release publication is still conservative: the workflow builds
-tarballs, checksums, a release inventory, a CycloneDX SBOM, and GitHub
+tarballs, `.mcmeta` artifact metadata sidecars, checksums, a release inventory, a CycloneDX SBOM, and GitHub
 artifact attestations. No public stable release has been cut yet.
 
 ## Version Identity
@@ -52,7 +52,8 @@ Before tagging a release:
    `MC_REQUIRE_TOOLS=1 zig build m0` before building artifacts. It also runs the built compiler and checks its
    reported version, then requires a clean source tree, so the publishing path proves
    the exact source revision passed the documented qualification bar.
-10. Confirm the dry-run workflow artifact contains tarballs for
+10. Confirm the dry-run workflow artifact contains tarballs and matching
+   `.tar.gz.mcmeta` sidecars for
    `x86_64-linux-musl`, `aarch64-linux-musl`, `x86_64-macos`, and
    `aarch64-macos`.
    Each tarball must contain `bin/mcc`, `bin/mcc-real`, `std/`,
@@ -61,7 +62,10 @@ Before tagging a release:
    `STABILITY.md`, `CHANGELOG.md`, and `THIRD-PARTY-LICENSES.md`.
 11. Confirm `SHA256SUMS`, `mcc-<version>-release-inventory.json`, and
    `mcc-<version>-sbom.cdx.json` are present and that
-   `sha256sum -c SHA256SUMS` passes.
+   `sha256sum -c SHA256SUMS` passes. The inventory records each tarball's
+   `metadata_sidecar`, and each sidecar records `# mcmeta v1`,
+   `artifact_kind=release-tarball`, the tarball digest, target, release commit,
+   source date epoch, and toolchain identity.
 12. Confirm the workflow generated Sigstore-backed artifact attestations with
    `actions/attest` using `subject-checksums: zig-out/release/SHA256SUMS`.
 13. Tag the exact commit and record the tag in `CHANGELOG.md`. Pushing `v*`
@@ -86,8 +90,8 @@ python3 tools/ci/package-release.py release --version 0.7.0 \
 
 The helper builds `mcc` with `zig build -Dtarget=<target> -Doptimize=ReleaseSafe
 -Dversion=<version> install`, stages the required runtime files, writes a
-deterministic tarball, emits release inventory and CycloneDX SBOM JSON files, and
-writes `SHA256SUMS`.
+deterministic tarball, writes a matching `.tar.gz.mcmeta` sidecar, emits release
+inventory and CycloneDX SBOM JSON files, and writes `SHA256SUMS`.
 
 The release workflow stages the VS Code extension into `zig-out/release`, appends
 it to `SHA256SUMS`, verifies that every checksum subject is a file in that

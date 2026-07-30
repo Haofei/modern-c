@@ -144,10 +144,43 @@ def tarball_name(target: str) -> str:
     return f"mcc-{VERSION}-{target}.tar.gz"
 
 
+def metadata_name(target: str) -> str:
+    return tarball_name(target) + ".mcmeta"
+
+
+def read_mcmeta(path: pathlib.Path) -> dict[str, str]:
+    require(path.is_file(), f"missing metadata sidecar {path.name}")
+    headers: dict[str, str] = {}
+    for line_number, line in enumerate(path.read_text(encoding="ascii").splitlines(), 1):
+        require(line.startswith("# "), f"{path.name}:{line_number} is not a metadata header")
+        body = line[2:]
+        if body == "mcmeta v1":
+            continue
+        require("=" in body, f"{path.name}:{line_number} metadata header lacks '='")
+        key, value = body.split("=", 1)
+        headers[key] = value
+    return headers
+
+
+def require_metadata_sidecar(out_dir: pathlib.Path, target: str) -> None:
+    tarball = out_dir / tarball_name(target)
+    sidecar = out_dir / metadata_name(target)
+    headers = read_mcmeta(sidecar)
+    require(headers.get("artifact_kind") == "release-tarball", f"{sidecar.name} artifact kind mismatch")
+    require(headers.get("backend") == "package-release", f"{sidecar.name} backend mismatch")
+    require(headers.get("generated_artifact_sha256") == sha256_file(tarball), f"{sidecar.name} artifact digest mismatch")
+    require(headers.get("compiler_version") == VERSION, f"{sidecar.name} compiler version mismatch")
+    require(headers.get("target_arch") == target, f"{sidecar.name} target mismatch")
+    require(headers.get("release_commit") == COMMIT, f"{sidecar.name} release commit mismatch")
+    require(headers.get("source_date_epoch") == str(SOURCE_DATE_EPOCH), f"{sidecar.name} source_date_epoch mismatch")
+    require("toolchain_identity" in headers, f"{sidecar.name} lacks toolchain identity")
+
+
 def require_checksums(out_dir: pathlib.Path) -> None:
     checksums = read_checksums(out_dir)
     expected_subjects = {
         *(tarball_name(target) for target in TARGETS),
+        *(metadata_name(target) for target in TARGETS),
         inventory_path(out_dir).name,
         sbom_path(out_dir).name,
     }
@@ -185,6 +218,12 @@ def require_inventory(out_dir: pathlib.Path) -> None:
         require(artifact.get("name") == tarball.name, f"inventory artifact name mismatch for {target}")
         require(artifact.get("sha256") == sha256_file(tarball), f"inventory sha256 mismatch for {target}")
         require(artifact.get("size") == tarball.stat().st_size, f"inventory size mismatch for {target}")
+        sidecar = out_dir / metadata_name(target)
+        metadata = artifact.get("metadata_sidecar")
+        require(isinstance(metadata, dict), f"inventory metadata_sidecar for {target} must be an object")
+        require(metadata.get("name") == sidecar.name, f"inventory metadata sidecar name mismatch for {target}")
+        require(metadata.get("sha256") == sha256_file(sidecar), f"inventory metadata sidecar sha256 mismatch for {target}")
+        require(metadata.get("size") == sidecar.stat().st_size, f"inventory metadata sidecar size mismatch for {target}")
 
         included_paths = artifact.get("included_paths")
         require(isinstance(included_paths, list), f"inventory included_paths for {target} must be a list")
@@ -224,7 +263,7 @@ def require_sbom(out_dir: pathlib.Path) -> None:
 
     components = payload.get("components")
     require(isinstance(components, list), "SBOM components must be a list")
-    require(len(components) == len(TARGETS), "SBOM must list one component per tarball")
+    require(len(components) == len(TARGETS) * 2, "SBOM must list one component per tarball and metadata sidecar")
     by_name: dict[str, dict[str, object]] = {}
     for component in components:
         require(isinstance(component, dict), "SBOM component must be an object")
@@ -240,9 +279,15 @@ def require_sbom(out_dir: pathlib.Path) -> None:
         require(isinstance(digest, dict), f"SBOM component {name} hash must be an object")
         require(digest.get("alg") == "SHA-256", f"SBOM component {name} hash alg mismatch")
         require(digest.get("content") == sha256_file(out_dir / name), f"SBOM component {name} hash content mismatch")
-        target = properties_dict(component).get("modern-c.target")
-        require(name == tarball_name(target or ""), f"SBOM component {name} target property mismatch")
-    require(set(by_name) == {tarball_name(target) for target in TARGETS}, "SBOM component set mismatch")
+        properties = properties_dict(component)
+        target = properties.get("modern-c.target")
+        require(target in TARGETS, f"SBOM component {name} target property mismatch")
+        if name.endswith(".mcmeta"):
+            require(name == metadata_name(target or ""), f"SBOM component {name} metadata target mismatch")
+            require(properties.get("modern-c.metadata-for") == tarball_name(target or ""), f"SBOM component {name} metadata-for mismatch")
+        else:
+            require(name == tarball_name(target or ""), f"SBOM component {name} target property mismatch")
+    require(set(by_name) == {*(tarball_name(target) for target in TARGETS), *(metadata_name(target) for target in TARGETS)}, "SBOM component set mismatch")
 
 
 def stripped_tar_paths(members: list[tarfile.TarInfo], root_name: str) -> set[str]:
@@ -293,6 +338,7 @@ def require_release_outputs(out_dir: pathlib.Path) -> None:
     require_sbom(out_dir)
     for target in TARGETS:
         require_tarball(out_dir, target)
+        require_metadata_sidecar(out_dir, target)
 
 
 def require_reproducible_outputs(first: pathlib.Path, second: pathlib.Path) -> None:
@@ -301,6 +347,7 @@ def require_reproducible_outputs(first: pathlib.Path, second: pathlib.Path) -> N
         inventory_path(first).name,
         sbom_path(first).name,
         *(tarball_name(target) for target in TARGETS),
+        *(metadata_name(target) for target in TARGETS),
     }
     for name in deterministic_names:
         require((first / name).read_bytes() == (second / name).read_bytes(), f"{name} is not byte-identical across packaging runs")
