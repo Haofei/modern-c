@@ -257,7 +257,7 @@ pub const SourceSpellingView = struct {
         return identity.spelling;
     }
 
-    pub fn functionSpelling(self: SourceSpellingView, function: mir.Function) ?[]const u8 {
+    fn functionSpelling(self: SourceSpellingView, function: mir.Function) ?[]const u8 {
         return self.symbolSpelling(function.typed_symbol_id);
     }
 
@@ -429,7 +429,7 @@ test "VerifiedProgram exposes MIR-owned source spelling view" {
     try std.testing.expect(module_mir.functions.len != 0);
     try std.testing.expectEqualStrings(
         "add_one",
-        program.source_spelling.functionSpelling(module_mir.functions[0]).?,
+        program.source_spelling.symbolSpelling(module_mir.functions[0].typed_symbol_id).?,
     );
     try std.testing.expect(program.source_spelling.definesFunctionSpelling(module_mir, "add_one"));
     try std.testing.expect(!program.source_spelling.definesFunctionSpelling(module_mir, "missing"));

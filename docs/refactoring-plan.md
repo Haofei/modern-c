@@ -194,7 +194,10 @@ Current baseline:
   spelling. Legacy `syntax_module` remains only because declaration metadata has
   not yet been fully normalized. C and LLVM runtime hook suppression now consume
   the shared `SourceSpellingView.definesFunctionSpelling` query; duplicate
-  backend-local `moduleDefinesHook` helpers are exact-zero gated.
+  backend-local `moduleDefinesHook` helpers are exact-zero gated. Function-level
+  spelling lookup is no longer part of the backend-facing public view; external
+  backend consumers get symbol spelling by typed `SymbolId` or the narrow
+  runtime-hook predicate.
 
 Deliverables:
 

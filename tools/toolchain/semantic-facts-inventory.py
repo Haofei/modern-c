@@ -950,6 +950,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub const SourceSpellingView = struct": 1,
         "source_spelling: SourceSpellingView": 1,
         "source_spelling.validateAgainstMir(typed_mir.*)": 1,
+        "pub fn functionSpelling(self: SourceSpellingView": 0,
         "pub fn definesFunctionSpelling(self: SourceSpellingView": 1,
         "VerifiedProgram exposes MIR-owned source spelling view": 1,
     },
