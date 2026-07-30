@@ -4214,7 +4214,7 @@ const CEmitter = struct {
     }
 
     fn pointerMemberPathFinalType(self: *CEmitter, root: ast.Expr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        var current = self.operandEmitType(root, locals) orelse self.exprSourceTypeForEmission(root, locals) orelse return null;
+        var current = self.memberBaseTypeForEmission(root, locals) orelse return null;
         for (fields) |field_name| current = self.memberFieldTypeFromAggregate(current, field_name) orelse return null;
         return current;
     }
@@ -6968,7 +6968,7 @@ const CEmitter = struct {
         if (info.aggregate) {
             if (self.derefPointerHasProvenLocalStorage(member.base.*, locals)) return false;
             const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
-            const base_ty = self.operandEmitType(member.base.*, locals) orelse self.exprSourceTypeForEmission(member.base.*, locals) orelse return false;
+            const base_ty = self.memberBaseTypeForEmission(member.base.*, locals) orelse return false;
             const base_c_ty = try self.cTypeFor(base_ty, .typedef_name);
             const base_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
             self.temp_index += 1;
@@ -7009,7 +7009,7 @@ const CEmitter = struct {
         const info = self.globalInfoFromType(field_ty) catch return false;
         if (!info.aggregate) return false;
         _ = target_ty orelse return false;
-        const base_ty = self.operandEmitType(member.base.*, locals) orelse self.exprSourceTypeForEmission(member.base.*, locals) orelse return false;
+        const base_ty = self.memberBaseTypeForEmission(member.base.*, locals) orelse return false;
         const base_c_ty = try self.cTypeFor(base_ty, .typedef_name);
         const base_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
         self.temp_index += 1;
@@ -7032,7 +7032,7 @@ const CEmitter = struct {
         const info = self.globalInfoFromType(field_ty) catch return false;
         if (!info.aggregate) return false;
         _ = target_ty orelse return false;
-        const root_ty = self.operandEmitType(path.root, locals) orelse self.exprSourceTypeForEmission(path.root, locals) orelse return false;
+        const root_ty = self.memberBaseTypeForEmission(path.root, locals) orelse return false;
         const root_c_ty = try self.cTypeFor(root_ty, .typedef_name);
         const root_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
         self.temp_index += 1;
@@ -7378,7 +7378,7 @@ const CEmitter = struct {
         const info = self.globalInfoFromType(field_ty) catch return false;
         const value_temp = try self.emitSequencedCallArgTemp(value, locals, field_ty);
         if (info.aggregate) {
-            const root_ty = self.operandEmitType(path.root, locals) orelse self.exprSourceTypeForEmission(path.root, locals) orelse return false;
+            const root_ty = self.memberBaseTypeForEmission(path.root, locals) orelse return false;
             const root_c_ty = try self.cTypeFor(root_ty, .typedef_name);
             const root_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_ptr{d}", .{self.temp_index});
             self.temp_index += 1;
@@ -7470,7 +7470,7 @@ const CEmitter = struct {
     }
 
     fn exprHasPointerType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
-        const ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse return false;
+        const ty = self.memberBaseTypeForEmission(expr, locals) orelse return false;
         return self.resolveAliasType(ty).kind == .pointer;
     }
 
