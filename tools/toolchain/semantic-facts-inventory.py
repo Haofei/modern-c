@@ -1336,6 +1336,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn enumNameForCallValue(": 0,
         "pub fn exprIsBoolForEmission(": 1,
         "fn identIsBoolForEmission(": 0,
+        "fn operandIsBoolForEmission(": 0,
         "pub fn taggedUnionTypeForExpr(": 1,
         "pub fn operandEmitType(": 1,
         "pub fn arrayTypeForExpr(": 1,

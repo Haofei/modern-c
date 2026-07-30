@@ -154,7 +154,10 @@ pub fn exprIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
         // facts. Syntax identifies the operation, but it must not independently
         // authorize boolean lowering when that fact is absent.
         .bool_literal => sourceExpressionResultIsBool(ctx, expr, true),
-        .ident, .index, .member => operandIsBoolForEmission(ctx, expr, locals),
+        .ident, .index, .member => blk: {
+            const ty = operandEmitType(ctx, expr, locals) orelse break :blk false;
+            break :blk isBoolType(resolveAliasType(ctx, ty));
+        },
         .call => if (ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals)) |ty| isBoolType(ty) else false,
         .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
             exprIsBoolForEmission(ctx, inner.*, locals)
@@ -171,11 +174,6 @@ pub fn exprIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
 fn sourceExpressionResultIsBool(ctx: TypeQueryContext, expr: ast.Expr, generated_fallback: bool) bool {
     if (expr.span.line == 0 or expr.span.column == 0) return generated_fallback;
     const ty = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return false;
-    return isBoolType(resolveAliasType(ctx, ty));
-}
-
-fn operandIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
-    const ty = operandEmitType(ctx, expr, locals) orelse return false;
     return isBoolType(resolveAliasType(ctx, ty));
 }
 
