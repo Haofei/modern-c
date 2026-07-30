@@ -356,7 +356,7 @@ pub fn operandEmitType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Stri
             if (expr.span.line != 0 or expr.span.column != 0) {
                 return ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span);
             }
-            const base_ty = operandEmitType(ctx, node.base.*, locals) orelse ctx.source_type_for_expr(ctx.source_ctx, node.base.*, locals) orelse return null;
+            const base_ty = operandEmitType(ctx, node.base.*, locals) orelse return null;
             const resolved = resolveAliasType(ctx, base_ty);
             const inferred = switch (resolved.kind) {
                 .array => resolved.kind.array.child.*,
