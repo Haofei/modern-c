@@ -1809,9 +1809,7 @@ const CEmitter = struct {
             .local_info_from_type = localInfoFromTypeForSwitch,
             .c_type = cTypeForCall,
             .c_ident = cIdentForCall,
-            .result_type_for_expr = resultTypeForSwitch,
             .tagged_union_type_for_expr = taggedUnionTypeForSwitch,
-            .nullable_type_for_expr = nullableTypeForSwitch,
             .nullable_inner_c_type_for_type = nullableInnerCTypeForSwitch,
             .emit_sequenced_arg_temp = emitSequencedArgTempForCall,
             .tagged_unions = &self.tagged_unions,
@@ -2059,20 +2057,9 @@ const CEmitter = struct {
         return self.localInfoFromType(ty);
     }
 
-    fn resultTypeForSwitch(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        const local_set = locals orelse return null;
-        return self.resultTypeForExpr(expr, local_set);
-    }
-
     fn taggedUnionTypeForSwitch(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.taggedUnionTypeForExpr(expr, locals);
-    }
-
-    fn nullableTypeForSwitch(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        return self.nullableTypeForExpr(expr, locals);
     }
 
     fn nullableInnerCTypeForSwitch(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8 {
