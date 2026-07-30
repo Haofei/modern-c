@@ -4841,6 +4841,15 @@ test "MIR dump exposes representation value identities" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=return_ptr_param kind=typed_load detail=p type=*mut value_id=p recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=return_ptr_param kind=representation_check detail=nonnull_pointer type=*mut value_id=p recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=read_ptr_param kind=representation_use detail=deref_base type=*mut value_id=p recorded=true") != null);
+    const expected_repr_result = try std.fmt.allocPrint(std.testing.allocator, "typed_result_ty_id={}", .{read_fn.representation_facts[0].typed_result_ty.index()});
+    defer std.testing.allocator.free(expected_repr_result);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_repr_result) != null);
+    const expected_repr_value = try std.fmt.allocPrint(std.testing.allocator, "typed_value_id={}", .{read_fn.representation_facts[0].typed_value_id.index()});
+    defer std.testing.allocator.free(expected_repr_value);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_repr_value) != null);
+    const expected_repr_span = try std.fmt.allocPrint(std.testing.allocator, "typed_span_id={}", .{read_fn.representation_facts[0].typed_span_id.index()});
+    defer std.testing.allocator.free(expected_repr_span);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_repr_span) != null);
 }
 
 test "MIR representation admission rejects typed span identity drift" {

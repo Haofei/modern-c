@@ -687,7 +687,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
         for (function.representation_facts) |fact| {
             try out.print(
                 allocator,
-                "mir representation_fact fn={s} kind={s} detail={s} type={s} value_id={s} recorded=true line={} column={}\n",
+                "mir representation_fact fn={s} kind={s} detail={s} type={s} value_id={s} recorded=true line={} column={} typed_result_ty_id={} typed_value_id={} typed_span_id={}\n",
                 .{
                     function.name,
                     @tagName(fact.kind),
@@ -696,6 +696,9 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     fact.value_id,
                     fact.source.line,
                     fact.source.column,
+                    if (fact.typed_result_ty.isValid()) fact.typed_result_ty.index() else std.math.maxInt(usize),
+                    if (fact.typed_value_id.isValid()) fact.typed_value_id.index() else std.math.maxInt(usize),
+                    if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize),
                 },
             );
         }
