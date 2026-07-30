@@ -460,9 +460,10 @@ family from backend authority must reduce the count.
 Current M0 reduction: C unchecked no-overflow inferred-local initialization now
 uses the source expression's complete `expression_result` fact for non-call
 source expressions. The remaining numeric-expression fallback is exact-count
-gated to generated zero-span nodes that cannot be keyed by source span. Numeric
-cast emission now consumes `explicit_cast_target` for source casts before
-checking numeric storage; the AST cast target remains only for generated
+gated to generated zero-span nodes that cannot be keyed by source span. C cast
+target inference for enum values, tagged-union values, pointer pointees, and
+numeric emission now consumes `explicit_cast_target` for source casts before
+checking the requested shape; the AST cast target remains only for generated
 zero-span casts.
 
 | Family | Budget class | Reduction condition |

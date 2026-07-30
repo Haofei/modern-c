@@ -114,7 +114,10 @@ pub fn enumNameForValueExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std
             const ret_ty = callReturnType(ctx, node) orelse break :blk null;
             break :blk enumNameForType(ctx, ret_ty);
         },
-        .cast => |node| enumNameForType(ctx, node.ty.*),
+        .cast => |node| blk: {
+            const target_ty = castTargetTypeForInference(ctx, expr, node) orelse break :blk null;
+            break :blk enumNameForType(ctx, target_ty);
+        },
         .member => |node| blk: {
             // A variant-path literal `Enum.variant` has the enum's own type;
             // its MIR fact, not declaration scanning, authorizes enum identity.
@@ -199,7 +202,7 @@ pub fn taggedUnionTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
             if (!ctx.tagged_unions.contains(type_name)) return null;
             break :blk ret_ty;
         },
-        .cast => |node| node.ty.*,
+        .cast => |node| castTargetTypeForInference(ctx, expr, node) orelse return null,
         .grouped => |inner| {
             const inferred = taggedUnionTypeForExpr(ctx, inner.*, locals) orelse return null;
             if (expr.span.line == 0 and expr.span.column == 0) return inferred;
@@ -335,7 +338,7 @@ pub fn derefPointeeType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
         else
             operandEmitType(ctx, inner.*, locals),
         .call => |node| pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .raw_many_offset_result, node.callee.*.span) orelse callReturnType(ctx, node) orelse return null),
-        .cast => |node| pointeeTypeFromPointerLike(ctx, node.ty.*),
+        .cast => |node| pointeeTypeFromPointerLike(ctx, castTargetTypeForInference(ctx, expr, node) orelse return null),
         .member, .index => pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null),
         .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
             derefPointeeType(ctx, inner.*, locals)
@@ -427,7 +430,7 @@ fn numericExprTypeForEmissionInferred(ctx: TypeQueryContext, expr: ast.Expr, loc
         // A cast's result type is its target type, so `(x as u32) << 8` and
         // similar recover their width.
         .cast => |node| {
-            const target_ty = numericCastTargetType(ctx, expr, node) orelse return null;
+            const target_ty = castTargetTypeForInference(ctx, expr, node) orelse return null;
             const resolved = resolveAliasType(ctx, target_ty);
             return if (isNumericStorageType(resolved)) resolved else null;
         },
@@ -455,7 +458,7 @@ fn numericExprTypeForEmissionInferred(ctx: TypeQueryContext, expr: ast.Expr, loc
     };
 }
 
-fn numericCastTargetType(ctx: TypeQueryContext, expr: ast.Expr, node: anytype) ?ast.TypeExpr {
+fn castTargetTypeForInference(ctx: TypeQueryContext, expr: ast.Expr, node: anytype) ?ast.TypeExpr {
     if (expr.span.line != 0 and expr.span.column != 0) {
         return ctx.mir_target_type(ctx.source_ctx, .explicit_cast_target, expr.span);
     }
