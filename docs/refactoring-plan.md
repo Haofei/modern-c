@@ -136,6 +136,15 @@ Risk links:
 
 Purpose: turn C and LLVM backends into mechanical consumers of verified facts.
 
+Current baseline:
+
+- `semantic-facts-inventory-test` owns the seven-family backend AST-inference
+  budget and the T3 disposition audit.
+- The same inventory owns the T4 exact backend source-surface classification:
+  registered semantic family, MIR/fact consumer, or mechanics-only.
+- New backend modules cannot appear without classification, and new backend
+  semantic inference families must update the finite budget deliberately.
+
 Deliverables:
 
 - Replace the production backend boundary with a narrow `VerifiedProgram` that
@@ -148,12 +157,12 @@ Deliverables:
 - Keep backend fallback policies explicit: conservative lowering, source-spanned
   diagnostic, or verifier failure.
 
-First target:
+Next target:
 
-- Create a backend-surface inventory that lists every C/LLVM helper still
-  reading AST/type spelling for semantic decisions.
-- For each migrated fact family, update the inventory in the same commit that
-  deletes or quarantines the old helper.
+- For each migrated fact family, update the T3/T4 inventory in the same commit
+  that deletes, quarantines, or accepts the old helper.
+- Reduce the seven-family budget when an entire family stops being backend
+  authority.
 
 Closure criteria:
 
@@ -354,11 +363,11 @@ Close it only when production code can no longer express the bad state.
 Use this backlog for the next engineering slices:
 
 1. Move optional/result representation lowering to typed fact consumers only.
-2. Add a backend-surface inventory row for every remaining C/LLVM semantic helper.
-3. Remove or quarantine the first migrated backend-local inference helper.
-4. Add artifact digest metadata to source-map output.
-5. Introduce the first generated gate manifest for a small subset of existing gates.
-6. Decide HIR authority explicitly and update `mcc lower-hir` / `verify-hir`
+2. Remove or quarantine the first migrated backend-local inference helper and
+   reduce or update the T3/T4 inventory in the same patch.
+3. Add artifact digest metadata to source-map output.
+4. Introduce the first generated gate manifest for a small subset of existing gates.
+5. Decide HIR authority explicitly and update `mcc lower-hir` / `verify-hir`
    documentation to match the decision.
 
 Each slice should end with:
