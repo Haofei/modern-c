@@ -1352,6 +1352,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn structTypeNameForExpr(": 1,
         "pub fn numericExprTypeForEmission(": 1,
         "fn numericExprTypeForEmissionInferred(": 1,
+        "fn numericCastTargetType(": 1,
+        "ctx.mir_target_type(ctx.source_ctx, .explicit_cast_target": 1,
         "fn expressionResultTypeOptional(": 1,
         "fn numericExpressionResultType(": 1,
         "pub fn conditionOperandTypeForEmission(": 1,

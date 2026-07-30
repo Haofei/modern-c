@@ -427,7 +427,8 @@ fn numericExprTypeForEmissionInferred(ctx: TypeQueryContext, expr: ast.Expr, loc
         // A cast's result type is its target type, so `(x as u32) << 8` and
         // similar recover their width.
         .cast => |node| {
-            const resolved = resolveAliasType(ctx, node.ty.*);
+            const target_ty = numericCastTargetType(ctx, expr, node) orelse return null;
+            const resolved = resolveAliasType(ctx, target_ty);
             return if (isNumericStorageType(resolved)) resolved else null;
         },
         .grouped => |inner| numericExprTypeForEmission(ctx, inner.*, locals),
@@ -452,6 +453,13 @@ fn numericExprTypeForEmissionInferred(ctx: TypeQueryContext, expr: ast.Expr, loc
         },
         else => null,
     };
+}
+
+fn numericCastTargetType(ctx: TypeQueryContext, expr: ast.Expr, node: anytype) ?ast.TypeExpr {
+    if (expr.span.line != 0 and expr.span.column != 0) {
+        return ctx.mir_target_type(ctx.source_ctx, .explicit_cast_target, expr.span);
+    }
+    return node.ty.*;
 }
 
 fn expressionResultTypeOptional(ctx: TypeQueryContext, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {
