@@ -379,6 +379,8 @@ Direct slice-call index bases now use the same MIR-owned direct-call result
 helper as array direct-call bases and inferred locals; `lower_c_infer` no
 longer exposes public slice/array/enum/nullable/tagged-union/Result call
 return-type classifier helpers that are only used inside the infer module. The
+last private slice-call wrapper has also been inlined at its only call site, so
+the remaining slice-call path uses the common call-result query directly. The
 remaining `lower_c_infer` public entrypoints are now individually exact-count
 gated in the semantic-facts inventory so this registered inference surface
 cannot grow without an explicit inventory update. Direct-call index lowering now

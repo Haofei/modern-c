@@ -43,7 +43,10 @@ pub const TypeQueryContext = struct {
 
 pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |call| callSliceResultType(ctx, call),
+        .call => |call| blk: {
+            const return_ty = callReturnType(ctx, call) orelse break :blk null;
+            break :blk if (return_ty.kind == .slice) return_ty else null;
+        },
         // Real source slices have an exact MIR result type. Generated
         // zero-span nodes retain only a narrow base-derived path for values
         // already described by call return facts or operand emission facts.
@@ -73,11 +76,6 @@ fn sliceBaseTypeForZeroSpanSlice(ctx: TypeQueryContext, expr: ast.Expr, locals: 
         },
         else => operandEmitType(ctx, expr, locals),
     };
-}
-
-fn callSliceResultType(ctx: TypeQueryContext, call: anytype) ?ast.TypeExpr {
-    const return_ty = callReturnType(ctx, call) orelse return null;
-    return if (return_ty.kind == .slice) return_ty else null;
 }
 
 pub fn sliceTypeForBase(ctx: TypeQueryContext, ty: ast.TypeExpr, span: ast.Span) ?ast.TypeExpr {
