@@ -43,14 +43,9 @@ pub const TypeQueryContext = struct {
     mir_owned_target_type: MirOwnedTargetTypeFn,
 };
 
-pub fn sliceReturnTypeForCall(ctx: TypeQueryContext, call: anytype) ?ast.TypeExpr {
-    const return_ty = callReturnType(ctx, call) orelse return null;
-    return if (return_ty.kind == .slice) return_ty else null;
-}
-
 pub fn sliceReturnTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |call| sliceReturnTypeForCall(ctx, call),
+        .call => |call| callSliceResultType(ctx, call),
         // Real source slices have an exact MIR result type. Generated
         // zero-span nodes retain only a narrow base-derived path for values
         // already described by call return facts or operand emission facts.
@@ -84,7 +79,7 @@ fn sliceBaseTypeForZeroSpanSlice(ctx: TypeQueryContext, expr: ast.Expr, locals: 
 
 pub fn sliceReturnTypeForIndexBase(ctx: TypeQueryContext, expr: ast.Expr) ?ast.TypeExpr {
     return switch (expr.kind) {
-        .call => |call| sliceReturnTypeForCall(ctx, call),
+        .call => |call| callSliceResultType(ctx, call),
         .grouped => |inner| blk: {
             const inferred = sliceReturnTypeForIndexBase(ctx, inner.*) orelse break :blk null;
             if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
@@ -92,6 +87,11 @@ pub fn sliceReturnTypeForIndexBase(ctx: TypeQueryContext, expr: ast.Expr) ?ast.T
         },
         else => null,
     };
+}
+
+fn callSliceResultType(ctx: TypeQueryContext, call: anytype) ?ast.TypeExpr {
+    const return_ty = callReturnType(ctx, call) orelse return null;
+    return if (return_ty.kind == .slice) return_ty else null;
 }
 
 pub fn sliceTypeForBase(ctx: TypeQueryContext, ty: ast.TypeExpr, span: ast.Span) ?ast.TypeExpr {
