@@ -22,7 +22,6 @@ const simpleNameType = ast_query.simpleNameType;
 const typeName = ast_query.typeName;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const ExprSourceTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
 pub const UnderlyingIntTypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) ?[]const u8;
 pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8;
@@ -38,7 +37,6 @@ pub const Context = struct {
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
     c_type: CTypeFn,
-    expr_source_type: ExprSourceTypeFn,
     underlying_int_type_name: UnderlyingIntTypeNameFn,
     result_type_name: ResultTypeNameFn,
     mir_call_target_kind: MirCallTargetKindFn,

@@ -1226,6 +1226,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "ctx.mir_target_type(ctx.emit_ctx, .bitcast_target": 1,
         "resolveAliasType(ctx.type_aliases, call.type_args[0])": 0,
         "numeric_expr_type:": 0,
+        "expr_source_type": 0,
+        "ExprSourceTypeFn": 0,
     },
     "src/lower_c_infer.zig": {
         "source_type_for_expr": 0,
@@ -1367,6 +1369,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/lower_c_call.zig": {
         'isIdentNamed(call.callee.*, "trap")': 0,
+        "expr_source_type: ExprSourceTypeFn": 1,
+        "ctx.expr_source_type(ctx.emit_ctx": 2,
         "ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_result": 2,
         "ctx.mir_owned_target_type(ctx.emit_ctx, .direct_call_argument": 1,
         "mir.explicitTrapHelperForTarget(kind)": 1,
