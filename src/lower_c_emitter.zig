@@ -6450,12 +6450,19 @@ const CEmitter = struct {
             },
             .member => blk: {
                 _ = self.directLocalAggregateMemberPath(expr, locals) orelse break :blk false;
-                const source_ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse break :blk false;
+                const source_ty = self.directAggregateMemberCopySourceTypeForEmission(expr, locals) orelse break :blk false;
                 const source_struct_name = self.directStructTypeName(source_ty) orelse break :blk false;
                 break :blk std.mem.eql(u8, source_struct_name, target_struct_name);
             },
             else => false,
         };
+    }
+
+    fn directAggregateMemberCopySourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| return fact.target_ty;
+        if (expr.span.line != 0 or expr.span.column != 0) return null;
+        if (self.operandEmitType(expr, locals)) |ty| return ty;
+        return self.exprSourceTypeForEmission(expr, locals);
     }
 
     fn applyMirPointerProvenanceForAssignment(self: *CEmitter, target: ast.Expr, value: ast.Expr, span: ast.Span, locals: *std.StringHashMap(LocalInfo)) !void {

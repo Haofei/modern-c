@@ -10577,6 +10577,17 @@ test "lower-c consumes MIR pointer provenance facts for aggregate pointer reads"
         \\    return p.*;
         \\}
         \\
+        \\fn c_nested_aggregate_member_assignment_copy_pointer_field_load() -> u32 {
+        \\    var local: u32 = 0;
+        \\    let src: Outer = .{ .inner = .{ .ptr = &shared_counter, .ptrs = .{ &shared_counter, &local } } };
+        \\    var dst: Outer = .{ .inner = .{ .ptr = &local, .ptrs = .{ &local, &local } } };
+        \\    #[unsafe_contract(noalias)] {
+        \\        dst.inner = compiler.assume_noalias_unchecked(src.inner, 4);
+        \\    }
+        \\    let p: *mut u32 = dst.inner.ptr;
+        \\    return p.*;
+        \\}
+        \\
         \\fn c_nested_aggregate_assigned_pointer_field_load() -> u32 {
         \\    var local: u32 = 22;
         \\    var outer: Outer = .{ .inner = .{ .ptr = &local, .ptrs = .{ &local, &local } } };
@@ -10698,6 +10709,11 @@ test "lower-c consumes MIR pointer provenance facts for aggregate pointer reads"
     const nested_field_body = try cFunctionBody(output.items, "static uint32_t c_nested_aggregate_pointer_field_load(void)");
     try expectContains(nested_field_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_pointer_field_load subject=p provenance=global_storage reason=none source=");
     try expectContains(nested_field_body, "return ((uint32_t)mc_race_load_u32(p));");
+
+    const nested_member_copy_body = try cFunctionBody(output.items, "static uint32_t c_nested_aggregate_member_assignment_copy_pointer_field_load(void)");
+    try expectContains(nested_member_copy_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_member_assignment_copy_pointer_field_load subject=dst field=inner.ptr provenance=global_storage reason=reassignment source=");
+    try expectContains(nested_member_copy_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_member_assignment_copy_pointer_field_load subject=p provenance=global_storage reason=none source=");
+    try expectContains(nested_member_copy_body, "return ((uint32_t)mc_race_load_u32(p));");
 
     const nested_assigned_field_body = try cFunctionBody(output.items, "static uint32_t c_nested_aggregate_assigned_pointer_field_load(void)");
     try expectContains(nested_assigned_field_body, "/* mir pointer_provenance consumed fn=c_nested_aggregate_assigned_pointer_field_load subject=p provenance=global_storage reason=none source=");
