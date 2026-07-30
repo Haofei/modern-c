@@ -111,7 +111,8 @@ Current status:
   mirrors for CFG edges.
 - Representation-sensitive instructions and `RepresentationFact` rows now
   double-write typed `ValueId` identities through a per-function interner. The
-  legacy textual `value_id` remains for dumps and compatibility, while backend
+  function owns a `ValueIdentity` table for audit/debug dumps. The legacy
+  textual `value_id` remains for dumps and compatibility, while backend
   admission rejects typed identity drift.
 - `mir-identity-inventory-test` gates the typed ID definitions, `BlockId`
   builder assignment, typed successor mirrors, typed `ValueId` representation

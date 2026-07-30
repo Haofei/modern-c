@@ -45,6 +45,7 @@ def main() -> int:
         "pub fn eql(self: @This(), other: @This()) bool {",
         "typed_value_id: ?ValueId = null,",
         "typed_value_id: ValueId = .invalid,",
+        "pub const ValueIdentity = struct {",
         "typed_id: BlockId = .invalid,",
         "typed_successors: []BlockId = &.{},",
     ):
@@ -58,6 +59,8 @@ def main() -> int:
         "if (block.typed_successors.len != 0) {",
         "value_ids: std.StringHashMap(ValueId),",
         "fn internValueId(self: *FunctionBuilder, spelling: []const u8) !ValueId {",
+        "fn buildValueIdentities(self: *FunctionBuilder) ![]ValueIdentity {",
+        "for (function.value_identities) |identity| {",
         ".typed_value_id = typed_value_id,",
         "fn representationTypedValueIdsCompatible(instruction: Instruction, fact: RepresentationFact) bool {",
         "pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: *std.ArrayList(u8)) !void {",
@@ -67,12 +70,14 @@ def main() -> int:
     for needle in (
         "const BlockId = mir.BlockId;",
         "const ValueId = mir.ValueId;",
+        "fn valueIdentityBySpelling(function: mir.Function, spelling: []const u8) ?mir.ValueIdentity {",
         'test "MIR block model carries typed block identity"',
         'test "MIR verifier rejects typed successor drift in CFG"',
         'test "MIR representation admission rejects typed value identity drift"',
         "try std.testing.expectEqual(BlockId.fromIndex(block.id), block.typed_id);",
         "try std.testing.expectEqual(block.successors.len, block.typed_successors.len);",
         "try std.testing.expectEqual(read_fn.representation_facts[0].typed_value_id, read_fn.representation_facts[2].typed_value_id);",
+        'try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir value_identity fn=read_ptr_param id=0 spelling=p") != null);',
         "read_fn.representation_facts[0].typed_value_id = ValueId.fromIndex(4096);",
     ):
         require_contains("src/mir_tests.zig", needle)

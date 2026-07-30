@@ -531,6 +531,11 @@ pub const RepresentationFact = struct {
     source: SourcePoint,
 };
 
+pub const ValueIdentity = struct {
+    id: ValueId,
+    spelling: []const u8,
+};
+
 pub const Block = struct {
     id: usize,
     typed_id: BlockId = .invalid,
@@ -576,6 +581,7 @@ pub const Function = struct {
     const_get_facts: []ConstGetFact = &.{},
     call_target_facts: []CallTargetFact = &.{},
     target_type_facts: []TargetTypeFact = &.{},
+    value_identities: []ValueIdentity = &.{},
     generated_type_expr_nodes: []*ast.TypeExpr = &.{},
     generated_type_expr_args: [][]ast.TypeExpr = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
@@ -610,6 +616,7 @@ pub const Module = struct {
             if (function.const_get_facts.len != 0) self.allocator.free(function.const_get_facts);
             if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);
             if (function.target_type_facts.len != 0) self.allocator.free(function.target_type_facts);
+            if (function.value_identities.len != 0) self.allocator.free(function.value_identities);
             if (function.ffi_param_contracts.len != 0) self.allocator.free(function.ffi_param_contracts);
             for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);
             if (function.generated_type_expr_nodes.len != 0) self.allocator.free(function.generated_type_expr_nodes);

@@ -70,6 +70,13 @@ fn countTargetTypeFactsByKind(function: mir.Function, kind: mir.TargetTypeKind) 
     return count;
 }
 
+fn valueIdentityBySpelling(function: mir.Function, spelling: []const u8) ?mir.ValueIdentity {
+    for (function.value_identities) |identity| {
+        if (std.mem.eql(u8, identity.spelling, spelling)) return identity;
+    }
+    return null;
+}
+
 fn functionByNameMut(module: *mir.Module, name: []const u8) ?*mir.Function {
     for (module.functions) |*function| {
         if (std.mem.eql(u8, function.name, name)) return function;
@@ -4456,11 +4463,14 @@ test "MIR dump exposes representation value identities" {
 
     const return_fn = functionByName(typed_mir, "return_ptr_param").?;
     const read_fn = functionByName(typed_mir, "read_ptr_param").?;
+    const return_p_identity = valueIdentityBySpelling(return_fn, "p").?;
+    const read_p_identity = valueIdentityBySpelling(read_fn, "p").?;
     try std.testing.expectEqual(@as(usize, 2), return_fn.representation_facts.len);
     try std.testing.expectEqual(.typed_load, return_fn.representation_facts[0].kind);
     try std.testing.expectEqualStrings("p", return_fn.representation_facts[0].detail);
     try std.testing.expectEqualStrings("p", return_fn.representation_facts[0].value_id);
     try std.testing.expect(return_fn.representation_facts[0].typed_value_id.isValid());
+    try std.testing.expect(return_fn.representation_facts[0].typed_value_id.eql(return_p_identity.id));
     try std.testing.expectEqual(.representation_check, return_fn.representation_facts[1].kind);
     try std.testing.expectEqualStrings("nonnull_pointer", return_fn.representation_facts[1].detail);
     try std.testing.expectEqualStrings("p", return_fn.representation_facts[1].value_id);
@@ -4470,6 +4480,7 @@ test "MIR dump exposes representation value identities" {
     try std.testing.expectEqualStrings("p", read_fn.representation_facts[0].detail);
     try std.testing.expectEqualStrings("p", read_fn.representation_facts[0].value_id);
     try std.testing.expect(read_fn.representation_facts[0].typed_value_id.isValid());
+    try std.testing.expect(read_fn.representation_facts[0].typed_value_id.eql(read_p_identity.id));
     try std.testing.expectEqual(.representation_check, read_fn.representation_facts[1].kind);
     try std.testing.expectEqualStrings("nonnull_pointer", read_fn.representation_facts[1].detail);
     try std.testing.expectEqualStrings("p", read_fn.representation_facts[1].value_id);
@@ -4490,10 +4501,12 @@ test "MIR dump exposes representation value identities" {
     try mir.appendDump(std.testing.allocator, module, &dump);
 
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir instr fn=return_ptr_param") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir value_identity fn=return_ptr_param id=0 spelling=p") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "representation_facts=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=typed_load detail=p type=*mut value_id=p") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=representation_check detail=nonnull_pointer type=*mut value_id=p") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir instr fn=read_ptr_param") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir value_identity fn=read_ptr_param id=0 spelling=p") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=representation_use detail=deref_base type=*mut value_id=p") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=return_ptr_param kind=typed_load detail=p type=*mut value_id=p recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=return_ptr_param kind=representation_check detail=nonnull_pointer type=*mut value_id=p recorded=true") != null);

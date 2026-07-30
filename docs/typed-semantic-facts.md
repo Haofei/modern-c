@@ -38,10 +38,11 @@ The typed MIR identity migration has started with `BlockId`: `src/mir_model.zig`
 defines the typed ID family (`SourceId`, `NodeId`, `SymbolId`, `TypeId`,
 `ValueId`, `BlockId`, and `SpanId`), built MIR blocks carry a `typed_id` plus
 typed successor mirrors, representation-sensitive instructions and
-`RepresentationFact` rows double-write typed `ValueId` identities, and
-`mir-identity-inventory-test` gates those seeds. This is a migration anchor
-only; legacy string/value/type identity remains live until the later Phase 2
-slices move those domains onto typed IDs.
+`RepresentationFact` rows double-write typed `ValueId` identities, each function
+owns a `ValueIdentity` table for those typed ids, and
+`mir-identity-inventory-test` gates those seeds. This is a migration anchor only;
+legacy string/value/type identity remains live until the later Phase 2 slices
+move those domains onto typed IDs.
 
 The completed backend AST-inference budget sets the current shrinking budget to
 eight registered backend families. This closes the budget action slice; each

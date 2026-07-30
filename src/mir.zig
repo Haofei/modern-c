@@ -161,6 +161,7 @@ pub const ConstGetFact = mir_model.ConstGetFact;
 pub const AggregateReturnSummaryFact = mir_model.AggregateReturnSummaryFact;
 pub const AggregateReturnPointerFact = mir_model.AggregateReturnPointerFact;
 pub const RepresentationFact = mir_model.RepresentationFact;
+pub const ValueIdentity = mir_model.ValueIdentity;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
@@ -524,6 +525,13 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             "mir function name={s} return={s} no_lang_trap={} irq_context={} extern={} c_abi={} params={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
             .{ function.name, function.return_ty.name(), function.no_lang_trap, function.irq_context, function.is_extern, function.c_abi, function.param_count, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.const_get_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
+        for (function.value_identities) |identity| {
+            try out.print(
+                allocator,
+                "mir value_identity fn={s} id={} spelling={s}\n",
+                .{ function.name, identity.id.index(), identity.spelling },
+            );
+        }
         for (function.ffi_param_contracts) |fact| {
             if (fact.kind == .address) {
                 const address_class = switch (fact.address_class.?) {
@@ -3749,6 +3757,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(call_target_facts);
         const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(target_type_facts);
+        const value_identities = try self.buildValueIdentities();
+        errdefer self.allocator.free(value_identities);
         const generated_type_expr_nodes = try self.generated_type_expr_nodes.toOwnedSlice(self.allocator);
         errdefer {
             for (generated_type_expr_nodes) |node| self.allocator.destroy(node);
@@ -3824,6 +3834,7 @@ const FunctionBuilder = struct {
             .const_get_facts = const_get_facts,
             .call_target_facts = call_target_facts,
             .target_type_facts = target_type_facts,
+            .value_identities = value_identities,
             .generated_type_expr_nodes = generated_type_expr_nodes,
             .generated_type_expr_args = generated_type_expr_args,
             .pointer_provenance_facts = pointer_provenance_facts,
@@ -6920,6 +6931,21 @@ const FunctionBuilder = struct {
             entry.value_ptr.* = ValueId.fromIndex(self.value_ids.count() - 1);
         }
         return entry.value_ptr.*;
+    }
+
+    fn buildValueIdentities(self: *FunctionBuilder) ![]ValueIdentity {
+        const identities = try self.allocator.alloc(ValueIdentity, self.value_ids.count());
+        errdefer self.allocator.free(identities);
+        var it = self.value_ids.iterator();
+        while (it.next()) |entry| {
+            const id = entry.value_ptr.*;
+            std.debug.assert(id.index() < identities.len);
+            identities[id.index()] = .{
+                .id = id,
+                .spelling = entry.key_ptr.*,
+            };
+        }
+        return identities;
     }
 
     fn addRuntimeRepresentationCheck(self: *FunctionBuilder, ty: ValueType, span: ast.Span, value_id: []const u8) !void {
