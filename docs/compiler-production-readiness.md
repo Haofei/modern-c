@@ -2,7 +2,11 @@
 
 Status: **internally qualification-gated supported subset, not an unrestricted or externally audited production language**.
 Current assessment: **updated 2026-07-25, evaluated per checked-out revision and pinned toolchain**.
-Evidence register: **778 bounded implementation or regression entries, 0 active slices, 0 open architectural workstreams**.
+Evidence register: **778 bounded implementation or regression entries for the
+supported subset**. Open/closed blocker state is not counted here; use
+[`review-risk-register.yaml`](review-risk-register.yaml) and
+[`profile-manifest.json`](profile-manifest.json) as the current machine-readable
+sources for architectural blockers and product-profile claims.
 
 Comparative C/Rust/MC claims are governed separately by
 [`kernel-language-comparison-plan.md`](kernel-language-comparison-plan.md). That
@@ -997,14 +1001,14 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 ### Bounded Workstream Status
 
-This is the authoritative maintenance dashboard for the three closed compiler
-qualification workstreams. It states what reopens a row and what evidence must
-accompany an admitted extension.
+This is the maintenance dashboard for the three compiler qualification
+workstreams. It states what reopens a row and what evidence must accompany an
+admitted extension. It is not the authoritative open/closed blocker ledger; use
+`review-risk-register.yaml` for that.
 
 `Current` means the next eligible implementation slice, not uncommitted work.
-The header's `0 active slices` remains correct until a patch is being implemented
-and verified. A phase advances only when its authority moves out of backend-local
-or formatted-key inference and its listed evidence is gated.
+A phase advances only when its authority moves out of backend-local or
+formatted-key inference and its listed evidence is gated.
 
 ### Canonical Execution Dashboard
 
