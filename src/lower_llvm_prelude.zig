@@ -1,7 +1,7 @@
 const std = @import("std");
 
-const ast = @import("ast.zig");
 const backend = @import("backend.zig");
+const mir = @import("mir.zig");
 
 // The sanitizer shadow-hook symbols. SINGLE source of truth: this one list drives both the
 // weak no-op `define`s in `emitTrapDecl` AND `isKsanHook` (which suppresses a redundant MC
@@ -18,21 +18,21 @@ const sanitizer_hooks = [_][]const u8{
     "mc_csan_write",
 };
 
-// True if the MODULE ITSELF provides a `fn` definition (a body) whose name is `hook`. A pure-MC
-// sanitizer runtime does `export fn mc_ksan_check(...) {...}`; in that case we must NOT also emit
-// our auto weak no-op `define`, or the symbol would be doubly-defined (invalid IR). Only a body
-// counts; an `extern fn` declaration (handled by `isKsanHook`) does not provide a definition.
-fn moduleDefinesHook(module: ast.Module, hook: []const u8) bool {
-    for (module.decls) |decl| {
-        if (decl.kind == .fn_decl) {
-            const fn_decl = decl.kind.fn_decl;
-            if (fn_decl.body != null and std.mem.eql(u8, fn_decl.name.text, hook)) return true;
-        }
+// True if the verified MIR module itself provides a function definition whose
+// symbol spelling is `hook`. A pure-MC sanitizer runtime does
+// `export fn mc_ksan_check(...) {...}`; in that case we must NOT also emit our
+// auto weak no-op `define`, or the symbol would be doubly-defined (invalid IR).
+// Extern declarations do not count as definitions.
+fn moduleDefinesHook(source_spelling: backend.SourceSpellingView, module_mir: mir.Module, hook: []const u8) bool {
+    for (module_mir.functions) |function| {
+        if (function.is_extern) continue;
+        const spelling = source_spelling.functionSpelling(function) orelse continue;
+        if (std.mem.eql(u8, spelling, hook)) return true;
     }
     return false;
 }
 
-pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: ast.Module) !void {
+pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source_spelling: backend.SourceSpellingView, module_mir: mir.Module) !void {
     // The checked-arithmetic / bounds / unreachable trap hooks. Like the C backend (which emits
     // them as per-unit `static inline ... __builtin_trap()`), emit a WEAK trapping `define` for
     // each in EVERY LLVM object: a default build self-provides a halting handler (llvm.trap ->
@@ -46,7 +46,7 @@ pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), modul
         "mc_trap_NullUnwrap",            "mc_trap_Unreachable",
     };
     for (trap_hooks) |hook| {
-        if (moduleDefinesHook(module, hook)) continue;
+        if (moduleDefinesHook(source_spelling, module_mir, hook)) continue;
         try out.print(allocator, "define weak void @{s}() noreturn {{\n  call void @llvm.trap()\n  unreachable\n}}\n", .{hook});
     }
     try out.appendSlice(allocator, "\n");
@@ -63,7 +63,7 @@ pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), modul
         // If the module defines this hook itself (a pure-MC sanitizer runtime), yield to that
         // definition: its `export fn` is emitted through normal MIR emission. Emitting the auto
         // weak `define` here too would doubly-define the symbol.
-        if (moduleDefinesHook(module, hook)) continue;
+        if (moduleDefinesHook(source_spelling, module_mir, hook)) continue;
         try out.print(allocator, "define weak void @{s}(i64 %a, i64 %b) {{\n  ret void\n}}\n", .{hook});
     }
     try out.appendSlice(allocator, "\n");
@@ -71,7 +71,7 @@ pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), modul
 
 /// Linux owns the final trap and sanitizer policy. This profile leaves only
 /// declarations, so an unreferenced hook contributes no hidden object text.
-pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayList(u8), module: ast.Module) !void {
+pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source_spelling: backend.SourceSpellingView, module_mir: mir.Module) !void {
     try out.appendSlice(allocator, "declare void @llvm.trap()\n");
     const trap_hooks = [_][]const u8{
         "mc_trap_IntegerOverflow",       "mc_trap_DivideByZero", "mc_trap_InvalidShift",
@@ -79,7 +79,7 @@ pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayLis
         "mc_trap_NullUnwrap",            "mc_trap_Unreachable",
     };
     for (trap_hooks) |hook| {
-        if (!moduleDefinesHook(module, hook))
+        if (!moduleDefinesHook(source_spelling, module_mir, hook))
             try out.print(allocator, "declare void @{s}() noreturn\n", .{hook});
     }
     try out.appendSlice(allocator,
@@ -90,7 +90,7 @@ pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayLis
         \\
     );
     for (sanitizer_hooks) |hook| {
-        if (!moduleDefinesHook(module, hook))
+        if (!moduleDefinesHook(source_spelling, module_mir, hook))
             try out.print(allocator, "declare void @{s}(i64, i64)\n", .{hook});
     }
     try out.appendSlice(allocator, "\n");

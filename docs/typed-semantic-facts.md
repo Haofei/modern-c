@@ -66,7 +66,9 @@ typed instruction identity without a verifier diagnostic.
 `SymbolIdentity` table. Backend entrypoints can resolve function symbol spelling
 through this explicit view instead of treating the AST as the source-spelling
 table. Legacy `syntax_module` remains present for declaration metadata that has
-not yet been normalized, so this is a boundary seed rather than AST removal.
+not yet been normalized. LLVM runtime hook suppression already consumes this
+view when deciding whether to emit weak/default trap and sanitizer hook bodies;
+the AST is no longer the authority for that prelude symbol-spelling decision.
 
 The completed backend AST-inference budget sets the current shrinking budget to
 eight registered backend families. This closes the budget action slice; each

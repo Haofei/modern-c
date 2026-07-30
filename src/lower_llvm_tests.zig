@@ -4,6 +4,7 @@ const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_llvm = @import("lower_llvm.zig");
+const lower_llvm_prelude = @import("lower_llvm_prelude.zig");
 const mir = @import("mir.zig");
 const test_support = @import("test_support.zig");
 
@@ -154,6 +155,28 @@ test "LLVM Linux kernel profile externalizes runtime and emits x86 hardening met
     try expectContains(output.items, "define i32 @identity(i32 %value) nounwind fn_ret_thunk_extern");
     try expectContains(output.items, "!\"cf-protection-branch\", i32 1");
     try expectContains(output.items, "!\"function_return_thunk_extern\", i32 1");
+}
+
+test "LLVM runtime hook suppression uses MIR source spelling view" {
+    const source =
+        \\export fn mc_trap_Bounds() -> void {}
+        \\export fn mc_ksan_check(addr: usize, size: usize) -> void {}
+    ;
+    var parsed = try test_support.parseModule("llvm_runtime_hook_source_spelling.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    const source_spelling = backend_mod.SourceSpellingView{ .symbols = module_mir.symbol_identities };
+    try lower_llvm_prelude.emitTrapDecl(std.testing.allocator, &output, source_spelling, module_mir);
+
+    try expectNotContains(output.items, "define weak void @mc_trap_Bounds()");
+    try expectContains(output.items, "define weak void @mc_trap_IntegerOverflow()");
+    try expectNotContains(output.items, "define weak void @mc_ksan_check");
+    try expectContains(output.items, "define weak void @mc_ksan_store");
 }
 
 test "LLVM Linux kernel profile emits arm64 BTI hardening metadata" {

@@ -239,7 +239,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    try appendLlvmCheckedMirProfile(allocator, program.syntax_module, program.typed_mir, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.linux_kernel, opts.reporter);
+    try appendLlvmCheckedMirProfileWithSourceSpelling(allocator, program.syntax_module, program.typed_mir, program.source_spelling, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.linux_kernel, opts.reporter);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
@@ -266,10 +266,27 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
 }
 
 pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
+    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, module, module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
+}
+
+fn appendLlvmCheckedMirProfileWithSourceSpelling(
+    allocator: std.mem.Allocator,
+    module: ast.Module,
+    module_mir: *const mir.Module,
+    source_spelling: backend_mod.SourceSpellingView,
+    out: *std.ArrayList(u8),
+    source_path: []const u8,
+    checks: backend_mod.Checks,
+    stub_asm: bool,
+    target_arch: backend_mod.TargetArch,
+    linux_kernel: bool,
+    reporter: ?*diagnostics.Reporter,
+) !void {
     mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err) {
         error.StaleMirTargetTypeFacts => return error.UnsupportedLlvmEmission,
         else => return err,
     };
+    if (!source_spelling.validateAgainstMir(module_mir.*)) return error.UnsupportedLlvmEmission;
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;
@@ -282,9 +299,9 @@ pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Mod
     try out.appendSlice(allocator, "; semantic checks: sema + MIR policy/CFG verification\n\n");
     try emitTargetTypeDecls(allocator, out, target_arch);
     if (linux_kernel)
-        try emitExternalRuntimeDecls(allocator, out, module)
+        try emitExternalRuntimeDecls(allocator, out, source_spelling, module_mir.*)
     else
-        try emitTrapDecl(allocator, out, module);
+        try emitTrapDecl(allocator, out, source_spelling, module_mir.*);
 
     var ctx = LlvmEmitter{
         .allocator = allocator,

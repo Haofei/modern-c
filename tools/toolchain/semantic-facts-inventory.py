@@ -952,6 +952,12 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "source_spelling.validateAgainstMir(typed_mir.*)": 1,
         "VerifiedProgram exposes MIR-owned source spelling view": 1,
     },
+    "src/lower_llvm_prelude.zig": {
+        "fn moduleDefinesHook(source_spelling: backend.SourceSpellingView": 1,
+        "source_spelling.functionSpelling(function)": 1,
+        "pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source_spelling: backend.SourceSpellingView": 1,
+        "pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source_spelling: backend.SourceSpellingView": 1,
+    },
     "src/mir.zig": {
         "appendTargetTypeFact(.assert_condition": 1,
         "appendTargetTypeFact(.loop_condition": 1,
@@ -1375,6 +1381,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "isTrapCallee(": 0,
     },
     "src/lower_llvm.zig": {
+        "program.source_spelling": 1,
+        "source_spelling: backend_mod.SourceSpellingView": 1,
+        "source_spelling.validateAgainstMir(module_mir.*)": 1,
         'ast_query.isIdentNamed(call.callee.*, "trap")': 0,
         "mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)": 1,
         "fn mirTargetTypeFactAt(": 1,
@@ -1592,6 +1601,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "lower-c discard calls require MIR identity and argument type facts": 1,
     },
     "src/lower_llvm_tests.zig": {
+        "LLVM runtime hook suppression uses MIR source spelling view": 1,
         "LLVM DMA calls consume MIR identities and complete types": 1,
         "LLVM runtime asserts require MIR bool condition types": 1,
         "LLVM ordinary direct calls require MIR result and argument types": 1,
