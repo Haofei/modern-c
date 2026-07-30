@@ -5267,11 +5267,24 @@ const CEmitter = struct {
     }
 
     fn emitNullableCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-        const nullable_ty = self.nullableReturnTypeForExpr(initializer) orelse return false;
+        const nullable_ty = self.nullableDirectCallResultTypeForInferredLocal(initializer) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, nullable_ty)) orelse nullable_ty;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
         try self.emitInferredCallLocalInitValue(name, inferred_ty, initializer, locals);
         return true;
+    }
+
+    fn nullableDirectCallResultTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) ?ast.TypeExpr {
+        return switch (initializer.kind) {
+            .grouped => |inner| self.nullableDirectCallResultTypeForInferredLocal(inner.*),
+            .call => |call| blk: {
+                const fn_name = calleeIdentName(call.callee.*) orelse break :blk null;
+                const fact = self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null) orelse break :blk null;
+                const resolved = self.resolveAliasType(fact.target_ty);
+                break :blk if (resolved.kind == .nullable) fact.target_ty else null;
+            },
+            else => null,
+        };
     }
 
     fn emitInferredCallLocalInitValue(self: *CEmitter, name: []const u8, inferred_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {

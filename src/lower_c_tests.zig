@@ -3301,6 +3301,7 @@ test "lower-c inferred local unary expressions require MIR types" {
 test "lower-c inferred local direct calls require MIR types" {
     const source =
         \\extern fn get_pointer() -> *mut u32;
+        \\extern fn maybe_pointer() -> ?*mut u32;
         \\fn make_count() -> u64 { return 7; }
         \\fn caller() -> u64 {
         \\    let count = make_count();
@@ -3308,6 +3309,10 @@ test "lower-c inferred local direct calls require MIR types" {
         \\}
         \\fn external_caller() -> *mut u32 {
         \\    let pointer = get_pointer();
+        \\    return pointer;
+        \\}
+        \\fn nullable_caller() -> ?*mut u32 {
+        \\    let pointer = maybe_pointer();
         \\    return pointer;
         \\}
     ;
@@ -3321,6 +3326,7 @@ test "lower-c inferred local direct calls require MIR types" {
     try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t count = make_count()") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = maybe_pointer()") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_trap_InvalidRepresentation()") != null);
 
     var missing = try mir.build(std.testing.allocator, parsed.module);
@@ -3343,6 +3349,20 @@ test "lower-c inferred local direct calls require MIR types" {
     var external_stale_output: std.ArrayList(u8) = .empty;
     defer external_stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &external_stale, &external_stale_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
+
+    var missing_nullable_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_nullable_result.deinit();
+    try removeTargetTypeKindForFunction(&missing_nullable_result, "nullable_caller", .direct_call_result);
+    var missing_nullable_result_output: std.ArrayList(u8) = .empty;
+    defer missing_nullable_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_nullable_result, &missing_nullable_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
+
+    var stale_nullable_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_nullable_result.deinit();
+    try renameTargetTypeFactForFunction(&stale_nullable_result, "nullable_caller", .direct_call_result, "u64");
+    var stale_nullable_result_output: std.ArrayList(u8) = .empty;
+    defer stale_nullable_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_nullable_result, &stale_nullable_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local array and slice calls require MIR types" {
