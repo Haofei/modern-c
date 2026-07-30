@@ -571,7 +571,13 @@ fn expressionResultTypeOptional(ctx: TypeQueryContext, expr: ast.Expr, inferred:
 }
 
 fn numericExpressionResultType(ctx: TypeQueryContext, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
-    const fact = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return inferred;
+    const fact = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse {
+        // Source numeric value expressions have MIR-owned result types. Generated
+        // zero-span nodes can still use their syntactic operand type because no
+        // source-keyed fact can identify them.
+        if (expr.span.line != 0 and expr.span.column != 0) return null;
+        return inferred;
+    };
     const resolved_fact = resolveAliasType(ctx, fact);
     if (!isNumericStorageType(resolved_fact) or !sameCStorageType(resolved_fact, inferred)) return null;
     return fact;
