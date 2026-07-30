@@ -57,6 +57,9 @@ def main() -> int:
         "generic_precheck.check(allocator, lowered, diag, self.file_boundaries)",
         "mangle_private.transform(allocator, specialized, self.file_boundaries)",
         "checker.file_boundaries = session.file_boundaries;",
+        'test "CompilationSession keeps parse context request scoped"',
+        "try std.testing.expectEqual(ast.VisibilityMode.explicit_public, module_a.visibility_mode);",
+        "try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, module_b.visibility_mode);",
     ):
         require_contains(main_zig, needle)
 

@@ -1325,6 +1325,35 @@ fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []cons
     try session.writeStdout(output.items);
 }
 
+test "CompilationSession keeps parse context request scoped" {
+    const source = "fn answer() -> u32 { return 1; }\n";
+
+    var boundaries_a = [_]loader.FileBoundary{.{ .start = 0, .path = "a.mc" }};
+    var session_a = CompilationSession.init(std.testing.allocator, std.testing.io);
+    session_a.visibility_mode = .explicit_public;
+    session_a.file_boundaries = boundaries_a[0..];
+    var diag_a = session_a.initReporter("root_a.mc", source);
+    defer diag_a.deinit();
+    try std.testing.expectEqualStrings("a.mc", diag_a.file_boundaries.?[0].path);
+    var arena_a = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_a.deinit();
+    const module_a = try session_a.parseModuleOrReportMode(source, arena_a.allocator(), &diag_a, false);
+    defer module_a.deinit(arena_a.allocator());
+    try std.testing.expectEqual(ast.VisibilityMode.explicit_public, module_a.visibility_mode);
+
+    var boundaries_b = [_]loader.FileBoundary{.{ .start = 0, .path = "b.mc" }};
+    var session_b = CompilationSession.init(std.testing.allocator, std.testing.io);
+    session_b.file_boundaries = boundaries_b[0..];
+    var diag_b = session_b.initReporter("root_b.mc", source);
+    defer diag_b.deinit();
+    try std.testing.expectEqualStrings("b.mc", diag_b.file_boundaries.?[0].path);
+    var arena_b = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_b.deinit();
+    const module_b = try session_b.parseModuleOrReportMode(source, arena_b.allocator(), &diag_b, false);
+    defer module_b.deinit(arena_b.allocator());
+    try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, module_b.visibility_mode);
+}
+
 test {
     _ = diagnostics;
     _ = eval;
