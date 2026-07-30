@@ -216,6 +216,8 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/lowering-coverage-inventory.py"], ["lowering-coverage-inventory-test", "lowering-coverage"])
     assert_gates(module, ["tools/toolchain/lowering-coverage-baseline.tsv"], ["lowering-coverage-inventory-test", "lowering-coverage"])
     assert_route(module, ["docs/lowering-coverage.md"], ["lowering-coverage-inventory-test", "lowering-coverage"], ["git diff --check"])
+    assert_gates(module, ["tools/toolchain/semantic-facts-inventory.py"], ["semantic-facts-inventory-test"])
+    assert_route(module, ["docs/typed-semantic-facts.md"], ["semantic-facts-inventory-test"], ["git diff --check"])
     assert_gates(module, ["tools/toolchain/compiler-coverage.sh"], ["compiler-coverage"])
     assert_gates(module, ["tools/toolchain/compiler-coverage-baseline.tsv"], ["compiler-coverage"])
     assert_route(module, ["docs/compiler-coverage.md"], ["compiler-coverage"], ["git diff --check"])

@@ -197,6 +197,14 @@ RULES: tuple[Rule, ...] = (
         "lowering coverage ratchet changes need the lowering coverage gate",
     ),
     Rule(
+        (
+            "tools/toolchain/semantic-facts-inventory.py",
+            "docs/typed-semantic-facts.md",
+        ),
+        ("semantic-facts-inventory-test",),
+        "semantic fact inventory changes need the semantic facts gate",
+    ),
+    Rule(
         ("tools/toolchain/compiler-coverage.sh", "tools/toolchain/compiler-coverage-baseline.tsv", "docs/compiler-coverage.md"),
         ("compiler-coverage",),
         "compiler coverage ratchet changes need the compiler coverage gate",

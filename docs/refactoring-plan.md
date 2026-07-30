@@ -23,6 +23,14 @@ feature work cheaper, not to add new surface area.
 
 Purpose: make the current implicit seams visible before moving code.
 
+Current status:
+
+- The existing typed-semantic-fact register in
+  [`typed-semantic-facts.md`](typed-semantic-facts.md) is enforced by
+  `semantic-facts-inventory-test`.
+- The gate is part of `m0`, `fast`, and `c0`, so backend semantic authority
+  drift is no longer only a manual review check.
+
 Work:
 
 - Add a small inventory for each backend semantic decision:
