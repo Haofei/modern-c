@@ -668,6 +668,71 @@ test "MIR lowering admission rejects unknown call-target result facts" {
     try std.testing.expectError(error.UnknownMirLoweringType, mir.validateLoweringAdmission(typed_mir));
 }
 
+test "MIR assign instructions carry known lowering types" {
+    const source =
+        \\fn assign_value() -> u32 {
+        \\    var x: u32 = 1;
+        \\    x = 2;
+        \\    return x;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_assign_known_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    try mir.validateLoweringAdmission(typed_mir);
+
+    const function = functionByName(typed_mir, "assign_value").?;
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .assign) continue;
+            try std.testing.expectEqualStrings("x", instruction.detail);
+            try std.testing.expectEqualStrings("u32", valueTypeName(instruction.result_ty));
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "MIR lowering admission rejects unknown assign instruction types" {
+    const source =
+        \\fn assign_value() -> u32 {
+        \\    var x: u32 = 1;
+        \\    x = 2;
+        \\    return x;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_unknown_assign_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "assign_value").?;
+    for (function.blocks) |*block| {
+        for (block.instructions) |*instruction| {
+            if (instruction.kind != .assign) continue;
+            instruction.result_ty = .unknown;
+            try std.testing.expectError(error.UnknownMirLoweringType, mir.validateKnownFactTypesForLowering(typed_mir));
+            try std.testing.expectError(error.UnknownMirLoweringType, mir.validateLoweringAdmission(typed_mir));
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
 test "MIR owns inferred local types for conversion results" {
     const source =
         \\fn inferred_conversion(value: u64) -> u8 {

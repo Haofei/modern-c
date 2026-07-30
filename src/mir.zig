@@ -1408,6 +1408,9 @@ pub fn validateKnownFactTypesForLowering(module: Module) error{UnknownMirLowerin
                 .return_ => |ty| if (valueTypeIsUnknownPlaceholder(ty)) return error.UnknownMirLoweringType,
                 else => {},
             }
+            for (block.instructions) |instruction| {
+                if (instruction.kind == .assign and valueTypeIsUnknownPlaceholder(instruction.result_ty)) return error.UnknownMirLoweringType;
+            }
         }
         for (function.range_facts) |fact| {
             if (valueTypeIsUnknownPlaceholder(fact.result_ty)) return error.UnknownMirLoweringType;
@@ -4387,7 +4390,9 @@ const FunctionBuilder = struct {
                 return false;
             },
             .assignment => |node| {
-                try self.addInstr(.assign, exprText(node.target), .unknown, stmt.span);
+                const assignment_target_ty = self.typeForAssignmentTarget(node.target);
+                const assignment_target_type_expr = self.typeExprForAssignmentTarget(node.target);
+                try self.addInstr(.assign, exprText(node.target), assignment_target_ty, stmt.span);
                 // Escape analysis: a reassignment updates the target local's
                 // address provenance (e.g. `out = p` drops a prior `&local`).
                 if (assignmentTargetIdentName(node.target)) |target_name| {
@@ -4420,13 +4425,13 @@ const FunctionBuilder = struct {
                     null;
                 defer self.direct_local_pointer_array_alias_initializer = previous_array_alias_initializer;
                 self.assignment_target = exprText(node.target);
-                self.assignment_target_ty = self.typeForAssignmentTarget(node.target);
-                self.assignment_target_type_expr = self.typeExprForAssignmentTarget(node.target);
+                self.assignment_target_ty = assignment_target_ty;
+                self.assignment_target_type_expr = assignment_target_type_expr;
                 try self.addNullabilityConversionCheck(self.assignment_target_ty, node.value, node.value.span);
                 try self.addConversionCheck(self.assignment_target_ty, node.value, .assignment, node.value.span);
                 try self.addResultPayloadConversionCheck(self.assignment_target_ty, node.value, node.value.span);
                 try self.addTargetRepresentationCheck(self.assignment_target_ty, node.value, node.value.span);
-                if (self.typeExprForAssignmentTarget(node.target)) |target_ty| try self.addAggregateConversionChecks(target_ty, node.value, .assignment);
+                if (assignment_target_type_expr) |target_ty| try self.addAggregateConversionChecks(target_ty, node.value, .assignment);
                 try self.buildExpr(node.value);
                 try self.addRepresentationUseForValue(self.assignment_target_ty, "assignment", node.value.span, exprText(node.value));
                 try self.recordPointerProvenanceForAssignment(node.target, node.value, stmt.span);

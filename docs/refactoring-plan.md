@@ -133,11 +133,13 @@ Current baseline:
   before emission.
 - C and LLVM backend entrypoints now share `mir.validateLoweringAdmission()`;
   call-target, target-type, representation, integer, range, function-return,
-  and terminator fact positions reject the `.unknown` type placeholder before
-  lowering.
+  terminator, and assignment instruction type positions reject the `.unknown`
+  type placeholder before lowering.
 - Scalar/domain conversion call-target result types are MIR-owned, including
   `try_from` as `Result<T, ConversionError>`, rather than falling back through
   generic call inference.
+- Assignment MIR instructions now carry the resolved target/source lowering
+  type instead of a debug-only `.unknown` placeholder.
 - Inventory checks anchor the migrated surface.
 
 Implementation order:
