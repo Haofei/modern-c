@@ -4602,12 +4602,23 @@ const CEmitter = struct {
     fn emitPointerToPAddrTargetCast(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!bool {
         const ty = target_ty orelse return false;
         if (!lower_c_type.isPAddrType(ty)) return false;
-        const source_ty = self.operandEmitType(expr, locals) orelse self.exprSourceTypeForEmission(expr, locals) orelse return false;
+        const source_ty = self.paddrCoercionSourceTypeForEmission(expr, locals) orelse return false;
         if (!lower_c_type.isPointerLikeAddressType(source_ty)) return false;
         try self.out.appendSlice(self.allocator, "((uintptr_t)(");
         try self.emitExpr(expr, locals);
         try self.out.appendSlice(self.allocator, "))");
         return true;
+    }
+
+    fn paddrCoercionSourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+        if (self.mirTargetTypeFactAt(.paddr_coercion_source, expr.span)) |fact| return fact.target_ty;
+        if (expr.kind == .cast) return (self.mirTargetTypeFactAt(.explicit_cast_source, expr.span) orelse return null).target_ty;
+        if (expr.span.line == 0 and expr.span.column == 0) {
+            if (self.operandEmitType(expr, locals)) |ty| return ty;
+            if (self.callReturnTypeForExpr(expr, locals)) |ty| return ty;
+            return self.exprSourceTypeForEmission(expr, locals);
+        }
+        return null;
     }
 
     fn emitAggregateLiteralWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {

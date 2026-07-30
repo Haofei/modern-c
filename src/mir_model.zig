@@ -381,6 +381,7 @@ pub const TargetTypeKind = enum {
     value_optional_coercion,
     dyn_coercion,
     dyn_coercion_source,
+    paddr_coercion_source,
     conversion_source,
     conversion_target,
     wrapping_left,

@@ -6005,6 +6005,11 @@ const FunctionBuilder = struct {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
                     try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
                     try self.appendTargetTypeFact(.raw_address, target.address_type_expr, target.address_ty, expr.span);
+                    if (node.args.len != 0) {
+                        if (self.paddrCoercionSourceTypeExpr(target.address_ty, node.args[0])) |source_ty| {
+                            try self.appendTargetTypeFact(.paddr_coercion_source, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), node.args[0].span);
+                        }
+                    }
                     try self.appendTargetTypeFact(.raw_payload, target.payload_type_expr, target.payload_ty, expr.span);
                     try self.appendTargetTypeFact(.raw_result, target.result_type_expr, target.result_ty, expr.span);
                 }
@@ -6827,6 +6832,9 @@ const FunctionBuilder = struct {
             try self.appendTargetTypeFact(.dyn_coercion_source, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
             return;
         }
+        if (self.paddrCoercionSourceTypeExpr(result_ty, expr)) |source_ty| {
+            try self.appendTargetTypeFact(.paddr_coercion_source, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
+        }
         if (self.valueOptionalPayloadTargetType(target_ty, result_ty)) |payload_ty| {
             if (expr.kind != .null_literal and self.exprType(expr) != .nullable_value) {
                 try self.appendTargetTypeFact(.value_optional_coercion, target_ty, result_ty, expr.span);
@@ -7083,6 +7091,15 @@ const FunctionBuilder = struct {
             .grouped => |inner| self.dynCoercionSourceTypeExpr(inner.*),
             .address_of => |inner| self.typeExprForExpr(inner.*),
             else => self.typeExprForExpr(expr),
+        };
+    }
+
+    fn paddrCoercionSourceTypeExpr(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr) ?ast.TypeExpr {
+        if (target_ty != .address or target_ty.address != .paddr) return null;
+        const source_ty = self.typeExprForExpr(expr) orelse return null;
+        return switch (aggregateTargetTypeAlias(source_ty, self.aliases).kind) {
+            .pointer, .raw_many_pointer => source_ty,
+            else => null,
         };
     }
 

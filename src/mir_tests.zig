@@ -4126,6 +4126,9 @@ test "MIR records typed call target facts for raw address calls" {
         \\fn store(addr: PAddr, value: u32) -> void {
         \\    unsafe { raw.store<u32>(addr, value); }
         \\}
+        \\fn store_pointer(addr: *mut u32, value: u32) -> void {
+        \\    unsafe { raw.store<u32>(addr, value); }
+        \\}
         \\fn pause() -> void {
         \\    unsafe { cpu.pause(); }
         \\}
@@ -4151,6 +4154,7 @@ test "MIR records typed call target facts for raw address calls" {
     const read = functionByName(typed_mir, "read").?;
     const pointer = functionByName(typed_mir, "pointer").?;
     const store = functionByName(typed_mir, "store").?;
+    const store_pointer = functionByName(typed_mir, "store_pointer").?;
     const pause = functionByName(typed_mir, "pause").?;
     const fences = functionByName(typed_mir, "fences").?;
     try std.testing.expectEqual(@as(usize, 1), read.call_target_facts.len);
@@ -4173,6 +4177,7 @@ test "MIR records typed call target facts for raw address calls" {
     try std.testing.expectEqualStrings("u32", read.target_type_facts[2].target_ty.kind.name.text);
     try std.testing.expectEqualStrings("u32", pointer.target_type_facts[2].target_ty.kind.pointer.child.kind.name.text);
     try std.testing.expectEqualStrings("void", store.target_type_facts[2].target_ty.kind.name.text);
+    try std.testing.expect(targetTypeFactByKind(store_pointer, .paddr_coercion_source) != null);
     try std.testing.expectEqual(@as(usize, 1), pause.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.cpu_pause, pause.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("void", pause.call_target_facts[0].result_ty.name());

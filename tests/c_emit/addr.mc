@@ -16,3 +16,9 @@ fn region_holds(base: usize, len: usize, probe: usize) -> bool {
     var r: PhysRange = phys_range(pa(base), len);
     return pr_contains(&r, pa(probe));
 }
+
+fn unsafe_pointer_to_paddr(p: *mut u8) -> PAddr {
+    unsafe {
+        return p as PAddr;
+    }
+}
