@@ -849,6 +849,8 @@ test "LLVM explicit casts require MIR source and target type facts" {
     const source =
         \\fn widen(value: u32) -> u64 { return value as u64; }
     ;
+    const cast_text = "value as u64";
+    const cast_offset = std.mem.indexOf(u8, source, cast_text) orelse return error.TestUnexpectedResult;
     var parsed = try test_support.parseCheckedModule("llvm_explicit_cast_type_facts.mc", source);
     defer parsed.deinit();
     var module_mir = try mir.build(std.testing.allocator, parsed.module);
@@ -857,6 +859,20 @@ test "LLVM explicit casts require MIR source and target type facts" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_explicit_cast_type_facts.mc", .{}, false, .riscv64, null));
+
+    var missing_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_result.deinit();
+    try removeTargetTypeFactAtOffsetForFunction(&missing_result, "widen", .expression_result, cast_offset, cast_text.len);
+    var missing_result_output: std.ArrayList(u8) = .empty;
+    defer missing_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_result, &missing_result_output, "llvm_explicit_cast_type_facts.mc", .{}, false, .riscv64, null));
+
+    var stale_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_result.deinit();
+    try renameTargetTypeFactAtOffsetForFunction(&stale_result, "widen", .expression_result, cast_offset, cast_text.len, "u32");
+    var stale_result_output: std.ArrayList(u8) = .empty;
+    defer stale_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_result, &stale_result_output, "llvm_explicit_cast_type_facts.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM implicit view const narrowing requires MIR source and target type facts" {

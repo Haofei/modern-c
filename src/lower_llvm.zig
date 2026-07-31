@@ -9025,7 +9025,7 @@ const LlvmEmitter = struct {
                 if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null
             else
                 self.callReturnType(call),
-            .cast => if (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span)) |fact| fact.target_ty else null,
+            .cast => self.castResultType(expr),
             // Source addresses have exact MIR expression-result facts. Only
             // compiler-generated zero-span nodes retain the declaration-based
             // fallback because they cannot be keyed to a source fact.
@@ -9077,6 +9077,11 @@ const LlvmEmitter = struct {
     fn requireExpressionResultType(self: *LlvmEmitter, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {
         const expected = inferred orelse if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| return fact.target_ty else return null;
         return self.expressionResultTypeAt(expr.span, expected);
+    }
+
+    fn castResultType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        const target_ty = (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span) orelse return null).target_ty;
+        return self.expressionResultTypeAt(expr.span, target_ty);
     }
 
     fn expressionResultTypeAt(self: *LlvmEmitter, span: ast.Span, inferred: ast.TypeExpr) ?ast.TypeExpr {
