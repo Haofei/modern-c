@@ -9038,6 +9038,10 @@ const LlvmEmitter = struct {
                 if (self.mirTargetTypeFactAt(.enum_literal, expr.span)) |fact| fact.target_ty else null
             else
                 null,
+            .null_literal => if (expr.span.line != 0 and expr.span.column != 0)
+                if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact| fact.target_ty else null
+            else
+                null,
             .float_literal => if (expr.span.line != 0 and expr.span.column != 0)
                 if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact| fact.target_ty else null
             else
