@@ -9047,6 +9047,7 @@ const LlvmEmitter = struct {
             else
                 null,
             .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else null,
+            .struct_literal => if (self.mirTargetTypeFactAt(.struct_literal, expr.span)) |fact| fact.target_ty else null,
             .block => if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null,
             // Source groupings have their own MIR-owned result type. The
             // inner query is a stale-fact check only; generated zero-span
