@@ -708,6 +708,38 @@ test "lower-c explicit casts require MIR source and target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_explicit_cast_type_facts.mc", .{}, false, null));
 }
 
+test "lower-c cast deref pointee requires MIR expression result" {
+    const source =
+        \\fn read(p: *mut u32) -> u32 {
+        \\    unsafe { return (p as *mut u32).*; }
+        \\}
+    ;
+    const cast_text = "p as *mut u32";
+    const cast_offset = std.mem.indexOf(u8, source, cast_text) orelse return error.TestUnexpectedResult;
+    var parsed = try test_support.parseCheckedModule("c_cast_deref_expression_result.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_cast_deref_expression_result.mc", .{}, false, null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeFactAtOffsetForFunction(&missing, "read", .expression_result, cast_offset, cast_text.len);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_cast_deref_expression_result.mc", .{}, false, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactAtOffsetForFunction(&stale, "read", .expression_result, cast_offset, cast_text.len, "u64");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_cast_deref_expression_result.mc", .{}, false, null));
+}
+
 test "lower-c implicit view const narrowing requires MIR source and target type facts" {
     const source =
         \\fn narrow(xs: []mut u8) -> []const u8 { return xs; }

@@ -358,7 +358,7 @@ pub fn derefPointeeType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
         else
             operandEmitType(ctx, inner.*, locals),
         .call => |node| pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .raw_many_offset_result, node.callee.*.span) orelse ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals) orelse return null),
-        .cast => |node| pointeeTypeFromPointerLike(ctx, castTargetTypeForInference(ctx, expr, node) orelse return null),
+        .cast => |node| pointeeTypeFromPointerLike(ctx, castResultTypeForInference(ctx, expr, node) orelse return null),
         .member, .index => pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null),
         .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
             derefPointeeType(ctx, inner.*, locals)
@@ -489,6 +489,12 @@ fn castTargetTypeForInference(ctx: TypeQueryContext, expr: ast.Expr, node: anyty
         return ctx.mir_target_type(ctx.source_ctx, .explicit_cast_target, expr.span);
     }
     return node.ty.*;
+}
+
+fn castResultTypeForInference(ctx: TypeQueryContext, expr: ast.Expr, node: anytype) ?ast.TypeExpr {
+    const target_ty = castTargetTypeForInference(ctx, expr, node) orelse return null;
+    if (expr.span.line == 0 and expr.span.column == 0) return target_ty;
+    return requireExpressionResultType(ctx, expr, target_ty);
 }
 
 fn expressionResultTypeOptional(ctx: TypeQueryContext, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {

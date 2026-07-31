@@ -436,6 +436,10 @@ members keep the bounded operand fallback.
 Boolean-shape classification for source member/index results likewise reads
 the expression's own MIR `expression_result` row directly; identifiers and
 zero-span generated nodes keep their bounded declaration/operand paths.
+Source-spanned cast expressions used as dereference bases now require both the
+MIR `explicit_cast_target` and the cast expression's own matching
+`expression_result` row before C recovers a pointer-like pointee; generated
+zero-span casts keep the bounded syntactic target fallback.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|
