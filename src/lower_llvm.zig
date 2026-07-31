@@ -9014,6 +9014,10 @@ const LlvmEmitter = struct {
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
                 simpleType(expr.span, "bool"),
+            .void_literal => if (expr.span.line != 0 and expr.span.column != 0)
+                if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
+            else
+                simpleType(expr.span, "void"),
             // Source unary expressions have their own MIR-owned result type.
             // Generated zero-span nodes retain the operand-derived fallback.
             .unary => |node| if (expr.span.line == 0 and expr.span.column == 0)
