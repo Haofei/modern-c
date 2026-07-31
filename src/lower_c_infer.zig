@@ -437,7 +437,7 @@ fn numericExprTypeForEmissionInferred(ctx: TypeQueryContext, expr: ast.Expr, loc
         .cast => |node| {
             const target_ty = castTargetTypeForInference(ctx, expr, node) orelse return null;
             const resolved = resolveAliasType(ctx, target_ty);
-            return if (isNumericStorageType(resolved)) resolved else null;
+            return if (isNumericStorageType(resolved)) numericExpressionResultType(ctx, expr, resolved) else null;
         },
         .grouped => |inner| numericExprTypeForEmission(ctx, inner.*, locals),
         .unary => |node| numericExprTypeForEmission(ctx, node.expr.*, locals),
