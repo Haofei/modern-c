@@ -3298,6 +3298,37 @@ test "lower-c sequenced comparison literals require MIR result types" {
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_condition_literal_result.mc", .{}, false, null));
 }
 
+test "lower-c sequenced comparison member operands require MIR result types" {
+    const source =
+        \\struct Holder { value: u64 }
+        \\fn compare(holder: Holder) -> bool { return holder.value == 7; }
+    ;
+    const member_text = "holder.value";
+    const member_offset = std.mem.indexOf(u8, source, member_text) orelse return error.TestUnexpectedResult;
+    var parsed = try test_support.parseCheckedModule("c_condition_member_result.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_condition_member_result.mc", .{}, false, null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeFactAtOffsetForFunction(&missing, "compare", .expression_result, member_offset, member_text.len);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing, &missing_output, .kernel, "c_condition_member_result.mc", .{}, false, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactAtOffsetForFunction(&stale, "compare", .expression_result, member_offset, member_text.len, "bool");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_condition_member_result.mc", .{}, false, null));
+}
+
 test "lower-c boolean expressions require MIR result types" {
     const source =
         \\fn compare(left: u32, right: u32) -> bool { return !(left < right); }

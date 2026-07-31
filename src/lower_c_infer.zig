@@ -553,13 +553,10 @@ pub fn conditionOperandTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, lo
             break :blk requireExpressionResultType(ctx, expr, inferred);
         },
         .binary => numericExprTypeForEmission(ctx, expr, locals),
-        .index => operandEmitType(ctx, expr, locals),
-        // A struct-field read — including one off a call result (`mk(x).v == 7`) —
-        // resolves through operandEmitType, which walks the base to the field's
-        // declared type. Without this a sequenced
-        // comparison in a value context (return / let-init) could not recover the
-        // operand type and failed UnsupportedCEmission.
-        .member => operandEmitType(ctx, expr, locals),
+        .index, .member => if (expr.span.line == 0 and expr.span.column == 0)
+            operandEmitType(ctx, expr, locals)
+        else
+            ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span),
         else => null,
     };
 }

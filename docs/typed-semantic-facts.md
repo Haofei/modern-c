@@ -443,6 +443,9 @@ zero-span casts keep the bounded syntactic target fallback.
 Source member/index expressions used as dereference bases now also read their
 own MIR `expression_result` row directly before C recovers a pointer-like
 pointee; generated zero-span nodes keep the bounded operand fallback.
+Source member/index expressions used as sequenced comparison operands now read
+their own MIR `expression_result` row directly as the operand width/type;
+generated zero-span nodes keep the bounded operand fallback.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|
