@@ -424,6 +424,9 @@ Source-spanned address-of pointee queries now also consume the address
 expression's own MIR `expression_result` row directly instead of routing through
 the generic operand helper; zero-span generated address expressions keep the
 bounded addressed-operand fallback.
+Struct-name classification for source member/index results now reads the
+member/index expression's own MIR `expression_result` row directly; zero-span
+generated member/index nodes keep the bounded operand fallback.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|

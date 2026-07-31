@@ -367,11 +367,17 @@ pub fn structTypeNameForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
             // A source member result is already represented by a complete MIR
             // expression_result row. Do not rediscover its struct type by
             // walking the member declaration here.
-            const ty = operandEmitType(ctx, expr, locals) orelse break :blk null;
+            const ty = if (expr.span.line == 0 and expr.span.column == 0)
+                operandEmitType(ctx, expr, locals) orelse break :blk null
+            else
+                ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse break :blk null;
             break :blk structNameFromType(ctx, ty);
         },
         .index => blk: {
-            const ty = operandEmitType(ctx, expr, locals) orelse break :blk null;
+            const ty = if (expr.span.line == 0 and expr.span.column == 0)
+                operandEmitType(ctx, expr, locals) orelse break :blk null
+            else
+                ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse break :blk null;
             break :blk structNameFromType(ctx, ty);
         },
         .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
