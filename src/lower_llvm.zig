@@ -9080,7 +9080,15 @@ const LlvmEmitter = struct {
                     if (self.memberField(node.base.*, node.name.text)) |field| break :blk field.ty;
                     break :blk null;
                 } else null),
-            .binary => |node| self.requireExpressionResultType(expr, if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*)),
+            // Source binary expressions have their own MIR-owned result type.
+            // Keep operand-derived inference only for generated zero-span nodes
+            // that cannot be keyed to a source expression-result fact.
+            .binary => |node| if (expr.span.line == 0 and expr.span.column == 0)
+                self.requireExpressionResultType(expr, if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*))
+            else if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact|
+                fact.target_ty
+            else
+                null,
             .try_expr => |node| self.tryExpressionResultType(expr, node.operand.*),
             else => null,
         };
