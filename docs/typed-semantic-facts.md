@@ -427,6 +427,9 @@ bounded addressed-operand fallback.
 Struct-name classification for source member/index results now reads the
 member/index expression's own MIR `expression_result` row directly; zero-span
 generated member/index nodes keep the bounded operand fallback.
+Array-shape classification for source member/index results follows the same
+rule and reads the member/index expression's own MIR `expression_result` row
+directly before fixed-array lowering uses it.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|

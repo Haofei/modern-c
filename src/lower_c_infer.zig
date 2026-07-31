@@ -297,7 +297,10 @@ pub fn arrayTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
         // particular, a nested array result must not be reconstructed by
         // walking the struct declaration or the previous array expression.
         .index, .member => {
-            const result_ty = operandEmitType(ctx, expr, locals) orelse return null;
+            const result_ty = if (expr.span.line == 0 and expr.span.column == 0)
+                operandEmitType(ctx, expr, locals) orelse return null
+            else
+                ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return null;
             const resolved = resolveAliasType(ctx, result_ty);
             return if (resolved.kind == .array) resolved else null;
         },
