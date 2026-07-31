@@ -111,7 +111,11 @@ pub fn enumNameForValueExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std
         },
         .cast => |node| blk: {
             const target_ty = castTargetTypeForInference(ctx, expr, node) orelse break :blk null;
-            break :blk enumNameForType(ctx, target_ty);
+            const ty = if (expr.span.line == 0 and expr.span.column == 0)
+                target_ty
+            else
+                requireExpressionResultType(ctx, expr, target_ty) orelse break :blk null;
+            break :blk enumNameForType(ctx, ty);
         },
         .member => |node| blk: {
             // A variant-path literal `Enum.variant` has the enum's own type;
@@ -197,7 +201,11 @@ pub fn taggedUnionTypeForExpr(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*s
             if (!ctx.tagged_unions.contains(type_name)) return null;
             break :blk ret_ty;
         },
-        .cast => |node| castTargetTypeForInference(ctx, expr, node) orelse return null,
+        .cast => |node| blk: {
+            const target_ty = castTargetTypeForInference(ctx, expr, node) orelse return null;
+            if (expr.span.line == 0 and expr.span.column == 0) break :blk target_ty;
+            break :blk requireExpressionResultType(ctx, expr, target_ty) orelse return null;
+        },
         .grouped => |inner| {
             const inferred = taggedUnionTypeForExpr(ctx, inner.*, locals) orelse return null;
             if (expr.span.line == 0 and expr.span.column == 0) return inferred;
