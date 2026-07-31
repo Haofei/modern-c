@@ -3441,6 +3441,34 @@ test "MIR owns source boolean expression result types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR owns source void literal expression result types" {
+    const source =
+        \\fn explicit_void() -> void { (); }
+    ;
+    const void_text = "()";
+    const void_offset = (std.mem.indexOf(u8, source, "{ ();") orelse return error.TestUnexpectedResult) + "{ ".len;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_void_literal_expression_result.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "explicit_void").?;
+    var found = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .expression_result or fact.source.offset != void_offset or fact.source.len != void_text.len) continue;
+        try std.testing.expectEqualStrings("void", fact.target_ty.kind.name.text);
+        found = true;
+    }
+    try std.testing.expect(found);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
 test "MIR owns direct address dereference result types" {
     const source =
         \\fn read_local() -> u32 {
