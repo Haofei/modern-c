@@ -420,6 +420,10 @@ Array-valued dereference queries now use the same source-expression rule:
 source-spanned `ptr.*` array results consume their own MIR `expression_result`
 row before fixed-array index lowering can use them, while zero-span generated
 dereferences keep the bounded pointee fallback.
+Source-spanned address-of pointee queries now also consume the address
+expression's own MIR `expression_result` row directly instead of routing through
+the generic operand helper; zero-span generated address expressions keep the
+bounded addressed-operand fallback.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|

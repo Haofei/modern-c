@@ -333,7 +333,7 @@ pub fn derefPointeeType(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.Str
     return switch (expr.kind) {
         .ident => |id| pointeeTypeFromPointerLike(ctx, sourceTypeForIdent(ctx, id.text, locals) orelse return null),
         .address_of => |inner| if (expr.span.line != 0 and expr.span.column != 0)
-            pointeeTypeFromPointerLike(ctx, operandEmitType(ctx, expr, locals) orelse return null)
+            pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse return null)
         else
             operandEmitType(ctx, inner.*, locals),
         .call => |node| pointeeTypeFromPointerLike(ctx, ctx.mir_target_type(ctx.source_ctx, .raw_many_offset_result, node.callee.*.span) orelse ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals) orelse return null),
