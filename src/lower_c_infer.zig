@@ -160,8 +160,15 @@ pub fn exprIsBoolForEmission(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*st
             const ty = ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse break :blk false;
             break :blk isBoolType(resolveAliasType(ctx, ty));
         },
-        .ident, .index, .member => blk: {
-            const ty = operandEmitType(ctx, expr, locals) orelse break :blk false;
+        .ident => |ident| blk: {
+            const ty = sourceTypeForIdent(ctx, ident.text, locals) orelse break :blk false;
+            break :blk isBoolType(resolveAliasType(ctx, ty));
+        },
+        .index, .member => blk: {
+            const ty = if (expr.span.line == 0 and expr.span.column == 0)
+                operandEmitType(ctx, expr, locals) orelse break :blk false
+            else
+                ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse break :blk false;
             break :blk isBoolType(resolveAliasType(ctx, ty));
         },
         .call => if (ctx.call_return_type_for_expr(ctx.source_ctx, expr, locals)) |ty| isBoolType(ty) else false,

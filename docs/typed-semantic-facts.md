@@ -433,6 +433,9 @@ directly before fixed-array lowering uses it.
 Pointer-shape classification for source member results also reads the member
 expression's own MIR `expression_result` row directly; zero-span generated
 members keep the bounded operand fallback.
+Boolean-shape classification for source member/index results likewise reads
+the expression's own MIR `expression_result` row directly; identifiers and
+zero-span generated nodes keep their bounded declaration/operand paths.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|
