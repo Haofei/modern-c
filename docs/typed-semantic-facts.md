@@ -412,6 +412,10 @@ Direct-call index lowering now queries MIR-owned base facts inside
 access-context callbacks named as slice/array return-type classifiers.
 Direct-call index address lowering also queries that base fact once
 per address expression before choosing slice or fixed-array emission mechanics.
+Unary operands in sequenced comparison conditions now follow the same
+source-expression rule: source-spanned unary expressions must consume their own
+MIR `expression_result` row and use the recursively recovered operand type only
+to reject stale rows; zero-span generated nodes keep the bounded fallback.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|

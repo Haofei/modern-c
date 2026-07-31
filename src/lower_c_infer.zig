@@ -504,7 +504,11 @@ pub fn conditionOperandTypeForEmission(ctx: TypeQueryContext, expr: ast.Expr, lo
             if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
             break :blk requireExpressionResultType(ctx, expr, inferred);
         },
-        .unary => |node| conditionOperandTypeForEmission(ctx, node.expr.*, locals),
+        .unary => |node| blk: {
+            const inferred = conditionOperandTypeForEmission(ctx, node.expr.*, locals) orelse break :blk null;
+            if (expr.span.line == 0 and expr.span.column == 0) break :blk inferred;
+            break :blk requireExpressionResultType(ctx, expr, inferred);
+        },
         .binary => numericExprTypeForEmission(ctx, expr, locals),
         .index => operandEmitType(ctx, expr, locals),
         // A struct-field read — including one off a call result (`mk(x).v == 7`) —
