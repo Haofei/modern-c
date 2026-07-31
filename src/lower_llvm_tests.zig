@@ -3365,6 +3365,37 @@ test "LLVM sequenced comparison literals require MIR result types" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_condition_literal_result.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM sequenced comparison member operands require MIR result types" {
+    const source =
+        \\struct Holder { value: u64 }
+        \\fn compare(holder: Holder) -> bool { return holder.value == 7; }
+    ;
+    const member_text = "holder.value";
+    const member_offset = std.mem.indexOf(u8, source, member_text) orelse return error.TestUnexpectedResult;
+    var parsed = try test_support.parseCheckedModule("llvm_condition_member_result.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &complete, &complete_output, "llvm_condition_member_result.mc", .{}, false, .riscv64, null);
+
+    var missing = try mir.build(std.testing.allocator, parsed.module);
+    defer missing.deinit();
+    try removeTargetTypeFactAtOffsetForFunction(&missing, "compare", .expression_result, member_offset, member_text.len);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing, &missing_output, "llvm_condition_member_result.mc", .{}, false, .riscv64, null));
+
+    var stale = try mir.build(std.testing.allocator, parsed.module);
+    defer stale.deinit();
+    try renameTargetTypeFactAtOffsetForFunction(&stale, "compare", .expression_result, member_offset, member_text.len, "bool");
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_condition_member_result.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM boolean expressions require MIR result types" {
     const source =
         \\fn compare(left: u32, right: u32) -> bool { return !(left < right); }

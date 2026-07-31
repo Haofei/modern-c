@@ -8103,14 +8103,26 @@ const LlvmEmitter = struct {
     }
 
     fn comparisonOperandType(self: *LlvmEmitter, node: anytype) ?ast.TypeExpr {
-        const left_ty = self.exprType(node.left.*);
-        const right_ty = self.exprType(node.right.*);
+        const left_ty = self.comparisonOperandExprType(node.left.*);
+        const right_ty = self.comparisonOperandExprType(node.right.*);
         const left_contextual = contextualIntegerLiteralExpr(node.left.*);
         const right_contextual = contextualIntegerLiteralExpr(node.right.*);
 
         if (left_contextual and !right_contextual) return right_ty orelse left_ty;
         if (right_contextual and !left_contextual) return left_ty orelse right_ty;
         return left_ty orelse right_ty;
+    }
+
+    fn comparisonOperandExprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        return switch (expr.kind) {
+            .member, .index => if (expr.span.line == 0 and expr.span.column == 0)
+                self.exprType(expr)
+            else if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact|
+                fact.target_ty
+            else
+                null,
+            else => self.exprType(expr),
+        };
     }
 
     fn contextualIntegerLiteralExpr(expr: ast.Expr) bool {
