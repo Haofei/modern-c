@@ -430,6 +430,9 @@ generated member/index nodes keep the bounded operand fallback.
 Array-shape classification for source member/index results follows the same
 rule and reads the member/index expression's own MIR `expression_result` row
 directly before fixed-array lowering uses it.
+Pointer-shape classification for source member results also reads the member
+expression's own MIR `expression_result` row directly; zero-span generated
+members keep the bounded operand fallback.
 
 | Family | Owner / source anchors | Current consumer | Migration status | Fail-closed policy |
 |---|---|---|---|---|

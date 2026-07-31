@@ -327,7 +327,10 @@ pub fn exprIsPointer(ctx: TypeQueryContext, expr: ast.Expr, locals: ?*std.String
             break :blk resolveAliasType(ctx, ty).kind == .pointer;
         },
         .member => blk: {
-            const result_ty = operandEmitType(ctx, expr, locals) orelse break :blk false;
+            const result_ty = if (expr.span.line == 0 and expr.span.column == 0)
+                operandEmitType(ctx, expr, locals) orelse break :blk false
+            else
+                ctx.mir_target_type(ctx.source_ctx, .expression_result, expr.span) orelse break :blk false;
             break :blk resolveAliasType(ctx, result_ty).kind == .pointer;
         },
         .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
