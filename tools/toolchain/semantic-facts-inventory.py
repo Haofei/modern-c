@@ -19,10 +19,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
     "c-expression-type-inference": {
         "docs/typed-semantic-facts.md": ["| `c-expression-type-inference` |"],
-        "src/lower_c_infer.zig": [
-            "//! Retired C backend expression type inference helper module.",
-            "exact-gates the helper",
-        ],
         "src/lower_c_emitter.zig": [
             "fn indirectCallCalleeType(",
             "mirTargetTypeFactAt(.indirect_call_callee",
@@ -266,7 +262,7 @@ BACKEND_AST_INFERENCE_DISPOSITIONS: dict[str, str] = {
     "llvm-expression-type-inference": "conservative-or-diagnosed",
 }
 
-LOWER_C_INFER_HELPER_SURFACE: dict[str, bool] = {}
+RETIRED_LOWER_C_INFER_PATH = "src/lower_c_infer.zig"
 
 T3_DISPOSITION_AUDIT: dict[str, list[str]] = {
     "docs/typed-semantic-facts.md": [
@@ -295,7 +291,6 @@ T4_BACKEND_FILE_AUTHORITY: dict[str, list[str]] = {
         "src/lower_c_emitter.zig",
         "src/lower_c_expr.zig",
         "src/lower_c_global.zig",
-        "src/lower_c_infer.zig",
         "src/lower_c_info.zig",
         "src/lower_c_layout.zig",
         "src/lower_c_shape.zig",
@@ -1824,80 +1819,6 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "expr_source_type": 0,
         "ExprSourceTypeFn": 0,
     },
-    "src/lower_c_infer.zig": {
-        "const FnInfo = lower_c_model.FnInfo": 0,
-        "functions: *const std.StringHashMap(FnInfo)": 0,
-        "ctx.functions": 0,
-        "pub const MirOwnedTargetTypeFn": 0,
-        "mir_owned_target_type:": 0,
-        "source_type_for_expr": 0,
-        "SourceTypeFn": 0,
-        "pub fn sliceReturnTypeForExpr(": 0,
-        "fn sliceBaseTypeForZeroSpanSlice(": 0,
-        "pub fn enumNameForExpr(": 0,
-        "pub fn enumNameForValueExpr(": 0,
-        "fn enumNameForIdentValue(": 0,
-        "fn enumNameForVariantPath(": 0,
-        "fn enumNameForCallValue(": 0,
-        "pub fn exprIsBoolForEmission(": 0,
-        "fn identIsBoolForEmission(": 0,
-        "fn operandIsBoolForEmission(": 0,
-        "fn sourceExpressionResultIsBool(": 0,
-        "fn binaryOpProducesBool(": 0,
-        "fn sourceCompoundNumericExpressionRequiresResultFact(": 0,
-        "pub fn taggedUnionTypeForExpr(": 0,
-        "pub fn operandEmitType(": 0,
-        "fn requireExpressionResultType(": 0,
-        "pub fn arrayTypeForExpr(": 0,
-        "pub fn exprIsPointer(": 0,
-        "pub fn derefPointeeType(": 0,
-        "pub fn structTypeNameForExpr(": 0,
-        "pub fn numericExprTypeForEmission(": 0,
-        "fn numericExprTypeForEmissionInferred(": 0,
-        "fn castTargetTypeForInference(": 0,
-        "ctx.mir_target_type(ctx.source_ctx, .explicit_cast_target": 0,
-        "node.ty.*": 0,
-        "fn expressionResultTypeOptional(": 0,
-        "fn numericExpressionResultType(": 0,
-        "pub fn conditionOperandTypeForEmission(": 0,
-        "ctx.call_return_type_for_expr(ctx.source_ctx": 0,
-        "CallReturnTypeFn": 0,
-        "call_return_type_for_expr:": 0,
-        "fn callReturnType(": 0,
-        "fn sourceTypeForIdent(": 0,
-        "fn resolveAliasType(": 0,
-        "pub fn sliceReturnTypeForCall(": 0,
-        "fn callSliceResultType(": 0,
-        ".call => |call| callSliceResultType(ctx, call)": 0,
-        "pub fn sliceReturnTypeForIndexBase(": 0,
-        "fn sliceReturnTypeForIndexBase(": 0,
-        "pub fn arrayReturnTypeForExpr(": 0,
-        "fn arrayReturnTypeForExpr(": 0,
-        "pub fn enumReturnTypeForExpr(": 0,
-        "fn enumReturnTypeForExpr(": 0,
-        "pub fn nullableReturnTypeForExpr(": 0,
-        "fn nullableReturnTypeForExpr(": 0,
-        "pub fn taggedUnionReturnTypeForExpr(": 0,
-        "fn taggedUnionReturnTypeForExpr(": 0,
-        "pub fn resultReturnTypeForCall(": 0,
-        "fn resultReturnTypeForCall(": 0,
-        "pub fn resultTypeForExpr(": 0,
-        "fn resultTypeForExpr(": 0,
-        "pub fn resultTypeFromSourceExpr(": 0,
-        "fn resultTypeFromSourceExpr(": 0,
-        "mir_owned_target_type(ctx.source_ctx, .direct_call_result": 0,
-        "mir_target_type(ctx.source_ctx, .qualified_union_result": 0,
-        "mir_target_type(ctx.source_ctx, .enum_variant_path_result": 0,
-        "fn qualifiedUnionConstructorType(": 0,
-        "fn enumVariantPathType(": 0,
-        "taggedUnionCase(union_decl": 0,
-        "for (enum_decl.cases)": 0,
-        "fn assumeNoaliasReturnTypeForCall(": 0,
-        "mir_target_type(ctx.source_ctx, .raw_many_offset_result": 0,
-        "fn rawManyOffsetExprTypeForEmission(": 0,
-        "fn rawManyOffsetReturnTypeForCall(": 0,
-        "fn sourceTypeForIdentNoLocalFallback(": 0,
-    },
     "src/lower_c_reflect.zig": {
         "mir.reflectionCallTargetKind(call)": 0,
         "reflectionCallKind(call.callee.*)": 0,
@@ -2819,25 +2740,9 @@ def main() -> int:
     if set(budget_families) != set(BACKEND_AST_INFERENCE_DISPOSITIONS):
         missing.append("T3 disposition audit: disposition keys do not exactly match the backend AST-inference budget")
 
-    try:
-        lower_c_infer_surface = zig_top_level_functions("src/lower_c_infer.zig")
-    except FileNotFoundError:
-        missing.append("lower_c_infer helper surface: src/lower_c_infer.zig file missing")
-    else:
-        checked += 1
-        if set(lower_c_infer_surface) != set(LOWER_C_INFER_HELPER_SURFACE):
-            missing.append(
-                "lower_c_infer helper surface: exact function set differs; "
-                f"unregistered={sorted(set(lower_c_infer_surface) - set(LOWER_C_INFER_HELPER_SURFACE))!r}, "
-                f"stale={sorted(set(LOWER_C_INFER_HELPER_SURFACE) - set(lower_c_infer_surface))!r}"
-            )
-        for name, expected_pub in sorted(LOWER_C_INFER_HELPER_SURFACE.items()):
-            checked += 1
-            actual_pub = lower_c_infer_surface.get(name)
-            if actual_pub is not None and actual_pub != expected_pub:
-                expected = "pub" if expected_pub else "private"
-                actual = "pub" if actual_pub else "private"
-                missing.append(f"lower_c_infer helper surface: {name} expected {expected}, found {actual}")
+    checked += 1
+    if (REPO_ROOT / RETIRED_LOWER_C_INFER_PATH).exists():
+        missing.append(f"retired lower_c_infer module: {RETIRED_LOWER_C_INFER_PATH} must stay deleted")
 
     for relative, anchors in sorted(T3_DISPOSITION_AUDIT.items()):
         path = REPO_ROOT / relative
@@ -3046,7 +2951,7 @@ def main() -> int:
 
     print(
         "semantic facts inventory anchors OK "
-        f"({checked} anchors, {len(LOWER_C_INFER_HELPER_SURFACE)} lower_c_infer helpers exact-gated)"
+        f"({checked} anchors, retired lower_c_infer file absent)"
     )
     return 0
 

@@ -2037,8 +2037,8 @@ with one known `getelementptr inbounds` exception on the va_list path,
   `mirCheckElided`, `src/mir.zig` `mir elided_bounds_fact`, and `src/mir_tests.zig`
   `MIR dump exposes elided bounds facts`.
 - **[P1] Parity is empirical: both backends still carry semantic-adjacent emission
-  queries.** The retired `src/lower_c_infer.zig` module is now exact-gated at zero
-  helpers, and production backend entrypoints no longer read
+  queries.** The retired `src/lower_c_infer.zig` module is now deleted and
+  inventory-gated absent, and production backend entrypoints no longer read
   `program.syntax_module` directly. Remaining legacy syntax access is routed
   through exact-gated `VerifiedProgram` accessors for declaration metadata and
   source-map mechanics. C still keeps emission-local operand/numeric/shape queries

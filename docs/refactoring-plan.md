@@ -197,7 +197,7 @@ Do these in order unless a failing test forces a narrower slice:
 
 | Order | Slice | Proof |
 |---:|---|---|
-| 1 | Remove or quarantine the next backend-local semantic helper. | Complete for `src/lower_c_infer.zig`: helper surface is exact-gated at zero. |
+| 1 | Remove or quarantine the next backend-local semantic helper. | Complete for `src/lower_c_infer.zig`: the retired helper module is deleted, and `semantic-facts-inventory-test` fails if the file is reintroduced. |
 | 2 | Convert one call/optional/result MIR family toward typed IDs or verifier-owned facts. | Complete for `if_let_subject` and `try_operand`: MIR admission now rejects forged non-Result/non-nullable subject/operand families before backend emission. |
 | 3 | Replace one `VerifiedProgram` AST semantic read with a typed view. | Complete for naked backend `program.syntax_module` reads: C/LLVM entrypoints now use exact-gated legacy/source-map accessors and SourceSpellingView remains the MIR-owned spelling view. |
 | 4 | Introduce shared artifact metadata without changing emitted bytes. | Complete for metadata/map envelope writing: `.mcmeta` and `.mcmap` now use the same `ArtifactBundle` writer while preserving their magic/header bytes. |
