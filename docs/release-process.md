@@ -28,8 +28,8 @@ Before tagging a release:
 2. Confirm `SECURITY.md`, `STABILITY.md`, and `CHANGELOG.md` describe the support
    window and compatibility surfaces for that exact tag. Private vulnerability
    reports use GitHub Security Advisories with coordinated embargo/disclosure.
-3. Run `zig build m0` on Ubuntu 24.04 with LLVM 18 (`MC_LLVM_MAJOR=18`) and no skips.
-4. Run `zig build m0` in the pinned Linux container with no skips.
+3. Run `zig build m0-full` on Ubuntu 24.04 with LLVM 18 (`MC_LLVM_MAJOR=18`) and no skips.
+4. Run `zig build m0-full` in the pinned Linux container with no skips.
 5. Confirm the nightly rotating-seed mcfuzz workflow is green for the release
    candidate commit. Shrink any reported failing seed with `tools/fuzz/mcfuzz.py
    shrink` and commit the minimized repro under `tools/fuzz/corpus/` before
@@ -49,7 +49,7 @@ Before tagging a release:
    verifies `GITHUB_SHA` and the source version, runs `zig build preflight`, the
    focused `release-metadata-test`, `package-release-test`, and
    `release-safe-install-test` gates, and a complete no-skip
-   `MC_REQUIRE_TOOLS=1 zig build m0` before building artifacts. It also runs the built compiler and checks its
+   `MC_REQUIRE_TOOLS=1 zig build m0-full` before building artifacts. It also runs the built compiler and checks its
    reported version, then requires a clean source tree, so the publishing path proves
    the exact source revision passed the documented qualification bar.
 10. Confirm the dry-run workflow artifact contains tarballs and matching

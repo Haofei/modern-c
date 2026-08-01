@@ -10,7 +10,7 @@ Use this when VisionFive 2 hardware is unavailable.
   example `LLD=/opt/homebrew/opt/lld/bin/ld.lld zig build riscv-qemu-validation`.
 - Run `tools/qemu/riscv-qemu-soak-smoke.sh` before making a durability claim from
   QEMU-only evidence. Set `MC_SOAK_ITERS=N` to raise the repeat count.
-- Run `zig build m0` before broad milestone or release claims.
+- Run `zig build m0-full` before broad milestone or release claims.
 
 ## Required Tools
 

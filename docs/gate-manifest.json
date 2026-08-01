@@ -14,6 +14,33 @@
       "intent": "full qualification and provenance"
     }
   },
+  "ci_pass_assertions": {
+    "ci-m0-pass": {
+      "build_tier": "m0",
+      "min_count": 19,
+      "gates": [
+        "test-lint",
+        "bad-diagnostics-test",
+        "diagnostics-reference-test",
+        "diagnostic-code-inventory-test",
+        "semantic-facts-inventory-test",
+        "compilation-session-inventory-test",
+        "mir-identity-inventory-test",
+        "gate-manifest-test",
+        "ci-pass-gates-test",
+        "dev-gates-test",
+        "mcc-cli-test",
+        "mcc-build-test",
+        "mcmap-test",
+        "release-metadata-test",
+        "package-release-test",
+        "profile-manifest-test",
+        "std-api-docs-test",
+        "vendoring-test",
+        "third-party-licenses-test"
+      ]
+    }
+  },
   "gates": [
     {
       "id": "test-lint",
@@ -46,7 +73,6 @@
         "compiler-subset"
       ],
       "build_tiers": [
-        "m0",
         "fast",
         "c0"
       ],
@@ -156,7 +182,6 @@
         "compiler-subset"
       ],
       "build_tiers": [
-        "m0",
         "fast",
         "c0"
       ],
@@ -176,7 +201,6 @@
         "compiler-subset"
       ],
       "build_tiers": [
-        "m0",
         "fast",
         "c0"
       ],
@@ -198,7 +222,6 @@
         "llvm-experimental"
       ],
       "build_tiers": [
-        "m0",
         "fast"
       ],
       "skip_policy": "tool-required"

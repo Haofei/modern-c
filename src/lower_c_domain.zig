@@ -34,6 +34,13 @@ pub const Context = struct {
     mir_target_type: MirTargetTypeFn,
 };
 
+const DomainTypes = struct {
+    domain: ast.TypeExpr,
+    payload: ast.TypeExpr,
+    result: ast.TypeExpr,
+    interval: ?ast.TypeExpr = null,
+};
+
 // Serial/counter domain operations. `serial<T>`/`counter<T>` lower to their
 // unsigned inner integer, so the modular difference is plain wrapping
 // subtraction; serial ordering reinterprets that difference as signed.
@@ -45,10 +52,9 @@ pub fn emitDomainOpCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap
     if (kind == .wrap_residue or !std.mem.eql(u8, member.name.text, fact_info.op)) return false;
     const expected_args: usize = if (fact_info.has_interval) 3 else 2;
     if (call.args.len != expected_args) return error.UnsupportedCEmission;
-    _ = ctx.mir_target_type(ctx.emit_ctx, .domain_type, call.callee.*.span) orelse return error.UnsupportedCEmission;
-    const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .domain_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
-    const result_ty = ctx.mir_target_type(ctx.emit_ctx, .domain_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
-    if (fact_info.has_interval) _ = ctx.mir_target_type(ctx.emit_ctx, .domain_interval, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    const types = try domainTypesForEmission(ctx, call, fact_info.has_interval);
+    const payload_ty = types.payload;
+    const result_ty = types.result;
     const inner_name = ctx.underlying_int_type_name(ctx.emit_ctx, payload_ty) orelse return error.UnsupportedCEmission;
     const unsigned_c = try ctx.c_type(ctx.emit_ctx, payload_ty);
     const op = fact_info.op;
@@ -108,6 +114,19 @@ pub fn emitDomainOpCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap
     try ctx.emit_expr(ctx.emit_ctx, call.args[1], locals);
     try ctx.out.print(ctx.allocator, ")) {s} 0)", .{cmp});
     return true;
+}
+
+fn domainTypesForEmission(ctx: Context, call: anytype, needs_interval: bool) !DomainTypes {
+    const span = call.callee.*.span;
+    return .{
+        .domain = ctx.mir_target_type(ctx.emit_ctx, .domain_type, span) orelse return error.UnsupportedCEmission,
+        .payload = ctx.mir_target_type(ctx.emit_ctx, .domain_payload, span) orelse return error.UnsupportedCEmission,
+        .result = ctx.mir_target_type(ctx.emit_ctx, .domain_result, span) orelse return error.UnsupportedCEmission,
+        .interval = if (needs_interval)
+            ctx.mir_target_type(ctx.emit_ctx, .domain_interval, span) orelse return error.UnsupportedCEmission
+        else
+            null,
+    };
 }
 
 fn emitSignedSerialDiff(ctx: Context, a: ast.Expr, b: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), signed_c: []const u8, unsigned_c: []const u8) !void {

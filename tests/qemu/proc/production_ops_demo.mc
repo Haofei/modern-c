@@ -133,8 +133,15 @@ export fn production_ops_run() -> u32 {
     if rollback_mark_boot_failed(&rb, 1) != true { pass = 0; }
     if rollback_active_version(&rb) != 10 { pass = 0; }
     if rollback_mark_boot_failed(&rb, 0) { pass = 0; }
-    var next_agent: BundleHeader = bundle_header_init(.Agent, 12, 1, 41, 7, 0xBB66, 256);
-    switch bundle_verify_and_admit_metadata(&next_agent, .Agent, 1, 8, 13, 7, 0xBB66) {
+    var next_agent: BundleHeader = bundle_header_init(.Agent, 12, 1, 41, 7, exact_hash, 256);
+    switch bundle_verify_and_admit_metadata(&next_agent, .Agent, 1, 8, 13, 7, exact_hash) {
+        ok(vb) => {
+            if rollback_install_verified_candidate(&rb, vb) != 2 { pass = 0; }
+            if rollback_active_version(&rb) != 10 { pass = 0; }
+        }
+        err(e) => { pass = 0; }
+    }
+    switch bundle_verify_and_admit_image(&next_agent, .Agent, 1, 8, 13, 7, image_base, 4) {
         ok(vb) => {
             let verified_slot: usize = rollback_install_verified_candidate(&rb, vb);
             if verified_slot != 1 { pass = 0; }

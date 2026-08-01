@@ -1015,7 +1015,7 @@ True self-hosting is achieved only when all of these are true:
 | Checker coverage | The MC compiler implements the full checker: type resolution, const-eval, definite-init, move/borrow rules, effects, traits/bounds/coherence, hardening types, exhaustiveness, layout, and all current diagnostics. | Differential check gates match the Zig compiler on success/failure and diagnostic codes for `tests/spec/` plus widened negative fixtures. |
 | Backend coverage | Both production backends are implemented in MC: C and LLVM. | `diff-backend`, LLVM object/sweep/debug/opt gates, and C backend gates pass under the MC compiler. |
 | Driver/toolchain | `mcc-cc`, `mcc-llvm-cc`, profiles, imports, package/registry flows, source maps, diagnostics, and reproducible-build behavior work through the MC compiler. | Toolchain gates pass with the MC compiler selected. |
-| Whole corpus | The MC compiler builds the full hosted and kernel corpus, including QEMU tests. | `zig build m0` and `tools/m0-parallel.sh <jobs>` report `real_failures=0` with the MC compiler under test. |
+| Whole corpus | The MC compiler builds the full hosted and kernel corpus, including QEMU tests. | `zig build m0-full` and `tools/m0-parallel.sh <jobs>` report `real_failures=0` with the MC compiler under test. |
 | Bootstrap fixpoint | The compiler can build itself twice and reach a stable artifact. | Stage0 -> Stage1 -> Stage2 bootstrap succeeds; Stage1 and Stage2 outputs are byte-identical or match an explicitly-normalized stable-output contract. |
 
 **Non-negotiable naming rule:** do not write "self-hosting achieved" until the full definition of done
@@ -1050,7 +1050,7 @@ Do not restart from scratch. Build on these assets:
 | `tools/toolchain/diff-backend.sh` and fuzz gates | C/LLVM agreement checks for the Zig compiler. | Re-run them with the MC compiler selected; add oracle comparison while both compilers exist. |
 | LLVM sweep/object/debug/opt scripts | Current LLVM backend coverage. | Make these pass under the MC LLVM backend before claiming full replacement. |
 | `tools/toolchain/mcc-cc.sh`, `mcc-llvm-cc.sh`, `mcc-pkg.sh`, `mcc-registry.sh` | Toolchain and packaging surface. | Audit each script so it can select the compiler under test via an explicit environment variable or argument. |
-| `build/tiers.zig` and `tools/m0-parallel.sh` | Full conformance gate list and parallel local runner. | Treat `m0` as the final acceptance gate. The parallel runner is for fast local confidence; `zig build m0` remains the serial truth gate. |
+| `build/tiers.zig` and `tools/m0-parallel.sh` | Full conformance gate list and parallel local runner. | Treat `m0-full` as the final acceptance gate. The parallel runner is for fast local confidence; `zig build m0-full` remains the serial truth gate. |
 | `std/`, `kernel/`, `examples/`, `demo/`, `user/`, `tests/` | Real language surface. | Expand the corpus in this order: hosted std subset -> full std -> examples/demo/user -> kernel/QEMU -> whole `m0`. |
 
 ### 6.4 Harness required before large porting
@@ -1071,7 +1071,7 @@ Build the harness first. Without it, the project becomes a large rewrite with no
    Stage1/Stage2 artifacts and runs a smoke corpus with Stage2.
 5. **Corpus manifest.** Add a checked-in manifest for the self-host corpus rather than discovering files
    ad hoc. Track expected mode per file: parse-only, check-fail, emit-C, emit-LLVM, object, run, QEMU.
-6. **Ledger.** Keep [`docs/archive/full-selfhost-ledger.md`](archive/full-selfhost-ledger.md) current with phase,
+6. **Ledger.** Keep the self-host status in this document or a generated risk/evidence ledger with phase,
    corpus size, pass/fail counts, unsupported features, performance, and the commit that changed
    the result.
 
@@ -1096,7 +1096,7 @@ record it as a named lesser milestone and keep the full-self-host status as NOT 
 | P7. Full LLVM backend | Textual LLVM IR emission, object lowering, debug metadata, target ABI/layout, atomics, traps, async/runtime paths, kernel profile, and forbidden-assumption policy. | LLVM gates that pass under Zig also pass under MC, including object/run/QEMU coverage. | `llvm-test`, object/sweep/debug/opt/pkg/runtime/std/kernel/QEMU gates. |
 | P8. Optimizer and equivalence | Port optimizer decisions and opt-equiv behavior without changing the safety contract. | Optimized and unoptimized C/LLVM outputs remain behavior-equivalent and preserve required checks. | `opt-test`, `opt-equiv-test`, LLVM opt sweeps, fuzz equivalence. |
 | P9. Driver, packages, and tools | CLI compatibility, `emit-c`, `emit-llvm`, `emit-map`, profiles, `mcc-cc`, `mcc-llvm-cc`, package manifests, registry/lockfiles, editor diagnostics surface, reproducible builds. | Toolchain scripts and package flows work with the MC compiler selected. | Toolchain, package, registry, map, reproducible-build, and editor-facing diagnostic gates. |
-| P10. Corpus widening and cutover | Full std, examples, demo, userland, kernel, QEMU, fuzz, and complete `m0` under Stage2. | Stage2 is the default compiler for the full gate matrix and reports zero real failures. | `tools/m0-parallel.sh <jobs>` and final `zig build m0` with MC compiler selected. |
+| P10. Corpus widening and cutover | Full std, examples, demo, userland, kernel, QEMU, fuzz, and complete `m0-full` under Stage2. | Stage2 is the default compiler for the full gate matrix and reports zero real failures. | `tools/m0-parallel.sh <jobs>` and final `zig build m0-full` with MC compiler selected. |
 
 ### 6.6 Subsystem checklist
 
@@ -1127,7 +1127,7 @@ Cutover starts only after P0–P9 are green on the widened corpus.
 4. Compare Stage1 and Stage2 artifacts using the documented normalization contract.
 5. Run the full oracle corpus with Stage2 selected as `MCC_UNDER_TEST`.
 6. Run `tools/m0-parallel.sh <jobs>` and require `real_failures=0`.
-7. Run the serial truth gate, `zig build m0`, with the MC compiler selected for compiler-produced
+7. Run the serial truth gate, `zig build m0-full`, with the MC compiler selected for compiler-produced
    artifacts.
 8. Switch the default `mcc` toolchain entry point to Stage2/MC.
 9. Keep the Zig implementation available only as an explicitly named fallback/oracle during a fixed
@@ -1166,7 +1166,7 @@ These are valid milestones, but none equals true self-hosting:
 - Update this document or the full-selfhost ledger whenever a phase changes status, a corpus expands, or
   a gap is discovered.
 - Use strict file staging for commits. Do not mix unrelated fixes with self-host phase work.
-- For local confidence use `tools/m0-parallel.sh <jobs>`; for final acceptance use serial `zig build m0`.
+- For local confidence use `tools/m0-parallel.sh <jobs>`; for final acceptance use serial `zig build m0-full`.
 
 ### 6.10 Open risks
 

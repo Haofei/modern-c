@@ -405,7 +405,58 @@ test "MIR target-type admission rejects target span identity drift" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(module_mir));
 }
 
-test "MIR lowering admission rejects unknown target-type result facts" {
+test "MIR target-type admission rejects target fact identity table drift" {
+    const source =
+        \\fn callee(x: u32) -> u32 {
+        \\    return x;
+        \\}
+        \\
+        \\fn caller() -> u32 {
+        \\    return callee(7);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bad_target_fact_identity_table.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    {
+        var module_mir = try mir.build(std.testing.allocator, module);
+        defer module_mir.deinit();
+        const caller = functionByNameMut(&module_mir, "caller").?;
+        const fact = targetTypeFactByKind(caller.*, .direct_call_result) orelse return error.TestUnexpectedResult;
+        caller.type_identities[fact.typed_result_ty.index()].spelling = "u64";
+
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(module_mir));
+    }
+
+    {
+        var module_mir = try mir.build(std.testing.allocator, module);
+        defer module_mir.deinit();
+        const caller = functionByNameMut(&module_mir, "caller").?;
+        const fact = targetTypeFactByKind(caller.*, .direct_call_result) orelse return error.TestUnexpectedResult;
+        caller.span_identities[fact.typed_span_id.index()].source.line += 1;
+
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(module_mir));
+    }
+
+    {
+        var module_mir = try mir.build(std.testing.allocator, module);
+        defer module_mir.deinit();
+        const caller = functionByNameMut(&module_mir, "caller").?;
+        const fact = targetTypeFactByKind(caller.*, .direct_call_result) orelse return error.TestUnexpectedResult;
+        caller.target_owner_identities[fact.typed_target_owner_id.index()].spelling = "other_callee";
+
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(module_mir));
+    }
+}
+
+test "MIR target-type admission rejects unknown target-type result identity drift" {
     const source =
         \\fn callee(x: u32) -> u32 {
         \\    return x;
@@ -443,9 +494,8 @@ test "MIR lowering admission rejects unknown target-type result facts" {
     try std.testing.expect(fact_count != 0);
     try std.testing.expect(instruction_count != 0);
 
-    try mir.validateTargetTypeFactsForLowering(module_mir);
-    try std.testing.expectError(error.UnknownMirLoweringType, mir.validateKnownFactTypesForLowering(module_mir));
-    try std.testing.expectError(error.UnknownMirLoweringType, mir.validateLoweringAdmission(module_mir));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(module_mir));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateLoweringAdmission(module_mir));
 }
 
 test "MIR dump exposes bounded FFI parameter contracts" {
@@ -598,6 +648,43 @@ fn duplicateTargetTypeFact(function: *mir.Function, allocator: std.mem.Allocator
     function.target_type_facts = facts;
 }
 
+fn simpleTypeExprForTest(name: []const u8, span: ast.Span) ast.TypeExpr {
+    return .{ .span = span, .kind = .{ .name = .{ .text = name, .span = span } } };
+}
+
+fn retargetFirstTargetTypeFactAndInstruction(
+    function: *mir.Function,
+    kind: mir.TargetTypeKind,
+    spelling: []const u8,
+    result_ty: ValueType,
+) !void {
+    const type_identity = typeIdentityBySpelling(function.*, spelling) orelse return error.TestUnexpectedResult;
+    var fact_source: ?mir.SourcePoint = null;
+    for (function.target_type_facts) |*fact| {
+        if (fact.kind != kind) continue;
+        const replacement_ty = simpleTypeExprForTest(spelling, fact.target_ty.span);
+        fact.target_ty = replacement_ty;
+        fact.result_ty = result_ty;
+        fact.typed_result_ty = type_identity.id;
+        fact_source = fact.source;
+        break;
+    } else return error.TestUnexpectedResult;
+
+    const source = fact_source.?;
+    for (function.blocks) |*block| {
+        for (block.instructions) |*instruction| {
+            if (instruction.kind != .target_type) continue;
+            if (!std.mem.eql(u8, instruction.detail, @tagName(kind))) continue;
+            if (instruction.line != source.line or instruction.column != source.column) continue;
+            instruction.target_ty = simpleTypeExprForTest(spelling, instruction.target_ty.?.span);
+            instruction.result_ty = result_ty;
+            instruction.typed_result_ty = type_identity.id;
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
 test "MIR owns all scalar conversion builtin call targets" {
     const source =
         \\type W = wrap<u8>;
@@ -636,12 +723,12 @@ test "MIR owns all scalar conversion builtin call targets" {
         try std.testing.expectEqual(case.kind, function.call_target_facts[0].kind);
         try std.testing.expectEqualStrings(case.result_name, function.call_target_facts[0].result_ty.name());
         try std.testing.expect(function.target_type_facts.len >= 2);
-        try std.testing.expectEqual(mir.TargetTypeKind.conversion_source, function.target_type_facts[0].kind);
-        try std.testing.expectEqual(mir.TargetTypeKind.conversion_target, function.target_type_facts[1].kind);
+        try std.testing.expect(targetTypeFactByKind(function, .conversion_source) != null);
+        try std.testing.expect(targetTypeFactByKind(function, .conversion_target) != null);
     }
     try mir.validateLoweringAdmission(typed_mir);
-    try std.testing.expectEqualStrings("u32", valueTypeName(functionByName(typed_mir, "mod_value").?.target_type_facts[0].result_ty));
-    try std.testing.expectEqualStrings("u64", valueTypeName(functionByName(typed_mir, "adapted_binary").?.target_type_facts[0].result_ty));
+    try std.testing.expectEqualStrings("u32", valueTypeName((targetTypeFactByKind(functionByName(typed_mir, "mod_value").?, .conversion_source) orelse return error.TestUnexpectedResult).result_ty));
+    try std.testing.expectEqualStrings("u64", valueTypeName((targetTypeFactByKind(functionByName(typed_mir, "adapted_binary").?, .conversion_source) orelse return error.TestUnexpectedResult).result_ty));
 }
 
 test "MIR lowering admission rejects unknown call-target result facts" {
@@ -958,9 +1045,8 @@ test "MIR owns target types for contextual constructors and literals" {
     const bind_fn = functionByName(typed_mir, "make_bind").?;
     try std.testing.expectEqual(@as(usize, 1), bind_fn.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.bind, bind_fn.call_target_facts[0].kind);
-    try std.testing.expectEqual(@as(usize, 1), bind_fn.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.bind, bind_fn.target_type_facts[0].kind);
-    try std.testing.expect(bind_fn.target_type_facts[0].target_ty.kind == .closure_type);
+    const bind_fact = targetTypeFactByKind(bind_fn, .bind) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(bind_fact.target_ty.kind == .closure_type);
     try std.testing.expect(callInstructionByDetail(bind_fn, "bind").?.result_ty != .unknown);
 
     const ok_fn = functionByName(typed_mir, "make_ok").?;
@@ -980,10 +1066,9 @@ test "MIR owns target types for contextual constructors and literals" {
     const arg_fn = functionByName(typed_mir, "pass_ok").?;
     try std.testing.expect(targetTypeFactByKind(arg_fn, .result_ok) != null);
     const slot_fn = functionByName(typed_mir, "make_slot").?;
-    try std.testing.expectEqual(@as(usize, 3), slot_fn.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, slot_fn.target_type_facts[0].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.bind, slot_fn.target_type_facts[1].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.result_ok, slot_fn.target_type_facts[2].kind);
+    try std.testing.expect(targetTypeFactByKind(slot_fn, .struct_literal) != null);
+    try std.testing.expect(targetTypeFactByKind(slot_fn, .bind) != null);
+    try std.testing.expect(targetTypeFactByKind(slot_fn, .result_ok) != null);
     const number_fn = functionByName(typed_mir, "make_number").?;
     try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(number_fn, .tagged_union));
     try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(number_fn, .direct_call_result));
@@ -1014,7 +1099,7 @@ test "MIR owns target types for contextual constructors and literals" {
     const flags_fact = functionByName(typed_mir, "make_flags").?.target_type_facts[0];
     try std.testing.expectEqual(mir.TargetTypeKind.struct_literal, flags_fact.kind);
     try std.testing.expectEqual(mir.AggregateConstructionKind.packed_bits, flags_fact.aggregate_construction.?);
-    const slot_fact = slot_fn.target_type_facts[0];
+    const slot_fact = targetTypeFactByKind(slot_fn, .struct_literal) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(mir.AggregateConstructionKind.declared_struct, slot_fact.aggregate_construction.?);
     const c_word_fact = functionByName(typed_mir, "make_c_word").?.target_type_facts[0];
     try std.testing.expectEqual(mir.AggregateConstructionKind.c_union, c_word_fact.aggregate_construction.?);
@@ -1129,8 +1214,10 @@ test "MIR owns implicit view const narrowing source and target types" {
         try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .view_const_narrow_target));
     }
 
-    try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "slice_passthrough").?.target_type_facts.len);
-    try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "raw_many_passthrough").?.target_type_facts.len);
+    try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(functionByName(typed_mir, "slice_passthrough").?, .view_const_narrow_source));
+    try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(functionByName(typed_mir, "slice_passthrough").?, .view_const_narrow_target));
+    try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(functionByName(typed_mir, "raw_many_passthrough").?, .view_const_narrow_source));
+    try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(functionByName(typed_mir, "raw_many_passthrough").?, .view_const_narrow_target));
 }
 
 test "MIR owns mapped try error target types" {
@@ -1241,8 +1328,8 @@ test "MIR owns dyn coercion targets and excludes pass-through values" {
     const pass_arg = functionByName(typed_mir, "pass_arg").?;
     try std.testing.expect(targetTypeFactByKind(pass_arg, .dyn_coercion) != null);
     try std.testing.expect(targetTypeFactByKind(pass_arg, .dyn_coercion_source) != null);
-    try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "pass_through").?.target_type_facts.len);
-    try std.testing.expectEqual(@as(usize, 0), functionByName(typed_mir, "pass_nullable").?.target_type_facts.len);
+    try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(functionByName(typed_mir, "pass_through").?, .dyn_coercion));
+    try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(functionByName(typed_mir, "pass_nullable").?, .dyn_coercion));
     try std.testing.expectEqual(mir.TargetTypeKind.null_literal, functionByName(typed_mir, "no_dyn").?.target_type_facts[0].kind);
 }
 
@@ -1676,8 +1763,7 @@ test "MIR owns runtime assert condition types" {
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "require_flag").?;
-    try std.testing.expectEqual(@as(usize, 1), function.target_type_facts.len);
-    const fact = function.target_type_facts[0];
+    const fact = targetTypeFactByKind(function, .assert_condition) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(mir.TargetTypeKind.assert_condition, fact.kind);
     try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
     try std.testing.expectEqualStrings("bool", fact.result_ty.name());
@@ -1765,6 +1851,26 @@ test "MIR owns if-let subject types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR target-type admission rejects forged if-let subject family" {
+    const source =
+        \\fn result_subject(value: Result<u32, u32>) -> u32 { if let ok(v) = value { return v; } else { return 0; } }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_bad_if_let_subject_family.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "result_subject") orelse return error.TestUnexpectedResult;
+    try retargetFirstTargetTypeFactAndInstruction(function, .if_let_subject, "u32", .{ .integer = "u32" });
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
+}
+
 test "MIR owns try operand and result types" {
     const source =
         \\extern fn make_result() -> Result<u32, u32>;
@@ -1792,6 +1898,27 @@ test "MIR owns try operand and result types" {
     const nullable_payload_fact = targetTypeFactByKind(functionByName(typed_mir, "nullable_try").?, .expression_result) orelse return error.TestUnexpectedResult;
     try std.testing.expect(nullable_payload_fact.target_ty.kind == .pointer);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR target-type admission rejects forged try operand family" {
+    const source =
+        \\extern fn make_result() -> Result<u32, u32>;
+        \\fn result_try() -> u32 { return make_result()?; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_bad_try_operand_family.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByNameMut(&typed_mir, "result_try") orelse return error.TestUnexpectedResult;
+    try retargetFirstTargetTypeFactAndInstruction(function, .try_operand, "u32", .{ .integer = "u32" });
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 }
 
 test "MIR owns for-loop iterable and element types" {
@@ -2171,7 +2298,7 @@ test "MIR owns inferred local literal types" {
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "literals").?;
     try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .inferred_local));
-    try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .expression_result));
+    try std.testing.expectEqual(@as(usize, 5), countTargetTypeFactsByKind(function, .expression_result));
     var saw_count = false;
     var saw_enabled = false;
     var saw_literal_results: usize = 0;
@@ -2192,7 +2319,83 @@ test "MIR owns inferred local literal types" {
     }
     try std.testing.expect(saw_count);
     try std.testing.expect(saw_enabled);
-    try std.testing.expectEqual(@as(usize, 3), saw_literal_results);
+    try std.testing.expectEqual(@as(usize, 5), saw_literal_results);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR owns direct identifier expression result types" {
+    const source =
+        \\global enabled: bool = true;
+        \\fn direct_identifier(value: u32) -> u32 {
+        \\    if enabled { return value; }
+        \\    return value;
+        \\}
+    ;
+    const value_text = "value";
+    const value_offset = std.mem.indexOf(u8, source, "return value;") orelse return error.TestUnexpectedResult;
+    const ident_offset = value_offset + "return ".len;
+    const enabled_use = std.mem.indexOf(u8, source, "if enabled") orelse return error.TestUnexpectedResult;
+    const enabled_offset = enabled_use + "if ".len;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_direct_identifier_expression_result.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "direct_identifier").?;
+    var saw_value = false;
+    var saw_enabled = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .expression_result) continue;
+        if (fact.source.offset == ident_offset and fact.source.len == value_text.len) {
+            try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+            saw_value = true;
+        }
+        if (fact.source.offset == enabled_offset and fact.source.len == "enabled".len) {
+            try std.testing.expectEqualStrings("bool", fact.target_ty.kind.name.text);
+            saw_enabled = true;
+        }
+    }
+    try std.testing.expect(saw_value);
+    try std.testing.expect(saw_enabled);
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR owns direct call expression result types" {
+    const source =
+        \\fn make() -> u16 { return 9; }
+        \\fn use_call() -> u16 {
+        \\    return make();
+        \\}
+    ;
+    const call_text = "make()";
+    const call_offset = std.mem.indexOfPos(u8, source, std.mem.indexOf(u8, source, "return make();") orelse return error.TestUnexpectedResult, call_text) orelse return error.TestUnexpectedResult;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_direct_call_expression_result.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+    const function = functionByName(typed_mir, "use_call").?;
+    var saw_call = false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .expression_result or fact.source.offset != call_offset or fact.source.len != call_text.len) continue;
+        try std.testing.expectEqualStrings("u16", fact.target_ty.kind.name.text);
+        saw_call = true;
+    }
+    try std.testing.expect(saw_call);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
@@ -2691,7 +2894,8 @@ test "MIR records typed call target facts for reductions" {
     try std.testing.expectEqual(@as(usize, 1), checked.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.reduce_sum_checked, checked.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("Result", checked.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 2), checked.target_type_facts.len);
+    try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(checked, .reduce_source));
+    try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(checked, .reduce_element));
     var checked_has_source = false;
     var checked_has_element = false;
     for (checked.target_type_facts) |fact| switch (fact.kind) {
@@ -2705,6 +2909,7 @@ test "MIR records typed call target facts for reductions" {
             try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
             checked_has_element = true;
         },
+        .expression_result => {},
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expect(checked_has_source);
@@ -2714,7 +2919,8 @@ test "MIR records typed call target facts for reductions" {
     try std.testing.expectEqual(@as(usize, 1), left.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.reduce_sum_left, left.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("f64", left.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 2), left.target_type_facts.len);
+    try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(left, .reduce_source));
+    try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(left, .reduce_element));
     var left_has_source = false;
     var left_has_element = false;
     for (left.target_type_facts) |fact| switch (fact.kind) {
@@ -2728,6 +2934,7 @@ test "MIR records typed call target facts for reductions" {
             try std.testing.expectEqualStrings("f64", fact.target_ty.kind.name.text);
             left_has_element = true;
         },
+        .expression_result => {},
         else => return error.TestUnexpectedResult,
     };
     try std.testing.expect(left_has_source);
@@ -3131,11 +3338,10 @@ test "MIR owns value reflection call target facts" {
         try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
         try std.testing.expectEqual(item.kind, function.call_target_facts[0].kind);
         try std.testing.expectEqualStrings("usize", function.call_target_facts[0].result_ty.name());
-        try std.testing.expectEqual(@as(usize, 2), function.target_type_facts.len);
-        try std.testing.expectEqual(mir.TargetTypeKind.reflection_target, function.target_type_facts[0].kind);
-        try std.testing.expectEqualStrings(item.target, function.target_type_facts[0].target_ty.kind.name.text);
-        try std.testing.expectEqual(mir.TargetTypeKind.reflection_result, function.target_type_facts[1].kind);
-        try std.testing.expectEqualStrings("usize", function.target_type_facts[1].target_ty.kind.name.text);
+        const reflection_target = targetTypeFactByKind(function, .reflection_target) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(item.target, reflection_target.target_ty.kind.name.text);
+        const reflection_result = targetTypeFactByKind(function, .reflection_result) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("usize", reflection_result.target_ty.kind.name.text);
     }
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
@@ -3168,24 +3374,27 @@ test "MIR owns byte-view call target facts" {
     try std.testing.expectEqual(@as(usize, 1), view.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.byte_view_as_bytes, view.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("[]const", view.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 3), view.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_source, view.target_type_facts[0].kind);
-    try std.testing.expectEqualStrings("u32", view.target_type_facts[0].target_ty.kind.name.text);
-    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_result, view.target_type_facts[1].kind);
-    try std.testing.expectEqual(ast.Mutability.@"const", view.target_type_facts[1].target_ty.kind.slice.mutability);
-    try std.testing.expectEqual(mir.TargetTypeKind.expression_result, view.target_type_facts[2].kind);
-    try std.testing.expectEqual(ast.Mutability.@"const", view.target_type_facts[2].target_ty.kind.pointer.mutability);
-    try std.testing.expectEqualStrings("u32", view.target_type_facts[2].target_ty.kind.pointer.child.kind.name.text);
+    const view_source = targetTypeFactByKind(view, .byte_view_source) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u32", view_source.target_ty.kind.name.text);
+    const view_result = targetTypeFactByKind(view, .byte_view_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ast.Mutability.@"const", view_result.target_ty.kind.slice.mutability);
+    var saw_view_pointer_result = false;
+    for (view.target_type_facts) |fact| {
+        if (fact.kind != .expression_result or fact.target_ty.kind != .pointer) continue;
+        try std.testing.expectEqual(ast.Mutability.@"const", fact.target_ty.kind.pointer.mutability);
+        try std.testing.expectEqualStrings("u32", fact.target_ty.kind.pointer.child.kind.name.text);
+        saw_view_pointer_result = true;
+    }
+    try std.testing.expect(saw_view_pointer_result);
 
     const equal = functionByName(typed_mir, "byte_equal").?;
     try std.testing.expectEqual(@as(usize, 1), equal.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.byte_view_equal, equal.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("bool", equal.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 2), equal.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_source, equal.target_type_facts[0].kind);
-    try std.testing.expectEqual(ast.Mutability.@"const", equal.target_type_facts[0].target_ty.kind.slice.mutability);
-    try std.testing.expectEqual(mir.TargetTypeKind.byte_view_result, equal.target_type_facts[1].kind);
-    try std.testing.expectEqualStrings("bool", equal.target_type_facts[1].target_ty.kind.name.text);
+    const equal_source = targetTypeFactByKind(equal, .byte_view_source) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ast.Mutability.@"const", equal_source.target_ty.kind.slice.mutability);
+    const equal_result = targetTypeFactByKind(equal, .byte_view_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("bool", equal_result.target_ty.kind.name.text);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -3215,13 +3424,12 @@ test "MIR owns raw-many offset identity and complete types" {
     try std.testing.expectEqual(@as(usize, 1), shifted.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.raw_many_offset, shifted.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("[*]mut", shifted.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 3), shifted.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.raw_many_offset_base, shifted.target_type_facts[0].kind);
-    try std.testing.expectEqualStrings("Words", shifted.target_type_facts[0].target_ty.kind.name.text);
-    try std.testing.expectEqual(mir.TargetTypeKind.raw_many_offset_element, shifted.target_type_facts[1].kind);
-    try std.testing.expectEqualStrings("u16", shifted.target_type_facts[1].target_ty.kind.name.text);
-    try std.testing.expectEqual(mir.TargetTypeKind.raw_many_offset_result, shifted.target_type_facts[2].kind);
-    try std.testing.expectEqualStrings("Words", shifted.target_type_facts[2].target_ty.kind.name.text);
+    const raw_base = targetTypeFactByKind(shifted, .raw_many_offset_base) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Words", raw_base.target_ty.kind.name.text);
+    const raw_element = targetTypeFactByKind(shifted, .raw_many_offset_element) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u16", raw_element.target_ty.kind.name.text);
+    const raw_result = targetTypeFactByKind(shifted, .raw_many_offset_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Words", raw_result.target_ty.kind.name.text);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -3531,20 +3739,18 @@ test "MIR owns MMIO read write identities and complete types" {
         const function = functionByName(typed_mir, case.name).?;
         try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
         try std.testing.expectEqual(case.kind, function.call_target_facts[0].kind);
-        try std.testing.expectEqual(@as(usize, 4), function.target_type_facts.len);
-        try std.testing.expectEqual(mir.TargetTypeKind.mmio_struct, function.target_type_facts[0].kind);
-        try std.testing.expectEqualStrings("Device", function.target_type_facts[0].target_ty.kind.name.text);
-        try std.testing.expectEqual(mir.TargetTypeKind.mmio_storage, function.target_type_facts[1].kind);
-        try std.testing.expectEqualStrings(case.storage, function.target_type_facts[1].target_ty.kind.name.text);
-        try std.testing.expectEqual(mir.TargetTypeKind.mmio_value, function.target_type_facts[2].kind);
-        try std.testing.expectEqualStrings(case.value, function.target_type_facts[2].target_ty.kind.name.text);
-        try std.testing.expectEqual(mir.TargetTypeKind.mmio_result, function.target_type_facts[3].kind);
-        try std.testing.expectEqualStrings(case.result, function.target_type_facts[3].target_ty.kind.name.text);
+        const mmio_struct = targetTypeFactByKind(function, .mmio_struct) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("Device", mmio_struct.target_ty.kind.name.text);
+        const mmio_storage = targetTypeFactByKind(function, .mmio_storage) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(case.storage, mmio_storage.target_ty.kind.name.text);
+        const mmio_value = targetTypeFactByKind(function, .mmio_value) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(case.value, mmio_value.target_ty.kind.name.text);
+        const mmio_result = targetTypeFactByKind(function, .mmio_result) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(case.result, mmio_result.target_ty.kind.name.text);
     }
     const inferred = functionByName(typed_mir, "read_raw_inferred").?;
     try std.testing.expectEqual(@as(usize, 1), inferred.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.mmio_read, inferred.call_target_facts[0].kind);
-    try std.testing.expectEqual(@as(usize, 5), inferred.target_type_facts.len);
     const result_fact = targetTypeFactByKind(inferred, .mmio_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("u32", result_fact.target_ty.kind.name.text);
     const local_fact = targetTypeFactByKind(inferred, .inferred_local) orelse return error.TestUnexpectedResult;
@@ -3578,7 +3784,6 @@ test "MIR owns MMIO map identity and complete types" {
     const function = functionByName(typed_mir, "map_device").?;
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.mmio_map, function.call_target_facts[0].kind);
-    try std.testing.expectEqual(@as(usize, 5), function.target_type_facts.len);
     const try_result = targetTypeFactByKind(function, .expression_result) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("MmioPtr", try_result.target_ty.kind.generic.base.text);
     try std.testing.expectEqualStrings("Device", try_result.target_ty.kind.generic.args[0].kind.name.text);
@@ -3630,31 +3835,33 @@ test "MIR owns semantic escape call target facts" {
     try std.testing.expectEqual(@as(usize, 1), reveal_fn.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.declassify, reveal_fn.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("u8", reveal_fn.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 2), reveal_fn.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.declassify_source, reveal_fn.target_type_facts[0].kind);
-    try std.testing.expectEqualStrings("Secret", reveal_fn.target_type_facts[0].target_ty.kind.generic.base.text);
-    try std.testing.expectEqual(mir.TargetTypeKind.declassify_result, reveal_fn.target_type_facts[1].kind);
-    try std.testing.expectEqualStrings("u8", reveal_fn.target_type_facts[1].result_ty.name());
+    const declassify_source = targetTypeFactByKind(reveal_fn, .declassify_source) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Secret", declassify_source.target_ty.kind.generic.base.text);
+    const declassify_result = targetTypeFactByKind(reveal_fn, .declassify_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u8", declassify_result.result_ty.name());
 
     const noalias_fn = functionByName(typed_mir, "noalias_value").?;
     try std.testing.expectEqual(@as(usize, 1), noalias_fn.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.assume_noalias, noalias_fn.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("*mut", noalias_fn.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 2), noalias_fn.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.assume_noalias_source, noalias_fn.target_type_facts[0].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.assume_noalias_result, noalias_fn.target_type_facts[1].kind);
+    try std.testing.expect(targetTypeFactByKind(noalias_fn, .assume_noalias_source) != null);
+    try std.testing.expect(targetTypeFactByKind(noalias_fn, .assume_noalias_result) != null);
 
     const address_fn = functionByName(typed_mir, "noalias_address").?;
     try std.testing.expectEqual(@as(usize, 1), address_fn.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.assume_noalias, address_fn.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("*mut", address_fn.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 3), address_fn.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.assume_noalias_source, address_fn.target_type_facts[0].kind);
-    try std.testing.expectEqualStrings("*mut", address_fn.target_type_facts[0].result_ty.name());
-    try std.testing.expectEqual(mir.TargetTypeKind.assume_noalias_result, address_fn.target_type_facts[1].kind);
-    try std.testing.expectEqual(mir.TargetTypeKind.expression_result, address_fn.target_type_facts[2].kind);
-    try std.testing.expectEqual(ast.Mutability.mut, address_fn.target_type_facts[2].target_ty.kind.pointer.mutability);
-    try std.testing.expectEqualStrings("u8", address_fn.target_type_facts[2].target_ty.kind.pointer.child.kind.name.text);
+    const noalias_address_source = targetTypeFactByKind(address_fn, .assume_noalias_source) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("*mut", noalias_address_source.result_ty.name());
+    try std.testing.expect(targetTypeFactByKind(address_fn, .assume_noalias_result) != null);
+    var saw_mut_u8_pointer_result = false;
+    for (address_fn.target_type_facts) |fact| {
+        if (fact.kind != .expression_result or fact.target_ty.kind != .pointer) continue;
+        try std.testing.expectEqual(ast.Mutability.mut, fact.target_ty.kind.pointer.mutability);
+        try std.testing.expectEqualStrings("u8", fact.target_ty.kind.pointer.child.kind.name.text);
+        saw_mut_u8_pointer_result = true;
+    }
+    try std.testing.expect(saw_mut_u8_pointer_result);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -3681,8 +3888,9 @@ test "MIR owns discard call identities and argument types" {
     try std.testing.expectEqual(@as(usize, 2), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.drop, function.call_target_facts[0].kind);
     try std.testing.expectEqual(mir.CallTargetKind.forget_unchecked, function.call_target_facts[1].kind);
-    try std.testing.expectEqual(@as(usize, 2), function.target_type_facts.len);
+    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .discard_argument));
     for (function.target_type_facts) |fact| {
+        if (fact.kind == .expression_result) continue;
         try std.testing.expectEqual(mir.TargetTypeKind.discard_argument, fact.kind);
         try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
     }
@@ -3938,11 +4146,10 @@ test "MIR records typed call target facts for bitcast calls" {
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.bitcast, function.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("u32", function.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 2), function.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.bitcast_source, function.target_type_facts[0].kind);
-    try std.testing.expectEqualStrings("f32", function.target_type_facts[0].result_ty.name());
-    try std.testing.expectEqual(mir.TargetTypeKind.bitcast_target, function.target_type_facts[1].kind);
-    try std.testing.expectEqualStrings("u32", function.target_type_facts[1].result_ty.name());
+    const bitcast_source = targetTypeFactByKind(function, .bitcast_source) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("f32", bitcast_source.result_ty.name());
+    const bitcast_target = targetTypeFactByKind(function, .bitcast_target) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("u32", bitcast_target.result_ty.name());
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -4066,9 +4273,8 @@ test "MIR records typed call target facts for phys calls" {
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.phys, function.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("PAddr", function.call_target_facts[0].result_ty.name());
-    try std.testing.expectEqual(@as(usize, 1), function.target_type_facts.len);
-    try std.testing.expectEqual(mir.TargetTypeKind.phys_result, function.target_type_facts[0].kind);
-    try std.testing.expectEqualStrings("PAddr", function.target_type_facts[0].result_ty.name());
+    const phys_result = targetTypeFactByKind(function, .phys_result) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("PAddr", phys_result.result_ty.name());
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
@@ -4195,16 +4401,15 @@ test "MIR records typed call target facts for raw address calls" {
     try std.testing.expectEqual(mir.CallTargetKind.raw_store, store.call_target_facts[0].kind);
     try std.testing.expectEqualStrings("void", store.call_target_facts[0].result_ty.name());
     for ([_]mir.Function{ read, pointer, store }) |function| {
-        try std.testing.expectEqual(@as(usize, 3), function.target_type_facts.len);
-        try std.testing.expectEqual(mir.TargetTypeKind.raw_address, function.target_type_facts[0].kind);
-        try std.testing.expectEqualStrings("PAddr", function.target_type_facts[0].target_ty.kind.name.text);
-        try std.testing.expectEqual(mir.TargetTypeKind.raw_payload, function.target_type_facts[1].kind);
-        try std.testing.expectEqualStrings("u32", function.target_type_facts[1].target_ty.kind.name.text);
-        try std.testing.expectEqual(mir.TargetTypeKind.raw_result, function.target_type_facts[2].kind);
+        const raw_address = targetTypeFactByKind(function, .raw_address) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("PAddr", raw_address.target_ty.kind.name.text);
+        const raw_payload = targetTypeFactByKind(function, .raw_payload) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("u32", raw_payload.target_ty.kind.name.text);
+        try std.testing.expect(targetTypeFactByKind(function, .raw_result) != null);
     }
-    try std.testing.expectEqualStrings("u32", read.target_type_facts[2].target_ty.kind.name.text);
-    try std.testing.expectEqualStrings("u32", pointer.target_type_facts[2].target_ty.kind.pointer.child.kind.name.text);
-    try std.testing.expectEqualStrings("void", store.target_type_facts[2].target_ty.kind.name.text);
+    try std.testing.expectEqualStrings("u32", (targetTypeFactByKind(read, .raw_result) orelse return error.TestUnexpectedResult).target_ty.kind.name.text);
+    try std.testing.expectEqualStrings("u32", (targetTypeFactByKind(pointer, .raw_result) orelse return error.TestUnexpectedResult).target_ty.kind.pointer.child.kind.name.text);
+    try std.testing.expectEqualStrings("void", (targetTypeFactByKind(store, .raw_result) orelse return error.TestUnexpectedResult).target_ty.kind.name.text);
     try std.testing.expect(targetTypeFactByKind(store_pointer, .paddr_coercion_source) != null);
     try std.testing.expectEqual(@as(usize, 1), pause.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.cpu_pause, pause.call_target_facts[0].kind);
@@ -5230,6 +5435,42 @@ test "MIR representation admission rejects typed result type drift" {
     try std.testing.expect(read_fn.representation_facts.len > 0);
     read_fn.representation_facts[0].typed_result_ty = TypeId.fromIndex(4096);
     try std.testing.expectError(error.InvalidMirRepresentationFacts, mir.validateRepresentationFactsForLowering(typed_mir));
+}
+
+test "MIR representation admission requires typed result identity" {
+    const source =
+        \\fn read_ptr_param(p: *mut u8) -> u8 {
+        \\    return p.*;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_representation_requires_typed_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.build(std.testing.allocator, module);
+    defer typed_mir.deinit();
+
+    var read_fn = functionByNameMut(&typed_mir, "read_ptr_param").?;
+    try std.testing.expect(read_fn.representation_facts.len > 0);
+    const fact = &read_fn.representation_facts[0];
+    for (read_fn.blocks) |*block| {
+        for (block.instructions) |*instruction| {
+            if (instruction.kind != fact.kind) continue;
+            if (!std.mem.eql(u8, instruction.detail, fact.detail)) continue;
+            instruction.typed_result_ty = .invalid;
+            fact.typed_result_ty = .invalid;
+            try std.testing.expectError(error.InvalidMirRepresentationFacts, mir.validateRepresentationFactsForLowering(typed_mir));
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
 }
 
 test "MIR representation admission rejects typed value identity drift" {

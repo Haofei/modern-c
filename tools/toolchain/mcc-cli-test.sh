@@ -204,6 +204,10 @@ assert_stdout_empty "--help with extra arg"
 assert_stderr_contains "usage:" "--help extra-arg usage"
 
 printf 'export fn main() -> u32 { return 0; }\n' >"$WORK/ok.mc"
+LOADED_OK="$WORK/loaded-ok.mc"
+# loader.loadCombinedSource appends a separator newline for this no-import root.
+cat "$WORK/ok.mc" >"$LOADED_OK"
+printf '\n' >>"$LOADED_OK"
 
 printf 'fn hidden() -> u32 { return 1; }\n' >"$WORK/visibility_lib.mc"
 printf 'import "./visibility_lib.mc";\nfn use_hidden() -> u32 { return hidden(); }\n' >"$WORK/visibility_root.mc"
@@ -236,13 +240,60 @@ if [ ! -s "$WORK/ok.c.mcmeta" ]; then
     echo "FAIL: mcc-cli-test — emit-c -o did not create artifact metadata sidecar"
     exit 1
 fi
-python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.mcmeta" --artifact "$WORK/ok.c" >/dev/null
+python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.mcmeta" --artifact "$WORK/ok.c" --source "$LOADED_OK" --artifact-kind c --backend c >/dev/null
+if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.mcmeta" --artifact "$WORK/ok.c" --artifact-kind llvm-ir --backend c >/dev/null 2>&1; then
+    echo "FAIL: mcc-cli-test — metadata verifier accepted C sidecar as LLVM IR"
+    cat "$WORK/ok.c.mcmeta"
+    exit 1
+fi
+if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.mcmeta" --artifact "$WORK/ok.c" --artifact-kind c --backend llvm >/dev/null 2>&1; then
+    echo "FAIL: mcc-cli-test — metadata verifier accepted C sidecar with the wrong backend"
+    cat "$WORK/ok.c.mcmeta"
+    exit 1
+fi
+cp "$WORK/ok.c" "$WORK/wrong-ok.c"
+printf '\n/* tamper */\n' >>"$WORK/wrong-ok.c"
+if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.mcmeta" --artifact "$WORK/wrong-ok.c" --source "$LOADED_OK" --artifact-kind c --backend c >/dev/null 2>&1; then
+    echo "FAIL: mcc-cli-test — metadata verifier accepted the wrong C artifact"
+    cat "$WORK/ok.c.mcmeta"
+    exit 1
+fi
+printf 'export fn main() -> u32 { return 1; }\n\n' >"$WORK/wrong-loaded-ok.mc"
+if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.mcmeta" --artifact "$WORK/ok.c" --source "$WORK/wrong-loaded-ok.mc" --artifact-kind c --backend c >/dev/null 2>&1; then
+    echo "FAIL: mcc-cli-test — metadata verifier accepted the wrong loaded source"
+    cat "$WORK/ok.c.mcmeta"
+    exit 1
+fi
+tail -n +2 "$WORK/ok.c.mcmeta" > "$WORK/ok.c.no-magic.mcmeta"
+if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.no-magic.mcmeta" --artifact "$WORK/ok.c" >/dev/null 2>&1; then
+    echo "FAIL: mcc-cli-test — metadata verifier accepted a sidecar without the mcmeta magic"
+    cat "$WORK/ok.c.no-magic.mcmeta"
+    exit 1
+fi
+grep -v '^# generated_artifact_sha256=' "$WORK/ok.c.mcmeta" > "$WORK/ok.c.no-artifact-digest.mcmeta"
+if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.no-artifact-digest.mcmeta" >/dev/null 2>&1; then
+    echo "FAIL: mcc-cli-test — metadata verifier accepted a sidecar without generated_artifact_sha256"
+    cat "$WORK/ok.c.no-artifact-digest.mcmeta"
+    exit 1
+fi
 grep -Fq "# artifact_kind=c" "$WORK/ok.c.mcmeta" || {
     echo "FAIL: mcc-cli-test — emit-c metadata missing artifact kind"; cat "$WORK/ok.c.mcmeta"; exit 1;
 }
 grep -Fq "# backend=c" "$WORK/ok.c.mcmeta" || {
     echo "FAIL: mcc-cli-test — emit-c metadata missing backend"; cat "$WORK/ok.c.mcmeta"; exit 1;
 }
+printf 'old artifact\n' >"$WORK/guard.c"
+mkdir "$WORK/guard.c.mcmeta"
+run_case emit-c "$WORK/ok.mc" -o "$WORK/guard.c"
+assert_rc 1 "emit-c metadata sidecar preflight"
+assert_stdout_empty "emit-c metadata sidecar preflight"
+assert_stderr_contains "metadata sidecar" "emit-c metadata sidecar preflight"
+if [ "$(cat "$WORK/guard.c")" != "old artifact" ]; then
+    echo "FAIL: mcc-cli-test — emit-c replaced the artifact before validating metadata sidecar"
+    cat "$WORK/guard.c"
+    exit 1
+fi
+rmdir "$WORK/guard.c.mcmeta"
 
 run_case emit-map "$WORK/ok.mc" -o "$WORK/ok.mcmap"
 assert_rc 0 "emit-map output path"
@@ -267,7 +318,12 @@ if [ ! -s "$WORK/ok.ll.mcmeta" ]; then
     echo "FAIL: mcc-cli-test — emit-llvm -o did not create artifact metadata sidecar"
     exit 1
 fi
-python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.ll.mcmeta" --artifact "$WORK/ok.ll" >/dev/null
+python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.ll.mcmeta" --artifact "$WORK/ok.ll" --artifact-kind llvm-ir --backend llvm >/dev/null
+if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.ll.mcmeta" --artifact "$WORK/ok.ll" --artifact-kind c --backend llvm >/dev/null 2>&1; then
+    echo "FAIL: mcc-cli-test — metadata verifier accepted LLVM sidecar as C"
+    cat "$WORK/ok.ll.mcmeta"
+    exit 1
+fi
 grep -Fq "# artifact_kind=llvm-ir" "$WORK/ok.ll.mcmeta" || {
     echo "FAIL: mcc-cli-test — emit-llvm metadata missing artifact kind"; cat "$WORK/ok.ll.mcmeta"; exit 1;
 }
@@ -297,6 +353,24 @@ assert_rc 1 "unknown check flag"
 assert_stdout_empty "unknown check flag"
 assert_stderr_starts_with "error: unknown option: --definitely-bad" "unknown check flag"
 assert_stderr_contains "usage:" "unknown check flag usage"
+
+run_case emit-c "$WORK/ok.mc" --profile=kernel --profile=hosted
+assert_rc 1 "duplicate profile flag"
+assert_stdout_empty "duplicate profile flag"
+assert_stderr_starts_with "error: duplicate option: --profile" "duplicate profile flag"
+assert_stderr_contains "usage:" "duplicate profile usage"
+
+run_case verify "$WORK/ok.mc" --checks=all --optimize
+assert_rc 1 "duplicate checks flag"
+assert_stdout_empty "duplicate checks flag"
+assert_stderr_starts_with "error: duplicate option: --checks" "duplicate checks flag"
+assert_stderr_contains "usage:" "duplicate checks usage"
+
+run_case emit-c "$WORK/ok.mc" -o "$WORK/dup-a.c" -o "$WORK/dup-b.c"
+assert_rc 1 "duplicate output flag"
+assert_stdout_empty "duplicate output flag"
+assert_stderr_starts_with "error: duplicate option: -o" "duplicate output flag"
+assert_stderr_contains "usage:" "duplicate output usage"
 
 mkdir -p "$WORK/std"
 run_case fmt "$WORK/ok.mc" --std-dir="$WORK/std"

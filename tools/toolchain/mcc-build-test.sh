@@ -29,6 +29,12 @@ export fn not_main() -> u32 {
 }
 MC
 
+cat >"$WORK/nine.mc" <<'MC'
+export fn main() -> u32 {
+    return 9;
+}
+MC
+
 "$MCC" build "$WORK/ok.mc" -o "$WORK/ok" >"$WORK/build.out" 2>"$WORK/build.err"
 
 set +e
@@ -45,7 +51,19 @@ if [ ! -s "$WORK/ok.mcmeta" ]; then
     echo "FAIL: mcc-build-test - build did not create executable metadata sidecar"
     exit 1
 fi
-python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.mcmeta" --artifact "$WORK/ok" >/dev/null
+python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.mcmeta" --artifact "$WORK/ok" --artifact-kind host-executable --backend c >/dev/null
+cp "$WORK/ok" "$WORK/ok-mutated"
+printf '\n# stale metadata probe\n' >>"$WORK/ok-mutated"
+if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.mcmeta" --artifact "$WORK/ok-mutated" --artifact-kind host-executable --backend c >/dev/null 2>&1; then
+    echo "FAIL: mcc-build-test - metadata verifier accepted a stale executable sidecar for different artifact bytes"
+    cat "$WORK/ok.mcmeta"
+    exit 1
+fi
+if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.mcmeta" --artifact "$WORK/ok" --artifact-kind c --backend c >/dev/null 2>&1; then
+    echo "FAIL: mcc-build-test - metadata verifier accepted executable sidecar as C source"
+    cat "$WORK/ok.mcmeta"
+    exit 1
+fi
 grep -Fq "# artifact_kind=host-executable" "$WORK/ok.mcmeta" || {
     echo "FAIL: mcc-build-test - build metadata missing artifact kind"; cat "$WORK/ok.mcmeta"; exit 1;
 }
@@ -94,6 +112,56 @@ fi
 if find "$WORK" -maxdepth 1 -name '*.mc-build-*' | grep -q .; then
     echo "FAIL: mcc-build-test - failing clang leaked temporary build artifacts"
     find "$WORK" -maxdepth 1 -name '*.mc-build-*' -print
+    exit 1
+fi
+
+rm -f "$WORK/ok.mcmeta"
+mkdir "$WORK/ok.mcmeta"
+set +e
+"$MCC" build "$WORK/nine.mc" -o "$WORK/ok" >"$WORK/metadata-dir.out" 2>"$WORK/metadata-dir.err"
+RC=$?
+"$WORK/ok" >/dev/null 2>&1
+OLD_RC=$?
+set -e
+if [ "$RC" -ne 1 ] || [ "$OLD_RC" -ne 7 ]; then
+    echo "FAIL: mcc-build-test - metadata sidecar failure corrupted an existing executable or returned wrong status (build rc=$RC old rc=$OLD_RC)"
+    cat "$WORK/metadata-dir.out"
+    cat "$WORK/metadata-dir.err"
+    exit 1
+fi
+if ! grep -Fq "metadata sidecar" "$WORK/metadata-dir.err"; then
+    echo "FAIL: mcc-build-test - metadata sidecar preflight did not report the sidecar path"
+    cat "$WORK/metadata-dir.out"
+    cat "$WORK/metadata-dir.err"
+    exit 1
+fi
+rmdir "$WORK/ok.mcmeta"
+
+mkdir "$WORK/output-dir"
+set +e
+"$MCC" build "$WORK/nine.mc" -o "$WORK/output-dir" >"$WORK/output-dir.out" 2>"$WORK/output-dir.err"
+RC=$?
+set -e
+if [ "$RC" -ne 1 ]; then
+    echo "FAIL: mcc-build-test - directory output target did not fail closed"
+    cat "$WORK/output-dir.out"
+    cat "$WORK/output-dir.err"
+    exit 1
+fi
+if ! grep -Fq "destination is a directory" "$WORK/output-dir.err"; then
+    echo "FAIL: mcc-build-test - directory output preflight did not report directory destination"
+    cat "$WORK/output-dir.out"
+    cat "$WORK/output-dir.err"
+    exit 1
+fi
+if find "$WORK" -maxdepth 1 -name 'output-dir.mc-build-*' | grep -q .; then
+    echo "FAIL: mcc-build-test - directory output failure leaked temporary build artifacts"
+    find "$WORK" -maxdepth 1 -name 'output-dir.mc-build-*' -print
+    exit 1
+fi
+if [ -e "$WORK/output-dir.mcmeta" ]; then
+    echo "FAIL: mcc-build-test - directory output failure created metadata sidecar"
+    ls -la "$WORK/output-dir.mcmeta"
     exit 1
 fi
 

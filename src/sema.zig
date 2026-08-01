@@ -340,7 +340,7 @@ pub const Checker = struct {
     // comptime folds such as `~CONST_U32`.
     const_global_widths: ?*const std.StringHashMap(u16) = null,
     const_global_domains: ?*const std.StringHashMap(eval.DomainWidth) = null,
-    comptime_module: ?ast.Module = null,
+    comptime_decls: ?[]const ast.Decl = null,
     // Functions that declare at least one `comptime` parameter (section 22),
     // keyed by name, so call sites can re-check their comptime assertions with
     // the parameters bound to the call's constant arguments.
@@ -432,8 +432,8 @@ pub const Checker = struct {
     }
 
     pub fn checkModule(self: *Checker, module: ast.Module) void {
-        self.comptime_module = module;
-        defer self.comptime_module = null;
+        self.comptime_decls = module.decls;
+        defer self.comptime_decls = null;
         defer self.live_locals.deinit(self.reporter.allocator); // free the block-scoping liveness stack
         var mmio_structs = std.StringHashMap(MmioStruct).init(self.reporter.allocator);
         defer deinitMmioStructs(&mmio_structs);
@@ -1385,7 +1385,7 @@ pub const Checker = struct {
 
     fn seedComptimeScope(self: *Checker, scope: *eval.ComptimeScope) void {
         scope.funcs = self.const_fns;
-        scope.module = self.comptime_module;
+        scope.decls = self.comptime_decls;
         scope.globals = self.const_globals;
         scope.global_domains = self.const_global_domains;
         if (self.reflect_env) |env| {

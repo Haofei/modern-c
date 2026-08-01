@@ -125,48 +125,6 @@ pub fn emitTaggedUnionType(ctx: Context, union_decl: ast.UnionDecl) !void {
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{union_decl.name.text});
 }
 
-pub fn emitAggregateForwardDeclarations(
-    ctx: Context,
-    module: ast.Module,
-    structs: *std.StringHashMap(ast.StructDecl),
-    tagged_unions: *std.StringHashMap(ast.UnionDecl),
-    array_types: *std.StringHashMap(ArrayInfo),
-    result_types: *std.StringHashMap(ResultInfo),
-) !void {
-    var emitted = false;
-    for (module.decls) |decl| {
-        var keyword: []const u8 = "struct";
-        const name = switch (decl.kind) {
-            .struct_decl => |struct_decl| blk: {
-                if (!structs.contains(struct_decl.name.text)) continue;
-                // A `#[c_union]` is a real C `union`; its forward tag must match its
-                // definition tag (`typedef union U U;`), not the default `struct`.
-                if (struct_decl.is_c_union) keyword = "union";
-                break :blk struct_decl.name.text;
-            },
-            .union_decl => |union_decl| if (tagged_unions.contains(union_decl.name.text)) union_decl.name.text else continue,
-            else => continue,
-        };
-        try ctx.out.print(ctx.allocator, "typedef {s} {s} {s};\n", .{ keyword, name, name });
-        emitted = true;
-    }
-    {
-        var it = array_types.valueIterator();
-        while (it.next()) |array| {
-            try ctx.out.print(ctx.allocator, "typedef struct {s} {s};\n", .{ array.name, array.name });
-            emitted = true;
-        }
-    }
-    {
-        var it = result_types.valueIterator();
-        while (it.next()) |result| {
-            try ctx.out.print(ctx.allocator, "typedef struct {s} {s};\n", .{ result.name, result.name });
-            emitted = true;
-        }
-    }
-    if (emitted) try ctx.out.appendSlice(ctx.allocator, "\n");
-}
-
 pub fn emitFunctionSignature(ctx: Context, fn_decl: ast.FnDecl, is_static: bool, with_asm_label: bool) !void {
     const ret = if (fn_decl.return_type) |ret_ty| try ctx.c_type(ctx.emit_ctx, ret_ty) else "void";
     const cname = try ctx.c_ident(ctx.emit_ctx, fn_decl.name.text);

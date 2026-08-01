@@ -3,9 +3,8 @@
 > **Status:** Living document, derived from the current source tree. It describes
 > *what the kernel is* (object model, ABIs, invariants, mechanisms) as a complement to
 > [`MC_0.7_Final_Design.md`](MC_0.7_Final_Design.md) (the *language* the kernel is written
-> in) and [`../archive/agent-os-vision.md`](../archive/agent-os-vision.md) (the *why* — the agent-OS north
-> star). Where this spec and the vision doc disagree on "state today," **this spec
-> reflects the code**.
+> in) and the live roadmap documents. Where this spec and a roadmap disagree on
+> "state today," **this spec reflects the code**.
 >
 > **Faithfulness rule:** normative claims must identify their implementation **scope**.
 > **GATED** means the mechanism is exercised by required `emit-c` *and* `emit-llvm` backend
@@ -25,7 +24,7 @@ semi-trusted, long-running, communication-heavy principals. It is *not* a
 general-purpose OS. It does **not** target POSIX compatibility or general-purpose hardware
 breadth; those mechanisms (a POSIX-shaped syscall demo, drivers, filesystems, ELF loading,
 TCP/IP, TLS) exist **only where they serve agent confinement, communication, storage, or
-bootstrapping** — never for their own sake (see [vision § SKIP](../archive/agent-os-vision.md)).
+bootstrapping** — never for their own sake.
 
 What distinguishes it from a production C kernel is that a large class of kernel bugs are
 **compile errors** rather than runtime faults: opaque address classes, linear/`move`
@@ -664,8 +663,7 @@ Beyond the type-system guarantees, the kernel ships an **opt-in hardening suite*
 analyses (UserPtr/Cap/Rights/Secret taint, definite-init, borrow-escape) and sanitizer
 profiles (ksan/kmsan/kcsan, heap redzones + stack canary), all **parity-gated**. Struct-layout
 drift between MC and mirrored C structs is a compile error via generated
-`_Static_assert(sizeof/offsetof)`. Current roadmap: [`../todo.md`](../todo.md);
-hardening campaign record: [`../archive/hardening-todo.md`](../archive/hardening-todo.md).
+`_Static_assert(sizeof/offsetof)`. Current roadmap: [`../todo.md`](../todo.md).
 
 ---
 
@@ -750,5 +748,4 @@ The safety keystone (governance) has landed. The open frontier, per the vision d
 - **IPC fast path** — co-designed with sampling provenance.
 - **Accelerator/CPU/IPC accounting** — extend governance beyond memory for on-host inference.
 
-Current roadmap: [`../todo.md`](../todo.md). Hardening campaign record:
-[`../archive/hardening-todo.md`](../archive/hardening-todo.md).
+Current roadmap: [`../todo.md`](../todo.md).

@@ -39,9 +39,12 @@ pub const Options = struct {
         var saw_output_flag = false;
         var saw_remap_prefix_flag = false;
         var saw_json_flag = false;
+        var saw_check_fmt_flag = false;
+        var saw_structs_flag = false;
 
         while (args.next()) |flag| {
             if (std.mem.startsWith(u8, flag, "--arch=")) {
+                if (saw_arch_flag) return duplicateOption("--arch");
                 saw_arch_flag = true;
                 const value = flag["--arch=".len..];
                 if (std.mem.eql(u8, value, "riscv64") or std.mem.eql(u8, value, "x86_64") or
@@ -52,6 +55,7 @@ pub const Options = struct {
                     return error.InvalidArgs;
                 }
             } else if (std.mem.startsWith(u8, flag, "--platform=")) {
+                if (saw_platform_flag) return duplicateOption("--platform");
                 saw_platform_flag = true;
                 const value = flag["--platform=".len..];
                 if (std.mem.eql(u8, value, "qemu_virt")) {
@@ -60,13 +64,17 @@ pub const Options = struct {
                     return error.InvalidArgs;
                 }
             } else if (std.mem.startsWith(u8, flag, "--structs=")) {
+                if (saw_structs_flag) return duplicateOption("--structs");
+                saw_structs_flag = true;
                 opts.structs_flag = flag["--structs=".len..];
             } else if (std.mem.startsWith(u8, flag, "--std-dir=")) {
+                if (saw_std_dir_flag) return duplicateOption("--std-dir");
                 saw_std_dir_flag = true;
                 const value = flag["--std-dir=".len..];
                 if (value.len == 0) return error.InvalidArgs;
                 opts.std_dir = value;
             } else if (std.mem.startsWith(u8, flag, "--visibility=")) {
+                if (saw_visibility_flag) return duplicateOption("--visibility");
                 saw_visibility_flag = true;
                 const value = flag["--visibility=".len..];
                 if (std.mem.eql(u8, value, "legacy")) {
@@ -77,12 +85,13 @@ pub const Options = struct {
                     return error.InvalidArgs;
                 }
             } else if (std.mem.eql(u8, flag, "-o")) {
+                if (saw_output_flag) return duplicateOption("-o");
                 saw_output_flag = true;
-                if (opts.output_path != null) return error.InvalidArgs;
                 const value = args.next() orelse return error.InvalidArgs;
                 if (value.len == 0) return error.InvalidArgs;
                 opts.output_path = value;
             } else if (std.mem.startsWith(u8, flag, "--profile=")) {
+                if (saw_profile_flag) return duplicateOption("--profile");
                 saw_profile_flag = true;
                 const value = flag["--profile=".len..];
                 if (std.mem.eql(u8, value, "kernel")) {
@@ -93,26 +102,33 @@ pub const Options = struct {
                     return error.InvalidArgs;
                 }
             } else if (std.mem.startsWith(u8, flag, "--checks=")) {
+                if (saw_checks_flag) return duplicateOption("--checks");
                 saw_checks_flag = true;
                 try opts.parseChecks(flag["--checks=".len..]);
             } else if (std.mem.eql(u8, flag, "--optimize")) {
                 // Deprecated alias for `--checks=elide-proven`.
+                if (saw_checks_flag) return duplicateOption("--checks");
                 saw_checks_flag = true;
                 opts.checks.optimize = true;
             } else if (std.mem.eql(u8, flag, "--check")) {
+                if (saw_check_fmt_flag) return duplicateOption("--check");
+                saw_check_fmt_flag = true;
                 opts.check_fmt = true;
             } else if (std.mem.eql(u8, flag, "--json")) {
+                if (saw_json_flag) return duplicateOption("--json");
                 saw_json_flag = true;
                 opts.json_diagnostics = true;
             } else if (std.mem.eql(u8, flag, "--stub-asm")) {
+                if (saw_stub_asm_flag) return duplicateOption("--stub-asm");
                 saw_stub_asm_flag = true;
                 opts.stub_asm = true;
             } else if (std.mem.eql(u8, flag, "--linux-kernel")) {
+                if (saw_linux_kernel_flag) return duplicateOption("--linux-kernel");
                 saw_linux_kernel_flag = true;
                 opts.linux_kernel = true;
             } else if (std.mem.startsWith(u8, flag, "--remap-prefix=")) {
+                if (saw_remap_prefix_flag) return duplicateOption("--remap-prefix");
                 saw_remap_prefix_flag = true;
-                if (opts.remap_prefix != null) return error.InvalidArgs;
                 opts.remap_prefix = try parsePathRemap(flag["--remap-prefix=".len..]);
             } else {
                 if (std.mem.eql(u8, command, "build") and !std.mem.startsWith(u8, flag, "-")) {
@@ -280,6 +296,11 @@ pub const Options = struct {
 
     fn invalidOptionForCommand(option: []const u8, command: []const u8) error{InvalidArgs} {
         std.debug.print("error: option {s} is not valid for command `{s}`\n", .{ option, command });
+        return error.InvalidArgs;
+    }
+
+    fn duplicateOption(option: []const u8) error{InvalidArgs} {
+        std.debug.print("error: duplicate option: {s}\n", .{option});
         return error.InvalidArgs;
     }
 };

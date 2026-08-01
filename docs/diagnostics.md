@@ -13,7 +13,7 @@ Total codes: **244**.
 |---|---|---|
 | `E_ADDRESS_CLASS_CAST` | bitcast may not mint, cross, or strip a built-in address class (PAddr/VAddr/DmaAddr/MmioPtr/...); use the typed constructor or \`unsafe\`<br>casting to a built-in address class forges it from a non-address value; use the typed constructor (pa/va/dma/mmio.map) or \`unsafe\` | `src/sema.zig:4151`<br>`src/sema.zig:5755` |
 | `E_ADDRESS_CLASS_MISMATCH` | mmio.map requires a PAddr argument | `src/mir_verify_util.zig:180`<br>`src/sema.zig:4092`<br>`src/sema.zig:7593` |
-| `E_ADDRESS_CLASS_OPERATION` | MIR verifier found illegal operation on opaque address class<br>opaque address classes do not support this operator | `src/mir.zig:1066`<br>`src/sema.zig:2883`<br>`src/sema.zig:2921` |
+| `E_ADDRESS_CLASS_OPERATION` | MIR verifier found illegal operation on opaque address class<br>opaque address classes do not support this operator | `src/mir.zig:1067`<br>`src/sema.zig:2883`<br>`src/sema.zig:2921` |
 | `E_AMBIGUOUS_ERROR_CONVERSION` | multiple #[error_from] conversions for the same source and target error types; keep exactly one | `src/sema.zig:2790` |
 | `E_ARITH_DOMAIN_DIVISION` | division and remainder are defined only on checked integers, not arithmetic domains | `src/mir_verify_util.zig:143`<br>`src/sema.zig:2918` |
 | `E_ARITH_DOMAIN_UNSIGNED` | MC-C0 arithmetic domains require an unsigned integer type argument | `src/sema.zig:3531` |
@@ -37,7 +37,7 @@ Total codes: **244**.
 | `E_ATOMIC_OPERATION` | atomic fetch_add/fetch_sub requires an integer payload type<br>unknown atomic operation | `src/mir_verify_util.zig:189`<br>`src/sema.zig:3721`<br>`src/sema.zig:3748` |
 | `E_ATOMIC_ORDERING` | atomic load ordering must be .relaxed, .acquire, or .seq_cst<br>atomic read-modify-write ordering must be a valid atomic memory order<br>atomic store ordering must be .relaxed, .release, or .seq_cst | `src/mir_verify_util.zig:191`<br>`src/sema.zig:3794`<br>`src/sema.zig:3798`<br>`src/sema.zig:3804`<br>`src/sema.zig:3808`<br>`src/sema.zig:3814`<br>_+1 more_ |
 | `E_AWAIT_OUTSIDE_ASYNC` | \`await\` is only valid inside an \`async fn\` (in '{s}') | `src/async_lower.zig:255` |
-| `E_BACKEND_UNSUPPORTED` | C backend does not yet support {s}<br>LLVM backend does not yet support {s}<br>{s} backend does not yet support this construct | `src/lower_c_emitter.zig:3440`<br>`src/lower_c_emitter.zig:3905`<br>`src/lower_llvm.zig:1409`<br>`src/lower_llvm.zig:1416`<br>`src/main.zig:1285` |
+| `E_BACKEND_UNSUPPORTED` | C backend does not yet support {s}<br>LLVM backend does not yet support {s}<br>{s} backend does not yet support this construct | `src/lower_c_emitter.zig:3448`<br>`src/lower_c_emitter.zig:3973`<br>`src/lower_llvm.zig:1419`<br>`src/lower_llvm.zig:1426`<br>`src/main.zig:1431` |
 | `E_BITCAST_TYPE` | bitcast pointer-reinterpret may not cross into or out of an opaque/secret/userptr class<br>bitcast source must have a fixed scalar, pointer, or address-class layout<br>bitcast source type must be known<br>_+1 more_ | `src/mir_verify_util.zig:194`<br>`src/sema.zig:4107`<br>`src/sema.zig:4117`<br>`src/sema.zig:4120`<br>`src/sema.zig:4135` |
 | `E_BITWISE_ARITH_DOMAIN_OPERAND` | bitwise operations are not defined on this arithmetic domain | `src/mir_verify_util.zig:144`<br>`src/sema.zig:2886`<br>`src/sema.zig:2967` |
 | `E_BITWISE_BOOL_OPERAND` | bitwise operations are not defined on bool operands | `src/mir_verify_util.zig:155`<br>`src/sema.zig:2877`<br>`src/sema.zig:2961` |
@@ -138,12 +138,12 @@ Total codes: **244**.
 | `E_LOCAL_ADDRESS_ESCAPE` | cannot return a closure that captures local storage (the environment would dangle)<br>cannot return the address of local storage<br>cannot return the address of local storage inside an aggregate (the borrow would dangle)<br>_+2 more_ | `src/mir_verify_util.zig:196`<br>`src/sema.zig:2738`<br>`src/sema.zig:2742`<br>`src/sema.zig:5468`<br>`src/sema.zig:5473`<br>`src/sema.zig:5569`<br>_+1 more_ |
 | `E_LOCAL_REQUIRES_INITIALIZER` | ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage | `src/sema.zig:2592` |
 | `E_MC_VOID_POINTER_FFI` | use c_void for C opaque object pointers, not MC void | `src/sema.zig:3467` |
-| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:10266` |
-| `E_MIR_IDENTITY` | MIR verifier found malformed instruction identity | `src/mir.zig:1227` |
-| `E_MIR_SYMBOL_ID` | MIR verifier found malformed symbol identity table | `src/mir.zig:1215` |
-| `E_MMIO_ACCESS_FORBIDDEN` | MIR verifier found MMIO register access disallowed by Reg/RegBits mode<br>MMIO register access mode does not allow read<br>MMIO register access mode does not allow write | `src/mir.zig:1094`<br>`src/sema.zig:3693`<br>`src/sema.zig:3703` |
+| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:10369` |
+| `E_MIR_IDENTITY` | MIR verifier found malformed instruction identity | `src/mir.zig:1228` |
+| `E_MIR_SYMBOL_ID` | MIR verifier found malformed symbol identity table | `src/mir.zig:1216` |
+| `E_MMIO_ACCESS_FORBIDDEN` | MIR verifier found MMIO register access disallowed by Reg/RegBits mode<br>MMIO register access mode does not allow read<br>MMIO register access mode does not allow write | `src/mir.zig:1095`<br>`src/sema.zig:3693`<br>`src/sema.zig:3703` |
 | `E_MMIO_ACCESS_MODE` | MMIO register access mode must be .read, .write, or .read_write | `src/sema.zig:3673`<br>`src/sema.zig:3678` |
-| `E_MMIO_DIRECT_ASSIGN` | MIR verifier found direct assignment to an MMIO register<br>MMIO registers must be accessed through typed read/write methods | `src/mir.zig:1088`<br>`src/sema.zig:2522` |
+| `E_MMIO_DIRECT_ASSIGN` | MIR verifier found direct assignment to an MMIO register<br>MMIO registers must be accessed through typed read/write methods | `src/mir.zig:1089`<br>`src/sema.zig:2522` |
 | `E_MMIO_ORDERING` | MMIO read ordering must be .relaxed or .acquire<br>MMIO write ordering must be .relaxed or .release | `src/mir_verify_util.zig:192`<br>`src/sema.zig:4190`<br>`src/sema.zig:4194`<br>`src/sema.zig:4200`<br>`src/sema.zig:4204` |
 | `E_MMIO_PTR_DEREF` | _see source_ | `src/mir_verify_util.zig:172`<br>`src/sema.zig:7608` |
 | `E_MMIO_PTR_TARGET` | MmioPtr target must be an extern mmio struct type | `src/sema.zig:3626`<br>`src/sema.zig:3631` |
@@ -158,14 +158,14 @@ Total codes: **244**.
 | `E_NAKED_BODY` | a #[naked] function body must be exactly one \`asm\` block (optionally wrapped in one \`unsafe {}\`); there is no frame for locals, statements, or expressions | `src/sema.zig:1490` |
 | `E_NAKED_RETURN` | a #[naked] function must return \`never\` or \`void\`; it cannot synthesize a value return (the asm body owns the calling convention) | `src/sema.zig:1485` |
 | `E_NESTING_TOO_DEEP` | nesting too deep | `src/parser.zig:2190` |
-| `E_NEVER_FALLTHROUGH` | function declared -&gt; never can fall off the end | `src/hir.zig:181`<br>`src/mir.zig:1012`<br>`src/sema.zig:1532` |
+| `E_NEVER_FALLTHROUGH` | function declared -&gt; never can fall off the end | `src/hir.zig:181`<br>`src/mir.zig:1013`<br>`src/sema.zig:1532` |
 | `E_NEVER_RETURNS` | function declared -&gt; never cannot return normally | `src/sema.zig:2452`<br>`src/sema.zig:2459` |
 | `E_NEVER_STORAGE` | never is a control-flow type and cannot be used for storage | `src/sema.zig:3473`<br>`src/sema.zig:3641` |
 | `E_NO_ERROR_CONVERSION` | '?' cannot convert the propagated error to the function's error type; declare an #[error_from] fn converting it | `src/sema.zig:2811` |
 | `E_NO_IMPLICIT_CONVERSION` | MaybeUninit.write payload must match the storage type<br>Secret&lt;T&gt; can only wrap a value of its underlying type T<br>annotated local initializer requires an explicit conversion<br>_+9 more_ | `src/mir_verify_util.zig:98`<br>`src/mir_verify_util.zig:106`<br>`src/mir_verify_util.zig:131`<br>`src/mir_verify_util.zig:160`<br>`src/sema.zig:1322`<br>`src/sema.zig:1323`<br>_+39 more_ |
 | `E_NO_IMPLICIT_INTEGER_PROMOTION` | integer arithmetic requires matching types or an explicit conversion | `src/mir_verify_util.zig:159`<br>`src/sema.zig:5891` |
 | `E_NO_IMPLICIT_POINTER_CONVERSION` | pointer and view conversions must be explicit<br>pointer comparisons require compatible pointer or view operands | `src/mir_verify_util.zig:78`<br>`src/mir_verify_util.zig:79`<br>`src/mir_verify_util.zig:92`<br>`src/mir_verify_util.zig:93`<br>`src/mir_verify_util.zig:94`<br>`src/mir_verify_util.zig:95`<br>_+6 more_ |
-| `E_NO_LANG_TRAP_EDGE` | HIR verifier found language trap edge {s} before C emission<br>MIR verifier found language trap edge {s}<br>assert may emit a language trap in #[no_lang_trap]<br>_+9 more_ | `src/hir.zig:195`<br>`src/mir.zig:1021`<br>`src/sema.zig:2505`<br>`src/sema.zig:2838`<br>`src/sema.zig:2848`<br>`src/sema.zig:2865`<br>_+7 more_ |
+| `E_NO_LANG_TRAP_EDGE` | HIR verifier found language trap edge {s} before C emission<br>MIR verifier found language trap edge {s}<br>assert may emit a language trap in #[no_lang_trap]<br>_+9 more_ | `src/hir.zig:195`<br>`src/mir.zig:1022`<br>`src/sema.zig:2505`<br>`src/sema.zig:2838`<br>`src/sema.zig:2848`<br>`src/sema.zig:2865`<br>_+7 more_ |
 | `E_NULLABLE_DYN_DISPATCH` | cannot dispatch a method through a \`?*dyn Trait\` (it may be absent / \`none\`); narrow it first with \`if let\` / \`switch\`, or \`unwrap\` it to a \`*dyn Trait\` | `src/sema.zig:3116` |
 | `E_NULLABLE_DYN_NARROW` | a \`?*dyn Trait\` cannot coerce to a non-null \`*dyn Trait\`: it may be \`none\`. Narrow it with \`if let\` / \`switch\`, or \`unwrap\` it first | `src/sema.zig:5365` |
 | `E_NULL_NON_NULL_POINTER` | null cannot initialize a non-null pointer | `src/mir_verify_util.zig:77`<br>`src/sema.zig:5037` |
@@ -180,7 +180,7 @@ Total codes: **244**.
 | `E_PARSE` | _see source_ | `src/parser.zig:2168` |
 | `E_PARSE_EXPECTED_EXPRESSION` | _see source_ | `src/parser.zig:2166` |
 | `E_PARSE_EXPECTED_PARAMETER_NAME` | _see source_ | `src/parser.zig:2167` |
-| `E_PARSE_FAILED` | _see source_ | `src/main.zig:641` |
+| `E_PARSE_FAILED` | _see source_ | `src/main.zig:711` |
 | `E_PHYS_PTR_DEREF` | _see source_ | `src/mir_verify_util.zig:173`<br>`src/sema.zig:7609` |
 | `E_POINTER_ARITH_SINGLE_OBJECT` | single-object pointers do not support arithmetic | `src/mir_verify_util.zig:161`<br>`src/sema.zig:2944` |
 | `E_POINTER_ORDERING` | optional values support only equality comparisons against null<br>pointer and view values support only equality comparisons | `src/mir_verify_util.zig:162`<br>`src/sema.zig:6028`<br>`src/sema.zig:6044` |
@@ -196,12 +196,12 @@ Total codes: **244**.
 | `E_REFLECTION_TYPE_ARG` | reflection type argument must be a type name | `src/sema.zig:4872` |
 | `E_REFLECTION_TYPE_VALUE` | field_type produces a type and is valid only in type position | `src/sema.zig:4853` |
 | `E_REFLECTION_UNKNOWN_TYPE` | field reflection requires a known field-bearing layout type<br>reflection layout could not be computed for this type<br>reflection requires a known layout-capable type | `src/sema.zig:4887`<br>`src/sema.zig:4908`<br>`src/sema.zig:4938`<br>`src/sema.zig:4947`<br>`src/sema.zig:4951`<br>`src/sema.zig:4962` |
-| `E_REPRESENTATION_CHECK_MISSING` | MIR verifier found representation-sensitive value use without dominating check | `src/mir.zig:1102`<br>`src/mir.zig:1109` |
+| `E_REPRESENTATION_CHECK_MISSING` | MIR verifier found representation-sensitive value use without dominating check | `src/mir.zig:1103`<br>`src/mir.zig:1110` |
 | `E_RESERVED_C_IDENTIFIER` | identifier is reserved by the C backend or C headers; choose a different source name<br>local binding name is reserved by the C backend or C headers; choose a different source name<br>parameter name is reserved by the C backend or C headers; choose a different source name | `src/sema.zig:968`<br>`src/sema.zig:1451`<br>`src/sema.zig:2633` |
 | `E_RESERVED_QUALIFIED_NAME` | a local binding may not shadow a module/impl name<br>a parameter may not shadow a module/impl name<br>a top-level value may not shadow a module/impl name | `src/sema.zig:975`<br>`src/sema.zig:1453`<br>`src/sema.zig:2637` |
 | `E_RESOURCE_LEAK` | linear \`move\` value bound in a switch arm is never consumed (must be moved, returned, or freed)<br>linear \`move\` value bound in an if-let branch is never consumed (must be moved, returned, or freed)<br>linear \`move\` value created in only one branch is never consumed before the branch exits<br>_+2 more_ | `src/sema_move.zig:700`<br>`src/sema_move.zig:730`<br>`src/sema_move.zig:1185`<br>`src/sema_move.zig:1258`<br>`src/sema_move.zig:1317`<br>`src/sema_move.zig:1352`<br>_+3 more_ |
 | `E_RESOURCE_OVERWRITE` | cannot assign a linear \`move\` array element through an unknown dynamic index; the selected live element must be consumed first<br>cannot overwrite a live linear \`move\` array element; consume it first<br>cannot overwrite a live linear \`move\` field; consume it first<br>_+1 more_ | `src/sema_move.zig:957`<br>`src/sema_move.zig:1012`<br>`src/sema_move.zig:1029`<br>`src/sema_move.zig:1038` |
-| `E_RETURN_MISSING` | function return type requires all paths to return a value | `src/hir.zig:181`<br>`src/mir.zig:1012`<br>`src/sema.zig:1534` |
+| `E_RETURN_MISSING` | function return type requires all paths to return a value | `src/hir.zig:181`<br>`src/mir.zig:1013`<br>`src/sema.zig:1534` |
 | `E_RETURN_REQUIRES_VALUE` | function return type requires a value | `src/sema.zig:2461` |
 | `E_RETURN_TYPE_MISMATCH` | return expression must match the declared return type | `src/mir_verify_util.zig:96`<br>`src/mir_verify_util.zig:114`<br>`src/sema.zig:5451`<br>`src/sema.zig:5452`<br>`src/sema.zig:5453`<br>`src/sema.zig:5475`<br>_+3 more_ |
 | `E_SECRET_BRANCH` | secret value cannot drive a branch or switch; this would leak it through control-flow timing — use declassify/reveal (unsafe) or a constant-time select<br>secret value cannot drive a loop condition; this would leak it through control-flow timing | `src/sema.zig:2325`<br>`src/sema.zig:6497` |
@@ -215,7 +215,7 @@ Total codes: **244**.
 | `E_SWITCH_MULTI_BINDING_ARM` | switch arms with multiple patterns cannot introduce bindings | `src/mir_verify_util.zig:121`<br>`src/sema.zig:6714` |
 | `E_SWITCH_RESULT_REQUIRED` | switch ok or err patterns require a Result value<br>switch ok(...) or err(...) binding requires a Result value | `src/mir_verify_util.zig:120`<br>`src/sema.zig:6689`<br>`src/sema.zig:6703` |
 | `E_SWITCH_RESULT_TAG` | switch result binding supports only ok(...) or err(...)<br>switch result patterns support only ok or err tags | `src/mir_verify_util.zig:119`<br>`src/sema.zig:6687`<br>`src/sema.zig:6701` |
-| `E_SYMBOLS_INTERNAL` | _see source_ | `src/main.zig:645` |
+| `E_SYMBOLS_INTERNAL` | _see source_ | `src/main.zig:715` |
 | `E_TRAIT_BOUND_MEMBER` | generic type-parameter member calls require a \`where\` bound whose trait declares that member | `src/sema.zig:3449` |
 | `E_TRAIT_EFFECT_MISMATCH` | impl method's effect annotations (#[may_sleep]) do not match the trait signature | `src/sema.zig:6351` |
 | `E_TRAIT_INCOHERENT` | duplicate \`impl Trait for Type\` (coherence: at most one impl per (Trait, Type) pair) | `src/sema.zig:6299` |
@@ -232,7 +232,7 @@ Total codes: **244**.
 | `E_UNBOUNDED_INDIRECT_CALL` | a \`#[bounded]\` function may not dispatch through \`*dyn Trait\` (the callee's termination cannot be checked through the vtable)<br>a \`#[bounded]\` function may not make an indirect/closure call (the callee's termination cannot be checked through the closure)<br>a \`#[bounded]\` function may not make an indirect/fn-pointer call (the callee's termination cannot be checked through the pointer) | `src/sema.zig:3096`<br>`src/sema.zig:3108`<br>`src/sema.zig:3138` |
 | `E_UNBOUNDED_LOOP` | loop in a bounded/IRQ-context function is not statically bounded (no monotone counter toward a bound, fixed-range for, or break) | `src/sema.zig:4291` |
 | `E_UNBOUNDED_RECURSION` | direct recursion from a bounded/IRQ-context function (a kernel must not recurse unboundedly in interrupt/atomic context)<br>recursive direct-call cycle among bounded/IRQ-context functions (no decreasing metric is proven) | `src/sema.zig:4330`<br>`src/sema.zig:4426` |
-| `E_UNCHECKED_OUTSIDE_CONTRACT` | MIR verifier found unchecked optimizer assumption outside matching contract region<br>unchecked operation requires matching #[unsafe_contract] | `src/mir.zig:1032`<br>`src/sema.zig:3032` |
+| `E_UNCHECKED_OUTSIDE_CONTRACT` | MIR verifier found unchecked optimizer assumption outside matching contract region<br>unchecked operation requires matching #[unsafe_contract] | `src/mir.zig:1033`<br>`src/sema.zig:3032` |
 | `E_UNHANDLED_RESULT` | Result defer cleanup must be handled or propagated<br>Result expression statements must be handled or propagated<br>Result local must be handled before reassignment<br>_+2 more_ | `src/mir_verify_util.zig:110`<br>`src/sema.zig:2290`<br>`src/sema.zig:2305`<br>`src/sema.zig:2308`<br>`src/sema.zig:2491`<br>`src/sema.zig:2500` |
 | `E_UNINIT_REQUIRES_STORAGE` | uninit is valid only for explicit typed mutable storage initialization | `src/sema.zig:1317`<br>`src/sema.zig:2547`<br>`src/sema.zig:2702`<br>`src/sema.zig:5445`<br>`src/sema.zig:5506` |
 | `E_UNION_CASE_HAS_NO_PAYLOAD` | union case binding requires a payload case<br>union case has no payload type | `src/mir_verify_util.zig:130`<br>`src/sema.zig:4959`<br>`src/sema.zig:6698` |
@@ -244,7 +244,7 @@ Total codes: **244**.
 | `E_UNKNOWN_TRAIT` | unknown trait in \`*dyn Trait\`<br>unknown trait in impl | `src/sema.zig:3560`<br>`src/sema.zig:6324` |
 | `E_UNKNOWN_TYPE` | enum literals are values, not runtime types<br>type members are not supported; this member does not resolve to a declared type<br>unknown generic type name<br>_+1 more_ | `src/sema.zig:3475`<br>`src/sema.zig:3481`<br>`src/sema.zig:3483`<br>`src/sema.zig:3521` |
 | `E_UNKNOWN_UNION_CASE` | union has no case with this name | `src/mir_verify_util.zig:129`<br>`src/sema.zig:5591`<br>`src/sema.zig:5629`<br>`src/sema.zig:6684`<br>`src/sema.zig:6696` |
-| `E_UNSAFE_REQUIRED` | MIR verifier found unsafe machine effect outside unsafe context<br>arc_get_mut yields an aliasable \`*mut T\` whose uniqueness the checker cannot enforce; it requires an unsafe context (do not arc_clone/publish the handle while the pointer lives)<br>declassify/reveal escapes the constant-time discipline and requires unsafe<br>_+2 more_ | `src/mir.zig:1039`<br>`src/sema.zig:2405`<br>`src/sema.zig:3036`<br>`src/sema.zig:3043`<br>`src/sema.zig:3258`<br>`src/sema.zig:3334`<br>_+2 more_ |
+| `E_UNSAFE_REQUIRED` | MIR verifier found unsafe machine effect outside unsafe context<br>arc_get_mut yields an aliasable \`*mut T\` whose uniqueness the checker cannot enforce; it requires an unsafe context (do not arc_clone/publish the handle while the pointer lives)<br>declassify/reveal escapes the constant-time discipline and requires unsafe<br>_+2 more_ | `src/mir.zig:1040`<br>`src/sema.zig:2405`<br>`src/sema.zig:3036`<br>`src/sema.zig:3043`<br>`src/sema.zig:3258`<br>`src/sema.zig:3334`<br>_+2 more_ |
 | `E_UNSIGNED_NEGATION` | unsigned checked integers do not support unary '-' | `src/mir_verify_util.zig:153`<br>`src/sema.zig:2868` |
 | `E_UNUSED_MOVE_RESULT` | the linear \`move\` result of this expression is discarded; bind it with \`let\`, return it, or pass it to a consuming function | `src/sema_move.zig:805` |
 | `E_USERPTR_CAST_DEREF` | casting a UserPtr&lt;T&gt; to a derefable kernel pointer bypasses uaccess validation; only UserPtr&lt;-&gt;usize is permitted | `src/sema.zig:5706` |

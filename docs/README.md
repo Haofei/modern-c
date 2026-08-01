@@ -45,10 +45,7 @@ These are still useful as day-to-day references or rationale companions:
 
 ## Historical records
 
-These documents are retained because they explain decisions and landed work, but
-their original "state today" sections are not current backlog:
-
-- [`archive/`](archive/) — historical remediation reports, milestone notes, experiment plans, and completed/deferred campaign records.
-
-When a historical plan conflicts with `README.md`, `todo.md`, or the two specs,
-trust the newer consolidated sources unless the code proves otherwise.
+Historical remediation notes, milestone drafts, and experiment records are kept
+in git history instead of as live documentation. When an older plan conflicts
+with `README.md`, `todo.md`, or the two specs, trust the newer consolidated
+sources unless the code proves otherwise.

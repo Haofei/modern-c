@@ -22,6 +22,11 @@ const mir = @import("mir.zig");
 const LocalInfo = lower_c_model.LocalInfo;
 const memberCallee = ast_query.memberCallee;
 
+const EnumRawTypes = struct {
+    source: ast.TypeExpr,
+    result: ast.TypeExpr,
+};
+
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
 pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
@@ -87,10 +92,17 @@ fn emitEnumRawCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Loca
     if (!std.mem.eql(u8, member.name.text, "raw")) return false;
     if (call.args.len != 0) return error.UnsupportedCEmission;
     if (ctx.mir_call_target_kind(ctx.enum_ctx, call.callee.*.span) != .enum_raw) return false;
-    _ = ctx.mir_target_type(ctx.enum_ctx, .enum_raw_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
-    _ = ctx.mir_target_type(ctx.enum_ctx, .enum_raw_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    _ = try enumRawTypesForEmission(ctx, call);
     // `.raw()` is a transparent-repr read on both open and closed enums: emit the
     // enum-typed base directly (its C value already IS the representation integer).
     try ctx.emit_expr(ctx.enum_ctx, member.base.*, locals);
     return true;
+}
+
+fn enumRawTypesForEmission(ctx: Context, call: anytype) !EnumRawTypes {
+    const span = call.callee.*.span;
+    return .{
+        .source = ctx.mir_target_type(ctx.enum_ctx, .enum_raw_source, span) orelse return error.UnsupportedCEmission,
+        .result = ctx.mir_target_type(ctx.enum_ctx, .enum_raw_result, span) orelse return error.UnsupportedCEmission,
+    };
 }

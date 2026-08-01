@@ -46,7 +46,7 @@ jobs:
           qemu-system-x86_64 --version
       - name: Preflight the QEMU toolchain (fail fast with a clear report)
         run: zig build preflight
-      - name: Run full milestone gate without skips
+      - name: Run core milestone gate without skips
         shell: bash
         # MC_REQUIRE_TOOLS=1 makes a missing tool FAIL at the gate (not silently SKIP), instead of
         # relying on the implicit CI env var. The grep is then belt-and-suspenders.
@@ -57,9 +57,9 @@ jobs:
             echo "m0 skipped at least one gate in CI" >&2
             exit 1
           fi
-          # Positively assert the async QEMU gates RAN on both backends. The list is
-          # read from build/tiers.zig, and the verifier also proves each name is an
-          # m0 dependency, so CI cannot silently drift away from the tier.
+          # Positively assert the core m0 gates ran. The list is manifest-backed,
+          # and the verifier also proves each name is an m0 dependency, so CI
+          # cannot silently drift away from the tier.
           python3 tools/ci/pass-gates.py assert --tier ci-m0-pass --log m0.log
   docker:
     # Keeps the cross-platform dev image (Dockerfile / docker-compose.yml) honest: the image

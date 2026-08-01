@@ -4,8 +4,7 @@ Status: first written 2026-06-30 (production-readiness-plan.md §4.7 hardening p
 Scope: the production kernel that runs untrusted edge-AI agents — RISC-V S/U-mode the
 reference target, aarch64/x86_64 secondary. This is a *structured, code-grounded* review
 of the actual enforcers, meant to be read alongside [`docs/threat-model.md`](threat-model.md)
-(assets, trust boundaries, guarantees G1–G5) and the hardening backlog in
-[`docs/archive/hardening-todo.md`](archive/hardening-todo.md). It is deliberately honest about gaps; where a
+(assets, trust boundaries, guarantees G1–G5). It is deliberately honest about gaps; where a
 mitigation is partial or a primitive is a stand-in, that is called out as a residual risk
 rather than glossed over.
 
@@ -45,7 +44,8 @@ update bundle. See threat-model §2.
 ## 2. Attack surface and mitigations
 
 Each surface below lists the concrete enforcer (with file), then the residual risk. Where a
-gate pins the property, it is named; run gates via `zig build m0` or `tools/m0-parallel.sh`.
+gate pins the property, it is named; run core gates via `zig build m0` and the
+full security/runtime matrix via `zig build m0-full` or `tools/m0-parallel.sh`.
 
 ### 2.1 Syscall ABI (the primary agent → kernel boundary)
 
@@ -91,7 +91,7 @@ and policy quotas are enforced (`kernel/agent/mcp.mc`, `kernel/core/policy.mc`).
 guarantee **G2** and is audited kernel-side (§2.7).
 
 Residual: uniform per-agent memory/CPU budget enforcement on *every* broker/device path is
-incomplete (threat-model §5, hardening-todo Tier 0 / axis T). Some exhaustion paths still
+incomplete (threat-model §5, production-readiness-plan §4.7 / P6). Some exhaustion paths still
 `unreachable` rather than returning a typed `NoMem` — those are tracked.
 
 ### 2.5 Availability / DoS

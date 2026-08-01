@@ -176,20 +176,25 @@ kernel changes with the milestone gate.
 zig build test       # compiler unit tests and spec conformance
 zig build c-test     # checked C backend
 zig build llvm-test  # LLVM backend
-zig build fast       # broad host-only development gate
-zig build m0         # complete compiler, backend, toolchain, and QEMU milestone
+zig build fast       # broad host-only development gate, no fuzz or QEMU
+zig build m0         # core compiler qualification gate
+zig build m0-full    # complete compiler, backend, fuzz, runtime, and QEMU matrix
 ```
 
 Normal local gates may report a skip when an external tool is unavailable. A
 qualification run must fail instead of skipping:
 
 ```sh
-MC_REQUIRE_TOOLS=1 MC_LLVM_MAJOR=18 zig build m0
+MC_REQUIRE_TOOLS=1 MC_LLVM_MAJOR=18 zig build m0-full
 ```
 
-`m0` covers unit and spec tests, C and LLVM fixture sweeps, IR assembly and object
-generation, optimizer compatibility, differential execution, fuzz oracles,
-package and release tooling, host-driver tests, and the QEMU kernel matrix.
+`m0` covers the deterministic compiler-core qualification path used for normal
+local and CI feedback. It intentionally omits the full `c-test` fixture compile
+sweep; use `fast`, `c0`, or `m0-full` when a change needs that C-backend
+coverage. `m0-full` preserves the exhaustive matrix: unit and spec tests, C and
+LLVM fixture sweeps, IR assembly and object generation, optimizer compatibility,
+differential execution, fuzz oracles, package and release tooling, host-driver
+tests, runtime experiments, and the QEMU kernel matrix.
 
 The canonical Zig aggregate executes side-effecting `Run` gates serially. For
 the same complete gate inventory with process-level parallelism, bounded nested
@@ -197,13 +202,12 @@ worker pools, longest-first scheduling, and serial rechecks of contention
 failures, use:
 
 ```sh
-tools/fast-parallel.sh --full       # complete host-only fast inventory, 300 fuzz seeds
-MC_REQUIRE_TOOLS=1 tools/m0-parallel.sh  # complete m0 inventory; skips are failures
+tools/fast-parallel.sh              # fast inventory with process-level parallelism
+MC_REQUIRE_TOOLS=1 tools/m0-parallel.sh  # complete full inventory; skips are failures
 ```
 
 Both runners derive their gate lists directly from `build/tiers.zig`; they do
-not maintain a smaller duplicate list. The non-`--full` fast runner deliberately
-uses 40 fuzz seeds for edit-loop feedback.
+not maintain a smaller duplicate list.
 
 For an edit loop, the repository can select focused gates from changed files:
 

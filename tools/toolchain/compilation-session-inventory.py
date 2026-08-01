@@ -45,7 +45,12 @@ def main() -> int:
         "visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in,",
         "fn writeStdout(self: *CompilationSession, bytes: []const u8) !void {",
         "fn writeOutputPath(self: *CompilationSession, path: []const u8, bytes: []const u8) !void {",
+        "const ArtifactMetadataDraft = struct {",
+        "fn ensureReplaceTargetNotDirectory(self: *CompilationSession, path: []const u8, label: []const u8) !void {",
+        "fn prepareArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !ArtifactMetadataDraft {",
         "fn writeArtifact(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8) !void {",
+        "fn writeArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !void {",
+        "fn writeArtifactWithMetadata(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8, bundle: backend.ArtifactBundle) !void {",
         "fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {",
         "fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
         "fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
@@ -61,7 +66,7 @@ def main() -> int:
         "mangle_private.transform(allocator, specialized, self.file_boundaries)",
         "checker.file_boundaries = self.file_boundaries;",
         "module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });",
-        "const program = backend.VerifiedProgram.init(module, module_mir, diag) catch |err| {",
+        "const program = backend.VerifiedProgram.initFromDecls(module.decls, module_mir, diag) catch |err| {",
         "const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);",
         "_ = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.LowerMirFailed);",
         "try mir.appendDumpFromMir(allocator, module_mir, &output);",
@@ -77,7 +82,9 @@ def main() -> int:
         fail("sema checker construction must stay centralized in CompilationSession.checkModule")
     if main_text.count("mir.buildOpt(") != 1:
         fail("MIR build must stay centralized in CompilationSession.buildVerifiedProgram")
-    if main_text.count("backend.VerifiedProgram.init(") != 1:
+    if main_text.count("backend.VerifiedProgram.init(") != 0:
+        fail("VerifiedProgram module-shaped construction must not be used")
+    if main_text.count("backend.VerifiedProgram.initFromDecls(") != 1:
         fail("VerifiedProgram construction must stay centralized in CompilationSession.buildVerifiedProgram")
     if main_text.count("session.parseCheckedModuleOrReport(") < 7:
         fail("compile-like CLI commands must share CompilationSession.parseCheckedModuleOrReport")
@@ -104,7 +111,10 @@ def main() -> int:
         ("build/tiers.zig", 'c0_step.dependOn(ctx.cmd("compilation-session-inventory-test"))'),
         ("tools/dev-gates.py", "compilation-session-inventory-test"),
         ("tools/toolchain/dev-gates-test.py", "compilation-session-inventory-test"),
-        ("docs/refactoring-plan.md", "File-boundary, module-graph, visibility, IO, parse/check, MIR build, and"),
+        ("tools/toolchain/mcc-cli-test.sh", "emit-c metadata sidecar preflight"),
+        ("tools/toolchain/mcc-build-test.sh", "metadata sidecar failure corrupted an existing executable"),
+        ("tools/toolchain/mcc-build-test.sh", "directory output target did not fail closed"),
+        ("docs/refactoring-plan.md", "CompilationSession owns file-boundary, module-graph, visibility, IO, parse/check, MIR build, VerifiedProgram construction, artifact output, and metadata sidecar preflight."),
     ):
         require_contains(path, needle)
 

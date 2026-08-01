@@ -84,7 +84,7 @@ still needs `WASM_ENABLE_BULK_MEMORY_OPT=1` + `WASM_ENABLE_REF_TYPES=1`.
 
 WAMR has **fully replaced** wasm3. Every WASM gate — the confined agent family + net-realtool
 + watchdog + bench, the 3 S-mode (OpenSBI) peers, and the 2 cross-arch peers (x86_64 ring-3,
-aarch64 EL0) — runs on WAMR, both backends, **gated in `zig build m0`** (verified green at
+aarch64 EL0) — runs on WAMR, both backends, **gated in `zig build m0-full`** (verified green at
 647 PASS / 0 FAIL). `third_party/wasm3`, `examples/apps/wasm_host.c`, and
 `examples/apps/wasm/wasi_shim.{c,h}` are **deleted**; the superseded `wasm-run` Phase-0 spike
 is retired in favour of `wamr-run`/`wamr-fuel`/`wamr-agent` (the latter adds the deterministic
@@ -104,7 +104,7 @@ CALL_INDIRECT_OVERLONG=1 reads stock toolchain output directly).
 
 Verification note: a long Docker session degrades the host (m0 slows, background wrappers get
 killed). Use the detached-to-mounted-file + poll method: `docker compose run --rm -d dev bash
--c 'zig build m0 > /work/.wamr-cache/m0.log 2>&1; echo EXIT=$? ...'` then poll
+-c 'zig build m0-full > /work/.wamr-cache/m0-full.log 2>&1; echo EXIT=$? ...'` then poll
 `.wamr-cache/m0.log` for the `EXIT=` marker.
 
 ## Old remaining-work notes (superseded by the list above)

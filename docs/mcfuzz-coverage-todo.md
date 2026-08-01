@@ -11,8 +11,8 @@ each other** (differential, pipeline, sanitize, determinism all assume C≡LLVM 
 (**Update:** the independent oracles below — E1 reference interpreter and E2 metamorphic
 — are now **implemented** as build steps (`fuzz-reference` / `fuzz-metamorphic`) and,
 alongside `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-artifacts`, `fuzz-corpus`, and
-`fuzz-trapsite`, are wired into both `m0` and `fast` in `build/tiers.zig`; `fuzz-asan`
-is wired into `m0` and nightly only because it depends on host ASan compiler-rt
+`fuzz-trapsite`, are wired into `m0-full` in `build/tiers.zig` and covered by
+nightly fuzz cadence; `fuzz-asan` is wired into `m0-full` and nightly only because it depends on host ASan compiler-rt
 availability. The remaining backlog is generator surface, where the differential oracles
 still apply.)
 
@@ -133,14 +133,14 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 
 | # | Item | Effort | Notes |
 |---|------|--------|-------|
-| E1 | **Reference interpreter** (eval generated subset, assert digest) | Done / expanding | `fuzz-reference`, gated by `m0`/`fast`; highest leverage for bugs both backends share. Keep extending the interpreted subset as generator surface grows. |
-| E2 | **Metamorphic/algebraic** (semantics-preserving transform → same digest) | Done / expanding | `fuzz-metamorphic`, gated by `m0`/`fast`; keep adding transforms for new constructs. |
-| E3 | Optimization-level differential | Done / expanding | `fuzz-optlevel`, gated by `m0`/`fast`; keep widening the generated surface. |
-| E4 | Artifact consistency oracle over `facts`/`emit-map`/`lower-mir`/`lower-ir` | Done / expanding | `fuzz-artifacts`, gated by `m0`/`fast`; checks stage status, MIR/IR trap-edge counters, checked-trap facts reaching IR, and core mcmap source/function/MIR-reference invariants. |
-| E5 | Memory-safety oracle (ASan over pointer/slice programs) | Done / expanding | `fuzz-asan`, gated by `m0` and nightly but omitted from `fast` with the other env-fragile sanitizer gates; covers C-emitted memory safety over the current nullable/non-null pointer, byte-view slice, and `[]mut T` slice generator surface. |
-| E6 | Round-trip / idempotence (re-parse, re-lower → stable) | Done / expanding | `fuzz-roundtrip`, gated by `m0`/`fast`; generated and formatted source both check, `fmt(fmt(src)) == fmt(src)`, stripped token streams match, and emitted C matches after source-location normalization. |
+| E1 | **Reference interpreter** (eval generated subset, assert digest) | Done / expanding | `fuzz-reference`, gated by `m0-full`/nightly; highest leverage for bugs both backends share. Keep extending the interpreted subset as generator surface grows. |
+| E2 | **Metamorphic/algebraic** (semantics-preserving transform → same digest) | Done / expanding | `fuzz-metamorphic`, gated by `m0-full`/nightly; keep adding transforms for new constructs. |
+| E3 | Optimization-level differential | Done / expanding | `fuzz-optlevel`, gated by `m0-full`/nightly; keep widening the generated surface. |
+| E4 | Artifact consistency oracle over `facts`/`emit-map`/`lower-mir`/`lower-ir` | Done / expanding | `fuzz-artifacts`, gated by `m0-full`/nightly; checks stage status, MIR/IR trap-edge counters, checked-trap facts reaching IR, and core mcmap source/function/MIR-reference invariants. |
+| E5 | Memory-safety oracle (ASan over pointer/slice programs) | Done / expanding | `fuzz-asan`, gated by `m0-full` and nightly but omitted from `fast` with the other env-fragile sanitizer gates; covers C-emitted memory safety over the current nullable/non-null pointer, byte-view slice, and `[]mut T` slice generator surface. |
+| E6 | Round-trip / idempotence (re-parse, re-lower → stable) | Done / expanding | `fuzz-roundtrip`, gated by `m0-full`/nightly; generated and formatted source both check, `fmt(fmt(src)) == fmt(src)`, stripped token streams match, and emitted C matches after source-location normalization. |
 | E7 | Crash-bucketing & auto-minimization of findings | Done / expanding | `mcfuzz.py run` prints root-cause bucket summaries on failure, can write `--triage-dir` JSONL findings, and `--shrink-failures` opt-in minimizes the first finding per signature. |
-| E8 | Trap-location/trap-kind agreement | Done / expanding | `fuzz-trapsite`, gated by `m0`/`fast`; generated trapping programs run through both backends with trap helpers instrumented in temp artifacts, and normalized outcomes must agree as `ok:<stdout>`, `trap:<Kind>`, or `status:<rc>`. |
+| E8 | Trap-location/trap-kind agreement | Done / expanding | `fuzz-trapsite`, gated by `m0-full`/nightly; generated trapping programs run through both backends with trap helpers instrumented in temp artifacts, and normalized outcomes must agree as `ok:<stdout>`, `trap:<Kind>`, or `status:<rc>`. |
 
 ## F. Methodology / infrastructure
 
@@ -202,7 +202,7 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 **Tally: 19 coverage items + 3 promoted oracles (metamorphic, optlevel, reference) + 3 real
 C-backend bugs found & fixed (INT64_MIN, narrow wrap-mul UB, f32 double-rounding). The original
 core oracle family plus `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-corpus`, and
-`fuzz-reference` now gate both `m0` and `fast`.**
+`fuzz-reference` now gate `m0-full` and the nightly fuzz cadence.**
 
 ### Done 2026-07-04
 
@@ -223,7 +223,7 @@ core oracle family plus `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `
 **Tally after E4: 19 coverage items + 5 promoted oracles (metamorphic, optlevel, reference,
 roundtrip, artifacts) + 3 real C-backend bugs found & fixed. The original core oracle family plus
 `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-corpus`, `fuzz-reference`,
-`fuzz-roundtrip`, and `fuzz-artifacts` now gate both `m0` and `fast`.**
+`fuzz-roundtrip`, and `fuzz-artifacts` now gate `m0-full` and the nightly fuzz cadence.**
 
 ### Done 2026-07-04 (E8 trapsite agreement)
 
@@ -243,8 +243,8 @@ roundtrip, artifacts) + 3 real C-backend bugs found & fixed. The original core o
 **Current tally: 19 coverage items + 7 promoted oracles (metamorphic, optlevel, reference,
 roundtrip, artifacts, trapsite, asan) + 3 real C-backend bugs found & fixed. The original core
 oracle family plus `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-corpus`,
-`fuzz-reference`, `fuzz-roundtrip`, `fuzz-artifacts`, and `fuzz-trapsite` now gate both `m0`
-and `fast`; `fuzz-asan` gates `m0` and nightly only.**
+`fuzz-reference`, `fuzz-roundtrip`, `fuzz-artifacts`, and `fuzz-trapsite` now gate `m0-full`
+and the nightly fuzz cadence; `fuzz-asan` gates `m0-full` and nightly only.**
 
 ### Blocked by missing backend support (can't be generated into runnable programs)
 

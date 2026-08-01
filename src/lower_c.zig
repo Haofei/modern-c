@@ -42,7 +42,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    return appendCProfileWithMirSourceSpelling(allocator, program.syntax_module, program.typed_mir, program.source_spelling, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm, opts.reporter);
+    return appendCProfileWithMirSourceSpelling(allocator, program.declarationMetadata(), program.typed_mir, program.source_spelling, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm, opts.reporter);
 }
 
 fn backendEmitMap(
@@ -56,7 +56,7 @@ fn backendEmitMap(
     _ = ctx;
     return appendCSourceMapFromGenerated(
         allocator,
-        program.syntax_module,
+        program.sourceMapMechanics(),
         out,
         generated_artifact,
         program.typed_mir,
@@ -95,12 +95,12 @@ fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, o
 }
 
 pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
-    return appendCProfileWithMirSourceSpelling(allocator, module, typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
+    return appendCProfileWithMirSourceSpelling(allocator, backend_mod.DeclarationMetadataView.forDecls(module.decls), typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCProfileWithMirSourceSpelling(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    declarations: backend_mod.DeclarationMetadataView,
     typed_mir: *const mir.Module,
     source_spelling: backend_mod.SourceSpellingView,
     out: *std.ArrayList(u8),
@@ -115,6 +115,7 @@ fn appendCProfileWithMirSourceSpelling(
         else => return err,
     };
     if (!source_spelling.validateAgainstMir(typed_mir.*)) return error.UnsupportedCEmission;
+    const early_metadata = declarations.cEarlyDeclarationMetadata();
     const profile_marker = switch (profile) {
         .kernel => "/* mc-profile: kernel (freestanding) */\n",
         .hosted => "/* mc-profile: hosted (links libc + -lm) */\n",
@@ -125,7 +126,7 @@ fn appendCProfileWithMirSourceSpelling(
 
     try lower_c_emitter.appendModuleMir(
         allocator,
-        module,
+        early_metadata,
         typed_mir,
         out,
         source_path,
@@ -145,7 +146,7 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
 
-    try appendCSourceMapFromGenerated(allocator, module, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
+    try appendCSourceMapFromGenerated(allocator, backend_mod.SourceMapMechanicsView.forDecls(module.decls), out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
         .profile = profile,
         .source_path = source_path,
     });
@@ -153,7 +154,7 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
 
 pub fn appendCSourceMapFromGenerated(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    source_map_view: backend_mod.SourceMapMechanicsView,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     typed_mir: *const mir.Module,
@@ -161,5 +162,5 @@ pub fn appendCSourceMapFromGenerated(
     generated_c_path: ?[]const u8,
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
-    try lower_c_map.appendSourceMap(allocator, module, out, generated_c, typed_mir, source_path, generated_c_path, opts);
+    try lower_c_map.appendSourceMap(allocator, source_map_view, out, generated_c, typed_mir, source_path, generated_c_path, opts);
 }

@@ -837,11 +837,12 @@ def main() -> int:
     if gates:
         print("\nConfidence gates:")
         print("  zig build fast")
-        print("  tools/fast-parallel.sh <jobs>  # fast gates in parallel with bounded local fuzz count")
+        print("  tools/fast-parallel.sh <jobs>  # fast gates in parallel")
         print("  tools/m0-parallel.sh <jobs>    # broad local milestone check when the slice is large")
 
         print("\nTruth gate:")
-        print("  zig build m0                   # required before release/production claims")
+        print("  zig build m0                   # core compiler qualification")
+        print("  zig build m0-full              # required before release/production claims")
     else:
         print("\nConfidence gates:")
         print("  none for checks-only changes")

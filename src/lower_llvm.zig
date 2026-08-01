@@ -101,6 +101,12 @@ const MirSubjectType = struct {
 };
 const hasNamedAttr = sema_decl.hasNamedAttr;
 
+const LlvmFunctionDeclArtifact = struct {
+    fn_decl: ast.FnDecl,
+    attrs: []const ast.Attr,
+    is_extern: bool,
+};
+
 // LLVM backend AST/call-shape queries and small pure lowering helpers.
 const lower_llvm_query = @import("lower_llvm_query.zig");
 const assignmentIdent = lower_llvm_query.assignmentIdent;
@@ -157,6 +163,10 @@ const DebugLocalKind = lower_llvm_model.DebugLocalKind;
 const LoopLabels = lower_llvm_model.LoopLabels;
 const RawManyOffsetInfo = lower_llvm_model.RawManyOffsetInfo;
 const EnumRawCallInfo = lower_llvm_model.EnumRawCallInfo;
+const ReduceTypes = struct {
+    source_ty: ast.TypeExpr,
+    element_ty: ast.TypeExpr,
+};
 const DomainResidueCallInfo = lower_llvm_model.DomainResidueCallInfo;
 const DomainOpCallInfo = lower_llvm_model.DomainOpCallInfo;
 const ConversionCallInfo = lower_llvm_model.ConversionCallInfo;
@@ -166,6 +176,30 @@ const IntRange = lower_llvm_model.IntRange;
 const AtomicCallInfo = lower_llvm_model.AtomicCallInfo;
 const MaybeUninitCallInfo = lower_llvm_model.MaybeUninitCallInfo;
 const ResultTypeInfo = lower_llvm_model.ResultTypeInfo;
+const EnumRawTypes = struct {
+    enum_ty: ast.TypeExpr,
+    repr_ty: ast.TypeExpr,
+};
+const DomainTypes = struct {
+    domain_ty: ast.TypeExpr,
+    payload_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
+    interval_ty: ?ast.TypeExpr = null,
+};
+const BitcastTypes = struct {
+    source_ty: ast.TypeExpr,
+    target_ty: ast.TypeExpr,
+};
+const SemanticEscapeTypes = struct {
+    source_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
+};
+
+const ArithmeticCallTypes = struct {
+    left_ty: ast.TypeExpr,
+    right_ty: ast.TypeExpr,
+    result_ty: ast.TypeExpr,
+};
 
 const UncheckedCallInfo = struct {
     op: []const u8,
@@ -215,6 +249,7 @@ const LocalSliceAggregatePointerArrayBase = struct {
 
 fn directCallFactMatchesDeclared(fact_ty: ast.TypeExpr, declared_ty: ast.TypeExpr) bool {
     if (std.meta.eql(fact_ty, declared_ty)) return true;
+    if (sema_type.sameTypeSyntax(fact_ty, declared_ty)) return true;
     return (typeNameEql(fact_ty, "void") and typeNameEql(declared_ty, "void")) or
         (typeNameEql(fact_ty, "never") and typeNameEql(declared_ty, "never"));
 }
@@ -239,7 +274,7 @@ fn backendLower(
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
     _ = ctx;
-    try appendLlvmCheckedMirProfileWithSourceSpelling(allocator, program.syntax_module, program.typed_mir, program.source_spelling, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.linux_kernel, opts.reporter);
+    try appendLlvmCheckedMirProfileWithSourceSpelling(allocator, program.declarationMetadata(), program.typed_mir, program.source_spelling, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.linux_kernel, opts.reporter);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
@@ -266,12 +301,12 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
 }
 
 pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, module, module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
+    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, backend_mod.DeclarationMetadataView.forDecls(module.decls), module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
 }
 
 fn appendLlvmCheckedMirProfileWithSourceSpelling(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    declarations: backend_mod.DeclarationMetadataView,
     module_mir: *const mir.Module,
     source_spelling: backend_mod.SourceSpellingView,
     out: *std.ArrayList(u8),
@@ -287,6 +322,8 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         else => return err,
     };
     if (!source_spelling.validateAgainstMir(module_mir.*)) return error.UnsupportedLlvmEmission;
+    const early_metadata = declarations.llvmEarlyDeclarationMetadata();
+    const decls = early_metadata.declsForEarlyDeclarationScan();
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;
@@ -318,7 +355,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
         .const_global_widths = std.StringHashMap(u16).init(allocator),
         .const_global_domains = std.StringHashMap(eval.DomainWidth).init(allocator),
-        .comptime_module = module,
+        .comptime_decls = decls,
         .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
         .enum_types = std.StringHashMap(ast.EnumDecl).init(allocator),
         .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
@@ -361,86 +398,28 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .linux_kernel = linux_kernel,
     };
     defer ctx.deinit();
-    for (module.decls) |decl| {
-        if (decl.kind == .fn_decl) {
-            const fn_decl = decl.kind.fn_decl;
-            if (fn_decl.is_const and !ctx.const_fns.contains(fn_decl.name.text)) try ctx.const_fns.put(fn_decl.name.text, fn_decl);
-            for (decl.attrs) |attr| switch (attr.kind) {
-                .backend_name => |name| try ctx.backend_names.put(fn_decl.name.text, name),
-                else => {},
-            };
-        }
-    }
-    try ctx.preRegisterTypeDecls(module);
+    try ctx.preRegisterTypeDeclsFromDecls(decls);
     var reflect_env = ctx.reflectEnv();
-    try eval.collectConstGlobalsWithOptions(allocator, module, &ctx.const_fns, &ctx.const_globals, .{
+    try eval.collectConstGlobalsFromDeclsWithOptions(allocator, decls, &ctx.const_fns, &ctx.const_globals, .{
         .reflect = lower_llvm_reflect.comptimeReflectThunk,
         .reflect_ctx = &reflect_env,
         .domains = &ctx.const_global_domains,
     });
-    try ctx.collectConstGlobalWidths(module);
-    for (module.decls) |decl| {
-        switch (decl.kind) {
-            .packed_bits_decl => |packed_bits| try ctx.collectPackedBits(packed_bits),
-            .overlay_union_decl => |overlay_union| try ctx.collectOverlayUnion(overlay_union),
-            .union_decl => |union_decl| try ctx.collectTaggedUnion(union_decl),
-            else => {},
-        }
-    }
-    for (module.decls) |decl| {
-        switch (decl.kind) {
-            .type_alias => |alias| try ctx.collectTypeAlias(alias),
-            .enum_decl => |enum_decl| try ctx.collectEnum(enum_decl),
-            else => {},
-        }
-    }
-    for (module.decls) |decl| {
-        switch (decl.kind) {
-            .struct_decl => |struct_decl| try ctx.collectStruct(struct_decl),
-            else => {},
-        }
-    }
-    for (module.decls) |decl| {
-        switch (decl.kind) {
-            .fn_decl => |fn_decl| try ctx.collectFunction(fn_decl, decl.attrs),
-            .extern_fn => |fn_decl| try ctx.collectFunction(fn_decl, decl.attrs),
-            else => {},
-        }
-    }
-    for (module.decls) |decl| {
-        switch (decl.kind) {
-            .global_decl => |global| try ctx.collectGlobal(global),
-            .trait_decl => |t| try ctx.trait_decls.put(t.name.text, t),
-            .impl_trait => |it| {
-                const key = try std.fmt.allocPrint(allocator, "{s}\x00{s}", .{ it.trait_name.text, it.type_name.text });
-                try ctx.impl_methods.put(key, it.methods);
-            },
-            else => {},
-        }
-    }
+    try ctx.collectNonStructTypeArtifacts();
+    try ctx.collectStructArtifacts();
+    try ctx.collectCallableAndValueDeclArtifacts();
     try ctx.collectMirAggregateReturnPointerFieldFacts();
     // Tier 2: one rodata vtable global per `impl Trait for Type` of an object-safe
     // trait. Function pointers may be forward-referenced in LLVM IR, so this can run
     // before the function bodies are emitted.
     try ctx.emitVtables();
-    for (module.decls) |decl| {
-        switch (decl.kind) {
-            .global_decl => |global| try ctx.emitGlobal(global),
-            else => {},
-        }
-    }
-    for (module.decls) |decl| {
-        switch (decl.kind) {
-            .fn_decl => |fn_decl| if (fn_decl.body) |body| try ctx.emitFunction(fn_decl, body, decl.attrs),
-            .extern_fn => |fn_decl| try ctx.emitExternFunction(fn_decl),
-            else => {},
-        }
-    }
+    try ctx.emitCollectedGlobals();
+    try ctx.emitCollectedCallableDeclarations();
     // Scalar-env closure thunks discovered while emitting bodies. LLVM IR allows
     // forward references to these `@mc_envthunk_*` symbols, so emitting them after
     // the function bodies is fine.
     try ctx.emitBindThunks();
-    try ctx.emitBackendNameAliases(module);
+    try ctx.emitBackendNameAliases();
     try ctx.emitStringLiteralGlobals();
     try ctx.emitIntrinsicDecls();
     try ctx.emitDebugMetadata();
@@ -463,7 +442,7 @@ const LlvmEmitter = struct {
     const_globals: std.StringHashMap(eval.ComptimeValue) = undefined,
     const_global_widths: std.StringHashMap(u16) = undefined,
     const_global_domains: std.StringHashMap(eval.DomainWidth) = undefined,
-    comptime_module: ast.Module,
+    comptime_decls: []const ast.Decl,
     type_aliases: std.StringHashMap(ast.TypeExpr) = undefined,
     enum_types: std.StringHashMap(ast.EnumDecl) = undefined,
     packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
@@ -485,6 +464,10 @@ const LlvmEmitter = struct {
     // alias `@Y = alias <fnty>, ptr @name` so the override symbol is linkable (the C backend
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
+    decl_artifacts: std.ArrayList(ast.Decl) = .empty,
+    struct_decl_artifacts: std.ArrayList(ast.StructDecl) = .empty,
+    function_decl_artifacts: std.ArrayList(LlvmFunctionDeclArtifact) = .empty,
+    global_decl_artifacts: std.ArrayList(ast.GlobalDecl) = .empty,
     global_types: std.StringHashMap(ast.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
     global_initializers: std.StringHashMap(ast.Expr) = undefined,
@@ -576,6 +559,10 @@ const LlvmEmitter = struct {
         self.impl_methods.deinit();
         self.bind_thunks.deinit();
         self.backend_names.deinit();
+        self.decl_artifacts.deinit(self.allocator);
+        self.struct_decl_artifacts.deinit(self.allocator);
+        self.function_decl_artifacts.deinit(self.allocator);
+        self.global_decl_artifacts.deinit(self.allocator);
         self.global_types.deinit();
         self.global_is_const.deinit();
         self.global_initializers.deinit();
@@ -600,22 +587,13 @@ const LlvmEmitter = struct {
         self.scratch.deinit();
     }
 
-    fn collectConstGlobalWidths(self: *LlvmEmitter, module: ast.Module) !void {
-        for (module.decls) |decl| {
-            const global = switch (decl.kind) {
-                .global_decl => |g| g,
-                else => continue,
-            };
-            if (!global.is_const) continue;
-            const ty = global.ty orelse continue;
-            const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
-            try self.const_global_widths.put(global.name.text, bits);
-        }
-    }
-
-    fn preRegisterTypeDecls(self: *LlvmEmitter, module: ast.Module) !void {
-        for (module.decls) |decl| {
+    fn preRegisterTypeDeclsFromDecls(self: *LlvmEmitter, decls: []const ast.Decl) !void {
+        for (decls) |decl| {
+            try self.decl_artifacts.append(self.allocator, decl);
             switch (decl.kind) {
+                .fn_decl => |fn_decl| {
+                    if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+                },
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
                 .enum_decl => |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl),
                 .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
@@ -628,11 +606,16 @@ const LlvmEmitter = struct {
                     if (struct_decl.abi) |abi| {
                         if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
                     }
+                    try self.struct_decl_artifacts.append(self.allocator, struct_decl);
                     try self.struct_types.put(struct_decl.name.text, struct_decl);
                 },
                 else => {},
             }
         }
+    }
+
+    fn collectStructArtifacts(self: *LlvmEmitter) !void {
+        for (self.struct_decl_artifacts.items) |struct_decl| try self.collectStruct(struct_decl);
     }
 
     fn collectStruct(self: *LlvmEmitter, struct_decl: ast.StructDecl) !void {
@@ -653,6 +636,19 @@ const LlvmEmitter = struct {
     fn collectTypeAlias(self: *LlvmEmitter, alias: ast.TypeAlias) !void {
         _ = try self.llvmType(alias.ty);
         try self.type_aliases.put(alias.name.text, alias.ty);
+    }
+
+    fn collectNonStructTypeArtifacts(self: *LlvmEmitter) !void {
+        for (self.decl_artifacts.items) |decl| {
+            switch (decl.kind) {
+                .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
+                .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
+                .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
+                .type_alias => |alias| try self.collectTypeAlias(alias),
+                .enum_decl => |enum_decl| try self.collectEnum(enum_decl),
+                else => {},
+            }
+        }
     }
 
     fn collectEnum(self: *LlvmEmitter, enum_decl: ast.EnumDecl) !void {
@@ -709,13 +705,43 @@ const LlvmEmitter = struct {
         } else null;
         const c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi"));
         try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .c_abi = c_abi, .is_variadic = fn_decl.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
+        for (attrs) |attr| switch (attr.kind) {
+            .backend_name => |name| try self.backend_names.put(fn_decl.name.text, name),
+            else => {},
+        };
+    }
+
+    fn collectCallableAndValueDeclArtifacts(self: *LlvmEmitter) !void {
+        for (self.decl_artifacts.items) |decl| {
+            switch (decl.kind) {
+                .fn_decl => |fn_decl| {
+                    try self.collectFunction(fn_decl, decl.attrs);
+                    try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = fn_decl, .attrs = decl.attrs, .is_extern = false });
+                },
+                .extern_fn => |fn_decl| {
+                    try self.collectFunction(fn_decl, decl.attrs);
+                    try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = fn_decl, .attrs = decl.attrs, .is_extern = true });
+                },
+                .global_decl => |global| try self.collectGlobal(global),
+                .trait_decl => |t| try self.trait_decls.put(t.name.text, t),
+                .impl_trait => |it| {
+                    const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ it.trait_name.text, it.type_name.text });
+                    try self.impl_methods.put(key, it.methods);
+                },
+                else => {},
+            }
+        }
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
         const ty = global.ty orelse return error.UnsupportedLlvmEmission;
         _ = try self.llvmType(ty);
+        try self.global_decl_artifacts.append(self.allocator, global);
         try self.global_types.put(global.name.text, ty);
         try self.global_is_const.put(global.name.text, global.is_const);
+        if (global.is_const) {
+            if (eval.comptimeTypeBitWidth(ty)) |bits| try self.const_global_widths.put(global.name.text, bits);
+        }
         if (global.init) |expr| try self.global_initializers.put(global.name.text, expr);
     }
 
@@ -789,6 +815,20 @@ const LlvmEmitter = struct {
         const visibility: []const u8 = if (global.exported) "" else "internal ";
         const init = if (global.init) |expr| try self.emitGlobalInitializer(expr, ty) else try self.zeroInitializer(ty);
         try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ global.name.text, visibility, kind, llvm_ty, init });
+    }
+
+    fn emitCollectedGlobals(self: *LlvmEmitter) !void {
+        for (self.global_decl_artifacts.items) |global| try self.emitGlobal(global);
+    }
+
+    fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {
+        for (self.function_decl_artifacts.items) |artifact| {
+            if (artifact.is_extern) {
+                try self.emitExternFunction(artifact.fn_decl);
+            } else if (artifact.fn_decl.body) |body| {
+                try self.emitFunction(artifact.fn_decl, body, artifact.attrs);
+            }
+        }
     }
 
     fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
@@ -1026,7 +1066,7 @@ const LlvmEmitter = struct {
 
     fn seedConstFoldScope(self: *LlvmEmitter, scope: *eval.ComptimeScope, reflect_env: *LlvmReflectEnv) bool {
         if (!lower_llvm_reflect.seedConstFoldScope(reflect_env, scope)) return false;
-        scope.module = self.comptime_module;
+        scope.decls = self.comptime_decls;
         return true;
     }
 
@@ -1156,19 +1196,17 @@ const LlvmEmitter = struct {
 
     // `#[backend_name("Y")]`: a module-level alias exposing the override symbol, pointing at the
     // function emitted under its source name. The aliasee type is the function type.
-    fn emitBackendNameAliases(self: *LlvmEmitter, module: ast.Module) !void {
-        for (module.decls) |decl| {
-            if (decl.kind != .fn_decl) continue;
-            const fn_decl = decl.kind.fn_decl;
-            if (fn_decl.body == null) continue;
-            const backend = self.backend_names.get(fn_decl.name.text) orelse continue;
-            const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
-            try self.out.print(self.allocator, "@{s} = alias {s} (", .{ backend, try self.llvmType(ret_ty) });
-            for (fn_decl.params, 0..) |param, i| {
+    fn emitBackendNameAliases(self: *LlvmEmitter) !void {
+        for (self.debug_functions.items) |debug_function| {
+            const source_name = debug_function.name;
+            const backend = self.backend_names.get(source_name) orelse continue;
+            const sig = self.fn_sigs.get(source_name) orelse return error.UnsupportedLlvmEmission;
+            try self.out.print(self.allocator, "@{s} = alias {s} (", .{ backend, try self.llvmType(sig.ret) });
+            for (sig.params, 0..) |param, i| {
                 if (i != 0) try self.out.appendSlice(self.allocator, ", ");
                 try self.out.appendSlice(self.allocator, try self.llvmType(param.ty));
             }
-            try self.out.print(self.allocator, "), ptr @{s}\n", .{fn_decl.name.text});
+            try self.out.print(self.allocator, "), ptr @{s}\n", .{source_name});
         }
     }
 
@@ -1450,7 +1488,7 @@ const LlvmEmitter = struct {
 
     fn emitExprInner(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) anyerror![]const u8 {
         const semantic_expected_ty = if (expr.kind == .null_literal)
-            if (expr.span.line == 0 or expr.span.column == 0)
+            if (!isSourceSpan(expr.span))
                 expected_ty
             else if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact|
                 fact.target_ty
@@ -2170,11 +2208,13 @@ const LlvmEmitter = struct {
                 // the program; emit the trap/call followed by `unreachable` (no value needed even
                 // in a value-returning function, since this path does not fall through).
                 if (try self.emitNeverExpr(expr)) return;
-                if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| {
+                const call_span = call.callee.*.span;
+                const call_kind = self.mirCallTargetKindAt(call_span);
+                if (call_kind) |kind| {
                     switch (kind) {
                         .drop, .forget_unchecked => {
                             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-                            const argument_ty = (self.mirTargetTypeFactAt(.discard_argument, call.args[0].span) orelse return error.UnsupportedLlvmEmission).target_ty;
+                            const argument_ty = try self.requireMirDiscardArgumentTypeForEmission(call.args[0]);
                             _ = try self.emitExpr(call.args[0], argument_ty);
                             return;
                         },
@@ -2190,7 +2230,7 @@ const LlvmEmitter = struct {
                 if (try self.emitBuiltinVoidCall(call)) return;
                 // A `va.*` intrinsic as a statement (`va.end(&ap);`): route through emitCall,
                 // which emits the call/instruction; any result (none for va.end) is discarded.
-                if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| {
+                if (call_kind) |kind| {
                     switch (kind) {
                         .va_start, .va_arg, .va_end => {
                             _ = try self.emitCall(call, simpleType(expr.span, "void"), expr.span);
@@ -2199,7 +2239,7 @@ const LlvmEmitter = struct {
                         else => {},
                     }
                 }
-                if (self.callReturnType(call)) |ret_ty| {
+                if (self.callResultTypeForEmission(call)) |ret_ty| {
                     // A `void` or `-> never` call statement produces no value, so it is emitted
                     // without a result name (a named void instruction is invalid LLVM).
                     if (typeNameEql(ret_ty, "void") or typeNameEql(ret_ty, "never")) {
@@ -2214,7 +2254,7 @@ const LlvmEmitter = struct {
             },
             .grouped => |inner| try self.emitExprStatement(inner.*),
             else => {
-                const ty = self.exprType(expr) orelse {
+                const ty = self.exprStatementTypeForEmission(expr) orelse {
                     self.reportUnsupported(expr.span, @tagName(expr.kind));
                     return error.UnsupportedLlvmEmission;
                 };
@@ -2375,8 +2415,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitAssert(self: *LlvmEmitter, expr: ast.Expr) !void {
-        const ty = (self.mirTargetTypeFactAt(.assert_condition, expr.span) orelse return error.UnsupportedLlvmEmission).target_ty;
-        if (!typeNameEql(ty, "bool")) return error.UnsupportedLlvmEmission;
+        const ty = try self.requireMirBoolTargetTypeForEmission(.assert_condition, expr);
         const condition = try self.emitExpr(expr, ty);
         const cont = try self.nextLabel("assert_ok");
         const trap = try self.nextLabel("trap_assert");
@@ -2646,8 +2685,7 @@ const LlvmEmitter = struct {
                 return true;
             },
             .call => |call| {
-                const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return false;
-                const helper = mir.explicitTrapHelperForTarget(kind) orelse return false;
+                const helper = self.trapHelperForCall(call) orelse return false;
                 if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
                 try self.out.print(self.allocator, "  call void @{s}(){s}\n  unreachable\n", .{ helper, try self.debugCallSuffix() });
                 return true;
@@ -2666,12 +2704,17 @@ const LlvmEmitter = struct {
         return switch (expr.kind) {
             .unreachable_expr => true,
             .call => |call| blk: {
-                const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse break :blk false;
-                break :blk mir.explicitTrapHelperForTarget(kind) != null;
+                break :blk self.trapHelperForCall(call) != null;
             },
             .grouped => |inner| self.exprStatementDiverges(inner.*),
             else => false,
         };
+    }
+
+    fn trapHelperForCall(self: *LlvmEmitter, call: anytype) ?[]const u8 {
+        const call_span = call.callee.*.span;
+        const kind = self.mirCallTargetKindAt(call_span) orelse return null;
+        return mir.explicitTrapHelperForTarget(kind);
     }
 
     fn emitLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl, is_mutable: bool) !void {
@@ -2697,9 +2740,12 @@ const LlvmEmitter = struct {
             try self.local_slots.put(name, .{ .ty = ty, .ptr = ptr, .kind = .va_list_local, .is_mutable = is_mutable });
             const dst = try self.vaListCursorPtrFromStorage(ptr);
             if (init.kind == .call) {
-                if (self.mirCallTargetKindAt(init.kind.call.callee.*.span)) |kind| {
+                const call = init.kind.call;
+                const call_span = call.callee.*.span;
+                const call_kind = self.mirCallTargetKindAt(call_span);
+                if (call_kind) |kind| {
                     if (kind == .va_start) {
-                        const info = self.vaCallInfo(init.kind.call) orelse return error.UnsupportedLlvmEmission;
+                        const info = self.vaCallInfo(call, kind) orelse return error.UnsupportedLlvmEmission;
                         if (info.kind != .va_start) return error.UnsupportedLlvmEmission;
                         try self.out.print(self.allocator, "  call void @llvm.va_start(ptr {s})\n", .{dst});
                         return;
@@ -2725,9 +2771,12 @@ const LlvmEmitter = struct {
         // `var ap: va_list = va.start();` — the slot IS the va_list cursor storage; initialize
         // it in place with llvm.va_start (it has no value to store).
         if (init.kind == .call) {
-            if (self.mirCallTargetKindAt(init.kind.call.callee.*.span)) |kind| {
+            const call = init.kind.call;
+            const call_span = call.callee.*.span;
+            const call_kind = self.mirCallTargetKindAt(call_span);
+            if (call_kind) |kind| {
                 if (kind == .va_start) {
-                    const info = self.vaCallInfo(init.kind.call) orelse return error.UnsupportedLlvmEmission;
+                    const info = self.vaCallInfo(call, kind) orelse return error.UnsupportedLlvmEmission;
                     if (info.kind != .va_start) return error.UnsupportedLlvmEmission;
                     try self.out.print(self.allocator, "  call void @llvm.va_start(ptr {s})\n", .{ptr});
                     return;
@@ -2784,7 +2833,7 @@ const LlvmEmitter = struct {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
             return fact_ty;
         }
-        if (self.exprType(initializer) orelse self.inferredLocalCallReturnType(initializer)) |known_ty| {
+        if (self.exprType(initializer)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
         return fact_ty;
@@ -2795,7 +2844,7 @@ const LlvmEmitter = struct {
             .grouped => |inner| try self.requireMirTryExpressionResultType(inner.*),
             .try_expr => |node| blk: {
                 const result_ty = (self.mirTargetTypeFactAt(.expression_result, initializer.span) orelse return error.UnsupportedLlvmEmission).target_ty;
-                const operand_ty = (self.mirTargetTypeFactAt(.try_operand, node.operand.*.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+                const operand_ty = try self.requireMirTryOperandType(node.operand.*);
                 const expected_ty = if (self.resultInfo(operand_ty)) |info|
                     info.ok_ty
                 else
@@ -2841,9 +2890,18 @@ const LlvmEmitter = struct {
     fn directAddressOfLocalPlaceInfo(self: *LlvmEmitter, operand: ast.Expr) ?DirectAddressPlace {
         return switch (operand.kind) {
             .ident => |ident| blk: {
-                if (self.local_slots.get(ident.text)) |slot| break :blk .{ .ty = slot.ty, .mutability = if (slot.is_mutable) .mut else .@"const" };
-                if (self.local_types.get(ident.text)) |ty| break :blk .{ .ty = ty, .mutability = .@"const" };
-                if (self.global_types.get(ident.text)) |ty| break :blk .{ .ty = ty, .mutability = if (self.global_is_const.get(ident.text) orelse true) .@"const" else .mut };
+                if (self.local_slots.get(ident.text)) |slot| {
+                    const ty = self.identifierExpressionType(operand, ident.text) orelse break :blk null;
+                    break :blk .{ .ty = ty, .mutability = if (slot.is_mutable) .mut else .@"const" };
+                }
+                if (self.local_types.contains(ident.text)) {
+                    const ty = self.identifierExpressionType(operand, ident.text) orelse break :blk null;
+                    break :blk .{ .ty = ty, .mutability = .@"const" };
+                }
+                if (self.global_types.contains(ident.text)) {
+                    const ty = self.identifierExpressionType(operand, ident.text) orelse break :blk null;
+                    break :blk .{ .ty = ty, .mutability = if (self.global_is_const.get(ident.text) orelse true) .@"const" else .mut };
+                }
                 break :blk null;
             },
             .member => |node| if (self.directAddressOfLocalPlaceInfo(node.base.*)) |base| .{ .ty = self.exprType(operand) orelse return null, .mutability = base.mutability } else null,
@@ -2868,16 +2926,8 @@ const LlvmEmitter = struct {
 
     fn directAddressOfLocalPointerType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
-            .ident => |ident| self.local_types.get(ident.text),
+            .ident => |ident| self.identifierExpressionType(expr, ident.text),
             .grouped => |inner| self.directAddressOfLocalPointerType(inner.*),
-            else => null,
-        };
-    }
-
-    fn inferredLocalCallReturnType(self: *LlvmEmitter, initializer: ast.Expr) ?ast.TypeExpr {
-        return switch (initializer.kind) {
-            .call => |call| self.callReturnType(call),
-            .grouped => |inner| self.inferredLocalCallReturnType(inner.*),
             else => null,
         };
     }
@@ -2988,16 +3038,20 @@ const LlvmEmitter = struct {
     }
 
     fn emitBuiltinVoidCall(self: *LlvmEmitter, call: anytype) !bool {
-        if (self.maybeUninitCallInfo(call)) |info| {
-            if (!std.mem.eql(u8, info.op, "write")) return false;
-            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const ptr = try self.storageBaseAddress(info.base);
-            const value = try self.emitExpr(call.args[0], info.payload_ty);
-            try self.emitConcreteObjectStore(ptr, info.payload_ty, value);
-            return true;
+        const call_span = call.callee.*.span;
+        const call_kind = self.mirCallTargetKindAt(call_span);
+        if (call_kind) |kind| {
+            if (self.maybeUninitCallInfo(call, kind)) |info| {
+                if (!std.mem.eql(u8, info.op, "write")) return false;
+                if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+                const ptr = try self.storageBaseAddress(info.base);
+                const value = try self.emitExpr(call.args[0], info.payload_ty);
+                try self.emitConcreteObjectStore(ptr, info.payload_ty, value);
+                return true;
+            }
         }
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_store) {
-            const info = self.rawCallInfo(call) orelse return error.UnsupportedLlvmEmission;
+        if (call_kind == .raw_store) {
+            const info = self.rawCallInfo(call, .raw_store) orelse return error.UnsupportedLlvmEmission;
             const addr = try self.emitExpr(call.args[0], info.address_ty);
             const value = try self.emitExpr(call.args[1], info.payload_ty);
             const ptr = try self.nextTemp();
@@ -3028,38 +3082,42 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
             return true;
         }
-        if (self.mmioAccessInfo(call)) |info| {
-            if (!std.mem.eql(u8, info.op, "write")) return false;
-            if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
-            const ordering = orderingArg(call.args[1]) orelse return error.UnsupportedLlvmEmission;
-            const raw_value = try self.emitExpr(call.args[0], info.value_ty);
-            const value = if (std.mem.eql(u8, try self.llvmType(info.value_ty), try self.llvmType(info.storage_ty)))
-                raw_value
-            else
-                try self.castValue(raw_value, info.value_ty, info.storage_ty);
-            try self.emitMmioFence(ordering, .before_store);
-            const ptr = try self.emitMmioRegisterAddress(info);
-            try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(info.storage_ty), value, ptr, try self.debugCallSuffix() });
-            return true;
-        }
-        if (self.dmaCacheCallInfo(call)) |info| {
-            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            _ = try self.emitExpr(call.args[0], info.dma_ty);
-            if (std.mem.eql(u8, info.op, "clean")) {
-                try self.out.print(self.allocator, "  fence release{s}\n", .{try self.debugCallSuffix()});
-            } else if (std.mem.eql(u8, info.op, "invalidate")) {
-                try self.out.print(self.allocator, "  fence acquire{s}\n", .{try self.debugCallSuffix()});
-            } else {
-                return error.UnsupportedLlvmEmission;
+        if (call_kind) |kind| {
+            if (self.mmioAccessInfo(call, kind)) |info| {
+                if (!std.mem.eql(u8, info.op, "write")) return false;
+                if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
+                const ordering = orderingArg(call.args[1]) orelse return error.UnsupportedLlvmEmission;
+                const raw_value = try self.emitExpr(call.args[0], info.value_ty);
+                const value = if (std.mem.eql(u8, try self.llvmType(info.value_ty), try self.llvmType(info.storage_ty)))
+                    raw_value
+                else
+                    try self.castValue(raw_value, info.value_ty, info.storage_ty);
+                try self.emitMmioFence(ordering, .before_store);
+                const ptr = try self.emitMmioRegisterAddress(info);
+                try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(info.storage_ty), value, ptr, try self.debugCallSuffix() });
+                return true;
             }
-            return true;
         }
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .cpu_pause) {
+        if (call_kind) |kind| {
+            if (self.dmaCacheCallInfo(call, kind)) |info| {
+                if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+                _ = try self.emitExpr(call.args[0], info.dma_ty);
+                if (std.mem.eql(u8, info.op, "clean")) {
+                    try self.out.print(self.allocator, "  fence release{s}\n", .{try self.debugCallSuffix()});
+                } else if (std.mem.eql(u8, info.op, "invalidate")) {
+                    try self.out.print(self.allocator, "  fence acquire{s}\n", .{try self.debugCallSuffix()});
+                } else {
+                    return error.UnsupportedLlvmEmission;
+                }
+                return true;
+            }
+        }
+        if (call_kind == .cpu_pause) {
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             try self.out.print(self.allocator, "  call void asm sideeffect \"pause\", \"~{{memory}}\"(){s}\n", .{try self.debugCallSuffix()});
             return true;
         }
-        if (self.mirCallTargetKindAt(call.callee.*.span)) |fence_kind| {
+        if (call_kind) |fence_kind| {
             const ordering: ?[]const u8 = switch (fence_kind) {
                 .fence_full => "seq_cst",
                 .fence_release => "release",
@@ -3072,15 +3130,17 @@ const LlvmEmitter = struct {
                 return true;
             }
         }
-        if (self.atomicCallInfo(call)) |info| {
-            if (!std.mem.eql(u8, info.op, "store")) return false;
-            if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
-            const ordering = atomicOrderingArg(call.args, 1) orelse return error.UnsupportedLlvmEmission;
-            const llvm_order = atomicLlvmOrdering(ordering, .store) orelse return error.UnsupportedLlvmEmission;
-            const ptr = try self.atomicAddress(info);
-            const value = try self.emitAtomicValueForStorage(call.args[0], info.payload_ty);
-            try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} {s}, align {d}{s}\n", .{ try self.atomicStorageLlvmType(info.payload_ty), value, ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
-            return true;
+        if (call_kind) |kind| {
+            if (self.atomicCallInfo(call, kind)) |info| {
+                if (!std.mem.eql(u8, info.op, "store")) return false;
+                if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
+                const ordering = atomicOrderingArg(call.args, 1) orelse return error.UnsupportedLlvmEmission;
+                const llvm_order = atomicLlvmOrdering(ordering, .store) orelse return error.UnsupportedLlvmEmission;
+                const ptr = try self.atomicAddress(info);
+                const value = try self.emitAtomicValueForStorage(call.args[0], info.payload_ty);
+                try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} {s}, align {d}{s}\n", .{ try self.atomicStorageLlvmType(info.payload_ty), value, ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
+                return true;
+            }
         }
         return false;
     }
@@ -3163,8 +3223,7 @@ const LlvmEmitter = struct {
     fn emitWhile(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
         if (loop.kind != .@"while") return error.UnsupportedLlvmEmission;
         const condition_expr = loop.iterable orelse return error.UnsupportedLlvmEmission;
-        const condition_ty = (self.mirTargetTypeFactAt(.loop_condition, condition_expr.span) orelse return error.UnsupportedLlvmEmission).target_ty;
-        if (!typeNameEql(condition_ty, "bool")) return error.UnsupportedLlvmEmission;
+        const condition_ty = try self.requireMirBoolTargetTypeForEmission(.loop_condition, condition_expr);
 
         const cond_label = try self.nextLabel("while_cond");
         const body_label = try self.nextLabel("while_body");
@@ -3182,8 +3241,16 @@ const LlvmEmitter = struct {
     }
 
     fn requireMirSwitchSubjectType(self: *LlvmEmitter, subject: ast.Expr) !MirSubjectType {
-        if (subject.span.line == 0 or subject.span.column == 0) return .{ .target_ty = self.exprType(subject) orelse return error.UnsupportedLlvmEmission };
-        const fact = self.mirTargetTypeFactAt(.switch_subject, subject.span) orelse return error.UnsupportedLlvmEmission;
+        return self.requireMirSubjectType(.switch_subject, subject);
+    }
+
+    fn requireMirIfLetSubjectType(self: *LlvmEmitter, value: ast.Expr) !MirSubjectType {
+        return self.requireMirSubjectType(.if_let_subject, value);
+    }
+
+    fn requireMirSubjectType(self: *LlvmEmitter, kind: mir.TargetTypeKind, subject: ast.Expr) !MirSubjectType {
+        if (!isSourceSpan(subject.span)) return .{ .target_ty = self.exprType(subject) orelse return error.UnsupportedLlvmEmission };
+        const fact = self.mirTargetTypeFactAt(kind, subject.span) orelse return error.UnsupportedLlvmEmission;
         const fact_ty = fact.target_ty;
         if (self.exprType(subject)) |known_ty| {
             if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
@@ -3195,18 +3262,27 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn requireMirIfLetSubjectType(self: *LlvmEmitter, value: ast.Expr) !MirSubjectType {
-        if (value.span.line == 0 or value.span.column == 0) return .{ .target_ty = self.exprType(value) orelse return error.UnsupportedLlvmEmission };
-        const fact = self.mirTargetTypeFactAt(.if_let_subject, value.span) orelse return error.UnsupportedLlvmEmission;
-        const fact_ty = fact.target_ty;
-        if (self.exprType(value)) |known_ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+    fn mirTargetTypeForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, expr: ast.Expr) ?ast.TypeExpr {
+        if (!isSourceSpan(expr.span)) return self.exprType(expr);
+        const fact_ty = (self.mirTargetTypeFactAt(kind, expr.span) orelse return null).target_ty;
+        if (self.exprType(expr)) |known_ty| {
+            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return null;
         }
-        const resolved_fact_ty = self.resolveAliasType(fact_ty);
-        return .{
-            .target_ty = fact_ty,
-            .nullable_representation = if (resolved_fact_ty.kind == .nullable) try self.nullableRepresentationFromTargetFact(fact) else null,
-        };
+        return fact_ty;
+    }
+
+    fn requireMirTargetTypeForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, expr: ast.Expr) !ast.TypeExpr {
+        return self.mirTargetTypeForEmission(kind, expr) orelse error.UnsupportedLlvmEmission;
+    }
+
+    fn requireMirTargetTypeAtForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span) !ast.TypeExpr {
+        return (self.mirTargetTypeFactAt(kind, span) orelse return error.UnsupportedLlvmEmission).target_ty;
+    }
+
+    fn requireMirBoolTargetTypeForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, expr: ast.Expr) !ast.TypeExpr {
+        const ty = try self.requireMirTargetTypeForEmission(kind, expr);
+        if (!typeNameEql(ty, "bool")) return error.UnsupportedLlvmEmission;
+        return ty;
     }
 
     fn nullableRepresentationFromTargetFact(self: *LlvmEmitter, fact: mir.TargetTypeFact) !NullableRepresentation {
@@ -3232,27 +3308,31 @@ const LlvmEmitter = struct {
     }
 
     fn requireMirTryOperandType(self: *LlvmEmitter, operand: ast.Expr) !ast.TypeExpr {
-        if (operand.span.line == 0 or operand.span.column == 0) return self.exprType(operand) orelse error.UnsupportedLlvmEmission;
-        const fact_ty = (self.mirTargetTypeFactAt(.try_operand, operand.span) orelse return error.UnsupportedLlvmEmission).target_ty;
-        if (self.exprType(operand)) |known_ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
-        }
-        return fact_ty;
+        return self.requireMirTargetTypeForEmission(.try_operand, operand);
+    }
+
+    fn mirTryOperandTypeForQuery(self: *LlvmEmitter, operand: ast.Expr) ?ast.TypeExpr {
+        return self.requireMirTryOperandType(operand) catch null;
+    }
+
+    fn requireMirDiscardArgumentTypeForEmission(self: *LlvmEmitter, argument: ast.Expr) !ast.TypeExpr {
+        return self.requireMirTargetTypeForEmission(.discard_argument, argument);
     }
 
     fn requireMirForLoopTypes(self: *LlvmEmitter, iterable: ast.Expr) !struct { iterable: ast.TypeExpr, element: ast.TypeExpr } {
-        const iterable_ty = (self.mirTargetTypeFactAt(.for_iterable, iterable.span) orelse return error.UnsupportedLlvmEmission).target_ty;
-        const element_ty = (self.mirTargetTypeFactAt(.for_element, iterable.span) orelse return error.UnsupportedLlvmEmission).target_ty;
+        const iterable_ty = try self.requireMirTargetTypeForEmission(.for_iterable, iterable);
+        const element_ty = try self.requireMirForElementTypeForEmission(iterable);
         const expected_element = switch (self.resolveAliasType(iterable_ty).kind) {
             .array => |node| node.child.*,
             .slice => |node| node.child.*,
             else => return error.UnsupportedLlvmEmission,
         };
         if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(expected_element))) return error.UnsupportedLlvmEmission;
-        if (self.exprType(iterable)) |known_ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(iterable_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
-        }
         return .{ .iterable = iterable_ty, .element = element_ty };
+    }
+
+    fn requireMirForElementTypeForEmission(self: *LlvmEmitter, iterable: ast.Expr) !ast.TypeExpr {
+        return self.requireMirTargetTypeAtForEmission(.for_element, iterable.span);
     }
 
     fn emitFor(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
@@ -4677,12 +4757,18 @@ const LlvmEmitter = struct {
                 self.directAggregateCopySourceMemberForStruct(call.args[0], target_struct_name),
             .member => blk: {
                 _ = self.directLocalAggregateMemberPath(expr) orelse break :blk false;
-                const source_ty = self.exprType(expr) orelse break :blk false;
+                const source_ty = self.aggregateCopyMemberSourceTypeForEmission(expr) orelse break :blk false;
                 const source_struct_name = self.directStructTypeName(source_ty) orelse break :blk false;
                 break :blk std.mem.eql(u8, source_struct_name, target_struct_name);
             },
             else => false,
         };
+    }
+
+    fn aggregateCopyMemberSourceTypeForEmission(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| return fact.target_ty;
+        if (isSourceSpan(expr.span)) return null;
+        return self.exprType(expr);
     }
 
     fn localAggregatePointerAliasBaseName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
@@ -5517,7 +5603,7 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return null;
         var matched: ?mir.CallTargetKind = null;
         for (function.call_target_facts) |fact| {
-            if (!mirSourceMatches(span, fact.source)) continue;
+            if (!mirCallTargetSourceMatches(span, fact.source)) continue;
             if (matched) |kind| {
                 if (kind != fact.kind) return null;
             } else {
@@ -5530,7 +5616,7 @@ const LlvmEmitter = struct {
     fn mirHasCallTargetKindAt(self: *LlvmEmitter, kind: mir.CallTargetKind, span: ast.Span) bool {
         const function = self.currentMirFunction() orelse return false;
         for (function.call_target_facts) |fact| {
-            if (fact.kind == kind and mirSourceMatches(span, fact.source)) return true;
+            if (fact.kind == kind and mirCallTargetSourceMatches(span, fact.source)) return true;
         }
         return false;
     }
@@ -5572,7 +5658,7 @@ const LlvmEmitter = struct {
                 if (fact.kind == kind and fact.target_index == null and fact.target_owner == null and mirTargetTypeSourceMatches(kind, span, fact.source)) return fact;
             }
         }
-        if (span.line == 0 or span.column == 0) return null;
+        if (!isSourceSpan(span)) return null;
         var matched: ?mir.TargetTypeFact = null;
         for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
             if (fact.kind != kind or fact.target_index != null or fact.target_owner != null or !mirTargetTypeSourceMatches(kind, span, fact.source)) continue;
@@ -5586,7 +5672,7 @@ const LlvmEmitter = struct {
     }
 
     fn contextualTargetTypeAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, generated_ty: ast.TypeExpr) ?ast.TypeExpr {
-        if (span.line == 0 or span.column == 0) return generated_ty;
+        if (!isSourceSpan(span)) return generated_ty;
         return if (self.mirTargetTypeFactAt(kind, span)) |fact| fact.target_ty else null;
     }
 
@@ -5599,7 +5685,7 @@ const LlvmEmitter = struct {
         // Async lowering may create compiler-owned zero-span aggregate nodes.
         // They have no source-keyed fact; their generated declaration is the
         // only admitted fallback. Real source literals must carry the fact.
-        const result: MirStructLiteralConstruction = if (span.line == 0 or span.column == 0) blk: {
+        const result: MirStructLiteralConstruction = if (!isSourceSpan(span)) blk: {
             if (self.packedBitsInfoForType(generated_ty) != null) break :blk .{ .target_ty = generated_ty, .construction = .packed_bits };
             const decl = self.structDeclForType(generated_ty) orelse return error.UnsupportedLlvmEmission;
             break :blk .{ .target_ty = generated_ty, .construction = if (decl.is_c_union) .c_union else .declared_struct };
@@ -5623,7 +5709,7 @@ const LlvmEmitter = struct {
                 if (fact.kind == kind and fact.target_index == target_index and fact.target_owner != null and std.mem.eql(u8, fact.target_owner.?, target_owner) and mirSourceMatches(span, fact.source)) return fact;
             }
         }
-        if (span.line == 0 or span.column == 0) return null;
+        if (!isSourceSpan(span)) return null;
         var matched: ?mir.TargetTypeFact = null;
         for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
             if (fact.kind != kind or fact.target_index != target_index or fact.target_owner == null or !std.mem.eql(u8, fact.target_owner.?, target_owner) or !mirSourceMatches(span, fact.source)) continue;
@@ -5652,6 +5738,12 @@ const LlvmEmitter = struct {
 
     fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
         return span.line == source.line and span.column == source.column;
+    }
+
+    fn mirCallTargetSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
+        if (!mirSourceMatches(span, source)) return false;
+        if (source.offset == 0 and source.len == 0) return true;
+        return span.offset == source.offset and span.len == source.len;
     }
 
     fn mirTargetTypeSourceMatches(kind: mir.TargetTypeKind, span: ast.Span, source: mir.SourcePoint) bool {
@@ -5890,7 +5982,7 @@ const LlvmEmitter = struct {
     fn isMirAssumeNoaliasCall(self: *LlvmEmitter, call: anytype) bool {
         return call.type_args.len == 0 and
             call.args.len == 2 and
-            self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias;
+            self.mirHasCallTargetKindAt(.assume_noalias, call.callee.*.span);
     }
 
     fn mirPointerProvenanceCoversDirectLocalUpdate(self: *LlvmEmitter, ty: ast.TypeExpr, expr: ast.Expr) bool {
@@ -6188,12 +6280,12 @@ const LlvmEmitter = struct {
                         self.localPointerArrayAliasBaseHasAnyGlobalPointerProvenance(node.base.*)),
             .call => |call| if (self.isMirAssumeNoaliasCall(call))
                 self.pointerExprHasGlobalStorageProvenance(call.args[0])
-            else if (self.rawManyOffsetCallInfo(call)) |info|
-                call.args.len == 1 and
+            else if (self.mirHasCallTargetKindAt(.raw_many_offset, call.callee.*.span)) blk: {
+                const info = self.rawManyOffsetCallInfo(call, .raw_many_offset) orelse break :blk false;
+                break :blk call.args.len == 1 and
                     self.localArrayConstIndexValue(call.args[0]) == 0 and
-                    self.pointerExprHasGlobalStorageProvenance(info.base)
-            else
-                false,
+                    self.pointerExprHasGlobalStorageProvenance(info.base);
+            } else false,
             else => false,
         };
     }
@@ -7033,11 +7125,12 @@ const LlvmEmitter = struct {
         defer self.local_slice_pointer_array_ranges.clearRetainingCapacity();
         defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
         defer self.local_pointer_array_aliases.clearRetainingCapacity();
-        if (self.mirCallTargetKindAt(span)) |kind| switch (kind) {
+        const call_kind = self.mirCallTargetKindAt(span);
+        if (call_kind) |kind| switch (kind) {
             .drop, .forget_unchecked => return error.UnsupportedLlvmEmission,
             else => {},
         };
-        if (self.mirCallTargetKindAt(span) == .bind) {
+        if (call_kind == .bind) {
             const fact = self.mirTargetTypeFactAt(.bind, span) orelse return error.UnsupportedLlvmEmission;
             return try self.emitBindValue(call, fact.target_ty);
         }
@@ -7052,7 +7145,7 @@ const LlvmEmitter = struct {
         // Async lowering creates direct calls without source locations. Such calls
         // cannot safely query location-keyed builtin facts shared by other generated
         // nodes, so resolve declared functions before builtin dispatch.
-        if (span.line == 0 or span.column == 0) {
+        if (!isSourceSpan(span)) {
             if (self.directCallName(call.callee.*)) |callee| {
                 if (self.fn_sigs.contains(callee)) return try self.emitDirectCall(callee, call, expected_ty);
             }
@@ -7374,25 +7467,28 @@ const LlvmEmitter = struct {
     }
 
     fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr, span: ast.Span) !?[]const u8 {
-        if (self.reflectionCallInfo(call) != null) return self.reflectionCallValue(call) orelse error.UnsupportedLlvmEmission;
+        const call_span = call.callee.*.span;
+        const call_kind = self.mirCallTargetKindAt(call_span);
+        if (call_kind) |kind| {
+            if (self.reflectionCallInfo(call, kind)) |info| return self.reflectionCallValue(call, info) orelse error.UnsupportedLlvmEmission;
+        }
         // `declassify(x)` / `reveal(x)` strip the constant-time `Secret<T>` tag.
         // Secret shares T's representation, so this is a value-identity pass-through.
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify) {
+        if (call_kind == .declassify) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const source_ty = (self.mirTargetTypeFactAt(.declassify_source, call.callee.*.span) orelse return error.UnsupportedLlvmEmission).target_ty;
-            _ = self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
-            const value = try self.emitExpr(call.args[0], source_ty);
+            const types = try self.declassifyTypesForEmission(call);
+            const value = try self.emitExpr(call.args[0], types.source_ty);
             return try self.coerceExprValue(value, call.args[0], expected_ty);
         }
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias) {
+        if (call_kind == .assume_noalias) {
             if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
-            const source_ty = (self.mirTargetTypeFactAt(.assume_noalias_source, call.callee.*.span) orelse return error.UnsupportedLlvmEmission).target_ty;
-            _ = self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span) orelse return error.UnsupportedLlvmEmission;
-            const value = try self.emitExpr(call.args[0], source_ty);
+            const types = try self.assumeNoaliasTypesForEmission(call);
+            const value = try self.emitExpr(call.args[0], types.source_ty);
             _ = try self.emitExpr(call.args[1], simpleType(call.args[1].span, "usize"));
             return try self.coerceExprValue(value, call.args[0], expected_ty);
         }
-        if (self.constGetCallInfo(call)) |info| {
+        if (call_kind == .const_get) {
+            const info = self.constGetCallInfo(call, .const_get) orelse return error.UnsupportedLlvmEmission;
             if (call.args.len != 0) return error.UnsupportedLlvmEmission;
             const base_ptr = try self.arrayBasePointer(info.base);
             const ptr = try self.nextTemp();
@@ -7401,63 +7497,70 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(info.element_ty), ptr });
             return result;
         }
-        if (self.bitcastCallTargetType(call)) |target_ty| {
-            const source_ty = if (self.mirTargetTypeFactAt(.bitcast_source, call.callee.*.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission;
-            const value = try self.emitExpr(call.args[0], source_ty);
-            return try self.emitBitcastValue(value, source_ty, target_ty);
+        if (call_kind == .bitcast) {
+            const types = try self.bitcastTypesForEmission(call, .bitcast);
+            const value = try self.emitExpr(call.args[0], types.source_ty);
+            return try self.emitBitcastValue(value, types.source_ty, types.target_ty);
         }
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .phys) {
+        if (call_kind == .phys) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            _ = self.physCallTargetType(call) orelse return error.UnsupportedLlvmEmission;
+            _ = try self.physResultTypeForEmission(call, .phys);
             return try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
         }
-        if (self.mmioMapCallInfo(call)) |info| {
+        if (call_kind == .mmio_map) {
+            const info = self.mmioMapCallInfo(call, .mmio_map) orelse return error.UnsupportedLlvmEmission;
             const addr = try self.emitExpr(call.args[0], info.source_ty);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ result, addr });
             return result;
         }
-        if (self.dmaBufCallInfo(call)) |info| {
-            if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
-            const base = try self.emitExpr(info.base, info.dma_ty);
-            if (std.mem.eql(u8, info.op, "dma_addr")) return base;
-            if (std.mem.eql(u8, info.op, "as_slice")) {
-                const ptr = try self.nextTemp();
-                const with_ptr = try self.nextTemp();
-                const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, base });
-                try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr {s}, 0\n", .{ with_ptr, try self.llvmType(info.result_ty), ptr });
-                try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, i64 1, 1\n", .{ result, try self.llvmType(info.result_ty), with_ptr });
-                return result;
+        if (call_kind) |kind| {
+            if (self.dmaBufCallInfo(call, kind)) |info| {
+                if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
+                const base = try self.emitExpr(info.base, info.dma_ty);
+                if (std.mem.eql(u8, info.op, "dma_addr")) return base;
+                if (std.mem.eql(u8, info.op, "as_slice")) {
+                    const ptr = try self.nextTemp();
+                    const with_ptr = try self.nextTemp();
+                    const result = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, base });
+                    try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, ptr {s}, 0\n", .{ with_ptr, try self.llvmType(info.result_ty), ptr });
+                    try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, i64 1, 1\n", .{ result, try self.llvmType(info.result_ty), with_ptr });
+                    return result;
+                }
+                return error.UnsupportedLlvmEmission;
             }
-            return error.UnsupportedLlvmEmission;
         }
         if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
             if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
             const payload_ty = self.atomicInitPayloadTypeAt(call.callee.*.span, expected_ty) orelse return error.UnsupportedLlvmEmission;
             return try self.emitAtomicValueForStorage(call.args[0], payload_ty);
         }
-        if (self.mmioAccessInfo(call)) |info| {
-            if (!std.mem.eql(u8, info.op, "read")) return null;
-            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const ordering = orderingArg(call.args[0]) orelse return error.UnsupportedLlvmEmission;
-            const ptr = try self.emitMmioRegisterAddress(info);
-            const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}{s}\n", .{ result, try self.llvmType(info.storage_ty), ptr, try self.debugCallSuffix() });
-            try self.emitMmioFence(ordering, .after_load);
-            if (std.mem.eql(u8, try self.llvmType(info.storage_ty), try self.llvmType(info.value_ty))) return result;
-            return try self.castValue(result, info.storage_ty, info.value_ty);
+        if (call_kind) |kind| {
+            if (self.mmioAccessInfo(call, kind)) |info| {
+                if (!std.mem.eql(u8, info.op, "read")) return null;
+                if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+                const ordering = orderingArg(call.args[0]) orelse return error.UnsupportedLlvmEmission;
+                const ptr = try self.emitMmioRegisterAddress(info);
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}{s}\n", .{ result, try self.llvmType(info.storage_ty), ptr, try self.debugCallSuffix() });
+                try self.emitMmioFence(ordering, .after_load);
+                if (std.mem.eql(u8, try self.llvmType(info.storage_ty), try self.llvmType(info.value_ty))) return result;
+                return try self.castValue(result, info.storage_ty, info.value_ty);
+            }
         }
-        if (self.maybeUninitCallInfo(call)) |info| {
-            if (!std.mem.eql(u8, info.op, "assume_init")) return null;
-            if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
-            const ptr = try self.storageBaseAddress(info.base);
-            const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(info.payload_ty), ptr });
-            return result;
+        if (call_kind) |kind| {
+            if (self.maybeUninitCallInfo(call, kind)) |info| {
+                if (!std.mem.eql(u8, info.op, "assume_init")) return null;
+                if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
+                const ptr = try self.storageBaseAddress(info.base);
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ result, try self.llvmType(info.payload_ty), ptr });
+                return result;
+            }
         }
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_load) {
-            const info = self.rawCallInfo(call) orelse return error.UnsupportedLlvmEmission;
+        if (call_kind == .raw_load) {
+            const info = self.rawCallInfo(call, .raw_load) orelse return error.UnsupportedLlvmEmission;
             const value_ty = info.payload_ty;
             const addr = try self.emitExpr(call.args[0], info.address_ty);
             const ptr = try self.nextTemp();
@@ -7480,11 +7583,11 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}{s}\n", .{ result, llvm_ty, ptr, try self.debugCallSuffix() });
             return result;
         }
-        if (self.mirCallTargetKindAt(call.callee.*.span)) |kind| switch (kind) {
+        if (call_kind) |kind| switch (kind) {
             .va_start, .va_arg, .va_end => {
                 // The cursor argument is either `&ap` for a local va_list or a `*mut va_list`
                 // parameter. Normalize both to the ABI cursor pointer that va_arg / va_end want.
-                const info = self.vaCallInfo(call) orelse return error.UnsupportedLlvmEmission;
+                const info = self.vaCallInfo(call, kind) orelse return error.UnsupportedLlvmEmission;
                 const cursor_ty = info.cursor_ty orelse return error.UnsupportedLlvmEmission;
                 const ap_ptr = try self.emitVaListCursorArg(call.args[0], cursor_ty);
                 switch (info.kind) {
@@ -7499,20 +7602,23 @@ const LlvmEmitter = struct {
             },
             else => {},
         };
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_ptr) {
-            const info = self.rawCallInfo(call) orelse return error.UnsupportedLlvmEmission;
+        if (call_kind == .raw_ptr) {
+            const info = self.rawCallInfo(call, .raw_ptr) orelse return error.UnsupportedLlvmEmission;
             const addr = try self.emitExpr(call.args[0], info.address_ty);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ result, addr });
             return result;
         }
-        if (self.enumRawCallInfo(call)) |info| {
+        if (call_kind == .enum_raw) {
+            const info = self.enumRawCallInfo(call, .enum_raw) orelse return error.UnsupportedLlvmEmission;
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             const value = try self.emitExpr(info.base, info.enum_ty);
             return try self.castValue(value, info.enum_ty, info.repr_ty);
         }
-        if (self.byteViewCallInfo(call)) |info| return try self.emitByteViewCall(call, info);
-        const generated_result_constructor: ?mir.ResultConstructorFactInfo = if (span.line == 0 or span.column == 0)
+        if (call_kind) |kind| {
+            if (self.byteViewCallInfo(call, kind)) |info| return try self.emitByteViewCall(call, info);
+        }
+        const generated_result_constructor: ?mir.ResultConstructorFactInfo = if (!isSourceSpan(span))
             if (calleeIdentName(call.callee.*)) |name|
                 if (std.mem.eql(u8, name, "ok"))
                     .{ .target_kind = .result_ok, .tag = "ok" }
@@ -7524,10 +7630,11 @@ const LlvmEmitter = struct {
                 null
         else
             null;
+        const constructor_kind = self.mirCallTargetKindAt(span);
         const result_constructor = generated_result_constructor orelse
-            if (self.mirCallTargetKindAt(span)) |kind| mir.resultConstructorFactInfo(kind) else null;
+            if (constructor_kind) |kind| mir.resultConstructorFactInfo(kind) else null;
         if (result_constructor) |constructor| {
-            const result_ty = if (span.line == 0 or span.column == 0)
+            const result_ty = if (!isSourceSpan(span))
                 expected_ty
             else if (self.mirTargetTypeFactAt(constructor.target_kind, span)) |fact|
                 fact.target_ty
@@ -7536,69 +7643,84 @@ const LlvmEmitter = struct {
             return try self.emitResultConstructorValue(call, result_ty, constructor.tag);
         }
         if (self.mirTargetTypeFactAt(.result_ok, span) != null or self.mirTargetTypeFactAt(.result_err, span) != null) return error.UnsupportedLlvmEmission;
-        if (self.domainResidueCallInfo(call)) |info| {
+        if (call_kind == .wrap_residue) {
+            const info = self.domainResidueCallInfo(call, .wrap_residue) orelse return error.UnsupportedLlvmEmission;
             if (call.type_args.len != 0 or call.args.len != 0) return error.UnsupportedLlvmEmission;
             return try self.emitExpr(info.base, info.domain_ty);
         }
-        if (self.domainOpCallInfo(call)) |info| return try self.emitDomainOpCall(call, info);
-        if (self.reduceCallInfo(call)) |info| return try self.emitReduceCall(call, info);
-        if (self.conversionCallInfo(call)) |info| {
-            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const value = try self.emitExpr(call.args[0], info.source_ty);
-            if (std.mem.eql(u8, info.op, "trap_from")) return try self.emitTrapConversion(value, info.source_ty, info.target_ty);
-            if (std.mem.eql(u8, info.op, "sat_from")) return try self.emitSaturatingConversion(value, info.source_ty, info.target_ty);
-            if (std.mem.eql(u8, info.op, "try_from")) return try self.emitTryConversion(value, info.source_ty, info.target_ty);
-            if (!std.mem.eql(u8, info.op, "from") and !std.mem.eql(u8, info.op, "wrap_from") and !std.mem.eql(u8, info.op, "from_mod")) return error.UnsupportedLlvmEmission;
-            return try self.castValue(value, info.source_ty, info.target_ty);
+        if (call_kind) |kind| {
+            if (self.domainOpCallInfo(call, kind)) |info| return try self.emitDomainOpCall(call, info);
         }
-        if (self.wrappingCallInfo(call)) |info| {
-            if (self.integerBitsOf(info.result_ty) == null) return error.UnsupportedLlvmEmission;
-            const left = try self.emitExpr(call.args[0], info.left_ty);
-            const right = try self.emitExpr(call.args[1], info.right_ty);
-            return try self.emitPlainBinaryValues(info.op, try self.llvmType(info.result_ty), left, right);
+        if (call_kind) |kind| {
+            if (self.reduceCallInfo(call, kind)) |info| return try self.emitReduceCall(call, info);
         }
-        if (self.uncheckedCallInfo(call)) |info| {
-            if (self.integerBitsOf(info.result_ty) == null) return error.UnsupportedLlvmEmission;
-            try self.requireMirNoOverflowRangeFact(info.op, span);
-            const left = try self.emitExpr(call.args[0], info.left_ty);
-            const right = try self.emitExpr(call.args[1], info.right_ty);
-            return try self.emitPlainBinaryValues(info.op, try self.llvmType(info.result_ty), left, right);
-        }
-        if (self.atomicCallInfo(call)) |info| {
-            if (std.mem.eql(u8, info.op, "load")) {
+        if (call_kind) |kind| {
+            if (self.conversionCallInfo(call, kind)) |info| {
                 if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-                const ordering = atomicOrderingArg(call.args, 0) orelse return error.UnsupportedLlvmEmission;
-                const llvm_order = atomicLlvmOrdering(ordering, .load) orelse return error.UnsupportedLlvmEmission;
-                const ptr = try self.atomicAddress(info);
-                const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = load atomic {s}, ptr {s} {s}, align {d}{s}\n", .{ result, try self.atomicStorageLlvmType(info.payload_ty), ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
-                if (typeNameEql(info.payload_ty, "bool")) {
-                    const bool_result = try self.nextTemp();
-                    try self.out.print(self.allocator, "  {s} = trunc i8 {s} to i1\n", .{ bool_result, result });
-                    return bool_result;
-                }
-                return result;
-            }
-            if (std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) {
-                if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
-                const ordering = atomicOrderingArg(call.args, 1) orelse return error.UnsupportedLlvmEmission;
-                const llvm_order = atomicLlvmOrdering(ordering, .rmw) orelse return error.UnsupportedLlvmEmission;
-                if (self.integerBitsOf(info.payload_ty) == null) return error.UnsupportedLlvmEmission;
-                const ptr = try self.atomicAddress(info);
-                const delta = try self.emitExpr(call.args[0], info.payload_ty);
-                const result = try self.nextTemp();
-                const op: []const u8 = if (std.mem.eql(u8, info.op, "fetch_sub")) "sub" else "add";
-                try self.out.print(self.allocator, "  {s} = atomicrmw {s} ptr {s}, {s} {s} {s}{s}\n", .{ result, op, ptr, try self.llvmType(info.payload_ty), delta, llvm_order, try self.debugCallSuffix() });
-                return result;
+                const value = try self.emitExpr(call.args[0], info.source_ty);
+                if (std.mem.eql(u8, info.op, "trap_from")) return try self.emitTrapConversion(value, info.source_ty, info.target_ty);
+                if (std.mem.eql(u8, info.op, "sat_from")) return try self.emitSaturatingConversion(value, info.source_ty, info.target_ty);
+                if (std.mem.eql(u8, info.op, "try_from")) return try self.emitTryConversion(value, info.source_ty, info.target_ty);
+                if (!std.mem.eql(u8, info.op, "from") and !std.mem.eql(u8, info.op, "wrap_from") and !std.mem.eql(u8, info.op, "from_mod")) return error.UnsupportedLlvmEmission;
+                return try self.castValue(value, info.source_ty, info.target_ty);
             }
         }
-        if (self.rawManyOffsetCallInfo(call)) |info| {
-            if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-            const base = try self.emitExpr(info.base, info.base_ty);
-            const index = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
-            const result = try self.nextTemp();
-            try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(info.element_ty), base, index });
-            return result;
+        if (call_kind) |kind| {
+            if (self.wrappingCallInfo(call, kind)) |info| {
+                if (self.integerBitsOf(info.result_ty) == null) return error.UnsupportedLlvmEmission;
+                const left = try self.emitExpr(call.args[0], info.left_ty);
+                const right = try self.emitExpr(call.args[1], info.right_ty);
+                return try self.emitPlainBinaryValues(info.op, try self.llvmType(info.result_ty), left, right);
+            }
+        }
+        if (call_kind) |kind| {
+            if (self.uncheckedCallInfo(call, kind)) |info| {
+                if (self.integerBitsOf(info.result_ty) == null) return error.UnsupportedLlvmEmission;
+                try self.requireMirNoOverflowRangeFact(info.op, span);
+                const left = try self.emitExpr(call.args[0], info.left_ty);
+                const right = try self.emitExpr(call.args[1], info.right_ty);
+                return try self.emitPlainBinaryValues(info.op, try self.llvmType(info.result_ty), left, right);
+            }
+        }
+        if (call_kind) |kind| {
+            if (self.atomicCallInfo(call, kind)) |info| {
+                if (std.mem.eql(u8, info.op, "load")) {
+                    if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+                    const ordering = atomicOrderingArg(call.args, 0) orelse return error.UnsupportedLlvmEmission;
+                    const llvm_order = atomicLlvmOrdering(ordering, .load) orelse return error.UnsupportedLlvmEmission;
+                    const ptr = try self.atomicAddress(info);
+                    const result = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = load atomic {s}, ptr {s} {s}, align {d}{s}\n", .{ result, try self.atomicStorageLlvmType(info.payload_ty), ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
+                    if (typeNameEql(info.payload_ty, "bool")) {
+                        const bool_result = try self.nextTemp();
+                        try self.out.print(self.allocator, "  {s} = trunc i8 {s} to i1\n", .{ bool_result, result });
+                        return bool_result;
+                    }
+                    return result;
+                }
+                if (std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) {
+                    if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
+                    const ordering = atomicOrderingArg(call.args, 1) orelse return error.UnsupportedLlvmEmission;
+                    const llvm_order = atomicLlvmOrdering(ordering, .rmw) orelse return error.UnsupportedLlvmEmission;
+                    if (self.integerBitsOf(info.payload_ty) == null) return error.UnsupportedLlvmEmission;
+                    const ptr = try self.atomicAddress(info);
+                    const delta = try self.emitExpr(call.args[0], info.payload_ty);
+                    const result = try self.nextTemp();
+                    const op: []const u8 = if (std.mem.eql(u8, info.op, "fetch_sub")) "sub" else "add";
+                    try self.out.print(self.allocator, "  {s} = atomicrmw {s} ptr {s}, {s} {s} {s}{s}\n", .{ result, op, ptr, try self.llvmType(info.payload_ty), delta, llvm_order, try self.debugCallSuffix() });
+                    return result;
+                }
+            }
+        }
+        if (call_kind == .raw_many_offset) {
+            if (self.rawManyOffsetCallInfo(call, .raw_many_offset)) |info| {
+                if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
+                const base = try self.emitExpr(info.base, info.base_ty);
+                const index = try self.emitExpr(call.args[0], simpleType(call.args[0].span, "usize"));
+                const result = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 {s}\n", .{ result, try self.llvmType(info.element_ty), base, index });
+                return result;
+            }
         }
         return null;
     }
@@ -8115,7 +8237,7 @@ const LlvmEmitter = struct {
 
     fn comparisonOperandExprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
-            .member, .index => if (expr.span.line == 0 and expr.span.column == 0)
+            .member, .index => if (!isSourceSpan(expr.span))
                 self.exprType(expr)
             else if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact|
                 fact.target_ty
@@ -9009,44 +9131,44 @@ const LlvmEmitter = struct {
 
     fn exprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
         return switch (expr.kind) {
-            .ident => |ident| self.local_types.get(ident.text) orelse self.global_types.get(ident.text) orelse self.fnPointerTypeForName(ident.text),
-            .bool_literal => if (expr.span.line != 0 and expr.span.column != 0)
+            .ident => |ident| self.identifierExpressionType(expr, ident.text),
+            .bool_literal => if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
                 simpleType(expr.span, "bool"),
-            .void_literal => if (expr.span.line != 0 and expr.span.column != 0)
+            .void_literal => if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
                 simpleType(expr.span, "void"),
             // Source unary expressions have their own MIR-owned result type.
             // Generated zero-span nodes retain the operand-derived fallback.
-            .unary => |node| if (expr.span.line == 0 and expr.span.column == 0)
+            .unary => |node| if (!isSourceSpan(expr.span))
                 self.requireExpressionResultType(expr, if (node.op == .logical_not) simpleType(expr.span, "bool") else self.exprType(node.expr.*))
             else if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact|
                 fact.target_ty
             else
                 null,
-            .int_literal => if (expr.span.line != 0 and expr.span.column != 0)
+            .int_literal => if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
                 null,
-            .char_literal => if (expr.span.line != 0 and expr.span.column != 0)
+            .char_literal => if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.char_literal, expr.span)) |fact| fact.target_ty else null
             else
                 null,
-            .string_literal => if (expr.span.line != 0 and expr.span.column != 0)
+            .string_literal => if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.string_literal, expr.span)) |fact| fact.target_ty else null
             else
                 null,
-            .enum_literal => if (expr.span.line != 0 and expr.span.column != 0)
+            .enum_literal => if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.enum_literal, expr.span)) |fact| fact.target_ty else null
             else
                 null,
-            .null_literal => if (expr.span.line != 0 and expr.span.column != 0)
+            .null_literal => if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact| fact.target_ty else null
             else
                 null,
-            .float_literal => if (expr.span.line != 0 and expr.span.column != 0)
+            .float_literal => if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact| fact.target_ty else null
             else
                 null,
@@ -9056,23 +9178,16 @@ const LlvmEmitter = struct {
             // Source groupings have their own MIR-owned result type. The
             // inner query is a stale-fact check only; generated zero-span
             // groupings retain the construction-derived fallback.
-            .grouped => |inner| if (expr.span.line == 0 and expr.span.column == 0)
+            .grouped => |inner| if (!isSourceSpan(expr.span))
                 self.exprType(inner.*)
             else
                 self.requireExpressionResultType(expr, self.exprType(inner.*)),
-            .call => |call| if (self.mirTargetTypeFactAt(.qualified_union_result, expr.span)) |fact|
-                fact.target_ty
-            else if (self.mirCallTargetKindAt(call.callee.*.span) == .assume_noalias)
-                if (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span)) |fact| fact.target_ty else null
-            else if (self.mirCallTargetKindAt(call.callee.*.span) == .declassify)
-                if (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span)) |fact| fact.target_ty else null
-            else
-                self.callReturnType(call),
+            .call => |call| self.callExpressionType(expr, call),
             .cast => self.castResultType(expr),
             // Source addresses have exact MIR expression-result facts. Only
             // compiler-generated zero-span nodes retain the declaration-based
             // fallback because they cannot be keyed to a source fact.
-            .address_of => |inner| if (expr.span.line != 0 and expr.span.column != 0)
+            .address_of => |inner| if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else if (self.exprType(inner.*)) |ty|
                 (if (self.resolveAliasType(ty).kind == .fn_pointer) ty else self.pointerTypeFor(ty) catch null)
@@ -9081,24 +9196,24 @@ const LlvmEmitter = struct {
             // Real source dereferences have an exact MIR result type. Only
             // generated zero-span nodes need the legacy operand-derived
             // fallback because no source-keyed fact can identify them.
-            .deref => |inner| if (expr.span.line != 0 and expr.span.column != 0)
+            .deref => |inner| if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
                 self.requireExpressionResultType(expr, self.derefPointeeType(inner.*)),
             // Real source indexes have an exact MIR result type. The fallback
             // remains only for generated zero-span nodes; index-address
             // emission still derives storage mechanics from the base.
-            .index => |node| if (expr.span.line != 0 and expr.span.column != 0)
+            .index => |node| if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
                 self.requireExpressionResultType(expr, self.indexElementType(node.base.*)),
             // Real source slices have an exact MIR result type. Slice
             // emission still derives base storage mechanics separately.
-            .slice => |node| if (expr.span.line != 0 and expr.span.column != 0)
+            .slice => |node| if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
                 self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| self.sliceTypeForBase(base_ty, node.base.*.span) else null),
-            .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else if (expr.span.line != 0 and expr.span.column != 0)
+            .member => |node| if (self.mirTargetTypeFactAt(.enum_variant_path_result, expr.span)) |fact| fact.target_ty else if (isSourceSpan(expr.span))
                 if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| fact.target_ty else null
             else
                 self.requireExpressionResultType(expr, if (self.exprType(node.base.*)) |base_ty| blk: {
@@ -9114,7 +9229,7 @@ const LlvmEmitter = struct {
             // Source binary expressions have their own MIR-owned result type.
             // Keep operand-derived inference only for generated zero-span nodes
             // that cannot be keyed to a source expression-result fact.
-            .binary => |node| if (expr.span.line == 0 and expr.span.column == 0)
+            .binary => |node| if (!isSourceSpan(expr.span))
                 self.requireExpressionResultType(expr, if (binaryIsComparison(node.op) or node.op == .logical_and or node.op == .logical_or) simpleType(expr.span, "bool") else self.exprType(node.left.*))
             else if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact|
                 fact.target_ty
@@ -9123,6 +9238,20 @@ const LlvmEmitter = struct {
             .try_expr => |node| self.tryExpressionResultType(expr, node.operand.*),
             else => null,
         };
+    }
+
+    fn exprStatementTypeForEmission(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+        if (!isSourceSpan(expr.span)) return self.exprType(expr);
+        const fact = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
+        const known = self.exprType(expr) orelse return null;
+        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact), self.resolveAliasType(known))) return null;
+        return fact;
+    }
+
+    fn identifierExpressionType(self: *LlvmEmitter, expr: ast.Expr, name: []const u8) ?ast.TypeExpr {
+        const inferred = self.local_types.get(name) orelse self.global_types.get(name) orelse self.fnPointerTypeForName(name) orelse return null;
+        if (!isSourceSpan(expr.span)) return inferred;
+        return self.expressionResultTypeAt(expr.span, inferred);
     }
 
     fn requireExpressionResultType(self: *LlvmEmitter, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {
@@ -9135,11 +9264,28 @@ const LlvmEmitter = struct {
         return self.expressionResultTypeAt(expr.span, target_ty);
     }
 
+    fn callExpressionType(self: *LlvmEmitter, expr: ast.Expr, call: anytype) ?ast.TypeExpr {
+        // Source call expressions have complete MIR result facts. The
+        // call-specific fact identifies the callee/ABI or builtin path; the
+        // expression_result row authorizes the value type at this source span.
+        const call_span = call.callee.*.span;
+        const call_kind = self.mirCallTargetKindAt(call_span);
+        const inferred = if (self.mirTargetTypeFactAt(.qualified_union_result, expr.span)) |fact|
+            fact.target_ty
+        else if (call_kind == .assume_noalias)
+            if (self.assumeNoaliasTypesForQuery(call)) |types| types.result_ty else return null
+        else if (call_kind == .declassify)
+            if (self.declassifyTypesForQuery(call)) |types| types.result_ty else return null
+        else
+            self.callResultTypeForEmission(call) orelse return null;
+        return self.expressionResultTypeAt(expr.span, inferred);
+    }
+
     fn expressionResultTypeAt(self: *LlvmEmitter, span: ast.Span, inferred: ast.TypeExpr) ?ast.TypeExpr {
         // Async lowering creates zero-span expressions whose construction site
         // already determines their type. Multiple generated nodes share that
         // sentinel span, so a span-keyed MIR lookup cannot identify one fact.
-        if (span.line == 0 or span.column == 0) return inferred;
+        if (!isSourceSpan(span)) return inferred;
         const fact = self.mirTargetTypeFactAt(.expression_result, span) orelse return null;
         if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) return null;
         return fact.target_ty;
@@ -9162,7 +9308,7 @@ const LlvmEmitter = struct {
 
     fn tryExpressionResultType(self: *LlvmEmitter, expr: ast.Expr, operand: ast.Expr) ?ast.TypeExpr {
         const result_ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
-        const operand_ty = (self.mirTargetTypeFactAt(.try_operand, operand.span) orelse return null).target_ty;
+        const operand_ty = self.mirTryOperandTypeForQuery(operand) orelse return null;
         const expected_ty = if (self.resultInfo(operand_ty)) |info|
             info.ok_ty
         else
@@ -9192,10 +9338,9 @@ const LlvmEmitter = struct {
         return lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, ty);
     }
 
-    fn mmioAccessInfo(self: *LlvmEmitter, call: anytype) ?MmioAccessInfo {
+    fn mmioAccessInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?MmioAccessInfo {
         if (call.type_args.len != 0) return null;
         const member = memberCallee(call) orelse return null;
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         const op: []const u8 = switch (kind) {
             .mmio_read => blk: {
                 if (!std.mem.eql(u8, member.name.text, "read") or call.args.len != 1) return null;
@@ -9230,8 +9375,8 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn mmioMapCallInfo(self: *LlvmEmitter, call: anytype) ?MmioMapInfo {
-        if (self.mirCallTargetKindAt(call.callee.*.span) != .mmio_map) return null;
+    fn mmioMapCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?MmioMapInfo {
+        if (kind != .mmio_map) return null;
         if (call.type_args.len != 1 or call.args.len != 1) return null;
         return .{
             .source_ty = (self.mirTargetTypeFactAt(.mmio_map_source, call.callee.*.span) orelse return null).target_ty,
@@ -9240,8 +9385,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn rawCallInfo(self: *LlvmEmitter, call: anytype) ?RawCallInfo {
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+    fn rawCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?RawCallInfo {
         const valid_shape = switch (kind) {
             .raw_load => ast_query.isRawLoadCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
             .raw_ptr => ast_query.isRawPtrCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
@@ -9249,16 +9393,29 @@ const LlvmEmitter = struct {
             else => false,
         };
         if (!valid_shape) return null;
+        const types = self.rawAddressTypesForEmission(call) orelse return null;
         return .{
             .kind = kind,
-            .address_ty = (self.mirTargetTypeFactAt(.raw_address, call.callee.*.span) orelse return null).target_ty,
-            .payload_ty = (self.mirTargetTypeFactAt(.raw_payload, call.callee.*.span) orelse return null).target_ty,
-            .result_ty = (self.mirTargetTypeFactAt(.raw_result, call.callee.*.span) orelse return null).target_ty,
+            .address_ty = types.address_ty,
+            .payload_ty = types.payload_ty,
+            .result_ty = types.result_ty,
         };
     }
 
-    fn byteViewCallInfo(self: *LlvmEmitter, call: anytype) ?ByteViewCallInfo {
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+    fn rawAddressTypesForEmission(self: *LlvmEmitter, call: anytype) ?struct {
+        address_ty: ast.TypeExpr,
+        payload_ty: ast.TypeExpr,
+        result_ty: ast.TypeExpr,
+    } {
+        const span = call.callee.*.span;
+        return .{
+            .address_ty = (self.mirTargetTypeFactAt(.raw_address, span) orelse return null).target_ty,
+            .payload_ty = (self.mirTargetTypeFactAt(.raw_payload, span) orelse return null).target_ty,
+            .result_ty = (self.mirTargetTypeFactAt(.raw_result, span) orelse return null).target_ty,
+        };
+    }
+
+    fn byteViewCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?ByteViewCallInfo {
         const expected_args: usize = switch (kind) {
             .byte_view_as_bytes => 1,
             .byte_view_equal => 2,
@@ -9272,8 +9429,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn reflectionCallInfo(self: *LlvmEmitter, call: anytype) ?ReflectionCallInfo {
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+    fn reflectionCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?ReflectionCallInfo {
         const expected_args: usize = switch (kind) {
             .reflection_size, .reflection_alignment, .reflection_repr => 0,
             .reflection_field_offset, .reflection_bit_offset => 1,
@@ -9287,8 +9443,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn vaCallInfo(self: *LlvmEmitter, call: anytype) ?VaCallInfo {
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+    fn vaCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?VaCallInfo {
         const valid_shape = switch (kind) {
             .va_start => call.type_args.len == 0 and call.args.len == 0,
             .va_arg => call.type_args.len == 1 and call.args.len == 1,
@@ -9296,11 +9451,25 @@ const LlvmEmitter = struct {
             else => false,
         };
         if (!valid_shape) return null;
+        const types = self.vaCallTypesForEmission(call, kind) orelse return null;
         return .{
             .kind = kind,
-            .cursor_ty = if (kind == .va_start) null else (self.mirTargetTypeFactAt(.va_cursor, call.callee.*.span) orelse return null).target_ty,
-            .payload_ty = if (kind == .va_arg) (self.mirTargetTypeFactAt(.va_payload, call.callee.*.span) orelse return null).target_ty else null,
-            .result_ty = (self.mirTargetTypeFactAt(.va_result, call.callee.*.span) orelse return null).target_ty,
+            .cursor_ty = types.cursor_ty,
+            .payload_ty = types.payload_ty,
+            .result_ty = types.result_ty,
+        };
+    }
+
+    fn vaCallTypesForEmission(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?struct {
+        cursor_ty: ?ast.TypeExpr,
+        payload_ty: ?ast.TypeExpr,
+        result_ty: ast.TypeExpr,
+    } {
+        const span = call.callee.*.span;
+        return .{
+            .cursor_ty = if (kind == .va_start) null else (self.mirTargetTypeFactAt(.va_cursor, span) orelse return null).target_ty,
+            .payload_ty = if (kind == .va_arg) (self.mirTargetTypeFactAt(.va_payload, span) orelse return null).target_ty else null,
+            .result_ty = (self.mirTargetTypeFactAt(.va_result, span) orelse return null).target_ty,
         };
     }
 
@@ -9736,8 +9905,12 @@ const LlvmEmitter = struct {
         return self.resolveAliasType(ty).kind == .fn_pointer;
     }
 
-    fn callReturnType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
-        if (self.reflectionCallInfo(call)) |info| return info.result_ty;
+    fn callResultTypeForEmission(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
+        const call_span = call.callee.*.span;
+        const call_kind = self.mirCallTargetKindAt(call_span);
+        if (call_kind) |kind| {
+            if (self.reflectionCallInfo(call, kind)) |info| return info.result_ty;
+        }
         // Tier 2 dynamic dispatch `d.method(args)` through a `*dyn Trait`: the return type is the
         // trait method's declared return type. Without this, exprType() is null for a dispatch call,
         // so a dispatch used directly as a switch/if subject (`if self.inner.poll() { ... }`) fell
@@ -9750,40 +9923,61 @@ const LlvmEmitter = struct {
             if (!std.meta.eql(fact_ty, declared_ty)) return null;
             return fact_ty;
         }
-        if (self.constGetCallInfo(call)) |info| return info.element_ty;
-        if (self.bitcastCallTargetType(call)) |ty| return ty;
-        if (self.physCallTargetType(call)) |ty| return ty;
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .raw_load or self.mirCallTargetKindAt(call.callee.*.span) == .raw_ptr) return if (self.rawCallInfo(call)) |info| info.result_ty else null;
-        if (self.vaCallInfo(call)) |info| return info.result_ty;
-        if (self.enumRawCallInfo(call)) |info| return info.repr_ty;
-        if (self.domainResidueCallInfo(call)) |info| return info.payload_ty;
-        if (self.domainOpCallInfo(call)) |info| return info.return_ty;
-        if (self.reduceCallInfo(call)) |info| return info.return_ty;
-        if (self.byteViewCallInfo(call)) |info| return info.result_ty;
-        if (self.mmioMapCallInfo(call)) |info| return info.result_ty;
-        if (self.conversionCallInfo(call)) |info| {
-            if (std.mem.eql(u8, info.op, "try_from")) {
-                return self.resultType(info.target_ty, simpleType(call.callee.*.span, "ConversionError"), call.callee.*.span) catch null;
+        if (call_kind == .const_get) return if (self.constGetCallInfo(call, .const_get)) |info| info.element_ty else null;
+        if (call_kind == .bitcast) return if (self.bitcastTypesForQuery(call, .bitcast)) |types| types.target_ty else null;
+        if (call_kind == .phys) return self.physResultTypeForQuery(call, .phys);
+        if (call_kind == .raw_load) return if (self.rawCallInfo(call, .raw_load)) |info| info.result_ty else null;
+        if (call_kind == .raw_ptr) return if (self.rawCallInfo(call, .raw_ptr)) |info| info.result_ty else null;
+        if (call_kind) |kind| {
+            if (self.vaCallInfo(call, kind)) |info| return info.result_ty;
+        }
+        if (call_kind == .enum_raw) return if (self.enumRawCallInfo(call, .enum_raw)) |info| info.repr_ty else null;
+        if (call_kind == .wrap_residue) return if (self.domainResidueCallInfo(call, .wrap_residue)) |info| info.payload_ty else null;
+        if (call_kind) |kind| {
+            if (self.domainOpCallInfo(call, kind)) |info| return info.return_ty;
+        }
+        if (call_kind) |kind| {
+            if (self.reduceCallInfo(call, kind)) |info| return info.return_ty;
+        }
+        if (call_kind) |kind| {
+            if (self.byteViewCallInfo(call, kind)) |info| return info.result_ty;
+        }
+        if (call_kind == .mmio_map) return if (self.mmioMapCallInfo(call, .mmio_map)) |info| info.result_ty else null;
+        if (call_kind) |kind| {
+            if (self.conversionCallInfo(call, kind)) |info| {
+                if (std.mem.eql(u8, info.op, "try_from")) {
+                    return self.resultType(info.target_ty, simpleType(call.callee.*.span, "ConversionError"), call.callee.*.span) catch null;
+                }
+                return info.target_ty;
             }
-            return info.target_ty;
         }
-        if (self.wrappingCallInfo(call)) |info| return info.result_ty;
-        if (self.uncheckedCallInfo(call)) |info| return info.result_ty;
-        if (self.atomicCallInfo(call)) |info| {
-            if (std.mem.eql(u8, info.op, "load") or std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) return info.payload_ty;
-            if (std.mem.eql(u8, info.op, "store")) return simpleType(call.callee.*.span, "void");
+        if (call_kind) |kind| {
+            if (self.wrappingCallInfo(call, kind)) |info| return info.result_ty;
         }
-        if (self.mmioAccessInfo(call)) |info| {
-            return info.result_ty;
+        if (call_kind) |kind| {
+            if (self.uncheckedCallInfo(call, kind)) |info| return info.result_ty;
         }
-        if (self.maybeUninitCallInfo(call)) |info| {
-            if (std.mem.eql(u8, info.op, "assume_init")) return info.payload_ty;
-            if (std.mem.eql(u8, info.op, "write")) return simpleType(call.callee.*.span, "void");
+        if (call_kind) |kind| {
+            if (self.atomicCallInfo(call, kind)) |info| {
+                if (std.mem.eql(u8, info.op, "load") or std.mem.eql(u8, info.op, "fetch_add") or std.mem.eql(u8, info.op, "fetch_sub")) return info.payload_ty;
+                if (std.mem.eql(u8, info.op, "store")) return simpleType(call.callee.*.span, "void");
+            }
         }
-        if (self.dmaCacheCallInfo(call)) |info| return info.result_ty;
-        if (self.dmaBufCallInfo(call)) |info| return info.result_ty;
-        if (self.rawManyOffsetCallInfo(call)) |info| return info.result_ty;
-        if (self.mirCallTargetKindAt(call.callee.*.span) == .bind) return if (self.mirTargetTypeFactAt(.bind, call.callee.*.span)) |fact| fact.target_ty else null;
+        if (call_kind) |kind| {
+            if (self.mmioAccessInfo(call, kind)) |info| return info.result_ty;
+        }
+        if (call_kind) |kind| {
+            if (self.maybeUninitCallInfo(call, kind)) |info| {
+                if (std.mem.eql(u8, info.op, "assume_init")) return info.payload_ty;
+                if (std.mem.eql(u8, info.op, "write")) return simpleType(call.callee.*.span, "void");
+            }
+        }
+        if (call_kind) |kind| {
+            if (self.dmaCacheCallInfo(call, kind)) |info| return info.result_ty;
+            if (self.dmaBufCallInfo(call, kind)) |info| return info.result_ty;
+        }
+        if (call_kind == .raw_many_offset) return if (self.rawManyOffsetCallInfo(call, .raw_many_offset)) |info| info.result_ty else null;
+        if (call_kind == .bind) return if (self.mirTargetTypeFactAt(.bind, call_span)) |fact| fact.target_ty else null;
         if (self.closureCalleeType(call.callee.*)) |closure_ty| return closure_ty.kind.closure_type.ret.*;
         if (self.fnPointerCalleeType(call.callee.*)) |fn_ty| return fn_ty.kind.fn_pointer.ret.*;
         const callee = self.directCallName(call.callee.*) orelse return null;
@@ -9793,26 +9987,31 @@ const LlvmEmitter = struct {
         return fact_ty;
     }
 
-    fn enumRawCallInfo(self: *LlvmEmitter, call: anytype) ?EnumRawCallInfo {
+    fn enumRawCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?EnumRawCallInfo {
         const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "raw")) return null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) != .enum_raw) return null;
-        const enum_ty = (self.mirTargetTypeFactAt(.enum_raw_source, call.callee.*.span) orelse return null).target_ty;
-        const repr_ty = (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span) orelse return null).target_ty;
-        return .{ .base = member.base.*, .enum_ty = enum_ty, .repr_ty = repr_ty };
+        if (kind != .enum_raw) return null;
+        const types = self.enumRawTypesForEmission(call) orelse return null;
+        return .{ .base = member.base.*, .enum_ty = types.enum_ty, .repr_ty = types.repr_ty };
     }
 
-    fn domainResidueCallInfo(self: *LlvmEmitter, call: anytype) ?DomainResidueCallInfo {
+    fn enumRawTypesForEmission(self: *LlvmEmitter, call: anytype) ?EnumRawTypes {
+        const span = call.callee.*.span;
+        return .{
+            .enum_ty = (self.mirTargetTypeFactAt(.enum_raw_source, span) orelse return null).target_ty,
+            .repr_ty = (self.mirTargetTypeFactAt(.enum_raw_result, span) orelse return null).target_ty,
+        };
+    }
+
+    fn domainResidueCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?DomainResidueCallInfo {
         const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "residue")) return null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) != .wrap_residue) return null;
-        const domain_ty = (self.mirTargetTypeFactAt(.domain_type, call.callee.*.span) orelse return null).target_ty;
-        _ = self.mirTargetTypeFactAt(.domain_payload, call.callee.*.span) orelse return null;
-        const result_ty = (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span) orelse return null).target_ty;
-        return .{ .base = member.base.*, .domain_ty = domain_ty, .payload_ty = result_ty };
+        if (kind != .wrap_residue) return null;
+        const types = self.domainTypesForEmission(call, false) orelse return null;
+        return .{ .base = member.base.*, .domain_ty = types.domain_ty, .payload_ty = types.result_ty };
     }
 
-    fn conversionCallInfo(self: *LlvmEmitter, call: anytype) ?ConversionCallInfo {
+    fn conversionCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?ConversionCallInfo {
         const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "from") and
             !std.mem.eql(u8, member.name.text, "wrap_from") and
@@ -9832,69 +10031,88 @@ const LlvmEmitter = struct {
         const target_ty = self.resolveAliasType(target_fact.target_ty);
         if (self.integerBitsOf(target_ty) == null) return null;
         const expected_kind = mir.conversionCallTargetKindForName(member.name.text) orelse return null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) != expected_kind) return null;
+        if (kind != expected_kind) return null;
         return .{ .source_ty = source_fact.target_ty, .target_ty = target_ty, .op = member.name.text };
     }
 
-    fn uncheckedCallInfo(self: *LlvmEmitter, call: anytype) ?UncheckedCallInfo {
+    fn uncheckedCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?UncheckedCallInfo {
         if (call.type_args.len != 0 or call.args.len != 2) return null;
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         const op = mir.uncheckedCallFactInfo(kind) orelse return null;
-        const left_ty = (self.mirTargetTypeFactAt(.unchecked_left, call.args[0].span) orelse return null).target_ty;
-        const right_ty = (self.mirTargetTypeFactAt(.unchecked_right, call.args[1].span) orelse return null).target_ty;
-        const result_ty = (self.mirTargetTypeFactAt(.unchecked_result, call.callee.*.span) orelse return null).target_ty;
-        return .{ .op = op, .left_ty = left_ty, .right_ty = right_ty, .result_ty = result_ty };
+        const types = self.uncheckedTypesForEmission(call) orelse return null;
+        return .{ .op = op, .left_ty = types.left_ty, .right_ty = types.right_ty, .result_ty = types.result_ty };
     }
 
-    fn wrappingCallInfo(self: *LlvmEmitter, call: anytype) ?WrappingCallInfo {
+    fn wrappingCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?WrappingCallInfo {
         if (call.type_args.len != 0 or call.args.len != 2) return null;
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         const op = mir.wrappingCallFactInfo(kind) orelse return null;
+        const types = self.wrappingTypesForEmission(call) orelse return null;
+        return .{ .op = op, .left_ty = types.left_ty, .right_ty = types.right_ty, .result_ty = types.result_ty };
+    }
+
+    fn uncheckedTypesForEmission(self: *LlvmEmitter, call: anytype) ?ArithmeticCallTypes {
+        return self.arithmeticCallTypesForEmission(call, .unchecked_left, .unchecked_right, .unchecked_result);
+    }
+
+    fn wrappingTypesForEmission(self: *LlvmEmitter, call: anytype) ?ArithmeticCallTypes {
+        return self.arithmeticCallTypesForEmission(call, .wrapping_left, .wrapping_right, .wrapping_result);
+    }
+
+    fn arithmeticCallTypesForEmission(self: *LlvmEmitter, call: anytype, left_kind: mir.TargetTypeKind, right_kind: mir.TargetTypeKind, result_kind: mir.TargetTypeKind) ?ArithmeticCallTypes {
         return .{
-            .op = op,
-            .left_ty = (self.mirTargetTypeFactAt(.wrapping_left, call.args[0].span) orelse return null).target_ty,
-            .right_ty = (self.mirTargetTypeFactAt(.wrapping_right, call.args[1].span) orelse return null).target_ty,
-            .result_ty = (self.mirTargetTypeFactAt(.wrapping_result, call.callee.*.span) orelse return null).target_ty,
+            .left_ty = (self.mirTargetTypeFactAt(left_kind, call.args[0].span) orelse return null).target_ty,
+            .right_ty = (self.mirTargetTypeFactAt(right_kind, call.args[1].span) orelse return null).target_ty,
+            .result_ty = (self.mirTargetTypeFactAt(result_kind, call.callee.*.span) orelse return null).target_ty,
         };
     }
 
-    fn domainOpCallInfo(self: *LlvmEmitter, call: anytype) ?DomainOpCallInfo {
+    fn domainOpCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?DomainOpCallInfo {
         if (call.type_args.len != 0) return null;
         const member = memberCallee(call) orelse return null;
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         const fact_info = mir.domainCallFactInfo(kind) orelse return null;
         if (kind == .wrap_residue or !std.mem.eql(u8, member.name.text, fact_info.op)) return null;
-        const domain_ty = (self.mirTargetTypeFactAt(.domain_type, call.callee.*.span) orelse return null).target_ty;
-        const payload_ty = (self.mirTargetTypeFactAt(.domain_payload, call.callee.*.span) orelse return null).target_ty;
-        const return_ty = (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span) orelse return null).target_ty;
-        const interval_ty = if (fact_info.has_interval)
-            (self.mirTargetTypeFactAt(.domain_interval, call.callee.*.span) orelse return null).target_ty
-        else
-            null;
-        return .{ .domain_ty = domain_ty, .payload_ty = payload_ty, .return_ty = return_ty, .interval_ty = interval_ty, .op = fact_info.op };
+        const types = self.domainTypesForEmission(call, fact_info.has_interval) orelse return null;
+        return .{ .domain_ty = types.domain_ty, .payload_ty = types.payload_ty, .return_ty = types.result_ty, .interval_ty = types.interval_ty, .op = fact_info.op };
     }
 
-    fn reduceCallInfo(self: *LlvmEmitter, call: anytype) ?ReduceCallInfo {
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+    fn domainTypesForEmission(self: *LlvmEmitter, call: anytype, needs_interval: bool) ?DomainTypes {
+        const span = call.callee.*.span;
+        return .{
+            .domain_ty = (self.mirTargetTypeFactAt(.domain_type, span) orelse return null).target_ty,
+            .payload_ty = (self.mirTargetTypeFactAt(.domain_payload, span) orelse return null).target_ty,
+            .result_ty = (self.mirTargetTypeFactAt(.domain_result, span) orelse return null).target_ty,
+            .interval_ty = if (needs_interval)
+                (self.mirTargetTypeFactAt(.domain_interval, span) orelse return null).target_ty
+            else
+                null,
+        };
+    }
+
+    fn reduceCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?ReduceCallInfo {
         if (kind != .reduce_sum_checked and kind != .reduce_sum_left and kind != .reduce_sum_fast) return null;
         if (call.type_args.len != 1) return null;
-        const source_ty = (self.mirTargetTypeFactAt(.reduce_source, call.args[0].span) orelse return null).target_ty;
-        const element_ty = (self.mirTargetTypeFactAt(.reduce_element, call.callee.*.span) orelse return null).target_ty;
+        const types = self.reduceTypesForEmission(call) orelse return null;
         const return_ty = if (kind == .reduce_sum_checked)
-            self.resultType(element_ty, simpleType(call.callee.*.span, "Overflow"), call.callee.*.span) catch return null
+            self.resultType(types.element_ty, simpleType(call.callee.*.span, "Overflow"), call.callee.*.span) catch return null
         else
-            element_ty;
+            types.element_ty;
         const op = switch (kind) {
             .reduce_sum_checked => "sum_checked",
             .reduce_sum_left => "sum_left",
             .reduce_sum_fast => "sum_fast",
             else => return null,
         };
-        return .{ .source_ty = source_ty, .element_ty = element_ty, .return_ty = return_ty, .op = op };
+        return .{ .source_ty = types.source_ty, .element_ty = types.element_ty, .return_ty = return_ty, .op = op };
     }
 
-    fn constGetCallInfo(self: *LlvmEmitter, call: anytype) ?ConstGetCallInfo {
-        if (self.mirCallTargetKindAt(call.callee.*.span) != .const_get) return null;
+    fn reduceTypesForEmission(self: *LlvmEmitter, call: anytype) ?ReduceTypes {
+        return .{
+            .source_ty = (self.mirTargetTypeFactAt(.reduce_source, call.args[0].span) orelse return null).target_ty,
+            .element_ty = (self.mirTargetTypeFactAt(.reduce_element, call.callee.*.span) orelse return null).target_ty,
+        };
+    }
+
+    fn constGetCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?ConstGetCallInfo {
+        if (kind != .const_get) return null;
         if (call.args.len != 0 or call.type_args.len != 1) return null;
         const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "const_get")) return null;
@@ -9909,8 +10127,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn atomicCallInfo(self: *LlvmEmitter, call: anytype) ?AtomicCallInfo {
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+    fn atomicCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?AtomicCallInfo {
         const op = switch (kind) {
             .atomic_load => "load",
             .atomic_store => "store",
@@ -9945,8 +10162,7 @@ const LlvmEmitter = struct {
         return self.atomicBaseAddress(info.base);
     }
 
-    fn maybeUninitCallInfo(self: *LlvmEmitter, call: anytype) ?MaybeUninitCallInfo {
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+    fn maybeUninitCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?MaybeUninitCallInfo {
         const op = switch (kind) {
             .maybe_uninit_write => "write",
             .maybe_uninit_assume_init => "assume_init",
@@ -9957,20 +10173,59 @@ const LlvmEmitter = struct {
         return .{ .base = member.base.*, .op = op, .payload_ty = payload_ty };
     }
 
-    fn bitcastCallTargetType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
-        if (self.mirCallTargetKindAt(call.callee.*.span) != .bitcast) return null;
-        if (call.type_args.len != 1 or call.args.len != 1) return null;
-        return if (self.mirTargetTypeFactAt(.bitcast_target, call.callee.*.span)) |fact| fact.target_ty else null;
+    fn bitcastTypesForEmission(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) !BitcastTypes {
+        return self.bitcastTypesForQuery(call, kind) orelse error.UnsupportedLlvmEmission;
     }
 
-    fn physCallTargetType(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
-        if (self.mirCallTargetKindAt(call.callee.*.span) != .phys) return null;
+    fn bitcastTypesForQuery(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?BitcastTypes {
+        if (kind != .bitcast) return null;
+        if (call.type_args.len != 1 or call.args.len != 1) return null;
+        const span = call.callee.*.span;
+        return .{
+            .source_ty = (self.mirTargetTypeFactAt(.bitcast_source, span) orelse return null).target_ty,
+            .target_ty = (self.mirTargetTypeFactAt(.bitcast_target, span) orelse return null).target_ty,
+        };
+    }
+
+    fn physResultTypeForEmission(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) !ast.TypeExpr {
+        return self.physResultTypeForQuery(call, kind) orelse error.UnsupportedLlvmEmission;
+    }
+
+    fn physResultTypeForQuery(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?ast.TypeExpr {
+        if (kind != .phys) return null;
         if (call.type_args.len != 0 or call.args.len != 1) return null;
         return if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| fact.target_ty else null;
     }
 
-    fn dmaCacheCallInfo(self: *LlvmEmitter, call: anytype) ?DmaCacheCallInfo {
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+    fn semanticEscapeTypesForEmission(self: *LlvmEmitter, call: anytype, source_kind: mir.TargetTypeKind, result_kind: mir.TargetTypeKind) !SemanticEscapeTypes {
+        return self.semanticEscapeTypesForQuery(call, source_kind, result_kind) orelse error.UnsupportedLlvmEmission;
+    }
+
+    fn semanticEscapeTypesForQuery(self: *LlvmEmitter, call: anytype, source_kind: mir.TargetTypeKind, result_kind: mir.TargetTypeKind) ?SemanticEscapeTypes {
+        const span = call.callee.*.span;
+        return .{
+            .source_ty = (self.mirTargetTypeFactAt(source_kind, span) orelse return null).target_ty,
+            .result_ty = (self.mirTargetTypeFactAt(result_kind, span) orelse return null).target_ty,
+        };
+    }
+
+    fn declassifyTypesForEmission(self: *LlvmEmitter, call: anytype) !SemanticEscapeTypes {
+        return self.semanticEscapeTypesForEmission(call, .declassify_source, .declassify_result);
+    }
+
+    fn declassifyTypesForQuery(self: *LlvmEmitter, call: anytype) ?SemanticEscapeTypes {
+        return self.semanticEscapeTypesForQuery(call, .declassify_source, .declassify_result);
+    }
+
+    fn assumeNoaliasTypesForEmission(self: *LlvmEmitter, call: anytype) !SemanticEscapeTypes {
+        return self.semanticEscapeTypesForEmission(call, .assume_noalias_source, .assume_noalias_result);
+    }
+
+    fn assumeNoaliasTypesForQuery(self: *LlvmEmitter, call: anytype) ?SemanticEscapeTypes {
+        return self.semanticEscapeTypesForQuery(call, .assume_noalias_source, .assume_noalias_result);
+    }
+
+    fn dmaCacheCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?DmaCacheCallInfo {
         const fact_info = mir.dmaCallFactInfo(kind) orelse return null;
         if (!fact_info.cache) return null;
         const member = memberCallee(call) orelse return null;
@@ -9983,8 +10238,7 @@ const LlvmEmitter = struct {
         return .{ .op = fact_info.op, .dma_ty = dma_ty, .result_ty = result_ty };
     }
 
-    fn dmaBufCallInfo(self: *LlvmEmitter, call: anytype) ?DmaBufCallInfo {
-        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+    fn dmaBufCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?DmaBufCallInfo {
         const fact_info = mir.dmaCallFactInfo(kind) orelse return null;
         if (fact_info.cache) return null;
         const member = memberCallee(call) orelse return null;
@@ -10045,8 +10299,7 @@ const LlvmEmitter = struct {
         return lower_llvm_reflect.arrayLenValue(&env, expr);
     }
 
-    fn reflectionCallValue(self: *LlvmEmitter, call: anytype) ?[]const u8 {
-        const info = self.reflectionCallInfo(call) orelse return null;
+    fn reflectionCallValue(self: *LlvmEmitter, call: anytype, info: ReflectionCallInfo) ?[]const u8 {
         var env = self.reflectEnv();
         const value = switch (info.kind) {
             .reflection_size => lower_llvm_reflect.comptimeSizeOf(&env, info.target_ty, 0),
@@ -10175,11 +10428,11 @@ const LlvmEmitter = struct {
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
     }
 
-    fn rawManyOffsetCallInfo(self: *LlvmEmitter, call: anytype) ?RawManyOffsetInfo {
+    fn rawManyOffsetCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?RawManyOffsetInfo {
         if (call.type_args.len != 0 or call.args.len != 1) return null;
         const member = memberCallee(call) orelse return null;
         if (!std.mem.eql(u8, member.name.text, "offset")) return null;
-        if (self.mirCallTargetKindAt(call.callee.*.span) != .raw_many_offset) return null;
+        if (kind != .raw_many_offset) return null;
         const base_ty = (self.mirTargetTypeFactAt(.raw_many_offset_base, call.callee.*.span) orelse return null).target_ty;
         const element_ty = (self.mirTargetTypeFactAt(.raw_many_offset_element, call.callee.*.span) orelse return null).target_ty;
         const result_ty = (self.mirTargetTypeFactAt(.raw_many_offset_result, call.callee.*.span) orelse return null).target_ty;

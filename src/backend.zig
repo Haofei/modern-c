@@ -100,9 +100,30 @@ pub fn appendArtifactBundleHeaders(allocator: std.mem.Allocator, out: *std.Array
     try appendOptionalStringHeader(allocator, out, "toolchain_identity", bundle.toolchain_identity);
 }
 
-pub fn appendArtifactMetadata(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bundle: ArtifactBundle) !void {
-    try out.appendSlice(allocator, "# mcmeta v1\n");
+pub const ArtifactBundleFormat = enum {
+    metadata_sidecar,
+    source_map,
+
+    fn magic(self: ArtifactBundleFormat) []const u8 {
+        return switch (self) {
+            .metadata_sidecar => "# mcmeta v1\n",
+            .source_map => "# mcmap v1\n",
+        };
+    }
+};
+
+pub fn appendArtifactBundle(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    bundle: ArtifactBundle,
+    format: ArtifactBundleFormat,
+) !void {
+    try out.appendSlice(allocator, format.magic());
     try appendArtifactBundleHeaders(allocator, out, bundle);
+}
+
+pub fn appendArtifactMetadata(allocator: std.mem.Allocator, out: *std.ArrayList(u8), bundle: ArtifactBundle) !void {
+    try appendArtifactBundle(allocator, out, bundle, .metadata_sidecar);
 }
 
 fn appendDigestValueHeader(allocator: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, digest: Sha256Digest) !void {
@@ -244,7 +265,7 @@ pub const LowerOptions = struct {
 /// Backend-facing source spelling view. This is intentionally backed by
 /// verified MIR identities, not by an AST rescan. It is the first explicit
 /// source/symbol table that backend entrypoints can consume while legacy
-/// lowerers still carry `syntax_module` for not-yet-normalized declarations.
+/// lowerers still carry declaration slices for not-yet-normalized metadata.
 pub const SourceSpellingView = struct {
     symbols: []const mir.SymbolIdentity,
 
@@ -288,17 +309,74 @@ pub const SourceSpellingView = struct {
     }
 };
 
+/// Transitional declaration metadata view for backend mechanics that still need
+/// not-yet-normalized declarations. This is narrower than exposing a syntax
+/// module at backend entrypoints: every call site must name the remaining
+/// legacy declaration dependency explicitly.
+pub const DeclarationMetadataView = struct {
+    decls: []const ast.Decl,
+
+    pub fn forDecls(decls: []const ast.Decl) DeclarationMetadataView {
+        return .{ .decls = decls };
+    }
+
+    pub fn cEarlyDeclarationMetadata(self: DeclarationMetadataView) CEarlyDeclarationMetadataView {
+        return .{ .decls = self.decls };
+    }
+
+    pub fn llvmEarlyDeclarationMetadata(self: DeclarationMetadataView) LlvmEarlyDeclarationMetadataView {
+        return .{ .decls = self.decls };
+    }
+};
+
+/// Transitional C declaration metadata prepass view. This is the only C backend
+/// syntax escape for early const/type/declaration artifact collection.
+pub const CEarlyDeclarationMetadataView = struct {
+    decls: []const ast.Decl,
+
+    pub fn declsForEarlyDeclarationScan(self: CEarlyDeclarationMetadataView) []const ast.Decl {
+        return self.decls;
+    }
+};
+
+/// Transitional LLVM declaration metadata prepass view. This is the only LLVM
+/// backend syntax escape for early type/declaration artifact collection.
+pub const LlvmEarlyDeclarationMetadataView = struct {
+    decls: []const ast.Decl,
+
+    pub fn declsForEarlyDeclarationScan(self: LlvmEarlyDeclarationMetadataView) []const ast.Decl {
+        return self.decls;
+    }
+};
+
+/// Transitional source-map mechanics view. Source maps still enumerate syntax
+/// spans until map rows are normalized into MIR/source-span tables, but this
+/// keeps that escape separate from backend semantic lowering and declaration
+/// metadata.
+pub const SourceMapMechanicsView = struct {
+    decls: []const ast.Decl,
+
+    pub fn forDecls(decls: []const ast.Decl) SourceMapMechanicsView {
+        return .{ .decls = decls };
+    }
+
+    pub fn declsForRowEnumeration(self: SourceMapMechanicsView) []const ast.Decl {
+        return self.decls;
+    }
+};
+
 /// The only code-generation input accepted by a Backend. Construction runs the
-/// MIR verifier and exposes MIR-owned source spelling before legacy syntax. The
-/// syntax module remains attached solely for declaration metadata that MIR
-/// emission has not yet normalized.
+/// MIR verifier and exposes MIR-owned source spelling plus narrow declaration
+/// slices for metadata/source-map mechanics that MIR emission has not yet
+/// normalized.
 pub const VerifiedProgram = struct {
     source_spelling: SourceSpellingView,
-    syntax_module: ast.Module,
+    declaration_metadata: DeclarationMetadataView,
+    source_map_mechanics: SourceMapMechanicsView,
     typed_mir: *const mir.Module,
 
-    pub fn init(
-        syntax_module: ast.Module,
+    pub fn initFromDecls(
+        decls: []const ast.Decl,
         typed_mir: *const mir.Module,
         reporter: *diagnostics.Reporter,
     ) !VerifiedProgram {
@@ -307,7 +385,26 @@ pub const VerifiedProgram = struct {
         try mir.validateLoweringAdmission(typed_mir.*);
         const source_spelling = SourceSpellingView{ .symbols = typed_mir.symbol_identities };
         if (!source_spelling.validateAgainstMir(typed_mir.*)) return error.InvalidMir;
-        return .{ .source_spelling = source_spelling, .syntax_module = syntax_module, .typed_mir = typed_mir };
+        return .{
+            .source_spelling = source_spelling,
+            .declaration_metadata = DeclarationMetadataView.forDecls(decls),
+            .source_map_mechanics = SourceMapMechanicsView.forDecls(decls),
+            .typed_mir = typed_mir,
+        };
+    }
+
+    /// Temporary compatibility view for legacy declaration metadata that has
+    /// not yet been normalized into typed MIR tables. New backend consumers
+    /// should prefer `source_spelling`, MIR identities, or explicit facts.
+    pub fn declarationMetadata(self: VerifiedProgram) DeclarationMetadataView {
+        return self.declaration_metadata;
+    }
+
+    /// Source-map mechanics still walk syntax spans to enumerate source rows.
+    /// This accessor makes that use explicit and keeps ordinary backend code
+    /// from reaching for syntax as an unclassified semantic input.
+    pub fn sourceMapMechanics(self: VerifiedProgram) SourceMapMechanicsView {
+        return self.source_map_mechanics;
     }
 };
 
@@ -424,7 +521,7 @@ test "VerifiedProgram exposes MIR-owned source spelling view" {
     var module_mir = try mir.build(std.testing.allocator, module);
     defer module_mir.deinit();
 
-    const program = try VerifiedProgram.init(module, &module_mir, &reporter);
+    const program = try VerifiedProgram.initFromDecls(module.decls, &module_mir, &reporter);
     try std.testing.expect(program.source_spelling.validateAgainstMir(module_mir));
     try std.testing.expect(module_mir.functions.len != 0);
     try std.testing.expectEqualStrings(
@@ -466,4 +563,31 @@ test "ArtifactBundle emits shared source-map provenance headers" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "# lower_checks_csan=false\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "# lower_stub_asm=true\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "# lower_linux_kernel=false\n") != null);
+}
+
+test "ArtifactBundle shared writer preserves metadata and source-map magic" {
+    const bundle = ArtifactBundle.forArtifact("artifact", .{
+        .profile = .kernel,
+        .source_path = "source.mc",
+        .compiler_version = "0.7.0-dev",
+    }, .{
+        .artifact_kind = "c",
+        .backend_name = "c",
+    });
+
+    var sidecar: std.ArrayList(u8) = .empty;
+    defer sidecar.deinit(std.testing.allocator);
+    var explicit_sidecar: std.ArrayList(u8) = .empty;
+    defer explicit_sidecar.deinit(std.testing.allocator);
+    var source_map: std.ArrayList(u8) = .empty;
+    defer source_map.deinit(std.testing.allocator);
+
+    try appendArtifactMetadata(std.testing.allocator, &sidecar, bundle);
+    try appendArtifactBundle(std.testing.allocator, &explicit_sidecar, bundle, .metadata_sidecar);
+    try appendArtifactBundle(std.testing.allocator, &source_map, bundle, .source_map);
+
+    try std.testing.expectEqualStrings(sidecar.items, explicit_sidecar.items);
+    try std.testing.expect(std.mem.startsWith(u8, sidecar.items, "# mcmeta v1\n"));
+    try std.testing.expect(std.mem.startsWith(u8, source_map.items, "# mcmap v1\n"));
+    try std.testing.expect(std.mem.indexOf(u8, source_map.items, "# generated_artifact_sha256=") != null);
 }

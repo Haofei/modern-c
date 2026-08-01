@@ -248,8 +248,8 @@ def require_release_artifact_metadata() -> None:
         "zig build release-metadata-test package-release-test release-safe-install-test",
         'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
         "does not match build.zig.zon",
-        "MC_REQUIRE_TOOLS=1 zig build m0",
-        "release m0 skipped at least one gate",
+        "MC_REQUIRE_TOOLS=1 zig build m0-full",
+        "release m0-full skipped at least one gate",
         'release_m0_log="$RUNNER_TEMP/release-m0.log"',
         'tools/ci/pass-gates.py assert --tier ci-m0-pass --log "$release_m0_log"',
         'test "$(zig-out/version-check/bin/mcc --version)" = "mcc ${{ steps.meta.outputs.version }}"',
@@ -328,15 +328,20 @@ def require_release_artifact_metadata() -> None:
     ):
         fail("build/qemu.zig does not register release-safe-install-test as an install=false script test")
     tiers = read("build/tiers.zig")
-    for gate in (EXPECTED_PACKAGE_RELEASE_TEST, EXPECTED_RELEASE_SAFE_INSTALL_TEST):
-        for tier in ("m0_step", "fast_step", "c0_step"):
-            if f'{tier}.dependOn(ctx.cmd("{gate}"))' not in tiers:
-                fail(f"build/tiers.zig does not wire {gate} into {tier}")
+    for tier in ("m0_step", "fast_step", "c0_step"):
+        if f'{tier}.dependOn(ctx.cmd("{EXPECTED_PACKAGE_RELEASE_TEST}"))' not in tiers:
+            fail(f"build/tiers.zig does not wire {EXPECTED_PACKAGE_RELEASE_TEST} into {tier}")
+        if f'{tier}.dependOn(ctx.cmd("{EXPECTED_RELEASE_SAFE_INSTALL_TEST}"))' in tiers:
+            fail(f"build/tiers.zig must keep {EXPECTED_RELEASE_SAFE_INSTALL_TEST} out of default {tier}")
+    if f'm0_full_step.dependOn(ctx.cmd("{EXPECTED_RELEASE_SAFE_INSTALL_TEST}"))' not in tiers:
+        fail(f"build/tiers.zig does not wire {EXPECTED_RELEASE_SAFE_INSTALL_TEST} into m0-full")
     require_contains("build/qemu.zig", '"source-package-test"')
     require_contains("build/qemu.zig", '"tools/toolchain/source-package-test.sh"')
+    if 'm0_full_step.dependOn(ctx.cmd("source-package-test"))' not in tiers:
+        fail("build/tiers.zig does not wire source-package-test into m0-full")
     for tier in ("m0_step", "fast_step", "c0_step"):
-        if f'{tier}.dependOn(ctx.cmd("source-package-test"))' not in tiers:
-            fail(f"build/tiers.zig does not wire source-package-test into {tier}")
+        if f'{tier}.dependOn(ctx.cmd("source-package-test"))' in tiers:
+            fail(f"build/tiers.zig must keep source-package-test out of default {tier}")
     if "mcc build" in workflow or "mcc build" in packager:
         fail("release artifact workflow must not implement or invoke `mcc build`")
 
@@ -524,7 +529,7 @@ def main() -> None:
         "timeout-minutes: 60",
         "actions/cache@",
         "ZIG_GLOBAL_CACHE_DIR",
-        "Run full milestone gate without skips",
+        "Run core milestone gate without skips",
         "MC_REQUIRE_TOOLS=1 zig build m0",
         "python3 tools/ci/pass-gates.py assert --tier ci-m0-pass --log m0.log",
     ):

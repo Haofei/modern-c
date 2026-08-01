@@ -8,8 +8,7 @@
 # deterministic truth for the tier.
 #
 # Usage:
-#   tools/fast-parallel.sh [jobs]          # 40-seed development confidence
-#   tools/fast-parallel.sh --full [jobs]   # complete 300-seed fast-tier coverage
+#   tools/fast-parallel.sh [jobs]
 set -euo pipefail
 
 ROOT="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,9 +17,8 @@ cd "$ROOT"
 # shellcheck source=tools/lib/test-env.sh
 . "$ROOT/tools/lib/test-env.sh"
 
-FULL=0
 if [ "${1:-}" = "--full" ]; then
-    FULL=1
+    # Backward-compatible no-op: fast no longer carries fuzz gates.
     shift
 fi
 HOST_JOBS="$(mc_host_jobs)"
@@ -28,19 +26,11 @@ OUTER_JOBS="${1:-$HOST_JOBS}"
 case "$OUTER_JOBS" in
     ''|*[!0-9]*|0) echo "usage: tools/fast-parallel.sh [--full] [positive-jobs]" >&2; exit 2 ;;
 esac
-# Aggregate `fast` launches many fuzz/diff gates at once. Leave single-gate
-# defaults alone, but cap nested worker pools for this aggregate runner unless
-# the caller explicitly chose a value.
+# Aggregate `fast` launches several compiler/differential gates at once. Leave
+# single-gate defaults alone, but cap nested worker pools for this aggregate
+# runner unless the caller explicitly chose a value.
 INNER_DEFAULT="$(mc_inner_jobs "$OUTER_JOBS" "$HOST_JOBS")"
 export JOBS="${JOBS:-${MC_FAST_INNER_JOBS:-$INNER_DEFAULT}}"
-# Keep the local parallel confidence pass bounded. Canonical `zig build fast`
-# and CI still use each gate's own default count unless COUNT is set there too.
-# --full preserves the canonical 300-seed default while still parallelizing gates.
-if [ "$FULL" -eq 1 ]; then
-    export COUNT="${COUNT:-${MC_FAST_FULL_FUZZ_COUNT:-300}}"
-else
-    export COUNT="${COUNT:-${MC_FAST_FUZZ_COUNT:-40}}"
-fi
 
 OUT=".wamr-cache/fastp-logs"
 rm -rf "$OUT"
@@ -78,7 +68,7 @@ if [ -s "$TIMES" ]; then
     GATES=("${ORDERED[@]}")
 fi
 
-echo "[fast-parallel] ${#GATES[@]} gates, outer -P $OUTER_JOBS, inner JOBS=$JOBS, COUNT=$COUNT $( [ -s "$TIMES" ] && echo '(LPT-ordered)' )"
+echo "[fast-parallel] ${#GATES[@]} gates, outer -P $OUTER_JOBS, inner JOBS=$JOBS $( [ -s "$TIMES" ] && echo '(LPT-ordered)' )"
 
 S=$(date +%s)
 set +e
@@ -98,7 +88,7 @@ E=$(date +%s)
 
 pass=$(awk '/^PASS / { n++ } END { print n + 0 }' "$OUT/summary.txt")
 fail=$(awk '/^FAIL / { n++ } END { print n + 0 }' "$OUT/summary.txt")
-echo "[fast-parallel] parallel pass: PASS=$pass FAIL=$fail wall=$((E - S))s (outer -P $OUTER_JOBS, inner JOBS=$JOBS, COUNT=$COUNT)"
+echo "[fast-parallel] parallel pass: PASS=$pass FAIL=$fail wall=$((E - S))s (outer -P $OUTER_JOBS, inner JOBS=$JOBS)"
 if [ "$tee_rc" -ne 0 ]; then
     echo "[fast-parallel] tee failed with status $tee_rc"
     exit "$tee_rc"

@@ -93,9 +93,9 @@ jobs:
           zig build preflight
           zig build release-metadata-test package-release-test release-safe-install-test
           release_m0_log="$RUNNER_TEMP/release-m0.log"
-          MC_REQUIRE_TOOLS=1 zig build m0 2>&1 | tee "$release_m0_log"
+          MC_REQUIRE_TOOLS=1 zig build m0-full 2>&1 | tee "$release_m0_log"
           if grep -n '^SKIP:' "$release_m0_log"; then
-            echo "release m0 skipped at least one gate" >&2
+            echo "release m0-full skipped at least one gate" >&2
             exit 1
           fi
           python3 tools/ci/pass-gates.py assert --tier ci-m0-pass --log "$release_m0_log"

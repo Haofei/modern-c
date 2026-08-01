@@ -34,9 +34,12 @@ route it to the matching expectation.
 | Host-driver execution | runtime behavior on the host | `tools/lib/host-tests.tsv` via `host-harness.sh` | medium |
 | QEMU execution | real boot / device / network behavior | the per-feature QEMU gates (`virtio-test`, `https-get-test`, …) | slow |
 
-Aggregate lanes compose these: **`fast`** = unit + emit-C + differential/fuzz (no QEMU);
+Aggregate lanes compose these: **`fast`** = spec + emit-C + differential (no fuzz/QEMU);
 **`c0`** (spec §L.1) = unit + `c-test` + `sweep` + `demo-test`; **`c1`** (spec §L.2) =
-`c0` + `kernel-test`; **`m0`** = the full conformance set including QEMU.
+`c0` + `kernel-test`; **`m0`** = the deterministic compiler-core qualification set;
+it keeps C-backend smoke coverage but leaves the full `c-test` fixture sweep to
+`fast`/`c0`/`m0-full`; **`m0-full`** = the full conformance set including fuzz,
+runtime experiments, and QEMU.
 
 ## The expected-outcome taxonomy
 

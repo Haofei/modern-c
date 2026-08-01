@@ -178,25 +178,95 @@ const CompilationSession = struct {
         };
     }
 
+    const ArtifactMetadataDraft = struct {
+        path: []const u8,
+        bytes: std.ArrayList(u8),
+
+        fn deinit(self: *ArtifactMetadataDraft, allocator: std.mem.Allocator) void {
+            allocator.free(self.path);
+            self.bytes.deinit(allocator);
+        }
+    };
+
+    fn ensureReplaceTargetNotDirectory(self: *CompilationSession, path: []const u8, label: []const u8) !void {
+        const stat = std.Io.Dir.cwd().statFile(self.io, path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => {
+                std.debug.print("error: unable to inspect {s} \"{s}\": {s}\n", .{ label, path, @errorName(err) });
+                return error.OutputWriteFailed;
+            },
+        };
+        if (stat.kind == .directory) {
+            std.debug.print("error: unable to replace {s} \"{s}\": destination is a directory\n", .{ label, path });
+            return error.OutputWriteFailed;
+        }
+    }
+
+    fn prepareArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !ArtifactMetadataDraft {
+        const metadata_path = try artifactMetadataPath(self.allocator, output_path);
+        errdefer self.allocator.free(metadata_path);
+
+        var metadata: std.ArrayList(u8) = .empty;
+        errdefer metadata.deinit(self.allocator);
+        try backend.appendArtifactMetadata(self.allocator, &metadata, bundle);
+
+        return .{
+            .path = metadata_path,
+            .bytes = metadata,
+        };
+    }
+
     fn writeArtifact(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8) !void {
         if (output_path) |path| return self.writeOutputPath(path, bytes);
         return self.writeStdout(bytes);
     }
 
     fn writeArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !void {
-        const metadata_path = try artifactMetadataPath(self.allocator, output_path);
-        defer self.allocator.free(metadata_path);
-
-        var metadata: std.ArrayList(u8) = .empty;
+        var metadata = try self.prepareArtifactMetadataSidecar(output_path, bundle);
         defer metadata.deinit(self.allocator);
-        try backend.appendArtifactMetadata(self.allocator, &metadata, bundle);
-        try self.writeOutputPath(metadata_path, metadata.items);
+        try self.writeOutputPath(metadata.path, metadata.bytes.items);
     }
 
     fn writeArtifactWithMetadata(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8, bundle: backend.ArtifactBundle) !void {
         const path = output_path orelse return self.writeStdout(bytes);
-        try self.writeOutputPath(path, bytes);
-        try self.writeArtifactMetadataSidecar(path, bundle);
+
+        var metadata = try self.prepareArtifactMetadataSidecar(path, bundle);
+        defer metadata.deinit(self.allocator);
+        try self.ensureReplaceTargetNotDirectory(path, "output");
+        try self.ensureReplaceTargetNotDirectory(metadata.path, "metadata sidecar");
+
+        var metadata_file = std.Io.Dir.cwd().createFileAtomic(self.io, metadata.path, .{
+            .replace = true,
+        }) catch |err| {
+            std.debug.print("error: unable to write metadata sidecar \"{s}\": {s}\n", .{ metadata.path, @errorName(err) });
+            return error.OutputWriteFailed;
+        };
+        defer metadata_file.deinit(self.io);
+        metadata_file.file.writeStreamingAll(self.io, metadata.bytes.items) catch |err| {
+            std.debug.print("error: unable to write metadata sidecar \"{s}\": {s}\n", .{ metadata.path, @errorName(err) });
+            return error.OutputWriteFailed;
+        };
+
+        var artifact_file = std.Io.Dir.cwd().createFileAtomic(self.io, path, .{
+            .replace = true,
+        }) catch |err| {
+            std.debug.print("error: unable to write output \"{s}\": {s}\n", .{ path, @errorName(err) });
+            return error.OutputWriteFailed;
+        };
+        defer artifact_file.deinit(self.io);
+        artifact_file.file.writeStreamingAll(self.io, bytes) catch |err| {
+            std.debug.print("error: unable to write output \"{s}\": {s}\n", .{ path, @errorName(err) });
+            return error.OutputWriteFailed;
+        };
+
+        artifact_file.replace(self.io) catch |err| {
+            std.debug.print("error: unable to commit output \"{s}\": {s}\n", .{ path, @errorName(err) });
+            return error.OutputWriteFailed;
+        };
+        metadata_file.replace(self.io) catch |err| {
+            std.debug.print("error: unable to commit metadata sidecar \"{s}\": {s}\n", .{ metadata.path, @errorName(err) });
+            return error.OutputWriteFailed;
+        };
     }
 
     fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {
@@ -286,7 +356,7 @@ const CompilationSession = struct {
     ) !backend.VerifiedProgram {
         module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });
         errdefer module_mir.deinit();
-        const program = backend.VerifiedProgram.init(module, module_mir, diag) catch |err| {
+        const program = backend.VerifiedProgram.initFromDecls(module.decls, module_mir, diag) catch |err| {
             if (diag.has_errors) return failure_error;
             return err;
         };
@@ -1015,11 +1085,31 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .backend_name = "c",
         .toolchain_identity = toolchain_identity,
     });
+    var metadata = try session.prepareArtifactMetadataSidecar(output_path, bundle);
+    defer metadata.deinit(allocator);
+    try session.ensureReplaceTargetNotDirectory(output_path, "output");
+    try session.ensureReplaceTargetNotDirectory(metadata.path, "metadata sidecar");
+
+    var metadata_file = std.Io.Dir.cwd().createFileAtomic(io, metadata.path, .{
+        .replace = true,
+    }) catch |err| {
+        std.debug.print("error: unable to write metadata sidecar \"{s}\": {s}\n", .{ metadata.path, @errorName(err) });
+        return error.BuildFailed;
+    };
+    defer metadata_file.deinit(io);
+    metadata_file.file.writeStreamingAll(io, metadata.bytes.items) catch |err| {
+        std.debug.print("error: unable to write metadata sidecar \"{s}\": {s}\n", .{ metadata.path, @errorName(err) });
+        return error.BuildFailed;
+    };
+
     std.Io.Dir.cwd().rename(tmp_exe, std.Io.Dir.cwd(), output_path, io) catch |err| {
         std.debug.print("mcc build: unable to commit {s}: {s}\n", .{ output_path, @errorName(err) });
         return error.BuildFailed;
     };
-    try session.writeArtifactMetadataSidecar(output_path, bundle);
+    metadata_file.replace(io) catch |err| {
+        std.debug.print("error: unable to commit metadata sidecar \"{s}\": {s}\n", .{ metadata.path, @errorName(err) });
+        return error.BuildFailed;
+    };
     try session.writeStdout("mcc build: wrote ");
     try session.writeStdout(output_path);
     try session.writeStdout("\n");

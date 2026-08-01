@@ -365,6 +365,41 @@ fn removeTargetTypeKindForFunction(module_mir: *mir.Module, name: []const u8, ki
     return error.TestUnexpectedResult;
 }
 
+fn removeTargetTypeKindForFunctionLineAndTargetName(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, line: usize, target_name: []const u8) !void {
+    for (module_mir.functions) |*function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        var retained_count: usize = 0;
+        var removed_count: usize = 0;
+        for (function.target_type_facts) |fact| {
+            const remove = fact.kind == kind and
+                fact.source.line == line and
+                fact.target_ty.kind == .name and
+                std.mem.eql(u8, fact.target_ty.kind.name.text, target_name);
+            if (remove) {
+                removed_count += 1;
+            } else {
+                retained_count += 1;
+            }
+        }
+        if (removed_count == 0) return error.TestUnexpectedResult;
+        const retained = try module_mir.allocator.alloc(mir.TargetTypeFact, retained_count);
+        var index: usize = 0;
+        for (function.target_type_facts) |fact| {
+            const remove = fact.kind == kind and
+                fact.source.line == line and
+                fact.target_ty.kind == .name and
+                std.mem.eql(u8, fact.target_ty.kind.name.text, target_name);
+            if (remove) continue;
+            retained[index] = fact;
+            index += 1;
+        }
+        if (function.target_type_facts.len != 0) module_mir.allocator.free(function.target_type_facts);
+        function.target_type_facts = retained;
+        return;
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn renameTargetTypeFactForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.TargetTypeKind, target_name: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
@@ -653,6 +688,23 @@ test "lower-c rejects missing dyn-coercion target type facts" {
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_dyn_target_type_facts.mc", .{}, false, null));
+}
+
+test "lower-c rejects missing dyn-coercion source type facts" {
+    const source =
+        \\trait Shape { fn area(self: *Self) -> u32; }
+        \\struct Square { side: u32 }
+        \\impl Shape for Square { fn area(self: *Square) -> u32 { return self.side; } }
+        \\fn as_dyn(value: *Square) -> *dyn Shape { return value; }
+    ;
+    var parsed = try test_support.parseCheckedModule("c_missing_dyn_source_type_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try removeTargetTypeKindForFunction(&module_mir, "as_dyn", .dyn_coercion_source);
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_dyn_source_type_facts.mc", .{}, false, null));
 }
 
 fn retargetCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.CallTargetKind) !void {
@@ -1004,6 +1056,52 @@ test "lower-c rejects prebuilt MIR with extra stale representation facts" {
     try std.testing.expectError(
         error.InvalidMirRepresentationFacts,
         lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_extra_stale_representation_facts.mc", .{}, false, null),
+    );
+}
+
+test "lower-c rejects prebuilt MIR with missing Result try payload representation facts" {
+    const source =
+        \\extern fn make_result_pointer() -> Result<*mut u8, Error>;
+        \\
+        \\fn result_try_payload_representation_gate() -> *mut u8 {
+        \\    return make_result_pointer()?;
+        \\}
+    ;
+
+    var parsed = try test_support.parseCheckedModule("c_missing_result_try_payload_representation_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearRepresentationFactsForFunction(&module_mir, "result_try_payload_representation_gate");
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirRepresentationFacts,
+        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_missing_result_try_payload_representation_facts.mc", .{}, false, null),
+    );
+}
+
+test "lower-c rejects prebuilt MIR with stale Result try payload representation facts" {
+    const source =
+        \\extern fn make_result_pointer() -> Result<*mut u8, Error>;
+        \\
+        \\fn result_try_payload_representation_gate() -> *mut u8 {
+        \\    return make_result_pointer()?;
+        \\}
+    ;
+
+    var parsed = try test_support.parseCheckedModule("c_stale_result_try_payload_representation_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try retargetRepresentationFactsForFunction(&module_mir, "result_try_payload_representation_gate", "stale_try_payload");
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirRepresentationFacts,
+        lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_stale_result_try_payload_representation_facts.mc", .{}, false, null),
     );
 }
 
@@ -1791,6 +1889,15 @@ test "lower-c inferred local direct addresses require MIR types" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
+
+    var stale_pointee_source = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_pointee_source.deinit();
+    const pointee_function_offset = std.mem.indexOf(u8, source, "fn address_pointee") orelse return error.TestUnexpectedResult;
+    const pointee_source_offset = std.mem.indexOfPos(u8, source, pointee_function_offset, "source.*") orelse return error.TestUnexpectedResult;
+    try renameTargetTypeFactAtOffsetForFunction(&stale_pointee_source, "address_pointee", .expression_result, pointee_source_offset, "source".len, "u64");
+    var stale_pointee_source_output: std.ArrayList(u8) = .empty;
+    defer stale_pointee_source_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_pointee_source, &stale_pointee_source_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
 }
 
 test "lower-c compound expressions require complete MIR result facts" {
@@ -2763,6 +2870,65 @@ test "lower-c raw memory calls require complete MIR target type facts" {
     }
 }
 
+test "lower-c pointer-to-PAddr coercions require MIR source type facts" {
+    const source =
+        \\fn write_pointer(addr: *mut u32, value: u32) -> void {
+        \\    unsafe { raw.store<u32>(addr, value); }
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_paddr_coercion_source_type_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_paddr_coercion_source_type_facts.mc", .{}, false, null);
+    try expectContains(complete_output.items, "((uintptr_t)(addr))");
+
+    var missing_source = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_source.deinit();
+    try removeTargetTypeKindForFunction(&missing_source, "write_pointer", .paddr_coercion_source);
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_source, &missing_output, .kernel, "c_paddr_coercion_source_type_facts.mc", .{}, false, null));
+}
+
+test "lower-c aggregate member copy source type requires MIR expression result" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\struct Inner { ptr: *mut u32 }
+        \\struct Outer { inner: Inner }
+        \\
+        \\fn member_copy_source_type_gate() -> u32 {
+        \\    var local: u32 = 0;
+        \\    let src: Outer = .{ .inner = .{ .ptr = &shared_counter } };
+        \\    var dst: Outer = .{ .inner = .{ .ptr = &local } };
+        \\    #[unsafe_contract(noalias)] { dst.inner = compiler.assume_noalias_unchecked(src.inner, 4); }
+        \\    return dst.inner.ptr.*;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_aggregate_member_copy_source_type_facts.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_aggregate_member_copy_source_type_facts.mc", .{}, false, null);
+    const complete_body = try cFunctionBody(complete_output.items, "static uint32_t member_copy_source_type_gate(void)");
+    try expectContains(complete_body, "/* mir pointer_provenance consumed fn=member_copy_source_type_gate subject=dst field=inner.ptr provenance=global_storage reason=reassignment source=");
+    try expectContains(complete_body, "return ((uint32_t)mc_race_load_u32(dst.inner.ptr));");
+
+    var missing_source_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_source_result.deinit();
+    try removeTargetTypeKindForFunctionLineAndTargetName(&missing_source_result, "member_copy_source_type_gate", .expression_result, 10, "Inner");
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_source_result, &missing_output, .kernel, "c_aggregate_member_copy_source_type_facts.mc", .{}, false, null));
+}
+
 test "lower-c varargs calls require complete MIR cursor payload and result facts" {
     const source =
         \\export fn first_arg(count: i32, ...) -> i64 {
@@ -2947,14 +3113,14 @@ test "lower-c switches require MIR subject types" {
     try retargetTargetTypeResultForFunction(&stale_nullable_repr, "nullable_subject", .switch_subject, .{ .nullable_value = "u32" });
     var stale_nullable_repr_output: std.ArrayList(u8) = .empty;
     defer stale_nullable_repr_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_nullable_repr, &stale_nullable_repr_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_nullable_repr, &stale_nullable_repr_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
 
     var unknown_subject_repr = try mir.build(std.testing.allocator, parsed.module);
     defer unknown_subject_repr.deinit();
     try retargetTargetTypeResultForFunction(&unknown_subject_repr, "nullable_subject", .switch_subject, .unknown);
     var unknown_subject_repr_output: std.ArrayList(u8) = .empty;
     defer unknown_subject_repr_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnknownMirLoweringType, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &unknown_subject_repr, &unknown_subject_repr_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &unknown_subject_repr, &unknown_subject_repr_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c if-let statements require MIR subject types" {
@@ -2999,7 +3165,7 @@ test "lower-c if-let statements require MIR subject types" {
     try retargetTargetTypeResultForFunction(&stale_nullable_repr, "nullable_subject", .if_let_subject, .{ .nullable_value = "u32" });
     var stale_nullable_repr_output: std.ArrayList(u8) = .empty;
     defer stale_nullable_repr_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_nullable_repr, &stale_nullable_repr_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_nullable_repr, &stale_nullable_repr_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c try expressions require MIR operand and result types" {
@@ -3158,6 +3324,54 @@ test "lower-c inferred local casts require MIR types" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null));
+
+    const cast_offset = std.mem.indexOf(u8, source, "value as u32") orelse return error.TestUnexpectedResult;
+
+    var missing_cast_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_cast_result.deinit();
+    try removeTargetTypeFactAtOffsetForFunction(&missing_cast_result, "casts", .expression_result, cast_offset, "value as u32".len);
+    var missing_cast_result_output: std.ArrayList(u8) = .empty;
+    defer missing_cast_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_cast_result, &missing_cast_result_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null));
+
+    var stale_cast_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_cast_result.deinit();
+    try renameTargetTypeFactAtOffsetForFunction(&stale_cast_result, "casts", .expression_result, cast_offset, "value as u32".len, "u64");
+    var stale_cast_result_output: std.ArrayList(u8) = .empty;
+    defer stale_cast_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_cast_result, &stale_cast_result_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null));
+}
+
+test "lower-c float cast operands require MIR result type" {
+    const source =
+        \\fn cast_float(value: f64) -> f32 {
+        \\    return (value as f32) + 1.0;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("c_float_cast_operand_type.mc", source);
+    defer parsed.deinit();
+
+    var complete = try mir.build(std.testing.allocator, parsed.module);
+    defer complete.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &complete, &complete_output, .kernel, "c_float_cast_operand_type.mc", .{}, false, null);
+
+    const cast_offset = std.mem.indexOf(u8, source, "value as f32") orelse return error.TestUnexpectedResult;
+
+    var missing_cast_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_cast_result.deinit();
+    try removeTargetTypeFactAtOffsetForFunction(&missing_cast_result, "cast_float", .expression_result, cast_offset, "value as f32".len);
+    var missing_cast_result_output: std.ArrayList(u8) = .empty;
+    defer missing_cast_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_cast_result, &missing_cast_result_output, .kernel, "c_float_cast_operand_type.mc", .{}, false, null));
+
+    var stale_cast_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_cast_result.deinit();
+    try renameTargetTypeFactAtOffsetForFunction(&stale_cast_result, "cast_float", .expression_result, cast_offset, "value as f32".len, "u32");
+    var stale_cast_result_output: std.ArrayList(u8) = .empty;
+    defer stale_cast_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_cast_result, &stale_cast_result_output, .kernel, "c_float_cast_operand_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local binary expressions require MIR types" {
@@ -3438,6 +3652,23 @@ test "lower-c inferred local direct calls require MIR types" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale, &stale_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
+
+    const caller_offset = std.mem.indexOf(u8, source, "fn caller") orelse return error.TestUnexpectedResult;
+    const call_offset = std.mem.indexOfPos(u8, source, caller_offset, "make_count()") orelse return error.TestUnexpectedResult;
+
+    var missing_call_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_call_result.deinit();
+    try removeTargetTypeFactAtOffsetForFunction(&missing_call_result, "caller", .expression_result, call_offset, "make_count()".len);
+    var missing_call_result_output: std.ArrayList(u8) = .empty;
+    defer missing_call_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &missing_call_result, &missing_call_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
+
+    var stale_call_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_call_result.deinit();
+    try renameTargetTypeFactAtOffsetForFunction(&stale_call_result, "caller", .expression_result, call_offset, "make_count()".len, "u32");
+    var stale_call_result_output: std.ArrayList(u8) = .empty;
+    defer stale_call_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &stale_call_result, &stale_call_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
 
     var external_stale = try mir.build(std.testing.allocator, parsed.module);
     defer external_stale.deinit();

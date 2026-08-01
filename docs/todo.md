@@ -6,8 +6,9 @@ current backlog to check first.
 
 Current baseline:
 
-- `zig build m0` is the full milestone gate for the implemented language,
-  backend, hardening, agent, and QEMU surface.
+- `zig build m0` is the core compiler qualification gate for normal local/CI
+  feedback; `zig build m0-full` is the full milestone gate for the implemented
+  language, backend, hardening, agent, fuzz, runtime, and QEMU surface.
 - `zig build riscv-qemu-validation` is the focused QEMU/OpenSBI surrogate for
   the selected RISC-V board path when VisionFive 2 hardware is unavailable.
 - The C and LLVM backends both cover the current implemented spec surface.
@@ -30,20 +31,15 @@ Current baseline:
 | P1 | Persistence and recovery | Filesystems, block storage, checkpoint-like primitives, lifecycle, liveupdate demos, BlobStore-backed policy/audit checkpointing, BlockDevice-backed policy/audit checkpointing, watchdog/reboot reason records, and rollback state primitives are gated. | Move the BlockDevice checkpoint to the production virtio-blk reboot path, add storage-full/crash behavior, and run long QEMU plus real-board soak tests. |
 | P1 | VFS/POSIX/network completeness | VFS, fdspace, ramfs/diskfs/blockfs, sockets, DNS/TCP/TLS, brokered net calls, and shell/userland tests exist. | Decide the production syscall subset; add only the POSIX/VFS/network pieces the agent product actually needs. |
 | P1 | Multi-architecture platform | RISC-V, x86_64, and AArch64 all have substantial boot/user/VM coverage; device depth varies. | Focus now on the real-board RISC-V path. Defer x86 virtio-pci data-path depth, AArch64 GIC/timer/virtio depth, and COW/demand portability unless those become near-term targets. |
-| P2 | Fuzzing and independent oracles | The mcfuzz oracle family, including `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-reference`, and `fuzz-corpus`, is registered in `build/fuzz.zig` and wired into both `m0` and `fast` in `build/tiers.zig`; `.github/workflows/nightly-fuzz.yml` also exists for the longer fuzz cadence. | Keep the promoted fuzz gates green; continue expanding generator surface and independent oracle coverage where backend/runtime support exists. |
+| P2 | Fuzzing and independent oracles | The mcfuzz oracle family, including `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-reference`, and `fuzz-corpus`, is registered in `build/fuzz.zig` and wired into `m0-full`; `.github/workflows/nightly-fuzz.yml` also exists for the longer fuzz cadence. | Keep the promoted fuzz gates green in the full/nightly profiles; continue expanding generator surface and independent oracle coverage where backend/runtime support exists. |
 | P2 | Remaining mcfuzz generator surface | Most scalar/control-flow coverage has landed. Tagged unions, slices, multi-module programs, external-link programs, and coverage-guided throughput remain open or blocked. | Keep expanding `tools/fuzz/mcfuzz.py` where backend/runtime support exists; do not generate features that cannot yet lower into runnable programs. |
 | P2 | Tooling polish | `mcc fmt`, symbol indexing, LSP, package registry, and editor client are implemented and gated. | Improve formatter pretty-printing, type-directed completion, package registry signing/networking, and developer diagnostics as needed by active work. |
 
-## Historical docs folded into this roadmap
+## Historical work folded into this roadmap
 
-- `archive/hardening-todo.md`: the main hardening campaign is resolved or explicitly
-  deferred; use its item list for rationale and evidence, not as a live backlog.
-- Deleted completed records: the agent-OS implementation backlog, test-refactor
-  handoff, repo refactor plan, stale review, and S-mode IRQ reset root-cause note.
-  Their current takeaways are folded into this roadmap and the platform plan.
-- `platform-portability-plan.md`, `archive/quickjs-agent-plan.md`,
-  `future-kernel-plan.md`, and `production-readiness-plan.md`: still useful for
-  details, but their active work is summarized above.
+Completed campaign notes and experiment drafts live in git history, not as live
+documentation. Their current takeaways are folded into this roadmap, the
+platform plan, `future-kernel-plan.md`, and `production-readiness-plan.md`.
 
 ## Minimum production checklist
 

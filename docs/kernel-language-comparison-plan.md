@@ -19,16 +19,14 @@ readiness. Those remain owned by:
 - [`compiler-production-readiness.md`](compiler-production-readiness.md) for the
   qualified `mcc` supported subset;
 - [`production-readiness-plan.md`](production-readiness-plan.md) for the focused
-  agent-kernel product;
-- [`archive/virtio-rng-language-experiment-plan.md`](archive/virtio-rng-language-experiment-plan.md)
-  for the first C/Rust/MC protocol experiment.
+  agent-kernel product.
 
 The canonical T/M/P phase status lives only in
 `compiler-production-readiness.md`. This document consumes those closure results;
 it must not maintain a competing completion count.
 
 The current bounded developer measurements and their negative K2 conclusion are
-recorded in [`archive/virtio-rng-comparison-evidence.md`](archive/virtio-rng-comparison-evidence.md).
+recorded in this document; older experiment notes live only in git history.
 
 ## 1. Claim boundary
 

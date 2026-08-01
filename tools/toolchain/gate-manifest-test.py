@@ -13,6 +13,8 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "docs" / "gate-manifest.json"
 PROFILE_MANIFEST = ROOT / "docs" / "profile-manifest.json"
+RISK_REGISTER = ROOT / "docs" / "review-risk-register.yaml"
+REFACTORING_PLAN = ROOT / "docs" / "refactoring-plan.md"
 BUILD_DIR = ROOT / "build"
 TIERS = BUILD_DIR / "tiers.zig"
 
@@ -29,6 +31,7 @@ REQUIRED_FIELDS = {
 KNOWN_EXECUTION_TIERS = {"pr", "nightly", "release"}
 KNOWN_BUILD_TIERS = {"m0", "fast", "c0"}
 KNOWN_SKIP_POLICIES = {"no-skip", "tool-required", "documented-skip"}
+KNOWN_CI_PASS_ASSERTIONS = {"ci-m0-pass"}
 REQUIRED_GOVERNANCE_GATES = {
     "gate-manifest-test",
     "profile-manifest-test",
@@ -38,6 +41,76 @@ REQUIRED_GOVERNANCE_GATES = {
     "package-release-test",
     "ci-pass-gates-test",
 }
+ARTIFACT_METADATA_ANCHORS: dict[str, list[str]] = {
+    "src/backend.zig": [
+        "pub const ArtifactBundle = struct",
+        "pub fn forArtifact(",
+        "pub fn forSourceMap(",
+        "pub const ArtifactBundleFormat = enum",
+        "pub fn appendArtifactBundle(",
+        "pub fn appendArtifactMetadata(",
+        "generated_artifact_sha256",
+        "source_map_payload_sha256",
+    ],
+    "src/main.zig": [
+        "fn writeArtifactMetadataSidecar(",
+        "fn writeArtifactWithMetadata(",
+        '.artifact_kind = "c"',
+        '.artifact_kind = "llvm-ir"',
+        '.artifact_kind = "host-executable"',
+    ],
+    "src/lower_c_map.zig": [
+        "const bundle = backend.ArtifactBundle.forSourceMap(",
+        "try backend.appendArtifactBundle(allocator, out, bundle, .source_map)",
+    ],
+    "tools/toolchain/mcmap-verify.py": [
+        'expected_magic=b"# mcmap v1" if args.map is not None else b"# mcmeta v1"',
+        "wrong metadata bundle magic",
+        "require_header_value(headers, \"artifact_kind\", \"c-source-map\")",
+        "require_header_value(headers, \"backend\", \"c\")",
+        "if args.artifact_kind is not None:",
+        "if args.backend is not None:",
+        "expected_artifact_digest = require_sha256_header(headers, \"generated_artifact_sha256\")",
+        "expected_payload_digest = require_sha256_header(headers, \"source_map_payload_sha256\")",
+        "require_sha256_header(headers, \"mir_facts_sha256\")",
+    ],
+    "tools/toolchain/mcc-cli-test.sh": [
+        "ok.c.mcmeta",
+        "ok.ll.mcmeta",
+        "ok.c.no-magic.mcmeta",
+        "ok.c.no-artifact-digest.mcmeta",
+        "metadata verifier accepted a sidecar without the mcmeta magic",
+        "metadata verifier accepted a sidecar without generated_artifact_sha256",
+        "metadata verifier accepted C sidecar as LLVM IR",
+        "metadata verifier accepted LLVM sidecar as C",
+        "# artifact_kind=c",
+        "# artifact_kind=llvm-ir",
+    ],
+    "tools/toolchain/mcc-build-test.sh": [
+        "ok.mcmeta",
+        "# artifact_kind=host-executable",
+        "metadata verifier accepted executable sidecar as C source",
+        "sha256=[0-9a-f]{64}",
+        "directory output target did not fail closed",
+        "directory output failure leaked temporary build artifacts",
+        "directory output failure created metadata sidecar",
+    ],
+    "tools/toolchain/mcmap-test.sh": [
+        "no-magic.mcmap",
+        "no-artifact-digest.mcmap",
+        "no-artifact-kind.mcmap",
+        "wrong-backend.mcmap",
+        "verifier accepted a map without the mcmap magic",
+        "verifier accepted a map without generated_artifact_sha256",
+        "verifier accepted a map without artifact_kind",
+        "verifier accepted a map with the wrong backend header",
+        "require_sha_header generated_artifact_sha256",
+        "require_sha_header source_map_payload_sha256",
+    ],
+}
+RISK_ID_RE = re.compile(r"^\s*-\s+id:\s+([A-Z0-9][A-Z0-9-]+)\s*$", re.MULTILINE)
+REFACTOR_RISK_REF_RE = re.compile(r"`([A-Z0-9][A-Z0-9-]+)`")
+REFACTOR_ZIG_BUILD_RE = re.compile(r"\bzig\s+build\s+([A-Za-z0-9_.<>-]+)")
 
 
 def fail(message: str) -> None:
@@ -89,6 +162,63 @@ def tier_dependencies() -> dict[str, set[str]]:
     }
 
 
+def risk_register_ids() -> set[str]:
+    try:
+        text = RISK_REGISTER.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        fail(f"missing {RISK_REGISTER.relative_to(ROOT)}")
+    ids = set(RISK_ID_RE.findall(text))
+    if not ids:
+        fail(f"{RISK_REGISTER.relative_to(ROOT)} contains no risk ids")
+    return ids
+
+
+def refactoring_plan_risk_refs() -> set[str]:
+    try:
+        text = REFACTORING_PLAN.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        fail(f"missing {REFACTORING_PLAN.relative_to(ROOT)}")
+    refs = {
+        ref
+        for ref in REFACTOR_RISK_REF_RE.findall(text)
+        if "-" in ref and not ref.endswith("-GATE")
+    }
+    if not refs:
+        fail(f"{REFACTORING_PLAN.relative_to(ROOT)} contains no risk references")
+    return refs
+
+
+def refactoring_plan_build_refs() -> set[str]:
+    try:
+        text = REFACTORING_PLAN.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        fail(f"missing {REFACTORING_PLAN.relative_to(ROOT)}")
+    refs = {
+        ref
+        for ref in REFACTOR_ZIG_BUILD_RE.findall(text)
+        if not (ref.startswith("<") and ref.endswith(">"))
+    }
+    if not refs:
+        fail(f"{REFACTORING_PLAN.relative_to(ROOT)} contains no zig build references")
+    return refs
+
+
+def validate_anchor_inventory(name: str, anchors: dict[str, list[str]]) -> None:
+    for rel_path, needles in anchors.items():
+        path = ROOT / rel_path
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            fail(f"{name} references missing file {rel_path}")
+        for needle in needles:
+            if needle not in text:
+                fail(f"{name} missing anchor in {rel_path}: {needle!r}")
+
+
+def anchor_count(anchors: dict[str, list[str]]) -> int:
+    return sum(len(needles) for needles in anchors.values())
+
+
 def string_list(gate_id: str, gate: dict[str, Any], field: str) -> list[str]:
     value = gate.get(field)
     if not isinstance(value, list) or not value:
@@ -97,6 +227,48 @@ def string_list(gate_id: str, gate: dict[str, Any], field: str) -> list[str]:
         if not isinstance(item, str) or not item:
             fail(f"gate {gate_id} has invalid {field} item {item!r}")
     return value
+
+
+def validate_ci_pass_assertions(
+    manifest: dict[str, Any],
+    known_gates: set[str],
+    dependencies: dict[str, set[str]],
+) -> int:
+    assertions = manifest.get("ci_pass_assertions")
+    if not isinstance(assertions, dict) or set(assertions) != KNOWN_CI_PASS_ASSERTIONS:
+        fail("ci_pass_assertions must define exactly ci-m0-pass")
+
+    total = 0
+    for assertion_id, spec in assertions.items():
+        if not isinstance(spec, dict):
+            fail(f"ci_pass_assertions.{assertion_id} must be an object")
+        build_tier = spec.get("build_tier")
+        if build_tier not in KNOWN_BUILD_TIERS:
+            fail(f"ci_pass_assertions.{assertion_id} uses unknown build_tier {build_tier!r}")
+        gates = spec.get("gates")
+        if not isinstance(gates, list) or not gates:
+            fail(f"ci_pass_assertions.{assertion_id}.gates must be a non-empty list")
+        minimum = spec.get("min_count")
+        if not isinstance(minimum, int) or minimum < 1:
+            fail(f"ci_pass_assertions.{assertion_id}.min_count must be a positive integer")
+        if len(gates) < minimum:
+            fail(
+                f"ci_pass_assertions.{assertion_id} has {len(gates)} gate(s), "
+                f"below required floor {minimum}"
+            )
+        seen: set[str] = set()
+        for gate in gates:
+            if not isinstance(gate, str) or not gate:
+                fail(f"ci_pass_assertions.{assertion_id}.gates contains a non-string gate")
+            if gate in seen:
+                fail(f"ci_pass_assertions.{assertion_id}.gates duplicates {gate}")
+            seen.add(gate)
+            if gate not in known_gates:
+                fail(f"ci_pass_assertions.{assertion_id} references unregistered gate {gate}")
+            if gate not in dependencies[build_tier]:
+                fail(f"ci_pass_assertions.{assertion_id} references gate {gate} outside {build_tier}")
+        total += len(gates)
+    return total
 
 
 def main() -> None:
@@ -127,6 +299,23 @@ def main() -> None:
 
     known_gates = registered_gates()
     dependencies = tier_dependencies()
+    known_risks = risk_register_ids()
+    refactor_risk_refs = refactoring_plan_risk_refs()
+    refactor_build_refs = refactoring_plan_build_refs()
+    validate_anchor_inventory("artifact metadata inventory", ARTIFACT_METADATA_ANCHORS)
+    ci_pass_assertion_count = validate_ci_pass_assertions(manifest, known_gates, dependencies)
+    unknown_refactor_risks = sorted(refactor_risk_refs - known_risks)
+    if unknown_refactor_risks:
+        fail(
+            "refactoring plan references unknown risk ids: "
+            + ", ".join(unknown_refactor_risks)
+        )
+    unknown_refactor_build_refs = sorted(refactor_build_refs - known_gates)
+    if unknown_refactor_build_refs:
+        fail(
+            "refactoring plan references unknown zig build steps: "
+            + ", ".join(unknown_refactor_build_refs)
+        )
     seen: set[str] = set()
     owners: set[str] = set()
 
@@ -178,7 +367,11 @@ def main() -> None:
 
     print(
         "PASS: gate-manifest-test - "
-        f"{len(gates)} manifest gates, {len(owners)} owners, {len(known_profiles)} profiles"
+        f"{len(gates)} manifest gates, {len(owners)} owners, "
+        f"{len(known_profiles)} profiles, {len(refactor_risk_refs)} refactor risk refs, "
+        f"{len(refactor_build_refs)} refactor build refs, "
+        f"{anchor_count(ARTIFACT_METADATA_ANCHORS)} artifact metadata anchors, "
+        f"{ci_pass_assertion_count} CI PASS assertion gates"
     )
 
 

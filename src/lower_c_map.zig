@@ -13,7 +13,7 @@ const mir_syntax = @import("mir_syntax.zig");
 
 pub fn appendSourceMap(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    source_map: backend.SourceMapMechanicsView,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     mir_module: *const mir.Module,
@@ -27,6 +27,7 @@ pub fn appendSourceMap(
     var payload: std.ArrayList(u8) = .empty;
     defer payload.deinit(allocator);
     try payload.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol source_module source_qualname symbol_kind visibility backend_name origin\n");
+    const decls = source_map.declsForRowEnumeration();
     var mapper = SourceMapEmitter{
         .allocator = allocator,
         .out = &payload,
@@ -36,7 +37,9 @@ pub fn appendSourceMap(
         .mir_module = mir_module,
         .module_name = moduleNameFromPath(source_path),
     };
-    try mapper.emitModule(module);
+    defer mapper.deinit();
+    try mapper.collectRowArtifactsFromDecls(decls);
+    try mapper.emitCollectedRows();
 
     var mir_facts_input: std.ArrayList(u8) = .empty;
     defer mir_facts_input.deinit(allocator);
@@ -44,8 +47,7 @@ pub fn appendSourceMap(
 
     const bundle = backend.ArtifactBundle.forSourceMap(generated_c, payload.items, mir_facts_input.items, opts);
 
-    try out.appendSlice(allocator, "# mcmap v1\n");
-    try backend.appendArtifactBundleHeaders(allocator, out, bundle);
+    try backend.appendArtifactBundle(allocator, out, bundle, .source_map);
     try out.appendSlice(allocator, payload.items);
 }
 
@@ -363,9 +365,20 @@ const SourceMapEmitter = struct {
     symbol_kind: []const u8 = "value",
     visibility: []const u8 = "internal",
     origin: []const u8 = "source",
+    decl_row_artifacts: std.ArrayList(ast.Decl) = .empty,
 
-    fn emitModule(self: *SourceMapEmitter, module: ast.Module) !void {
-        for (module.decls) |decl| {
+    fn deinit(self: *SourceMapEmitter) void {
+        self.decl_row_artifacts.deinit(self.allocator);
+    }
+
+    fn collectRowArtifactsFromDecls(self: *SourceMapEmitter, decls: []const ast.Decl) !void {
+        for (decls) |decl| {
+            try self.decl_row_artifacts.append(self.allocator, decl);
+        }
+    }
+
+    fn emitCollectedRows(self: *SourceMapEmitter) !void {
+        for (self.decl_row_artifacts.items) |decl| {
             self.origin = declOrigin(decl);
             switch (decl.kind) {
                 .global_decl => |global| {

@@ -60,8 +60,10 @@ def main() -> None:
             fail(f"{name} runner does not cap nested worker pools")
         if "${ms:-0}" not in source:
             fail(f"{name} runner no longer starts known longest gates first")
-    if '--full' not in fast or "MC_FAST_FULL_FUZZ_COUNT:-300" not in fast:
-        fail("fast runner lacks complete 300-seed mode")
+    if '--full' not in fast or "Backward-compatible no-op" not in fast:
+        fail("fast runner no longer preserves the legacy --full compatibility flag")
+    if "MC_FAST_FULL_FUZZ_COUNT" in fast:
+        fail("fast runner still carries the removed full-fuzz mode")
     if "MC_REQUIRE_TOOLS" not in m0 or 'grep -q "^SKIP:"' not in m0:
         fail("m0 runner does not fail strict qualification skips")
 
@@ -76,8 +78,8 @@ def main() -> None:
         'const m0_step = b.step("m0"',
         'const fast_step = b.step("fast"',
     )
-    if len(fast_gates) < 30 or len(m0_gates) <= len(fast_gates):
-        fail("tier extraction boundaries no longer describe full gate inventories")
+    if len(fast_gates) < 30 or len(m0_gates) < 20:
+        fail("tier extraction boundaries no longer describe core gate inventories")
 
     print(
         "PASS: parallel-runner-test - full gate inventories use bounded nested "

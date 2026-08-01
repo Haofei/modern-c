@@ -73,6 +73,8 @@ pub fn build(b: *std.Build) h.Ctx {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&test_cmd.step);
     test_step.dependOn(&spec_test_cmd.step);
+    ctx.cmds.put("test-unit", unit_test_step) catch @panic("OOM");
+    ctx.cmds.put("test-spec", spec_test_step) catch @panic("OOM");
     ctx.cmds.put("test", test_step) catch @panic("OOM");
 
     return ctx;

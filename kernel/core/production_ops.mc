@@ -338,6 +338,9 @@ pub fn rollback_install_candidate(r: *mut RollbackState, version: u64) -> usize 
 }
 
 pub fn rollback_install_verified_candidate(r: *mut RollbackState, bundle: VerifiedBundle) -> usize {
+    if !VerifiedBundle.has_exact_bytes(bundle) {
+        return 2; // metadata-only admission is not enough to install a boot candidate
+    }
     return rollback_install_candidate(r, VerifiedBundle.version(bundle));
 }
 

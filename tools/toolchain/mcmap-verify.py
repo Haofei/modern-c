@@ -34,9 +34,21 @@ def read_file(path: Path) -> bytes:
         raise VerifyError(f"cannot read {path}: {exc}") from exc
 
 
-def parse_bundle(data: bytes, *, require_payload: bool) -> tuple[dict[str, str], bytes]:
+def parse_bundle(data: bytes, *, require_payload: bool, expected_magic: bytes) -> tuple[dict[str, str], bytes]:
     headers: dict[str, str] = {}
     lines = data.splitlines(keepends=True)
+    if not lines:
+        raise VerifyError("empty metadata bundle")
+    first_line = lines[0].rstrip(b"\r\n")
+    if first_line != expected_magic:
+        try:
+            actual = first_line.decode("ascii")
+        except UnicodeDecodeError:
+            actual = "<non-ascii>"
+        raise VerifyError(
+            "wrong metadata bundle magic: "
+            f"expected {expected_magic.decode('ascii')!r} actual {actual!r}"
+        )
     payload_start: int | None = None
 
     for index, line in enumerate(lines):
@@ -78,15 +90,29 @@ def require_sha256_header(headers: dict[str, str], name: str) -> str:
     return value
 
 
+def require_header_value(headers: dict[str, str], name: str, expected: str) -> None:
+    actual = require_header(headers, name)
+    if actual != expected:
+        raise VerifyError(f"header '{name}' is {actual!r}, expected {expected!r}")
+
+
 def verify(args: argparse.Namespace) -> None:
     input_path = args.map if args.map is not None else args.metadata
     if input_path is None:
         raise VerifyError("one of --map or --metadata is required")
 
     map_data = read_file(input_path)
-    headers, payload = parse_bundle(map_data, require_payload=args.map is not None)
+    headers, payload = parse_bundle(
+        map_data,
+        require_payload=args.map is not None,
+        expected_magic=b"# mcmap v1" if args.map is not None else b"# mcmeta v1",
+    )
+
+    expected_artifact_digest = require_sha256_header(headers, "generated_artifact_sha256")
 
     if args.map is not None:
+        require_header_value(headers, "artifact_kind", "c-source-map")
+        require_header_value(headers, "backend", "c")
         expected_payload_digest = require_sha256_header(headers, "source_map_payload_sha256")
         actual_payload_digest = sha256_bytes(payload)
         if actual_payload_digest != expected_payload_digest:
@@ -97,8 +123,13 @@ def verify(args: argparse.Namespace) -> None:
 
         require_sha256_header(headers, "mir_facts_sha256")
 
+    if args.artifact_kind is not None:
+        require_header_value(headers, "artifact_kind", args.artifact_kind)
+
+    if args.backend is not None:
+        require_header_value(headers, "backend", args.backend)
+
     if args.artifact is not None:
-        expected_artifact_digest = require_sha256_header(headers, "generated_artifact_sha256")
         actual_artifact_digest = sha256_bytes(read_file(args.artifact))
         if actual_artifact_digest != expected_artifact_digest:
             raise VerifyError(
@@ -132,6 +163,14 @@ def main() -> int:
         "--source",
         type=Path,
         help="Exact loaded source object that must match source_sha256",
+    )
+    parser.add_argument(
+        "--artifact-kind",
+        help="Expected artifact_kind header value for metadata-sidecar consumers",
+    )
+    parser.add_argument(
+        "--backend",
+        help="Expected backend header value for metadata-sidecar consumers",
     )
     args = parser.parse_args()
 

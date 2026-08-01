@@ -103,14 +103,29 @@ pub const UncheckedCallInfo = struct {
     result_ty: ast.TypeExpr,
 };
 
+const ReduceTypes = struct {
+    source: ast.TypeExpr,
+    element: ast.TypeExpr,
+};
+
+const DomainTypes = struct {
+    domain: ast.TypeExpr,
+    payload: ast.TypeExpr,
+    result: ast.TypeExpr,
+};
+
+const ArithmeticCallTypes = struct {
+    left: ast.TypeExpr,
+    right: ast.TypeExpr,
+    result: ast.TypeExpr,
+};
+
 pub fn uncheckedCallInfo(ctx: Context, call: anytype) ?UncheckedCallInfo {
     if (call.type_args.len != 0 or call.args.len != 2) return null;
     const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
     const op = mir.uncheckedCallFactInfo(kind) orelse return null;
-    const left_ty = (ctx.mir_target_type(ctx.emit_ctx, .unchecked_left, call.args[0].span) orelse return null);
-    const right_ty = (ctx.mir_target_type(ctx.emit_ctx, .unchecked_right, call.args[1].span) orelse return null);
-    const result_ty = (ctx.mir_target_type(ctx.emit_ctx, .unchecked_result, call.callee.*.span) orelse return null);
-    return .{ .op = op, .left_ty = left_ty, .right_ty = right_ty, .result_ty = result_ty };
+    const types = uncheckedTypesForEmission(ctx, call) orelse return null;
+    return .{ .op = op, .left_ty = types.left, .right_ty = types.right, .result_ty = types.result };
 }
 
 const WrappingCallInfo = struct {
@@ -123,10 +138,23 @@ fn wrappingCallInfo(ctx: Context, call: anytype) ?WrappingCallInfo {
     if (call.type_args.len != 0 or call.args.len != 2) return null;
     const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
     _ = mir.wrappingCallFactInfo(kind) orelse return null;
+    const types = wrappingTypesForEmission(ctx, call) orelse return null;
+    return .{ .left_ty = types.left, .right_ty = types.right, .result_ty = types.result };
+}
+
+fn uncheckedTypesForEmission(ctx: Context, call: anytype) ?ArithmeticCallTypes {
+    return arithmeticCallTypesForEmission(ctx, call, .unchecked_left, .unchecked_right, .unchecked_result);
+}
+
+fn wrappingTypesForEmission(ctx: Context, call: anytype) ?ArithmeticCallTypes {
+    return arithmeticCallTypesForEmission(ctx, call, .wrapping_left, .wrapping_right, .wrapping_result);
+}
+
+fn arithmeticCallTypesForEmission(ctx: Context, call: anytype, left_kind: mir.TargetTypeKind, right_kind: mir.TargetTypeKind, result_kind: mir.TargetTypeKind) ?ArithmeticCallTypes {
     return .{
-        .left_ty = ctx.mir_target_type(ctx.emit_ctx, .wrapping_left, call.args[0].span) orelse return null,
-        .right_ty = ctx.mir_target_type(ctx.emit_ctx, .wrapping_right, call.args[1].span) orelse return null,
-        .result_ty = ctx.mir_target_type(ctx.emit_ctx, .wrapping_result, call.callee.*.span) orelse return null,
+        .left = ctx.mir_target_type(ctx.emit_ctx, left_kind, call.args[0].span) orelse return null,
+        .right = ctx.mir_target_type(ctx.emit_ctx, right_kind, call.args[1].span) orelse return null,
+        .result = ctx.mir_target_type(ctx.emit_ctx, result_kind, call.callee.*.span) orelse return null,
     };
 }
 
@@ -178,9 +206,7 @@ pub fn emitResidueCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(
     const member = memberCallee(call.callee.*) orelse return false;
     if (!std.mem.eql(u8, member.name.text, "residue")) return false;
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .wrap_residue) return false;
-    _ = ctx.mir_target_type(ctx.emit_ctx, .domain_type, call.callee.*.span) orelse return error.UnsupportedCEmission;
-    _ = ctx.mir_target_type(ctx.emit_ctx, .domain_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
-    _ = ctx.mir_target_type(ctx.emit_ctx, .domain_result, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    _ = try residueTypesForEmission(ctx, call);
     if (call.args.len != 0) return error.UnsupportedCEmission;
     try ctx.emit_expr(ctx.emit_ctx, member.base.*, locals);
     return true;
@@ -194,8 +220,9 @@ pub fn emitReduceSumCheckedCall(ctx: Context, call: anytype, locals: ?*std.Strin
     if (kind != .reduce_sum_checked and kind != .reduce_sum_left and kind != .reduce_sum_fast) return false;
     const member = memberCallee(call.callee.*) orelse return false;
     if (call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
-    const source_ty = ctx.mir_target_type(ctx.emit_ctx, .reduce_source, call.args[0].span) orelse return error.UnsupportedCEmission;
-    const element_ty = ctx.mir_target_type(ctx.emit_ctx, .reduce_element, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    const types = try reduceTypesForEmission(ctx, call);
+    const source_ty = types.source;
+    const element_ty = types.element;
 
     if (kind == .reduce_sum_left or kind == .reduce_sum_fast) {
         return try emitFloatReduceCall(ctx, call, locals, source_ty, element_ty, kind == .reduce_sum_fast);
@@ -213,6 +240,22 @@ pub fn emitReduceSumCheckedCall(ctx: Context, call: anytype, locals: ?*std.Strin
     try ctx.out.print(ctx.allocator, "); __int128 mc_acc{d} = 0; for (uintptr_t mc_i{d} = 0; mc_i{d} < mc_xs{d}.len; mc_i{d}++) mc_acc{d} += (__int128)mc_xs{d}.ptr[mc_i{d}]; ", .{ n, n, n, n, n, n, n, n });
     try ctx.out.print(ctx.allocator, "(mc_acc{d} < (__int128)({s}) || mc_acc{d} > (__int128)({s})) ? (({s}){{ .is_ok = false, .payload.err = 0 }}) : (({s}){{ .is_ok = true, .payload.ok = ({s})mc_acc{d} }}); }})", .{ n, range.c_min, n, range.c_max, struct_name, struct_name, t_cty, n });
     return true;
+}
+
+fn reduceTypesForEmission(ctx: Context, call: anytype) !ReduceTypes {
+    return .{
+        .source = ctx.mir_target_type(ctx.emit_ctx, .reduce_source, call.args[0].span) orelse return error.UnsupportedCEmission,
+        .element = ctx.mir_target_type(ctx.emit_ctx, .reduce_element, call.callee.*.span) orelse return error.UnsupportedCEmission,
+    };
+}
+
+fn residueTypesForEmission(ctx: Context, call: anytype) !DomainTypes {
+    const span = call.callee.*.span;
+    return .{
+        .domain = ctx.mir_target_type(ctx.emit_ctx, .domain_type, span) orelse return error.UnsupportedCEmission,
+        .payload = ctx.mir_target_type(ctx.emit_ctx, .domain_payload, span) orelse return error.UnsupportedCEmission,
+        .result = ctx.mir_target_type(ctx.emit_ctx, .domain_result, span) orelse return error.UnsupportedCEmission,
+    };
 }
 
 pub fn sequencedBinaryPlan(ctx: Context, node: anytype, target_ty: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !?SequencedBinaryPlan {

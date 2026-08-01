@@ -107,6 +107,23 @@ require_header lower_checks_csan false "$MAP"
 require_header lower_stub_asm false "$MAP"
 python3 "$MCMAP_VERIFY" --map "$MAP" --artifact "$W/generated.c" --source "$LOADED_SRC" >/dev/null
 
+tail -n +2 "$MAP" > "$W/no-magic.mcmap"
+if python3 "$MCMAP_VERIFY" --map "$W/no-magic.mcmap" --artifact "$W/generated.c" --source "$LOADED_SRC" >/dev/null 2>&1; then
+    echo "FAIL: mcmap-test — verifier accepted a map without the mcmap magic"; exit 1
+fi
+grep -v '^# generated_artifact_sha256=' "$MAP" > "$W/no-artifact-digest.mcmap"
+if python3 "$MCMAP_VERIFY" --map "$W/no-artifact-digest.mcmap" --source "$LOADED_SRC" >/dev/null 2>&1; then
+    echo "FAIL: mcmap-test — verifier accepted a map without generated_artifact_sha256"; exit 1
+fi
+grep -v '^# artifact_kind=' "$MAP" > "$W/no-artifact-kind.mcmap"
+if python3 "$MCMAP_VERIFY" --map "$W/no-artifact-kind.mcmap" --artifact "$W/generated.c" --source "$LOADED_SRC" >/dev/null 2>&1; then
+    echo "FAIL: mcmap-test — verifier accepted a map without artifact_kind"; exit 1
+fi
+sed 's/^# backend=c$/# backend=llvm/' "$MAP" > "$W/wrong-backend.mcmap"
+if python3 "$MCMAP_VERIFY" --map "$W/wrong-backend.mcmap" --artifact "$W/generated.c" --source "$LOADED_SRC" >/dev/null 2>&1; then
+    echo "FAIL: mcmap-test — verifier accepted a map with the wrong backend header"; exit 1
+fi
+
 "$MCC" emit-map "$SRC" --profile=hosted --checks=elide-proven,ksan --stub-asm > "$W/hosted.mcmap" 2>/dev/null
 "$MCC" emit-c "$SRC" --profile=hosted --checks=elide-proven,ksan --stub-asm > "$W/hosted.c" 2>/dev/null
 require_sha_header generated_artifact_sha256 "$(sha256_file "$W/hosted.c")" "$W/hosted.mcmap"

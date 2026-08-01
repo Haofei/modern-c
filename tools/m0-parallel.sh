@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Parallel m0 runner.
 #
-# `zig build m0` runs SERIALLY: zig 0.16's build runner executes side-effecting Run steps (which all
-# our QEMU/script gates are) one at a time, so a full m0 takes ~sum-of-all-gates wall time even on a
+# `zig build m0-full` runs SERIALLY: zig 0.16's build runner executes side-effecting Run steps (which all
+# our QEMU/script gates are) one at a time, so a full matrix takes ~sum-of-all-gates wall time even on a
 # many-core box. This runner executes the SAME gate set as concurrent `zig build <gate>` PROCESSES —
 # process-level parallelism, which the OS does spread across all cores (verified) — for the same
-# pass/fail at a fraction of the wall time. Use it for fast local milestone runs; `zig build m0`
-# remains the canonical (deterministic, serial) gate.
+# pass/fail at a fraction of the wall time. Use it for fast local full-matrix runs; `zig build m0-full`
+# remains the canonical (deterministic, serial) release gate.
 #
 # Usage: tools/m0-parallel.sh [jobs]      (jobs default: host CPU count)
 set -euo pipefail
@@ -32,12 +32,12 @@ OUT=".wamr-cache/m0p-logs"; rm -rf "$OUT"; mkdir -p "$OUT"
 echo "[m0-parallel] building compiler (zig build install) ..."
 zig build install >"$OUT/_install.log" 2>&1 || { echo "[m0-parallel] install FAILED"; tail -20 "$OUT/_install.log"; exit 1; }
 
-# The m0 gate set is the ctx.cmd("...") dependency list in tiers.zig's m0 block (between the m0_step
-# and c0_step declarations). Single source of truth — no separate list to drift.
+# The full gate set is the ctx.cmd("...") dependency list in tiers.zig's m0-full block (between
+# the m0_full_step and m0_step declarations). Single source of truth — no separate list to drift.
 GATES=()
 while IFS= read -r gate; do
     GATES+=("$gate")
-done < <(awk '/const m0_step = b.step/{f=1} /const c0_step = b.step/{f=0} f' build/tiers.zig \
+done < <(awk '/const m0_full_step = b.step/{f=1} /const m0_step = b.step/{f=0} f' build/tiers.zig \
     | grep -oE 'ctx\.cmd\("[^"]+"\)' | sed -E 's/.*\("([^"]+)"\)/\1/' | sort -u)
 [ "${#GATES[@]}" -gt 0 ] || { echo "[m0-parallel] no gates extracted from build/tiers.zig"; exit 1; }
 
@@ -131,7 +131,7 @@ echo "[m0-parallel] parallel pass: PASS=$pass FAIL=$fail  wall=$((E - S))s  (-P 
 # Re-verify failures SERIALLY. Under high parallelism some gates false-fail on contention (fixed
 # QEMU ports, CPU starvation past a harness's internal `timeout`); they pass when run alone. A gate
 # that fails BOTH the parallel run and the serial re-verify is a REAL failure. This keeps the speed
-# (only failures retry) while matching `zig build m0`'s verdict.
+# (only failures retry) while matching `zig build m0-full`'s verdict.
 FAILED=()
 while IFS= read -r gate; do
     FAILED+=("$gate")

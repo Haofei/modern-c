@@ -1122,6 +1122,52 @@ test "LLVM rejects prebuilt MIR with extra stale representation facts" {
     );
 }
 
+test "LLVM rejects prebuilt MIR with missing Result try payload representation facts" {
+    const source =
+        \\extern fn make_result_pointer() -> Result<*mut u8, Error>;
+        \\
+        \\fn result_try_payload_representation_gate() -> *mut u8 {
+        \\    return make_result_pointer()?;
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_missing_result_try_payload_representation_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try clearRepresentationFactsForFunction(&module_mir, "result_try_payload_representation_gate");
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirRepresentationFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_missing_result_try_payload_representation_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
+test "LLVM rejects prebuilt MIR with stale Result try payload representation facts" {
+    const source =
+        \\extern fn make_result_pointer() -> Result<*mut u8, Error>;
+        \\
+        \\fn result_try_payload_representation_gate() -> *mut u8 {
+        \\    return make_result_pointer()?;
+        \\}
+    ;
+
+    var parsed = try test_support.parseModule("llvm_stale_result_try_payload_representation_facts.mc", source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+    defer module_mir.deinit();
+    try retargetRepresentationFactsForFunction(&module_mir, "result_try_payload_representation_gate", "stale_try_payload");
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.InvalidMirRepresentationFacts,
+        lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_stale_result_try_payload_representation_facts.mc", .{}, false, .riscv64, null),
+    );
+}
+
 test "LLVM rejects prebuilt MIR with missing integer facts" {
     const source =
         \\fn integer_fact_gate() -> u8 {
@@ -1898,12 +1944,30 @@ test "LLVM inferred local direct addresses require MIR types" {
     defer stale_const_global_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_const_global, &stale_const_global_output, "llvm_inferred_local_address.mc", .{}, false, .riscv64, null));
 
+    var stale_address_local_operand = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_address_local_operand.deinit();
+    const address_local_function_offset = std.mem.indexOf(u8, source, "fn address_local") orelse return error.TestUnexpectedResult;
+    const address_local_expr_offset = std.mem.indexOfPos(u8, source, address_local_function_offset, "&value") orelse return error.TestUnexpectedResult;
+    try renameTargetTypeFactAtOffsetForFunction(&stale_address_local_operand, "address_local", .expression_result, address_local_expr_offset + 1, "value".len, "u64");
+    var stale_address_local_operand_output: std.ArrayList(u8) = .empty;
+    defer stale_address_local_operand_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_address_local_operand, &stale_address_local_operand_output, "llvm_inferred_local_address.mc", .{}, false, .riscv64, null));
+
     var stale = try mir.build(std.testing.allocator, parsed.module);
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "address_global", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_local_address.mc", .{}, false, .riscv64, null));
+
+    var stale_pointee_source = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_pointee_source.deinit();
+    const pointee_function_offset = std.mem.indexOf(u8, source, "fn address_pointee") orelse return error.TestUnexpectedResult;
+    const pointee_source_offset = std.mem.indexOfPos(u8, source, pointee_function_offset, "source.*") orelse return error.TestUnexpectedResult;
+    try renameTargetTypeFactAtOffsetForFunction(&stale_pointee_source, "address_pointee", .expression_result, pointee_source_offset, "source".len, "u64");
+    var stale_pointee_source_output: std.ArrayList(u8) = .empty;
+    defer stale_pointee_source_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_pointee_source, &stale_pointee_source_output, "llvm_inferred_local_address.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM compound expressions require complete MIR result facts" {
@@ -1989,6 +2053,26 @@ test "LLVM compound expressions require complete MIR result facts" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_expression_result_facts.mc", .{}, false, .riscv64, null);
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const function_offset = std.mem.indexOf(u8, source, "fn binary_result") orelse return error.TestUnexpectedResult;
+        const left_offset = std.mem.indexOfPos(u8, source, function_offset, "left + 1") orelse return error.TestUnexpectedResult;
+        try removeTargetTypeFactAtOffsetForFunction(&module_mir, "binary_result", .expression_result, left_offset, "left".len);
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_expression_result_facts.mc", .{}, false, .riscv64, null));
+    }
+    {
+        var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
+        defer module_mir.deinit();
+        const function_offset = std.mem.indexOf(u8, source, "fn binary_result") orelse return error.TestUnexpectedResult;
+        const left_offset = std.mem.indexOfPos(u8, source, function_offset, "left + 1") orelse return error.TestUnexpectedResult;
+        try renameTargetTypeFactAtOffsetForFunction(&module_mir, "binary_result", .expression_result, left_offset, "left".len, "u64");
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(std.testing.allocator);
+        try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_expression_result_facts.mc", .{}, false, .riscv64, null));
     }
     {
         var module_mir = try mir.buildOpt(std.testing.allocator, parsed.module, .{});
@@ -3018,14 +3102,14 @@ test "LLVM switches require MIR subject types" {
     try retargetTargetTypeResultForFunction(&stale_nullable_repr, "nullable_subject", .switch_subject, .{ .nullable_value = "u32" });
     var stale_nullable_repr_output: std.ArrayList(u8) = .empty;
     defer stale_nullable_repr_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_nullable_repr, &stale_nullable_repr_output, "llvm_switch_subject_type_facts.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_nullable_repr, &stale_nullable_repr_output, "llvm_switch_subject_type_facts.mc", .{}, false, .riscv64, null));
 
     var unknown_subject_repr = try mir.build(std.testing.allocator, parsed.module);
     defer unknown_subject_repr.deinit();
     try retargetTargetTypeResultForFunction(&unknown_subject_repr, "nullable_subject", .switch_subject, .unknown);
     var unknown_subject_repr_output: std.ArrayList(u8) = .empty;
     defer unknown_subject_repr_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnknownMirLoweringType, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &unknown_subject_repr, &unknown_subject_repr_output, "llvm_switch_subject_type_facts.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &unknown_subject_repr, &unknown_subject_repr_output, "llvm_switch_subject_type_facts.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM if-let statements require MIR subject types" {
@@ -3070,7 +3154,7 @@ test "LLVM if-let statements require MIR subject types" {
     try retargetTargetTypeResultForFunction(&stale_nullable_repr, "nullable_subject", .if_let_subject, .{ .nullable_value = "u32" });
     var stale_nullable_repr_output: std.ArrayList(u8) = .empty;
     defer stale_nullable_repr_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_nullable_repr, &stale_nullable_repr_output, "llvm_if_let_subject_type_facts.mc", .{}, false, .riscv64, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_nullable_repr, &stale_nullable_repr_output, "llvm_if_let_subject_type_facts.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM try expressions require MIR operand and result types" {
@@ -3492,6 +3576,23 @@ test "LLVM inferred local direct calls require MIR types" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale, &stale_output, "llvm_inferred_local_call_types.mc", .{}, false, .riscv64, null));
+
+    const caller_offset = std.mem.indexOf(u8, source, "fn caller") orelse return error.TestUnexpectedResult;
+    const call_offset = std.mem.indexOfPos(u8, source, caller_offset, "make_count()") orelse return error.TestUnexpectedResult;
+
+    var missing_call_result = try mir.build(std.testing.allocator, parsed.module);
+    defer missing_call_result.deinit();
+    try removeTargetTypeFactAtOffsetForFunction(&missing_call_result, "caller", .expression_result, call_offset, "make_count()".len);
+    var missing_call_result_output: std.ArrayList(u8) = .empty;
+    defer missing_call_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_call_result, &missing_call_result_output, "llvm_inferred_local_call_types.mc", .{}, false, .riscv64, null));
+
+    var stale_call_result = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_call_result.deinit();
+    try renameTargetTypeFactAtOffsetForFunction(&stale_call_result, "caller", .expression_result, call_offset, "make_count()".len, "u32");
+    var stale_call_result_output: std.ArrayList(u8) = .empty;
+    defer stale_call_result_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &stale_call_result, &stale_call_result_output, "llvm_inferred_local_call_types.mc", .{}, false, .riscv64, null));
 }
 
 test "LLVM inferred local Result direct calls require MIR types" {
@@ -12318,7 +12419,7 @@ test "LLVM unsupported diagnostics use nearest source span for generated nodes" 
 
     var module_mir = try mir.build(std.testing.allocator, module);
     defer module_mir.deinit();
-    const verified = try backend_mod.VerifiedProgram.init(module, &module_mir, &reporter);
+    const verified = try backend_mod.VerifiedProgram.initFromDecls(module.decls, &module_mir, &reporter);
     const llvm_backend = lower_llvm.mcBackend();
     try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerFn(llvm_backend.ctx, std.testing.allocator, verified, &out, .{
         .profile = .kernel,

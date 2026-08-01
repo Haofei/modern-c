@@ -1278,6 +1278,7 @@ pub fn validateRepresentationFactsForLowering(module: Module) error{InvalidMirRe
             }
         }
         for (function.representation_facts) |fact| {
+            if (!representationFactTypedIdentitiesValid(function, fact)) return error.InvalidMirRepresentationFacts;
             if (!functionHasMatchingRepresentationInstruction(function, fact)) return error.InvalidMirRepresentationFacts;
         }
     }
@@ -1487,6 +1488,10 @@ fn instructionRequiresKnownLoweringType(instruction: Instruction) bool {
 
 pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTargetTypeFacts, StaleMirTargetTypeFacts }!void {
     for (module.functions) |function| {
+        for (function.target_type_facts) |fact| {
+            if (!targetTypeFactTypedIdentitiesValid(function, fact)) return error.InvalidMirTargetTypeFacts;
+            if (!targetTypeFactFamilyValid(fact)) return error.InvalidMirTargetTypeFacts;
+        }
         for (function.blocks) |block| for (block.instructions) |instruction| {
             const kind = targetTypeKindForInstruction(instruction) orelse continue;
             if (!targetTypeHasSourcePoint(instruction.line, instruction.column)) continue;
@@ -1505,8 +1510,47 @@ pub fn validateTargetTypeFactsForLowering(module: Module) error{ InvalidMirTarge
     }
 }
 
+fn targetTypeFactFamilyValid(fact: TargetTypeFact) bool {
+    return switch (fact.kind) {
+        .if_let_subject => isResultOrNullableTargetType(fact.result_ty),
+        .try_operand => isResultOrNullableTargetType(fact.result_ty),
+        else => true,
+    };
+}
+
+fn isResultOrNullableTargetType(ty: ValueType) bool {
+    return switch (ty) {
+        .result, .nullable_pointer, .nullable_dyn_trait, .nullable_value => true,
+        else => false,
+    };
+}
+
 fn targetTypeHasSourcePoint(line: usize, column: usize) bool {
     return line != 0 and column != 0;
+}
+
+fn targetTypeFactTypedIdentitiesValid(function: Function, fact: TargetTypeFact) bool {
+    if (!fact.typed_result_ty.isValid()) return false;
+    const result_index = fact.typed_result_ty.index();
+    if (result_index >= function.type_identities.len) return false;
+    if (!std.mem.eql(u8, function.type_identities[result_index].spelling, fact.result_ty.name())) return false;
+
+    if (!fact.typed_span_id.isValid()) return false;
+    const span_index = fact.typed_span_id.index();
+    if (span_index >= function.span_identities.len) return false;
+    const source = function.span_identities[span_index].source;
+    if (source.line != fact.source.line or source.column != fact.source.column or source.offset != fact.source.offset or source.len != fact.source.len) return false;
+
+    if (fact.target_owner) |owner| {
+        if (!fact.typed_target_owner_id.isValid()) return false;
+        const owner_index = fact.typed_target_owner_id.index();
+        if (owner_index >= function.target_owner_identities.len) return false;
+        if (!std.mem.eql(u8, function.target_owner_identities[owner_index].spelling, owner)) return false;
+    } else if (fact.typed_target_owner_id.isValid()) {
+        return false;
+    }
+
+    return true;
 }
 
 fn targetTypeKindForInstruction(instruction: Instruction) ?TargetTypeKind {
@@ -1791,6 +1835,21 @@ fn functionHasMatchingRepresentationInstruction(function: Function, fact: Repres
         }
     }
     return false;
+}
+
+fn representationFactTypedIdentitiesValid(function: Function, fact: RepresentationFact) bool {
+    if (!fact.typed_result_ty.isValid()) return false;
+    const result_index = fact.typed_result_ty.index();
+    if (result_index >= function.type_identities.len) return false;
+    if (!std.mem.eql(u8, function.type_identities[result_index].spelling, fact.result_ty.name())) return false;
+
+    if (!fact.typed_span_id.isValid()) return false;
+    const span_index = fact.typed_span_id.index();
+    if (span_index >= function.span_identities.len) return false;
+    const source = function.span_identities[span_index].source;
+    if (source.line != fact.source.line or source.column != fact.source.column or source.offset != fact.source.offset or source.len != fact.source.len) return false;
+
+    return true;
 }
 
 fn representationTypedValueIdsCompatible(instruction: Instruction, fact: RepresentationFact) bool {
@@ -4982,6 +5041,7 @@ const FunctionBuilder = struct {
         if (self.byteViewCallTarget(call)) |target| return target.result_type_expr;
         if (self.enumRawCallTarget(call)) |target| return target.result_type_expr;
         if (self.domainCallTarget(call) catch null) |target| return target.result_type_expr;
+        if (self.dmaCallTarget(call)) |target| return if (target.kind == .dma_cache_clean or target.kind == .dma_cache_invalidate) null else target.result_type_expr;
         if (self.mmioCallTarget(call)) |target| return if (target.kind == .mmio_read) target.result_type_expr else null;
         if (self.rawManyOffsetCallTarget(call)) |target| return target.result_type_expr;
         if (self.constGetCallTarget(call)) |target| return target.result_type_expr;
@@ -5735,7 +5795,7 @@ const FunctionBuilder = struct {
                 if (self.constGetCallTarget(node)) |target| {
                     try self.addConstGetInstr(target.result_ty, target.index, expr.span);
                     try self.addInstr(.call_target, @tagName(CallTargetKind.const_get), target.result_ty, expr.span);
-                    try self.addCallTargetFact(.const_get, target.result_ty, expr.span);
+                    try self.addCallTargetFact(.const_get, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.const_get_base, target.base_type_expr, target.base_ty, expr.span);
                     try self.appendTargetTypeFact(.const_get_result, target.result_type_expr, target.result_ty, expr.span);
                     try self.const_get_facts.append(self.allocator, .{ .index = target.index, .source = .{ .line = expr.span.line, .column = expr.span.column } });
@@ -5901,7 +5961,7 @@ const FunctionBuilder = struct {
                         .sum_fast => .reduce_sum_fast,
                     };
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
-                    try self.addCallTargetFact(fact_kind, call_ty, expr.span);
+                    try self.addCallTargetFact(fact_kind, call_ty, node.callee.*.span);
                     if (node.type_args.len != 1) return error.UnsupportedMirConstruction;
                     const element_ty = node.type_args[0];
                     const source_ty = self.typeExprForExpr(node.args[0]) orelse return error.UnsupportedMirConstruction;
@@ -5910,27 +5970,27 @@ const FunctionBuilder = struct {
                 }
                 if (wrapping_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
-                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.wrapping_left, target.left_ty, target.left_value_ty, node.args[0].span);
                     try self.appendTargetTypeFact(.wrapping_right, target.right_ty, target.right_value_ty, node.args[1].span);
                     try self.appendTargetTypeFact(.wrapping_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (unchecked_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
-                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.unchecked_left, target.left_ty, target.left_value_ty, node.args[0].span);
                     try self.appendTargetTypeFact(.unchecked_right, target.right_ty, target.right_value_ty, node.args[1].span);
                     try self.appendTargetTypeFact(.unchecked_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (enum_raw_target) |target| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.enum_raw), target.result_ty, expr.span);
-                    try self.addCallTargetFact(.enum_raw, target.result_ty, expr.span);
+                    try self.addCallTargetFact(.enum_raw, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.enum_raw_source, target.source_type_expr, target.source_ty, expr.span);
                     try self.appendTargetTypeFact(.enum_raw_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (domain_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
-                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.domain_type, target.domain_type_expr, target.domain_ty, expr.span);
                     try self.appendTargetTypeFact(.domain_payload, target.payload_type_expr, target.payload_ty, expr.span);
                     try self.appendTargetTypeFact(.domain_result, target.result_type_expr, target.result_ty, expr.span);
@@ -5940,28 +6000,28 @@ const FunctionBuilder = struct {
                 }
                 if (dma_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
-                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.dma_buffer, target.buffer_type_expr, target.buffer_ty, expr.span);
                     try self.appendTargetTypeFact(.dma_payload, target.payload_type_expr, target.payload_ty, expr.span);
                     try self.appendTargetTypeFact(.dma_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (raw_many_offset_target) |target| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.raw_many_offset), target.result_ty, expr.span);
-                    try self.addCallTargetFact(.raw_many_offset, target.result_ty, expr.span);
+                    try self.addCallTargetFact(.raw_many_offset, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.raw_many_offset_base, target.base_type_expr, target.base_ty, expr.span);
                     try self.appendTargetTypeFact(.raw_many_offset_element, target.element_type_expr, target.element_ty, expr.span);
                     try self.appendTargetTypeFact(.raw_many_offset_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (mmio_map_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
-                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.mmio_map_source, target.source_type_expr, target.source_ty, expr.span);
                     try self.appendTargetTypeFact(.mmio_map_payload, target.payload_type_expr, target.payload_ty, expr.span);
                     try self.appendTargetTypeFact(.mmio_map_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (mmio_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
-                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.mmio_struct, target.struct_type_expr, target.struct_ty, expr.span);
                     try self.appendTargetTypeFact(.mmio_storage, target.storage_type_expr, target.storage_ty, expr.span);
                     try self.appendTargetTypeFact(.mmio_value, target.value_type_expr, target.value_ty, expr.span);
@@ -5971,25 +6031,25 @@ const FunctionBuilder = struct {
                     const group_id = self.next_target_fact_group_id;
                     self.next_target_fact_group_id += 1;
                     try self.addInstr(.call_target, @tagName(CallTargetKind.atomic_init), target.result_ty, expr.span);
-                    try self.addCallTargetFact(.atomic_init, target.result_ty, expr.span);
+                    try self.addCallTargetFact(.atomic_init, target.result_ty, node.callee.*.span);
                     try self.appendOwnedTargetTypeFact(.atomic_init_payload, target.payload_type_expr, target.payload_ty, expr.span, "atomic.init", group_id);
                     try self.appendOwnedTargetTypeFact(.atomic_init_result, target.result_type_expr, target.result_ty, expr.span, "atomic.init", group_id);
                 }
                 if (self.atomicCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
-                    try self.addCallTargetFact(fact_kind, call_ty, expr.span);
+                    try self.addCallTargetFact(fact_kind, call_ty, node.callee.*.span);
                     const payload_ty = self.atomicCallPayloadTypeExpr(node) orelse return error.UnsupportedMirConstruction;
                     try self.appendTargetTypeFact(.atomic_payload, payload_ty, valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
                 if (self.maybeUninitCallTargetKind(node.callee.*)) |fact_kind| {
                     try self.addInstr(.call_target, @tagName(fact_kind), call_ty, expr.span);
-                    try self.addCallTargetFact(fact_kind, call_ty, expr.span);
+                    try self.addCallTargetFact(fact_kind, call_ty, node.callee.*.span);
                     const payload_ty = self.maybeUninitCallPayloadTypeExpr(node) orelse return error.UnsupportedMirConstruction;
                     try self.appendTargetTypeFact(.maybe_uninit_payload, payload_ty, valueTypeFromTypeAlias(payload_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
                 if (self.bitcastCallValueType(node)) |bitcast_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.bitcast), bitcast_ty, expr.span);
-                    try self.addCallTargetFact(.bitcast, bitcast_ty, expr.span);
+                    try self.addCallTargetFact(.bitcast, bitcast_ty, node.callee.*.span);
                     const target_ty = node.type_args[0];
                     const source_ty = try self.explicitCastSourceTypeExpr(node.args[0], target_ty);
                     try self.appendTargetTypeFact(.bitcast_source, source_ty, valueTypeFromTypeAlias(source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
@@ -5997,13 +6057,13 @@ const FunctionBuilder = struct {
                 }
                 if (self.physCallValueType(node)) |phys_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.phys), phys_ty, expr.span);
-                    try self.addCallTargetFact(.phys, phys_ty, expr.span);
+                    try self.addCallTargetFact(.phys, phys_ty, node.callee.*.span);
                     const result_ty = ast_query.simpleNameType("PAddr", expr.span);
                     try self.appendTargetTypeFact(.phys_result, result_ty, phys_ty, expr.span);
                 }
                 if (raw_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
-                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.raw_address, target.address_type_expr, target.address_ty, expr.span);
                     if (node.args.len != 0) {
                         if (self.paddrCoercionSourceTypeExpr(target.address_ty, node.args[0])) |source_ty| {
@@ -6015,7 +6075,7 @@ const FunctionBuilder = struct {
                 }
                 if (va_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
-                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
                     if (target.cursor_type_expr) |cursor_ty| {
                         try self.appendTargetTypeFact(.va_cursor, cursor_ty, target.cursor_ty.?, expr.span);
                     }
@@ -6026,46 +6086,46 @@ const FunctionBuilder = struct {
                 }
                 if (discard_target) |target| {
                     try self.addInstr(.call_target, @tagName(target), .void, expr.span);
-                    try self.addCallTargetFact(target, .void, expr.span);
+                    try self.addCallTargetFact(target, .void, node.callee.*.span);
                     const argument_ty = self.typeExprForExpr(node.args[0]) orelse return error.UnsupportedMirConstruction;
                     try self.appendTargetTypeFact(.discard_argument, argument_ty, valueTypeFromTypeAlias(argument_ty, self.enums, self.structs, self.packed_bits, self.aliases), node.args[0].span);
                 }
                 if (explicit_trap_target) |target| {
                     try self.addInstr(.call_target, @tagName(target), .never, expr.span);
-                    try self.addCallTargetFact(target, .never, expr.span);
+                    try self.addCallTargetFact(target, .never, node.callee.*.span);
                 }
                 if (self.cpuPauseCallValueType(node)) |cpu_pause_ty| {
                     try self.addInstr(.call_target, @tagName(CallTargetKind.cpu_pause), cpu_pause_ty, expr.span);
-                    try self.addCallTargetFact(.cpu_pause, cpu_pause_ty, expr.span);
+                    try self.addCallTargetFact(.cpu_pause, cpu_pause_ty, node.callee.*.span);
                 }
                 if (self.fenceCallTargetKind(node.callee.*)) |fence_kind| {
                     if (node.type_args.len == 0 and node.args.len == 0) {
                         try self.addInstr(.call_target, @tagName(fence_kind), .void, expr.span);
-                        try self.addCallTargetFact(fence_kind, .void, expr.span);
+                        try self.addCallTargetFact(fence_kind, .void, node.callee.*.span);
                     }
                 }
                 if (conversion_target) |conversion| {
                     const conversion_result_ty = self.conversionCallResultValueType(conversion);
                     try self.addInstr(.call_target, @tagName(conversion.kind), call_ty, expr.span);
-                    try self.addCallTargetFact(conversion.kind, conversion_result_ty, expr.span);
+                    try self.addCallTargetFact(conversion.kind, conversion_result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.conversion_source, conversion.source_ty, valueTypeFromTypeAlias(conversion.source_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                     try self.appendTargetTypeFact(.conversion_target, conversion.target_ty, valueTypeFromTypeAlias(conversion.target_ty, self.enums, self.structs, self.packed_bits, self.aliases), expr.span);
                 }
                 if (reflection_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
-                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.reflection_target, target.target_type_expr, target.target_ty, expr.span);
                     try self.appendTargetTypeFact(.reflection_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (byte_view_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
-                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
                     try self.appendTargetTypeFact(.byte_view_source, target.source_type_expr, target.source_ty, expr.span);
                     try self.appendTargetTypeFact(.byte_view_result, target.result_type_expr, target.result_ty, expr.span);
                 }
                 if (semantic_escape_target) |target| {
                     try self.addInstr(.call_target, @tagName(target.kind), target.result_ty, expr.span);
-                    try self.addCallTargetFact(target.kind, target.result_ty, expr.span);
+                    try self.addCallTargetFact(target.kind, target.result_ty, node.callee.*.span);
                     const source_kind: TargetTypeKind = switch (target.kind) {
                         .declassify => .declassify_source,
                         .assume_noalias => .assume_noalias_source,
@@ -6809,7 +6869,7 @@ const FunctionBuilder = struct {
         try self.call_target_facts.append(self.allocator, .{
             .kind = kind,
             .result_ty = result_ty,
-            .source = .{ .line = span.line, .column = span.column },
+            .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
         });
     }
 
@@ -6857,7 +6917,7 @@ const FunctionBuilder = struct {
 
     fn addExpressionResultFact(self: *FunctionBuilder, expr: ast.Expr) !void {
         switch (expr.kind) {
-            .int_literal, .bool_literal, .void_literal, .member, .index, .slice, .deref, .try_expr, .unary, .binary, .address_of, .cast, .grouped, .block => {},
+            .ident, .call, .int_literal, .bool_literal, .void_literal, .member, .index, .slice, .deref, .try_expr, .unary, .binary, .address_of, .cast, .grouped, .block => {},
             else => return,
         }
         const ty = (try self.expressionResultTypeExpr(expr)) orelse return;
@@ -6872,6 +6932,7 @@ const FunctionBuilder = struct {
     fn expressionResultTypeExpr(self: *FunctionBuilder, expr: ast.Expr) !?ast.TypeExpr {
         if (self.typeExprForExpr(expr)) |ty| return ty;
         return switch (expr.kind) {
+            .call => |call| self.inferredLocalCallType(call),
             .int_literal => |literal| integerLiteralTypeExpr(literal, expr.span),
             .bool_literal => ast_query.simpleNameType("bool", expr.span),
             .void_literal => ast_query.simpleNameType("void", expr.span),

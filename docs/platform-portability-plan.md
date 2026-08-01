@@ -80,7 +80,7 @@ Architecture-specific mechanisms that still need better generic hooks:
 
 ## 6. Test policy
 
-`zig build m0` is the required baseline for current platform claims. `zig build
+`zig build m0-full` is the required baseline for current platform claims. `zig build
 riscv-qemu-validation` is the focused board-surrogate gate for the selected RISC-V
 path when VisionFive 2 hardware is unavailable. Tracking gates that exist but are
 intentionally outside `m0` are not release evidence until they are fixed and promoted.
@@ -191,7 +191,7 @@ The platform portability plan can be called complete for the first production ta
 - storage and network complete through interrupt-backed paths;
 - brokered FS/network effects run through the production agent surface;
 - policy/audit and watchdog/reboot evidence survive the platform path;
-- `zig build m0` remains green;
+- `zig build m0-full` remains green;
 - any architecture-specific exceptions are explicitly scoped and not presented as parity.
 
 Until then, this document remains active.

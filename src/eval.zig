@@ -481,7 +481,7 @@ pub const ComptimeScope = struct {
     funcs: ?*const std.StringHashMap(ast.FnDecl) = null,
     // Parsed declarations used to resolve global types, aliases, and aggregate
     // field types while folding. AST storage is owned by the caller.
-    module: ?ast.Module = null,
+    decls: ?[]const ast.Decl = null,
     // Named compile-time constants (`const NAME: T = …` globals), resolved when
     // an identifier is not a local binding.
     globals: ?*const std.StringHashMap(ComptimeValue) = null,
@@ -799,18 +799,28 @@ pub fn collectConstGlobalsWithOptions(
     out: *std.StringHashMap(ComptimeValue),
     options: CollectConstGlobalsOptions,
 ) !void {
+    return collectConstGlobalsFromDeclsWithOptions(allocator, module.decls, funcs, out, options);
+}
+
+pub fn collectConstGlobalsFromDeclsWithOptions(
+    allocator: std.mem.Allocator,
+    decls: []const ast.Decl,
+    funcs: *const std.StringHashMap(ast.FnDecl),
+    out: *std.StringHashMap(ComptimeValue),
+    options: CollectConstGlobalsOptions,
+) !void {
     // Fold scratch (e.g. array temporaries) lives in an arena that is freed
     // here; values retained in `out` must therefore be deep-cloned.
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var scope = ComptimeScope.init(arena.allocator());
     defer scope.deinit();
-    scope.module = module;
+    scope.decls = decls;
     scope.funcs = funcs;
     scope.globals = out;
     scope.reflect = options.reflect;
     scope.reflect_ctx = options.reflect_ctx;
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         const global = switch (decl.kind) {
             .global_decl => |g| g,
             else => continue,
@@ -933,8 +943,8 @@ fn trySubstituteTypePtr(scope: *const ComptimeScope, ty: ast.TypeExpr) ?*ast.Typ
 }
 
 fn moduleAliasType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr {
-    const module = scope.module orelse return null;
-    for (module.decls) |decl| {
+    const decls = scope.decls orelse return null;
+    for (decls) |decl| {
         const alias = switch (decl.kind) {
             .type_alias => |node| node,
             else => continue,
@@ -945,8 +955,8 @@ fn moduleAliasType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr 
 }
 
 fn moduleGlobalType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr {
-    const module = scope.module orelse return null;
-    for (module.decls) |decl| {
+    const decls = scope.decls orelse return null;
+    for (decls) |decl| {
         const global = switch (decl.kind) {
             .global_decl => |node| node,
             else => continue,
@@ -962,8 +972,8 @@ fn moduleStructFieldType(scope: *const ComptimeScope, ty: ast.TypeExpr, field_na
         .name => |name| name.text,
         else => return null,
     };
-    const module = scope.module orelse return null;
-    for (module.decls) |decl| {
+    const decls = scope.decls orelse return null;
+    for (decls) |decl| {
         const struct_decl = switch (decl.kind) {
             .struct_decl => |node| node,
             else => continue,
@@ -1006,7 +1016,7 @@ fn comptimeCallReturnType(scope: *const ComptimeScope, call: anytype) ?ast.TypeE
 
     var call_scope = ComptimeScope.init(scope.bindings.allocator);
     defer call_scope.deinit();
-    call_scope.module = scope.module;
+    call_scope.decls = scope.decls;
     call_scope.funcs = scope.funcs;
     for (fn_decl.params, call.args) |param, arg| {
         if (!isComptimeTypeParam(param)) continue;
@@ -1219,9 +1229,9 @@ fn foldComptimeStructLiteralExpected(scope: *const ComptimeScope, fields: []cons
         .name => |name| name.text,
         else => return foldComptimeStructLiteral(scope, fields),
     };
-    const module = scope.module orelse return foldComptimeStructLiteral(scope, fields);
+    const decls = scope.decls orelse return foldComptimeStructLiteral(scope, fields);
     var struct_decl: ?ast.StructDecl = null;
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         const candidate = switch (decl.kind) {
             .struct_decl => |node| node,
             else => continue,
@@ -1560,7 +1570,7 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
     var callee_scope = ComptimeScope.init(scope.bindings.allocator);
     defer callee_scope.deinit();
     callee_scope.funcs = scope.funcs;
-    callee_scope.module = scope.module;
+    callee_scope.decls = scope.decls;
     callee_scope.globals = scope.globals;
     callee_scope.global_domains = scope.global_domains;
     callee_scope.reflect = scope.reflect;

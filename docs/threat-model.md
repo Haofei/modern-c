@@ -141,7 +141,8 @@ public vulnerability intake, not a claim that runtime containment absorbs the bu
 
 ## 9. How this is validated
 
-The guarantees above are pinned by the gated test families (run via `zig build m0` or
+The guarantees above are pinned by the gated test families (run the core set via
+`zig build m0`, and the full runtime/QEMU set via `zig build m0-full` or
 `tools/m0-parallel.sh`): the confined-agent family (G1/G2), the FS/net broker
 allow+deny audit gates (G2/G5), the hostile-input gates — ELF bounds, syscall ptr/len,
 TCP checksums, pool overflow (G3) — and the fuel/watchdog/scheduler gates (G4). New

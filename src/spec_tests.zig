@@ -313,145 +313,7 @@ test "tests/spec phase and expectation metadata values are supported" {
     try std.testing.expect(all_supported);
 }
 
-test "tests/spec fixtures produce declared semantic error codes" {
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-
-    var dir = try std.Io.Dir.cwd().openDir(io, "tests/spec", .{ .iterate = true });
-    defer dir.close(io);
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".mc")) continue;
-
-        const source = try dir.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024));
-        defer allocator.free(source);
-
-        var metadata = try parseLeadingMetadata(allocator, source);
-        defer metadata.deinit(allocator);
-
-        const check_value = metadata.valueFor("check") orelse continue;
-        if (!hasExpectedDiagnosticCode(check_value)) continue;
-
-        const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
-        defer allocator.free(path);
-
-        var imported = false;
-        var reporter = diagnostics.Reporter.init(allocator, path, source);
-        defer reporter.deinit();
-        var spec = try resolveSpecSource(allocator, io, path, source, &imported, &reporter);
-        defer spec.deinit(allocator, imported);
-        reporter.source = spec.source;
-        reporter.file_boundaries = spec.boundaries;
-
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-        const parse_allocator = arena.allocator();
-
-        const module = try parseSpecModuleForExpectedDiagnostics(spec.source, parse_allocator, &reporter);
-        defer if (module) |m| m.deinit(parse_allocator);
-
-        if (module) |m| {
-            var checker = sema.Checker.init(&reporter);
-            checker.file_boundaries = spec.boundaries;
-            checker.checkModule(m);
-            if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
-                try mir.verify(allocator, m, &reporter);
-            }
-        }
-
-        var checks = std.mem.splitScalar(u8, check_value, ',');
-        while (checks.next()) |raw_check| {
-            const code = trimCheck(raw_check);
-            if (classifyCheck(code) != .diagnostic) continue;
-            if (!hasDiagnosticCode(reporter, code)) {
-                std.debug.print("{s}: expected diagnostic code {s}\n", .{ path, code });
-                try std.testing.expect(false);
-            }
-        }
-    }
-}
-
-test "tests/spec inline EXPECT_ERROR comments match diagnostic lines" {
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-
-    var dir = try std.Io.Dir.cwd().openDir(io, "tests/spec", .{ .iterate = true });
-    defer dir.close(io);
-
-    var walker = try dir.walk(allocator);
-    defer walker.deinit();
-
-    var found_expectation = false;
-
-    while (try walker.next(io)) |entry| {
-        if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".mc")) continue;
-
-        const source = try dir.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024));
-        defer allocator.free(source);
-
-        var metadata = try parseLeadingMetadata(allocator, source);
-        defer metadata.deinit(allocator);
-
-        var expected_errors = try parseExpectedErrors(allocator, source);
-        defer expected_errors.deinit(allocator);
-        if (expected_errors.items.len == 0) continue;
-        found_expectation = true;
-
-        const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
-        defer allocator.free(path);
-
-        var imported = false;
-        var reporter = diagnostics.Reporter.init(allocator, path, source);
-        defer reporter.deinit();
-        var spec = try resolveSpecSource(allocator, io, path, source, &imported, &reporter);
-        defer spec.deinit(allocator, imported);
-        reporter.source = spec.source;
-        reporter.file_boundaries = spec.boundaries;
-
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-        const parse_allocator = arena.allocator();
-
-        const module = try parseSpecModuleForExpectedDiagnostics(spec.source, parse_allocator, &reporter);
-        defer if (module) |m| m.deinit(parse_allocator);
-
-        if (module) |m| {
-            var checker = sema.Checker.init(&reporter);
-            checker.file_boundaries = spec.boundaries;
-            checker.checkModule(m);
-            if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
-                try mir.verify(allocator, m, &reporter);
-            }
-        }
-
-        for (expected_errors.items) |expected| {
-            if (!hasDiagnosticCodeOnLine(reporter, expected.code, expected.target_line)) {
-                std.debug.print(
-                    "{s}:{d}: expected {s} on line {d}\n",
-                    .{ path, expected.comment_line, expected.code, expected.target_line },
-                );
-                try std.testing.expect(false);
-            }
-        }
-        for (reporter.diagnostics.items) |diag| {
-            if (diag.severity != .error_ or !isCompilerErrorCodeMessage(diag.message)) continue;
-            if (!hasExpectedErrorForDiagnostic(expected_errors.items, diag)) {
-                std.debug.print(
-                    "{s}:{d}: unexpected diagnostic {s}; add an EXPECT_ERROR comment on the target line\n",
-                    .{ path, diag.span.line, diag.message },
-                );
-                try std.testing.expect(false);
-            }
-        }
-    }
-
-    try std.testing.expect(found_expectation);
-}
-
-test "tests/spec semantic errors are all explicitly expected" {
+test "tests/spec diagnostic declarations and inline EXPECT_ERROR comments match compiler output" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -462,6 +324,8 @@ test "tests/spec semantic errors are all explicitly expected" {
     defer walker.deinit();
 
     var found_fixture = false;
+    var found_expectation = false;
+    var found_declared_diagnostic = false;
 
     while (try walker.next(io)) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.path, ".mc")) continue;
@@ -470,53 +334,90 @@ test "tests/spec semantic errors are all explicitly expected" {
         const source = try dir.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024));
         defer allocator.free(source);
 
-        // Import-using fixtures (the soundness fixtures that pull in std/kernel opaque types)
-        // are import-expanded elsewhere; checking them here against inline EXPECT_ERROR comments
-        // would also see incidental diagnostics from the imported stdlib. Their declared
-        // diagnostic codes are locked by "tests/spec fixtures produce declared semantic error
-        // codes" (which IS import-aware), so skip them in this raw, single-file pass.
-        if (hasTopLevelImport(source)) continue;
+        var metadata = try parseLeadingMetadata(allocator, source);
+        defer metadata.deinit(allocator);
+
+        const check_value = metadata.valueFor("check") orelse "";
+        const needs_declared_diagnostic = hasExpectedDiagnosticCode(check_value);
+        if (needs_declared_diagnostic) found_declared_diagnostic = true;
 
         var expected_errors = try parseExpectedErrors(allocator, source);
         defer expected_errors.deinit(allocator);
+        const needs_inline_expectation = expected_errors.items.len > 0;
+        if (needs_inline_expectation) found_expectation = true;
+
+        const imported_fixture = hasTopLevelImport(source);
+        const needs_unexpected_diagnostic_check = !imported_fixture;
+        if (!needs_declared_diagnostic and !needs_inline_expectation and !needs_unexpected_diagnostic_check) continue;
 
         const path = try std.fmt.allocPrint(allocator, "tests/spec/{s}", .{entry.path});
         defer allocator.free(path);
 
+        var imported = false;
         var reporter = diagnostics.Reporter.init(allocator, path, source);
         defer reporter.deinit();
+        var spec = try resolveSpecSource(allocator, io, path, source, &imported, &reporter);
+        defer spec.deinit(allocator, imported);
+        reporter.source = spec.source;
+        reporter.file_boundaries = spec.boundaries;
 
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
         const parse_allocator = arena.allocator();
 
-        var metadata = try parseLeadingMetadata(allocator, source);
-        defer metadata.deinit(allocator);
-
-        const module = try parseSpecModuleForExpectedDiagnostics(source, parse_allocator, &reporter);
+        const module = try parseSpecModuleForExpectedDiagnostics(spec.source, parse_allocator, &reporter);
         defer if (module) |m| m.deinit(parse_allocator);
 
         if (module) |m| {
             var checker = sema.Checker.init(&reporter);
+            checker.file_boundaries = spec.boundaries;
             checker.checkModule(m);
             if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
                 try mir.verify(allocator, m, &reporter);
             }
         }
 
-        for (reporter.diagnostics.items) |diag| {
-            if (diag.severity != .error_ or !isCompilerErrorCodeMessage(diag.message)) continue;
-            if (!hasExpectedErrorForDiagnostic(expected_errors.items, diag)) {
-                std.debug.print(
-                    "{s}:{d}: unexpected diagnostic {s}; every spec diagnostic must have an EXPECT_ERROR comment on the target line\n",
-                    .{ path, diag.span.line, diag.message },
-                );
+        if (needs_declared_diagnostic) {
+            var checks = std.mem.splitScalar(u8, check_value, ',');
+            while (checks.next()) |raw_check| {
+                const code = trimCheck(raw_check);
+                if (classifyCheck(code) != .diagnostic) continue;
+                if (!hasDiagnosticCode(reporter, code)) {
+                    std.debug.print("{s}: expected diagnostic code {s}\n", .{ path, code });
+                    try std.testing.expect(false);
+                }
+            }
+        }
+
+        if (needs_inline_expectation) {
+            for (expected_errors.items) |expected| {
+                if (!hasDiagnosticCodeOnLine(reporter, expected.code, expected.target_line)) {
+                    std.debug.print(
+                        "{s}:{d}: expected {s} on line {d}\n",
+                        .{ path, expected.comment_line, expected.code, expected.target_line },
+                    );
+                    try std.testing.expect(false);
+                }
+            }
+        }
+
+        if (needs_inline_expectation or needs_unexpected_diagnostic_check) {
+            for (reporter.diagnostics.items) |diag| {
+                if (diag.severity != .error_ or !isCompilerErrorCodeMessage(diag.message)) continue;
+                if (hasExpectedErrorForDiagnostic(expected_errors.items, diag)) continue;
+                const guidance = if (imported_fixture)
+                    "add an EXPECT_ERROR comment on the target line"
+                else
+                    "every spec diagnostic must have an EXPECT_ERROR comment on the target line";
+                std.debug.print("{s}:{d}: unexpected diagnostic {s}; {s}\n", .{ path, diag.span.line, diag.message, guidance });
                 try std.testing.expect(false);
             }
         }
     }
 
     try std.testing.expect(found_fixture);
+    try std.testing.expect(found_expectation);
+    try std.testing.expect(found_declared_diagnostic);
 }
 
 test "tests/spec inline run trap expectations are reached by arithmetic evaluator" {

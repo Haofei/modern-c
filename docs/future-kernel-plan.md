@@ -9,10 +9,8 @@ the primary workload**, and every external effect is mediated, quota-bound, and 
 
 Related detailed plans:
 
-- `docs/archive/quickjs-agent-plan.md` — how QuickJS runs as a confined U-mode agent.
 - `docs/platform-portability-plan.md` — how the platform moves to
   `RV64GC + S-mode + OpenSBI + virtio`, then x86_64 and AArch64.
-- `docs/archive/agent-sandbox-milestone.md` — current sandbox milestone notes.
 - `docs/production-readiness-plan.md` — the path from gated prototype to fixed-device
   production readiness.
 
