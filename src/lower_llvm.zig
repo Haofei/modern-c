@@ -7,6 +7,7 @@ const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
+const semantic_db = @import("semantic_db.zig");
 const numeric = @import("numeric.zig");
 const sema_type = @import("sema_type.zig");
 const sema_decl = @import("sema_decl.zig");
@@ -5653,22 +5654,7 @@ const LlvmEmitter = struct {
     }
 
     fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
-        if (self.currentMirFunction()) |function| {
-            for (function.target_type_facts) |fact| {
-                if (fact.kind == kind and fact.target_index == null and fact.target_owner == null and mirTargetTypeSourceMatches(kind, span, fact.source)) return fact;
-            }
-        }
-        if (!isSourceSpan(span)) return null;
-        var matched: ?mir.TargetTypeFact = null;
-        for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
-            if (fact.kind != kind or fact.target_index != null or fact.target_owner != null or !mirTargetTypeSourceMatches(kind, span, fact.source)) continue;
-            if (matched) |existing| {
-                if (!std.meta.eql(existing.target_ty, fact.target_ty)) return null;
-            } else {
-                matched = fact;
-            }
-        };
-        return matched;
+        return semantic_db.SemanticDb.init(&self.mir_module).targetTypeFactAt(self.currentMirFunction(), kind, span);
     }
 
     fn contextualTargetTypeAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, generated_ty: ast.TypeExpr) ?ast.TypeExpr {
@@ -5704,22 +5690,7 @@ const LlvmEmitter = struct {
     }
 
     fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-        if (self.currentMirFunction()) |function| {
-            for (function.target_type_facts) |fact| {
-                if (fact.kind == kind and fact.target_index == target_index and fact.target_owner != null and std.mem.eql(u8, fact.target_owner.?, target_owner) and mirSourceMatches(span, fact.source)) return fact;
-            }
-        }
-        if (!isSourceSpan(span)) return null;
-        var matched: ?mir.TargetTypeFact = null;
-        for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
-            if (fact.kind != kind or fact.target_index != target_index or fact.target_owner == null or !std.mem.eql(u8, fact.target_owner.?, target_owner) or !mirSourceMatches(span, fact.source)) continue;
-            if (matched) |existing| {
-                if (!std.meta.eql(existing.target_ty, fact.target_ty)) return null;
-            } else {
-                matched = fact;
-            }
-        };
-        return matched;
+        return semantic_db.SemanticDb.init(&self.mir_module).targetTypeFactAtOwned(self.currentMirFunction(), kind, span, target_owner, target_index);
     }
 
     fn mirConstGetIndexAt(self: *LlvmEmitter, span: ast.Span) ?usize {

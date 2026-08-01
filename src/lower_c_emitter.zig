@@ -7,6 +7,7 @@ const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const mir = @import("mir.zig");
+const semantic_db = @import("semantic_db.zig");
 const sema_type = @import("sema_type.zig");
 const switch_lower = @import("switch_lower.zig");
 
@@ -62,6 +63,7 @@ const lower_c_overlay = @import("lower_c_overlay.zig");
 const lower_c_asm = @import("lower_c_asm.zig");
 const lower_c_layout = @import("lower_c_layout.zig");
 const lower_c_dispatch = @import("lower_c_dispatch.zig");
+const lower_c_module = @import("lower_c_module.zig");
 const LocalInfo = lower_c_model.LocalInfo;
 const ArrayInfo = lower_c_model.ArrayInfo;
 const AggregateEmitUnit = lower_c_model.AggregateEmitUnit;
@@ -240,7 +242,7 @@ pub fn appendModuleMir(
     try emitter.emitModule(declarations);
 }
 
-const CEmitter = struct {
+pub const CEmitter = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     scratch: std.heap.ArenaAllocator,
@@ -382,7 +384,7 @@ const CEmitter = struct {
         };
     }
 
-    fn deinit(self: *CEmitter) void {
+    pub fn deinit(self: *CEmitter) void {
         self.deinitFunctionCollections();
         self.deinitTypeCollections();
         self.deinitDeclCollections();
@@ -447,20 +449,15 @@ const CEmitter = struct {
         self.loop_defer_marks.deinit(self.allocator);
     }
 
-    // Run only the artifact-collection pre-passes (no emission). After this returns, the
-    // emitter's `structs`/`type_aliases`/`const_globals`/… maps are populated, so layout
-    // queries (`comptimeStructLayout`) resolve exactly as during emission. Shared by
-    // `emitModule` (which goes on to emit) and `appendLayoutAsserts` (layouts only).
     fn collectModule(self: *CEmitter, declarations: backend_mod.CEarlyDeclarationMetadataView) anyerror!void {
-        const decls = declarations.declsForEarlyDeclarationScan();
-        self.comptime_decls = decls;
-        try self.collectEarlyDeclarationMetadataFromDecls(decls);
-        try self.collectConstGlobals();
-        try self.collectDeclArtifactsFromDecls(decls);
-        try self.collectBindThunks();
+        try lower_c_module.collect(self, declarations);
     }
 
-    fn collectEarlyDeclarationMetadataFromDecls(self: *CEmitter, decls: []const ast.Decl) !void {
+    pub fn setComptimeDecls(self: *CEmitter, decls: []const ast.Decl) void {
+        self.comptime_decls = decls;
+    }
+
+    pub fn collectEarlyDeclarationMetadataFromDecls(self: *CEmitter, decls: []const ast.Decl) !void {
         // Pre-pass: collect const/comptime metadata and pre-register nominal type
         // names up front, so fixed-array lengths, reflection queries, and type-name
         // mangling resolve during the artifact-collection pass below. Const global
@@ -486,7 +483,7 @@ const CEmitter = struct {
         };
     }
 
-    fn collectConstGlobals(self: *CEmitter) !void {
+    pub fn collectConstGlobals(self: *CEmitter) !void {
         var reflect_env = self.reflectEnv();
         const decls = self.comptime_decls orelse return error.UnsupportedCEmission;
         try eval.collectConstGlobalsFromDeclsWithOptions(self.allocator, decls, &self.const_fns, &self.const_globals, .{
@@ -496,7 +493,7 @@ const CEmitter = struct {
         });
     }
 
-    fn collectDeclArtifactsFromDecls(self: *CEmitter, decls: []const ast.Decl) anyerror!void {
+    pub fn collectDeclArtifactsFromDecls(self: *CEmitter, decls: []const ast.Decl) anyerror!void {
         for (decls) |decl| {
             try self.collectDeclArtifact(decl);
         }
@@ -553,7 +550,7 @@ const CEmitter = struct {
         try self.impl_methods.put(key, impl_trait.methods);
     }
 
-    fn collectBindThunks(self: *CEmitter) anyerror!void {
+    pub fn collectBindThunks(self: *CEmitter) anyerror!void {
         // Now that every function signature is known, scan all bodies for
         // `bind(scalar, f)` closures that need an env-widening thunk.
         for (self.function_decl_artifacts.items) |artifact| {
@@ -566,16 +563,10 @@ const CEmitter = struct {
     }
 
     fn emitModule(self: *CEmitter, declarations: backend_mod.CEarlyDeclarationMetadataView) anyerror!void {
-        defer self.deinit();
-        try self.collectModule(declarations);
-        try self.emitTypePrelude();
-        try self.emitFunctionDeclarations();
-        try self.emitGeneratedDispatchArtifacts();
-        try self.emitGlobalDefinitions();
-        try self.emitFunctionDefinitions();
+        try lower_c_module.emit(self, declarations);
     }
 
-    fn emitTypePrelude(self: *CEmitter) anyerror!void {
+    pub fn emitTypePrelude(self: *CEmitter) anyerror!void {
         try self.emitEnums();
         try self.emitPackedBitsTypes();
         try self.emitOverlayUnionTypes();
@@ -609,7 +600,7 @@ const CEmitter = struct {
         }
     }
 
-    fn emitFunctionDeclarations(self: *CEmitter) anyerror!void {
+    pub fn emitFunctionDeclarations(self: *CEmitter) anyerror!void {
         // Forward-declare every defined function up front so a call to a function
         // declared later in the (possibly import-merged) source resolves — MC
         // resolves calls module-wide, independent of declaration order.
@@ -624,7 +615,7 @@ const CEmitter = struct {
         }
     }
 
-    fn emitGeneratedDispatchArtifacts(self: *CEmitter) !void {
+    pub fn emitGeneratedDispatchArtifacts(self: *CEmitter) !void {
         // Env-widening thunks for scalar-env closures: emit after the function
         // forward declarations (the thunks call those functions) and before any
         // body that might `bind` through one.
@@ -635,7 +626,7 @@ const CEmitter = struct {
         try lower_c_dispatch.emitVtables(self.dispatchContext(), &self.impl_methods, &self.trait_decls);
     }
 
-    fn emitGlobalDefinitions(self: *CEmitter) anyerror!void {
+    pub fn emitGlobalDefinitions(self: *CEmitter) anyerror!void {
         // Emit every global before any function body. MC resolves names
         // module-wide regardless of declaration order, and import-merged sources
         // can place a function ahead of a global it reads (e.g. a `const` defined
@@ -645,7 +636,7 @@ const CEmitter = struct {
         for (self.global_decl_artifacts.items) |global| try self.emitGlobal(global);
     }
 
-    fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
+    pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
         for (self.function_decl_artifacts.items) |artifact| {
             if (artifact.is_extern) {
                 // Extern prototypes were already emitted in the forward-declaration pass.
@@ -5951,28 +5942,7 @@ const CEmitter = struct {
     }
 
     fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
-        // Async lowering creates synthetic expressions with a zero source span.
-        // `expression_result` facts are keyed by the complete source span, so a
-        // zero span cannot identify one uniquely. Falling through to the first
-        // line-zero fact mis-types unrelated synthetic fields and can turn an
-        // assignment target into a race-load expression.
-        if (kind == .expression_result and !isSourceSpan(span)) return null;
-        if (self.currentMirFunction()) |function| {
-            for (function.target_type_facts) |fact| {
-                if (fact.kind == kind and fact.target_index == null and fact.target_owner == null and mirTargetTypeSourceMatches(kind, span, fact.source)) return fact;
-            }
-        }
-        if (!isSourceSpan(span)) return null;
-        var matched: ?mir.TargetTypeFact = null;
-        for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
-            if (fact.kind != kind or fact.target_index != null or fact.target_owner != null or !mirTargetTypeSourceMatches(kind, span, fact.source)) continue;
-            if (matched) |existing| {
-                if (!std.meta.eql(existing.target_ty, fact.target_ty)) return null;
-            } else {
-                matched = fact;
-            }
-        };
-        return matched;
+        return semantic_db.SemanticDb.init(self.mir_module).targetTypeFactAt(self.currentMirFunction(), kind, span);
     }
 
     fn mirTargetTypeFactMatchingType(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, expected_ty: ast.TypeExpr) ?mir.TargetTypeFact {
@@ -5986,22 +5956,7 @@ const CEmitter = struct {
     }
 
     fn mirTargetTypeFactAtOwned(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-        if (self.currentMirFunction()) |function| {
-            for (function.target_type_facts) |fact| {
-                if (fact.kind == kind and fact.target_index == target_index and fact.target_owner != null and std.mem.eql(u8, fact.target_owner.?, target_owner) and mirSourceMatches(span, fact.source)) return fact;
-            }
-        }
-        if (!isSourceSpan(span)) return null;
-        var matched: ?mir.TargetTypeFact = null;
-        for (self.mir_module.functions) |function| for (function.target_type_facts) |fact| {
-            if (fact.kind != kind or fact.target_index != target_index or fact.target_owner == null or !std.mem.eql(u8, fact.target_owner.?, target_owner) or !mirSourceMatches(span, fact.source)) continue;
-            if (matched) |existing| {
-                if (!std.meta.eql(existing.target_ty, fact.target_ty)) return null;
-            } else {
-                matched = fact;
-            }
-        };
-        return matched;
+        return semantic_db.SemanticDb.init(self.mir_module).targetTypeFactAtOwned(self.currentMirFunction(), kind, span, target_owner, target_index);
     }
 
     fn mirConstGetIndexAt(self: *CEmitter, span: ast.Span) ?usize {

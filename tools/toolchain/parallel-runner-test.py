@@ -66,6 +66,8 @@ def main() -> None:
         fail("fast runner still carries the removed full-fuzz mode")
     if "MC_REQUIRE_TOOLS" not in m0 or 'grep -q "^SKIP:"' not in m0:
         fail("m0 runner does not fail strict qualification skips")
+    if "m0-timing-report.py" not in m0 or "m0-parallel-report.txt" not in m0:
+        fail("m0 runner does not emit a persisted bottleneck report")
 
     tiers = read("build/tiers.zig")
     fast_gates = tier_gates(

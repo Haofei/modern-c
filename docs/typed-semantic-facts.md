@@ -137,7 +137,10 @@ conservative callback/exported ambiguity. Arbitrary-CFG aggregate provenance
 remains open.
 
 The compiler already has several fact-like surfaces, but they are not a single
-typed semantic source of truth:
+typed semantic source of truth.  `src/semantic_db.zig` is the current narrow
+production query boundary: both C and LLVM consult it for target-type facts, so
+source-span matching, owner matching, and `TypeId`/`SpanId`/`SymbolId` identity
+validation are no longer independently reimplemented by each backend.
 
 - `mcc facts` parses a module and prints `src/ir.zig`'s fact collector output via
   `ir.appendFacts`. These are textual inspection facts for semantic traps,
@@ -1110,7 +1113,7 @@ semantic-facts inventory.
 |---|---|---|
 | Registered semantic family | The module contains one or more residual semantic decisions governed by the seven-family budget and its final T3 disposition. It may also consume facts or perform mechanics. | `ast_query`; C aggregate/emitter/expression/global/inference/info/layout/shape/target/type modules; LLVM main/lookup/query/shape modules. |
 | MIR/fact consumer | Lowering selection is entered through the registered MIR identities, types, provenance, range, bounds, or representation facts anchored by the family inventory. AST access validates spelling, arity, layout, or emission operands after selection. | C entry/access/arithmetic/atomic/builtin/call/collect/conversion/domain/memory/MMIO/reflection/special/switch/try modules; LLVM atomic/reflection modules. |
-| Mechanics-only | The module encodes names, text, target syntax, CFG emission, aliases, attributes, runtime declarations, already-selected operations, or backend data models. It is not allowed to introduce a new lowering-affecting semantic classification without moving to a registered family or MIR/fact consumer class. | Remaining inventoried C/LLVM backend modules. |
+| Mechanics-only | The module encodes names, text, target syntax, CFG emission, aliases, attributes, runtime declarations, already-selected operations, module-pipeline ordering, or backend data models. It is not allowed to introduce a new lowering-affecting semantic classification without moving to a registered family or MIR/fact consumer class. | Remaining inventoried C/LLVM backend modules, including `lower_c_module`. |
 
 This is a supported-subset authority audit, not a proof derived automatically
 from Zig semantics. The exact-file gate prevents an unseen backend surface; the

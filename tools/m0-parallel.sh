@@ -9,6 +9,10 @@
 # remains the canonical (deterministic, serial) release gate.
 #
 # Usage: tools/m0-parallel.sh [jobs]      (jobs default: host CPU count)
+#
+# On every completed run the runner writes both a machine-readable ranking and
+# a short top-20 bottleneck report under .wamr-cache/. These reports are
+# telemetry only: they never participate in a gate's pass/fail result.
 set -euo pipefail
 cd "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -63,6 +67,8 @@ GATES=("${PARALLEL_GATES[@]}")
 # MC_M0_USE_PARALLEL_PROFILE=1. Missing timings are estimated conservatively so
 # known-heavy fuzz/coverage gates do not get stranded at the tail.
 PROFILE_TIMES=".wamr-cache/m0-parallel-times.tsv"
+REPORT_TSV=".wamr-cache/m0-parallel-report.tsv"
+REPORT_SUMMARY=".wamr-cache/m0-parallel-report.txt"
 TIMES=".wamr-cache/step-times.tsv"
 if [ "${MC_M0_USE_PARALLEL_PROFILE:-0}" = 1 ] && [ -s "$PROFILE_TIMES" ]; then
     TIMES="$PROFILE_TIMES"
@@ -171,5 +177,14 @@ if [ "${#SERIAL_GATES[@]}" -gt 0 ]; then
 fi
 find "$OUT/times" -type f -name '*.tsv' -print0 | xargs -0 cat | sort -t$'\t' -k1,1 >"$PROFILE_TIMES"
 EE=$(date +%s)
+python3 tools/toolchain/m0-timing-report.py \
+    --input "$PROFILE_TIMES" \
+    --tsv "$REPORT_TSV" \
+    --summary "$REPORT_SUMMARY" \
+    --wall-ms "$(((EE - S) * 1000))" \
+    --outer-jobs "$J" \
+    --inner-jobs "$JOBS"
+echo "[m0-parallel] timing report: $REPORT_SUMMARY (all rows: $REPORT_TSV)"
+sed -n '1,23p' "$REPORT_SUMMARY"
 echo "[m0-parallel] DONE  real_failures=$real_fail  total_wall=$((EE - S))s"
 [ "$real_fail" -eq 0 ] || exit 1

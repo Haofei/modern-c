@@ -68,6 +68,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTestOpts(ctx, "qmp-ordering-test", "Verify QMP command responses and asynchronous events are never discarded under legal reorderings", &.{ "python3", "tools/virtio-rng-experiment/test_qmp_hotplug.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "numeric-comptime-matrix-test", "Check width/domain arithmetic boundaries across every fixed integer width", &.{ "python3", "tools/toolchain/numeric-comptime-matrix.py", "zig-out/bin/mcc" }, .{ .install = true });
     _ = h.addScriptTestOpts(ctx, "parallel-runner-test", "Check full-tier parallel runners preserve coverage while bounding nested workers", &.{ "python3", "tools/toolchain/parallel-runner-test.py" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "m0-timing-report-test", "Check m0 timing reports rank gate bottlenecks deterministically", &.{ "python3", "tools/toolchain/m0-timing-report-test.py" }, .{ .install = false });
 
     _ = h.addScriptTest(ctx, "mcc-cli-test", "Validate mcc help/version/usage exit behavior and stdout/stderr channels", &.{ "bash", "tools/toolchain/mcc-cli-test.sh", "zig-out/bin/mcc" });
 

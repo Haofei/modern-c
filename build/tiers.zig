@@ -383,6 +383,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("qmp-ordering-test"));
     m0_full_step.dependOn(ctx.cmd("numeric-comptime-matrix-test"));
     m0_full_step.dependOn(ctx.cmd("parallel-runner-test"));
+    m0_full_step.dependOn(ctx.cmd("m0-timing-report-test"));
     // std-api-docs-test keeps the generated stdlib API index in sync with std/**/*.mc exports.
     m0_full_step.dependOn(ctx.cmd("std-api-docs-test"));
     // vendoring-test keeps third_party provenance and CVE/advisory process docs present.
