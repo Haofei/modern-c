@@ -13664,11 +13664,16 @@ test "lower-c emits deferred drop-attribute pointer release before return" {
     try appendCTest("emit_c_drop_attr_defer.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t accept_deferred_resource_release(bool flag)");
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, "close_ticket(&t);"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, "uint32_t mc_tmp"));
     const first_cleanup = std.mem.indexOf(u8, body, "close_ticket(&t);").?;
-    const early_return = std.mem.indexOf(u8, body, "return 1;").?;
+    const early_value = std.mem.indexOf(u8, body, "uint32_t mc_tmp").?;
+    const early_return = std.mem.indexOf(u8, body, "return mc_tmp").?;
     const final_cleanup = std.mem.lastIndexOf(u8, body, "close_ticket(&t);").?;
-    const final_return = std.mem.indexOf(u8, body, "return 2;").?;
+    const final_value = std.mem.lastIndexOf(u8, body, "uint32_t mc_tmp").?;
+    const final_return = std.mem.lastIndexOf(u8, body, "return mc_tmp").?;
+    try std.testing.expect(early_value < first_cleanup);
     try std.testing.expect(first_cleanup < early_return);
+    try std.testing.expect(final_value < final_cleanup);
     try std.testing.expect(final_cleanup < final_return);
 }
 
@@ -13692,11 +13697,35 @@ test "lower-c emits auto-drop release for affine move locals" {
     const body = try cFunctionBody(output.items, "static uint32_t auto_drop_before_return(bool flag)");
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, "close_guard("));
     const first_cleanup = std.mem.indexOf(u8, body, "close_guard(").?;
-    const early_return = std.mem.indexOf(u8, body, "return 1;").?;
+    const early_value = std.mem.indexOf(u8, body, "uint32_t mc_tmp").?;
+    const early_return = std.mem.indexOf(u8, body, "return mc_tmp").?;
     const final_cleanup = std.mem.lastIndexOf(u8, body, "close_guard(").?;
-    const final_return = std.mem.indexOf(u8, body, "return g.id;").?;
+    const final_value = std.mem.lastIndexOf(u8, body, "uint32_t mc_tmp").?;
+    const final_return = std.mem.lastIndexOf(u8, body, "return mc_tmp").?;
+    try std.testing.expect(early_value < first_cleanup);
     try std.testing.expect(first_cleanup < early_return);
+    try std.testing.expect(final_value < final_cleanup);
     try std.testing.expect(final_cleanup < final_return);
+}
+
+test "lower-c emits auto-drop release for implicit move aggregate locals" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\struct Wrapper { guard: Guard }
+        \\fn make_wrapper() -> Wrapper { return .{ .guard = make_guard() }; }
+        \\#[drop]
+        \\fn close_wrapper(w: *mut Wrapper) -> void { w.guard.id = 0; }
+        \\fn auto_drop_implicit_aggregate() -> u32 {
+        \\    var w = make_wrapper();
+        \\    return w.guard.id;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_drop_attr_aggregate_auto.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uint32_t auto_drop_implicit_aggregate(void)");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "close_wrapper(&w);"));
 }
 
 test "lower-c cancels auto-drop when affine move local is explicitly transferred" {

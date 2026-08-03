@@ -965,6 +965,8 @@ pub const Checker = struct {
     }
 
     fn collectDropPointerReleaseFns(self: *Checker, module: ast.Module, move_types: *const std.StringHashMap(void), linear_types: *const std.StringHashMap(void), structs: *const std.StringHashMap(StructInfo), release_fns: *std.StringHashMap([]const u8)) void {
+        var release_by_type = std.StringHashMap([]const u8).init(self.reporter.allocator);
+        defer release_by_type.deinit();
         for (module.decls) |decl| {
             if (!hasNamedAttr(decl.attrs, "drop")) continue;
             const fn_decl = switch (decl.kind) {
@@ -978,8 +980,20 @@ pub const Checker = struct {
                 self.errorCode(fn_decl.name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function must return void");
                 continue;
             }
+            if (fn_decl.is_variadic) {
+                self.errorCode(fn_decl.name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function must not be variadic");
+                continue;
+            }
+            if (fn_decl.params.len != 1) {
+                self.errorCode(fn_decl.name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function must take exactly one `*mut` checked resource parameter");
+                continue;
+            }
+            if (fn_decl.params[0].is_comptime) {
+                self.errorCode(fn_decl.params[0].name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function parameter must be runtime storage, not `comptime`");
+                continue;
+            }
             const resource_name = dropPointerReleaseParamTypeName(fn_decl) orelse {
-                self.errorCode(fn_decl.name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function must take a `*mut` checked resource as its first parameter");
+                self.errorCode(fn_decl.name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function must take exactly one `*mut` checked resource parameter");
                 continue;
             };
             if (structs.get(resource_name)) |info| {
@@ -996,6 +1010,15 @@ pub const Checker = struct {
                 self.errorCode(fn_decl.params[0].ty.span, "E_DROP_ATTR_SHAPE", "#[drop] release functions are only for affine `move struct` resources; `linear struct` values must be explicitly consumed");
                 continue;
             }
+            if (release_by_type.get(resource_name)) |existing| {
+                _ = existing;
+                self.errorCode(fn_decl.name.span, "E_DUPLICATE_DROP_GLUE", "a checked resource type may declare exactly one #[drop] release function");
+                continue;
+            }
+            release_by_type.put(resource_name, fn_decl.name.text) catch {
+                self.oom = true;
+                continue;
+            };
             if (!release_fns.contains(fn_decl.name.text)) release_fns.put(fn_decl.name.text, resource_name) catch {
                 self.oom = true;
             };

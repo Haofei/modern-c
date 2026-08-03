@@ -1392,6 +1392,26 @@ test "LLVM emits auto-drop release for affine move locals" {
     try std.testing.expect(final_cleanup < final_return);
 }
 
+test "LLVM emits auto-drop release for implicit move aggregate locals" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\struct Wrapper { guard: Guard }
+        \\fn make_wrapper() -> Wrapper { return .{ .guard = make_guard() }; }
+        \\#[drop]
+        \\fn close_wrapper(w: *mut Wrapper) -> void { w.guard.id = 0; }
+        \\fn auto_drop_implicit_aggregate() -> u32 {
+        \\    var w = make_wrapper();
+        \\    return w.guard.id;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_drop_attr_aggregate_auto.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @auto_drop_implicit_aggregate");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "call void @close_wrapper(ptr %w.addr"));
+}
+
 test "LLVM cancels auto-drop when affine move local is explicitly transferred" {
     const source =
         \\move struct Guard { id: u32 }

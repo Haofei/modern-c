@@ -712,10 +712,8 @@ const LlvmEmitter = struct {
         try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .c_abi = c_abi, .is_variadic = fn_decl.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
         if (hasNamedAttr(attrs, "drop")) {
             if (dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
-                if (self.struct_types.get(type_name)) |struct_decl| {
-                    if (struct_decl.is_move and !struct_decl.is_linear) {
-                        try self.auto_drop_fns_by_type.put(type_name, fn_decl.name.text);
-                    }
+                if (self.autoDropEligibleTypeName(type_name)) {
+                    try self.auto_drop_fns_by_type.put(type_name, fn_decl.name.text);
                 }
             }
         }
@@ -3980,7 +3978,10 @@ const LlvmEmitter = struct {
     }
 
     fn emitSwitchBody(self: *LlvmEmitter, body: ast.SwitchBody, ret_ty: ast.TypeExpr) !bool {
-        return switch (body) {
+        const saved_defer_stack = try self.allocator.dupe(ast.Expr, self.defer_stack.items);
+        defer self.allocator.free(saved_defer_stack);
+        errdefer self.restoreDeferStackSnapshot(saved_defer_stack);
+        const terminated = switch (body) {
             .block => |block| try self.emitBlock(block, ret_ty),
             .expr => |expr| blk: {
                 if (typeNameEql(ret_ty, "void")) {
@@ -3992,6 +3993,13 @@ const LlvmEmitter = struct {
                 break :blk true;
             },
         };
+        self.restoreDeferStackSnapshot(saved_defer_stack);
+        return terminated;
+    }
+
+    fn restoreDeferStackSnapshot(self: *LlvmEmitter, saved: []const ast.Expr) void {
+        self.defer_stack.items.len = saved.len;
+        @memcpy(self.defer_stack.items[0..saved.len], saved);
     }
 
     fn emitReturnVoid(self: *LlvmEmitter, span: ast.Span) !void {
@@ -10590,6 +10598,58 @@ const LlvmEmitter = struct {
             .nullable => |child| self.nullablePayloadIsValueType(child.*) or self.isAggregateType(child.*),
             .name => self.structDeclForType(resolved_ty) != null or self.overlayInfoForType(resolved_ty) != null or self.taggedUnionForType(resolved_ty) != null,
             .generic => |node| std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2,
+            else => false,
+        };
+    }
+
+    fn autoDropEligibleTypeName(self: *LlvmEmitter, type_name: []const u8) bool {
+        const decl = self.struct_types.get(type_name) orelse return false;
+        if (decl.is_linear) return false;
+        if (decl.is_move) return true;
+        return self.typeEmbedsMoveByValue(.{ .span = decl.name.span, .kind = .{ .name = decl.name } }, 0) and
+            !self.typeEmbedsLinearByValue(.{ .span = decl.name.span, .kind = .{ .name = decl.name } }, 0);
+    }
+
+    fn typeEmbedsMoveByValue(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) bool {
+        if (depth >= 64) return true;
+        return switch (ty.kind) {
+            .name => |n| blk: {
+                if (self.type_aliases.get(n.text)) |target| break :blk self.typeEmbedsMoveByValue(target, depth + 1);
+                const decl = self.struct_types.get(n.text) orelse break :blk false;
+                if (decl.is_move) break :blk true;
+                for (decl.fields) |field| if (self.typeEmbedsMoveByValue(field.ty, depth + 1)) break :blk true;
+                break :blk false;
+            },
+            .generic => |g| blk: {
+                if (self.struct_types.get(g.base.text)) |decl| if (decl.is_move) break :blk true;
+                for (g.args) |arg| if (self.typeEmbedsMoveByValue(arg, depth + 1)) break :blk true;
+                break :blk false;
+            },
+            .array => |node| self.typeEmbedsMoveByValue(node.child.*, depth + 1),
+            .qualified => |node| self.typeEmbedsMoveByValue(node.child.*, depth + 1),
+            .nullable => |child| self.typeEmbedsMoveByValue(child.*, depth + 1),
+            else => false,
+        };
+    }
+
+    fn typeEmbedsLinearByValue(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) bool {
+        if (depth >= 64) return true;
+        return switch (ty.kind) {
+            .name => |n| blk: {
+                if (self.type_aliases.get(n.text)) |target| break :blk self.typeEmbedsLinearByValue(target, depth + 1);
+                const decl = self.struct_types.get(n.text) orelse break :blk false;
+                if (decl.is_linear) break :blk true;
+                for (decl.fields) |field| if (self.typeEmbedsLinearByValue(field.ty, depth + 1)) break :blk true;
+                break :blk false;
+            },
+            .generic => |g| blk: {
+                if (self.struct_types.get(g.base.text)) |decl| if (decl.is_linear) break :blk true;
+                for (g.args) |arg| if (self.typeEmbedsLinearByValue(arg, depth + 1)) break :blk true;
+                break :blk false;
+            },
+            .array => |node| self.typeEmbedsLinearByValue(node.child.*, depth + 1),
+            .qualified => |node| self.typeEmbedsLinearByValue(node.child.*, depth + 1),
+            .nullable => |child| self.typeEmbedsLinearByValue(child.*, depth + 1),
             else => false,
         };
     }

@@ -728,6 +728,14 @@ test "drop attribute enables deterministic auto-drop and explicit transfer for a
         \\    var g: Guard = make_guard();
         \\    return move g;
         \\}
+        \\struct Wrapper { guard: Guard }
+        \\fn make_wrapper() -> Wrapper { return .{ .guard = make_guard() }; }
+        \\#[drop]
+        \\fn close_wrapper(w: *mut Wrapper) -> void { close_guard(&w.guard); }
+        \\fn accept_implicit_aggregate_auto_drop() -> u32 {
+        \\    var w: Wrapper = make_wrapper();
+        \\    return w.guard.id;
+        \\}
         \\fn reject_implicit_auto_drop_transfer() -> Guard {
         \\    var g: Guard = make_guard();
         \\    return g;
@@ -764,13 +772,27 @@ test "drop attribute shape is restricted to mut pointer checked resource returni
         \\fn reject_linear(t: *mut Token) -> void {
         \\    t.id = 0;
         \\}
+        \\#[drop]
+        \\fn reject_extra_param(t: *mut Ticket, mode: u32) -> void {
+        \\    t.id = mode;
+        \\}
+        \\#[drop]
+        \\fn close_ticket(t: *mut Ticket) -> void {
+        \\    t.id = 0;
+        \\}
+        \\#[drop]
+        \\fn reject_duplicate_ticket_drop(t: *mut Ticket) -> void {
+        \\    t.id = 1;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "drop_attr_shape.mc", source);
     defer reporter.deinit();
     try checkSource(source, &reporter);
     // DIAGNOSTIC_UNIT: E_DROP_ATTR_SHAPE
-    try std.testing.expectEqual(@as(usize, 4), countDiagnosticCode(&reporter, "E_DROP_ATTR_SHAPE"));
+    try std.testing.expectEqual(@as(usize, 5), countDiagnosticCode(&reporter, "E_DROP_ATTR_SHAPE"));
+    // DIAGNOSTIC_UNIT: E_DUPLICATE_DROP_GLUE
+    try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_DUPLICATE_DROP_GLUE"));
 }
 
 test "MaybeUninit cannot store affine, region, or view payloads" {
@@ -1516,10 +1538,21 @@ test "scoped borrow blocks moves and conflicting mutable borrows" {
     const source =
         \\move struct Ticket { id: u32 }
         \\fn issue_ticket() -> Ticket { return .{ .id = 1 }; }
+        \\fn touch(t: *mut Ticket) -> void {
+        \\    t.id = t.id + 1;
+        \\}
         \\fn consume(t: Ticket) -> u32 {
         \\    let id: u32 = t.id;
         \\    unsafe { forget_unchecked(t); }
         \\    return id;
+        \\}
+        \\fn mutate2(a: *mut Ticket, b: *mut Ticket) -> void {
+        \\    a.id = b.id;
+        \\}
+        \\fn handoff(p: *mut Ticket, t: Ticket) -> u32 {
+        \\    p.id = t.id;
+        \\    unsafe { forget_unchecked(t); }
+        \\    return p.id;
         \\}
         \\fn accept_shared_borrows_then_move() -> u32 {
         \\    let t: Ticket = issue_ticket();
@@ -1547,19 +1580,37 @@ test "scoped borrow blocks moves and conflicting mutable borrows" {
         \\    let b: *mut Ticket = borrow mut t;
         \\    return a.id + b.id;
         \\}
+        \\fn reject_call_arg_second_mut_borrow() -> void {
+        \\    var t: Ticket = issue_ticket();
+        \\    mutate2(borrow mut t, borrow mut t);
+        \\    unsafe { forget_unchecked(t); }
+        \\}
+        \\fn reject_call_arg_borrow_and_move() -> u32 {
+        \\    var t: Ticket = issue_ticket();
+        \\    return handoff(borrow mut t, move t);
+        \\}
+        \\fn reject_reborrow_alias_conflict() -> u32 {
+        \\    var t: Ticket = issue_ticket();
+        \\    let p: *mut Ticket = borrow mut t;
+        \\    let q: *mut Ticket = borrow mut p.*;
+        \\    return p.id + q.id;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "scoped_borrow.mc", source);
     defer reporter.deinit();
     try checkSource(source, &reporter);
     // DIAGNOSTIC_UNIT: E_BORROW_CONFLICT
-    try std.testing.expectEqual(@as(usize, 3), countDiagnosticCode(&reporter, "E_BORROW_CONFLICT"));
+    try std.testing.expectEqual(@as(usize, 6), countDiagnosticCode(&reporter, "E_BORROW_CONFLICT"));
 }
 
 test "scoped borrow ends at lexical block before move" {
     const source =
         \\move struct Ticket { id: u32 }
         \\fn issue_ticket() -> Ticket { return .{ .id = 1 }; }
+        \\fn touch(t: *mut Ticket) -> void {
+        \\    t.id = t.id + 1;
+        \\}
         \\fn consume(t: Ticket) -> u32 {
         \\    let id: u32 = t.id;
         \\    unsafe { forget_unchecked(t); }
@@ -1572,6 +1623,12 @@ test "scoped borrow ends at lexical block before move" {
         \\        let b: *Ticket = borrow t;
         \\        let x: u32 = a.id + b.id;
         \\    }
+        \\    return consume(move t);
+        \\}
+        \\fn accept_call_borrow_ends_after_full_expression() -> u32 {
+        \\    var t: Ticket = issue_ticket();
+        \\    touch(borrow mut t);
+        \\    touch(borrow mut t);
         \\    return consume(move t);
         \\}
     ;

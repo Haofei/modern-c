@@ -547,10 +547,8 @@ pub const CEmitter = struct {
         try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = is_extern, .is_variadic = fn_decl.is_variadic, .error_from = error_from.hasAttr(attrs) });
         if (!is_extern and hasNamedAttr(attrs, "drop")) {
             if (dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
-                if (self.structs.get(type_name)) |struct_decl| {
-                    if (struct_decl.is_move and !struct_decl.is_linear) {
-                        try self.auto_drop_fns_by_type.put(type_name, fn_decl.name.text);
-                    }
+                if (self.autoDropEligibleTypeName(type_name)) {
+                    try self.auto_drop_fns_by_type.put(type_name, fn_decl.name.text);
                 }
             }
         }
@@ -2852,6 +2850,44 @@ pub const CEmitter = struct {
         }
     }
 
+    fn cancelAutoDropsForMovesInExpr(self: *CEmitter, expr: ast.Expr) void {
+        switch (expr.kind) {
+            .move_expr => |inner| {
+                self.cancelAutoDropForMove(inner.*);
+                self.cancelAutoDropsForMovesInExpr(inner.*);
+            },
+            .grouped, .address_of, .deref, .await_expr => |inner| self.cancelAutoDropsForMovesInExpr(inner.*),
+            .borrow_expr => |node| self.cancelAutoDropsForMovesInExpr(node.value.*),
+            .array_literal => |items| for (items) |item| self.cancelAutoDropsForMovesInExpr(item),
+            .struct_literal => |fields| for (fields) |field| self.cancelAutoDropsForMovesInExpr(field.value),
+            .unary => |node| self.cancelAutoDropsForMovesInExpr(node.expr.*),
+            .binary => |node| {
+                self.cancelAutoDropsForMovesInExpr(node.left.*);
+                self.cancelAutoDropsForMovesInExpr(node.right.*);
+            },
+            .cast => |node| self.cancelAutoDropsForMovesInExpr(node.value.*),
+            .call => |node| {
+                self.cancelAutoDropsForMovesInExpr(node.callee.*);
+                for (node.args) |arg| self.cancelAutoDropsForMovesInExpr(arg);
+            },
+            .index => |node| {
+                self.cancelAutoDropsForMovesInExpr(node.base.*);
+                self.cancelAutoDropsForMovesInExpr(node.index.*);
+            },
+            .slice => |node| {
+                self.cancelAutoDropsForMovesInExpr(node.base.*);
+                self.cancelAutoDropsForMovesInExpr(node.start.*);
+                self.cancelAutoDropsForMovesInExpr(node.end.*);
+            },
+            .member => |node| self.cancelAutoDropsForMovesInExpr(node.base.*),
+            .try_expr => |node| {
+                self.cancelAutoDropsForMovesInExpr(node.operand.*);
+                if (node.mapped) |mapped| self.cancelAutoDropsForMovesInExpr(mapped.*);
+            },
+            else => {},
+        }
+    }
+
     fn blockContainsAutoDropReleaseCall(self: *CEmitter, block: ast.Block) bool {
         for (block.items) |stmt| {
             if (self.stmtContainsAutoDropReleaseCall(stmt)) return true;
@@ -3519,9 +3555,53 @@ pub const CEmitter = struct {
     }
 
     fn emitBlockExitItem(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: usize, cleanup_start: usize) anyerror!void {
-        if (returnMoveExpr(stmt)) |moved| self.cancelAutoDropForMove(moved);
+        if (stmt.kind == .@"return") {
+            if (self.defer_stack.items.len == cleanup_start) {
+                try self.emitStmt(stmt, locals, return_ty);
+                self.defer_stack.items.len = block_start;
+                return;
+            }
+            try self.emitReturnExitItem(stmt.kind.@"return", stmt.span, locals, return_ty, block_start, cleanup_start);
+            return;
+        }
         try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
         try self.emitStmt(stmt, locals, return_ty);
+        self.defer_stack.items.len = block_start;
+    }
+
+    fn emitReturnExitItem(self: *CEmitter, maybe_expr: ?ast.Expr, stmt_span: ast.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: usize, cleanup_start: usize) anyerror!void {
+        const expr = maybe_expr orelse {
+            try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
+            try self.writeLineDirective(stmt_span);
+            try self.emitVoidReturnStmt();
+            self.defer_stack.items.len = block_start;
+            return;
+        };
+        const target_ty = return_ty orelse {
+            try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
+            try self.emitReturnStmt(maybe_expr, locals, return_ty);
+            self.defer_stack.items.len = block_start;
+            return;
+        };
+        if (isVoidType(target_ty) and isVoidLiteralExpr(expr)) {
+            try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
+            try self.emitVoidReturnStmt();
+            self.defer_stack.items.len = block_start;
+            return;
+        }
+
+        self.cancelAutoDropsForMovesInExpr(expr);
+        try self.writeLineDirective(expr.span);
+        const tmp_name = try self.nextTempName();
+        try self.writeIndent();
+        try self.emitDeclarator(target_ty, tmp_name);
+        try self.out.appendSlice(self.allocator, " = ");
+        try self.emitExprWithTarget(expr, locals, target_ty);
+        try self.out.appendSlice(self.allocator, ";\n");
+        try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
+        try self.writeLineDirective(stmt_span);
+        try self.writeIndent();
+        try self.out.print(self.allocator, "return {s};\n", .{tmp_name});
         self.defer_stack.items.len = block_start;
     }
 
@@ -3739,10 +3819,19 @@ pub const CEmitter = struct {
     }
 
     fn emitSwitchBody(self: *CEmitter, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        const saved_defer_stack = try self.allocator.dupe(ast.Expr, self.defer_stack.items);
+        defer self.allocator.free(saved_defer_stack);
+        errdefer self.restoreDeferStackSnapshot(saved_defer_stack);
         switch (body) {
             .block => |block| try self.emitBlockItems(block, locals, return_ty),
             .expr => |expr| try self.emitExpressionStmt(expr, locals, return_ty),
         }
+        self.restoreDeferStackSnapshot(saved_defer_stack);
+    }
+
+    fn restoreDeferStackSnapshot(self: *CEmitter, saved: []const ast.Expr) void {
+        self.defer_stack.items.len = saved.len;
+        @memcpy(self.defer_stack.items[0..saved.len], saved);
     }
 
     fn nullableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -8725,6 +8814,58 @@ pub const CEmitter = struct {
         return self.cTypeFor(ty, style);
     }
 
+    fn autoDropEligibleTypeName(self: *CEmitter, type_name: []const u8) bool {
+        const decl = self.structs.get(type_name) orelse return false;
+        if (decl.is_linear) return false;
+        if (decl.is_move) return true;
+        return self.typeEmbedsMoveByValue(.{ .span = decl.name.span, .kind = .{ .name = decl.name } }, 0) and
+            !self.typeEmbedsLinearByValue(.{ .span = decl.name.span, .kind = .{ .name = decl.name } }, 0);
+    }
+
+    fn typeEmbedsMoveByValue(self: *CEmitter, ty: ast.TypeExpr, depth: usize) bool {
+        if (depth >= 64) return true;
+        return switch (ty.kind) {
+            .name => |n| blk: {
+                if (self.type_aliases.get(n.text)) |target| break :blk self.typeEmbedsMoveByValue(target, depth + 1);
+                const decl = self.structs.get(n.text) orelse break :blk false;
+                if (decl.is_move) break :blk true;
+                for (decl.fields) |field| if (self.typeEmbedsMoveByValue(field.ty, depth + 1)) break :blk true;
+                break :blk false;
+            },
+            .generic => |g| blk: {
+                if (self.structs.get(g.base.text)) |decl| if (decl.is_move) break :blk true;
+                for (g.args) |arg| if (self.typeEmbedsMoveByValue(arg, depth + 1)) break :blk true;
+                break :blk false;
+            },
+            .array => |node| self.typeEmbedsMoveByValue(node.child.*, depth + 1),
+            .qualified => |node| self.typeEmbedsMoveByValue(node.child.*, depth + 1),
+            .nullable => |child| self.typeEmbedsMoveByValue(child.*, depth + 1),
+            else => false,
+        };
+    }
+
+    fn typeEmbedsLinearByValue(self: *CEmitter, ty: ast.TypeExpr, depth: usize) bool {
+        if (depth >= 64) return true;
+        return switch (ty.kind) {
+            .name => |n| blk: {
+                if (self.type_aliases.get(n.text)) |target| break :blk self.typeEmbedsLinearByValue(target, depth + 1);
+                const decl = self.structs.get(n.text) orelse break :blk false;
+                if (decl.is_linear) break :blk true;
+                for (decl.fields) |field| if (self.typeEmbedsLinearByValue(field.ty, depth + 1)) break :blk true;
+                break :blk false;
+            },
+            .generic => |g| blk: {
+                if (self.structs.get(g.base.text)) |decl| if (decl.is_linear) break :blk true;
+                for (g.args) |arg| if (self.typeEmbedsLinearByValue(arg, depth + 1)) break :blk true;
+                break :blk false;
+            },
+            .array => |node| self.typeEmbedsLinearByValue(node.child.*, depth + 1),
+            .qualified => |node| self.typeEmbedsLinearByValue(node.child.*, depth + 1),
+            .nullable => |child| self.typeEmbedsLinearByValue(child.*, depth + 1),
+            else => false,
+        };
+    }
+
     fn arrayLenTextForInfo(ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.arrayLenTextForExpr(expr);
@@ -8774,22 +8915,6 @@ fn movedLocalName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .grouped => |inner| movedLocalName(inner.*),
         .ident => |ident| ident.text,
-        else => null,
-    };
-}
-
-fn returnMoveExpr(stmt: ast.Stmt) ?ast.Expr {
-    const expr = switch (stmt.kind) {
-        .@"return" => |maybe_expr| maybe_expr orelse return null,
-        else => return null,
-    };
-    return returnMoveExprInner(expr);
-}
-
-fn returnMoveExprInner(expr: ast.Expr) ?ast.Expr {
-    return switch (expr.kind) {
-        .grouped => |inner| returnMoveExprInner(inner.*),
-        .move_expr => |inner| inner.*,
         else => null,
     };
 }

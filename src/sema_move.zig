@@ -882,9 +882,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
             // a by-value resource, so it is only registered when the binding was not already
             // classed as a move resource above.
             if (!bound_as_move and !bound_as_index_fact and decl.names.len > 0 and decl.init != null) {
-                if (decl.init.?.kind == .borrow_expr) {
-                    registerScopedBorrow(self, decl.init.?.kind.borrow_expr, state);
-                }
+                if (decl.init.?.kind == .borrow_expr) registerBorrowAliasBinding(self, decl.names[0], decl.init.?.kind.borrow_expr, state, aliases);
                 if (aliasReferentForExpr(self, decl.init.?, state, aliases)) |referent| {
                     // Gap #2: `let q = f(&t)` where `f` returns a pointer — `q` may alias a
                     // borrow of the move binding `t`, or a tracked subplace such as `t.a`,
@@ -972,7 +970,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                             self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be reassigned");
                         }
                     }
-                    if (stateHasScopedBorrow(state, id.text)) {
+                    if (exprHasScopedBorrow(self, a.target, state, aliases)) {
                         self.errorCode(a.target.span, "E_BORROW_CONFLICT", "cannot assign to a local while a scoped borrow of it is live");
                     }
                     moveConsume(self, a.value, state, aliases);
@@ -985,7 +983,9 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                         // is not an alias of a tracked move binding, drop the slot entirely
                         // (it is no longer a meaningful borrow); leaving it live would be the
                         // phantom-leak false positive this fixes.
-                        if (aliasReferentForExpr(self, a.value, state, aliases)) |referent| {
+                        if (a.value.kind == .borrow_expr) {
+                            registerBorrowAliasBinding(self, id, a.value.kind.borrow_expr, state, aliases);
+                        } else if (aliasReferentForExpr(self, a.value, state, aliases)) |referent| {
                             if (trackedAliasReferent(referent, state)) |tracked_referent| {
                                 if (bindingMoveSlotPtrForIdent(id.text, state)) |slot| {
                                     slot.alias_of = tracked_referent.key;
@@ -1019,10 +1019,8 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     // Assigning through `p.field`: the base must be live, and overwriting a
                     // live `move` field (one not already moved out) would drop the old
                     // resource without consuming it.
-                    if (scopedBorrowRootName(a.target)) |root| {
-                        if (stateHasScopedBorrow(state, root)) {
-                            self.errorCode(a.target.span, "E_BORROW_CONFLICT", "cannot assign to storage while a scoped borrow of it is live");
-                        }
+                    if (exprHasScopedBorrow(self, a.target, state, aliases)) {
+                        self.errorCode(a.target.span, "E_BORROW_CONFLICT", "cannot assign to storage while a scoped borrow of it is live");
                     }
                     moveBorrow(self, m.base.*, state, aliases);
                     const place_opt = moveFieldPlaceKey(self, a.target, m, state, aliases);
@@ -1041,10 +1039,8 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     recordAssignedAggregateFieldAliasOrEscape(self, a.target, a.value, a.target.span, state, aliases);
                 },
                 .index => |ix| {
-                    if (scopedBorrowRootName(a.target)) |root| {
-                        if (stateHasScopedBorrow(state, root)) {
-                            self.errorCode(a.target.span, "E_BORROW_CONFLICT", "cannot assign to storage while a scoped borrow of it is live");
-                        }
+                    if (exprHasScopedBorrow(self, a.target, state, aliases)) {
+                        self.errorCode(a.target.span, "E_BORROW_CONFLICT", "cannot assign to storage while a scoped borrow of it is live");
                     }
                     moveBorrow(self, ix.base.*, state, aliases);
                     moveConsume(self, ix.index.*, state, aliases);
@@ -2852,6 +2848,10 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
             moveExitEdgeCfg(self, state, "linear `move` value is still live where `?` may return on error (consume it before `?`, or register it with `defer`)");
         },
         .cast => |c| moveConsume(self, c.value.*, state, aliases),
+        .borrow_expr => |node| {
+            registerScopedBorrow(self, node, state, aliases);
+            moveBorrow(self, node.value.*, state, aliases);
+        },
         .address_of => |inner| {
             moveBorrow(self, inner.*, state, aliases);
             if (placeKeyAndType(self, inner.*, state)) |pp| {
@@ -2949,6 +2949,9 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
             moveConsume(self, s.end.*, state, aliases);
         },
         .call => |c| {
+            var before_call_borrows = cloneMoveState(self, state);
+            defer before_call_borrows.deinit();
+            defer restoreScopedBorrowEffects(self, state, &before_call_borrows);
             // `drop(x)` is a safe discard for plain values, but on a linear `move`
             // value it consumes the binding while freeing nothing — a leak the
             // checker would otherwise bless. Reject it and point at the real options:
@@ -4513,9 +4516,14 @@ fn deferDropPointerReleaseArg(self: *Checker, arg: ast.Expr, resource_type: []co
     return true;
 }
 
-fn registerScopedBorrow(self: *Checker, node: anytype, state: *MoveState) void {
-    const root = scopedBorrowRootName(node.value.*) orelse return;
-    const slot = bindingMoveSlotPtrForIdent(root, state);
+const ScopedBorrowReferent = struct {
+    key: []const u8,
+    place: ?MovePlace = null,
+};
+
+fn registerScopedBorrow(self: *Checker, node: anytype, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    const referent = scopedBorrowReferentForExpr(self, node.value.*, state, aliases) orelse return;
+    const slot = if (referent.place) |place| rootMoveSlotPtrForPlace(place, state) orelse bindingMoveSlotPtrForIdent(place.root, state) else bindingMoveSlotPtrForIdent(referent.key, state);
     if (slot) |move_slot| {
         if (!move_slot.type_only) {
             if (!move_slot.live) {
@@ -4528,7 +4536,19 @@ fn registerScopedBorrow(self: *Checker, node: anytype, state: *MoveState) void {
             }
         }
     }
-    const borrow_entry = state.scoped_borrows.getOrPut(root) catch {
+    if (scopedBorrowRootFromKey(referent.key)) |new_root| {
+        var scoped_it = state.scoped_borrows.iterator();
+        while (scoped_it.next()) |entry| {
+            if (!entry.value_ptr.active() or std.mem.eql(u8, entry.key_ptr.*, referent.key)) continue;
+            const existing_root = scopedBorrowRootFromKey(entry.key_ptr.*) orelse continue;
+            if (!std.mem.eql(u8, existing_root, new_root)) continue;
+            if (node.mutability == .mut or entry.value_ptr.mut) {
+                self.errorCode(node.value.*.span, "E_BORROW_CONFLICT", "cannot take a scoped borrow while an overlapping scoped borrow is live");
+                return;
+            }
+        }
+    }
+    const borrow_entry = state.scoped_borrows.getOrPut(referent.key) catch {
         self.oom = true;
         return;
     };
@@ -4550,6 +4570,93 @@ fn registerScopedBorrow(self: *Checker, node: anytype, state: *MoveState) void {
         borrow_entry.value_ptr.shared += 1;
         if (slot) |move_slot| move_slot.scoped_shared_borrows += 1;
     }
+}
+
+fn registerBorrowAliasBinding(self: *Checker, binding: ast.Ident, node: anytype, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    const referent = scopedBorrowReferentForExpr(self, node.value.*, state, aliases) orelse return;
+    if (bindingMoveSlotPtrForIdent(binding.text, state)) |slot| {
+        slot.* = .{
+            .live = false,
+            .span = binding.span,
+            .place = .{ .root = binding.text },
+            .alias_of = referent.key,
+            .alias_place = referent.place,
+            .full_deref_alias = true,
+        };
+        return;
+    }
+    state.put(binding.text, .{
+        .live = false,
+        .span = binding.span,
+        .place = .{ .root = binding.text },
+        .alias_of = referent.key,
+        .alias_place = referent.place,
+        .full_deref_alias = true,
+    }) catch {
+        self.oom = true;
+    };
+}
+
+fn exprHasScopedBorrow(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    const referent = scopedBorrowReferentForExpr(self, expr, state, aliases) orelse return false;
+    if (state.scoped_borrows.get(referent.key)) |borrow| return borrow.active();
+    const root = if (referent.place) |place| place.root else scopedBorrowRootName(expr) orelse return false;
+    if (state.scoped_borrows.get(root)) |borrow| return borrow.active();
+    var scoped_it = state.scoped_borrows.iterator();
+    while (scoped_it.next()) |entry| {
+        if (!entry.value_ptr.active()) continue;
+        const existing_root = scopedBorrowRootFromKey(entry.key_ptr.*) orelse continue;
+        if (std.mem.eql(u8, existing_root, root)) return true;
+    }
+    return false;
+}
+
+fn restoreScopedBorrowEffects(self: *Checker, state: *MoveState, before: *const MoveState) void {
+    state.scoped_borrows.clearRetainingCapacity();
+    copyScopedBorrowSlots(self, state, before);
+
+    var reset_it = state.iterator();
+    while (reset_it.next()) |entry| {
+        entry.value_ptr.scoped_shared_borrows = 0;
+        entry.value_ptr.scoped_mut_borrow = false;
+    }
+
+    var before_it = before.iterator();
+    while (before_it.next()) |entry| {
+        const before_slot = entry.value_ptr.*;
+        const place = before_slot.place orelse continue;
+        const slot = bindingMoveSlotPtrForIdent(place.root, state) orelse rootMoveSlotPtrForPlace(place, state) orelse continue;
+        slot.scoped_shared_borrows = before_slot.scoped_shared_borrows;
+        slot.scoped_mut_borrow = before_slot.scoped_mut_borrow;
+    }
+}
+
+fn scopedBorrowReferentForExpr(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ScopedBorrowReferent {
+    switch (expr.kind) {
+        .grouped => |inner| return scopedBorrowReferentForExpr(self, inner.*, state, aliases),
+        .deref => |inner| {
+            if (aliasReferentForExpr(self, inner.*, state, aliases)) |referent| return .{ .key = referent.key, .place = referent.place };
+            if (scopedBorrowReferentForExpr(self, inner.*, state, aliases)) |referent| return referent;
+            return scopedBorrowFallbackReferent(expr);
+        },
+        else => {},
+    }
+    if (placeKeyAndType(self, expr, state)) |pp| return .{ .key = pp.key, .place = pp.place };
+    if (aliasReferentForExpr(self, expr, state, aliases)) |referent| return .{ .key = referent.key, .place = referent.place };
+    return scopedBorrowFallbackReferent(expr);
+}
+
+fn scopedBorrowFallbackReferent(expr: ast.Expr) ?ScopedBorrowReferent {
+    const root = scopedBorrowRootName(expr) orelse return null;
+    return .{ .key = root, .place = .{ .root = root } };
+}
+
+fn scopedBorrowRootFromKey(key: []const u8) ?[]const u8 {
+    if (key.len == 0) return null;
+    var end: usize = 0;
+    while (end < key.len and key[end] != '.' and key[end] != '[') : (end += 1) {}
+    if (end == 0) return null;
+    return key[0..end];
 }
 
 fn scopedBorrowRootName(expr: ast.Expr) ?[]const u8 {
