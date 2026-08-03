@@ -33,18 +33,22 @@ export fn production_ops_run() -> u32 {
     if bundle_image_hash_matches(&agent, 0x55AA) { pass = 0; }
     switch bundle_verify_and_admit_metadata(&agent, .Agent, 1, 8, 12, 7, 0xAA55) {
         ok(vb) => {
-            switch verified_bundle_kind(vb) {
+            switch verified_bundle_kind(&vb) {
                 .Agent => {}
                 _ => { pass = 0; }
             }
-            if verified_bundle_version(vb) != 10 { pass = 0; }
-            if verified_bundle_image_hash(vb) != 0xAA55 { pass = 0; }
-            if verified_bundle_key_id(vb) != 7 { pass = 0; }
+            if verified_bundle_version(&vb) != 10 { pass = 0; }
+            if verified_bundle_image_hash(&vb) != 0xAA55 { pass = 0; }
+            if verified_bundle_key_id(&vb) != 7 { pass = 0; }
+            unsafe { forget_unchecked(vb); }
         }
         err(e) => { pass = 0; }
     }
     switch bundle_verify_and_admit_metadata(&agent, .Agent, 1, 8, 12, 7, 0x55AA) {
-        ok(vb) => { pass = 0; }
+        ok(vb) => {
+            pass = 0;
+            unsafe { forget_unchecked(vb); }
+        }
         err(e) => {
             switch e {
                 .BadImageHash => {}
@@ -69,20 +73,24 @@ export fn production_ops_run() -> u32 {
     var exact: BundleHeader = bundle_header_init(.Agent, 10, 1, 41, 7, exact_hash, 256);
     switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, image_base, 4) {
         ok(vb) => {
-            if !verified_bundle_has_exact_bytes(vb) { pass = 0; }
-            if verified_bundle_image_base(vb) != image_base { pass = 0; }
-            if verified_bundle_image_len(vb) != 4 { pass = 0; }
-            if !verified_bundle_matches_image(vb, image_base, 4) { pass = 0; }
-            if verified_bundle_matches_image(vb, other_base, 4) { pass = 0; }
+            if !verified_bundle_has_exact_bytes(&vb) { pass = 0; }
+            if verified_bundle_image_base(&vb) != image_base { pass = 0; }
+            if verified_bundle_image_len(&vb) != 4 { pass = 0; }
+            if !verified_bundle_matches_image(&vb, image_base, 4) { pass = 0; }
+            if verified_bundle_matches_image(&vb, other_base, 4) { pass = 0; }
             unsafe { raw.store<u8>(phys(image_base + 2), 9); }
-            if verified_bundle_matches_image(vb, image_base, 4) { pass = 0; }
+            if verified_bundle_matches_image(&vb, image_base, 4) { pass = 0; }
             unsafe { raw.store<u8>(phys(image_base + 2), 3); }
+            unsafe { forget_unchecked(vb); }
         }
         err(e) => { pass = 0; }
     }
     exact.image_hash = exact_hash ^ 1;
     switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, image_base, 4) {
-        ok(vb) => { pass = 0; }
+        ok(vb) => {
+            pass = 0;
+            unsafe { forget_unchecked(vb); }
+        }
         err(e) => {
             switch e {
                 .BadImageHash => {}

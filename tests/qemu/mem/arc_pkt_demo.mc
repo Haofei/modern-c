@@ -12,7 +12,7 @@ struct Packet { len: u32, data: [64]u8 }
 global g_pool: [8192]u8;
 
 fn packet_init(owner: *Arc<Packet>) -> void {
-    var p: *mut Packet = raw.ptr<Packet>(0);
+    var p: *mut Packet = uninit;
     unsafe {
         p = arc_get_mut(Packet, owner);
     }
@@ -24,7 +24,10 @@ fn packet_init(owner: *Arc<Packet>) -> void {
 }
 
 fn packet_sum_addr(block: PAddr) -> u32 {
-    let p: *const Packet = raw.ptr<Packet>(block);
+    var p: *const Packet = uninit;
+    unsafe {
+        p = raw.ptr<Packet>(block);
+    }
     var sum: u32 = 0;
     var i: usize = 0;
     while i < (p.len as usize) {

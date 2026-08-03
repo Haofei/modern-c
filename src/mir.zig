@@ -4993,6 +4993,7 @@ const FunctionBuilder = struct {
             else
                 null,
             .address_of => |inner| self.inferredLocalAddressTypeExpr(initializer.span, inner.*),
+            .borrow_expr => |node| self.inferredLocalAddressTypeExpr(initializer.span, node.value.*),
             .grouped => |inner| try self.inferredLocalTypeExpr(inner.*),
             else => null,
         };
@@ -5584,11 +5585,15 @@ const FunctionBuilder = struct {
         // parser deliberately admits.  Preserve the facts for every wrapper,
         // then build the enclosed expression in the current frame.
         var expr = input_expr;
-        while (expr.kind == .grouped) {
+        while (expr.kind == .grouped or expr.kind == .move_expr) {
             try self.addTargetTypeFactForExpr(expr);
             try self.addSelfTypedExpressionFact(expr);
             try self.addExpressionResultFact(expr);
-            expr = expr.kind.grouped.*;
+            expr = switch (expr.kind) {
+                .grouped => expr.kind.grouped.*,
+                .move_expr => expr.kind.move_expr.*,
+                else => unreachable,
+            };
         }
 
         self.expr_depth += 1;
@@ -5659,7 +5664,7 @@ const FunctionBuilder = struct {
             .unreachable_expr => {
                 try self.addTrapEdge(.Unreachable, .unreachable_expr, expr.span);
             },
-            .grouped => unreachable,
+            .grouped, .move_expr => unreachable,
             .address_of => |inner| {
                 // OPT (annex E) — taking an address exposes the target to a later aliased write we
                 // cannot see; conservatively drop all facts so none is used past this point.
@@ -5679,6 +5684,24 @@ const FunctionBuilder = struct {
                 }
                 self.invalidateFacts();
                 try self.buildExpr(inner.*);
+            },
+            .borrow_expr => |node| {
+                // A scoped borrow is still an address escape for lowering/provenance purposes;
+                // the ownership checker constrains the lexical lifetime separately.
+                if (!self.isDirectLocalAggregateAliasInitializer(node.value.*) and !self.isDirectLocalPointerArrayAliasInitializer(node.value.*)) {
+                    try self.recordPointerProvenanceAddressEscape(node.value.*, expr.span);
+                }
+                if (directIdentName(node.value.*)) |name| {
+                    _ = self.local_function_aliases.remove(name);
+                    _ = self.local_aggregate_pointer_aliases.remove(name);
+                    _ = self.local_pointer_array_aliases.remove(name);
+                } else {
+                    self.local_function_aliases.clearRetainingCapacity();
+                    self.local_aggregate_pointer_aliases.clearRetainingCapacity();
+                    self.local_pointer_array_aliases.clearRetainingCapacity();
+                }
+                self.invalidateFacts();
+                try self.buildExpr(node.value.*);
             },
             .deref => |inner| {
                 const inner_ty = self.exprType(inner.*);
@@ -6945,6 +6968,7 @@ const FunctionBuilder = struct {
                 // lowering the complete pointer type without extending address
                 // inference to calls, pointer chains, or immutable globals.
                 try self.inferredLocalAddressTypeExpr(expr.span, inner.*),
+            .borrow_expr => |node| try self.inferredLocalAddressTypeExpr(expr.span, node.value.*),
             .deref => |inner| self.directAddressDerefTypeExpr(inner.*) orelse self.assignment_target_type_expr,
             .unary => |node| if (node.op == .logical_not)
                 ast_query.simpleNameType("bool", expr.span)
@@ -9093,7 +9117,7 @@ const FunctionBuilder = struct {
 
     fn unwrapGrouped(expr: ast.Expr) ast.Expr {
         return switch (expr.kind) {
-            .grouped => |inner| unwrapGrouped(inner.*),
+            .grouped, .move_expr => |inner| unwrapGrouped(inner.*),
             else => expr,
         };
     }

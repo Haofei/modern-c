@@ -25,7 +25,7 @@ fn install_trap_vector(h: Boot) -> TrapReady {
 
 fn accept_chain(id: u32) -> u32 {
     let b: Boot = boot_hart(id);
-    let t: TrapReady = install_trap_vector(b);
+    let t: TrapReady = install_trap_vector(move b);
     let final_id: u32 = t.hartid;
     unsafe { forget_unchecked(t); }
     return final_id;

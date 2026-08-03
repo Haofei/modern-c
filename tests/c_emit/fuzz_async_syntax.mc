@@ -70,8 +70,8 @@ async fn fetch(d: u64, v: i32) -> i32 {
 // async-fn-awaiting-async-fn nesting end to end.
 async fn sum_two(da: u64, va: i32, db: u64, vb: i32) -> i32 {
     let a: i32 = await fetch(da, va);
-    let b: i32 = await fetch(db, vb);
-    return a + b;
+    let b: i32 = await move fetch(db, vb);
+    return move (a + b);
 }
 
 // idempotence: a side-effecting tail statement, so re-polling after completion is observable.

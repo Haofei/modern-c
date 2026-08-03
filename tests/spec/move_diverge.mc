@@ -28,10 +28,10 @@ extern fn panicf() -> never;
 fn accept_nested_returns(a: bool, b: bool) -> u32 {
     let h: Handle = acquire();
     if a {
-        if b { return release(h); }
-        else { return release(h); }
+        if b { return release(move h); }
+        else { return release(move h); }
     }
-    return release(h);
+    return release(move h);
 }
 
 // --- accepted: a branch consumes then aborts via `trap(...)`; the fall-through
@@ -39,30 +39,30 @@ fn accept_nested_returns(a: bool, b: bool) -> u32 {
 fn accept_consume_then_trap(cond: bool) -> u32 {
     let h: Handle = acquire();
     if cond {
-        release(h);
+        release(move h);
         trap(.Assert);
     }
-    return release(h);
+    return release(move h);
 }
 
 // --- accepted: same, aborting via a call to a `-> never` function ---
 fn accept_consume_then_never_call(cond: bool) -> u32 {
     let h: Handle = acquire();
     if cond {
-        release(h);
+        release(move h);
         panicf();
     }
-    return release(h);
+    return release(move h);
 }
 
 // --- accepted: same, aborting via `unreachable` ---
 fn accept_consume_then_unreachable(cond: bool) -> u32 {
     let h: Handle = acquire();
     if cond {
-        release(h);
+        release(move h);
         unreachable;
     }
-    return release(h);
+    return release(move h);
 }
 
 // --- accepted: a live resource on a branch that aborts via `trap(...)` carries no
@@ -73,16 +73,16 @@ fn accept_abort_carries_no_leak(cond: bool) -> u32 {
     if cond {
         trap(.Assert); // h still live here; the aborting branch has no leak obligation
     }
-    return release(h);
+    return release(move h);
 }
 
 // --- accepted: `defer` cleanup reserves both resources, so neither leaks on the
 //     aborting branch nor on the normal exit ---
 fn accept_defer_covers_abort(cond: bool) -> u32 {
     let h1: Handle = acquire();
-    defer release(h1);
+    defer release(move h1);
     let h2: Handle = acquire();
-    defer release(h2);
+    defer release(move h2);
     if cond {
         trap(.Assert);
     }
@@ -97,5 +97,5 @@ fn reject_nested_return_leak(a: bool, b: bool) -> u32 {
     if a {
         if b { return 0; }
     }
-    return release(h);
+    return release(move h);
 }

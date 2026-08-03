@@ -47,6 +47,7 @@ const ReflectEnv = sema_reflect.ReflectEnv;
 
 const arithmeticDomainsImplicitlyMix = sema_type.arithmeticDomainsImplicitlyMix;
 const addressOfOperand = sema_expr.addressOfOperand;
+const explicitBorrowMutability = sema_expr.explicitBorrowMutability;
 const arrayLiteralItems = sema_expr.arrayLiteralItems;
 const backendNameAttr = sema_decl.backendNameAttr;
 const byteViewCallReturnClass = sema_call.byteViewCallReturnClass;
@@ -348,16 +349,36 @@ pub const Checker = struct {
     // Type registries for comptime reflection (`sizeof`/`alignof`), set for the
     // duration of checkModule.
     reflect_env: ?*const ReflectEnv = null,
-    // Names of `move struct` linear resource types (section 18.1), set for the
-    // duration of checkModule so the move/liveness pass (D.7) can classify
-    // bindings. Empty for the common case (no move types → the pass is a no-op).
+    // Known structs for resource classification of generic struct instances
+    // (`Box<Ticket>` embeds a resource iff a field stores `T` by value). This is
+    // separate from `Context` because the move checker also asks resource
+    // questions outside expression-checking code paths.
+    active_structs: ?*const std.StringHashMap(StructInfo) = null,
+    active_tagged_unions: ?*const std.StringHashMap(UnionInfo) = null,
+    // Names of checked resource structs (`move struct` and `linear struct`), set
+    // for the duration of checkModule so the move/liveness pass can classify
+    // bindings. Empty for the common case (no checked resources -> pass is a no-op).
     move_types: ?*const std.StringHashMap(void) = null,
-    // Names of `move struct` types marked `#[trivial_drop]` (section 18.1): the author
+    // Names of strict exactly-once `linear struct` resource types. This is a
+    // subset of `move_types`; legacy `move struct` entries remain affine once
+    // they have a safe completion path.
+    linear_types: ?*const std.StringHashMap(void) = null,
+    // Names of checked resources explicitly permitted to cross a thread/task
+    // spawn boundary (`thread_move move/linear struct`). There is no inferred
+    // Send/Sync lattice in Scoped Affine Ownership v0.
+    thread_move_types: ?*const std.StringHashMap(void) = null,
+    // Names of resource types marked `#[trivial_drop]` (section 18.1): the author
     // asserts, once at the declaration, that completing the resource needs no release, so
     // `drop(x)` is a SAFE final use (no `unsafe { forget_unchecked }` at every call site).
     // A resource's release obligation is not visible in its field types, so this cannot be
     // inferred — it is an explicit author assertion, like `unsafe`, moved to the boundary.
     trivial_drop_types: ?*const std.StringHashMap(void) = null,
+    // Functions marked `#[drop]` that release a checked resource through their first
+    // parameter, keyed by function name and valued by the top-level resource type name.
+    // Shape is intentionally narrow: `#[drop] fn f(x: *mut T, ...) -> void` where `T`
+    // is a `move struct` / `linear struct`. The function call is real codegen; this
+    // table only tells the ownership pass that `f(&x)` is a final use of `x`.
+    drop_ptr_release_fns: ?*const std.StringHashMap([]const u8) = null,
     // A module-level Context used during the move pass to infer a switch subject's Result
     // type, so an arm binding (`ok(p)`) can be recognized as a linear `move` value.
     move_ctx: ?*const Context = null,
@@ -476,13 +497,18 @@ pub const Checker = struct {
         if (!self.generic_template_precheck) self.checkTypeAliasCycles(module, &type_aliases);
         self.collectMmioStructs(module, &mmio_structs);
         self.collectStructs(module, &structs);
+        self.active_structs = &structs;
+        defer self.active_structs = null;
         self.collectPackedBits(module, &packed_bits);
         self.collectOverlayUnions(module, &overlay_unions);
         self.collectTaggedUnions(module, &tagged_unions);
+        self.active_tagged_unions = &tagged_unions;
+        defer self.active_tagged_unions = null;
         self.collectEnums(module, &enums);
         self.collectFunctions(module, &functions);
         if (!self.generic_template_precheck) self.checkErrorFromDecls(module);
         self.collectGlobals(module, &globals);
+        const safe_module = moduleHasSafeModuleAttr(module);
 
         // Orphan rule: an `impl` of an `opaque struct` must live in the type's defining file,
         // so a peer `impl <OpaqueType>` written in another file cannot become an authorized
@@ -496,7 +522,7 @@ pub const Checker = struct {
         // satisfaction is checked at the instantiation site during monomorphization;
         // the orphan rule for `impl Trait for <opaque>` is covered by checkOrphanImpls
         // above (the impl methods are `Type__m` functions keyed on the opaque owner).
-        self.checkTraits(module);
+        self.checkTraits(module, safe_module);
 
         var const_fns = std.StringHashMap(ast.FnDecl).init(self.reporter.allocator);
         defer const_fns.deinit();
@@ -573,30 +599,59 @@ pub const Checker = struct {
 
         var move_types = std.StringHashMap(void).init(self.reporter.allocator);
         defer move_types.deinit();
+        var linear_types = std.StringHashMap(void).init(self.reporter.allocator);
+        defer linear_types.deinit();
+        var thread_move_types = std.StringHashMap(void).init(self.reporter.allocator);
+        defer thread_move_types.deinit();
         var trivial_drop_types = std.StringHashMap(void).init(self.reporter.allocator);
         defer trivial_drop_types.deinit();
         for (module.decls) |decl| {
-            if (decl.kind == .struct_decl and decl.kind.struct_decl.is_move) {
+            if (decl.kind == .struct_decl and decl.kind.struct_decl.is_region and declHasTrivialDrop(decl)) {
+                self.errorCode(decl.span, "E_REGION_RESOURCE_CONFLICT", "`region struct` is region-owned and cannot declare #[trivial_drop]");
+            }
+            if (decl.kind == .struct_decl and (decl.kind.struct_decl.is_move or decl.kind.struct_decl.is_linear)) {
                 move_types.put(decl.kind.struct_decl.name.text, {}) catch {
                     self.oom = true;
                 };
+                if (decl.kind.struct_decl.is_linear) {
+                    linear_types.put(decl.kind.struct_decl.name.text, {}) catch {
+                        self.oom = true;
+                    };
+                }
+                if (decl.kind.struct_decl.is_thread_move) {
+                    thread_move_types.put(decl.kind.struct_decl.name.text, {}) catch {
+                        self.oom = true;
+                    };
+                }
             }
             if (declHasTrivialDrop(decl)) {
-                if (decl.kind == .struct_decl and decl.kind.struct_decl.is_move) {
+                if (decl.kind == .struct_decl and (decl.kind.struct_decl.is_move or decl.kind.struct_decl.is_linear)) {
                     trivial_drop_types.put(decl.kind.struct_decl.name.text, {}) catch {
                         self.oom = true;
                     };
                 } else {
                     // `#[trivial_drop]` asserts a linear resource's completion is a no-op; it
-                    // is meaningless on anything but a `move struct`.
-                    self.errorCode(decl.span, "E_TRIVIAL_DROP_NOT_MOVE", "#[trivial_drop] applies only to a `move struct` (it asserts the resource's completion needs no release)");
+                    // is meaningless on anything but a checked resource struct.
+                    self.errorCode(decl.span, "E_TRIVIAL_DROP_NOT_MOVE", "#[trivial_drop] applies only to a `move struct` or `linear struct` (it asserts the resource's completion needs no release)");
                 }
             }
         }
+        self.collectImplicitMoveAggregates(module, &move_types, &linear_types, &type_aliases);
+        self.collectThreadMoveAggregates(module, &move_types, &thread_move_types);
         self.move_types = &move_types;
         defer self.move_types = null;
+        self.linear_types = &linear_types;
+        defer self.linear_types = null;
+        self.thread_move_types = &thread_move_types;
+        defer self.thread_move_types = null;
         self.trivial_drop_types = &trivial_drop_types;
         defer self.trivial_drop_types = null;
+
+        var drop_ptr_release_fns = std.StringHashMap([]const u8).init(self.reporter.allocator);
+        defer drop_ptr_release_fns.deinit();
+        self.collectDropPointerReleaseFns(module, &move_types, &linear_types, &structs, &drop_ptr_release_fns);
+        self.drop_ptr_release_fns = &drop_ptr_release_fns;
+        defer self.drop_ptr_release_fns = null;
 
         // Explicit mode makes every imported file private-by-default. Legacy mode preserves
         // the original rule where a file becomes strict only after declaring some `pub` item.
@@ -637,7 +692,7 @@ pub const Checker = struct {
 
         for (module.decls) |decl| {
             if (self.generic_template_precheck and !self.shouldCheckGenericTemplateDecl(decl)) continue;
-            self.checkDecl(decl, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
+            self.checkDecl(decl, safe_module, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
         }
         self.checkBoundedCallCycles(module, &functions);
 
@@ -662,10 +717,12 @@ pub const Checker = struct {
             }
         }
 
-        // Linear `move`/liveness pass (section 18.1, annex D.7). No-op unless the
-        // module declares `move` types.
-        if (!self.generic_template_precheck and move_types.count() > 0) {
+        // Linear `move`/liveness pass (section 18.1, annex D.7), also owns the
+        // scoped-borrow state machine. It is skipped only when the module has
+        // neither checked resource types nor explicit `borrow` expressions.
+        if (!self.generic_template_precheck and (move_types.count() > 0 or moduleHasScopedBorrow(module))) {
             var move_ctx = Context{
+                .safe_module = safe_module,
                 .functions = &functions,
                 .globals = &globals,
                 .type_aliases = &type_aliases,
@@ -696,6 +753,13 @@ pub const Checker = struct {
             .union_decl => |union_decl| union_decl.type_params.len > 0,
             else => false,
         };
+    }
+
+    fn moduleHasSafeModuleAttr(module: ast.Module) bool {
+        for (module.decls) |decl| {
+            if (hasNamedAttr(decl.attrs, "safe_module")) return true;
+        }
+        return false;
     }
 
     fn collectTypeAliases(self: *Checker, module: ast.Module, type_aliases: *std.StringHashMap(ast.TypeExpr)) void {
@@ -815,7 +879,7 @@ pub const Checker = struct {
                 self.oom = true;
             };
         }
-        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields, .semantic_identity = (struct_decl.semantic_identity orelse struct_decl.name).text, .abi = struct_decl.abi, .type_param_count = struct_decl.type_params.len, .is_opaque = struct_decl.is_opaque, .is_c_union = struct_decl.is_c_union }) catch {
+        structs.put(struct_decl.name.text, .{ .fields = fields, .ordered = struct_decl.fields, .semantic_identity = (struct_decl.semantic_identity orelse struct_decl.name).text, .abi = struct_decl.abi, .type_params = struct_decl.type_params, .type_param_count = struct_decl.type_params.len, .is_opaque = struct_decl.is_opaque, .is_region = struct_decl.is_region, .is_view = struct_decl.is_view, .is_thread_move = struct_decl.is_thread_move, .is_c_union = struct_decl.is_c_union }) catch {
             fields.deinit();
         };
     }
@@ -855,7 +919,7 @@ pub const Checker = struct {
                 self.oom = true;
             };
         }
-        tagged_unions.put(union_decl.name.text, .{ .cases = cases, .type_param_count = union_decl.type_params.len }) catch {
+        tagged_unions.put(union_decl.name.text, .{ .cases = cases, .type_params = union_decl.type_params, .type_param_count = union_decl.type_params.len }) catch {
             cases.deinit();
         };
     }
@@ -880,9 +944,11 @@ pub const Checker = struct {
                     if (!functions.contains(fn_decl.name.text)) functions.put(fn_decl.name.text, .{
                         .params = fn_decl.params,
                         .return_ty = fn_decl.return_type,
+                        .return_borrow_source = fn_decl.return_borrow_source,
                         .is_extern = decl.kind == .extern_fn,
                         .is_variadic = fn_decl.is_variadic,
                         .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(decl.attrs, "mc_abi")),
+                        .unsafe_ffi = hasNamedAttr(decl.attrs, "unsafe_ffi"),
                         .no_lang_trap = hasNoLangTrap(decl.attrs),
                         .is_const = fn_decl.is_const,
                         .may_sleep = hasMaySleep(decl.attrs),
@@ -896,6 +962,128 @@ pub const Checker = struct {
                 .struct_decl, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
             }
         }
+    }
+
+    fn collectDropPointerReleaseFns(self: *Checker, module: ast.Module, move_types: *const std.StringHashMap(void), linear_types: *const std.StringHashMap(void), structs: *const std.StringHashMap(StructInfo), release_fns: *std.StringHashMap([]const u8)) void {
+        for (module.decls) |decl| {
+            if (!hasNamedAttr(decl.attrs, "drop")) continue;
+            const fn_decl = switch (decl.kind) {
+                .fn_decl => |node| node,
+                else => {
+                    self.errorCode(decl.span, "E_DROP_ATTR_SHAPE", "#[drop] applies only to a function declaration");
+                    continue;
+                },
+            };
+            if (!returnTypeIsVoid(fn_decl.return_type)) {
+                self.errorCode(fn_decl.name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function must return void");
+                continue;
+            }
+            const resource_name = dropPointerReleaseParamTypeName(fn_decl) orelse {
+                self.errorCode(fn_decl.name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function must take a `*mut` checked resource as its first parameter");
+                continue;
+            };
+            if (structs.get(resource_name)) |info| {
+                if (info.is_region) {
+                    self.errorCode(fn_decl.params[0].ty.span, "E_REGION_RESOURCE_CONFLICT", "`region struct` is released with its owning region and cannot have a #[drop] release function");
+                    continue;
+                }
+            }
+            if (!move_types.contains(resource_name)) {
+                self.errorCode(fn_decl.params[0].ty.span, "E_DROP_ATTR_SHAPE", "#[drop] release function's first parameter must point at a `move struct` or `linear struct`");
+                continue;
+            }
+            if (linear_types.contains(resource_name)) {
+                self.errorCode(fn_decl.params[0].ty.span, "E_DROP_ATTR_SHAPE", "#[drop] release functions are only for affine `move struct` resources; `linear struct` values must be explicitly consumed");
+                continue;
+            }
+            if (!release_fns.contains(fn_decl.name.text)) release_fns.put(fn_decl.name.text, resource_name) catch {
+                self.oom = true;
+            };
+        }
+    }
+
+    fn collectImplicitMoveAggregates(self: *Checker, module: ast.Module, move_types: *std.StringHashMap(void), linear_types: *std.StringHashMap(void), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+        self.move_types = move_types;
+        self.linear_types = linear_types;
+        defer {
+            self.move_types = null;
+            self.linear_types = null;
+        }
+
+        var changed = true;
+        var passes: usize = 0;
+        while (changed and passes < 64) : (passes += 1) {
+            changed = false;
+            for (module.decls) |decl| {
+                const struct_decl = switch (decl.kind) {
+                    .struct_decl => |node| node,
+                    else => continue,
+                };
+                if (struct_decl.is_region or struct_decl.is_view or struct_decl.is_c_union) continue;
+                var embeds_move = false;
+                var embeds_linear = false;
+                for (struct_decl.fields) |field| {
+                    if (self.typeEmbedsMoveByValue(field.ty, aliases)) embeds_move = true;
+                    if (self.typeEmbedsLinearByValue(field.ty, aliases)) embeds_linear = true;
+                }
+                if (embeds_move and !move_types.contains(struct_decl.name.text)) {
+                    move_types.put(struct_decl.name.text, {}) catch {
+                        self.oom = true;
+                    };
+                    changed = true;
+                }
+                if (embeds_linear and !linear_types.contains(struct_decl.name.text)) {
+                    linear_types.put(struct_decl.name.text, {}) catch {
+                        self.oom = true;
+                    };
+                    changed = true;
+                }
+            }
+        }
+        if (changed) {
+            const span = if (module.decls.len > 0) module.decls[0].span else diagnostics.Span{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+            self.errorCode(span, "E_INTERNAL_OOM", "compiler exceeded implicit resource aggregate classification depth");
+        }
+    }
+
+    fn collectThreadMoveAggregates(self: *Checker, module: ast.Module, move_types: *const std.StringHashMap(void), thread_move_types: *std.StringHashMap(void)) void {
+        for (module.decls) |decl| {
+            const struct_decl = switch (decl.kind) {
+                .struct_decl => |node| node,
+                else => continue,
+            };
+            if (!struct_decl.is_thread_move) continue;
+            if (!move_types.contains(struct_decl.name.text)) continue;
+            if (thread_move_types.contains(struct_decl.name.text)) continue;
+            thread_move_types.put(struct_decl.name.text, {}) catch {
+                self.oom = true;
+            };
+        }
+    }
+
+    fn returnTypeIsVoid(return_type: ?ast.TypeExpr) bool {
+        const ty = return_type orelse return true;
+        return switch (ty.kind) {
+            .name => |n| std.mem.eql(u8, n.text, "void"),
+            else => false,
+        };
+    }
+
+    fn dropPointerReleaseParamTypeName(fn_decl: ast.FnDecl) ?[]const u8 {
+        if (fn_decl.params.len == 0) return null;
+        const first = fn_decl.params[0].ty;
+        const child = switch (first.kind) {
+            .pointer => |p| blk: {
+                if (p.mutability != .mut) return null;
+                break :blk p.child.*;
+            },
+            else => return null,
+        };
+        return switch (child.kind) {
+            .name => |n| n.text,
+            .generic => |g| g.base.text,
+            else => null,
+        };
     }
 
     fn collectEnums(self: *Checker, module: ast.Module, enums: *std.StringHashMap(EnumInfo)) void {
@@ -924,7 +1112,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .global_decl => |global| if (global.ty) |ty| {
-                    if (!globals.contains(global.name.text)) globals.put(global.name.text, .{ .ty = ty }) catch {
+                    if (!globals.contains(global.name.text)) globals.put(global.name.text, .{ .ty = ty, .unsafe_ffi = hasNamedAttr(decl.attrs, "unsafe_ffi") }) catch {
                         self.oom = true;
                     };
                 },
@@ -977,12 +1165,12 @@ pub const Checker = struct {
         }
     }
 
-    fn checkDecl(self: *Checker, decl: ast.Decl, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    fn checkDecl(self: *Checker, decl: ast.Decl, safe_module: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         const no_lang_trap = hasNoLangTrap(decl.attrs);
         const irq_context = hasIrqContext(decl.attrs);
         const bounded = hasBoundedContext(decl.attrs);
         const is_naked = hasNaked(decl.attrs);
-        const type_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases };
+        const type_ctx = Context{ .safe_module = safe_module, .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases };
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
                 // Bare `extern fn` is an unresolved declaration in the active MC
@@ -991,7 +1179,11 @@ pub const Checker = struct {
                 const mc_abi_export = fn_decl.exported and hasNamedAttr(decl.attrs, "mc_abi");
                 const abi_boundary = (decl.kind == .extern_fn and fn_decl.abi != null) or (fn_decl.exported and !mc_abi_export);
                 const move_abi_boundary = decl.kind == .extern_fn or fn_decl.exported;
-                self.checkFn(fn_decl, abi_boundary, move_abi_boundary, no_lang_trap, irq_context, bounded, is_naked, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
+                const ffi_boundary = decl.kind == .extern_fn or abi_boundary;
+                if (safe_module and ffi_boundary and !hasNamedAttr(decl.attrs, "unsafe_ffi")) {
+                    self.errorCode(fn_decl.name.span, "E_SAFE_MODULE_FFI_BOUNDARY", "`#[safe_module]` requires external ABI declarations to be marked `#[unsafe_ffi]`; wrap audited FFI edges and expose a safe MC API");
+                }
+                self.checkFn(fn_decl, safe_module, abi_boundary, move_abi_boundary, no_lang_trap, irq_context, bounded, is_naked, mmio_structs, structs, packed_bits, overlay_unions, tagged_unions, enums, functions, globals, type_aliases);
                 // T(term)1: bounded-loop / no-unbounded-recursion check for IRQ/atomic
                 // and `#[bounded]` functions (opt-in; existing code is unaffected).
                 if (hasBoundedContext(decl.attrs)) {
@@ -1017,11 +1209,22 @@ pub const Checker = struct {
             // the impl methods themselves are ordinary `Type__m` fn_decls checked above.
             .trait_decl, .impl_trait => {},
             .global_decl => |global| {
+                if (safe_module and (global.exported or global.is_extern) and !hasNamedAttr(decl.attrs, "unsafe_ffi")) {
+                    self.errorCode(global.name.span, "E_SAFE_MODULE_FFI_BOUNDARY", "`#[safe_module]` requires external ABI data symbols to be marked `#[unsafe_ffi]`; wrap audited FFI edges and expose a safe MC API");
+                }
                 const type_error_count = self.reporter.diagnostics.items.len;
                 if (global.ty) |ty| {
                     self.checkType(ty, .storage, type_ctx);
+                    if (self.typeEmbedsRegionByValue(ty, structs, type_aliases)) {
+                        self.errorCode(ty.span, "E_REGION_RESOURCE_CONFLICT", "global storage cannot own a `region struct` by value; region nodes must be owned by an explicit region/arena and referenced through pointers or IDs");
+                    }
+                    if (self.typeEmbedsViewByValue(ty, structs, type_aliases)) {
+                        self.errorCode(ty.span, "E_BORROW_ESCAPES_SCOPE", "global storage cannot own a `view struct` by value; borrowed views are lexical and must stay in local scope");
+                    }
                     if (self.typeIsMoveArray(ty, type_aliases)) {
                         self.errorCode(ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "global storage cannot own an array of linear `move` values by value; hold the resources behind pointers or in a `move` container instead");
+                    } else if (self.typeEmbedsMoveByValue(ty, type_aliases)) {
+                        self.errorCode(ty.span, "E_GLOBAL_RESOURCE_STORAGE", "global storage cannot own `move`/`linear` resources by value; use an explicit init token, pointer, or copyable handle instead");
                     }
                 } else {
                     self.errorCode(global.name.span, "E_GLOBAL_REQUIRES_TYPE", "global declarations require an explicit storage type");
@@ -1085,6 +1288,17 @@ pub const Checker = struct {
         var fields = std.StringHashMap(void).init(self.reporter.allocator);
         defer fields.deinit();
 
+        if (struct_decl.is_region and (struct_decl.is_move or struct_decl.is_linear)) {
+            self.errorCode(struct_decl.name.span, "E_REGION_RESOURCE_CONFLICT", "`region struct` cannot also be `move` or `linear`; the enclosing region owns its lifetime");
+        }
+        if (struct_decl.is_view and (struct_decl.is_move or struct_decl.is_linear or struct_decl.is_region or struct_decl.is_thread_move)) {
+            self.errorCode(struct_decl.name.span, "E_BORROW_ESCAPES_SCOPE", "`view struct` is a lexical borrowed view and cannot also be `move`, `linear`, `region`, or `thread_move`");
+        }
+        const is_checked_resource_struct = struct_decl.is_move or struct_decl.is_linear or if (self.move_types) |move_types| move_types.contains(struct_decl.name.text) else false;
+        if (struct_decl.is_thread_move and !is_checked_resource_struct) {
+            self.errorCode(struct_decl.name.span, "E_THREAD_MOVE_RESOURCE", "`thread_move` applies only to checked resource structs (`move`, `linear`, or an aggregate that stores a checked resource by value)");
+        }
+
         // A generic struct's type parameters are valid type names in its fields.
         var type_params = std.StringHashMap(void).init(self.reporter.allocator);
         defer type_params.deinit();
@@ -1100,19 +1314,28 @@ pub const Checker = struct {
 
         for (struct_decl.fields) |field| {
             self.checkType(field.ty, .storage, ctx);
-            // A linear `move` resource stored by value in a non-`move` struct escapes
-            // linear tracking: the aggregate is copyable/leakable, so the resource could be
-            // duplicated or dropped without being consumed. This also closes the generic
-            // container hole — `Pool<Token, N>`, `Arc<Token>`, etc. monomorphize to a
-            // non-move struct with a move-typed field and are rejected here. Hold a move
-            // resource in another `move` type, or store it behind a pointer.
-            if (!struct_decl.is_move and self.typeIsMoveArray(field.ty, aliases)) {
-                // A copyable struct cannot own move resources by value. Move structs can
-                // track array field elements as places, but a non-move aggregate could be
-                // copied or leaked outside the linear checker.
+            // A plain struct with a scalar `move`/`linear` field automatically becomes a
+            // checked resource aggregate: typeEmbedsMoveByValue makes local/call/return/
+            // assignment/global paths track it like an explicit `move struct`. Arrays remain
+            // rejected for now because arbitrary element moves need nameable place tracking.
+            if (struct_decl.is_c_union and self.typeEmbedsMoveByValue(field.ty, aliases)) {
+                self.errorCode(field.ty.span, "E_MOVE_UNION_RESOURCE", "`#[c_union]` fields cannot contain `move`/`linear` resources by value; store a pointer or stable handle instead");
+            } else if (!struct_decl.is_move and !struct_decl.is_linear and self.typeIsMoveArray(field.ty, aliases)) {
                 self.errorCode(field.ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "a non-`move` struct cannot store an array of linear `move` values by value; make the struct `move`, or hold the resources behind pointers");
-            } else if (!struct_decl.is_move and self.typeEmbedsMoveByValue(field.ty, aliases)) {
-                self.errorCode(field.ty.span, "E_MOVE_FIELD_IN_NONMOVE", "a linear `move` value cannot be stored by value in a non-`move` struct (it would be duplicated or leaked); make the struct `move`, or store the resource behind a pointer");
+            }
+            if (ctx.structs) |known_structs| {
+                if (struct_decl.is_c_union and self.typeEmbedsRegionByValue(field.ty, known_structs, aliases)) {
+                    self.errorCode(field.ty.span, "E_REGION_RESOURCE_CONFLICT", "`#[c_union]` fields cannot contain `region struct` nodes by value; store a pointer, view, or stable ID");
+                } else if (struct_decl.is_c_union and self.typeEmbedsViewByValue(field.ty, known_structs, aliases)) {
+                    self.errorCode(field.ty.span, "E_BORROW_ESCAPES_SCOPE", "`#[c_union]` fields cannot contain `view struct` borrowed aggregates by value; rebuild the view lexically from its source");
+                } else if (!struct_decl.is_view and self.typeEmbedsViewByValue(field.ty, known_structs, aliases)) {
+                    self.errorCode(field.ty.span, "E_BORROW_ESCAPES_SCOPE", "ordinary structs cannot embed `view struct` borrowed aggregates by value; make the container a `view struct` or store the original source pointer/ID");
+                } else if (!struct_decl.is_region and self.typeEmbedsRegionByValue(field.ty, known_structs, aliases)) {
+                    self.errorCode(field.ty.span, "E_REGION_RESOURCE_CONFLICT", "a non-`region struct` cannot embed a `region struct` by value; store a pointer/view or make the containing node `region struct`");
+                }
+            }
+            if (struct_decl.is_thread_move and self.typeEmbedsNonThreadMoveByValue(field.ty, aliases)) {
+                self.errorCode(field.ty.span, "E_THREAD_MOVE_RESOURCE", "`thread_move` resource cannot contain a non-`thread_move` resource by value");
             }
             if (fields.contains(field.name.text)) {
                 self.errorCode(field.name.span, "E_DUPLICATE_STRUCT_FIELD", "struct field names must be unique");
@@ -1153,6 +1376,90 @@ pub const Checker = struct {
         return false;
     }
 
+    fn isLinearTypeName(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        const linear_types = self.linear_types orelse return false;
+        var cur = ty;
+        var guard: usize = 0;
+        while (guard < 64) : (guard += 1) {
+            switch (cur.kind) {
+                .name => |n| {
+                    if (linear_types.contains(n.text)) return true;
+                    if (aliases.get(n.text)) |target| {
+                        cur = target;
+                        continue;
+                    }
+                    return false;
+                },
+                .generic => |g| return linear_types.contains(g.base.text),
+                else => return false,
+            }
+        }
+        return false;
+    }
+
+    fn isThreadMoveTypeName(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        const thread_move_types = self.thread_move_types orelse return false;
+        var cur = ty;
+        var guard: usize = 0;
+        while (guard < 64) : (guard += 1) {
+            switch (cur.kind) {
+                .name => |n| {
+                    if (thread_move_types.contains(n.text)) return true;
+                    if (aliases.get(n.text)) |target| {
+                        cur = target;
+                        continue;
+                    }
+                    return false;
+                },
+                .generic => |g| return thread_move_types.contains(g.base.text),
+                else => return false,
+            }
+        }
+        return false;
+    }
+
+    fn isRegionTypeName(self: *Checker, ty: ast.TypeExpr, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        _ = self;
+        var cur = ty;
+        var guard: usize = 0;
+        while (guard < 64) : (guard += 1) {
+            switch (cur.kind) {
+                .name => |n| {
+                    if (structs.get(n.text)) |info| return info.is_region;
+                    if (aliases.get(n.text)) |target| {
+                        cur = target;
+                        continue;
+                    }
+                    return false;
+                },
+                .generic => |g| return if (structs.get(g.base.text)) |info| info.is_region else false,
+                else => return false,
+            }
+        }
+        return true;
+    }
+
+    fn isViewTypeName(self: *Checker, ty: ast.TypeExpr, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        _ = self;
+        var cur = ty;
+        var guard: usize = 0;
+        while (guard < 64) : (guard += 1) {
+            switch (cur.kind) {
+                .name => |n| {
+                    if (structs.get(n.text)) |info| return info.is_view;
+                    if (aliases.get(n.text)) |target| {
+                        cur = target;
+                        continue;
+                    }
+                    return false;
+                },
+                .generic => |g| return if (structs.get(g.base.text)) |info| info.is_view else false,
+                else => return false,
+            }
+        }
+        return true;
+    }
+
     // The `move struct` type NAME a type denotes (resolving aliases), or null. Like
     // isMoveTypeName but yields the name so it can be looked up in trivial_drop_types.
     pub fn moveTypeNameOf(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) ?[]const u8 {
@@ -1186,6 +1493,368 @@ pub const Checker = struct {
         return self.typeEmbedsMoveByValueDepth(ty, aliases, 0);
     }
 
+    pub fn typeEmbedsLinearByValue(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        return self.typeEmbedsLinearByValueDepth(ty, aliases, 0);
+    }
+
+    fn typeEmbedsRegionByValue(self: *Checker, ty: ast.TypeExpr, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        return self.typeEmbedsRegionByValueDepth(ty, structs, aliases, 0);
+    }
+
+    fn typeEmbedsViewByValue(self: *Checker, ty: ast.TypeExpr, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        return self.typeEmbedsViewByValueDepth(ty, structs, aliases, 0);
+    }
+
+    fn returnBorrowContractWrapsViewByValue(self: *Checker, ty: ast.TypeExpr, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        if (!self.typeEmbedsViewByValue(ty, structs, aliases)) return false;
+        return !self.isViewTypeName(ty, structs, aliases);
+    }
+
+    fn typeEmbedsNonThreadMoveByValue(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        return self.typeEmbedsNonThreadMoveByValueDepth(ty, aliases, 0);
+    }
+
+    fn genericArgForParam(params: []const ast.Ident, args: []const ast.TypeExpr, name: []const u8) ?ast.TypeExpr {
+        if (params.len != args.len) return null;
+        for (params, 0..) |param, i| {
+            if (std.mem.eql(u8, param.text, name)) return args[i];
+        }
+        return null;
+    }
+
+    fn genericStructEmbedsMoveByValue(self: *Checker, g: anytype, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        const structs = self.active_structs orelse return false;
+        const info = structs.get(g.base.text) orelse return false;
+        if (info.type_params.len == 0) return false;
+        if (info.type_params.len != g.args.len) return true;
+        for (info.ordered) |field| {
+            if (self.typeEmbedsMoveByValueWithGenericArgs(field.ty, info.type_params, g.args, aliases, depth + 1)) return true;
+        }
+        return false;
+    }
+
+    fn genericUnionEmbedsMoveByValue(self: *Checker, g: anytype, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        const unions = self.active_tagged_unions orelse return false;
+        const info = unions.get(g.base.text) orelse return false;
+        if (info.type_params.len == 0) return false;
+        if (info.type_params.len != g.args.len) return true;
+        var cases = info.cases.valueIterator();
+        while (cases.next()) |payload| {
+            if (payload.*) |ty| {
+                if (self.typeEmbedsMoveByValueWithGenericArgs(ty, info.type_params, g.args, aliases, depth + 1)) return true;
+            }
+        }
+        return false;
+    }
+
+    fn genericStructEmbedsLinearByValue(self: *Checker, g: anytype, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        const structs = self.active_structs orelse return false;
+        const info = structs.get(g.base.text) orelse return false;
+        if (info.type_params.len == 0) return false;
+        if (info.type_params.len != g.args.len) return true;
+        for (info.ordered) |field| {
+            if (self.typeEmbedsLinearByValueWithGenericArgs(field.ty, info.type_params, g.args, aliases, depth + 1)) return true;
+        }
+        return false;
+    }
+
+    fn genericUnionEmbedsLinearByValue(self: *Checker, g: anytype, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        const unions = self.active_tagged_unions orelse return false;
+        const info = unions.get(g.base.text) orelse return false;
+        if (info.type_params.len == 0) return false;
+        if (info.type_params.len != g.args.len) return true;
+        var cases = info.cases.valueIterator();
+        while (cases.next()) |payload| {
+            if (payload.*) |ty| {
+                if (self.typeEmbedsLinearByValueWithGenericArgs(ty, info.type_params, g.args, aliases, depth + 1)) return true;
+            }
+        }
+        return false;
+    }
+
+    fn genericStructEmbedsNonThreadMoveByValue(self: *Checker, g: anytype, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        const structs = self.active_structs orelse return false;
+        const info = structs.get(g.base.text) orelse return false;
+        if (info.type_params.len == 0) return false;
+        if (info.type_params.len != g.args.len) return true;
+        for (info.ordered) |field| {
+            if (self.typeEmbedsNonThreadMoveByValueWithGenericArgs(field.ty, info.type_params, g.args, aliases, depth + 1)) return true;
+        }
+        return false;
+    }
+
+    fn genericUnionEmbedsNonThreadMoveByValue(self: *Checker, g: anytype, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        const unions = self.active_tagged_unions orelse return false;
+        const info = unions.get(g.base.text) orelse return false;
+        if (info.type_params.len == 0) return false;
+        if (info.type_params.len != g.args.len) return true;
+        var cases = info.cases.valueIterator();
+        while (cases.next()) |payload| {
+            if (payload.*) |ty| {
+                if (self.typeEmbedsNonThreadMoveByValueWithGenericArgs(ty, info.type_params, g.args, aliases, depth + 1)) return true;
+            }
+        }
+        return false;
+    }
+
+    fn genericStructEmbedsRegionByValue(self: *Checker, g: anytype, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        const info = structs.get(g.base.text) orelse return false;
+        if (info.type_params.len == 0) return false;
+        if (info.type_params.len != g.args.len) return true;
+        for (info.ordered) |field| {
+            if (self.typeEmbedsRegionByValueWithGenericArgs(field.ty, info.type_params, g.args, structs, aliases, depth + 1)) return true;
+        }
+        return false;
+    }
+
+    fn genericUnionEmbedsRegionByValue(self: *Checker, g: anytype, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        const unions = self.active_tagged_unions orelse return false;
+        const info = unions.get(g.base.text) orelse return false;
+        if (info.type_params.len == 0) return false;
+        if (info.type_params.len != g.args.len) return true;
+        var cases = info.cases.valueIterator();
+        while (cases.next()) |payload| {
+            if (payload.*) |ty| {
+                if (self.typeEmbedsRegionByValueWithGenericArgs(ty, info.type_params, g.args, structs, aliases, depth + 1)) return true;
+            }
+        }
+        return false;
+    }
+
+    fn genericStructEmbedsViewByValue(self: *Checker, g: anytype, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        const info = structs.get(g.base.text) orelse return false;
+        if (info.type_params.len == 0) return false;
+        if (info.type_params.len != g.args.len) return true;
+        for (info.ordered) |field| {
+            if (self.typeEmbedsViewByValueWithGenericArgs(field.ty, info.type_params, g.args, structs, aliases, depth + 1)) return true;
+        }
+        return false;
+    }
+
+    fn genericUnionEmbedsViewByValue(self: *Checker, g: anytype, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        const unions = self.active_tagged_unions orelse return false;
+        const info = unions.get(g.base.text) orelse return false;
+        if (info.type_params.len == 0) return false;
+        if (info.type_params.len != g.args.len) return true;
+        var cases = info.cases.valueIterator();
+        while (cases.next()) |payload| {
+            if (payload.*) |ty| {
+                if (self.typeEmbedsViewByValueWithGenericArgs(ty, info.type_params, g.args, structs, aliases, depth + 1)) return true;
+            }
+        }
+        return false;
+    }
+
+    fn typeEmbedsMoveByValueWithGenericArgs(self: *Checker, ty: ast.TypeExpr, params: []const ast.Ident, args: []const ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        if (depth >= 64) return true;
+        switch (ty.kind) {
+            .name => |n| {
+                if (genericArgForParam(params, args, n.text)) |arg| return self.typeEmbedsMoveByValueDepth(arg, aliases, depth + 1);
+                return self.typeEmbedsMoveByValueDepth(ty, aliases, depth + 1);
+            },
+            .array => |node| return self.typeEmbedsMoveByValueWithGenericArgs(node.child.*, params, args, aliases, depth + 1),
+            .qualified => |node| return self.typeEmbedsMoveByValueWithGenericArgs(node.child.*, params, args, aliases, depth + 1),
+            .nullable => |child| return self.typeEmbedsMoveByValueWithGenericArgs(child.*, params, args, aliases, depth + 1),
+            .generic => |node| {
+                if (genericHoldsArgsByValue(node.base.text)) {
+                    for (node.args) |arg| {
+                        if (self.typeEmbedsMoveByValueWithGenericArgs(arg, params, args, aliases, depth + 1)) return true;
+                    }
+                }
+                return self.typeEmbedsMoveByValueDepth(ty, aliases, depth + 1);
+            },
+            else => return self.typeEmbedsMoveByValueDepth(ty, aliases, depth + 1),
+        }
+    }
+
+    fn typeEmbedsLinearByValueWithGenericArgs(self: *Checker, ty: ast.TypeExpr, params: []const ast.Ident, args: []const ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        if (depth >= 64) return true;
+        switch (ty.kind) {
+            .name => |n| {
+                if (genericArgForParam(params, args, n.text)) |arg| return self.typeEmbedsLinearByValueDepth(arg, aliases, depth + 1);
+                return self.typeEmbedsLinearByValueDepth(ty, aliases, depth + 1);
+            },
+            .array => |node| return self.typeEmbedsLinearByValueWithGenericArgs(node.child.*, params, args, aliases, depth + 1),
+            .qualified => |node| return self.typeEmbedsLinearByValueWithGenericArgs(node.child.*, params, args, aliases, depth + 1),
+            .nullable => |child| return self.typeEmbedsLinearByValueWithGenericArgs(child.*, params, args, aliases, depth + 1),
+            .generic => |node| {
+                if (genericHoldsArgsByValue(node.base.text)) {
+                    for (node.args) |arg| {
+                        if (self.typeEmbedsLinearByValueWithGenericArgs(arg, params, args, aliases, depth + 1)) return true;
+                    }
+                }
+                return self.typeEmbedsLinearByValueDepth(ty, aliases, depth + 1);
+            },
+            else => return self.typeEmbedsLinearByValueDepth(ty, aliases, depth + 1),
+        }
+    }
+
+    fn typeEmbedsNonThreadMoveByValueWithGenericArgs(self: *Checker, ty: ast.TypeExpr, params: []const ast.Ident, args: []const ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        if (depth >= 64) return true;
+        switch (ty.kind) {
+            .name => |n| {
+                if (genericArgForParam(params, args, n.text)) |arg| return self.typeEmbedsNonThreadMoveByValueDepth(arg, aliases, depth + 1);
+                return self.typeEmbedsNonThreadMoveByValueDepth(ty, aliases, depth + 1);
+            },
+            .array => |node| return self.typeEmbedsNonThreadMoveByValueWithGenericArgs(node.child.*, params, args, aliases, depth + 1),
+            .qualified => |node| return self.typeEmbedsNonThreadMoveByValueWithGenericArgs(node.child.*, params, args, aliases, depth + 1),
+            .nullable => |child| return self.typeEmbedsNonThreadMoveByValueWithGenericArgs(child.*, params, args, aliases, depth + 1),
+            .generic => |node| {
+                if (genericHoldsArgsByValue(node.base.text)) {
+                    for (node.args) |arg| {
+                        if (self.typeEmbedsNonThreadMoveByValueWithGenericArgs(arg, params, args, aliases, depth + 1)) return true;
+                    }
+                }
+                return self.typeEmbedsNonThreadMoveByValueDepth(ty, aliases, depth + 1);
+            },
+            else => return self.typeEmbedsNonThreadMoveByValueDepth(ty, aliases, depth + 1),
+        }
+    }
+
+    fn typeEmbedsRegionByValueWithGenericArgs(self: *Checker, ty: ast.TypeExpr, params: []const ast.Ident, args: []const ast.TypeExpr, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        if (depth >= 64) return true;
+        switch (ty.kind) {
+            .name => |n| {
+                if (genericArgForParam(params, args, n.text)) |arg| return self.typeEmbedsRegionByValueDepth(arg, structs, aliases, depth + 1);
+                return self.typeEmbedsRegionByValueDepth(ty, structs, aliases, depth + 1);
+            },
+            .array => |node| return self.typeEmbedsRegionByValueWithGenericArgs(node.child.*, params, args, structs, aliases, depth + 1),
+            .qualified => |node| return self.typeEmbedsRegionByValueWithGenericArgs(node.child.*, params, args, structs, aliases, depth + 1),
+            .nullable => |child| return self.typeEmbedsRegionByValueWithGenericArgs(child.*, params, args, structs, aliases, depth + 1),
+            .generic => |node| {
+                if (genericHoldsArgsByValue(node.base.text)) {
+                    for (node.args) |arg| {
+                        if (self.typeEmbedsRegionByValueWithGenericArgs(arg, params, args, structs, aliases, depth + 1)) return true;
+                    }
+                }
+                return self.typeEmbedsRegionByValueDepth(ty, structs, aliases, depth + 1);
+            },
+            else => return self.typeEmbedsRegionByValueDepth(ty, structs, aliases, depth + 1),
+        }
+    }
+
+    fn typeEmbedsViewByValueWithGenericArgs(self: *Checker, ty: ast.TypeExpr, params: []const ast.Ident, args: []const ast.TypeExpr, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        if (depth >= 64) return true;
+        switch (ty.kind) {
+            .name => |n| {
+                if (genericArgForParam(params, args, n.text)) |arg| return self.typeEmbedsViewByValueDepth(arg, structs, aliases, depth + 1);
+                return self.typeEmbedsViewByValueDepth(ty, structs, aliases, depth + 1);
+            },
+            .array => |node| return self.typeEmbedsViewByValueWithGenericArgs(node.child.*, params, args, structs, aliases, depth + 1),
+            .qualified => |node| return self.typeEmbedsViewByValueWithGenericArgs(node.child.*, params, args, structs, aliases, depth + 1),
+            .nullable => |child| return self.typeEmbedsViewByValueWithGenericArgs(child.*, params, args, structs, aliases, depth + 1),
+            .generic => |node| {
+                if (genericHoldsArgsByValue(node.base.text)) {
+                    for (node.args) |arg| {
+                        if (self.typeEmbedsViewByValueWithGenericArgs(arg, params, args, structs, aliases, depth + 1)) return true;
+                    }
+                }
+                return self.typeEmbedsViewByValueDepth(ty, structs, aliases, depth + 1);
+            },
+            else => return self.typeEmbedsViewByValueDepth(ty, structs, aliases, depth + 1),
+        }
+    }
+
+    fn substituteGenericStructFieldType(self: *Checker, allocator: std.mem.Allocator, container_ty: ast.TypeExpr, info: StructInfo, field_ty: ast.TypeExpr) ast.TypeExpr {
+        const generic = switch (container_ty.kind) {
+            .generic => |g| g,
+            .qualified => |q| switch (q.child.kind) {
+                .generic => |g| g,
+                else => return field_ty,
+            },
+            else => return field_ty,
+        };
+        if (info.type_params.len == 0) return field_ty;
+        if (info.type_params.len != generic.args.len) return field_ty;
+        return self.substituteTypeParams(allocator, field_ty, info.type_params, generic.args, 0) catch {
+            self.oom = true;
+            return field_ty;
+        };
+    }
+
+    fn substituteGenericUnionPayloadType(self: *Checker, allocator: std.mem.Allocator, container_ty: ast.TypeExpr, info: UnionInfo, payload_ty: ast.TypeExpr) ast.TypeExpr {
+        const generic = switch (container_ty.kind) {
+            .generic => |g| g,
+            .qualified => |q| switch (q.child.kind) {
+                .generic => |g| g,
+                else => return payload_ty,
+            },
+            else => return payload_ty,
+        };
+        if (info.type_params.len == 0) return payload_ty;
+        if (info.type_params.len != generic.args.len) return payload_ty;
+        return self.substituteTypeParams(allocator, payload_ty, info.type_params, generic.args, 0) catch {
+            self.oom = true;
+            return payload_ty;
+        };
+    }
+
+    fn substituteTypeParams(self: *Checker, allocator: std.mem.Allocator, ty: ast.TypeExpr, params: []const ast.Ident, args: []const ast.TypeExpr, depth: usize) std.mem.Allocator.Error!ast.TypeExpr {
+        if (depth >= 64) return ty;
+        switch (ty.kind) {
+            .name => |n| {
+                if (genericArgForParam(params, args, n.text)) |arg| return arg;
+                return ty;
+            },
+            .member, .enum_literal, .dyn_trait => return ty,
+            .nullable => |child| {
+                const next = try allocator.create(ast.TypeExpr);
+                next.* = try self.substituteTypeParams(allocator, child.*, params, args, depth + 1);
+                return .{ .span = ty.span, .kind = .{ .nullable = next } };
+            },
+            .qualified => |node| {
+                const next = try allocator.create(ast.TypeExpr);
+                next.* = try self.substituteTypeParams(allocator, node.child.*, params, args, depth + 1);
+                return .{ .span = ty.span, .kind = .{ .qualified = .{ .mutability = node.mutability, .child = next } } };
+            },
+            .pointer => |node| {
+                const next = try allocator.create(ast.TypeExpr);
+                next.* = try self.substituteTypeParams(allocator, node.child.*, params, args, depth + 1);
+                return .{ .span = ty.span, .kind = .{ .pointer = .{ .mutability = node.mutability, .child = next } } };
+            },
+            .raw_many_pointer => |node| {
+                const next = try allocator.create(ast.TypeExpr);
+                next.* = try self.substituteTypeParams(allocator, node.child.*, params, args, depth + 1);
+                return .{ .span = ty.span, .kind = .{ .raw_many_pointer = .{ .mutability = node.mutability, .child = next } } };
+            },
+            .slice => |node| {
+                const next = try allocator.create(ast.TypeExpr);
+                next.* = try self.substituteTypeParams(allocator, node.child.*, params, args, depth + 1);
+                return .{ .span = ty.span, .kind = .{ .slice = .{ .mutability = node.mutability, .child = next } } };
+            },
+            .array => |node| {
+                const next = try allocator.create(ast.TypeExpr);
+                next.* = try self.substituteTypeParams(allocator, node.child.*, params, args, depth + 1);
+                return .{ .span = ty.span, .kind = .{ .array = .{ .len = node.len, .child = next } } };
+            },
+            .generic => |node| {
+                const next_args = try allocator.alloc(ast.TypeExpr, node.args.len);
+                for (node.args, 0..) |arg, i| {
+                    next_args[i] = try self.substituteTypeParams(allocator, arg, params, args, depth + 1);
+                }
+                return .{ .span = ty.span, .kind = .{ .generic = .{ .base = node.base, .args = next_args } } };
+            },
+            .fn_pointer => |node| {
+                const next_params = try allocator.alloc(ast.TypeExpr, node.params.len);
+                for (node.params, 0..) |param, i| {
+                    next_params[i] = try self.substituteTypeParams(allocator, param, params, args, depth + 1);
+                }
+                const next_ret = try allocator.create(ast.TypeExpr);
+                next_ret.* = try self.substituteTypeParams(allocator, node.ret.*, params, args, depth + 1);
+                return .{ .span = ty.span, .kind = .{ .fn_pointer = .{ .params = next_params, .ret = next_ret } } };
+            },
+            .closure_type => |node| {
+                const next_params = try allocator.alloc(ast.TypeExpr, node.params.len);
+                for (node.params, 0..) |param, i| {
+                    next_params[i] = try self.substituteTypeParams(allocator, param, params, args, depth + 1);
+                }
+                const next_ret = try allocator.create(ast.TypeExpr);
+                next_ret.* = try self.substituteTypeParams(allocator, node.ret.*, params, args, depth + 1);
+                return .{ .span = ty.span, .kind = .{ .closure_type = .{ .params = next_params, .ret = next_ret } } };
+            },
+        }
+    }
+
     fn typeEmbedsMoveByValueDepth(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
         // Exhaustion is a safety boundary, not evidence that the type is copyable.
         // The parser admits deeper type syntax, so conservatively classify an
@@ -1199,10 +1868,11 @@ pub const Checker = struct {
             },
             .generic => |g| {
                 if (self.isMoveTypeName(ty, aliases)) return true; // a `move` generic (Arc<T>, …)
+                if (self.genericStructEmbedsMoveByValue(g, aliases, depth + 1)) return true;
+                if (self.genericUnionEmbedsMoveByValue(g, aliases, depth + 1)) return true;
                 // A built-in generic that stores its type arguments by value (e.g. Result<T,E>)
-                // embeds a move resource if any argument does. (User generic structs aren't
-                // handled here: they monomorphize to a concrete struct whose fields are checked
-                // directly, and a move field in a non-`move` struct is rejected there.)
+                // embeds a move resource if any argument does. User generic structs
+                // monomorphize to concrete structs whose fields are classified directly.
                 if (genericHoldsArgsByValue(g.base.text)) {
                     for (g.args) |arg| {
                         if (self.typeEmbedsMoveByValueDepth(arg, aliases, depth + 1)) return true;
@@ -1214,6 +1884,115 @@ pub const Checker = struct {
             .qualified => |node| return self.typeEmbedsMoveByValueDepth(node.child.*, aliases, depth + 1),
             .nullable => |child| return self.typeEmbedsMoveByValueDepth(child.*, aliases, depth + 1),
             else => return false, // pointers, slices, fn/closure types: not by-value
+        }
+    }
+
+    fn typeEmbedsRegionByValueDepth(self: *Checker, ty: ast.TypeExpr, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        // Exhaustion is a lifetime safety boundary, not evidence that the type is
+        // safe to copy out of a region.
+        if (depth >= 64) return true;
+        switch (ty.kind) {
+            .name => |n| {
+                if (self.isRegionTypeName(ty, structs, aliases)) return true;
+                if (aliases.get(n.text)) |target| return self.typeEmbedsRegionByValueDepth(target, structs, aliases, depth + 1);
+                return false;
+            },
+            .generic => |g| {
+                if (self.isRegionTypeName(ty, structs, aliases)) return true;
+                if (self.genericStructEmbedsRegionByValue(g, structs, aliases, depth + 1)) return true;
+                if (self.genericUnionEmbedsRegionByValue(g, structs, aliases, depth + 1)) return true;
+                if (genericHoldsArgsByValue(g.base.text)) {
+                    for (g.args) |arg| {
+                        if (self.typeEmbedsRegionByValueDepth(arg, structs, aliases, depth + 1)) return true;
+                    }
+                }
+                return false;
+            },
+            .array => |node| return self.typeEmbedsRegionByValueDepth(node.child.*, structs, aliases, depth + 1),
+            .qualified => |node| return self.typeEmbedsRegionByValueDepth(node.child.*, structs, aliases, depth + 1),
+            .nullable => |child| return self.typeEmbedsRegionByValueDepth(child.*, structs, aliases, depth + 1),
+            else => return false, // pointers, slices, fn/closure types: not by-value
+        }
+    }
+
+    fn typeEmbedsViewByValueDepth(self: *Checker, ty: ast.TypeExpr, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        // Exhaustion is a borrow-safety boundary, not evidence that the type is
+        // an ordinary ownerless value.
+        if (depth >= 64) return true;
+        switch (ty.kind) {
+            .name => |n| {
+                if (self.isViewTypeName(ty, structs, aliases)) return true;
+                if (aliases.get(n.text)) |target| return self.typeEmbedsViewByValueDepth(target, structs, aliases, depth + 1);
+                return false;
+            },
+            .generic => |g| {
+                if (self.isViewTypeName(ty, structs, aliases)) return true;
+                if (self.genericStructEmbedsViewByValue(g, structs, aliases, depth + 1)) return true;
+                if (self.genericUnionEmbedsViewByValue(g, structs, aliases, depth + 1)) return true;
+                if (genericHoldsArgsByValue(g.base.text)) {
+                    for (g.args) |arg| {
+                        if (self.typeEmbedsViewByValueDepth(arg, structs, aliases, depth + 1)) return true;
+                    }
+                }
+                return false;
+            },
+            .array => |node| return self.typeEmbedsViewByValueDepth(node.child.*, structs, aliases, depth + 1),
+            .qualified => |node| return self.typeEmbedsViewByValueDepth(node.child.*, structs, aliases, depth + 1),
+            .nullable => |child| return self.typeEmbedsViewByValueDepth(child.*, structs, aliases, depth + 1),
+            else => return false, // pointers, slices, fn/closure types: not by-value
+        }
+    }
+
+    fn typeEmbedsNonThreadMoveByValueDepth(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        if (depth >= 64) return true;
+        switch (ty.kind) {
+            .name => |n| {
+                if (self.isMoveTypeName(ty, aliases)) return !self.isThreadMoveTypeName(ty, aliases);
+                if (aliases.get(n.text)) |target| return self.typeEmbedsNonThreadMoveByValueDepth(target, aliases, depth + 1);
+                return false;
+            },
+            .generic => |g| {
+                if (self.isMoveTypeName(ty, aliases)) return !self.isThreadMoveTypeName(ty, aliases);
+                if (self.genericStructEmbedsNonThreadMoveByValue(g, aliases, depth + 1)) return true;
+                if (self.genericUnionEmbedsNonThreadMoveByValue(g, aliases, depth + 1)) return true;
+                if (genericHoldsArgsByValue(g.base.text)) {
+                    for (g.args) |arg| {
+                        if (self.typeEmbedsNonThreadMoveByValueDepth(arg, aliases, depth + 1)) return true;
+                    }
+                }
+                return false;
+            },
+            .array => |node| return self.typeEmbedsNonThreadMoveByValueDepth(node.child.*, aliases, depth + 1),
+            .qualified => |node| return self.typeEmbedsNonThreadMoveByValueDepth(node.child.*, aliases, depth + 1),
+            .nullable => |child| return self.typeEmbedsNonThreadMoveByValueDepth(child.*, aliases, depth + 1),
+            else => return false,
+        }
+    }
+
+    fn typeEmbedsLinearByValueDepth(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr), depth: usize) bool {
+        // Exhaustion is a safety boundary, not evidence that the type is affine.
+        if (depth >= 64) return true;
+        switch (ty.kind) {
+            .name => |n| {
+                if (self.isLinearTypeName(ty, aliases)) return true;
+                if (aliases.get(n.text)) |target| return self.typeEmbedsLinearByValueDepth(target, aliases, depth + 1);
+                return false;
+            },
+            .generic => |g| {
+                if (self.isLinearTypeName(ty, aliases)) return true;
+                if (self.genericStructEmbedsLinearByValue(g, aliases, depth + 1)) return true;
+                if (self.genericUnionEmbedsLinearByValue(g, aliases, depth + 1)) return true;
+                if (genericHoldsArgsByValue(g.base.text)) {
+                    for (g.args) |arg| {
+                        if (self.typeEmbedsLinearByValueDepth(arg, aliases, depth + 1)) return true;
+                    }
+                }
+                return false;
+            },
+            .array => |node| return self.typeEmbedsLinearByValueDepth(node.child.*, aliases, depth + 1),
+            .qualified => |node| return self.typeEmbedsLinearByValueDepth(node.child.*, aliases, depth + 1),
+            .nullable => |child| return self.typeEmbedsLinearByValueDepth(child.*, aliases, depth + 1),
+            else => return false,
         }
     }
 
@@ -1253,7 +2032,22 @@ pub const Checker = struct {
         if (union_decl.type_params.len > 0) ctx.type_params = &type_params;
 
         for (union_decl.cases) |case| {
-            if (case.ty) |ty| self.checkType(ty, .storage, ctx);
+            if (case.ty) |ty| {
+                self.checkType(ty, .storage, ctx);
+                if (ctx.type_aliases) |aliases| {
+                    if (self.typeEmbedsMoveByValue(ty, aliases)) {
+                        self.errorCode(ty.span, "E_MOVE_UNION_RESOURCE", "tagged union cases cannot contain `move`/`linear` resources by value; store a pointer or stable handle instead");
+                    }
+                    if (ctx.structs) |structs| {
+                        if (self.typeEmbedsRegionByValue(ty, structs, aliases)) {
+                            self.errorCode(ty.span, "E_REGION_RESOURCE_CONFLICT", "tagged union cases cannot contain `region struct` nodes by value; store a pointer, view, or stable ID");
+                        }
+                        if (self.typeEmbedsViewByValue(ty, structs, aliases)) {
+                            self.errorCode(ty.span, "E_BORROW_ESCAPES_SCOPE", "tagged union cases cannot contain `view struct` borrowed aggregates by value; rebuild the view lexically from its source");
+                        }
+                    }
+                }
+            }
             if (cases.contains(case.name.text)) {
                 self.errorCode(case.name.span, "E_DUPLICATE_UNION_CASE", "safe tagged union case names must be unique");
             } else {
@@ -1292,6 +2086,19 @@ pub const Checker = struct {
         defer fields.deinit();
         for (overlay_union.fields) |field| {
             self.checkType(field.ty, .storage, ctx);
+            if (ctx.type_aliases) |aliases| {
+                if (self.typeEmbedsMoveByValue(field.ty, aliases)) {
+                    self.errorCode(field.ty.span, "E_MOVE_UNION_RESOURCE", "overlay union fields cannot contain `move`/`linear` resources by value; store a pointer or stable handle instead");
+                }
+                if (ctx.structs) |structs| {
+                    if (self.typeEmbedsRegionByValue(field.ty, structs, aliases)) {
+                        self.errorCode(field.ty.span, "E_REGION_RESOURCE_CONFLICT", "overlay union fields cannot contain `region struct` nodes by value; store a pointer, view, or stable ID");
+                    }
+                    if (self.typeEmbedsViewByValue(field.ty, structs, aliases)) {
+                        self.errorCode(field.ty.span, "E_BORROW_ESCAPES_SCOPE", "overlay union fields cannot contain `view struct` borrowed aggregates by value; rebuild the view lexically from its source");
+                    }
+                }
+            }
             if (fields.contains(field.name.text)) {
                 self.errorCode(field.name.span, "E_DUPLICATE_OVERLAY_FIELD", "overlay union field names must be unique");
             } else {
@@ -1407,7 +2214,7 @@ pub const Checker = struct {
         if (scope.hasOom()) self.oom = true;
     }
 
-    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, abi_boundary: bool, move_abi_boundary: bool, no_lang_trap: bool, irq_context: bool, bounded: bool, is_naked: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    fn checkFn(self: *Checker, fn_decl: ast.FnDecl, safe_module: bool, abi_boundary: bool, move_abi_boundary: bool, no_lang_trap: bool, irq_context: bool, bounded: bool, is_naked: bool, mmio_structs: *const std.StringHashMap(MmioStruct), structs: *const std.StringHashMap(StructInfo), packed_bits: *const std.StringHashMap(LayoutFieldInfo), overlay_unions: *const std.StringHashMap(LayoutFieldInfo), tagged_unions: *const std.StringHashMap(UnionInfo), enums: *const std.StringHashMap(EnumInfo), functions: *const std.StringHashMap(FunctionInfo), globals: *const std.StringHashMap(GlobalInfo), type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         self.current_fn_owner = if (fn_decl.associated_owner) |owner| owner.text else null;
         defer self.current_fn_owner = null;
         var scope = Scope.init(self.reporter.allocator);
@@ -1439,12 +2246,18 @@ pub const Checker = struct {
                 };
             }
         }
-        const sig_ctx = Context{ .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases, .type_params = &type_params, .trait_bounds = fn_decl.bounds, .comptime_params = &comptime_params };
+        const sig_ctx = Context{ .safe_module = safe_module, .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases, .type_params = &type_params, .trait_bounds = fn_decl.bounds, .comptime_params = &comptime_params };
         if (abi_boundary) self.checkExternExportStructAbi(fn_decl, sig_ctx);
 
         for (fn_decl.params) |param| {
             self.checkType(param.ty, .storage, sig_ctx);
-            if (move_abi_boundary and self.typeIsMoveArray(param.ty, type_aliases)) {
+            if (self.typeEmbedsRegionByValue(param.ty, structs, type_aliases)) {
+                self.errorCode(param.ty.span, "E_REGION_RESOURCE_CONFLICT", "function parameters cannot pass `region struct` nodes by value; pass a pointer, view, or stable ID owned by the region/arena");
+            } else if (self.typeEmbedsViewByValue(param.ty, structs, type_aliases)) {
+                self.errorCode(param.ty.span, "E_BORROW_ESCAPES_SCOPE", "function parameters cannot pass `view struct` values by value in Scoped Affine Ownership v0; pass the original source view/pointer and build the view lexically");
+            } else if (abi_boundary and self.typeEmbedsMoveByValue(param.ty, type_aliases)) {
+                self.errorCode(param.ty.span, "E_MOVE_ABI_BY_VALUE", "explicit C ABI parameters cannot pass `move`/`linear` resources by value; pass a pointer, an integer handle, or mark an MC-only export `#[mc_abi]`");
+            } else if (move_abi_boundary and self.typeIsMoveArray(param.ty, type_aliases)) {
                 self.errorCode(param.ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "extern/export ABI parameters cannot pass arrays of linear `move` values by value; pass the resources behind pointers or in a `move` container instead");
             }
             if (isCBackendReservedLocalName(param.name.text)) {
@@ -1469,11 +2282,20 @@ pub const Checker = struct {
         const return_kind = if (fn_decl.return_type) |ty| classifyTypeCtx(ty, sig_ctx) else TypeClass.void;
         const returns_never = if (fn_decl.return_type) |ty| blk: {
             self.checkType(ty, .return_type, sig_ctx);
-            if (move_abi_boundary and self.typeIsMoveArray(ty, type_aliases)) {
+            if (self.typeEmbedsRegionByValue(ty, structs, type_aliases)) {
+                self.errorCode(ty.span, "E_REGION_RESOURCE_CONFLICT", "function returns cannot carry `region struct` nodes by value; return a pointer, view, or stable ID owned by the region/arena");
+            } else if (self.typeEmbedsViewByValue(ty, structs, type_aliases) and fn_decl.return_borrow_source == null) {
+                self.errorCode(ty.span, "E_BORROW_ESCAPES_SCOPE", "function returns cannot carry `view struct` values by value without an explicit `borrow(source)` contract");
+            } else if (abi_boundary and self.typeEmbedsMoveByValue(ty, type_aliases)) {
+                self.errorCode(ty.span, "E_MOVE_ABI_BY_VALUE", "explicit C ABI returns cannot carry `move`/`linear` resources by value; return a pointer, an integer handle, or mark an MC-only export `#[mc_abi]`");
+            } else if (move_abi_boundary and self.typeIsMoveArray(ty, type_aliases)) {
                 self.errorCode(ty.span, "E_MOVE_ARRAY_UNSUPPORTED", "extern/export ABI returns cannot carry arrays of linear `move` values by value; return resources behind pointers or in a `move` container instead");
             }
             break :blk isTypeName(ty, "never");
         } else false;
+        const return_borrow_source = if (self.checkReturnBorrowSignature(fn_decl, sig_ctx)) blk: {
+            break :blk if (fn_decl.return_borrow_source) |source| source.text else null;
+        } else null;
         const returns_void = if (fn_decl.return_type) |ty| isTypeName(ty, "void") else false;
         if (is_naked) {
             // `#[naked]` emits no prologue/epilogue: the body is a single `asm` block
@@ -1496,11 +2318,13 @@ pub const Checker = struct {
                 .no_lang_trap = no_lang_trap,
                 .irq_context = irq_context,
                 .bounded = bounded,
+                .safe_module = safe_module,
                 .in_unsafe = is_naked,
                 .returns_never = returns_never,
                 .returns_void = returns_void,
                 .is_variadic = fn_decl.is_variadic,
                 .return_ty = fn_decl.return_type,
+                .return_borrow_source = return_borrow_source,
                 .return_kind = return_kind,
                 .unsafe_contracts = .{},
                 .scope = &scope,
@@ -1553,6 +2377,43 @@ pub const Checker = struct {
                 self.errorCode(ret_ty.span, "E_EXTERN_STRUCT_BY_VALUE", "explicit C ABI functions cannot return this unclassified value type by value; use an out pointer or mark an MC-only export #[mc_abi]");
             }
         }
+    }
+
+    fn checkReturnBorrowSignature(self: *Checker, fn_decl: ast.FnDecl, ctx: Context) bool {
+        const source = fn_decl.return_borrow_source orelse return true;
+        var valid = true;
+        const return_ty = fn_decl.return_type orelse {
+            self.errorCode(source.span, "E_BORROW_RETURN_CONTRACT", "`borrow(source)` return contract requires an explicit return type");
+            return false;
+        };
+        if (!isBorrowContractViewType(self, return_ty, ctx)) {
+            self.errorCode(return_ty.span, "E_BORROW_RETURN_CONTRACT", "`borrow(source)` return contract is only valid for pointer, slice, cstr, nullable pointer, or `view struct` returns");
+            valid = false;
+        }
+        if (ctx.structs) |structs| {
+            if (ctx.type_aliases) |aliases| {
+                if (self.returnBorrowContractWrapsViewByValue(return_ty, structs, aliases)) {
+                    self.errorCode(return_ty.span, "E_BORROW_RETURN_CONTRACT", "`borrow(source)` may return a direct `view struct` in Scoped Affine Ownership v0, but not a Result/optional/array/container that stores a view by value");
+                    valid = false;
+                }
+            }
+        }
+        var found_source: ?ast.Param = null;
+        for (fn_decl.params) |param| {
+            if (std.mem.eql(u8, param.name.text, source.text)) {
+                found_source = param;
+                break;
+            }
+        }
+        const param = found_source orelse {
+            self.errorCode(source.span, "E_BORROW_RETURN_CONTRACT", "`borrow(source)` must name one function parameter");
+            return false;
+        };
+        if (!isBorrowContractSourceType(param.ty, ctx)) {
+            self.errorCode(param.ty.span, "E_BORROW_RETURN_CONTRACT", "`borrow(source)` source parameter must itself be a pointer, slice, cstr, or nullable pointer view");
+            valid = false;
+        }
+        return valid;
     }
 
     // ----- Definite-initialization pass (S0.1) ---------------------------------
@@ -1915,6 +2776,7 @@ pub const Checker = struct {
                 }
             },
             .address_of => |inner| self.diUseTarget(inner.*, state, ctx),
+            .borrow_expr => |node| self.diUseTarget(node.value.*, state, ctx),
             .grouped => |inner| self.diRead(inner.*, state, ctx),
             .unary => |u| self.diRead(u.expr.*, state, ctx),
             .binary => |b| {
@@ -2327,6 +3189,8 @@ pub const Checker = struct {
                         self.errorCode(expr.span, "E_CONDITION_NOT_BOOL", "condition must be bool");
                     } else if (loop.kind == .@"for" and !isForIterableBase(condition)) {
                         self.errorCode(expr.span, "E_FOR_BASE_NOT_ARRAY_OR_SLICE", "for loops iterate over arrays and slices");
+                    } else if (loop.kind == .@"for") {
+                        self.checkForIterableResourcePayload(expr, ctx);
                     }
                 }
                 var next = ctx;
@@ -2539,12 +3403,26 @@ pub const Checker = struct {
         const kind = if (inferred_ty) |ty| classifyTypeCtx(ty, ctx) else TypeClass.unknown;
         var address_origin: AddressOrigin = .none;
         if (local.ty) |ty| self.checkType(ty, .storage, ctx);
+        if (inferred_ty) |ty| {
+            if (ctx.structs) |structs| {
+                if (ctx.type_aliases) |type_aliases| {
+                    if (self.typeEmbedsRegionByValue(ty, structs, type_aliases)) {
+                        self.errorCode(ty.span, "E_REGION_RESOURCE_CONFLICT", "local storage cannot own a `region struct` by value; allocate region nodes in an explicit region/arena and keep pointers, views, or IDs in locals");
+                    }
+                    if (!self.isViewTypeName(ty, structs, type_aliases) and self.typeEmbedsViewByValue(ty, structs, type_aliases)) {
+                        self.errorCode(ty.span, "E_BORROW_ESCAPES_SCOPE", "local storage cannot wrap `view struct` borrowed aggregates inside ordinary arrays, optionals, Results, or containers; keep the view as a lexical `view struct` value");
+                    }
+                }
+            }
+        }
         if (local.init) |expr| {
             const initializer = self.checkExpr(expr, ctx);
             address_origin = addressOrigin(expr, ctx);
             if (isUninitLiteral(expr)) {
                 if (!mutable or local.ty == null) {
                     self.errorCode(expr.span, "E_UNINIT_REQUIRES_STORAGE", "uninit is valid only for explicit typed mutable storage initialization");
+                } else if (local.ty) |ty| {
+                    self.checkUninitResourceStorage(expr.span, ty, ctx);
                 }
             } else {
                 const literal_checked = if (local.ty) |ty| self.checkIntegerLiteralInitializer(kind, ty, expr, ctx) else false;
@@ -2582,6 +3460,9 @@ pub const Checker = struct {
                 const union_checked = if (local.ty) |ty| self.checkTaggedUnionConstructorCompatibility(ty, expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_NO_IMPLICIT_CONVERSION", "annotated local initializer requires an explicit conversion") else false;
                 const secret_checked = if (local.ty) |ty| (kind == .secret and self.checkSecretWrapInitializer(ty, expr, ctx)) else false;
+                if (inferred_ty) |ty| {
+                    self.checkExplicitResourceMove(ty, expr, ctx, "checked resources require `move expr` when initializing resource storage from an existing owner");
+                }
                 if (local.ty == null and (untargeted_union_checked or inferred_fn_pointer_checked)) {
                     // The diagnostic was emitted above; constructor calls need an explicit union target.
                 } else if (local.ty != null and !literal_checked and !null_checked and !null_target_checked and !targetless_literal_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(kind, initializer)) {
@@ -2733,6 +3614,9 @@ pub const Checker = struct {
             self.errorCode(borrow.span, "E_BORROW_ESCAPES_SCOPE", "cannot store the address of local storage where it outlives the local's scope (the borrow would dangle)");
         }
         if (assignmentTargetEscapesFunction(target, ctx)) {
+            if (exprHasScopedBorrow(value) and localAddressRoot(value, ctx) == null and aggregateLocalAddressRoot(value, ctx) == null) {
+                self.errorCode(value.span, "E_BORROW_ESCAPES_SCOPE", "explicit `borrow` cannot be stored into global or caller-owned storage; keep it lexical or return a parameter-derived view with `-> borrow(param)`");
+            }
             if (target_class == .closure) {
                 if (closureLocalAddressRoot(value, ctx)) |span| {
                     self.errorCode(span.span, "E_LOCAL_ADDRESS_ESCAPE", "cannot store a closure that captures local storage where it outlives the local's scope");
@@ -2741,9 +3625,28 @@ pub const Checker = struct {
             if (aggregateLocalAddressRoot(value, ctx)) |span| {
                 self.errorCode(span.span, "E_LOCAL_ADDRESS_ESCAPE", "cannot store a value that captures local storage where it outlives the local's scope");
             }
+        } else if (assignmentTargetIsAggregateSlot(target) and exprIsExplicitBorrowPointer(value, ctx)) {
+            self.errorCode(value.span, "E_BORROW_ESCAPES_SCOPE", "explicit `borrow` cannot be stored into ordinary aggregate fields or array elements; keep it as a scoped scalar borrow or use a dedicated view type");
         }
+        self.checkExplicitResourceMove(target_ty, value, ctx, "checked resources require `move expr` when assigning an existing resource owner by value");
         if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target_class, value_class)) {
             self.errorCode(value.span, "E_NO_IMPLICIT_CONVERSION", "assignment requires an explicit conversion");
+        }
+    }
+
+    fn checkExplicitResourceMove(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, message: []const u8) void {
+        const aliases = ctx.type_aliases orelse return;
+        if (!self.typeEmbedsMoveByValue(target_ty, aliases)) return;
+        if (exprHasExplicitMoveMarker(expr)) return;
+        const source_ty = exprResultType(expr, ctx) orelse exprDeclaredType(expr, ctx) orelse return;
+        if (!self.typeEmbedsMoveByValue(source_ty, aliases)) return;
+        if (!exprIsExistingResourceOwnerPlace(expr)) return;
+        self.errorCode(expr.span, "E_EXPLICIT_MOVE_REQUIRED", message);
+    }
+
+    fn checkUninitResourceStorage(self: *Checker, span: diagnostics.Span, ty: ast.TypeExpr, ctx: Context) void {
+        if (self.rawMemoryPayloadIsResource(ty, ctx)) {
+            self.errorCode(span, "E_UNINIT_RESOURCE_STORAGE", "`uninit` cannot create `move`/`linear`, `region`, or `view struct` storage; construct the resource with a typed initializer or keep raw bytes behind scalar storage");
         }
     }
 
@@ -2842,7 +3745,22 @@ pub const Checker = struct {
                 }
                 return .never;
             },
-            .grouped, .address_of => |inner| self.checkExpr(inner.*, ctx),
+            .grouped, .move_expr => |inner| self.checkExpr(inner.*, ctx),
+            .address_of => |inner| {
+                if (ctx.safe_module and !ctx.in_unsafe) {
+                    self.errorCode(expr.span, "E_SAFE_MODULE_ADDRESS_OF", "`#[safe_module]` requires raw address-taking with `&` to be inside an `unsafe` block; use explicit `borrow` for scoped safe views");
+                }
+                return self.checkExpr(inner.*, ctx);
+            },
+            .borrow_expr => |node| {
+                const value_class = self.checkExpr(node.value.*, ctx);
+                if (addressableStorageType(node.value.*, ctx) == null) {
+                    self.errorCode(expr.span, "E_BORROW_REQUIRES_STORAGE", "explicit `borrow` requires addressable storage; bind temporaries to a local before borrowing them");
+                } else if (node.mutability == .mut and !addressableStorageIsMutable(node.value.*, ctx)) {
+                    self.errorCode(expr.span, "E_BORROW_MUT_REQUIRES_MUTABLE_STORAGE", "`borrow mut` requires mutable storage");
+                }
+                return value_class;
+            },
             .try_expr => |inner| {
                 if (ctx.no_lang_trap) {
                     self.errorCode(expr.span, "E_NO_LANG_TRAP_EDGE", "unwrap may emit a language trap in #[no_lang_trap]");
@@ -2994,7 +3912,7 @@ pub const Checker = struct {
                 const source = self.checkExpr(node.value.*, ctx);
                 self.checkType(node.ty.*, .normal, ctx);
                 const target = classifyTypeCtx(node.ty.*, ctx);
-                if ((source == .c_void_pointer) != (target == .c_void_pointer)) {
+                if (isCVoidPointerType(node.ty.*, ctx) != isCVoidPointerClass(source)) {
                     self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
                 }
                 // SOUNDNESS: a slice (`[]T`) is a fat pointer (ptr+len). A scalar / non-slice
@@ -3007,6 +3925,8 @@ pub const Checker = struct {
                     self.errorCode(expr.span, "E_ILLEGAL_SLICE_CAST", "cannot cast a non-slice value to a slice: a slice is a fat pointer (ptr+len) and the length has no source. Build one with a slicing expression `a[i..j]`, a byte view (`mem.as_bytes`), or a string literal");
                 }
                 self.checkEnumCast(expr.span, node.value.*, source, node.ty.*, target, ctx);
+                self.checkResourceCastBoundary(expr.span, node.value.*, node.ty.*, ctx);
+                self.checkResourceCVoidCastBoundary(expr.span, node.value.*, node.ty.*, ctx);
                 self.checkCastSafetyStrip(expr.span, node.value.*, source, node.ty.*, target, ctx);
                 return target;
             },
@@ -3058,6 +3978,9 @@ pub const Checker = struct {
                 self.checkReduceCall(expr.span, node, ctx);
                 self.checkByteViewCall(expr.span, node, ctx);
                 self.checkVaCall(expr.span, node, ctx);
+                self.checkRawCopyResourcePayload(expr.span, node, ctx);
+                self.checkNonLocalJumpCall(expr.span, node, ctx);
+                self.checkCopyingGenericTypeArgResourcePayload(expr.span, node, ctx);
                 const bitcast_class = self.checkBitcastCall(expr.span, node, ctx);
                 const raw_many_offset_class = self.checkRawManyOffsetCall(expr.span, node, ctx);
                 const reflection_class = self.checkReflectionCall(expr.span, node, ctx);
@@ -3069,6 +3992,12 @@ pub const Checker = struct {
                 self.checkCallCallee(node.callee.*, ctx);
                 for (node.type_args) |ty| self.checkType(ty, .normal, ctx);
                 self.checkRawMemoryPayload(expr.span, node, ctx);
+                if (ast_query.isBindCallNode(node) and exprHasScopedBorrow(node.args[0])) {
+                    self.errorCode(node.args[0].span, "E_BORROW_ESCAPES_SCOPE", "explicit `borrow` cannot be captured by a closure; pass an owned environment or a parameter-derived view with an explicit lifetime contract");
+                }
+                if (ast_query.isBindCallNode(node)) {
+                    self.checkBindResourceCapture(node, ctx);
+                }
                 const direct_function = if (!trap_call and node.type_args.len == 0) directCallFunction(node.callee.*, ctx) else null;
                 // Calling a value of function-pointer type (callback, vtable
                 // field, local): check the call against the pointer's signature.
@@ -3142,6 +4071,9 @@ pub const Checker = struct {
                     return .void;
                 }
                 if (direct_function) |function| {
+                    if (function.unsafe_ffi and !ctx.in_unsafe) {
+                        self.errorCode(expr.span, "E_UNSAFE_REQUIRED", "calling a `#[unsafe_ffi]` external ABI boundary requires an unsafe context");
+                    }
                     // A `const fn` is evaluable at comptime (section 22); only
                     // non-const (runtime) functions are a forbidden effect.
                     if (ctx.in_comptime and !function.is_const) {
@@ -3202,6 +4134,7 @@ pub const Checker = struct {
                                 }
                             }
                         }
+                        self.checkCopyingGenericResourcePayload(expr.span, node, function, ctx);
                     }
                 }
                 for (node.args, 0..) |arg, index| {
@@ -3213,10 +4146,24 @@ pub const Checker = struct {
                     const source = self.checkExpr(arg, ctx);
                     if (direct_function) |function| {
                         if (index < function.params.len) {
+                            if ((function.is_extern or function.c_abi) and exprHasScopedBorrow(arg)) {
+                                self.errorCode(arg.span, "E_BORROW_FFI_BOUNDARY", "explicit `borrow` cannot cross an extern/C ABI call boundary; bind or copy through an ownership-aware safe wrapper");
+                            }
+                            if (function.is_extern or function.c_abi) {
+                                self.checkFfiResourcePointerArgument(arg, ctx);
+                            }
+                            if (isThreadSpawnBoundaryCall(node.callee.*)) {
+                                self.checkThreadSpawnArgument(function.params[index].ty, arg, ctx);
+                            }
                             if (function.is_extern) self.checkClosureArgumentDoesNotEscape(function.params[index].ty, arg, ctx, "cannot pass a closure that captures local storage to an extern function");
                             self.checkCallArgument(function.params[index].ty, arg, source, ctx);
-                        } else if (function.is_variadic and !cVariadicTailClassIsClassified(source)) {
-                            self.errorCode(arg.span, "E_EXTERN_STRUCT_BY_VALUE", "C variadic tail arguments must be classified scalar or pointer values");
+                        } else if (function.is_variadic) {
+                            self.checkFfiResourcePointerArgument(arg, ctx);
+                            if (self.exprEmbedsResourceByValue(arg, ctx)) {
+                                self.errorCode(arg.span, "E_VA_RESOURCE_PAYLOAD", "C variadic tail arguments cannot pass `move`/`linear`, `region`, or `view struct` resources by value; pass a copyable ABI handle or pointer through an audited wrapper");
+                            } else if (!cVariadicTailClassIsClassified(source)) {
+                                self.errorCode(arg.span, "E_EXTERN_STRUCT_BY_VALUE", "C variadic tail arguments must be classified scalar or pointer values");
+                            }
                         }
                     }
                     if (fnptr_ty) |fpty| {
@@ -3330,6 +4277,9 @@ pub const Checker = struct {
                 if (ctx.in_comptime and isRuntimePointerDerefClass(inner_class)) {
                     self.errorCode(expr.span, "E_COMPTIME_FORBIDS_RUNTIME_EFFECT", "comptime code cannot perform runtime hardware or I/O effects");
                 }
+                if (ctx.safe_module and !ctx.in_unsafe and inner_class == .pointer and !exprIsExplicitBorrowPointer(inner.*, ctx)) {
+                    self.errorCode(expr.span, "E_SAFE_MODULE_POINTER_DEREF", "`#[safe_module]` requires ordinary pointer dereference to be inside an `unsafe` block unless the pointer is derived from an explicit scoped `borrow`");
+                }
                 if (inner_class == .raw_many_pointer and !ctx.in_unsafe) {
                     self.errorCode(expr.span, "E_UNSAFE_REQUIRED", "operation requires unsafe context");
                 }
@@ -3356,6 +4306,9 @@ pub const Checker = struct {
                 const base_class = self.checkExpr(node.base.*, ctx);
                 if (base_class == .c_void_pointer) {
                     self.errorCode(expr.span, "E_C_VOID_NO_LAYOUT", "c_void has no fields in MC");
+                }
+                if (ctx.safe_module and !ctx.in_unsafe and base_class == .pointer and !exprIsExplicitBorrowPointer(node.base.*, ctx)) {
+                    self.errorCode(expr.span, "E_SAFE_MODULE_POINTER_DEREF", "`#[safe_module]` requires ordinary pointer field access to be inside an `unsafe` block unless the pointer is derived from an explicit scoped `borrow`");
                 }
                 // A direct `.field` on a UserPtr<T> is a kernel dereference of user memory:
                 // reading T's field reaches through the user pointer. Forbid it exactly like
@@ -3393,6 +4346,13 @@ pub const Checker = struct {
         // A local binding (above) shadows and is exempt; a cross-file reference to a private
         // top-level global / function used as a value is rejected.
         self.checkImportVisibility(ident.text, ident.span);
+        if (ctx.globals) |globals| {
+            if (globals.get(ident.text)) |global| {
+                if (global.unsafe_ffi and !ctx.in_unsafe) {
+                    self.errorCode(ident.span, "E_UNSAFE_REQUIRED", "accessing a `#[unsafe_ffi]` external ABI data symbol requires an unsafe context");
+                }
+            }
+        }
         if (globalClass(ident.text, ctx)) |class| return class;
         // A top-level function name used as a value is a function pointer.
         if (ctx.functions) |fns| {
@@ -3488,6 +4448,9 @@ pub const Checker = struct {
                 self.checkType(node.child.*, child_mode, ctx);
             },
             .raw_many_pointer => |node| {
+                if (ctx.safe_module and !ctx.in_unsafe) {
+                    self.errorCode(ty.span, "E_SAFE_MODULE_RAW_POINTER", "`#[safe_module]` forbids raw-many pointer types outside an `unsafe` block; wrap the raw edge in an unsafe implementation and expose pointer/slice/owner types");
+                }
                 const child_mode: TypeMode = if (isCAbiOpaqueBoundary(node.child.*)) .ffi_opaque_pointer else .normal;
                 self.checkType(node.child.*, child_mode, ctx);
             },
@@ -3601,14 +4564,25 @@ pub const Checker = struct {
         } else if (std.mem.eql(u8, node.base.text, "DmaBuf")) {
             if (node.args.len != 2) return;
             self.checkStoragePayloadType(node.args[0]);
+            self.checkAddressClassResourcePayload(node.args[0].span, node.args[0], ctx);
             self.checkDmaBufMode(node.args[1]);
         } else if (std.mem.eql(u8, node.base.text, "atomic")) {
             if (node.args.len != 1) return;
             self.checkStoragePayloadType(node.args[0]);
+            self.checkAtomicResourcePayload(node.args[0].span, node.args[0], ctx);
         } else if (std.mem.eql(u8, node.base.text, "MmioPtr")) {
             if (node.args.len != 1) return;
             self.checkStoragePayloadType(node.args[0]);
+            self.checkAddressClassResourcePayload(node.args[0].span, node.args[0], ctx);
             self.checkMmioPtrTarget(node.args[0], ctx);
+        } else if (std.mem.eql(u8, node.base.text, "UserPtr") or std.mem.eql(u8, node.base.text, "PhysPtr")) {
+            if (node.args.len != 1) return;
+            self.checkStoragePayloadType(node.args[0]);
+            self.checkAddressClassResourcePayload(node.args[0].span, node.args[0], ctx);
+        } else if (std.mem.eql(u8, node.base.text, "MaybeUninit")) {
+            if (node.args.len != 1) return;
+            self.checkStoragePayloadType(node.args[0]);
+            self.checkMaybeUninitResourcePayload(node.args[0].span, node.args[0], ctx);
         } else if (genericHasStoragePayload(node.base.text)) {
             if (node.args.len == 0) return;
             self.checkStoragePayloadType(node.args[0]);
@@ -3644,6 +4618,12 @@ pub const Checker = struct {
             .qualified => |node| self.checkStoragePayloadType(node.child.*),
             .array => |node| self.checkStoragePayloadType(node.child.*),
             else => {},
+        }
+    }
+
+    fn checkAddressClassResourcePayload(self: *Checker, span: diagnostics.Span, payload_ty: ast.TypeExpr, ctx: Context) void {
+        if (self.rawMemoryPayloadIsResource(payload_ty, ctx)) {
+            self.errorCode(span, "E_ADDRESS_RESOURCE_PAYLOAD", "external address and DMA payloads cannot store `move`/`linear`, `region`, or `view struct` resources by payload type; pass a copyable descriptor or explicit owner token instead");
         }
     }
 
@@ -3711,11 +4691,16 @@ pub const Checker = struct {
         if (isIdentNamed(member.base.*, "atomic") and std.mem.eql(u8, member.name.text, "init")) {
             if (args.len != 1) {
                 self.errorCode(span, "E_CALL_ARG_COUNT", "atomic.init expects exactly one initializer argument");
+                return;
+            }
+            if (self.exprEmbedsResourceByValue(args[0], ctx)) {
+                self.errorCode(args[0].span, "E_ATOMIC_RESOURCE_PAYLOAD", "atomic.init cannot materialize `move`/`linear`, `region`, or `view struct` resources; store a copyable handle or integer state instead");
             }
             return;
         }
 
         const payload_ty = atomicPayloadTypeForValue(member.base.*, ctx) orelse return;
+        self.checkAtomicResourcePayload(member.name.span, payload_ty, ctx);
         const payload_class = classifyTypeCtx(payload_ty, ctx);
         const op = atomicMemberOpName(member.name.text) orelse {
             self.errorCode(member.name.span, "E_ATOMIC_OPERATION", "unknown atomic operation");
@@ -3754,10 +4739,17 @@ pub const Checker = struct {
         }
     }
 
+    fn checkAtomicResourcePayload(self: *Checker, span: diagnostics.Span, payload_ty: ast.TypeExpr, ctx: Context) void {
+        if (self.rawMemoryPayloadIsResource(payload_ty, ctx)) {
+            self.errorCode(span, "E_ATOMIC_RESOURCE_PAYLOAD", "atomic payloads cannot be `move`/`linear`, `region`, or `view struct` resources; store a copyable handle or integer state instead");
+        }
+    }
+
     fn checkMaybeUninitCall(self: *Checker, span: diagnostics.Span, callee: ast.Expr, args: []ast.Expr, ctx: Context) void {
         const member = memberExpr(callee) orelse return;
         const op = maybeUninitMemberOpName(member.name.text) orelse return;
         const payload_ty = maybeUninitPayloadTypeForValue(member.base.*, ctx) orelse return;
+        self.checkMaybeUninitResourcePayload(member.name.span, payload_ty, ctx);
         if (std.mem.eql(u8, op, "write")) {
             if (args.len != 1) {
                 self.errorCode(span, "E_CALL_ARG_COUNT", "MaybeUninit.write expects exactly one payload argument");
@@ -3770,6 +4762,12 @@ pub const Checker = struct {
         }
         if (args.len != 0) {
             self.errorCode(span, "E_CALL_ARG_COUNT", "MaybeUninit.assume_init does not take arguments");
+        }
+    }
+
+    fn checkMaybeUninitResourcePayload(self: *Checker, span: diagnostics.Span, payload_ty: ast.TypeExpr, ctx: Context) void {
+        if (self.rawMemoryPayloadIsResource(payload_ty, ctx)) {
+            self.errorCode(span, "E_MAYBEUNINIT_RESOURCE_PAYLOAD", "MaybeUninit cannot store `move`/`linear`, `region`, or `view struct` payloads; use an ownership-aware resource container instead");
         }
     }
 
@@ -3978,19 +4976,9 @@ pub const Checker = struct {
                     self.errorCode(span, "E_CALL_ARG_COUNT", "mem.as_bytes expects exactly one address argument");
                     return;
                 }
-                const inner = switch (call.args[0].kind) {
-                    .address_of => |target| target.*,
-                    .grouped => |grouped| switch (grouped.kind) {
-                        .address_of => |target| target.*,
-                        else => {
-                            self.errorCode(call.args[0].span, "E_BYTE_VIEW_ADDRESS", "mem.as_bytes requires an address expression");
-                            return;
-                        },
-                    },
-                    else => {
-                        self.errorCode(call.args[0].span, "E_BYTE_VIEW_ADDRESS", "mem.as_bytes requires an address expression");
-                        return;
-                    },
+                const inner = ast_query.byteViewAddressTarget(call.args[0]) orelse {
+                    self.errorCode(call.args[0].span, "E_BYTE_VIEW_ADDRESS", "mem.as_bytes requires an address expression");
+                    return;
                 };
                 const source_ty = exprResultType(inner, ctx) orelse exprStorageType(inner, ctx) orelse {
                     self.errorCode(call.args[0].span, "E_BYTE_VIEW_ADDRESS", "mem.as_bytes requires an addressable value with known storage type");
@@ -3999,6 +4987,19 @@ pub const Checker = struct {
                 const resolved = resolveAliasType(source_ty, ctx);
                 if (isTypeName(resolved, "void") or isTypeName(resolved, "never")) {
                     self.errorCode(call.args[0].span, "E_BYTE_VIEW_ADDRESS", "mem.as_bytes requires byte-addressable storage");
+                }
+                if (ctx.type_aliases) |aliases| {
+                    if (self.typeEmbedsMoveByValue(source_ty, aliases)) {
+                        self.errorCode(call.args[0].span, "E_BYTE_VIEW_RESOURCE", "mem.as_bytes cannot expose the byte representation of a `move`/`linear` resource; use an explicit serialization or handle API");
+                    }
+                    if (ctx.structs) |structs| {
+                        if (self.typeEmbedsRegionByValue(source_ty, structs, aliases)) {
+                            self.errorCode(call.args[0].span, "E_BYTE_VIEW_RESOURCE", "mem.as_bytes cannot expose a `region struct` node by value; serialize through a region-aware view or stable ID");
+                        }
+                        if (self.typeEmbedsViewByValue(source_ty, structs, aliases)) {
+                            self.errorCode(call.args[0].span, "E_BYTE_VIEW_RESOURCE", "mem.as_bytes cannot expose a `view struct` by value; copy from the original source view or use an explicit serialization API");
+                        }
+                    }
                 }
             },
             .bytes_equal => {
@@ -4031,6 +5032,7 @@ pub const Checker = struct {
                 self.errorCode(span, "E_CALL_ARG_COUNT", "va.arg expects one result type and one va_list cursor argument");
                 return;
             }
+            self.checkVaResourcePayload(call.type_args[0].span, call.type_args[0], ctx);
         } else if (std.mem.eql(u8, name, "end")) {
             if (call.type_args.len != 0 or call.args.len != 1) {
                 self.errorCode(span, "E_CALL_ARG_COUNT", "va.end expects one va_list cursor argument");
@@ -4041,6 +5043,63 @@ pub const Checker = struct {
         }
         if (!vaCursorArgumentValid(call.args[0], ctx)) {
             self.errorCode(call.args[0].span, "E_NO_IMPLICIT_CONVERSION", "varargs cursor must be &va_list or *mut va_list");
+        }
+    }
+
+    fn checkVaResourcePayload(self: *Checker, span: diagnostics.Span, payload_ty: ast.TypeExpr, ctx: Context) void {
+        if (self.rawMemoryPayloadIsResource(payload_ty, ctx)) {
+            self.errorCode(span, "E_VA_RESOURCE_PAYLOAD", "va.arg cannot materialize `move`/`linear`, `region`, or `view struct` resources from an untracked C varargs cursor; pass a copyable ABI value or explicit handle instead");
+        }
+    }
+
+    fn checkRawCopyResourcePayload(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) void {
+        const name = directCallName(call.callee.*) orelse return;
+        if (rawCopyCallName(name)) {
+            if (call.type_args.len != 0 or call.args.len < 2) return;
+            if (self.exprMayPointAtResourceByValue(call.args[0], ctx) or self.exprMayPointAtResourceByValue(call.args[1], ctx)) {
+                self.errorCode(span, "E_RAW_COPY_RESOURCE_PAYLOAD", "memcpy/memmove-style byte copies cannot copy `move`/`linear`, `region`, or `view struct` storage; transfer ownership through a typed API or copy a stable handle/ID instead");
+            }
+        } else if (rawFillCallName(name)) {
+            if (call.type_args.len != 0 or call.args.len < 1) return;
+            if (self.exprMayPointAtResourceByValue(call.args[0], ctx)) {
+                self.errorCode(span, "E_RAW_COPY_RESOURCE_PAYLOAD", "memset/bzero-style byte fills cannot overwrite `move`/`linear`, `region`, or `view struct` storage; reset resources through a typed release/reinitialize API instead");
+            }
+        }
+    }
+
+    fn checkNonLocalJumpCall(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) void {
+        const name = directCallName(call.callee.*) orelse return;
+        if (!nonLocalJumpCallName(name)) return;
+        if (!ctx.in_unsafe) {
+            self.errorCode(span, "E_UNSAFE_REQUIRED", "non-local jump operations require unsafe context");
+        }
+        if (scopeHasOwnershipSensitiveBinding(self, ctx) or callArgsContainScopedBorrow(call.args)) {
+            self.errorCode(span, "E_NONLOCAL_JUMP_RESOURCE", "longjmp-style non-local control flow cannot cross live `move`/`linear`, `region`, `view struct`, or explicit borrow state; use structured Result/error returns so deterministic cleanup runs");
+        }
+    }
+
+    fn checkCopyingGenericResourcePayload(self: *Checker, span: diagnostics.Span, call: anytype, function: FunctionInfo, ctx: Context) void {
+        const name = directCallName(call.callee.*) orelse return;
+        if (!copyingGenericElementCallName(name)) return;
+        if (function.params.len == 0 or call.args.len == 0) return;
+        const type_param = function.params[0];
+        if (!type_param.is_comptime or !isTypeName(type_param.ty, "type")) return;
+        const payload_name = typeArgName(call.args[0], ctx) orelse return;
+        const payload_ty = ast.TypeExpr{
+            .span = call.args[0].span,
+            .kind = .{ .name = .{ .text = payload_name, .span = call.args[0].span } },
+        };
+        if (self.rawMemoryPayloadIsResource(payload_ty, ctx)) {
+            self.errorCode(span, "E_COPYING_RESOURCE_PAYLOAD", "copying/storage generic APIs such as sort/is_sorted/lower_bound/scan/ring/pool/slotmap/Vec/Arc/StrHashMap cannot use `move`/`linear`, `region`, or `view struct` element types; store stable handles or IDs instead");
+        }
+    }
+
+    fn checkCopyingGenericTypeArgResourcePayload(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) void {
+        const name = directCallName(call.callee.*) orelse return;
+        if (!copyingGenericElementCallName(name)) return;
+        if (call.type_args.len == 0) return;
+        if (self.rawMemoryPayloadIsResource(call.type_args[0], ctx)) {
+            self.errorCode(span, "E_COPYING_RESOURCE_PAYLOAD", "copying/storage generic APIs such as sort/is_sorted/lower_bound/scan/ring/pool/slotmap/Vec/Arc/StrHashMap cannot use `move`/`linear`, `region`, or `view struct` element types; store stable handles or IDs instead");
         }
     }
 
@@ -4085,6 +5144,7 @@ pub const Checker = struct {
             self.errorCode(span, "E_CALL_ARG_COUNT", "mmio.map requires exactly one target type and one physical address argument");
             return;
         }
+        self.checkAddressClassResourcePayload(call.type_args[0].span, call.type_args[0], ctx);
         self.checkMmioPtrTarget(call.type_args[0], ctx);
         const source_ty = exprResultType(call.args[0], ctx) orelse exprStorageType(call.args[0], ctx) orelse return;
         const source = classifyTypeCtx(source_ty, ctx);
@@ -4134,6 +5194,21 @@ pub const Checker = struct {
                 if (pointeeIsOpaquePrivacy(tty, ctx) != pointeeIsOpaquePrivacy(sty, ctx)) {
                     self.errorCode(span, "E_BITCAST_TYPE", "bitcast pointer-reinterpret may not cross into or out of an opaque/secret/userptr class");
                 }
+                if (self.pointerPointeeEmbedsMoveByValue(tty, ctx) or self.pointerPointeeEmbedsMoveByValue(sty, ctx)) {
+                    if (!sameTypeSyntaxCtx(tty, sty, ctx)) {
+                        self.errorCode(span, "E_BITCAST_TYPE", "bitcast pointer-reinterpret may not cross into or out of a `move`/`linear` resource pointee; use a typed resource API or an explicit unsafe raw handle");
+                    }
+                }
+                if (self.pointerPointeeEmbedsRegionByValue(tty, ctx) or self.pointerPointeeEmbedsRegionByValue(sty, ctx)) {
+                    if (!sameTypeSyntaxCtx(tty, sty, ctx)) {
+                        self.errorCode(span, "E_BITCAST_TYPE", "bitcast pointer-reinterpret may not cross into or out of a `region struct` pointee; use a region-aware view or stable ID");
+                    }
+                }
+                if (self.pointerPointeeEmbedsViewByValue(tty, ctx) or self.pointerPointeeEmbedsViewByValue(sty, ctx)) {
+                    if (!sameTypeSyntaxCtx(tty, sty, ctx)) {
+                        self.errorCode(span, "E_BITCAST_TYPE", "bitcast pointer-reinterpret may not cross into or out of a `view struct` pointee; rebuild the view from its source inside the lexical scope");
+                    }
+                }
             }
         }
 
@@ -4154,6 +5229,66 @@ pub const Checker = struct {
         }
 
         return target;
+    }
+
+    fn pointerPointeeEmbedsMoveByValue(self: *Checker, ty: ast.TypeExpr, ctx: Context) bool {
+        const aliases = ctx.type_aliases orelse return false;
+        const pointee = pointerPointeeType(ty, ctx) orelse return false;
+        return self.typeEmbedsMoveByValue(pointee, aliases);
+    }
+
+    fn pointerPointeeEmbedsRegionByValue(self: *Checker, ty: ast.TypeExpr, ctx: Context) bool {
+        const aliases = ctx.type_aliases orelse return false;
+        const structs = ctx.structs orelse return false;
+        const pointee = pointerPointeeType(ty, ctx) orelse return false;
+        return self.typeEmbedsRegionByValue(pointee, structs, aliases);
+    }
+
+    fn pointerPointeeEmbedsViewByValue(self: *Checker, ty: ast.TypeExpr, ctx: Context) bool {
+        const aliases = ctx.type_aliases orelse return false;
+        const structs = ctx.structs orelse return false;
+        const pointee = pointerPointeeType(ty, ctx) orelse return false;
+        return self.typeEmbedsViewByValue(pointee, structs, aliases);
+    }
+
+    fn pointerPointeeIsOwnershipResource(self: *Checker, ty: ast.TypeExpr, ctx: Context) bool {
+        const pointee = pointerPointeeType(ty, ctx) orelse return false;
+        return self.rawMemoryPayloadIsResource(pointee, ctx);
+    }
+
+    fn checkFfiResourcePointerArgument(self: *Checker, arg: ast.Expr, ctx: Context) void {
+        if (ctx.in_unsafe) return;
+        if (!self.exprMayPointAtResourceByValue(arg, ctx)) return;
+        self.errorCode(arg.span, "E_MOVE_FFI_ADDRESS", "safe code cannot pass a pointer to `move`/`linear`, `region`, or `view struct` storage across an extern/C ABI boundary; wrap audited byte-level access in unsafe or expose an ownership-aware safe API");
+    }
+
+    fn exprMayPointAtResourceByValue(self: *Checker, expr: ast.Expr, ctx: Context) bool {
+        switch (expr.kind) {
+            .grouped => |inner| return self.exprMayPointAtResourceByValue(inner.*, ctx),
+            .cast => |node| return self.exprMayPointAtResourceByValue(node.value.*, ctx),
+            .address_of => |inner| return self.addressableExprEmbedsResourceByValue(inner.*, ctx),
+            .borrow_expr => |node| return self.addressableExprEmbedsResourceByValue(node.value.*, ctx),
+            else => {
+                const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return false;
+                return self.pointerPointeeIsOwnershipResource(ty, ctx);
+            },
+        }
+    }
+
+    fn exprEmbedsResourceByValue(self: *Checker, expr: ast.Expr, ctx: Context) bool {
+        const ty = exprResultType(expr, ctx) orelse exprStorageType(expr, ctx) orelse return false;
+        const aliases = ctx.type_aliases orelse return false;
+        if (self.typeEmbedsMoveByValue(ty, aliases)) return true;
+        const structs = ctx.structs orelse return false;
+        return self.typeEmbedsRegionByValue(ty, structs, aliases) or self.typeEmbedsViewByValue(ty, structs, aliases);
+    }
+
+    fn addressableExprEmbedsResourceByValue(self: *Checker, expr: ast.Expr, ctx: Context) bool {
+        const ty = addressableStorageType(expr, ctx) orelse
+            exprResultType(expr, ctx) orelse
+            exprStorageType(expr, ctx) orelse
+            return false;
+        return self.rawMemoryPayloadIsResource(ty, ctx);
     }
 
     // `declassify(secret)` / `reveal(secret)` — the controlled escape from the
@@ -4909,6 +6044,31 @@ pub const Checker = struct {
         }
     }
 
+    fn checkSafeModuleTypeSurface(self: *Checker, ty: ast.TypeExpr) void {
+        switch (ty.kind) {
+            .raw_many_pointer => |node| {
+                self.errorCode(ty.span, "E_SAFE_MODULE_RAW_POINTER", "`#[safe_module]` forbids raw-many pointer types outside an `unsafe` block; wrap the raw edge in an unsafe implementation and expose pointer/slice/owner types");
+                self.checkSafeModuleTypeSurface(node.child.*);
+            },
+            .nullable => |child| self.checkSafeModuleTypeSurface(child.*),
+            .qualified => |node| self.checkSafeModuleTypeSurface(node.child.*),
+            .pointer => |node| self.checkSafeModuleTypeSurface(node.child.*),
+            .slice => |node| self.checkSafeModuleTypeSurface(node.child.*),
+            .array => |node| self.checkSafeModuleTypeSurface(node.child.*),
+            .generic => |node| for (node.args) |arg| self.checkSafeModuleTypeSurface(arg),
+            .fn_pointer => |node| {
+                for (node.params) |param| self.checkSafeModuleTypeSurface(param);
+                self.checkSafeModuleTypeSurface(node.ret.*);
+            },
+            .closure_type => |node| {
+                for (node.params) |param| self.checkSafeModuleTypeSurface(param);
+                self.checkSafeModuleTypeSurface(node.ret.*);
+            },
+            .member => |node| self.checkSafeModuleTypeSurface(node.base.*),
+            .name, .enum_literal, .dyn_trait => {},
+        }
+    }
+
     fn checkReflectedGenericTypeArgs(self: *Checker, ty: ast.TypeExpr, ctx: Context) void {
         switch (ty.kind) {
             .generic => |node| {
@@ -5074,6 +6234,9 @@ pub const Checker = struct {
         if (items.len != expected_len) {
             self.errorCode(expr.span, "E_ARRAY_LITERAL_LENGTH", "array literal element count must match the target array length");
         }
+        if (exprHasScopedBorrow(expr)) {
+            self.errorCode(expr.span, "E_BORROW_ESCAPES_SCOPE", "explicit `borrow` cannot be stored inside an ordinary array literal; keep it as a scoped scalar borrow or use a `view struct`");
+        }
         const element_ty = array.child.*;
         const element_class = classifyTypeCtx(element_ty, ctx);
         for (items) |item| {
@@ -5092,6 +6255,7 @@ pub const Checker = struct {
             const enum_checked = self.checkEnumValueCompatibility(element_ty, item, ctx, code, message);
             const union_checked = self.checkTaggedUnionConstructorCompatibility(element_ty, item, ctx, code, message);
             const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(item, ctx, code, message) else false;
+            self.checkExplicitResourceMove(element_ty, item, ctx, "checked resources require `move expr` when initializing a resource array element from an existing owner");
             if (!literal_checked and !null_checked and !array_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(element_class, item_class)) {
                 self.errorCode(item.span, code, message);
             }
@@ -5128,6 +6292,12 @@ pub const Checker = struct {
             self.errorCode(expr.span, code, message);
             return true;
         };
+        if (exprHasScopedBorrow(expr) and !struct_info.is_view) {
+            self.errorCode(expr.span, "E_BORROW_ESCAPES_SCOPE", "explicit `borrow` cannot be stored inside an ordinary struct literal; use a `view struct` for lexical borrowed aggregates");
+        }
+
+        var generic_field_arena = std.heap.ArenaAllocator.init(self.reporter.allocator);
+        defer generic_field_arena.deinit();
 
         var seen = std.StringHashMap(void).init(self.reporter.allocator);
         defer seen.deinit();
@@ -5139,11 +6309,12 @@ pub const Checker = struct {
                     self.oom = true;
                 };
             }
-            const field_ty = struct_info.fields.get(field.name.text) orelse {
+            const field_ty_template = struct_info.fields.get(field.name.text) orelse {
                 self.errorCode(field.name.span, "E_UNKNOWN_STRUCT_FIELD", "struct has no field with this name");
                 _ = self.checkExpr(field.value, ctx);
                 continue;
             };
+            const field_ty = self.substituteGenericStructFieldType(generic_field_arena.allocator(), resolved_target_ty, struct_info, field_ty_template);
             const value_class = self.checkExpr(field.value, ctx);
             const field_class = classifyTypeCtx(field_ty, ctx);
             const literal_checked = self.checkIntegerLiteralInitializer(field_class, field_ty, field.value, ctx);
@@ -5162,6 +6333,7 @@ pub const Checker = struct {
             const enum_checked = self.checkEnumValueCompatibility(field_ty, field.value, ctx, code, message);
             const union_checked = self.checkTaggedUnionConstructorCompatibility(field_ty, field.value, ctx, code, message);
             const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(field.value, ctx, code, message) else false;
+            self.checkExplicitResourceMove(field_ty, field.value, ctx, "checked resources require `move expr` when initializing a resource field from an existing owner");
             if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !canInitialize(field_class, value_class)) {
                 self.errorCode(field.value.span, code, message);
             }
@@ -5218,6 +6390,14 @@ pub const Checker = struct {
     fn checkAddressOfInitializer(self: *Checker, target: TypeClass, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
         if (!isNonNullPointerLike(target) and !isNullablePointerLike(target)) return false;
         const operand = addressOfOperand(expr) orelse return false;
+        if (explicitBorrowMutability(expr)) |borrow_mutability| {
+            if (viewType(resolveAliasType(target_ty, ctx))) |target_view| {
+                if (target_view.mutability == .mut and borrow_mutability != .mut) {
+                    self.errorCode(expr.span, "E_BORROW_MUT_REQUIRED", "`borrow` creates a shared borrow; use `borrow mut` for a mutable pointer target");
+                    return true;
+                }
+            }
+        }
         const source_ty = addressableStorageType(operand.*, ctx) orelse return true;
         if (!addressOfMatchesPointerTarget(target_ty, source_ty, operand.*, ctx)) {
             self.errorCode(expr.span, "E_NO_IMPLICIT_POINTER_CONVERSION", "pointer and view conversions must be explicit");
@@ -5231,6 +6411,10 @@ pub const Checker = struct {
             if (ctx.functions) |functions| if (functions.get(name)) |function| {
                 if (function.c_abi) {
                     self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "an explicit C ABI function cannot be converted to a plain MC function pointer; call it directly or use an ABI-qualified wrapper");
+                    return true;
+                }
+                if (function.unsafe_ffi) {
+                    self.errorCode(expr.span, "E_UNSAFE_REQUIRED", "a `#[unsafe_ffi]` boundary cannot be converted to a plain function pointer; wrap it in an audited safe MC function");
                     return true;
                 }
                 if (function.is_variadic) {
@@ -5259,6 +6443,10 @@ pub const Checker = struct {
             self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "an explicit C ABI function cannot be inferred as a plain MC function pointer; call it directly or use an ABI-qualified wrapper");
             return true;
         }
+        if (function.unsafe_ffi) {
+            self.errorCode(expr.span, "E_UNSAFE_REQUIRED", "a `#[unsafe_ffi]` boundary cannot be inferred as a plain function pointer; wrap it in an audited safe MC function");
+            return true;
+        }
         if (function.is_variadic) {
             self.errorCode(expr.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "a variadic function cannot be inferred as a non-variadic function pointer");
             return true;
@@ -5269,11 +6457,63 @@ pub const Checker = struct {
     fn checkRawMemoryPayload(self: *Checker, span: diagnostics.Span, call: anytype, ctx: Context) void {
         const member = memberExpr(call.callee.*) orelse return;
         if (!isIdentNamed(member.base.*, "raw")) return;
-        if (!std.mem.eql(u8, member.name.text, "load") and !std.mem.eql(u8, member.name.text, "store")) return;
+        const is_load = std.mem.eql(u8, member.name.text, "load");
+        const is_store = std.mem.eql(u8, member.name.text, "store");
+        const is_ptr = std.mem.eql(u8, member.name.text, "ptr");
+        if (!is_load and !is_store and !is_ptr) return;
         if (call.type_args.len != 1) return;
-        if (!rawMemoryPayloadIsScalar(call.type_args[0], ctx)) {
+        if (self.rawMemoryPayloadIsResource(call.type_args[0], ctx)) {
+            self.errorCode(span, "E_RAW_RESOURCE_PAYLOAD", "raw memory operations cannot expose `move`/`linear`, `region`, or `view struct` resources by payload type; move ownership through a typed handle API instead");
+        }
+        if ((is_load or is_store) and !rawMemoryPayloadIsScalar(call.type_args[0], ctx)) {
             self.errorCode(span, "E_RAW_AGGREGATE_UNSUPPORTED", "raw.load/raw.store currently require a scalar payload; aggregate raw access has no defined single-access volatile contract");
         }
+    }
+
+    fn rawMemoryPayloadIsResource(self: *Checker, ty: ast.TypeExpr, ctx: Context) bool {
+        const aliases = ctx.type_aliases orelse return false;
+        const structs = ctx.structs orelse return false;
+        return self.typeEmbedsOwnershipResourceByValue(ty, structs, aliases);
+    }
+
+    fn typeEmbedsOwnershipResourceByValue(self: *Checker, ty: ast.TypeExpr, structs: *const std.StringHashMap(StructInfo), aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+        return self.typeEmbedsMoveByValue(ty, aliases) or
+            self.typeEmbedsRegionByValue(ty, structs, aliases) or
+            self.typeEmbedsViewByValue(ty, structs, aliases);
+    }
+
+    fn checkBindResourceCapture(self: *Checker, call: anytype, ctx: Context) void {
+        if (call.args.len != 2) return;
+        const fname = calleeIdentName(call.args[1]) orelse return;
+        const fns = ctx.functions orelse return;
+        const info = fns.get(fname) orelse return;
+        if (info.params.len == 0) return;
+        const aliases = ctx.type_aliases orelse return;
+        const structs = ctx.structs orelse return;
+        if (!self.typeEmbedsOwnershipResourceByValue(info.params[0].ty, structs, aliases)) return;
+        self.errorCode(call.args[0].span, "E_CLOSURE_RESOURCE_CAPTURE", "closure environments cannot capture `move`/`linear`, `region`, or `view struct` resources by value; pass a stable handle/pointer or use an explicit owned-closure API");
+    }
+
+    fn scopeBindingIsOwnershipSensitive(self: *Checker, info: LocalInfo, ctx: Context) bool {
+        if (info.address_origin == .local and info.address_origin.local.explicit_borrow) return true;
+        const ty = info.ty orelse return false;
+        return self.rawMemoryPayloadIsResource(ty, ctx);
+    }
+
+    fn scopeHasOwnershipSensitiveBinding(self: *Checker, ctx: Context) bool {
+        const scope = ctx.scope orelse return false;
+        var it = scope.valueIterator();
+        while (it.next()) |info| {
+            if (self.scopeBindingIsOwnershipSensitive(info.*, ctx)) return true;
+        }
+        return false;
+    }
+
+    fn callArgsContainScopedBorrow(args: []const ast.Expr) bool {
+        for (args) |arg| {
+            if (exprHasScopedBorrow(arg)) return true;
+        }
+        return false;
     }
 
     fn checkClosureInitializer(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
@@ -5371,6 +6611,14 @@ pub const Checker = struct {
         }
         // `&x` / `&mut x`: the checked coercion. Verify the concrete type conforms.
         if (addressOfOperand(expr)) |operand| {
+            if (dyn.mutability == .mut) {
+                if (explicitBorrowMutability(expr)) |borrow_mutability| {
+                    if (borrow_mutability != .mut) {
+                        self.errorCode(expr.span, "E_BORROW_MUT_REQUIRED", "`borrow` creates a shared borrow; use `borrow mut` for a mutable dyn pointer target");
+                        return true;
+                    }
+                }
+            }
             // A `*mut dyn Trait` borrow needs a mutable place.
             if (dyn.mutability == .mut and !addressableStorageIsMutable(operand.*, ctx)) {
                 self.errorCode(expr.span, "E_DYN_MUT_BORROW", "a `*mut dyn Trait` requires `&mut` of a mutable place");
@@ -5469,16 +6717,39 @@ pub const Checker = struct {
         }
         // (bug #3) Returning an aggregate literal that embeds `&local` makes the borrow dangle
         // once the frame is gone — even though the return TYPE is a struct/array, not a pointer.
-        if (aggregateLocalAddressRoot(expr, ctx)) |span| {
-            self.errorCode(span.span, "E_LOCAL_ADDRESS_ESCAPE", "cannot return the address of local storage inside an aggregate (the borrow would dangle)");
+        const aggregate_local_escape = aggregateLocalAddressRoot(expr, ctx);
+        if (aggregate_local_escape) |span| {
+            if (!exprHasScopedBorrow(expr)) {
+                self.errorCode(span.span, "E_LOCAL_ADDRESS_ESCAPE", "cannot return the address of local storage inside an aggregate (the borrow would dangle)");
+            }
         }
+        if (!local_escape_checked and closure_local_escape == null and aggregate_local_escape == null and !exprHasScopedBorrow(expr) and returnTypeCanCarryBorrowedView(self, target_ty, target, ctx)) {
+            if (localAddressInEscapingValue(expr, ctx)) |span| {
+                self.errorCode(span.span, "E_BORROW_ESCAPES_SCOPE", "cannot return a wrapper value that carries a scoped borrow of local storage; return a parameter-derived view with `-> borrow(param)` or an owned value");
+            }
+        }
+        self.checkReturnBorrowContract(ctx, expr);
         const enum_checked = self.checkEnumValueCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const union_checked = self.checkTaggedUnionConstructorCompatibility(target_ty, expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
         const untargeted_union_checked = if (!union_checked) self.checkTaggedUnionConstructorRequiresUnionTarget(expr, ctx, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type") else false;
         const secret_checked = target == .secret and self.checkSecretWrapInitializer(target_ty, expr, ctx);
         const value_optional_checked = checkValueOptionalInitializer(target_ty, target, expr, returned, ctx);
+        self.checkExplicitResourceMove(target_ty, expr, ctx, "checked resources require `move expr` when returning an existing resource owner by value");
         if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !fn_pointer_checked and !closure_checked and !dyn_checked and !address_class_checked and !local_escape_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !value_optional_checked and !canInitialize(target, returned)) {
             self.errorCode(expr.span, "E_RETURN_TYPE_MISMATCH", "return expression must match the declared return type");
+        }
+    }
+
+    fn checkReturnBorrowContract(self: *Checker, ctx: Context, expr: ast.Expr) void {
+        if (exprHasScopedBorrow(expr)) {
+            if (isStructLiteral(expr) or isArrayLiteral(expr)) return;
+            self.errorCode(expr.span, "E_BORROW_ESCAPES_SCOPE", "explicit `borrow` is lexical and cannot be returned; return an existing parameter-derived view and declare `-> borrow(param) T` if the result borrows from a parameter");
+            return;
+        }
+        const source = ctx.return_borrow_source orelse return;
+        const target_ty = ctx.return_ty orelse return;
+        if (!returnBorrowExprMatchesSource(self, target_ty, expr, source, ctx)) {
+            self.errorCode(expr.span, "E_BORROW_RETURN_CONTRACT", "`borrow(source)` return contract requires every returned view expression to depend on the named source parameter");
         }
     }
 
@@ -5493,12 +6764,35 @@ pub const Checker = struct {
     }
 
     fn checkCVoidPointerConversion(self: *Checker, target: ast.TypeExpr, expr: ast.Expr, ctx: Context) bool {
-        const source = exprResultType(expr, ctx) orelse return false;
-        if (implicitCVoidPointerConversionCtx(target, source, ctx)) {
+        const target_is_c_void = isCVoidPointerType(target, ctx);
+        if (exprResultType(expr, ctx) orelse exprStorageType(expr, ctx)) |source| {
+            if (implicitCVoidPointerConversionCtx(target, source, ctx)) {
+                self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
+                self.checkImplicitResourceCVoidConversion(expr.span, target, expr, source, ctx);
+                return true;
+            }
+        }
+        if (target_is_c_void and self.exprMayPointAtResourceByValue(expr, ctx)) {
             self.errorCode(expr.span, "E_C_VOID_CONVERSION", "c_void pointer conversions require an explicit FFI boundary operation");
+            if (!ctx.in_unsafe) {
+                self.errorCode(expr.span, "E_UNSAFE_REQUIRED", "converting a pointer to `move`/`linear`, `region`, or `view struct` storage to c_void erases ownership provenance and requires unsafe context");
+            }
             return true;
         }
         return false;
+    }
+
+    fn checkImplicitResourceCVoidConversion(self: *Checker, span: diagnostics.Span, target_ty: ast.TypeExpr, expr: ast.Expr, source_ty: ast.TypeExpr, ctx: Context) void {
+        if (ctx.in_unsafe) return;
+        const target_is_c_void = isCVoidPointerType(target_ty, ctx);
+        const source_is_c_void = isCVoidPointerType(source_ty, ctx);
+        if (target_is_c_void and self.exprMayPointAtResourceByValue(expr, ctx)) {
+            self.errorCode(span, "E_UNSAFE_REQUIRED", "converting a pointer to `move`/`linear`, `region`, or `view struct` storage to c_void erases ownership provenance and requires unsafe context");
+            return;
+        }
+        if (source_is_c_void and self.pointerPointeeIsOwnershipResource(target_ty, ctx)) {
+            self.errorCode(span, "E_UNSAFE_REQUIRED", "converting c_void to a pointer to `move`/`linear`, `region`, or `view struct` storage restores ownership provenance and requires unsafe context");
+        }
     }
 
     fn checkCallArgument(self: *Checker, target_ty: ast.TypeExpr, arg: ast.Expr, source: TypeClass, ctx: Context) void {
@@ -5514,6 +6808,10 @@ pub const Checker = struct {
                 if (ctx.functions) |functions| if (functions.get(name)) |function| {
                     if (function.c_abi) {
                         self.errorCode(arg.span, "E_FN_POINTER_SIGNATURE_MISMATCH", "an explicit C ABI function cannot be passed as a plain MC function pointer; use an ABI-qualified wrapper");
+                        return;
+                    }
+                    if (function.unsafe_ffi) {
+                        self.errorCode(arg.span, "E_UNSAFE_REQUIRED", "a `#[unsafe_ffi]` boundary cannot be passed as a plain function pointer; wrap it in an audited safe MC function");
                         return;
                     }
                     if (function.is_variadic) {
@@ -5558,6 +6856,7 @@ pub const Checker = struct {
         // same. (Struct literals are target-typed and handled above.)
         if (self.checkNamedStructMismatch(target_ty, arg, ctx)) return;
         const secret_checked = target == .secret and self.checkSecretWrapInitializer(target_ty, arg, ctx);
+        self.checkExplicitResourceMove(target_ty, arg, ctx, "checked resources require `move expr` when passing an existing resource owner by value");
         if (!literal_checked and !null_checked and !array_literal_checked and !struct_literal_checked and !packed_bits_literal_checked and !array_decay_checked and !pointer_conversion_checked and !c_void_conversion_checked and !address_checked and !closure_checked and !dyn_checked and !address_class_checked and !enum_checked and !union_checked and !untargeted_union_checked and !secret_checked and !canInitialize(target, source)) {
             self.errorCode(arg.span, "E_NO_IMPLICIT_CONVERSION", "call argument requires an explicit conversion");
         }
@@ -5567,6 +6866,32 @@ pub const Checker = struct {
         if (classifyTypeCtx(target_ty, ctx) != .closure) return;
         if (closureLocalAddressRoot(arg, ctx)) |span| {
             self.errorCode(span.span, "E_LOCAL_ADDRESS_ESCAPE", message);
+        }
+    }
+
+    fn checkThreadSpawnArgument(self: *Checker, target_ty: ast.TypeExpr, arg: ast.Expr, ctx: Context) void {
+        var borrow_boundary_reported = false;
+        if (exprHasScopedBorrow(arg)) {
+            self.errorCode(arg.span, "E_BORROW_THREAD_BOUNDARY", "explicit `borrow` cannot cross a thread/task spawn boundary; pass owned state or a `thread_move` resource");
+            borrow_boundary_reported = true;
+        } else if (localAddressInEscapingValue(arg, ctx)) |borrow| {
+            self.errorCode(borrow.span, "E_BORROW_THREAD_BOUNDARY", "address of local storage cannot cross a thread/task spawn boundary; move owned state or use a thread-safe handle instead");
+            borrow_boundary_reported = true;
+        }
+        if (!borrow_boundary_reported and (self.exprMayPointAtResourceByValue(arg, ctx) or self.pointerPointeeIsOwnershipResource(target_ty, ctx))) {
+            self.errorCode(arg.span, "E_BORROW_THREAD_BOUNDARY", "pointers to `move`/`linear`, `region`, or `view struct` storage cannot cross a thread/task spawn boundary; transfer an owned `thread_move` resource or stable handle instead");
+            borrow_boundary_reported = true;
+        }
+        var empty_aliases = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
+        defer empty_aliases.deinit();
+        const aliases = ctx.type_aliases orelse &empty_aliases;
+        if (ctx.structs) |structs| {
+            if (!borrow_boundary_reported and self.typeEmbedsViewByValue(target_ty, structs, aliases)) {
+                self.errorCode(arg.span, "E_BORROW_THREAD_BOUNDARY", "`view struct` values cannot cross a thread/task spawn boundary; rebuild the view inside the spawned task from owned or thread-safe state");
+            }
+        }
+        if (self.typeEmbedsNonThreadMoveByValue(target_ty, aliases)) {
+            self.errorCode(arg.span, "E_THREAD_MOVE_RESOURCE", "resource transferred across a thread/task spawn boundary must be declared `thread_move`");
         }
     }
 
@@ -5585,7 +6910,13 @@ pub const Checker = struct {
 
     fn checkTaggedUnionConstructorCompatibility(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, ctx: Context, code: []const u8, message: []const u8) bool {
         const union_info = unionInfoForType(target_ty, ctx) orelse return false;
-        const call = taggedUnionConstructorCall(expr) orelse return false;
+        const resolved_target_ty = resolveAliasType(target_ty, ctx);
+        const call = taggedUnionConstructorCall(expr) orelse blk: {
+            const qcall = qualifiedTaggedUnionConstructorCall(expr) orelse return false;
+            const target_name = unionTypeName(resolved_target_ty) orelse return false;
+            if (!std.mem.eql(u8, qcall.owner, target_name)) return false;
+            break :blk TaggedUnionConstructorCall{ .name = qcall.member, .args = qcall.args };
+        };
         if (taggedUnionConstructorIsFunction(call.name.text, ctx)) return false;
         const case_payload = union_info.cases.get(call.name.text) orelse {
             self.errorCode(call.name.span, "E_UNKNOWN_UNION_CASE", "union has no case with this name");
@@ -5596,8 +6927,11 @@ pub const Checker = struct {
                 self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match union case payload");
                 return true;
             }
+            var payload_arena = std.heap.ArenaAllocator.init(self.reporter.allocator);
+            defer payload_arena.deinit();
+            const concrete_payload_ty = self.substituteGenericUnionPayloadType(payload_arena.allocator(), resolved_target_ty, union_info, payload_ty);
             const source = self.checkExpr(call.args[0], ctx);
-            self.checkCallArgument(payload_ty, call.args[0], source, ctx);
+            self.checkCallArgument(concrete_payload_ty, call.args[0], source, ctx);
         } else if (call.args.len != 0) {
             self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match union case payload");
         }
@@ -5635,7 +6969,12 @@ pub const Checker = struct {
                 return .unknown;
             }
             const source = self.checkExpr(node.args[0], ctx);
-            self.checkCallArgument(payload_ty, node.args[0], source, ctx);
+            // Generic union constructors (`Slot.some(...)`) need an expected
+            // concrete type (`Slot<Ticket>`) before `T` can be substituted in
+            // the payload. Target-aware initializer/argument/return checks
+            // perform that validation; this expression-level path only checks
+            // the callee shape so it does not report against the template `T`.
+            if (info.type_param_count == 0) self.checkCallArgument(payload_ty, node.args[0], source, ctx);
         } else if (node.args.len != 0) {
             self.errorCode(expr.span, "E_CALL_ARG_COUNT", "call argument count does not match union case payload");
         }
@@ -5705,6 +7044,13 @@ pub const Checker = struct {
         if (source == .user_ptr and isDerefablePointerClass(target)) {
             self.errorCode(span, "E_USERPTR_CAST_DEREF", "casting a UserPtr<T> to a derefable kernel pointer bypasses uaccess validation; only UserPtr<->usize is permitted");
         }
+        // `usize as *T` / `0 as *T` is the cast spelling of `raw.ptr<T>(addr)`:
+        // it mints a dereferenceable raw pointer from an integer address with no
+        // provenance or lifetime proof. Keep that edge explicit and greppable by
+        // requiring an unsafe context, just like the `raw.ptr` intrinsic.
+        if (isIntegerLike(source) and target != .slice and isDerefablePointerClass(target) and !exprIsDirectAddressOf(value) and !ctx.in_unsafe) {
+            self.errorCode(span, "E_UNSAFE_REQUIRED", "casting an integer address to a pointer requires unsafe context");
+        }
         // General opacity gate: a value-level `as` cast whose SOURCE is an
         // `opaque struct` declassifies its private fields with no `unsafe` and no
         // accessor — `b as <inner>` extracts the hidden `.raw`/`.bits`/etc. directly.
@@ -5732,6 +7078,55 @@ pub const Checker = struct {
         // (address class `as usize`) is NOT gated here: it cannot deref or forge and
         // is the `pa_value`/`va_value` raw-access edge.
         self.checkAddressClassCast(span, source, target, ctx);
+        self.checkSafeModulePointerCast(span, value, target_ty, ctx);
+    }
+
+    fn checkSafeModulePointerCast(self: *Checker, span: diagnostics.Span, value: ast.Expr, target_ty: ast.TypeExpr, ctx: Context) void {
+        if (!ctx.safe_module or ctx.in_unsafe) return;
+        const source_ty = exprResultType(value, ctx) orelse exprStorageType(value, ctx) orelse return;
+        if (sameTypeSyntaxCtx(source_ty, target_ty, ctx)) return;
+        const resolved_source = resolveAliasType(source_ty, ctx);
+        const resolved_target = resolveAliasType(target_ty, ctx);
+        const source_view = viewType(resolved_source) orelse return;
+        const target_view = viewType(resolved_target) orelse return;
+        if (source_view.kind != .pointer or target_view.kind != .pointer) return;
+        if (constNarrowingViewConversionCtx(resolved_target, resolved_source, ctx)) return;
+        if (nullablePointerWideningCtx(resolved_target, resolved_source, ctx)) return;
+        if (isCVoidPointerClass(classifyTypeCtx(resolved_source, ctx)) or isCVoidPointerClass(classifyTypeCtx(resolved_target, ctx))) return;
+        self.errorCode(span, "E_SAFE_MODULE_POINTER_CAST", "`#[safe_module]` requires pointer-to-pointer casts that reinterpret storage to be inside an `unsafe` block; expose a typed wrapper or use scoped `borrow`");
+    }
+
+    fn checkResourceCastBoundary(self: *Checker, span: diagnostics.Span, value: ast.Expr, target_ty: ast.TypeExpr, ctx: Context) void {
+        if (ctx.in_unsafe) return;
+        var empty_aliases = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
+        defer empty_aliases.deinit();
+        const aliases = ctx.type_aliases orelse &empty_aliases;
+        const source_ty = exprResultType(value, ctx) orelse exprStorageType(value, ctx) orelse return;
+        if (sameTypeSyntaxCtx(source_ty, target_ty, ctx)) return;
+        const source_resource = self.typeEmbedsMoveByValue(source_ty, aliases);
+        const target_resource = self.typeEmbedsMoveByValue(target_ty, aliases);
+        if (!source_resource and !target_resource) return;
+        if (source_resource and target_resource) {
+            self.errorCode(span, "E_UNSAFE_REQUIRED", "casting between checked resource types requires unsafe context; use an explicit consuming constructor or audited transfer wrapper");
+        } else if (source_resource) {
+            self.errorCode(span, "E_UNSAFE_REQUIRED", "casting a checked resource value to a non-resource type exposes its representation and requires unsafe context");
+        } else {
+            self.errorCode(span, "E_UNSAFE_REQUIRED", "casting a non-resource value to a checked resource type forges ownership and requires unsafe context");
+        }
+    }
+
+    fn checkResourceCVoidCastBoundary(self: *Checker, span: diagnostics.Span, value: ast.Expr, target_ty: ast.TypeExpr, ctx: Context) void {
+        if (ctx.in_unsafe) return;
+        const target_is_c_void = isCVoidPointerType(target_ty, ctx);
+        if (target_is_c_void and self.exprMayPointAtResourceByValue(value, ctx)) {
+            self.errorCode(span, "E_UNSAFE_REQUIRED", "casting a pointer to `move`/`linear`, `region`, or `view struct` storage to c_void erases ownership provenance and requires unsafe context");
+            return;
+        }
+        const source_ty = exprResultType(value, ctx) orelse exprStorageType(value, ctx) orelse return;
+        const source_is_c_void = isCVoidPointerType(source_ty, ctx);
+        if (source_is_c_void and self.pointerPointeeIsOwnershipResource(target_ty, ctx)) {
+            self.errorCode(span, "E_UNSAFE_REQUIRED", "casting c_void to a pointer to `move`/`linear`, `region`, or `view struct` storage restores ownership provenance and requires unsafe context");
+        }
     }
 
     // `as`-cast laundering of the built-in address classes. Rejected unless inside
@@ -5744,6 +7139,14 @@ pub const Checker = struct {
     //    pointer) — forging a device/physical/virtual address out of thin air.
     // EXTRACT (address class -> non-address, e.g. `a as usize`) is allowed: it is
     // the audited raw-access edge and can neither deref nor forge.
+    fn exprIsDirectAddressOf(expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .address_of => true,
+            .grouped => |inner| exprIsDirectAddressOf(inner.*),
+            else => false,
+        };
+    }
+
     fn checkAddressClassCast(self: *Checker, span: diagnostics.Span, source: TypeClass, target: TypeClass, ctx: Context) void {
         if (ctx.in_unsafe) return;
         if (isAddressClass(target) and isAddressClass(source)) {
@@ -5979,6 +7382,7 @@ pub const Checker = struct {
 
     fn checkComparisonOperatorOperands(self: *Checker, span: diagnostics.Span, op: ast.BinaryOp, left_expr: ast.Expr, left: TypeClass, right_expr: ast.Expr, right: TypeClass, ctx: Context) void {
         if (isAddressClass(left) or isAddressClass(right)) return;
+        if (self.checkResourceComparisonOperands(span, op, left_expr, left, right_expr, right, ctx)) return;
         if (op == .eq or op == .ne) {
             if (isKnownNonEnumNominalValueOperand(left_expr, left, ctx) or isKnownNonEnumNominalValueOperand(right_expr, right, ctx)) {
                 self.errorCode(span, "E_OPERATOR_OPERAND", "equality operators require comparable operands");
@@ -6003,6 +7407,15 @@ pub const Checker = struct {
         }
         if (isOrderedComparisonOperand(left) and isOrderedComparisonOperand(right)) return;
         self.errorCode(span, "E_OPERATOR_OPERAND", "ordered comparisons require integer or arithmetic-domain operands");
+    }
+
+    fn checkResourceComparisonOperands(self: *Checker, span: diagnostics.Span, op: ast.BinaryOp, left_expr: ast.Expr, left: TypeClass, right_expr: ast.Expr, right: TypeClass, ctx: Context) bool {
+        const left_resource = self.exprEmbedsResourceByValue(left_expr, ctx);
+        const right_resource = self.exprEmbedsResourceByValue(right_expr, ctx);
+        if (!left_resource and !right_resource) return false;
+        if ((op == .eq or op == .ne) and ((left == .null_literal and right == .nullable_value) or (right == .null_literal and left == .nullable_value))) return false;
+        self.errorCode(span, "E_RESOURCE_COMPARISON", "`move`/`linear`, `region`, and `view struct` resources do not support value comparison; compare an explicit stable handle, ID, or nullable presence tag instead");
+        return true;
     }
 
     fn checkPointerComparison(
@@ -6244,7 +7657,7 @@ pub const Checker = struct {
     // Tier 1 trait checks (docs/traits-design.md §7): conformance and coherence. The
     // method bodies are ordinary `Type__m` fn_decls checked elsewhere; this pass works
     // on the `trait_decl` / `impl_trait` records the parser emits.
-    fn checkTraits(self: *Checker, module: ast.Module) void {
+    fn checkTraits(self: *Checker, module: ast.Module, safe_module: bool) void {
         // Collect trait declarations by name.
         var traits = std.StringHashMap(ast.TraitDecl).init(self.reporter.allocator);
         defer traits.deinit();
@@ -6274,6 +7687,12 @@ pub const Checker = struct {
                         self.object_safe_traits.put(t.name.text, {}) catch {
                             self.oom = true;
                         };
+                    }
+                    if (safe_module) {
+                        for (t.methods) |method| {
+                            for (method.params) |param| self.checkSafeModuleTypeSurface(param.ty);
+                            if (method.return_type) |return_ty| self.checkSafeModuleTypeSurface(return_ty);
+                        }
                     }
                 }
             }
@@ -6393,6 +7812,13 @@ pub const Checker = struct {
         if (!ret_matches) {
             self.errorCode(provided.name.span, "E_TRAIT_SIGNATURE_MISMATCH", "impl method's return type does not match the trait signature");
         }
+        const borrow_matches = if (tm.return_borrow_source) |ts|
+            (if (provided.return_borrow_source) |is| std.mem.eql(u8, ts.text, is.text) else false)
+        else
+            provided.return_borrow_source == null;
+        if (!borrow_matches) {
+            self.errorCode(provided.name.span, "E_TRAIT_SIGNATURE_MISMATCH", "impl method's return borrow source does not match the trait signature");
+        }
     }
 
     fn checkIfLetPattern(self: *Checker, pattern: ast.Pattern, value_class: TypeClass) void {
@@ -6466,6 +7892,13 @@ pub const Checker = struct {
         });
     }
 
+    fn checkForIterableResourcePayload(self: *Checker, iterable: ast.Expr, ctx: Context) void {
+        const iterable_ty = exprResultType(iterable, ctx) orelse return;
+        const element_ty = iterableElementType(resolveAliasType(iterable_ty, ctx)) orelse return;
+        if (!self.rawMemoryPayloadIsResource(element_ty, ctx)) return;
+        self.errorCode(iterable.span, "E_RESOURCE_ITERATION", "`for` iteration cannot bind `move`/`linear`, `region`, or `view struct` elements by value; iterate indexes and explicitly `move` from fixed arrays, or iterate pointers/stable IDs");
+    }
+
     fn checkForBody(self: *Checker, loop: ast.Loop, ctx: Context, scope: *Scope) void {
         const label = loop.label orelse {
             self.checkBlockScoped(loop.body, ctx);
@@ -6495,6 +7928,9 @@ pub const Checker = struct {
         // including a secret *bool* produced by `secret == k`. Reveal it first.
         if (subject_class == .secret) {
             self.errorCode(node.subject.span, "E_SECRET_BRANCH", "secret value cannot drive a branch or switch; this would leak it through control-flow timing — use declassify/reveal (unsafe) or a constant-time select");
+        }
+        if (self.exprEmbedsResourceByValue(node.subject, ctx) and subject_class != .result and subject_class != .nullable_value) {
+            self.errorCode(node.subject.span, "E_RESOURCE_PATTERN", "`move`/`linear`, `region`, and `view struct` resources cannot be used as switch discriminants; narrow Result/nullable wrappers or switch on an explicit stable tag/ID instead");
         }
         const subject_ty = exprResultType(node.subject, ctx);
         const subject_enum = if (subject_ty) |ty| enumInfoForType(ty, ctx) else null;
@@ -6802,12 +8238,7 @@ fn copyScope(source: *const Scope, dest: *Scope) !void {
 // pointee's private bytes through a same-shape plain mirror). Non-pointers and
 // pointers to ordinary types return false.
 fn pointeeIsOpaquePrivacy(ty: ast.TypeExpr, ctx: Context) bool {
-    const child = switch (resolveAliasType(ty, ctx).kind) {
-        .pointer => |node| node.child.*,
-        .raw_many_pointer => |node| node.child.*,
-        .nullable => |node| return pointeeIsOpaquePrivacy(node.*, ctx),
-        else => return false,
-    };
+    const child = pointerPointeeType(ty, ctx) orelse return false;
     const resolved = resolveAliasType(child, ctx);
     switch (classifyType(resolved)) {
         // `Secret<T>` / `UserPtr<T>` pointees are privacy classes in their own right.
@@ -6829,6 +8260,21 @@ fn pointeeIsOpaquePrivacy(ty: ast.TypeExpr, ctx: Context) bool {
         }
     }
     return false;
+}
+
+fn pointerPointeeType(ty: ast.TypeExpr, ctx: Context) ?ast.TypeExpr {
+    return switch (resolveAliasType(ty, ctx).kind) {
+        .pointer => |node| node.child.*,
+        .raw_many_pointer => |node| node.child.*,
+        .nullable => |node| pointerPointeeType(node.*, ctx),
+        .qualified => |node| pointerPointeeType(node.child.*, ctx),
+        else => null,
+    };
+}
+
+fn isCVoidPointerType(ty: ast.TypeExpr, ctx: Context) bool {
+    const pointee = pointerPointeeType(ty, ctx) orelse return false;
+    return isTypeName(resolveAliasType(pointee, ctx), "c_void");
 }
 
 fn opacityStructNameOf(ty: ast.TypeExpr) ?[]const u8 {
@@ -7192,10 +8638,22 @@ const TaggedUnionConstructorCall = struct {
     args: []const ast.Expr,
 };
 
+const QualifiedTaggedUnionConstructorCall = struct {
+    owner: []const u8,
+    member: ast.Ident,
+    args: []const ast.Expr,
+};
+
 fn taggedUnionConstructorCall(expr: ast.Expr) ?TaggedUnionConstructorCall {
     const call = callExpr(expr) orelse return null;
     const name = calleeIdentName(call.callee.*) orelse return null;
     return .{ .name = .{ .text = name, .span = call.callee.*.span }, .args = call.args };
+}
+
+fn qualifiedTaggedUnionConstructorCall(expr: ast.Expr) ?QualifiedTaggedUnionConstructorCall {
+    const call = callExpr(expr) orelse return null;
+    const q = ast_query.qualifiedMemberCallee(call.callee.*) orelse return null;
+    return .{ .owner = q.owner, .member = q.member, .args = call.args };
 }
 
 fn isKnownTaggedUnionConstructorName(name: []const u8, ctx: Context) bool {
@@ -7285,10 +8743,104 @@ fn typeExprIsGenericValueArg(ty: ast.TypeExpr, ctx: Context) bool {
     };
 }
 
+fn moduleHasScopedBorrow(module: ast.Module) bool {
+    for (module.decls) |decl| {
+        switch (decl.kind) {
+            .fn_decl, .extern_fn => |fn_decl| if (fn_decl.body) |body| {
+                if (blockHasScopedBorrow(body)) return true;
+            },
+            .global_decl => |global| if (global.init) |init| {
+                if (exprHasScopedBorrow(init)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn blockHasScopedBorrow(block: ast.Block) bool {
+    for (block.items) |stmt| {
+        if (stmtHasScopedBorrow(stmt)) return true;
+    }
+    return false;
+}
+
+fn stmtHasScopedBorrow(stmt: ast.Stmt) bool {
+    return switch (stmt.kind) {
+        .let_decl, .var_decl => |decl| if (decl.init) |init| exprHasScopedBorrow(init) else false,
+        .loop => |node| (if (node.iterable) |iterable| exprHasScopedBorrow(iterable) else false) or blockHasScopedBorrow(node.body),
+        .if_let => |node| exprHasScopedBorrow(node.value) or blockHasScopedBorrow(node.then_block) or if (node.else_block) |else_block| blockHasScopedBorrow(else_block) else false,
+        .@"switch" => |node| switchHasScopedBorrow(node),
+        .unsafe_block, .comptime_block, .block => |body| blockHasScopedBorrow(body),
+        .contract_block => |node| blockHasScopedBorrow(node.block),
+        .@"return" => |expr| if (expr) |value| exprHasScopedBorrow(value) else false,
+        .@"defer", .assert, .expr => |expr| exprHasScopedBorrow(expr),
+        .assignment => |node| exprHasScopedBorrow(node.target) or exprHasScopedBorrow(node.value),
+        .asm_stmt => |node| asmStmtHasScopedBorrow(node),
+        .@"break", .@"continue" => false,
+    };
+}
+
+fn switchHasScopedBorrow(node: ast.Switch) bool {
+    if (exprHasScopedBorrow(node.subject)) return true;
+    for (node.arms) |arm| {
+        for (arm.patterns) |pattern| if (patternHasScopedBorrow(pattern)) return true;
+        switch (arm.body) {
+            .block => |body| if (blockHasScopedBorrow(body)) return true,
+            .expr => |expr| if (exprHasScopedBorrow(expr)) return true,
+        }
+    }
+    return false;
+}
+
+fn patternHasScopedBorrow(pattern: ast.Pattern) bool {
+    return switch (pattern.kind) {
+        .literal => |expr| exprHasScopedBorrow(expr),
+        else => false,
+    };
+}
+
+fn asmStmtHasScopedBorrow(stmt: ast.AsmStmt) bool {
+    for (stmt.inputs) |input| {
+        if (exprHasScopedBorrow(input.value)) return true;
+    }
+    return false;
+}
+
+fn exprHasScopedBorrow(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .borrow_expr => true,
+        .grouped, .address_of, .deref, .await_expr, .move_expr => |inner| exprHasScopedBorrow(inner.*),
+        .unary => |node| exprHasScopedBorrow(node.expr.*),
+        .binary => |node| exprHasScopedBorrow(node.left.*) or exprHasScopedBorrow(node.right.*),
+        .cast => |node| exprHasScopedBorrow(node.value.*),
+        .try_expr => |node| exprHasScopedBorrow(node.operand.*) or if (node.mapped) |mapped| exprHasScopedBorrow(mapped.*) else false,
+        .call => |node| blk: {
+            if (exprHasScopedBorrow(node.callee.*)) break :blk true;
+            for (node.args) |arg| if (exprHasScopedBorrow(arg)) break :blk true;
+            break :blk false;
+        },
+        .index => |node| exprHasScopedBorrow(node.base.*) or exprHasScopedBorrow(node.index.*),
+        .slice => |node| exprHasScopedBorrow(node.base.*) or exprHasScopedBorrow(node.start.*) or exprHasScopedBorrow(node.end.*),
+        .member => |node| exprHasScopedBorrow(node.base.*),
+        .array_literal => |items| blk: {
+            for (items) |item| if (exprHasScopedBorrow(item)) break :blk true;
+            break :blk false;
+        },
+        .struct_literal => |fields| blk: {
+            for (fields) |field| if (exprHasScopedBorrow(field.value)) break :blk true;
+            break :blk false;
+        },
+        .block => |body| blockHasScopedBorrow(body),
+        else => false,
+    };
+}
+
 fn exprMentionsAnyName(expr: ast.Expr, names: *const std.StringHashMap(void)) bool {
     return switch (expr.kind) {
         .ident => |ident| names.contains(ident.text),
-        .grouped, .address_of, .deref, .await_expr => |inner| exprMentionsAnyName(inner.*, names),
+        .grouped, .address_of, .deref, .await_expr, .move_expr => |inner| exprMentionsAnyName(inner.*, names),
+        .borrow_expr => |node| exprMentionsAnyName(node.value.*, names),
         .try_expr => |inner| exprMentionsAnyName(inner.operand.*, names) or if (inner.mapped) |mapped| exprMentionsAnyName(mapped.*, names) else false,
         .unary => |node| exprMentionsAnyName(node.expr.*, names),
         .binary => |node| exprMentionsAnyName(node.left.*, names) or exprMentionsAnyName(node.right.*, names),
@@ -7322,6 +8874,232 @@ fn exprMentionsAnyName(expr: ast.Expr, names: *const std.StringHashMap(void)) bo
         .enum_literal,
         => false,
     };
+}
+
+fn exprMentionsName(expr: ast.Expr, name: []const u8) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, name),
+        .grouped, .address_of, .deref, .await_expr, .move_expr => |inner| exprMentionsName(inner.*, name),
+        .borrow_expr => |node| exprMentionsName(node.value.*, name),
+        .try_expr => |inner| exprMentionsName(inner.operand.*, name) or if (inner.mapped) |mapped| exprMentionsName(mapped.*, name) else false,
+        .unary => |node| exprMentionsName(node.expr.*, name),
+        .binary => |node| exprMentionsName(node.left.*, name) or exprMentionsName(node.right.*, name),
+        .cast => |node| exprMentionsName(node.value.*, name),
+        .call => |node| blk: {
+            if (exprMentionsName(node.callee.*, name)) break :blk true;
+            for (node.args) |arg| if (exprMentionsName(arg, name)) break :blk true;
+            break :blk false;
+        },
+        .index => |node| exprMentionsName(node.base.*, name) or exprMentionsName(node.index.*, name),
+        .slice => |node| exprMentionsName(node.base.*, name) or exprMentionsName(node.start.*, name) or exprMentionsName(node.end.*, name),
+        .member => |node| exprMentionsName(node.base.*, name),
+        .array_literal => |items| blk: {
+            for (items) |item| if (exprMentionsName(item, name)) break :blk true;
+            break :blk false;
+        },
+        .struct_literal => |fields| blk: {
+            for (fields) |field| if (exprMentionsName(field.value, name)) break :blk true;
+            break :blk false;
+        },
+        .block => |block| blockMentionsName(block, name),
+        .int_literal,
+        .float_literal,
+        .string_literal,
+        .char_literal,
+        .bool_literal,
+        .null_literal,
+        .uninit_literal,
+        .unreachable_expr,
+        .void_literal,
+        .enum_literal,
+        => false,
+    };
+}
+
+fn exprHasExplicitMoveMarker(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .move_expr => true,
+        .grouped => |inner| exprHasExplicitMoveMarker(inner.*),
+        else => false,
+    };
+}
+
+fn exprIsExistingResourceOwnerPlace(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .ident, .member, .index, .deref => true,
+        .grouped => |inner| exprIsExistingResourceOwnerPlace(inner.*),
+        .move_expr => false,
+        .try_expr => |inner| exprIsExistingResourceOwnerPlace(inner.operand.*),
+        .cast => |node| exprIsExistingResourceOwnerPlace(node.value.*),
+        else => false,
+    };
+}
+
+fn returnBorrowExprMatchesSource(self: *Checker, target_ty: ast.TypeExpr, expr: ast.Expr, source: []const u8, ctx: Context) bool {
+    const resolved_target_ty = resolveAliasType(target_ty, ctx);
+    if (isNullLiteral(expr)) {
+        const target = classifyTypeCtx(resolved_target_ty, ctx);
+        return target == .nullable_pointer or target == .nullable_c_void_pointer or target == .nullable_dyn_trait or target == .nullable_value;
+    }
+    if (structTypeName(resolved_target_ty)) |struct_name| {
+        if (ctx.structs) |structs| {
+            if (structs.get(struct_name)) |info| {
+                if (info.is_view) return viewStructLiteralFieldsMatchSource(self, info, expr, source, ctx);
+            }
+        }
+    }
+    return exprIsBorrowPathFromSource(expr, source, ctx);
+}
+
+fn viewStructLiteralFieldsMatchSource(self: *Checker, info: StructInfo, expr: ast.Expr, source: []const u8, ctx: Context) bool {
+    const fields = structLiteralFields(expr) orelse return exprDependsOnlyOnBorrowSource(expr, source, ctx);
+    for (fields) |field| {
+        const field_ty = info.fields.get(field.name.text) orelse continue;
+        if (!returnTypeCanCarryBorrowedView(self, field_ty, classifyTypeCtx(field_ty, ctx), ctx)) continue;
+        if (!returnBorrowExprMatchesSource(self, field_ty, field.value, source, ctx)) return false;
+    }
+    return true;
+}
+
+fn exprDependsOnlyOnBorrowSource(expr: ast.Expr, source: []const u8, ctx: Context) bool {
+    return exprMentionsName(expr, source) and !exprMentionsOtherParameter(expr, source, ctx);
+}
+
+fn exprIsBorrowPathFromSource(expr: ast.Expr, source: []const u8, ctx: Context) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, source),
+        .grouped => |inner| exprIsBorrowPathFromSource(inner.*, source, ctx),
+        .cast => |node| exprIsBorrowPathFromSource(node.value.*, source, ctx),
+        .member => |node| exprIsBorrowPathFromSource(node.base.*, source, ctx),
+        .index => |node| exprIsBorrowPathFromSource(node.base.*, source, ctx) and
+            !exprHasScopedBorrow(node.index.*),
+        .slice => |node| exprIsBorrowPathFromSource(node.base.*, source, ctx) and
+            !exprHasScopedBorrow(node.start.*) and
+            !exprHasScopedBorrow(node.end.*),
+        else => false,
+    };
+}
+
+fn exprMentionsOtherParameter(expr: ast.Expr, source: []const u8, ctx: Context) bool {
+    return switch (expr.kind) {
+        .ident => |ident| blk: {
+            if (std.mem.eql(u8, ident.text, source)) break :blk false;
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            break :blk if (binding) |entry| entry.origin == .param else false;
+        },
+        .grouped, .address_of, .deref, .await_expr, .move_expr => |inner| exprMentionsOtherParameter(inner.*, source, ctx),
+        .borrow_expr => |node| exprMentionsOtherParameter(node.value.*, source, ctx),
+        .try_expr => |inner| exprMentionsOtherParameter(inner.operand.*, source, ctx) or if (inner.mapped) |mapped| exprMentionsOtherParameter(mapped.*, source, ctx) else false,
+        .unary => |node| exprMentionsOtherParameter(node.expr.*, source, ctx),
+        .binary => |node| exprMentionsOtherParameter(node.left.*, source, ctx) or exprMentionsOtherParameter(node.right.*, source, ctx),
+        .cast => |node| exprMentionsOtherParameter(node.value.*, source, ctx),
+        .call => |node| blk: {
+            if (exprMentionsOtherParameter(node.callee.*, source, ctx)) break :blk true;
+            for (node.args) |arg| if (exprMentionsOtherParameter(arg, source, ctx)) break :blk true;
+            break :blk false;
+        },
+        .index => |node| exprMentionsOtherParameter(node.base.*, source, ctx) or exprMentionsOtherParameter(node.index.*, source, ctx),
+        .slice => |node| exprMentionsOtherParameter(node.base.*, source, ctx) or exprMentionsOtherParameter(node.start.*, source, ctx) or exprMentionsOtherParameter(node.end.*, source, ctx),
+        .member => |node| exprMentionsOtherParameter(node.base.*, source, ctx),
+        .array_literal => |items| blk: {
+            for (items) |item| if (exprMentionsOtherParameter(item, source, ctx)) break :blk true;
+            break :blk false;
+        },
+        .struct_literal => |fields| blk: {
+            for (fields) |field| if (exprMentionsOtherParameter(field.value, source, ctx)) break :blk true;
+            break :blk false;
+        },
+        .block => |block| blockMentionsOtherParameter(block, source, ctx),
+        .int_literal,
+        .float_literal,
+        .string_literal,
+        .char_literal,
+        .bool_literal,
+        .null_literal,
+        .uninit_literal,
+        .unreachable_expr,
+        .void_literal,
+        .enum_literal,
+        => false,
+    };
+}
+
+fn blockMentionsOtherParameter(block: ast.Block, source: []const u8, ctx: Context) bool {
+    for (block.items) |stmt| {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| if (local.init) |init| {
+                if (exprMentionsOtherParameter(init, source, ctx)) return true;
+            },
+            .loop => |loop| {
+                if (loop.iterable) |iterable| if (exprMentionsOtherParameter(iterable, source, ctx)) return true;
+                if (blockMentionsOtherParameter(loop.body, source, ctx)) return true;
+            },
+            .if_let => |node| {
+                if (exprMentionsOtherParameter(node.value, source, ctx) or blockMentionsOtherParameter(node.then_block, source, ctx)) return true;
+                if (node.else_block) |else_block| if (blockMentionsOtherParameter(else_block, source, ctx)) return true;
+            },
+            .@"switch" => |node| {
+                if (exprMentionsOtherParameter(node.subject, source, ctx)) return true;
+                for (node.arms) |arm| {
+                    for (arm.patterns) |pattern| {
+                        if (pattern.kind == .literal and exprMentionsOtherParameter(pattern.kind.literal, source, ctx)) return true;
+                    }
+                    switch (arm.body) {
+                        .block => |body| if (blockMentionsOtherParameter(body, source, ctx)) return true,
+                        .expr => |body| if (exprMentionsOtherParameter(body, source, ctx)) return true,
+                    }
+                }
+            },
+            .contract_block => |node| if (blockMentionsOtherParameter(node.block, source, ctx)) return true,
+            .unsafe_block, .comptime_block, .block => |inner| if (blockMentionsOtherParameter(inner, source, ctx)) return true,
+            .@"return" => |maybe| if (maybe) |expr| {
+                if (exprMentionsOtherParameter(expr, source, ctx)) return true;
+            },
+            .@"defer", .assert, .expr => |expr| if (exprMentionsOtherParameter(expr, source, ctx)) return true,
+            .assignment => |node| if (exprMentionsOtherParameter(node.target, source, ctx) or exprMentionsOtherParameter(node.value, source, ctx)) return true,
+            .asm_stmt, .@"break", .@"continue" => {},
+        }
+    }
+    return false;
+}
+
+fn blockMentionsName(block: ast.Block, name: []const u8) bool {
+    for (block.items) |stmt| {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| if (local.init) |init| {
+                if (exprMentionsName(init, name)) return true;
+            },
+            .loop => |loop| {
+                if (loop.iterable) |iterable| if (exprMentionsName(iterable, name)) return true;
+                if (blockMentionsName(loop.body, name)) return true;
+            },
+            .if_let => |node| {
+                if (exprMentionsName(node.value, name) or blockMentionsName(node.then_block, name)) return true;
+                if (node.else_block) |else_block| if (blockMentionsName(else_block, name)) return true;
+            },
+            .@"switch" => |node| {
+                if (exprMentionsName(node.subject, name)) return true;
+                for (node.arms) |arm| {
+                    for (arm.patterns) |pattern| {
+                        if (pattern.kind == .literal and exprMentionsName(pattern.kind.literal, name)) return true;
+                    }
+                    switch (arm.body) {
+                        .block => |body| if (blockMentionsName(body, name)) return true,
+                        .expr => |body| if (exprMentionsName(body, name)) return true,
+                    }
+                }
+            },
+            .block, .unsafe_block, .comptime_block => |inner| if (blockMentionsName(inner, name)) return true,
+            .contract_block => |node| if (blockMentionsName(node.block, name)) return true,
+            .@"return" => |maybe| if (maybe) |expr| {
+                if (exprMentionsName(expr, name)) return true;
+            },
+            .@"defer", .assert, .expr => |expr| if (exprMentionsName(expr, name)) return true,
+            .assignment => |node| if (exprMentionsName(node.target, name) or exprMentionsName(node.value, name)) return true,
+            .asm_stmt, .@"break", .@"continue" => {},
+        }
+    }
+    return false;
 }
 
 fn blockMentionsAnyName(block: ast.Block, names: *const std.StringHashMap(void)) bool {
@@ -7371,6 +9149,28 @@ fn canInitialize(target: TypeClass, initializer: TypeClass) bool {
     if (isCheckedInt(target) and initializer == .int_literal) return true;
     if (isFloat(target) and initializer == .float_literal) return true;
     return false;
+}
+
+fn isBorrowContractViewType(self: *Checker, ty: ast.TypeExpr, ctx: Context) bool {
+    if (ctx.structs) |structs| {
+        if (ctx.type_aliases) |aliases| {
+            if (self.typeEmbedsViewByValue(ty, structs, aliases)) return true;
+        }
+    }
+    return isBorrowContractViewClass(classifyTypeCtx(ty, ctx));
+}
+
+fn isBorrowContractSourceType(ty: ast.TypeExpr, ctx: Context) bool {
+    return isBorrowContractViewClass(classifyTypeCtx(ty, ctx));
+}
+
+fn isBorrowContractViewClass(class: TypeClass) bool {
+    return class == .pointer or
+        class == .slice or
+        class == .cstr or
+        class == .nullable_pointer or
+        class == .nullable_c_void_pointer or
+        class == .nullable_dyn_trait;
 }
 
 fn externAbiTypeNeedsClassification(ty: ast.TypeExpr, ctx: Context) bool {
@@ -7894,7 +9694,7 @@ pub fn exprResultType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
         .index => |node| indexResultType(node, ctx),
         .slice => |node| sliceResultType(node, ctx),
         .member => |node| enumVariantPathType(node, ctx) orelse memberResultFieldType(node, ctx),
-        .grouped => |inner| exprResultType(inner.*, ctx),
+        .grouped, .move_expr => |inner| exprResultType(inner.*, ctx),
         // Comparison and logical operators yield `bool`; surfacing that lets a
         // `switch a < b { true => …, false => … }` count as exhaustive.
         .binary => |node| if (isComparisonBinary(node.op) or isLogicalBinary(node.op))
@@ -8134,7 +9934,7 @@ fn exprDeclaredType(expr: ast.Expr, ctx: Context) ?ast.TypeExpr {
             break :blk info.return_ty;
         },
         .member => |node| memberFieldType(node, ctx),
-        .grouped => |inner| exprDeclaredType(inner.*, ctx),
+        .grouped, .move_expr => |inner| exprDeclaredType(inner.*, ctx),
         else => null,
     };
 }
@@ -8252,6 +10052,102 @@ fn directCallName(callee: ast.Expr) ?[]const u8 {
     return calleeIdentName(callee);
 }
 
+fn rawCopyCallName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "memcpy") or
+        std.mem.eql(u8, name, "memmove") or
+        std.mem.eql(u8, name, "__builtin_memcpy") or
+        std.mem.eql(u8, name, "__builtin_memmove") or
+        std.mem.eql(u8, name, "mem_copy");
+}
+
+fn rawFillCallName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "memset") or
+        std.mem.eql(u8, name, "bzero") or
+        std.mem.eql(u8, name, "explicit_bzero") or
+        std.mem.eql(u8, name, "__builtin_memset") or
+        std.mem.eql(u8, name, "mem_set");
+}
+
+fn nonLocalJumpCallName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "longjmp") or
+        std.mem.eql(u8, name, "_longjmp") or
+        std.mem.eql(u8, name, "siglongjmp") or
+        std.mem.eql(u8, name, "__builtin_longjmp");
+}
+
+fn copyingGenericElementCallName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "sort") or
+        std.mem.eql(u8, name, "is_sorted") or
+        std.mem.eql(u8, name, "lower_bound") or
+        std.mem.eql(u8, name, "find_index") or
+        std.mem.eql(u8, name, "any") or
+        std.mem.eql(u8, name, "ring_init") or
+        std.mem.eql(u8, name, "ring_len") or
+        std.mem.eql(u8, name, "ring_is_empty") or
+        std.mem.eql(u8, name, "ring_is_full") or
+        std.mem.eql(u8, name, "ring_push") or
+        std.mem.eql(u8, name, "ring_front") or
+        std.mem.eql(u8, name, "ring_pop") or
+        std.mem.eql(u8, name, "pool_init") or
+        std.mem.eql(u8, name, "pool_alloc") or
+        std.mem.eql(u8, name, "pool_free") or
+        std.mem.eql(u8, name, "pool_set") or
+        std.mem.eql(u8, name, "pool_load") or
+        std.mem.eql(u8, name, "slotmap_init") or
+        std.mem.eql(u8, name, "slotmap_alloc") or
+        std.mem.eql(u8, name, "slotmap_alloc_at") or
+        std.mem.eql(u8, name, "slotmap_live") or
+        std.mem.eql(u8, name, "slotmap_set") or
+        std.mem.eql(u8, name, "slotmap_get") or
+        std.mem.eql(u8, name, "slotmap_free") or
+        std.mem.eql(u8, name, "slotmap_count") or
+        std.mem.eql(u8, name, "vec_new") or
+        std.mem.eql(u8, name, "vec_len") or
+        std.mem.eql(u8, name, "vec_push") or
+        std.mem.eql(u8, name, "vec_get") or
+        std.mem.eql(u8, name, "vec_set") or
+        std.mem.eql(u8, name, "vec_pop") or
+        std.mem.eql(u8, name, "vec_clear") or
+        std.mem.eql(u8, name, "vec_free") or
+        std.mem.eql(u8, name, "arc_new") or
+        std.mem.eql(u8, name, "arc_new_uninit") or
+        std.mem.eql(u8, name, "arc_clone") or
+        std.mem.eql(u8, name, "arc_clone_from_parts") or
+        std.mem.eql(u8, name, "arc_get") or
+        std.mem.eql(u8, name, "arc_get_mut") or
+        std.mem.eql(u8, name, "arc_count") or
+        std.mem.eql(u8, name, "arc_drop") or
+        std.mem.eql(u8, name, "strmap_new") or
+        std.mem.eql(u8, name, "strmap_len") or
+        std.mem.eql(u8, name, "strmap_put") or
+        std.mem.eql(u8, name, "strmap_get") or
+        std.mem.eql(u8, name, "strmap_get_or") or
+        std.mem.eql(u8, name, "strmap_contains") or
+        std.mem.eql(u8, name, "strmap_del") or
+        std.mem.eql(u8, name, "strmap_free");
+}
+
+fn isThreadSpawnBoundaryCall(callee: ast.Expr) bool {
+    if (directCallName(callee)) |name| {
+        return std.mem.eql(u8, name, "thread_spawn") or
+            std.mem.eql(u8, name, "task_spawn") or
+            std.mem.eql(u8, name, "spawn") or
+            std.mem.eql(u8, name, "proc_spawn") or
+            std.mem.eql(u8, name, "proc_spawn_attenuated") or
+            std.mem.eql(u8, name, "sched_spawn") or
+            std.mem.eql(u8, name, "agent_spawn") or
+            std.mem.eql(u8, name, "mc_thread_init");
+    }
+    return switch (callee.kind) {
+        .member => |node| std.mem.eql(u8, node.name.text, "spawn") and switch (node.base.*.kind) {
+            .ident => |base| std.mem.eql(u8, base.text, "thread") or std.mem.eql(u8, base.text, "task"),
+            else => false,
+        },
+        .grouped => |inner| isThreadSpawnBoundaryCall(inner.*),
+        else => false,
+    };
+}
+
 fn updateAssignmentAddressOrigin(target: ast.Expr, value: ast.Expr, ctx: Context) void {
     switch (target.kind) {
         .ident => |ident| {
@@ -8318,6 +10214,7 @@ fn placeRoot(expr: ast.Expr, ctx: Context) PlaceRoot {
 fn localAddressRoot(expr: ast.Expr, ctx: Context) ?BorrowedLocal {
     return switch (expr.kind) {
         .address_of => |inner| localStorageRoot(inner.*, ctx),
+        .borrow_expr => |node| localStorageRoot(node.value.*, ctx),
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| {
@@ -8383,8 +10280,9 @@ fn closureLocalAddressRoot(expr: ast.Expr, ctx: Context) ?BorrowedLocal {
 
 fn addressOrigin(expr: ast.Expr, ctx: Context) AddressOrigin {
     return switch (expr.kind) {
-        .address_of => |inner| if (localStorageRoot(inner.*, ctx)) |root| .{ .local = .{ .scope_depth = root.scope_depth } } else .none,
-        .call => if (closureLocalAddressRoot(expr, ctx)) |root| .{ .local = .{ .scope_depth = root.scope_depth } } else .none,
+        .address_of => |inner| if (localStorageRoot(inner.*, ctx)) |root| .{ .local = .{ .scope_depth = root.scope_depth, .explicit_borrow = false } } else .none,
+        .borrow_expr => |node| if (localStorageRoot(node.value.*, ctx)) |root| .{ .local = .{ .scope_depth = root.scope_depth, .explicit_borrow = true } } else .none,
+        .call => if (closureLocalAddressRoot(expr, ctx)) |root| .{ .local = .{ .scope_depth = root.scope_depth, .explicit_borrow = false } } else .none,
         .ident => |ident| {
             const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
             if (binding) |entry| return entry.address_origin;
@@ -8392,6 +10290,24 @@ fn addressOrigin(expr: ast.Expr, ctx: Context) AddressOrigin {
         },
         .grouped => |inner| addressOrigin(inner.*, ctx),
         else => .none,
+    };
+}
+
+fn exprIsExplicitBorrowPointer(expr: ast.Expr, ctx: Context) bool {
+    return switch (expr.kind) {
+        .borrow_expr => true,
+        .ident => |ident| blk: {
+            const binding = if (ctx.scope) |scope| scope.get(ident.text) else null;
+            if (binding) |entry| {
+                switch (entry.address_origin) {
+                    .local => |origin| break :blk origin.explicit_borrow,
+                    .none => {},
+                }
+            }
+            break :blk false;
+        },
+        .grouped => |inner| exprIsExplicitBorrowPointer(inner.*, ctx),
+        else => false,
     };
 }
 
@@ -8411,6 +10327,75 @@ fn borrowedLocalInAssignedValue(target_class: TypeClass, value: ast.Expr, ctx: C
     }
     if (aggregateLocalAddressRoot(value, ctx)) |borrow| return borrow;
     return null;
+}
+
+fn assignmentTargetIsAggregateSlot(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .member, .index => true,
+        .grouped => |inner| assignmentTargetIsAggregateSlot(inner.*),
+        else => false,
+    };
+}
+
+fn returnTypeCanCarryBorrowedView(self: *Checker, target_ty: ast.TypeExpr, target: TypeClass, ctx: Context) bool {
+    if (isPointerLikeClass(target) or target == .cstr or target == .closure or target == .fn_pointer or target == .result or target == .nullable_dyn_trait) return true;
+    if (ctx.structs) |structs| {
+        if (ctx.type_aliases) |aliases| {
+            if (self.typeEmbedsViewByValue(target_ty, structs, aliases)) return true;
+        }
+    }
+    if (target == .nullable_value) {
+        const inner = nullableInnerType(resolveAliasType(target_ty, ctx)) orelse return true;
+        return returnTypeCanCarryBorrowedView(self, inner, classifyTypeCtx(inner, ctx), ctx);
+    }
+    return switch (resolveAliasType(target_ty, ctx).kind) {
+        .nullable => |child| returnTypeCanCarryBorrowedView(self, child.*, classifyTypeCtx(child.*, ctx), ctx),
+        .generic => |node| blk: {
+            if (std.mem.eql(u8, node.base.text, "Result")) {
+                for (node.args) |arg| {
+                    if (returnTypeCanCarryBorrowedView(self, arg, classifyTypeCtx(arg, ctx), ctx)) break :blk true;
+                }
+            }
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
+fn localAddressInEscapingValue(expr: ast.Expr, ctx: Context) ?BorrowedLocal {
+    if (localAddressRoot(expr, ctx)) |borrow| return borrow;
+    if (closureLocalAddressRoot(expr, ctx)) |borrow| return borrow;
+    if (aggregateLocalAddressRoot(expr, ctx)) |borrow| return borrow;
+    return switch (expr.kind) {
+        .grouped, .address_of, .deref, .await_expr, .move_expr => |inner| localAddressInEscapingValue(inner.*, ctx),
+        .unary => |node| localAddressInEscapingValue(node.expr.*, ctx),
+        .binary => |node| localAddressInEscapingValue(node.left.*, ctx) orelse localAddressInEscapingValue(node.right.*, ctx),
+        .cast => |node| localAddressInEscapingValue(node.value.*, ctx),
+        .try_expr => |node| localAddressInEscapingValue(node.operand.*, ctx) orelse if (node.mapped) |mapped| localAddressInEscapingValue(mapped.*, ctx) else null,
+        .call => |node| blk: {
+            if (localAddressInEscapingValue(node.callee.*, ctx)) |borrow| break :blk borrow;
+            for (node.args) |arg| {
+                if (localAddressInEscapingValue(arg, ctx)) |borrow| break :blk borrow;
+            }
+            break :blk null;
+        },
+        .index => |node| localAddressInEscapingValue(node.base.*, ctx) orelse localAddressInEscapingValue(node.index.*, ctx),
+        .slice => |node| localAddressInEscapingValue(node.base.*, ctx) orelse localAddressInEscapingValue(node.start.*, ctx) orelse localAddressInEscapingValue(node.end.*, ctx),
+        .member => |node| localAddressInEscapingValue(node.base.*, ctx),
+        .array_literal => |items| blk: {
+            for (items) |item| {
+                if (localAddressInEscapingValue(item, ctx)) |borrow| break :blk borrow;
+            }
+            break :blk null;
+        },
+        .struct_literal => |fields| blk: {
+            for (fields) |field| {
+                if (localAddressInEscapingValue(field.value, ctx)) |borrow| break :blk borrow;
+            }
+            break :blk null;
+        },
+        else => null,
+    };
 }
 
 fn localStorageRoot(expr: ast.Expr, ctx: Context) ?BorrowedLocal {

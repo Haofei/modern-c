@@ -98,7 +98,7 @@ pub fn io_open(path: *const u8, flags: i32, mode: i32) -> Result<Fd, IoError> {
 // owns `buf` and guarantees it has room for `n` bytes (an unchecked contract,
 // like every raw-buffer boundary in MC).
 pub fn io_read(f: Fd, buf: PAddr, n: usize) -> Result<usize, IoError> {
-    var p: *mut u8 = raw.ptr<u8>(0);
+    var p: *mut u8 = uninit;
     unsafe {
         p = raw.ptr<u8>(buf);
     }
@@ -113,7 +113,7 @@ pub fn io_read(f: Fd, buf: PAddr, n: usize) -> Result<usize, IoError> {
 // `IoError.WriteFailed` on error (raw < 0). A short write (returned count < n)
 // is reported as a value, not hidden — the caller decides whether to loop.
 pub fn io_write(f: Fd, buf: PAddr, n: usize) -> Result<usize, IoError> {
-    var p: *const u8 = raw.ptr<u8>(0);
+    var p: *const u8 = uninit;
     unsafe {
         p = raw.ptr<u8>(buf);
     }

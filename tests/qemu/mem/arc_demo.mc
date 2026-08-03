@@ -10,7 +10,10 @@ struct Payload { value: u32 }
 global g_pool: [4096]u8;
 
 fn payload_value(block: PAddr) -> u32 {
-    let p: *const Payload = raw.ptr<Payload>(block);
+    var p: *const Payload = uninit;
+    unsafe {
+        p = raw.ptr<Payload>(block);
+    }
     return p.value;
 }
 

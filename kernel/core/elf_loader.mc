@@ -349,8 +349,10 @@ export fn elf_load_image_for(image_base: usize, image_len: usize, expected_machi
 
 #[mc_abi]
 export fn elf_load_verified_bundle_for(bundle: VerifiedBundle, image_base: usize, image_len: usize, expected_machine: u16, user_start: usize, user_end: usize, pt: *mut PageTable, h: *mut Heap) -> Result<u64, LoadError> {
-    if !verified_bundle_matches_image(bundle, image_base, image_len) {
+    if !verified_bundle_matches_image(&bundle, image_base, image_len) {
+        unsafe { forget_unchecked(bundle); }
         return err(.BadElf);
     }
+    unsafe { forget_unchecked(bundle); }
     return elf_load_image_for(image_base, image_len, expected_machine, user_start, user_end, pt, h);
 }

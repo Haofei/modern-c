@@ -121,11 +121,13 @@ pub const Context = struct {
     // it, so `dyn` cannot smuggle unbounded behavior into a bounded context.
     bounded: bool = false,
     in_unsafe: bool = false,
+    safe_module: bool = false,
     in_comptime: bool = false,
     returns_never: bool = false,
     returns_void: bool = false,
     is_variadic: bool = false,
     return_ty: ?ast.TypeExpr = null,
+    return_borrow_source: ?[]const u8 = null,
     return_kind: TypeClass = .void,
     loop_depth: usize = 0,
     // G7: stack of in-scope loop labels (`outer:`), innermost first, threaded on
@@ -195,9 +197,18 @@ pub const StructInfo = struct {
     ordered: []const ast.Field,
     semantic_identity: []const u8,
     abi: ?[]const u8 = null,
+    type_params: []const ast.Ident = &.{},
     type_param_count: usize = 0,
     // `opaque struct` - fields are private to the struct's associated functions.
     is_opaque: bool = false,
+    // `region struct` - instances are arena/region-owned graph nodes, not
+    // independent move/linear resources.
+    is_region: bool = false,
+    // `view struct` - lexical borrowed-view aggregate; may hold explicit borrow
+    // fields but must not escape without an explicit borrow-return contract.
+    is_view: bool = false,
+    // `thread_move` resource marker: explicit cross-thread transfer permission.
+    is_thread_move: bool = false,
     // `#[c_union]` - compiler-internal addressable union (union layout; see ast.StructDecl).
     is_c_union: bool = false,
 };
@@ -212,11 +223,21 @@ pub const MoveSlot = struct {
     place: ?MovePlace = null,
     // Reserved by a `defer` to be consumed at scope end: not a leak, not movable.
     deferred: bool = false,
+    // Reserved for compiler-inserted deterministic drop at lexical scope exit. Unlike
+    // `deferred`, ordinary borrows and mutation remain allowed while the binding is
+    // live; by-value moves are rejected in v0 so the backend can emit an unconditional
+    // cleanup without drop flags.
+    auto_drop: bool = false,
     // A place borrowed by a deferred expression. Unlike `deferred`, this does not
     // consume the resource or suppress leak checks; it only prevents moving the
     // borrowed root/subplace before deferred cleanup runs.
     deferred_borrow: bool = false,
     deferred_borrow_place: ?MovePlace = null,
+    // Explicit scoped borrows (`borrow x` / `borrow mut x`) currently tracked for
+    // root move bindings. These are lexical: a nested block restores the counts
+    // it observed on entry when it exits.
+    scoped_shared_borrows: usize = 0,
+    scoped_mut_borrow: bool = false,
     // The binding's declared/inferred type, when known - used to look up a `move` field's
     // type for place-sensitive field-move tracking. Null for synthetic field place keys.
     ty: ?ast.TypeExpr = null,
@@ -357,6 +378,16 @@ pub const MoveIndexFacts = struct {
     }
 };
 
+pub const ScopedBorrowSlot = struct {
+    span: diagnostics.Span,
+    shared: usize = 0,
+    mut: bool = false,
+
+    pub fn active(self: ScopedBorrowSlot) bool {
+        return self.shared != 0 or self.mut;
+    }
+};
+
 test "move index facts are independent, clonable metadata" {
     var facts = MoveIndexFacts.init(std.testing.allocator);
     defer facts.deinit();
@@ -399,6 +430,7 @@ test "move index facts retain only equal CFG join facts" {
 // now transports index facts as first-class state.
 pub const MoveState = struct {
     slots: std.StringHashMap(MoveSlot),
+    scoped_borrows: std.StringHashMap(ScopedBorrowSlot),
     index_facts: MoveIndexFacts,
     // Tracks the lexical bindings eligible to carry index facts even when a
     // particular path currently has no stable fact for them. This separates
@@ -409,6 +441,7 @@ pub const MoveState = struct {
     pub fn init(allocator: std.mem.Allocator) MoveState {
         return .{
             .slots = std.StringHashMap(MoveSlot).init(allocator),
+            .scoped_borrows = std.StringHashMap(ScopedBorrowSlot).init(allocator),
             .index_facts = MoveIndexFacts.init(allocator),
             .index_bindings = std.StringHashMap(void).init(allocator),
         };
@@ -416,6 +449,7 @@ pub const MoveState = struct {
 
     pub fn deinit(self: *MoveState) void {
         self.slots.deinit();
+        self.scoped_borrows.deinit();
         self.index_facts.deinit();
         self.index_bindings.deinit();
     }
@@ -450,6 +484,7 @@ pub const MoveState = struct {
 
     pub fn clearRetainingCapacity(self: *MoveState) void {
         self.slots.clearRetainingCapacity();
+        self.scoped_borrows.clearRetainingCapacity();
         self.index_facts.facts.clearRetainingCapacity();
         self.index_bindings.clearRetainingCapacity();
     }
@@ -675,15 +710,18 @@ pub const EnumInfo = struct {
 
 pub const UnionInfo = struct {
     cases: std.StringHashMap(?ast.TypeExpr),
+    type_params: []const ast.Ident = &.{},
     type_param_count: usize = 0,
 };
 
 pub const FunctionInfo = struct {
     params: []const ast.Param,
     return_ty: ?ast.TypeExpr,
+    return_borrow_source: ?ast.Ident = null,
     is_extern: bool = false,
     is_variadic: bool = false,
     c_abi: bool = false,
+    unsafe_ffi: bool = false,
     no_lang_trap: bool = false,
     is_const: bool = false,
     // C2: this function is a sleepable op (`#[may_sleep]`) - calling it from an
@@ -705,6 +743,7 @@ pub const FunctionInfo = struct {
 
 pub const GlobalInfo = struct {
     ty: ast.TypeExpr,
+    unsafe_ffi: bool = false,
 };
 
 pub const UnsafeContracts = struct {
@@ -758,6 +797,7 @@ pub const AddressOrigin = union(enum) {
     none,
     local: struct {
         scope_depth: usize,
+        explicit_borrow: bool = false,
     },
 };
 

@@ -395,7 +395,7 @@ const Walker = struct {
             .struct_literal => |fields| {
                 for (fields) |*f| try self.walkExpr(&f.value);
             },
-            .grouped => |e| try self.walkExpr(e),
+            .grouped, .move_expr => |e| try self.walkExpr(e),
             .block => |*bl| try self.walkBlock(bl),
             .unary => |*u| try self.walkExpr(u.expr),
             .binary => |*bin| {
@@ -407,6 +407,7 @@ const Walker = struct {
                 try self.walkType(c.ty);
             },
             .address_of => |e| try self.walkExpr(e),
+            .borrow_expr => |*node| try self.walkExpr(node.value),
             .call => |*c| {
                 try self.walkExpr(c.callee);
                 for (c.type_args) |*t| try self.walkType(t);

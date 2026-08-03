@@ -207,7 +207,7 @@ pub fn uncheckedRequirement(expr: ast.Expr) ?ContractKind {
 pub fn isUnsafeOperationCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |node| {
-            if (ast_query.isIdentNamed(node.base.*, "raw") and (std.mem.eql(u8, node.name.text, "store") or std.mem.eql(u8, node.name.text, "load"))) return true;
+            if (ast_query.isIdentNamed(node.base.*, "raw") and (std.mem.eql(u8, node.name.text, "store") or std.mem.eql(u8, node.name.text, "load") or std.mem.eql(u8, node.name.text, "ptr"))) return true;
             if (ast_query.isIdentNamed(node.base.*, "mmio") and std.mem.eql(u8, node.name.text, "map")) return true;
             if (ast_query.isIdentNamed(node.base.*, "va") and std.mem.eql(u8, node.name.text, "arg")) return true;
             return false;

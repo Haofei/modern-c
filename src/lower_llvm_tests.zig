@@ -1365,6 +1365,51 @@ test "LLVM discard calls require MIR identity and argument type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &missing_type, &type_output, "llvm_discard_call_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM emits auto-drop release for affine move locals" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn auto_drop_before_return(flag: bool) -> u32 {
+        \\    var g = make_guard();
+        \\    if flag {
+        \\        return 1;
+        \\    }
+        \\    return g.id;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_drop_attr_auto.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @auto_drop_before_return");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, "call void @close_guard(ptr %g.addr"));
+    const first_cleanup = std.mem.indexOf(u8, body, "call void @close_guard(ptr %g.addr").?;
+    const early_return = std.mem.indexOf(u8, body, "ret i32 1").?;
+    const final_cleanup = std.mem.lastIndexOf(u8, body, "call void @close_guard(ptr %g.addr").?;
+    const final_return = std.mem.indexOf(u8, body, "ret i32 %").?;
+    try std.testing.expect(first_cleanup < early_return);
+    try std.testing.expect(final_cleanup < final_return);
+}
+
+test "LLVM cancels auto-drop when affine move local is explicitly transferred" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn transfer_auto_drop() -> Guard {
+        \\    var g: Guard = make_guard();
+        \\    return move g;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_drop_attr_transfer.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "@transfer_auto_drop");
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, body, "call void @close_guard(ptr %g.addr"));
+}
+
 test "LLVM wrapping arithmetic requires MIR identity and operand/result type facts" {
     const source =
         \\fn wrapping_fact_gate(a: u32) -> u32 {

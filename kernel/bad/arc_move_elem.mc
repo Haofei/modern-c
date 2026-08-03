@@ -1,12 +1,10 @@
-// EXPECT: E_MOVE_FIELD_IN_NONMOVE — ArcBlock<T> stores `value: T` by value and arc_drop frees
-// the block without a move-aware destructor for T, so a linear `move` T would be duplicated or
-// leaked. Instantiating Arc over a move T is rejected here.
+// EXPECT: E_RAW_RESOURCE_PAYLOAD — ArcBlock<T> stores `value: T` by value behind a raw
+// allocation block. Instantiating Arc over a move T would let raw.ptr expose ownership
+// storage outside a typed move-aware API, so it is rejected here.
 import "std/collections/arc.mc";
 import "std/alloc/alloc.mc";
 move struct Res { v: u32 }
 fn bad(a: *mut dyn Allocator) -> void {
-    switch arc_new(Res, a, .{ .v = 1 }) {
-        ok(h) => { arc_drop(Res, h); }
-        err(e) => {}
-    }
+    let h: Arc<Res> = arc_new(Res, a, .{ .v = 1 });
+    arc_drop(Res, move h);
 }

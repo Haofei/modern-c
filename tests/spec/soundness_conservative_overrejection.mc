@@ -32,9 +32,9 @@ fn mk_outer() -> Outer {
     return .{ .inner = mk_inner(1) };
 }
 fn cn_outer(t: Outer) -> u32 {
-    let inner: Inner = t.inner;
+    let inner: Inner = move t.inner;
     unsafe { forget_unchecked(t); }
-    return cn_inner(inner);
+    return cn_inner(move inner);
 }
 fn cn_inner(t: Inner) -> u32 {
     let v: u32 = t.v;
@@ -64,7 +64,7 @@ fn accept_subfield_before() -> u32 {
     let t: Outer = mk_outer();
     let p: *Inner = &t.inner;
     let b: u32 = pkin(p);         // used BEFORE the move — p is dead afterwards
-    let a: u32 = cn_outer(t);
+    let a: u32 = cn_outer(move t);
     return a + b;
 }
 
@@ -73,7 +73,7 @@ fn accept_array_element_before() -> u32 {
     let t: T = mk();
     let arr: [1]*T = .{ &t };
     let b: u32 = pk(arr[0]);      // used BEFORE the move — arr[0] is dead afterwards
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     return a + b;
 }
 
@@ -83,7 +83,7 @@ fn accept_dynamic_singleton_array_element_before(i: usize) -> u32 {
     var arr: [1]*T = .{ &t };
     arr[i] = &t;
     let b: u32 = pk(arr[i]);      // successful dynamic index denotes arr[0]
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     return a + b;
 }
 
@@ -95,7 +95,7 @@ fn accept_dynamic_multi_array_element_before(i: usize) -> u32 {
     var arr: [2]*T = .{ &t, &t };
     arr[i] = &t;
     let b: u32 = pk(arr[i]);
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     return a + b;
 }
 
@@ -103,8 +103,8 @@ fn accept_dynamic_multi_array_element_before(i: usize) -> u32 {
 fn accept_dynamic_multi_array_element_laundered_before(i: usize) -> u32 {
     let t: T = mk();
     var arr: [2]*T = .{ &t, &t };
-    arr[i] = id(&t);
+    unsafe { arr[i] = id(&t); }
     let b: u32 = pk(arr[i]);
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     return a + b;
 }

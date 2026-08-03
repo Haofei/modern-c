@@ -441,7 +441,8 @@ const FunctionBuilder = struct {
                 try self.addInstr("trap_edge", "Unreachable", "language_trap", expr.span);
                 try self.addInstr("trap", "Unreachable", "never", expr.span);
             },
-            .grouped, .address_of, .deref => |inner| try self.buildExpr(inner.*),
+            .grouped, .move_expr, .address_of, .deref => |inner| try self.buildExpr(inner.*),
+            .borrow_expr => |node| try self.buildExpr(node.value.*),
             .try_expr => |inner| {
                 try self.addInstr("trap_edge", "Unwrap", "language_trap", expr.span);
                 try self.buildExpr(inner.operand.*);

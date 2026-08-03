@@ -8,6 +8,7 @@ const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const mir = @import("mir.zig");
 const semantic_db = @import("semantic_db.zig");
+const sema_decl = @import("sema_decl.zig");
 const sema_type = @import("sema_type.zig");
 const switch_lower = @import("switch_lower.zig");
 
@@ -131,6 +132,7 @@ const simpleNameType = ast_query.simpleNameType;
 const contractName = ast_query.contractName;
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
+const hasNamedAttr = sema_decl.hasNamedAttr;
 
 const MirSubjectType = struct {
     target_ty: ast.TypeExpr,
@@ -251,6 +253,8 @@ pub const CEmitter = struct {
     static_initializers: std.StringHashMap(ast.Expr),
     type_aliases: std.StringHashMap(ast.TypeExpr),
     functions: std.StringHashMap(FnInfo),
+    auto_drop_fns_by_type: std.StringHashMap([]const u8),
+    current_auto_drop_enabled: bool = true,
     function_decl_artifacts: std.ArrayList(FunctionDeclArtifact) = .empty,
     // Source function name -> overridden object/backend symbol (`#[backend_name("Y")]`).
     // Emitted as a C `__asm__("Y")` label so the object symbol is renamed without touching
@@ -353,6 +357,7 @@ pub const CEmitter = struct {
             .static_initializers = std.StringHashMap(ast.Expr).init(allocator),
             .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
             .functions = std.StringHashMap(FnInfo).init(allocator),
+            .auto_drop_fns_by_type = std.StringHashMap([]const u8).init(allocator),
             .backend_names = std.StringHashMap([]const u8).init(allocator),
             .const_fns = std.StringHashMap(ast.FnDecl).init(allocator),
             .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
@@ -407,6 +412,7 @@ pub const CEmitter = struct {
         }
         self.impl_methods.deinit();
         self.functions.deinit();
+        self.auto_drop_fns_by_type.deinit();
         self.backend_names.deinit();
     }
 
@@ -539,6 +545,15 @@ pub const CEmitter = struct {
 
     fn collectFnDeclArtifact(self: *CEmitter, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) !void {
         try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = is_extern, .is_variadic = fn_decl.is_variadic, .error_from = error_from.hasAttr(attrs) });
+        if (!is_extern and hasNamedAttr(attrs, "drop")) {
+            if (dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
+                if (self.structs.get(type_name)) |struct_decl| {
+                    if (struct_decl.is_move and !struct_decl.is_linear) {
+                        try self.auto_drop_fns_by_type.put(type_name, fn_decl.name.text);
+                    }
+                }
+            }
+        }
         try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = fn_decl, .attrs = attrs, .is_extern = is_extern });
         if (!is_extern and fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
         if (!is_extern) if (backendNameOverride(attrs)) |name| try self.backend_names.put(fn_decl.name.text, name);
@@ -1156,6 +1171,9 @@ pub const CEmitter = struct {
         const previous_function = self.current_function;
         self.current_function = fn_decl.name.text;
         defer self.current_function = previous_function;
+        const previous_auto_drop_enabled = self.current_auto_drop_enabled;
+        self.current_auto_drop_enabled = !self.blockContainsAutoDropReleaseCall(body);
+        defer self.current_auto_drop_enabled = previous_auto_drop_enabled;
         self.mir_pointer_local_provenance.clearRetainingCapacity();
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_pointer_array_elements);
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_aggregate_pointer_fields);
@@ -2805,9 +2823,124 @@ pub const CEmitter = struct {
             if (local.ty) |decl_ty| {
                 if (local.init) |initializer| try self.applyMirPointerProvenanceForLocalInitializer(name.text, decl_ty, initializer, locals);
             }
-            if (try self.emitSpecialLocalDecl(name.text, local, locals, return_ty)) continue;
+            if (try self.emitSpecialLocalDecl(name.text, local, locals, return_ty)) {
+                try self.registerAutoDropLocal(name, local.ty, locals);
+                continue;
+            }
             try self.emitDefaultLocalDecl(name.text, local.ty, local.init, locals);
+            try self.registerAutoDropLocal(name, local.ty, locals);
         }
+    }
+
+    fn registerAutoDropLocal(self: *CEmitter, name: ast.Ident, maybe_ty: ?ast.TypeExpr, locals: *std.StringHashMap(LocalInfo)) !void {
+        if (!self.current_auto_drop_enabled) return;
+        const ty = maybe_ty orelse if (locals.get(name.text)) |info| info.source_ty orelse return else return;
+        const type_name = typeName(self.resolveAliasType(ty)) orelse return;
+        const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
+        try self.defer_stack.append(self.allocator, try makeDropPointerCall(self.scratch.allocator(), drop_fn, name));
+    }
+
+    fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr) void {
+        const local_name = movedLocalName(expr) orelse return;
+        var index = self.defer_stack.items.len;
+        while (index > 0) {
+            index -= 1;
+            const cleanup = self.autoDropPointerCleanup(self.defer_stack.items[index]) orelse continue;
+            if (!std.mem.eql(u8, cleanup.local_name, local_name)) continue;
+            _ = self.defer_stack.orderedRemove(index);
+            return;
+        }
+    }
+
+    fn blockContainsAutoDropReleaseCall(self: *CEmitter, block: ast.Block) bool {
+        for (block.items) |stmt| {
+            if (self.stmtContainsAutoDropReleaseCall(stmt)) return true;
+        }
+        return false;
+    }
+
+    fn stmtContainsAutoDropReleaseCall(self: *CEmitter, stmt: ast.Stmt) bool {
+        return switch (stmt.kind) {
+            .let_decl, .var_decl => |decl| blk: {
+                if (decl.init) |initializer| break :blk self.exprContainsAutoDropReleaseCall(initializer);
+                break :blk false;
+            },
+            .loop => |node| (if (node.iterable) |iter| self.exprContainsAutoDropReleaseCall(iter) else false) or self.blockContainsAutoDropReleaseCall(node.body),
+            .if_let => |node| self.exprContainsAutoDropReleaseCall(node.value) or self.blockContainsAutoDropReleaseCall(node.then_block) or (if (node.else_block) |else_block| self.blockContainsAutoDropReleaseCall(else_block) else false),
+            .@"switch" => |node| blk: {
+                if (self.exprContainsAutoDropReleaseCall(node.subject)) break :blk true;
+                for (node.arms) |arm| {
+                    for (arm.patterns) |pattern| {
+                        switch (pattern.kind) {
+                            .literal => |expr| if (self.exprContainsAutoDropReleaseCall(expr)) break :blk true,
+                            else => {},
+                        }
+                    }
+                    switch (arm.body) {
+                        .block => |body| if (self.blockContainsAutoDropReleaseCall(body)) break :blk true,
+                        .expr => |expr| if (self.exprContainsAutoDropReleaseCall(expr)) break :blk true,
+                    }
+                }
+                break :blk false;
+            },
+            .unsafe_block, .comptime_block, .block => |body| self.blockContainsAutoDropReleaseCall(body),
+            .contract_block => |contract| self.blockContainsAutoDropReleaseCall(contract.block),
+            .@"return" => |maybe| if (maybe) |expr| self.exprContainsAutoDropReleaseCall(expr) else false,
+            .@"defer", .assert, .expr => |expr| self.exprContainsAutoDropReleaseCall(expr),
+            .assignment => |assign| self.exprContainsAutoDropReleaseCall(assign.target) or self.exprContainsAutoDropReleaseCall(assign.value),
+            .asm_stmt, .@"break", .@"continue" => false,
+        };
+    }
+
+    fn exprContainsAutoDropReleaseCall(self: *CEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .array_literal => |items| blk: {
+                for (items) |item| if (self.exprContainsAutoDropReleaseCall(item)) break :blk true;
+                break :blk false;
+            },
+            .struct_literal => |fields| blk: {
+                for (fields) |field| if (self.exprContainsAutoDropReleaseCall(field.value)) break :blk true;
+                break :blk false;
+            },
+            .grouped, .move_expr, .address_of, .deref, .await_expr => |inner| self.exprContainsAutoDropReleaseCall(inner.*),
+            .block => |body| self.blockContainsAutoDropReleaseCall(body),
+            .unary => |node| self.exprContainsAutoDropReleaseCall(node.expr.*),
+            .binary => |node| self.exprContainsAutoDropReleaseCall(node.left.*) or self.exprContainsAutoDropReleaseCall(node.right.*),
+            .cast => |node| self.exprContainsAutoDropReleaseCall(node.value.*),
+            .borrow_expr => |node| self.exprContainsAutoDropReleaseCall(node.value.*),
+            .call => |node| blk: {
+                if (calleeIdentName(node.callee.*)) |name| {
+                    if (self.autoDropReleaseFunctionName(name)) break :blk true;
+                }
+                if (self.exprContainsAutoDropReleaseCall(node.callee.*)) break :blk true;
+                for (node.args) |arg| if (self.exprContainsAutoDropReleaseCall(arg)) break :blk true;
+                break :blk false;
+            },
+            .index => |node| self.exprContainsAutoDropReleaseCall(node.base.*) or self.exprContainsAutoDropReleaseCall(node.index.*),
+            .slice => |node| self.exprContainsAutoDropReleaseCall(node.base.*) or self.exprContainsAutoDropReleaseCall(node.start.*) or self.exprContainsAutoDropReleaseCall(node.end.*),
+            .member => |node| self.exprContainsAutoDropReleaseCall(node.base.*),
+            .try_expr => |node| self.exprContainsAutoDropReleaseCall(node.operand.*) or (if (node.mapped) |mapped| self.exprContainsAutoDropReleaseCall(mapped.*) else false),
+            .ident,
+            .int_literal,
+            .float_literal,
+            .string_literal,
+            .char_literal,
+            .bool_literal,
+            .null_literal,
+            .uninit_literal,
+            .unreachable_expr,
+            .void_literal,
+            .enum_literal,
+            => false,
+        };
+    }
+
+    fn autoDropReleaseFunctionName(self: *CEmitter, name: []const u8) bool {
+        var it = self.auto_drop_fns_by_type.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.*, name)) return true;
+        }
+        return false;
     }
 
     fn localDeclInfo(self: *CEmitter, local: ast.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo)) !LocalInfo {
@@ -3386,6 +3519,7 @@ pub const CEmitter = struct {
     }
 
     fn emitBlockExitItem(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: usize, cleanup_start: usize) anyerror!void {
+        if (returnMoveExpr(stmt)) |moved| self.cancelAutoDropForMove(moved);
         try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
         try self.emitStmt(stmt, locals, return_ty);
         self.defer_stack.items.len = block_start;
@@ -3412,6 +3546,7 @@ pub const CEmitter = struct {
     }
 
     fn emitDeferredExpressionCleanup(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        if (try self.emitAutoDropPointerCleanup(expr)) return;
         if (try self.emitNeverExprStmt(expr, locals)) return;
         if (try lower_c_mmio.emitWriteStmt(self.mmioEmitContext(), expr, locals)) return;
         if (try self.emitRawStoreStmt(expr, locals)) return;
@@ -3427,6 +3562,30 @@ pub const CEmitter = struct {
         try self.writeIndent();
         try self.emitExpr(expr, locals);
         try self.out.appendSlice(self.allocator, ";\n");
+    }
+
+    fn emitAutoDropPointerCleanup(self: *CEmitter, expr: ast.Expr) !bool {
+        const cleanup = self.autoDropPointerCleanup(expr) orelse return false;
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
+        return true;
+    }
+
+    const AutoDropCleanup = struct {
+        fn_name: []const u8,
+        local_name: []const u8,
+    };
+
+    fn autoDropPointerCleanup(self: *CEmitter, expr: ast.Expr) ?AutoDropCleanup {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            else => return null,
+        };
+        const fn_name = calleeIdentName(call.callee.*) orelse return null;
+        if (!self.autoDropReleaseFunctionName(fn_name)) return null;
+        if (call.args.len != 1) return null;
+        const local_name = addressOfIdentName(call.args[0]) orelse return null;
+        return .{ .fn_name = fn_name, .local_name = local_name };
     }
 
     fn writeIndent(self: *CEmitter) !void {
@@ -3922,6 +4081,10 @@ pub const CEmitter = struct {
             .array_literal => try self.emitUnsupportedTargetlessAggregateExpr(expr, "array"),
             .struct_literal => try self.emitUnsupportedTargetlessAggregateExpr(expr, "struct"),
             .grouped => |inner| try self.emitGroupedExpr(inner.*, locals),
+            .move_expr => |inner| {
+                self.cancelAutoDropForMove(inner.*);
+                try self.emitExpr(inner.*, locals);
+            },
             .unreachable_expr => try self.out.appendSlice(self.allocator, "mc_trap_Unreachable()"),
             .unary => try lower_c_expr.emitUnaryExpr(self.exprEmitContext(), expr, locals),
             .binary => try lower_c_expr.emitBinaryExpr(self.exprEmitContext(), expr, locals),
@@ -3929,6 +4092,7 @@ pub const CEmitter = struct {
             .index => |node| try self.emitIndexExpr(node, expr.span, locals),
             .slice => |node| try self.emitSliceExpr(node, expr.span, locals),
             .address_of => |inner| try self.emitAddressOfExpr(inner.*, locals),
+            .borrow_expr => |node| try self.emitAddressOfExpr(node.value.*, locals),
             .deref => |inner| try self.emitDerefExpr(inner.*, expr.span, locals),
             .member => |node| try self.emitMemberExprOrFallback(node, expr.span, locals),
             .cast => |node| try self.emitCastExpr(expr.span, node, locals),
@@ -4628,6 +4792,10 @@ pub const CEmitter = struct {
             .float_literal => |literal| try self.emitFloatLiteralWithTarget(literal, expr.span),
             .char_literal => |literal| try self.emitCharLiteralWithTarget(literal, expr.span, semantic_target_ty),
             .grouped => |inner| try self.emitGroupedExprWithTarget(inner.*, locals, semantic_target_ty),
+            .move_expr => |inner| {
+                self.cancelAutoDropForMove(inner.*);
+                try self.emitExprWithTarget(inner.*, locals, semantic_target_ty);
+            },
             .address_of => try self.emitAddressOfExprWithTarget(expr, locals, semantic_target_ty),
             else => try self.emitExpr(expr, locals),
         }
@@ -8562,6 +8730,69 @@ pub const CEmitter = struct {
         return self.arrayLenTextForExpr(expr);
     }
 };
+
+fn dropPointerReleaseParamTypeName(fn_decl: ast.FnDecl) ?[]const u8 {
+    if (fn_decl.params.len == 0) return null;
+    const first = fn_decl.params[0].ty;
+    const child = switch (first.kind) {
+        .pointer => |p| blk: {
+            if (p.mutability != .mut) return null;
+            break :blk p.child.*;
+        },
+        else => return null,
+    };
+    return typeName(child);
+}
+
+fn makeDropPointerCall(allocator: std.mem.Allocator, fn_name: []const u8, local: ast.Ident) !ast.Expr {
+    const ident = ast.Expr{ .span = local.span, .kind = .{ .ident = .{ .text = local.text, .span = local.span } } };
+    const address = ast.Expr{ .span = local.span, .kind = .{ .address_of = try ast.makePtr(allocator, ident) } };
+    const args = try allocator.dupe(ast.Expr, &[_]ast.Expr{address});
+    return .{
+        .span = local.span,
+        .kind = .{ .call = .{
+            .callee = try ast.makePtr(allocator, ast.Expr{ .span = local.span, .kind = .{ .ident = .{ .text = fn_name, .span = local.span } } }),
+            .type_args = &.{},
+            .args = args,
+        } },
+    };
+}
+
+fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| addressOfIdentName(inner.*),
+        .address_of => |inner| switch (inner.kind) {
+            .grouped => addressOfIdentName(inner.*),
+            .ident => |ident| ident.text,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn movedLocalName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| movedLocalName(inner.*),
+        .ident => |ident| ident.text,
+        else => null,
+    };
+}
+
+fn returnMoveExpr(stmt: ast.Stmt) ?ast.Expr {
+    const expr = switch (stmt.kind) {
+        .@"return" => |maybe_expr| maybe_expr orelse return null,
+        else => return null,
+    };
+    return returnMoveExprInner(expr);
+}
+
+fn returnMoveExprInner(expr: ast.Expr) ?ast.Expr {
+    return switch (expr.kind) {
+        .grouped => |inner| returnMoveExprInner(inner.*),
+        .move_expr => |inner| inner.*,
+        else => null,
+    };
+}
 
 fn isSourceSpan(span: ast.Span) bool {
     return span.line != 0 and span.column != 0;

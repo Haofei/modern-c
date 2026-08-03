@@ -546,6 +546,7 @@ fn multiArmMoveCfg(self: *Checker, arm_count: usize) ?MultiArmMoveCfg {
 
 pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     const body = fn_decl.body orelse return;
+    const allow_auto_drop = !blockContainsDropPointerReleaseCall(self, body);
     var state = MoveState.init(self.reporter.allocator);
     defer state.deinit();
     defer {
@@ -572,7 +573,7 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
             }
         }
     }
-    const fell_through = moveFunctionBodyCfg(self, body, &state, aliases);
+    const fell_through = moveFunctionBodyCfg(self, body, &state, aliases, allow_auto_drop);
     // Implicit fall-through exit at the end of the body (a `void` return): only a
     // real exit edge if control can actually reach it. If the body diverges on every
     // path (e.g. ends in `return`), each such exit edge was already leak-checked.
@@ -583,7 +584,7 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
     }
 }
 
-fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
     var linear = linearMoveCfg(self, .exit) orelse return false;
     defer linear.deinit();
 
@@ -595,7 +596,7 @@ fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *MoveState, alias
         if (block == linear.entry) {
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == linear.body) {
-            const diverges = moveBlock(self, body, block_state, aliases);
+            const diverges = moveBlock(self, body, block_state, aliases, allow_auto_drop);
             if (!diverges) {
                 fell_through = true;
                 worklist.propagateSuccessors(self, block, block_state);
@@ -611,9 +612,9 @@ fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *MoveState, alias
 // (every path through it ends in `return`/`break`/`continue`), in which case the
 // join after the block is unreachable. Statements after a diverging statement are
 // dead code and are not analyzed.
-pub fn moveBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+pub fn moveBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
     for (block.items) |stmt| {
-        if (moveStmt(self, stmt, state, aliases)) return true;
+        if (moveStmt(self, stmt, state, aliases, allow_auto_drop)) return true;
     }
     return false;
 }
@@ -621,7 +622,7 @@ pub fn moveBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *
 // A lexical `{ ... }` sub-scope. Returns whether the block diverges. Block-local
 // `move` bindings are dropped from `state` on the way out; if the block falls through
 // (does not diverge) any still-live local is a leak at the scope's normal exit edge.
-pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
     var before = cloneMoveState(self, state);
     defer before.deinit();
 
@@ -636,7 +637,7 @@ pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *MoveState, alia
         if (block_id == linear.entry) {
             worklist.propagateSuccessors(self, block_id, block_state);
         } else if (block_id == linear.body) {
-            diverges = moveBlock(self, block, block_state, aliases);
+            diverges = moveBlock(self, block, block_state, aliases, allow_auto_drop);
             if (!diverges) {
                 worklist.propagateSuccessors(self, block_id, block_state);
             } else {
@@ -660,7 +661,9 @@ fn preserveOuterScopedMoveState(self: *Checker, state: *MoveState, before: *cons
         if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*) and current == null) {
             continue;
         }
-        const slot = current orelse entry.value_ptr.*;
+        var slot = current orelse entry.value_ptr.*;
+        slot.scoped_shared_borrows = entry.value_ptr.scoped_shared_borrows;
+        slot.scoped_mut_borrow = entry.value_ptr.scoped_mut_borrow;
         scoped.put(entry.key_ptr.*, slot) catch {
             self.oom = true;
         };
@@ -673,6 +676,7 @@ fn preserveOuterScopedMoveState(self: *Checker, state: *MoveState, before: *cons
             self.oom = true;
         };
     }
+    copyScopedBorrowSlots(self, &scoped, before);
     // Index facts have no ownership slot after M1.2a. Preserve only bindings
     // that existed before this lexical block, so index locals do not escape
     // while reassigned outer facts retain their current value.
@@ -696,7 +700,7 @@ fn preserveOuterScopedMoveState(self: *Checker, state: *MoveState, before: *cons
 pub fn checkMoveExitEdge(self: *Checker, state: *const MoveState, message: []const u8) void {
     var it = state.iterator();
     while (it.next()) |entry| {
-        if (entry.value_ptr.live and !entry.value_ptr.deferred) {
+        if (slotRequiresExplicitConsume(self, entry.value_ptr.*, null)) {
             self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", message);
         }
     }
@@ -726,7 +730,7 @@ pub fn reportMoveLocalsLeavingScope(self: *Checker, inner: *const MoveState, out
     var it = inner.iterator();
     while (it.next()) |entry| {
         if (moveStateSlotMatches(outer, entry.key_ptr.*, entry.value_ptr.*)) continue;
-        if (entry.value_ptr.live and !entry.value_ptr.deferred) {
+        if (slotRequiresExplicitConsume(self, entry.value_ptr.*, null)) {
             self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", message);
         }
     }
@@ -743,7 +747,7 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *MoveState, i
     while (it.next()) |entry| {
         const after = matchingMoveStateSlot(iteration_state, entry.key_ptr.*, entry.value_ptr.*) orelse continue;
         const before = entry.value_ptr.*;
-        if (before.live != after.live or before.deferred != after.deferred or !sameDeferredBorrowFact(before, after)) {
+        if (before.live != after.live or before.deferred != after.deferred or before.auto_drop != after.auto_drop or !sameDeferredBorrowFact(before, after)) {
             self.errorCode(before.span, "E_MOVE_LOOP_RESOURCE", "cannot consume or reserve an outer linear `move` value inside a loop; the loop may run zero or multiple times");
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
@@ -810,7 +814,7 @@ pub fn checkUnusedMoveResult(self: *Checker, e: ast.Expr, aliases: *const std.St
 // enclosing block on every path (`return`, `break`, `continue`, or a branch all of
 // whose arms diverge) — so the statements that follow are unreachable and the join
 // after it has no predecessor here.
-pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
     switch (stmt.kind) {
         .let_decl, .var_decl => |decl| {
             if (decl.init) |init_expr| moveConsume(self, init_expr, state, aliases);
@@ -829,7 +833,13 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     if (self.typeEmbedsMoveByValue(ty, aliases)) {
                         // A binding whose type embeds a `move` resource by value — a `move`
                         // struct, a `Result<…move…, …>`, or a `?move` — must be consumed.
-                        state.put(decl.names[0].text, .{ .live = true, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .ty = ty }) catch {
+                        state.put(decl.names[0].text, .{
+                            .live = true,
+                            .span = decl.names[0].span,
+                            .place = .{ .root = decl.names[0].text },
+                            .ty = ty,
+                            .auto_drop = allow_auto_drop and typeHasAutoDrop(self, ty, aliases),
+                        }) catch {
                             self.oom = true;
                         };
                         bound_as_move = true;
@@ -872,6 +882,9 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
             // a by-value resource, so it is only registered when the binding was not already
             // classed as a move resource above.
             if (!bound_as_move and !bound_as_index_fact and decl.names.len > 0 and decl.init != null) {
+                if (decl.init.?.kind == .borrow_expr) {
+                    registerScopedBorrow(self, decl.init.?.kind.borrow_expr, state);
+                }
                 if (aliasReferentForExpr(self, decl.init.?, state, aliases)) |referent| {
                     // Gap #2: `let q = f(&t)` where `f` returns a pointer — `q` may alias a
                     // borrow of the move binding `t`, or a tracked subplace such as `t.a`,
@@ -959,6 +972,9 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                             self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be reassigned");
                         }
                     }
+                    if (stateHasScopedBorrow(state, id.text)) {
+                        self.errorCode(a.target.span, "E_BORROW_CONFLICT", "cannot assign to a local while a scoped borrow of it is live");
+                    }
                     moveConsume(self, a.value, state, aliases);
                     markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                     if (has_index_binding) updateIndependentIndexFact(self, id.text, a.value, state);
@@ -1003,6 +1019,11 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     // Assigning through `p.field`: the base must be live, and overwriting a
                     // live `move` field (one not already moved out) would drop the old
                     // resource without consuming it.
+                    if (scopedBorrowRootName(a.target)) |root| {
+                        if (stateHasScopedBorrow(state, root)) {
+                            self.errorCode(a.target.span, "E_BORROW_CONFLICT", "cannot assign to storage while a scoped borrow of it is live");
+                        }
+                    }
                     moveBorrow(self, m.base.*, state, aliases);
                     const place_opt = moveFieldPlaceKey(self, a.target, m, state, aliases);
                     if (place_opt) |pp| {
@@ -1020,6 +1041,11 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     recordAssignedAggregateFieldAliasOrEscape(self, a.target, a.value, a.target.span, state, aliases);
                 },
                 .index => |ix| {
+                    if (scopedBorrowRootName(a.target)) |root| {
+                        if (stateHasScopedBorrow(state, root)) {
+                            self.errorCode(a.target.span, "E_BORROW_CONFLICT", "cannot assign to storage while a scoped borrow of it is live");
+                        }
+                    }
                     moveBorrow(self, ix.base.*, state, aliases);
                     moveConsume(self, ix.index.*, state, aliases);
                     if (moveIndexedPlaceKey(self, a.target, state, aliases)) |pp| {
@@ -1072,16 +1098,16 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
             moveBorrow(self, e, state, aliases);
             return false;
         },
-        .block, .unsafe_block, .comptime_block => |b| return moveScopedBlock(self, b, state, aliases),
-        .contract_block => |c| return moveScopedBlock(self, c.block, state, aliases),
+        .block, .unsafe_block, .comptime_block => |b| return moveScopedBlock(self, b, state, aliases, allow_auto_drop),
+        .contract_block => |c| return moveScopedBlock(self, c.block, state, aliases, allow_auto_drop),
         .loop => |l| {
-            return moveLoopCfg(self, l, state, aliases);
+            return moveLoopCfg(self, l, state, aliases, allow_auto_drop);
         },
         .if_let => |n| {
-            return moveIfLetCfg(self, n, state, aliases);
+            return moveIfLetCfg(self, n, state, aliases, allow_auto_drop);
         },
         .@"switch" => |sw| {
-            return moveSwitchCfg(self, sw, state, aliases);
+            return moveSwitchCfg(self, sw, state, aliases, allow_auto_drop);
         },
         .@"break" => |target| {
             moveLoopExitEdgeCfg(self, state, target, .break_exit);
@@ -1095,7 +1121,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
     }
 }
 
-fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
     if (loop.iterable) |iter| {
         switch (loop.kind) {
             .@"for" => moveBorrow(self, iter, state, aliases),
@@ -1128,7 +1154,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
             pending_outer_exits_before += outer.pending_exits.items.len;
         }
     }
-    const body_diverges = moveLoopBodyCfg(self, loop.body, state, aliases);
+    const body_diverges = moveLoopBodyCfg(self, loop.body, state, aliases, allow_auto_drop);
     var body_exits_outer_loop = false;
     if (self.move_loop_stack.items.len > 1) {
         var pending_outer_exits_after: usize = 0;
@@ -1154,7 +1180,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
 // transfer runs in entry, arm-local bindings live only in then, and only
 // non-diverging arms reach the join.  This is deliberately the first production
 // CFG slice; switch and loop still use their existing specialized transfer rules.
-fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
     var branch = twoArmMoveCfg(self) orelse return false;
     defer branch.deinit();
 
@@ -1173,15 +1199,15 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *co
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == branch.then_block) {
             then_bound_name = addIfLetMoveBinding(self, node.pattern, node.value, block_state, aliases);
-            then_div = moveBlock(self, node.then_block, block_state, aliases);
+            then_div = moveBlock(self, node.then_block, block_state, aliases, allow_auto_drop);
             if (!then_div) worklist.propagateSuccessors(self, block, block_state);
         } else if (block == branch.else_block) {
-            if (node.else_block) |else_body| else_div = moveBlock(self, else_body, block_state, aliases);
+            if (node.else_block) |else_body| else_div = moveBlock(self, else_body, block_state, aliases, allow_auto_drop);
             if (!else_div) worklist.propagateSuccessors(self, block, block_state);
         } else if (block == branch.then_exit) {
             if (then_bound_name) |name| {
                 if (bindingMoveSlotPtrForIdent(name, block_state)) |slot| {
-                    if (slot.live and !slot.deferred) {
+                    if (slotRequiresExplicitConsume(self, slot.*, aliases)) {
                         self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in an if-let branch is never consumed (must be moved, returned, or freed)");
                     }
                 }
@@ -1206,7 +1232,7 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *co
 // Route all switch arms through the same real-state CFG worklist. Each arm gets a
 // cloned post-subject state; only fallthrough arms contribute an incoming state to
 // the shared join block, where MoveStateCfgWorklist performs the ownership merge.
-fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
     if (node.arms.len == 0) {
         moveConsume(self, node.subject, state, aliases);
         return false;
@@ -1240,7 +1266,7 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *
                 }
             }
             if (arm_index) |index| {
-                const result = moveSwitchArm(self, node.arms[index], subject_ty, block_state, aliases);
+                const result = moveSwitchArm(self, node.arms[index], subject_ty, block_state, aliases, allow_auto_drop);
                 bound_names[index] = result.bound_name;
                 if (!result.diverges) {
                     all_diverge = false;
@@ -1254,7 +1280,7 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *
                 };
                 const index = exit_index orelse continue;
                 if (bound_names[index]) |name| {
-                    if (bindingMoveSlotPtrForIdent(name, block_state)) |slot| if (slot.live and !slot.deferred) {
+                    if (bindingMoveSlotPtrForIdent(name, block_state)) |slot| if (slotRequiresExplicitConsume(self, slot.*, aliases)) {
                         self.errorCode(slot.span, "E_RESOURCE_LEAK", "linear `move` value bound in a switch arm is never consumed (must be moved, returned, or freed)");
                     };
                     _ = removeBindingSlotForPlace(.{ .root = name }, block_state);
@@ -1270,7 +1296,7 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *
 
 const SwitchArmMoveResult = struct { diverges: bool, bound_name: ?[]const u8 };
 
-fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) SwitchArmMoveResult {
+fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) SwitchArmMoveResult {
     var bound_name: ?[]const u8 = null;
     for (arm.patterns) |pattern| {
         const payload_ty: ?ast.TypeExpr = switch (pattern.kind) {
@@ -1291,7 +1317,7 @@ fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, 
         };
     }
     const diverges = switch (arm.body) {
-        .block => |body| moveBlock(self, body, state, aliases),
+        .block => |body| moveBlock(self, body, state, aliases, allow_auto_drop),
         .expr => |expr| blk: {
             moveConsume(self, expr, state, aliases);
             checkUnusedMoveResult(self, expr, aliases);
@@ -1313,7 +1339,7 @@ pub fn finalizeBranchLocals(self: *Checker, branch: *MoveState, outer: *const Mo
     while (it.next()) |entry| {
         if (moveStateSlotMatches(outer, entry.key_ptr.*, entry.value_ptr.*)) continue;
         if (moveSubplaceRootInOuter(entry.value_ptr.*, entry.key_ptr.*, outer)) continue;
-        if (report and entry.value_ptr.live and !entry.value_ptr.deferred) {
+        if (report and slotRequiresExplicitConsume(self, entry.value_ptr.*, null)) {
             self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value declared in this branch is never consumed before the branch exits");
         }
         removals.append(self.reporter.allocator, entry.key_ptr.*) catch {
@@ -1348,7 +1374,7 @@ pub fn checkLoopExitLeaks(self: *Checker, state: *MoveState, target: ?ast.Ident)
     // merges back (producing spurious branch-mismatch / use-after-move downstream).
     var it = state.iterator();
     while (it.next()) |entry| {
-        if (entry.value_ptr.live and !entry.value_ptr.deferred and !loopFrameHasEntryPlace(frame, entry.value_ptr.place)) {
+        if (slotRequiresExplicitConsume(self, entry.value_ptr.*, null) and !loopFrameHasEntryPlace(frame, entry.value_ptr.place)) {
             self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value declared in a loop body is never consumed before this `break`/`continue` exits the iteration");
         }
     }
@@ -1474,6 +1500,7 @@ pub fn cloneMoveState(self: *Checker, state: *const MoveState) MoveState {
             self.oom = true;
         };
     }
+    copyScopedBorrowSlots(self, &clone, state);
     clone.index_facts.replaceFrom(&state.index_facts) catch {
         self.oom = true;
         return clone;
@@ -1496,6 +1523,7 @@ pub fn replaceMoveState(self: *Checker, dest: *MoveState, src: *const MoveState)
             self.oom = true;
         };
     }
+    copyScopedBorrowSlots(self, dest, src);
     dest.index_facts.replaceFrom(&src.index_facts) catch {
         self.oom = true;
         return;
@@ -1531,7 +1559,7 @@ fn mergeMoveBranchesImpl(
     var it = left.iterator();
     while (it.next()) |entry| {
         const other = matchingMoveStateSlot(right, entry.key_ptr.*, entry.value_ptr.*) orelse {
-            if (entry.value_ptr.live and !entry.value_ptr.deferred) {
+            if (slotRequiresExplicitConsume(self, entry.value_ptr.*, null)) {
                 if (report_diagnostics) self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value created in only one branch is never consumed before the branch exits");
             } else if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*)) {
                 if (report_diagnostics) self.errorCode(entry.value_ptr.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` field has inconsistent ownership across control-flow branches");
@@ -1542,7 +1570,7 @@ fn mergeMoveBranchesImpl(
             continue;
         };
         var slot = entry.value_ptr.*;
-        if (slot.live != other.live or slot.deferred != other.deferred or !sameDeferredBorrowFact(slot, other)) {
+        if (slot.live != other.live or slot.deferred != other.deferred or slot.auto_drop != other.auto_drop or !sameDeferredBorrowFact(slot, other)) {
             if (report_diagnostics) self.errorCode(slot.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` value has inconsistent ownership across control-flow branches");
             slot.live = false;
             slot.deferred = false;
@@ -1559,7 +1587,7 @@ fn mergeMoveBranchesImpl(
     var right_it = right.iterator();
     while (right_it.next()) |entry| {
         if (moveStateSlotMatches(left, entry.key_ptr.*, entry.value_ptr.*)) continue;
-        if (entry.value_ptr.live and !entry.value_ptr.deferred) {
+        if (slotRequiresExplicitConsume(self, entry.value_ptr.*, null)) {
             if (report_diagnostics) self.errorCode(entry.value_ptr.span, "E_RESOURCE_LEAK", "linear `move` value created in only one branch is never consumed before the branch exits");
         } else if (isTrackedMoveSubplace(entry.value_ptr.*, entry.key_ptr.*)) {
             if (report_diagnostics) self.errorCode(entry.value_ptr.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` field has inconsistent ownership across control-flow branches");
@@ -1569,6 +1597,7 @@ fn mergeMoveBranchesImpl(
         }
     }
 
+    mergeScopedBorrowSlots(self, &merged, left, right);
     merged.index_facts.replaceFrom(&left.index_facts) catch {
         self.oom = true;
         return;
@@ -1612,6 +1641,28 @@ fn matchingMoveStateSlot(state: *const MoveState, key: []const u8, slot: MoveSlo
     // A key-only legacy slot cannot establish CFG identity; treating it as
     // unmatched is the conservative join policy.
     return null;
+}
+
+fn copyScopedBorrowSlots(self: *Checker, dest: *MoveState, src: *const MoveState) void {
+    var it = src.scoped_borrows.iterator();
+    while (it.next()) |entry| {
+        dest.scoped_borrows.put(entry.key_ptr.*, entry.value_ptr.*) catch {
+            self.oom = true;
+            return;
+        };
+    }
+}
+
+fn mergeScopedBorrowSlots(self: *Checker, dest: *MoveState, left: *const MoveState, right: *const MoveState) void {
+    var it = left.scoped_borrows.iterator();
+    while (it.next()) |entry| {
+        const other = right.scoped_borrows.get(entry.key_ptr.*) orelse continue;
+        if (entry.value_ptr.shared != other.shared or entry.value_ptr.mut != other.mut) continue;
+        dest.scoped_borrows.put(entry.key_ptr.*, entry.value_ptr.*) catch {
+            self.oom = true;
+            return;
+        };
+    }
 }
 
 fn moveStateSlotMatches(state: *const MoveState, key: []const u8, slot: MoveSlot) bool {
@@ -2792,7 +2843,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
         .ident => |id| {
             consumeTrackedMoveBinding(self, id.text, expr.span, state);
         },
-        .grouped => |inner| moveConsume(self, inner.*, state, aliases),
+        .grouped, .move_expr => |inner| moveConsume(self, inner.*, state, aliases),
         .try_expr => |inner| {
             // `?` is an exit edge: on error it returns from the function. The operand's
             // `ok` payload is consumed and flows on; every *other* live `move` value
@@ -2906,11 +2957,12 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
             // does not cascade into use-after-move noise.)
             if (spine.isDropCall(c.callee.*)) {
                 for (c.args) |arg| {
-                    // `#[trivial_drop]` move types may be safely `drop`ped (the author has
-                    // asserted completion needs no release); every other linear resource
-                    // must be released by its free function or `forget_unchecked` in unsafe.
+                    // `#[trivial_drop]` resource types may be safely `drop`ped (the
+                    // author has asserted completion needs no release); every other
+                    // resource must be released by its free function or
+                    // `forget_unchecked` in unsafe.
                     if (exprIsMoveTyped(self, arg, state, aliases) and !exprIsTrivialDrop(self, arg, state, aliases)) {
-                        self.errorCode(arg.span, "E_DROP_LINEAR_RESOURCE", "a linear `move` value cannot be `drop`ped (it frees nothing); release it with its free function, `forget_unchecked` it in an unsafe block once its contents have been transferred, or mark the type `#[trivial_drop]` if completing it needs no release");
+                        self.errorCode(arg.span, "E_DROP_LINEAR_RESOURCE", "a checked resource value cannot be `drop`ped unless its type is marked `#[trivial_drop]`; release it with a by-value consuming function, a `#[drop] fn release(*mut T)`, or `forget_unchecked` in unsafe once transferred");
                     }
                 }
                 for (c.args) |arg| moveConsume(self, arg, state, aliases);
@@ -2919,6 +2971,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
                 // move is fine here (the aggregate is being thrown away, not reused).
                 for (c.args) |arg| moveForget(self, arg, state, aliases);
             } else {
+                const drop_release_type = dropPointerReleaseTypeForCallee(self, c.callee.*);
                 // T1.3 (borrow-escape through a CALL argument). A struct/array literal argument
                 // carrying `&<live-move-binding>` (`sink(.{ .p = &t })`, at any nesting depth)
                 // launders the borrow into the callee — memory we cannot prove dead. The escape
@@ -2930,8 +2983,15 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
                 // address-of laundered into memory marks the root, so `pk(&t); cn(t)` (borrow
                 // dead at the call) still accepts.
                 for (c.args) |arg| checkAggregateAliasArgument(self, arg, state);
-                for (c.args) |arg| markBorrowEscapeCallArg(self, arg, c.callee.*.span, state);
-                for (c.args) |arg| moveConsume(self, arg, state, aliases);
+                for (c.args, 0..) |arg, index| {
+                    if (index == 0) {
+                        if (drop_release_type) |resource_type| {
+                            if (consumeDropPointerReleaseArg(self, arg, resource_type, state, aliases)) continue;
+                        }
+                    }
+                    markBorrowEscapeCallArg(self, arg, c.callee.*.span, state);
+                    moveConsume(self, arg, state, aliases);
+                }
             }
         },
         .binary => |b| {
@@ -2941,7 +3001,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
                 else => moveConsume(self, b.right.*, state, aliases),
             }
         },
-        .block => |b| _ = moveScopedBlock(self, b, state, aliases),
+        .block => |b| _ = moveScopedBlock(self, b, state, aliases, true),
         .unary => |u| moveConsume(self, u.expr.*, state, aliases),
         .struct_literal => |fields| for (fields) |f| moveConsume(self, f.value, state, aliases),
         .array_literal => |items| for (items) |item| moveConsume(self, item, state, aliases),
@@ -2987,6 +3047,8 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
         } else if (slot.deferred_borrow) {
             self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value is borrowed by a deferred expression and cannot be moved before the defer runs");
             slot.live = false;
+        } else if (slotHasScopedBorrow(slot.*)) {
+            self.errorCode(span, "E_BORROW_CONFLICT", "cannot move a linear `move` value while a scoped borrow is live");
         } else if (slot.place != null and hasMovedSubplace(slot.place.?, state)) {
             // Moving the whole aggregate would also move the field already taken
             // out of it — a duplicate move. (`forget_unchecked` discards the husk
@@ -3027,6 +3089,8 @@ fn consumeTrackedMoveRootPlace(self: *Checker, place: MovePlace, span: diagnosti
     } else if (slot.deferred_borrow) {
         self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value is borrowed by a deferred expression and cannot be moved before the defer runs");
         slot.live = false;
+    } else if (slotHasScopedBorrow(slot.*)) {
+        self.errorCode(span, "E_BORROW_CONFLICT", "cannot move a linear `move` value while a scoped borrow is live");
     } else if (hasMovedSubplace(place, state)) {
         self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value used as a whole after one of its fields was moved out");
         slot.live = false;
@@ -3039,6 +3103,10 @@ fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, sp
     const root = rootMoveSlotForPlace(place, state) orelse return;
     if (!root.live) {
         self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after its owner was moved");
+        return;
+    }
+    if (root.auto_drop) {
+        self.errorCode(span, "E_USE_AFTER_MOVE", "cannot move a field out of an auto-dropped `move` value in ownership v0; keep the resource whole until its lexical cleanup runs");
         return;
     }
     if (deferredBorrowConflictsWithTrackedPlace(place, state)) {
@@ -3079,7 +3147,7 @@ fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *MoveState,
 // evaluated once for diagnostics, then its outgoing state travels over the
 // backedge and joins the zero-iteration path at the head. The existing loop
 // widening below remains the authority for rejecting outer-resource changes.
-fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, body: ast.Block, aliases: *const std.StringHashMap(ast.TypeExpr), body_diverges: *bool, body_visited: *bool) void {
+fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, body: ast.Block, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool, body_diverges: *bool, body_visited: *bool) void {
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
         if (block == loop_cfg.entry) {
@@ -3088,7 +3156,7 @@ fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, work
             worklist.propagateSuccessorsExcept(self, block, block_state, if (body_visited.*) loop_cfg.body else null);
         } else if (block == loop_cfg.body) {
             body_visited.* = true;
-            body_diverges.* = moveBlock(self, body, block_state, aliases);
+            body_diverges.* = moveBlock(self, body, block_state, aliases, allow_auto_drop);
             if (!body_diverges.*) worklist.propagateSuccessors(self, block, block_state);
         } else if (block == loop_cfg.break_source or block == loop_cfg.continue_source) {
             // The queued state belongs to this loop frame, so the active frame
@@ -3124,7 +3192,7 @@ fn finalizeLoopBodyCfgExit(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, wor
     replaceMoveState(self, outer_state, exit_state);
 }
 
-fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
     var loop_cfg = loopBodyMoveCfg(self) orelse return false;
     defer loop_cfg.deinit();
 
@@ -3136,9 +3204,9 @@ fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, ali
     worklist.useLoopBackedgeJoinPolicy(loop_cfg.loop_head);
     var body_diverges = false;
     var body_visited = false;
-    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, aliases, &body_diverges, &body_visited);
+    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, aliases, allow_auto_drop, &body_diverges, &body_visited);
     enqueuePendingLoopExitStates(self, &loop_cfg, &worklist);
-    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, aliases, &body_diverges, &body_visited);
+    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, aliases, allow_auto_drop, &body_diverges, &body_visited);
     finalizeLoopBodyCfgExit(self, &loop_cfg, &worklist, outer_state, body_diverges);
     return body_diverges;
 }
@@ -3168,7 +3236,7 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *MoveState, rhs_state: *co
     while (it.next()) |entry| {
         const after = matchingMoveStateSlot(rhs_state, entry.key_ptr.*, entry.value_ptr.*) orelse continue;
         const before = entry.value_ptr.*;
-        if (before.live != after.live or before.deferred != after.deferred or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameDeferredBorrowFact(before, after)) {
+        if (before.live != after.live or before.deferred != after.deferred or before.auto_drop != after.auto_drop or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameDeferredBorrowFact(before, after)) {
             self.errorCode(span, "E_MOVE_BRANCH_MISMATCH", if (deferred) "cannot consume, reserve, or defer-borrow an outer linear `move` value only on one side of a short-circuit expression" else "cannot consume, reserve, or escape an outer linear `move` value only on one side of a short-circuit expression");
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
@@ -3239,6 +3307,7 @@ fn sameDeferredBorrowFact(left: MoveSlot, right: MoveSlot) bool {
 }
 
 fn moveStatesEqual(left: *const MoveState, right: *const MoveState) bool {
+    if (!scopedBorrowStatesEqual(left, right)) return false;
     if (!left.index_facts.eql(&right.index_facts)) return false;
     if (left.index_bindings.count() != right.index_bindings.count()) return false;
     var bindings_it = left.index_bindings.keyIterator();
@@ -3254,10 +3323,21 @@ fn moveStatesEqual(left: *const MoveState, right: *const MoveState) bool {
     return true;
 }
 
+fn scopedBorrowStatesEqual(left: *const MoveState, right: *const MoveState) bool {
+    if (left.scoped_borrows.count() != right.scoped_borrows.count()) return false;
+    var it = left.scoped_borrows.iterator();
+    while (it.next()) |entry| {
+        const other = right.scoped_borrows.get(entry.key_ptr.*) orelse return false;
+        if (entry.value_ptr.shared != other.shared or entry.value_ptr.mut != other.mut) return false;
+    }
+    return true;
+}
+
 fn moveSlotStateEqual(left: MoveSlot, right: MoveSlot) bool {
     return left.live == right.live and
         sameMaybePlace(left.place, right.place) and
         left.deferred == right.deferred and
+        left.auto_drop == right.auto_drop and
         sameDeferredBorrowFact(left, right) and
         std.meta.eql(left.ty, right.ty) and
         left.type_only == right.type_only and
@@ -4287,9 +4367,209 @@ pub fn moveForget(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *c
             }
             clearSubplaces(root_place, state);
         },
-        .grouped => |inner| moveForget(self, inner.*, state, aliases),
+        .grouped, .move_expr => |inner| moveForget(self, inner.*, state, aliases),
         else => moveConsume(self, expr, state, aliases),
     }
+}
+
+fn moveAliases(self: *Checker, aliases: ?*const std.StringHashMap(ast.TypeExpr)) ?*const std.StringHashMap(ast.TypeExpr) {
+    if (aliases) |a| return a;
+    if (self.move_ctx) |ctx| return ctx.type_aliases;
+    return null;
+}
+
+fn slotRequiresExplicitConsume(self: *Checker, slot: MoveSlot, aliases: ?*const std.StringHashMap(ast.TypeExpr)) bool {
+    if (!slot.live or slot.deferred) return false;
+    if (slot.type_only or slot.alias_of != null) return false;
+    const ty = slot.ty orelse return true;
+    const resolved_aliases = moveAliases(self, aliases) orelse return true;
+    if (self.typeEmbedsLinearByValue(ty, resolved_aliases)) return true;
+    if (slot.auto_drop) return false;
+    const name = self.moveTypeNameOf(ty, resolved_aliases) orelse return true;
+    const trivial = self.trivial_drop_types orelse return false;
+    return !trivial.contains(name);
+}
+
+fn typeHasAutoDrop(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    if (self.typeEmbedsLinearByValue(ty, aliases)) return false;
+    const type_name = self.moveTypeNameOf(ty, aliases) orelse return false;
+    const releases = self.drop_ptr_release_fns orelse return false;
+    var it = releases.iterator();
+    while (it.next()) |entry| {
+        if (std.mem.eql(u8, entry.value_ptr.*, type_name)) return true;
+    }
+    return false;
+}
+
+fn blockContainsDropPointerReleaseCall(self: *Checker, block: ast.Block) bool {
+    for (block.items) |stmt| {
+        if (stmtContainsDropPointerReleaseCall(self, stmt)) return true;
+    }
+    return false;
+}
+
+fn stmtContainsDropPointerReleaseCall(self: *Checker, stmt: ast.Stmt) bool {
+    return switch (stmt.kind) {
+        .let_decl, .var_decl => |decl| blk: {
+            if (decl.init) |initializer| break :blk exprContainsDropPointerReleaseCall(self, initializer);
+            break :blk false;
+        },
+        .loop => |node| (if (node.iterable) |iter| exprContainsDropPointerReleaseCall(self, iter) else false) or blockContainsDropPointerReleaseCall(self, node.body),
+        .if_let => |node| exprContainsDropPointerReleaseCall(self, node.value) or blockContainsDropPointerReleaseCall(self, node.then_block) or (if (node.else_block) |else_block| blockContainsDropPointerReleaseCall(self, else_block) else false),
+        .@"switch" => |node| blk: {
+            if (exprContainsDropPointerReleaseCall(self, node.subject)) break :blk true;
+            for (node.arms) |arm| {
+                for (arm.patterns) |pattern| {
+                    if (pattern.kind == .literal and exprContainsDropPointerReleaseCall(self, pattern.kind.literal)) break :blk true;
+                }
+                switch (arm.body) {
+                    .block => |body| if (blockContainsDropPointerReleaseCall(self, body)) break :blk true,
+                    .expr => |expr| if (exprContainsDropPointerReleaseCall(self, expr)) break :blk true,
+                }
+            }
+            break :blk false;
+        },
+        .unsafe_block, .comptime_block, .block => |body| blockContainsDropPointerReleaseCall(self, body),
+        .contract_block => |contract| blockContainsDropPointerReleaseCall(self, contract.block),
+        .@"return" => |maybe| if (maybe) |expr| exprContainsDropPointerReleaseCall(self, expr) else false,
+        .@"defer", .assert, .expr => |expr| exprContainsDropPointerReleaseCall(self, expr),
+        .assignment => |assign| exprContainsDropPointerReleaseCall(self, assign.target) or exprContainsDropPointerReleaseCall(self, assign.value),
+        .asm_stmt, .@"break", .@"continue" => false,
+    };
+}
+
+fn exprContainsDropPointerReleaseCall(self: *Checker, expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .array_literal => |items| blk: {
+            for (items) |item| if (exprContainsDropPointerReleaseCall(self, item)) break :blk true;
+            break :blk false;
+        },
+        .struct_literal => |fields| blk: {
+            for (fields) |field| if (exprContainsDropPointerReleaseCall(self, field.value)) break :blk true;
+            break :blk false;
+        },
+        .grouped, .move_expr, .address_of, .deref, .await_expr => |inner| exprContainsDropPointerReleaseCall(self, inner.*),
+        .block => |body| blockContainsDropPointerReleaseCall(self, body),
+        .unary => |node| exprContainsDropPointerReleaseCall(self, node.expr.*),
+        .binary => |node| exprContainsDropPointerReleaseCall(self, node.left.*) or exprContainsDropPointerReleaseCall(self, node.right.*),
+        .cast => |node| exprContainsDropPointerReleaseCall(self, node.value.*),
+        .borrow_expr => |node| exprContainsDropPointerReleaseCall(self, node.value.*),
+        .call => |node| blk: {
+            if (dropPointerReleaseTypeForCallee(self, node.callee.*) != null) break :blk true;
+            if (exprContainsDropPointerReleaseCall(self, node.callee.*)) break :blk true;
+            for (node.args) |arg| if (exprContainsDropPointerReleaseCall(self, arg)) break :blk true;
+            break :blk false;
+        },
+        .index => |node| exprContainsDropPointerReleaseCall(self, node.base.*) or exprContainsDropPointerReleaseCall(self, node.index.*),
+        .slice => |node| exprContainsDropPointerReleaseCall(self, node.base.*) or exprContainsDropPointerReleaseCall(self, node.start.*) or exprContainsDropPointerReleaseCall(self, node.end.*),
+        .member => |node| exprContainsDropPointerReleaseCall(self, node.base.*),
+        .try_expr => |node| exprContainsDropPointerReleaseCall(self, node.operand.*) or (if (node.mapped) |mapped| exprContainsDropPointerReleaseCall(self, mapped.*) else false),
+        .ident,
+        .int_literal,
+        .float_literal,
+        .string_literal,
+        .char_literal,
+        .bool_literal,
+        .null_literal,
+        .uninit_literal,
+        .unreachable_expr,
+        .void_literal,
+        .enum_literal,
+        => false,
+    };
+}
+
+fn dropPointerReleaseTypeForCallee(self: *Checker, callee: ast.Expr) ?[]const u8 {
+    const releases = self.drop_ptr_release_fns orelse return null;
+    const name = ast_query.calleeIdentName(callee) orelse return null;
+    return releases.get(name);
+}
+
+fn dropPointerReleaseInner(arg: ast.Expr) ?ast.Expr {
+    return switch (arg.kind) {
+        .grouped => |inner| dropPointerReleaseInner(inner.*),
+        .address_of => |inner| inner.*,
+        else => null,
+    };
+}
+
+fn dropPointerReleaseArgMatches(self: *Checker, arg: ast.Expr, resource_type: []const u8, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    const inner = dropPointerReleaseInner(arg) orelse return false;
+    const inner_type = exprMoveTypeName(self, inner, state, aliases) orelse return false;
+    return std.mem.eql(u8, inner_type, resource_type);
+}
+
+fn consumeDropPointerReleaseArg(self: *Checker, arg: ast.Expr, resource_type: []const u8, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    if (!dropPointerReleaseArgMatches(self, arg, resource_type, state, aliases)) return false;
+    const inner = dropPointerReleaseInner(arg) orelse return false;
+    moveConsume(self, inner, state, aliases);
+    return true;
+}
+
+fn deferDropPointerReleaseArg(self: *Checker, arg: ast.Expr, resource_type: []const u8, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
+    if (!dropPointerReleaseArgMatches(self, arg, resource_type, state, aliases)) return false;
+    const inner = dropPointerReleaseInner(arg) orelse return false;
+    moveDefer(self, inner, state, aliases);
+    return true;
+}
+
+fn registerScopedBorrow(self: *Checker, node: anytype, state: *MoveState) void {
+    const root = scopedBorrowRootName(node.value.*) orelse return;
+    const slot = bindingMoveSlotPtrForIdent(root, state);
+    if (slot) |move_slot| {
+        if (!move_slot.type_only) {
+            if (!move_slot.live) {
+                self.errorCode(node.value.*.span, "E_USE_AFTER_MOVE", "cannot borrow a linear `move` value after it was moved");
+                return;
+            }
+            if (move_slot.deferred) {
+                self.errorCode(node.value.*.span, "E_USE_AFTER_MOVE", "cannot borrow a linear `move` value reserved by a `defer`");
+                return;
+            }
+        }
+    }
+    const borrow_entry = state.scoped_borrows.getOrPut(root) catch {
+        self.oom = true;
+        return;
+    };
+    if (!borrow_entry.found_existing) {
+        borrow_entry.value_ptr.* = .{ .span = node.value.*.span };
+    }
+    if (node.mutability == .mut) {
+        if (borrow_entry.value_ptr.mut or borrow_entry.value_ptr.shared != 0) {
+            self.errorCode(node.value.*.span, "E_BORROW_CONFLICT", "cannot take a mutable borrow while another scoped borrow is live");
+            return;
+        }
+        borrow_entry.value_ptr.mut = true;
+        if (slot) |move_slot| move_slot.scoped_mut_borrow = true;
+    } else {
+        if (borrow_entry.value_ptr.mut) {
+            self.errorCode(node.value.*.span, "E_BORROW_CONFLICT", "cannot take a shared borrow while a mutable scoped borrow is live");
+            return;
+        }
+        borrow_entry.value_ptr.shared += 1;
+        if (slot) |move_slot| move_slot.scoped_shared_borrows += 1;
+    }
+}
+
+fn scopedBorrowRootName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .ident => |id| id.text,
+        .grouped => |inner| scopedBorrowRootName(inner.*),
+        .member => |node| scopedBorrowRootName(node.base.*),
+        .index => |node| scopedBorrowRootName(node.base.*),
+        .deref => |inner| scopedBorrowRootName(inner.*),
+        else => null,
+    };
+}
+
+fn slotHasScopedBorrow(slot: MoveSlot) bool {
+    return slot.scoped_mut_borrow or slot.scoped_shared_borrows != 0;
+}
+
+fn stateHasScopedBorrow(state: *const MoveState, root: []const u8) bool {
+    const slot = state.scoped_borrows.get(root) orelse return false;
+    return slot.active();
 }
 
 // Whether `expr` denotes a linear `move` value — a tracked move binding by name, or
@@ -4298,7 +4578,7 @@ pub fn moveForget(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *c
 pub fn exprIsMoveTyped(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     switch (expr.kind) {
         .ident => |id| if (ownershipBindingMoveSlotForIdent(id.text, state) != null) return true,
-        .grouped => |inner| return exprIsMoveTyped(self, inner.*, state, aliases),
+        .grouped, .move_expr => |inner| return exprIsMoveTyped(self, inner.*, state, aliases),
         else => {},
     }
     if (self.move_ctx) |mctx| {
@@ -4326,7 +4606,7 @@ pub fn exprMoveTypeName(self: *Checker, expr: ast.Expr, state: *const MoveState,
         .ident => |id| if (ownershipBindingMoveSlotForIdent(id.text, state)) |slot| {
             if (slot.ty) |t| return self.moveTypeNameOf(t, aliases);
         },
-        .grouped => |inner| return exprMoveTypeName(self, inner.*, state, aliases),
+        .grouped, .move_expr => |inner| return exprMoveTypeName(self, inner.*, state, aliases),
         else => {},
     }
     if (self.move_ctx) |mctx| {
@@ -5028,7 +5308,7 @@ pub fn moveBorrow(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *c
                 }
             }
         },
-        .grouped, .deref => |inner| moveBorrow(self, inner.*, state, aliases),
+        .grouped, .move_expr, .deref => |inner| moveBorrow(self, inner.*, state, aliases),
         .address_of => |inner| {
             moveBorrow(self, inner.*, state, aliases);
             if (placeKeyAndType(self, inner.*, state)) |pp| {
@@ -5076,7 +5356,7 @@ pub fn moveBorrow(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *c
             moveBorrow(self, b.left.*, state, aliases);
             moveBorrow(self, b.right.*, state, aliases);
         },
-        .block => |b| _ = moveScopedBlock(self, b, state, aliases),
+        .block => |b| _ = moveScopedBlock(self, b, state, aliases, true),
         .call => |c| for (c.args) |arg| {
             checkAggregateAliasArgument(self, arg, state);
             moveBorrow(self, arg, state, aliases);
@@ -5162,7 +5442,7 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *co
                 }
             }
         },
-        .grouped => |inner| moveDefer(self, inner.*, state, aliases),
+        .grouped, .move_expr => |inner| moveDefer(self, inner.*, state, aliases),
         .cast => |c| moveDefer(self, c.value.*, state, aliases),
         .unary => |u| moveDefer(self, u.expr.*, state, aliases),
         .address_of => |inner| {
@@ -5180,13 +5460,21 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *co
                 moveBorrow(self, inner.*, state, aliases);
             }
         },
-        .call => |c| for (c.args) |arg| {
-            checkAggregateAliasArgument(self, arg, state);
-            if (callLaunderedMoveAliasReferent(self, arg, state, aliases)) |referent| {
-                markDeferredBorrowAliasReferent(self, referent, arg.span, state);
-                continue;
+        .call => |c| {
+            const drop_release_type = dropPointerReleaseTypeForCallee(self, c.callee.*);
+            for (c.args, 0..) |arg, index| {
+                checkAggregateAliasArgument(self, arg, state);
+                if (index == 0) {
+                    if (drop_release_type) |resource_type| {
+                        if (deferDropPointerReleaseArg(self, arg, resource_type, state, aliases)) continue;
+                    }
+                }
+                if (callLaunderedMoveAliasReferent(self, arg, state, aliases)) |referent| {
+                    markDeferredBorrowAliasReferent(self, referent, arg.span, state);
+                    continue;
+                }
+                moveDefer(self, arg, state, aliases);
             }
-            moveDefer(self, arg, state, aliases);
         },
         .member => |m| {
             moveBorrow(self, m.base.*, state, aliases);

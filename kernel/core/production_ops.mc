@@ -45,7 +45,7 @@ pub struct BundleHeader {
 // consumed by the loader. The digest is still the FNV-era u64 image_hash bridge;
 // the cryptographic secure-boot path must replace that with a real SHA-256
 // digest over immutable storage bytes without weakening the token shape.
-pub opaque struct VerifiedBundle {
+pub linear opaque struct VerifiedBundle {
     kind: BundleKind,
     version: u64,
     abi_version: u32,
@@ -202,25 +202,25 @@ impl VerifiedBundle {
         });
     }
 
-    fn kind(v: VerifiedBundle) -> BundleKind {
+    fn kind(v: *VerifiedBundle) -> BundleKind {
         return v.kind;
     }
-    fn version(v: VerifiedBundle) -> u64 {
+    fn version(v: *VerifiedBundle) -> u64 {
         return v.version;
     }
-    fn image_hash(v: VerifiedBundle) -> u64 {
+    fn image_hash(v: *VerifiedBundle) -> u64 {
         return v.image_hash;
     }
-    fn key_id(v: VerifiedBundle) -> u32 {
+    fn key_id(v: *VerifiedBundle) -> u32 {
         return v.key_id;
     }
-    fn image_base(v: VerifiedBundle) -> usize {
+    fn image_base(v: *VerifiedBundle) -> usize {
         return v.image_base;
     }
-    fn image_len(v: VerifiedBundle) -> usize {
+    fn image_len(v: *VerifiedBundle) -> usize {
         return v.image_len;
     }
-    fn has_exact_bytes(v: VerifiedBundle) -> bool {
+    fn has_exact_bytes(v: *VerifiedBundle) -> bool {
         return v.exact_bytes;
     }
 }
@@ -233,35 +233,35 @@ pub fn bundle_verify_and_admit_image(h: *BundleHeader, expected_kind: BundleKind
     return VerifiedBundle.admit_image(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id, image_base, image_len);
 }
 
-pub fn verified_bundle_kind(v: VerifiedBundle) -> BundleKind {
+pub fn verified_bundle_kind(v: *VerifiedBundle) -> BundleKind {
     return VerifiedBundle.kind(v);
 }
 
-pub fn verified_bundle_version(v: VerifiedBundle) -> u64 {
+pub fn verified_bundle_version(v: *VerifiedBundle) -> u64 {
     return VerifiedBundle.version(v);
 }
 
-pub fn verified_bundle_image_hash(v: VerifiedBundle) -> u64 {
+pub fn verified_bundle_image_hash(v: *VerifiedBundle) -> u64 {
     return VerifiedBundle.image_hash(v);
 }
 
-pub fn verified_bundle_key_id(v: VerifiedBundle) -> u32 {
+pub fn verified_bundle_key_id(v: *VerifiedBundle) -> u32 {
     return VerifiedBundle.key_id(v);
 }
 
-pub fn verified_bundle_has_exact_bytes(v: VerifiedBundle) -> bool {
+pub fn verified_bundle_has_exact_bytes(v: *VerifiedBundle) -> bool {
     return VerifiedBundle.has_exact_bytes(v);
 }
 
-pub fn verified_bundle_image_base(v: VerifiedBundle) -> usize {
+pub fn verified_bundle_image_base(v: *VerifiedBundle) -> usize {
     return VerifiedBundle.image_base(v);
 }
 
-pub fn verified_bundle_image_len(v: VerifiedBundle) -> usize {
+pub fn verified_bundle_image_len(v: *VerifiedBundle) -> usize {
     return VerifiedBundle.image_len(v);
 }
 
-pub fn verified_bundle_matches_image(v: VerifiedBundle, image_base: usize, image_len: usize) -> bool {
+pub fn verified_bundle_matches_image(v: *VerifiedBundle, image_base: usize, image_len: usize) -> bool {
     if !VerifiedBundle.has_exact_bytes(v) {
         return false;
     }
@@ -338,10 +338,13 @@ pub fn rollback_install_candidate(r: *mut RollbackState, version: u64) -> usize 
 }
 
 pub fn rollback_install_verified_candidate(r: *mut RollbackState, bundle: VerifiedBundle) -> usize {
-    if !VerifiedBundle.has_exact_bytes(bundle) {
+    let exact: bool = VerifiedBundle.has_exact_bytes(&bundle);
+    let version: u64 = VerifiedBundle.version(&bundle);
+    unsafe { forget_unchecked(bundle); } // installation consumes the admission token
+    if !exact {
         return 2; // metadata-only admission is not enough to install a boot candidate
     }
-    return rollback_install_candidate(r, VerifiedBundle.version(bundle));
+    return rollback_install_candidate(r, version);
 }
 
 pub fn rollback_mark_boot_success(r: *mut RollbackState) -> void {

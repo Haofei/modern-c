@@ -26,7 +26,7 @@ fn handoff(b: CpuOwned) -> DeviceOwned {     // clean caches, give to device
     return .{ .addr = addr };
 }
 fn submit(b: DeviceOwned) -> DeviceOwned {   // queue it; returns in-flight handle
-    return b;
+    return move b;
 }
 fn reclaim(b: DeviceOwned) -> CpuOwned {     // invalidate, take back
     let addr: usize = b.addr;
@@ -40,10 +40,10 @@ fn release(b: CpuOwned) -> void {            // free
 // Accepted: the full ownership cycle, each handle consumed exactly once.
 fn accept_cycle() -> void {
     let c: CpuOwned = make();
-    let d: DeviceOwned = handoff(c);
-    let inflight: DeviceOwned = submit(d);
-    let back: CpuOwned = reclaim(inflight);
-    release(back);
+    let d: DeviceOwned = handoff(move c);
+    let inflight: DeviceOwned = submit(move d);
+    let back: CpuOwned = reclaim(move inflight);
+    release(move back);
 }
 
 // Rejected: submitting a buffer the CPU still owns (never handed off).
@@ -51,16 +51,16 @@ fn reject_submit_cpu_owned() -> void {
     let c: CpuOwned = make();
     // EXPECT_ERROR: E_NO_IMPLICIT_CONVERSION
     let inflight: DeviceOwned = submit(c);
-    release(reclaim(inflight));
+    release(reclaim(move inflight));
 }
 
 // Rejected: touching the buffer after it was handed to the device.
 fn reject_use_after_handoff() -> void {
     let c: CpuOwned = make();
-    let d: DeviceOwned = handoff(c);
-    let inflight: DeviceOwned = submit(d);
+    let d: DeviceOwned = handoff(move c);
+    let inflight: DeviceOwned = submit(move d);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let again: DeviceOwned = submit(d);
-    release(reclaim(inflight));
-    release(reclaim(again));
+    let again: DeviceOwned = submit(move d);
+    release(reclaim(move inflight));
+    release(reclaim(move again));
 }

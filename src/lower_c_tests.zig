@@ -13644,6 +13644,98 @@ test "lower-c emits lexical defer cleanup before return" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static void accept_cleanup_on_fallthrough(void) {\n    close_a();\n}") != null);
 }
 
+test "lower-c emits deferred drop-attribute pointer release before return" {
+    const source =
+        \\move struct Ticket { id: u32 }
+        \\fn issue_ticket() -> Ticket { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_ticket(t: *mut Ticket) -> void { t.id = 0; }
+        \\fn accept_deferred_resource_release(flag: bool) -> u32 {
+        \\    var t: Ticket = issue_ticket();
+        \\    defer close_ticket(&t);
+        \\    if flag {
+        \\        return 1;
+        \\    }
+        \\    return 2;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_drop_attr_defer.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uint32_t accept_deferred_resource_release(bool flag)");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, "close_ticket(&t);"));
+    const first_cleanup = std.mem.indexOf(u8, body, "close_ticket(&t);").?;
+    const early_return = std.mem.indexOf(u8, body, "return 1;").?;
+    const final_cleanup = std.mem.lastIndexOf(u8, body, "close_ticket(&t);").?;
+    const final_return = std.mem.indexOf(u8, body, "return 2;").?;
+    try std.testing.expect(first_cleanup < early_return);
+    try std.testing.expect(final_cleanup < final_return);
+}
+
+test "lower-c emits auto-drop release for affine move locals" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn auto_drop_before_return(flag: bool) -> u32 {
+        \\    var g = make_guard();
+        \\    if flag {
+        \\        return 1;
+        \\    }
+        \\    return g.id;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_drop_attr_auto.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uint32_t auto_drop_before_return(bool flag)");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, "close_guard("));
+    const first_cleanup = std.mem.indexOf(u8, body, "close_guard(").?;
+    const early_return = std.mem.indexOf(u8, body, "return 1;").?;
+    const final_cleanup = std.mem.lastIndexOf(u8, body, "close_guard(").?;
+    const final_return = std.mem.indexOf(u8, body, "return g.id;").?;
+    try std.testing.expect(first_cleanup < early_return);
+    try std.testing.expect(final_cleanup < final_return);
+}
+
+test "lower-c cancels auto-drop when affine move local is explicitly transferred" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn transfer_auto_drop() -> Guard {
+        \\    var g: Guard = make_guard();
+        \\    return move g;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_drop_attr_transfer.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static Guard transfer_auto_drop(void)");
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, body, "close_guard("));
+}
+
+test "lower-c emits scoped borrow expressions as addresses" {
+    const source =
+        \\struct Cell { value: u32 }
+        \\fn read_cell(c: *Cell) -> u32 { return c.value; }
+        \\fn write_cell(c: *mut Cell, value: u32) -> void { c.value = value; }
+        \\fn use_borrow() -> u32 {
+        \\    var c: Cell = .{ .value = 1 };
+        \\    write_cell(borrow mut c, 7);
+        \\    return read_cell(borrow c);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_scoped_borrow.mc", source, &output);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "= &c;"));
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "write_cell(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return read_cell(mc_tmp") != null);
+}
+
 test "lower-c emits unsafe blocks as scoped blocks" {
     const source =
         \\fn accept_unsafe_block() -> u32 {

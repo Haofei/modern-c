@@ -133,6 +133,113 @@ test "parser accepts qualified generic type arguments" {
     try std.testing.expectEqualStrings("u8", qualifier.child.kind.name.text);
 }
 
+test "parser accepts linear struct resource qualifier" {
+    const source =
+        \\opaque linear struct Token { id: u32 }
+        \\linear struct Page { frame: usize }
+        \\linear opaque struct Bundle { image: usize }
+        \\region struct AstNode { kind: u32 }
+        \\opaque region struct SymbolNode { id: u32 }
+        \\thread_move move struct SendTicket { id: u32 }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "linear_struct.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = Parser.init(source, &reporter);
+    const module = try p.parseModule(allocator);
+    defer module.deinit(allocator);
+
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 6), module.decls.len);
+    const token = module.decls[0].kind.struct_decl;
+    try std.testing.expect(token.is_opaque);
+    try std.testing.expect(token.is_linear);
+    try std.testing.expect(!token.is_move);
+    const page = module.decls[1].kind.struct_decl;
+    try std.testing.expect(!page.is_opaque);
+    try std.testing.expect(page.is_linear);
+    try std.testing.expect(!page.is_move);
+    const bundle = module.decls[2].kind.struct_decl;
+    try std.testing.expect(bundle.is_opaque);
+    try std.testing.expect(bundle.is_linear);
+    try std.testing.expect(!bundle.is_move);
+    const ast_node = module.decls[3].kind.struct_decl;
+    try std.testing.expect(ast_node.is_region);
+    try std.testing.expect(!ast_node.is_opaque);
+    try std.testing.expect(!ast_node.is_linear);
+    try std.testing.expect(!ast_node.is_move);
+    const symbol_node = module.decls[4].kind.struct_decl;
+    try std.testing.expect(symbol_node.is_region);
+    try std.testing.expect(symbol_node.is_opaque);
+    try std.testing.expect(!symbol_node.is_linear);
+    try std.testing.expect(!symbol_node.is_move);
+    const send_ticket = module.decls[5].kind.struct_decl;
+    try std.testing.expect(send_ticket.is_thread_move);
+    try std.testing.expect(send_ticket.is_move);
+    try std.testing.expect(!send_ticket.is_linear);
+}
+
+test "parser accepts scoped borrow expressions" {
+    const source =
+        \\struct Cell { value: u32 }
+        \\fn use_borrow() -> void {
+        \\    let shared: *Cell = borrow cell;
+        \\    let writable: *mut Cell = borrow mut cell;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "borrow_expr.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = Parser.init(source, &reporter);
+    const module = try p.parseModule(allocator);
+    defer module.deinit(allocator);
+
+    try std.testing.expect(!reporter.has_errors);
+    const body = module.decls[1].kind.fn_decl.body.?;
+    const shared = body.items[0].kind.let_decl.init.?.kind.borrow_expr;
+    try std.testing.expectEqual(ast.Mutability.none, shared.mutability);
+    try std.testing.expectEqualStrings("cell", shared.value.kind.ident.text);
+    const writable = body.items[1].kind.let_decl.init.?.kind.borrow_expr;
+    try std.testing.expectEqual(ast.Mutability.mut, writable.mutability);
+    try std.testing.expectEqualStrings("cell", writable.value.kind.ident.text);
+}
+
+test "parser accepts single-source return borrow contracts" {
+    const source =
+        \\struct Cell { value: u32 }
+        \\fn view(cell: *Cell) -> borrow(cell) *Cell {
+        \\    return cell;
+        \\}
+        \\trait Reader {
+        \\    fn data(self: *Self, bytes: []const u8) -> borrow(bytes) []const u8;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "return_borrow.mc", source);
+    defer reporter.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = Parser.init(source, &reporter);
+    const module = try p.parseModule(allocator);
+    defer module.deinit(allocator);
+
+    try std.testing.expect(!reporter.has_errors);
+    const fn_decl = module.decls[1].kind.fn_decl;
+    try std.testing.expectEqualStrings("cell", fn_decl.return_borrow_source.?.text);
+    const trait = module.decls[2].kind.trait_decl;
+    try std.testing.expectEqualStrings("bytes", trait.methods[0].return_borrow_source.?.text);
+}
+
 test "qualified expression resolution OOM does not fall back to member access" {
     const source =
         \\module M {

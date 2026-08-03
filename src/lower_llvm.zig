@@ -364,6 +364,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .tagged_unions = std.StringHashMap(ast.UnionDecl).init(allocator),
         .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
+        .auto_drop_fns_by_type = std.StringHashMap([]const u8).init(allocator),
         .trait_decls = std.StringHashMap(ast.TraitDecl).init(allocator),
         .impl_methods = std.StringHashMap([]const ast.ImplTraitMethod).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
@@ -451,6 +452,8 @@ const LlvmEmitter = struct {
     tagged_unions: std.StringHashMap(ast.UnionDecl) = undefined,
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
+    auto_drop_fns_by_type: std.StringHashMap([]const u8) = undefined,
+    current_auto_drop_enabled: bool = true,
     // Tier 2 trait objects (traits-design §8): every `trait` by name (vtable layout +
     // dispatch slot resolution) and each `impl Trait for Type`'s mangled methods (the
     // rodata vtable's function-pointer list).
@@ -560,6 +563,7 @@ const LlvmEmitter = struct {
         self.impl_methods.deinit();
         self.bind_thunks.deinit();
         self.backend_names.deinit();
+        self.auto_drop_fns_by_type.deinit();
         self.decl_artifacts.deinit(self.allocator);
         self.struct_decl_artifacts.deinit(self.allocator);
         self.function_decl_artifacts.deinit(self.allocator);
@@ -706,6 +710,15 @@ const LlvmEmitter = struct {
         } else null;
         const c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi"));
         try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .c_abi = c_abi, .is_variadic = fn_decl.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
+        if (hasNamedAttr(attrs, "drop")) {
+            if (dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
+                if (self.struct_types.get(type_name)) |struct_decl| {
+                    if (struct_decl.is_move and !struct_decl.is_linear) {
+                        try self.auto_drop_fns_by_type.put(type_name, fn_decl.name.text);
+                    }
+                }
+            }
+        }
         for (attrs) |attr| switch (attr.kind) {
             .backend_name => |name| try self.backend_names.put(fn_decl.name.text, name),
             else => {},
@@ -1251,11 +1264,13 @@ const LlvmEmitter = struct {
         const old_return_ty = self.current_return_ty;
         const old_function = self.current_function;
         const old_params = self.current_params;
+        const old_auto_drop_enabled = self.current_auto_drop_enabled;
         self.current_debug_scope = if (self.fn_sigs.get(fn_decl.name.text)) |sig| sig.debug_id else null;
         self.current_debug_span = fn_decl.name.span;
         self.current_return_ty = ret_ty;
         self.current_function = fn_decl.name.text;
         self.current_params = fn_decl.params;
+        self.current_auto_drop_enabled = !self.blockContainsAutoDropReleaseCall(body);
         const entry_label = try self.functionEntryLabel();
         defer {
             self.current_debug_scope = old_scope;
@@ -1263,6 +1278,7 @@ const LlvmEmitter = struct {
             self.current_return_ty = old_return_ty;
             self.current_function = old_function;
             self.current_params = old_params;
+            self.current_auto_drop_enabled = old_auto_drop_enabled;
         }
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
         // epilogue. The body is a single inline-asm statement that performs the
@@ -1531,6 +1547,10 @@ const LlvmEmitter = struct {
             else
                 error.UnsupportedLlvmEmission,
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
+            .move_expr => |inner| blk: {
+                self.cancelAutoDropForMove(inner.*);
+                break :blk try self.emitExpr(inner.*, expected_ty);
+            },
             .call => |call| try self.emitCall(call, expected_ty, expr.span),
             .array_literal => |items| if (self.contextualTargetTypeAt(.array_literal, expr.span, semantic_expected_ty)) |target_ty|
                 try self.emitArrayLiteralValue(target_ty, items)
@@ -1547,6 +1567,7 @@ const LlvmEmitter = struct {
             .unary => |node| try self.emitUnary(node, expr.span),
             .cast => |node| try self.emitCast(expr.span, node.value.*),
             .address_of => |inner| try self.emitAddressOf(inner.*),
+            .borrow_expr => |node| try self.emitAddressOf(node.value.*),
             .deref => |inner| try self.emitDeref(inner.*, expr.span),
             .index => |node| try self.emitIndexLoad(node, expr.span),
             .slice => |node| try self.emitSlice(node, expr.span),
@@ -1715,6 +1736,7 @@ const LlvmEmitter = struct {
     fn emitVaListCursorArg(self: *LlvmEmitter, expr: ast.Expr, cursor_ty: ast.TypeExpr) ![]const u8 {
         return switch (expr.kind) {
             .address_of => |inner| try self.emitAddressOf(inner.*),
+            .borrow_expr => |node| try self.emitAddressOf(node.value.*),
             .grouped => |inner| try self.emitVaListCursorArg(inner.*, cursor_ty),
             else => try self.emitExpr(expr, cursor_ty),
         };
@@ -1939,8 +1961,35 @@ const LlvmEmitter = struct {
             .block => |block| {
                 if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission;
             },
-            else => try self.emitExprStatement(expr),
+            else => {
+                if (try self.emitAutoDropPointerCleanup(expr)) return;
+                try self.emitExprStatement(expr);
+            },
         }
+    }
+
+    fn emitAutoDropPointerCleanup(self: *LlvmEmitter, expr: ast.Expr) !bool {
+        const cleanup = self.autoDropPointerCleanup(expr) orelse return false;
+        const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
+        try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
+        return true;
+    }
+
+    const AutoDropCleanup = struct {
+        fn_name: []const u8,
+        local_name: []const u8,
+    };
+
+    fn autoDropPointerCleanup(self: *LlvmEmitter, expr: ast.Expr) ?AutoDropCleanup {
+        const call = switch (expr.kind) {
+            .call => |node| node,
+            else => return null,
+        };
+        const fn_name = calleeIdentName(call.callee.*) orelse return null;
+        if (!self.autoDropReleaseFunctionName(fn_name)) return null;
+        if (call.args.len != 1) return null;
+        const local_name = addressOfIdentName(call.args[0]) orelse return null;
+        return .{ .fn_name = fn_name, .local_name = local_name };
     }
 
     fn emitScopedBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) !bool {
@@ -2254,6 +2303,10 @@ const LlvmEmitter = struct {
                 return error.UnsupportedLlvmEmission;
             },
             .grouped => |inner| try self.emitExprStatement(inner.*),
+            .move_expr => |inner| {
+                self.cancelAutoDropForMove(inner.*);
+                try self.emitExprStatement(inner.*);
+            },
             else => {
                 const ty = self.exprStatementTypeForEmission(expr) orelse {
                     self.reportUnsupported(expr.span, @tagName(expr.kind));
@@ -2562,16 +2615,16 @@ const LlvmEmitter = struct {
         const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(binding.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.text);
         var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(binding.text);
-        defer restoreLocal(&self.local_types, binding.text, old_type) catch {};
-        defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
-        defer restoreLocal(&self.pointer_local_provenance, binding.text, old_global_pointer) catch {};
-        defer restoreLocal(&self.local_aggregate_pointer_aliases, binding.text, old_aggregate_pointer_alias) catch {};
-        defer restoreLocal(&self.local_pointer_array_aliases, binding.text, old_pointer_array_alias) catch {};
-        defer restoreLocal(&self.local_slice_global_pointer_arrays, binding.text, old_slice_global_pointer_array) catch {};
-        defer restoreLocal(&self.local_slice_pointer_array_ranges, binding.text, old_slice_pointer_array_range) catch {};
-        defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, binding.text, old_slice_aggregate_pointer_array_field) catch {};
-        defer self.restoreAggregatePointerFieldsForLocal(binding.text, &old_aggregate_pointer_fields) catch {};
-        defer self.restoreLocalArrayPointerElementsForLocal(binding.text, &old_local_array_pointer_elements) catch {};
+        defer restoreLocal(&self.local_types, binding.text, old_type);
+        defer restoreLocal(&self.local_slots, binding.text, old_slot);
+        defer restoreLocal(&self.pointer_local_provenance, binding.text, old_global_pointer);
+        defer restoreLocal(&self.local_aggregate_pointer_aliases, binding.text, old_aggregate_pointer_alias);
+        defer restoreLocal(&self.local_pointer_array_aliases, binding.text, old_pointer_array_alias);
+        defer restoreLocal(&self.local_slice_global_pointer_arrays, binding.text, old_slice_global_pointer_array);
+        defer restoreLocal(&self.local_slice_pointer_array_ranges, binding.text, old_slice_pointer_array_range);
+        defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, binding.text, old_slice_aggregate_pointer_array_field);
+        defer self.restoreAggregatePointerFieldsForLocal(binding.text, &old_aggregate_pointer_fields);
+        defer self.restoreLocalArrayPointerElementsForLocal(binding.text, &old_local_array_pointer_elements);
 
         const binding_ptr = try self.nextBindingPtr(binding.text);
         const binding_value = if (nullable_representation == .value) blk: {
@@ -2641,16 +2694,16 @@ const LlvmEmitter = struct {
         const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(tag_bind.binding.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(tag_bind.binding.text);
         var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(tag_bind.binding.text);
-        defer restoreLocal(&self.local_types, tag_bind.binding.text, old_type) catch {};
-        defer restoreLocal(&self.local_slots, tag_bind.binding.text, old_slot) catch {};
-        defer restoreLocal(&self.pointer_local_provenance, tag_bind.binding.text, old_global_pointer) catch {};
-        defer restoreLocal(&self.local_aggregate_pointer_aliases, tag_bind.binding.text, old_aggregate_pointer_alias) catch {};
-        defer restoreLocal(&self.local_pointer_array_aliases, tag_bind.binding.text, old_pointer_array_alias) catch {};
-        defer restoreLocal(&self.local_slice_global_pointer_arrays, tag_bind.binding.text, old_slice_global_pointer_array) catch {};
-        defer restoreLocal(&self.local_slice_pointer_array_ranges, tag_bind.binding.text, old_slice_pointer_array_range) catch {};
-        defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, tag_bind.binding.text, old_slice_aggregate_pointer_array_field) catch {};
-        defer self.restoreAggregatePointerFieldsForLocal(tag_bind.binding.text, &old_aggregate_pointer_fields) catch {};
-        defer self.restoreLocalArrayPointerElementsForLocal(tag_bind.binding.text, &old_local_array_pointer_elements) catch {};
+        defer restoreLocal(&self.local_types, tag_bind.binding.text, old_type);
+        defer restoreLocal(&self.local_slots, tag_bind.binding.text, old_slot);
+        defer restoreLocal(&self.pointer_local_provenance, tag_bind.binding.text, old_global_pointer);
+        defer restoreLocal(&self.local_aggregate_pointer_aliases, tag_bind.binding.text, old_aggregate_pointer_alias);
+        defer restoreLocal(&self.local_pointer_array_aliases, tag_bind.binding.text, old_pointer_array_alias);
+        defer restoreLocal(&self.local_slice_global_pointer_arrays, tag_bind.binding.text, old_slice_global_pointer_array);
+        defer restoreLocal(&self.local_slice_pointer_array_ranges, tag_bind.binding.text, old_slice_pointer_array_range);
+        defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, tag_bind.binding.text, old_slice_aggregate_pointer_array_field);
+        defer self.restoreAggregatePointerFieldsForLocal(tag_bind.binding.text, &old_aggregate_pointer_fields);
+        defer self.restoreLocalArrayPointerElementsForLocal(tag_bind.binding.text, &old_local_array_pointer_elements);
 
         const binding_ptr = try self.nextBindingPtr(tag_bind.binding.text);
         const payload = try self.nextTemp();
@@ -2691,7 +2744,7 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "  call void @{s}(){s}\n  unreachable\n", .{ helper, try self.debugCallSuffix() });
                 return true;
             },
-            .grouped => |inner| return try self.emitNeverExpr(inner.*),
+            .grouped, .move_expr => |inner| return try self.emitNeverExpr(inner.*),
             else => return false,
         }
         return false;
@@ -2707,7 +2760,7 @@ const LlvmEmitter = struct {
             .call => |call| blk: {
                 break :blk self.trapHelperForCall(call) != null;
             },
-            .grouped => |inner| self.exprStatementDiverges(inner.*),
+            .grouped, .move_expr => |inner| self.exprStatementDiverges(inner.*),
             else => false,
         };
     }
@@ -2790,6 +2843,7 @@ const LlvmEmitter = struct {
             } else {
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, try self.zeroInitializer(ty), ptr, try self.debugCallSuffix() });
             }
+            try self.registerAutoDropLocal(local.names[0], ty);
             return;
         }
         if (resolved_ty.kind == .array) {
@@ -2799,6 +2853,7 @@ const LlvmEmitter = struct {
                 const value = try self.emitExprWithMirRangeTarget(init, ty, name);
                 try self.emitConcreteObjectStore(ptr, ty, value);
             }
+            try self.registerAutoDropLocal(local.names[0], ty);
             return;
         }
         if (self.structDeclForType(resolved_ty)) |_| {
@@ -2809,10 +2864,122 @@ const LlvmEmitter = struct {
                 const value = try self.emitExprWithMirRangeTarget(init, ty, name);
                 try self.emitConcreteObjectStore(ptr, ty, value);
             }
+            try self.registerAutoDropLocal(local.names[0], ty);
             return;
         }
         const value = try self.emitExprWithMirRangeTarget(init, ty, name);
         try self.emitConcreteObjectStore(ptr, ty, value);
+        try self.registerAutoDropLocal(local.names[0], ty);
+    }
+
+    fn registerAutoDropLocal(self: *LlvmEmitter, name: ast.Ident, ty: ast.TypeExpr) !void {
+        if (!self.current_auto_drop_enabled) return;
+        const type_name = typeName(self.resolveAliasType(ty)) orelse return;
+        const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
+        try self.defer_stack.append(self.allocator, try makeDropPointerCall(self.scratch.allocator(), drop_fn, name));
+    }
+
+    fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr) void {
+        const local_name = movedLocalName(expr) orelse return;
+        var index = self.defer_stack.items.len;
+        while (index > 0) {
+            index -= 1;
+            const cleanup = self.autoDropPointerCleanup(self.defer_stack.items[index]) orelse continue;
+            if (!std.mem.eql(u8, cleanup.local_name, local_name)) continue;
+            _ = self.defer_stack.orderedRemove(index);
+            return;
+        }
+    }
+
+    fn blockContainsAutoDropReleaseCall(self: *LlvmEmitter, block: ast.Block) bool {
+        for (block.items) |stmt| {
+            if (self.stmtContainsAutoDropReleaseCall(stmt)) return true;
+        }
+        return false;
+    }
+
+    fn stmtContainsAutoDropReleaseCall(self: *LlvmEmitter, stmt: ast.Stmt) bool {
+        return switch (stmt.kind) {
+            .let_decl, .var_decl => |decl| blk: {
+                if (decl.init) |initializer| break :blk self.exprContainsAutoDropReleaseCall(initializer);
+                break :blk false;
+            },
+            .loop => |node| (if (node.iterable) |iter| self.exprContainsAutoDropReleaseCall(iter) else false) or self.blockContainsAutoDropReleaseCall(node.body),
+            .if_let => |node| self.exprContainsAutoDropReleaseCall(node.value) or self.blockContainsAutoDropReleaseCall(node.then_block) or (if (node.else_block) |else_block| self.blockContainsAutoDropReleaseCall(else_block) else false),
+            .@"switch" => |node| blk: {
+                if (self.exprContainsAutoDropReleaseCall(node.subject)) break :blk true;
+                for (node.arms) |arm| {
+                    for (arm.patterns) |pattern| {
+                        switch (pattern.kind) {
+                            .literal => |expr| if (self.exprContainsAutoDropReleaseCall(expr)) break :blk true,
+                            else => {},
+                        }
+                    }
+                    switch (arm.body) {
+                        .block => |body| if (self.blockContainsAutoDropReleaseCall(body)) break :blk true,
+                        .expr => |expr| if (self.exprContainsAutoDropReleaseCall(expr)) break :blk true,
+                    }
+                }
+                break :blk false;
+            },
+            .unsafe_block, .comptime_block, .block => |body| self.blockContainsAutoDropReleaseCall(body),
+            .contract_block => |contract| self.blockContainsAutoDropReleaseCall(contract.block),
+            .@"return" => |maybe| if (maybe) |expr| self.exprContainsAutoDropReleaseCall(expr) else false,
+            .@"defer", .assert, .expr => |expr| self.exprContainsAutoDropReleaseCall(expr),
+            .assignment => |assign| self.exprContainsAutoDropReleaseCall(assign.target) or self.exprContainsAutoDropReleaseCall(assign.value),
+            .asm_stmt, .@"break", .@"continue" => false,
+        };
+    }
+
+    fn exprContainsAutoDropReleaseCall(self: *LlvmEmitter, expr: ast.Expr) bool {
+        return switch (expr.kind) {
+            .array_literal => |items| blk: {
+                for (items) |item| if (self.exprContainsAutoDropReleaseCall(item)) break :blk true;
+                break :blk false;
+            },
+            .struct_literal => |fields| blk: {
+                for (fields) |field| if (self.exprContainsAutoDropReleaseCall(field.value)) break :blk true;
+                break :blk false;
+            },
+            .grouped, .move_expr, .address_of, .deref, .await_expr => |inner| self.exprContainsAutoDropReleaseCall(inner.*),
+            .block => |body| self.blockContainsAutoDropReleaseCall(body),
+            .unary => |node| self.exprContainsAutoDropReleaseCall(node.expr.*),
+            .binary => |node| self.exprContainsAutoDropReleaseCall(node.left.*) or self.exprContainsAutoDropReleaseCall(node.right.*),
+            .cast => |node| self.exprContainsAutoDropReleaseCall(node.value.*),
+            .borrow_expr => |node| self.exprContainsAutoDropReleaseCall(node.value.*),
+            .call => |node| blk: {
+                if (calleeIdentName(node.callee.*)) |name| {
+                    if (self.autoDropReleaseFunctionName(name)) break :blk true;
+                }
+                if (self.exprContainsAutoDropReleaseCall(node.callee.*)) break :blk true;
+                for (node.args) |arg| if (self.exprContainsAutoDropReleaseCall(arg)) break :blk true;
+                break :blk false;
+            },
+            .index => |node| self.exprContainsAutoDropReleaseCall(node.base.*) or self.exprContainsAutoDropReleaseCall(node.index.*),
+            .slice => |node| self.exprContainsAutoDropReleaseCall(node.base.*) or self.exprContainsAutoDropReleaseCall(node.start.*) or self.exprContainsAutoDropReleaseCall(node.end.*),
+            .member => |node| self.exprContainsAutoDropReleaseCall(node.base.*),
+            .try_expr => |node| self.exprContainsAutoDropReleaseCall(node.operand.*) or (if (node.mapped) |mapped| self.exprContainsAutoDropReleaseCall(mapped.*) else false),
+            .ident,
+            .int_literal,
+            .float_literal,
+            .string_literal,
+            .char_literal,
+            .bool_literal,
+            .null_literal,
+            .uninit_literal,
+            .unreachable_expr,
+            .void_literal,
+            .enum_literal,
+            => false,
+        };
+    }
+
+    fn autoDropReleaseFunctionName(self: *LlvmEmitter, name: []const u8) bool {
+        var it = self.auto_drop_fns_by_type.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.*, name)) return true;
+        }
+        return false;
     }
 
     fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {
@@ -3377,16 +3544,16 @@ const LlvmEmitter = struct {
         const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(binding.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.text);
         var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(binding.text);
-        defer restoreLocal(&self.local_types, binding.text, old_type) catch {};
-        defer restoreLocal(&self.local_slots, binding.text, old_slot) catch {};
-        defer restoreLocal(&self.pointer_local_provenance, binding.text, old_global_pointer) catch {};
-        defer restoreLocal(&self.local_aggregate_pointer_aliases, binding.text, old_aggregate_pointer_alias) catch {};
-        defer restoreLocal(&self.local_pointer_array_aliases, binding.text, old_pointer_array_alias) catch {};
-        defer restoreLocal(&self.local_slice_global_pointer_arrays, binding.text, old_slice_global_pointer_array) catch {};
-        defer restoreLocal(&self.local_slice_pointer_array_ranges, binding.text, old_slice_pointer_array_range) catch {};
-        defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, binding.text, old_slice_aggregate_pointer_array_field) catch {};
-        defer self.restoreAggregatePointerFieldsForLocal(binding.text, &old_aggregate_pointer_fields) catch {};
-        defer self.restoreLocalArrayPointerElementsForLocal(binding.text, &old_local_array_pointer_elements) catch {};
+        defer restoreLocal(&self.local_types, binding.text, old_type);
+        defer restoreLocal(&self.local_slots, binding.text, old_slot);
+        defer restoreLocal(&self.pointer_local_provenance, binding.text, old_global_pointer);
+        defer restoreLocal(&self.local_aggregate_pointer_aliases, binding.text, old_aggregate_pointer_alias);
+        defer restoreLocal(&self.local_pointer_array_aliases, binding.text, old_pointer_array_alias);
+        defer restoreLocal(&self.local_slice_global_pointer_arrays, binding.text, old_slice_global_pointer_array);
+        defer restoreLocal(&self.local_slice_pointer_array_ranges, binding.text, old_slice_pointer_array_range);
+        defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, binding.text, old_slice_aggregate_pointer_array_field);
+        defer self.restoreAggregatePointerFieldsForLocal(binding.text, &old_aggregate_pointer_fields);
+        defer self.restoreLocalArrayPointerElementsForLocal(binding.text, &old_local_array_pointer_elements);
         try self.local_types.put(binding.text, element_ty);
         try self.local_slots.put(binding.text, .{ .ty = element_ty, .ptr = binding_ptr });
 
@@ -3498,16 +3665,16 @@ const LlvmEmitter = struct {
         const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(bind.text);
         var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(bind.text);
         var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(bind.text);
-        defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
-        defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
-        defer restoreLocal(&self.pointer_local_provenance, bind.text, old_global_pointer) catch {};
-        defer restoreLocal(&self.local_aggregate_pointer_aliases, bind.text, old_aggregate_pointer_alias) catch {};
-        defer restoreLocal(&self.local_pointer_array_aliases, bind.text, old_pointer_array_alias) catch {};
-        defer restoreLocal(&self.local_slice_global_pointer_arrays, bind.text, old_slice_global_pointer_array) catch {};
-        defer restoreLocal(&self.local_slice_pointer_array_ranges, bind.text, old_slice_pointer_array_range) catch {};
-        defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, bind.text, old_slice_aggregate_pointer_array_field) catch {};
-        defer self.restoreAggregatePointerFieldsForLocal(bind.text, &old_aggregate_pointer_fields) catch {};
-        defer self.restoreLocalArrayPointerElementsForLocal(bind.text, &old_local_array_pointer_elements) catch {};
+        defer restoreLocal(&self.local_types, bind.text, old_type);
+        defer restoreLocal(&self.local_slots, bind.text, old_slot);
+        defer restoreLocal(&self.pointer_local_provenance, bind.text, old_global_pointer);
+        defer restoreLocal(&self.local_aggregate_pointer_aliases, bind.text, old_aggregate_pointer_alias);
+        defer restoreLocal(&self.local_pointer_array_aliases, bind.text, old_pointer_array_alias);
+        defer restoreLocal(&self.local_slice_global_pointer_arrays, bind.text, old_slice_global_pointer_array);
+        defer restoreLocal(&self.local_slice_pointer_array_ranges, bind.text, old_slice_pointer_array_range);
+        defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, bind.text, old_slice_aggregate_pointer_array_field);
+        defer self.restoreAggregatePointerFieldsForLocal(bind.text, &old_aggregate_pointer_fields);
+        defer self.restoreLocalArrayPointerElementsForLocal(bind.text, &old_local_array_pointer_elements);
 
         const binding_ptr = try self.nextBindingPtr(bind.text);
         const binding_value = if (nullable_representation == .value) blk: {
@@ -3616,16 +3783,16 @@ const LlvmEmitter = struct {
             const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(bind.text);
             var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(bind.text);
             var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(bind.text);
-            defer restoreLocal(&self.local_types, bind.text, old_type) catch {};
-            defer restoreLocal(&self.local_slots, bind.text, old_slot) catch {};
-            defer restoreLocal(&self.pointer_local_provenance, bind.text, old_global_pointer) catch {};
-            defer restoreLocal(&self.local_aggregate_pointer_aliases, bind.text, old_aggregate_pointer_alias) catch {};
-            defer restoreLocal(&self.local_pointer_array_aliases, bind.text, old_pointer_array_alias) catch {};
-            defer restoreLocal(&self.local_slice_global_pointer_arrays, bind.text, old_slice_global_pointer_array) catch {};
-            defer restoreLocal(&self.local_slice_pointer_array_ranges, bind.text, old_slice_pointer_array_range) catch {};
-            defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, bind.text, old_slice_aggregate_pointer_array_field) catch {};
-            defer self.restoreAggregatePointerFieldsForLocal(bind.text, &old_aggregate_pointer_fields) catch {};
-            defer self.restoreLocalArrayPointerElementsForLocal(bind.text, &old_local_array_pointer_elements) catch {};
+            defer restoreLocal(&self.local_types, bind.text, old_type);
+            defer restoreLocal(&self.local_slots, bind.text, old_slot);
+            defer restoreLocal(&self.pointer_local_provenance, bind.text, old_global_pointer);
+            defer restoreLocal(&self.local_aggregate_pointer_aliases, bind.text, old_aggregate_pointer_alias);
+            defer restoreLocal(&self.local_pointer_array_aliases, bind.text, old_pointer_array_alias);
+            defer restoreLocal(&self.local_slice_global_pointer_arrays, bind.text, old_slice_global_pointer_array);
+            defer restoreLocal(&self.local_slice_pointer_array_ranges, bind.text, old_slice_pointer_array_range);
+            defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, bind.text, old_slice_aggregate_pointer_array_field);
+            defer self.restoreAggregatePointerFieldsForLocal(bind.text, &old_aggregate_pointer_fields);
+            defer self.restoreLocalArrayPointerElementsForLocal(bind.text, &old_local_array_pointer_elements);
 
             const binding_ptr = try self.nextBindingPtr(bind.text);
             const payload = try self.nextTemp();
@@ -3701,16 +3868,16 @@ const LlvmEmitter = struct {
             const old_slice_aggregate_pointer_array_field = self.local_slice_aggregate_pointer_array_fields.fetchRemove(binding.binding.text);
             var old_aggregate_pointer_fields = try self.saveAndRemoveAggregatePointerFieldsForLocal(binding.binding.text);
             var old_local_array_pointer_elements = try self.saveAndRemoveLocalArrayPointerElementsForLocal(binding.binding.text);
-            defer restoreLocal(&self.local_types, binding.binding.text, old_type) catch {};
-            defer restoreLocal(&self.local_slots, binding.binding.text, old_slot) catch {};
-            defer restoreLocal(&self.pointer_local_provenance, binding.binding.text, old_global_pointer) catch {};
-            defer restoreLocal(&self.local_aggregate_pointer_aliases, binding.binding.text, old_aggregate_pointer_alias) catch {};
-            defer restoreLocal(&self.local_pointer_array_aliases, binding.binding.text, old_pointer_array_alias) catch {};
-            defer restoreLocal(&self.local_slice_global_pointer_arrays, binding.binding.text, old_slice_global_pointer_array) catch {};
-            defer restoreLocal(&self.local_slice_pointer_array_ranges, binding.binding.text, old_slice_pointer_array_range) catch {};
-            defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, binding.binding.text, old_slice_aggregate_pointer_array_field) catch {};
-            defer self.restoreAggregatePointerFieldsForLocal(binding.binding.text, &old_aggregate_pointer_fields) catch {};
-            defer self.restoreLocalArrayPointerElementsForLocal(binding.binding.text, &old_local_array_pointer_elements) catch {};
+            defer restoreLocal(&self.local_types, binding.binding.text, old_type);
+            defer restoreLocal(&self.local_slots, binding.binding.text, old_slot);
+            defer restoreLocal(&self.pointer_local_provenance, binding.binding.text, old_global_pointer);
+            defer restoreLocal(&self.local_aggregate_pointer_aliases, binding.binding.text, old_aggregate_pointer_alias);
+            defer restoreLocal(&self.local_pointer_array_aliases, binding.binding.text, old_pointer_array_alias);
+            defer restoreLocal(&self.local_slice_global_pointer_arrays, binding.binding.text, old_slice_global_pointer_array);
+            defer restoreLocal(&self.local_slice_pointer_array_ranges, binding.binding.text, old_slice_pointer_array_range);
+            defer self.restoreLocalOwnedStringValue(&self.local_slice_aggregate_pointer_array_fields, binding.binding.text, old_slice_aggregate_pointer_array_field);
+            defer self.restoreAggregatePointerFieldsForLocal(binding.binding.text, &old_aggregate_pointer_fields);
+            defer self.restoreLocalArrayPointerElementsForLocal(binding.binding.text, &old_local_array_pointer_elements);
 
             const binding_ptr = try self.nextBindingPtr(binding.binding.text);
             const payload = try self.taggedUnionLoadPayload(subject_ptr, subject_ty, payload_ty);
@@ -4245,9 +4412,11 @@ const LlvmEmitter = struct {
         return clone;
     }
 
-    fn restoreLocalOwnedStringValue(self: *LlvmEmitter, map: *std.StringHashMap([]const u8), key: []const u8, old: anytype) !void {
+    fn restoreLocalOwnedStringValue(self: *LlvmEmitter, map: *std.StringHashMap([]const u8), key: []const u8, old: anytype) void {
         if (map.fetchRemove(key)) |entry| self.allocator.free(entry.value);
-        if (old) |entry| try map.put(key, entry.value);
+        // `fetchRemove` retains the map capacity, so this restores a previously-held
+        // entry without allocating while a scope is unwound.
+        if (old) |entry| map.putAssumeCapacity(key, entry.value);
     }
 
     fn clearAggregateGlobalPointerFields(self: *LlvmEmitter) void {
@@ -4428,13 +4597,13 @@ const LlvmEmitter = struct {
         return saved;
     }
 
-    fn restoreLocalArrayPointerElementsForLocal(self: *LlvmEmitter, local_name: []const u8, saved: *std.StringHashMap(mir.PointerProvenance)) !void {
+    fn restoreLocalArrayPointerElementsForLocal(self: *LlvmEmitter, local_name: []const u8, saved: *std.StringHashMap(mir.PointerProvenance)) void {
         self.clearLocalArrayPointerElementsForLocal(local_name);
         defer saved.deinit();
 
         var it = saved.iterator();
         while (it.next()) |entry| {
-            try self.local_array_global_pointer_elements.put(entry.key_ptr.*, entry.value_ptr.*);
+            self.local_array_global_pointer_elements.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
         }
     }
 
@@ -4582,13 +4751,13 @@ const LlvmEmitter = struct {
         return saved;
     }
 
-    fn restoreAggregatePointerFieldsForLocal(self: *LlvmEmitter, local_name: []const u8, saved: *std.StringHashMap(mir.PointerProvenance)) !void {
+    fn restoreAggregatePointerFieldsForLocal(self: *LlvmEmitter, local_name: []const u8, saved: *std.StringHashMap(mir.PointerProvenance)) void {
         self.clearAggregatePointerFieldsForLocal(local_name);
         defer saved.deinit();
 
         var it = saved.iterator();
         while (it.next()) |entry| {
-            try self.aggregate_global_pointer_fields.put(entry.key_ptr.*, entry.value_ptr.*);
+            self.aggregate_global_pointer_fields.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
         }
     }
 
@@ -10431,13 +10600,62 @@ const LlvmEmitter = struct {
 const ResultSwitchPattern = switch_lower.ResultArmPattern;
 const TaggedUnionBinding = switch_lower.TaggedUnionArmBinding;
 
+fn dropPointerReleaseParamTypeName(fn_decl: ast.FnDecl) ?[]const u8 {
+    if (fn_decl.params.len == 0) return null;
+    const first = fn_decl.params[0].ty;
+    const child = switch (first.kind) {
+        .pointer => |p| blk: {
+            if (p.mutability != .mut) return null;
+            break :blk p.child.*;
+        },
+        else => return null,
+    };
+    return typeName(child);
+}
+
+fn makeDropPointerCall(allocator: std.mem.Allocator, fn_name: []const u8, local: ast.Ident) !ast.Expr {
+    const ident = ast.Expr{ .span = local.span, .kind = .{ .ident = .{ .text = local.text, .span = local.span } } };
+    const address = ast.Expr{ .span = local.span, .kind = .{ .address_of = try ast.makePtr(allocator, ident) } };
+    const args = try allocator.dupe(ast.Expr, &[_]ast.Expr{address});
+    return .{
+        .span = local.span,
+        .kind = .{ .call = .{
+            .callee = try ast.makePtr(allocator, ast.Expr{ .span = local.span, .kind = .{ .ident = .{ .text = fn_name, .span = local.span } } }),
+            .type_args = &.{},
+            .args = args,
+        } },
+    };
+}
+
+fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| addressOfIdentName(inner.*),
+        .address_of => |inner| switch (inner.kind) {
+            .grouped => addressOfIdentName(inner.*),
+            .ident => |ident| ident.text,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+fn movedLocalName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| movedLocalName(inner.*),
+        .ident => |ident| ident.text,
+        else => null,
+    };
+}
+
 fn isSourceSpan(span: ast.Span) bool {
     return span.line != 0 and span.column != 0;
 }
 
-fn restoreLocal(map: anytype, key: []const u8, old: anytype) !void {
+fn restoreLocal(map: anytype, key: []const u8, old: anytype) void {
     if (old) |entry| {
-        try map.put(key, entry.value);
+        // Each scope removes this key before installing its shadow binding. Restoring
+        // the old binding therefore fits in the capacity already retained by the map.
+        map.putAssumeCapacity(key, entry.value);
     } else {
         _ = map.remove(key);
     }

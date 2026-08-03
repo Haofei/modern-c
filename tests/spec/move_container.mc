@@ -23,7 +23,7 @@ fn consume(t: Token) -> u32 {
 fn accept_result_once() -> u32 {
     let r: Result<Token, E> = ok(make());
     switch r {
-        ok(t) => { return consume(t); }
+        ok(t) => { return consume(move t); }
         err(e) => { return 0; }
     }
 }
@@ -42,12 +42,12 @@ fn reject_result_twice() -> u32 {
     let r: Result<Token, E> = ok(make());
     var s: u32 = 0;
     switch r {
-        ok(t) => { s = consume(t); }
+        ok(t) => { s = consume(move t); }
         err(e) => {}
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     switch r {
-        ok(t) => { s = s + consume(t); }
+        ok(t) => { s = s + consume(move t); }
         err(e) => {}
     }
     return s;
@@ -63,10 +63,10 @@ fn reject_opt_leak() -> u32 {
 // --- accepted: fixed array elements are tracked as constant-index places ---
 fn accept_move_array_elements() -> u32 {
     var arr: [2]Token = .{ make(), make() };
-    let a: Token = arr[0];
-    let b: Token = arr[1];
+    let a: Token = move arr[0];
+    let b: Token = move arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(a) + consume(b);
+    return consume(move a) + consume(move b);
 }
 
 // --- rejected: drop of a wrapper that embeds a move resource frees nothing (recursive
@@ -101,10 +101,10 @@ move struct OptBox { item: ?Token }
 extern fn consume_opt(o: ?Token) -> u32;
 
 fn reject_wrapper_field_double_move(b: OptBox) -> u32 {
-    let a: ?Token = b.item;
+    let a: ?Token = move b.item;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let c: ?Token = b.item;
-    let x: u32 = consume_opt(a) + consume_opt(c);
+    let c: ?Token = move b.item;
+    let x: u32 = consume_opt(move a) + consume_opt(move c);
     unsafe { forget_unchecked(b); }
     return x;
 }

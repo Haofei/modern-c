@@ -126,6 +126,10 @@ pub const TraitMethodSig = struct {
     name: Ident,
     params: []Param,
     return_type: ?TypeExpr,
+    // `-> borrow(param) T` — a deliberately small return-lifetime summary:
+    // the returned view is derived from exactly one named parameter. This is not
+    // a user-visible lifetime parameter system; it is a checked contract.
+    return_borrow_source: ?Ident = null,
     self_mode: SelfMode,
     // The annotated effect attributes on the signature (e.g. `#[may_sleep]`),
     // carried so conformance can require each impl method to match.
@@ -151,6 +155,7 @@ pub const ImplTraitMethod = struct {
     // a `*dyn` vtable call becomes a wild/UB indirect call (the cast erases it).
     params: []Param = &.{},
     return_type: ?TypeExpr = null,
+    return_borrow_source: ?Ident = null,
 };
 
 // The `self` parameter form of a (trait or impl) method.
@@ -183,6 +188,7 @@ pub const FnDecl = struct {
     abi: ?[]const u8,
     params: []Param,
     return_type: ?TypeExpr,
+    return_borrow_source: ?Ident = null,
     body: ?Block,
     is_const: bool,
     exported: bool = false,
@@ -223,14 +229,31 @@ pub const StructDecl = struct {
     // Type parameters for a generic struct `struct Name<T, …>` (section 22);
     // empty for an ordinary struct.
     type_params: []Ident = &.{},
-    // `move struct …` — a linear resource type (section 18.1): its values are
-    // used linearly (moved/consumed exactly once), not copied.
+    // `move struct …` — the legacy spelling for a checked resource type.
+    // Today it is still enforced linearly for compatibility with existing
+    // code. New code that wants strict exactly-once consumption should prefer
+    // `linear struct`.
     is_move: bool = false,
+    // `linear struct …` — a strict single-owner resource token: values cannot be
+    // copied and must be consumed exactly once.
+    is_linear: bool = false,
     // `opaque struct …` — the fields are private to the struct's associated
     // functions (`impl Name { … }`). Outside code may hold and pass a value but
     // may not name its fields in a struct literal or `.field` access, so the
     // value cannot be forged or inspected — constructor-only handle capabilities.
     is_opaque: bool = false,
+    // `region struct …` — a graph/arena node type whose instances are owned by
+    // an enclosing region rather than tracked as independent move/linear
+    // resources. Region structs deliberately do not carry drop/release hooks.
+    is_region: bool = false,
+    // `view struct …` — a lexical borrowed-view aggregate. It may contain explicit
+    // borrow fields at construction, but it is not an owner and must not escape a
+    // scope through globals, ABI boundaries, or unconstrained returns.
+    is_view: bool = false,
+    // `thread_move move struct …` / `thread_move linear struct …` — explicit
+    // authorization that a resource may be transferred to a new thread/task.
+    // No Send/Sync inference exists in Scoped Affine Ownership v0.
+    is_thread_move: bool = false,
     // `#[c_union]` — a compiler-internal *addressable, runtime-selected union*. Laid out
     // as a real C `union` (all fields at offset 0; size = largest field, align = max),
     // so `&value.field` is a stable, in-place, alias-safe pointer to the shared storage
@@ -538,6 +561,10 @@ pub const Expr = struct {
         array_literal: []Expr,
         struct_literal: []StructLiteralField,
         grouped: *Expr,
+        // `move EXPR` — explicit ownership transfer marker for checked resources.
+        // It is a semantic wrapper: lowering emits the inner expression, while the
+        // ownership checker treats this as an intentional by-value consume.
+        move_expr: *Expr,
         block: Block,
         unary: struct {
             op: UnaryOp,
@@ -553,6 +580,13 @@ pub const Expr = struct {
             ty: *TypeExpr,
         },
         address_of: *Expr,
+        // `borrow EXPR` / `borrow mut EXPR` — a scoped managed borrow. It lowers
+        // like `&EXPR`, but the ownership checker treats the borrow as an explicit
+        // lifetime event instead of an arbitrary raw pointer expression.
+        borrow_expr: struct {
+            mutability: Mutability,
+            value: *Expr,
+        },
         call: struct {
             callee: *Expr,
             type_args: []TypeExpr,

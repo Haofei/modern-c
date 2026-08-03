@@ -50,7 +50,7 @@ fn consume(r: Res) -> u32 {
     return v;
 }
 fn consume_index(r: Res) -> usize {
-    consume(r);
+    consume(move r);
     return 0;
 }
 fn peek(r: *Res) -> u32 {
@@ -80,50 +80,50 @@ fn hold_res(r: *Res) -> ResPtrHolder {
 extern fn dynamic_index() -> usize;
 extern fn external_res_ptr() -> *Res;
 fn take_whole(p: Pair) -> u32 {
-    let a: Res = p.a;
-    let b: Res = p.b;
+    let a: Res = move p.a;
+    let b: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(a) + consume(b);
+    return consume(move a) + consume(move b);
 }
 
 // Accepted: fixed-array elements of `move` resources are tracked as constant-index
 // places, so each element can be moved exactly once before the array husk is discarded.
 fn accept_move_each_array_element() -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };
-    let x: Res = arr[0];
-    let y: Res = arr[1];
+    let x: Res = move arr[0];
+    let y: Res = move arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: a moved-out array element can be reinitialized before it is moved again.
 fn accept_reinitialize_array_element() -> u32 {
     var arr: [2]Res = .{ mkres(1), mkres(2) };
-    let x: Res = arr[0];
-    let y: u32 = consume(x);
+    let x: Res = move arr[0];
+    let y: u32 = consume(move x);
     arr[0] = mkres(y + 1);
-    let a: Res = arr[0];
-    let b: Res = arr[1];
+    let a: Res = move arr[0];
+    let b: Res = move arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(a) + consume(b);
+    return consume(move a) + consume(move b);
 }
 
 // Accepted: a deferred cleanup reserves a constant-index array element place,
 // so it is not reported as leaked on the function exit edge.
 fn accept_defer_array_element() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    defer consume(arr[0]);
+    defer consume(move arr[0]);
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(y);
+    return consume(move y);
 }
 
 // Accepted: a deferred cleanup block reserves the move value it consumes, just
-// like a direct `defer consume(r)` expression.
+// like a direct `defer consume(move r)` expression.
 fn accept_defer_block_consumes_root() -> u32 {
     let r: Res = mkres(1);
     defer {
-        consume(r);
+        consume(move r);
     };
     return 0;
 }
@@ -133,7 +133,7 @@ fn accept_defer_block_consumes_root() -> u32 {
 fn accept_defer_block_local_move_consumed() -> u32 {
     defer {
         let r: Res = mkres(1);
-        consume(r);
+        consume(move r);
     };
     return 0;
 }
@@ -145,7 +145,7 @@ fn accept_defer_block_cleanup_local_alias_before_consume() -> u32 {
         let r: Res = mkres(1);
         let p: *Res = &r;
         peek(p);
-        consume(r);
+        consume(move r);
     };
     return 0;
 }
@@ -156,7 +156,7 @@ fn reject_defer_block_cleanup_local_alias_after_consume() -> u32 {
     defer {
         let r: Res = mkres(1);
         let p: *Res = &r;
-        consume(r);
+        consume(move r);
         peek(p); // EXPECT_ERROR: E_USE_AFTER_MOVE
     };
     return 0;
@@ -169,7 +169,7 @@ fn accept_defer_block_cleanup_local_aggregate_alias_before_consume() -> u32 {
         let r: Res = mkres(1);
         let h: ResPtrHolder = .{ .p = &r };
         peek_holder(h);
-        consume(r);
+        consume(move r);
     };
     return 0;
 }
@@ -180,7 +180,7 @@ fn reject_defer_block_cleanup_local_struct_alias_after_consume() -> u32 {
     defer {
         let r: Res = mkres(1);
         let h: ResPtrHolder = .{ .p = &r };
-        consume(r);
+        consume(move r);
         peek_holder(h); // EXPECT_ERROR: E_USE_AFTER_MOVE
     };
     return 0;
@@ -192,7 +192,7 @@ fn reject_defer_block_cleanup_local_array_alias_after_consume() -> u32 {
     defer {
         let r: Res = mkres(1);
         let ptrs: [1]*Res = .{ &r };
-        consume(r);
+        consume(move r);
         peek_ptr_array(ptrs); // EXPECT_ERROR: E_USE_AFTER_MOVE
     };
     return 0;
@@ -205,7 +205,7 @@ fn reject_defer_block_cleanup_local_captured_aggregate_call_result_after_consume
     defer {
         let r: Res = mkres(1);
         let h: ResPtrHolder = hold_res(&r);
-        consume(r); // EXPECT_ERROR: E_USE_AFTER_MOVE
+        consume(move r); // EXPECT_ERROR: E_USE_AFTER_MOVE
         peek_holder(h);
     };
     return 0;
@@ -218,7 +218,7 @@ fn reject_defer_block_cleanup_local_captured_aggregate_call_assignment_after_con
         let r: Res = mkres(1);
         var h: ResPtrHolder = uninit;
         h = hold_res(&r);
-        consume(r); // EXPECT_ERROR: E_USE_AFTER_MOVE
+        consume(move r); // EXPECT_ERROR: E_USE_AFTER_MOVE
         peek_holder(h);
     };
     return 0;
@@ -232,9 +232,9 @@ fn reject_defer_block_cleanup_local_scalar_alias_reassignment() -> u32 {
         let s: Res = mkres(2);
         var p: *Res = &r;
         p = &s;
-        consume(s);
+        consume(move s);
         peek(p); // EXPECT_ERROR: E_USE_AFTER_MOVE
-        consume(r);
+        consume(move r);
     };
     return 0;
 }
@@ -246,7 +246,7 @@ fn accept_defer_block_cleanup_local_scalar_alias_reassigned_unknown() -> u32 {
         let r: Res = mkres(1);
         var p: *Res = &r;
         p = external_res_ptr();
-        consume(r);
+        consume(move r);
         peek(p);
     };
     return 0;
@@ -260,9 +260,9 @@ fn reject_defer_block_cleanup_local_struct_alias_reassignment() -> u32 {
         let s: Res = mkres(2);
         var h: ResPtrHolder = .{ .p = &r };
         h.p = &s;
-        consume(s);
+        consume(move s);
         peek_holder(h); // EXPECT_ERROR: E_USE_AFTER_MOVE
-        consume(r);
+        consume(move r);
     };
     return 0;
 }
@@ -274,9 +274,9 @@ fn reject_defer_block_cleanup_local_array_alias_reassignment() -> u32 {
         let s: Res = mkres(2);
         var ptrs: [1]*Res = .{ &r };
         ptrs[0] = &s;
-        consume(s);
+        consume(move s);
         peek_ptr_array(ptrs); // EXPECT_ERROR: E_USE_AFTER_MOVE
-        consume(r);
+        consume(move r);
     };
     return 0;
 }
@@ -292,9 +292,9 @@ fn reject_defer_block_branch_divergent_cleanup_local_alias(flag: bool) -> u32 {
         if flag {
             p = &s;
         }
-        consume(s);
+        consume(move s);
         peek(p); // EXPECT_ERROR: E_USE_AFTER_MOVE
-        consume(r);
+        consume(move r);
     };
     return 0;
 }
@@ -309,9 +309,9 @@ fn reject_defer_block_branch_divergent_cleanup_local_struct_alias(flag: bool) ->
         if flag {
             h.p = &s;
         }
-        consume(s);
+        consume(move s);
         peek_holder(h); // EXPECT_ERROR: E_USE_AFTER_MOVE
-        consume(r);
+        consume(move r);
     };
     return 0;
 }
@@ -331,7 +331,7 @@ fn reject_move_after_deferred_root_borrow() -> u32 {
     let r: Res = mkres(1);
     defer peek(&r);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(r);
+    return consume(move r);
 }
 
 // Rejected: a deferred cleanup block that borrows a move value keeps the value
@@ -342,7 +342,7 @@ fn reject_move_after_deferred_block_borrow() -> u32 {
         peek(&r);
     };
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(r);
+    return consume(move r);
 }
 
 // Rejected: deferred aggregate literal arguments can also carry borrows that
@@ -351,7 +351,7 @@ fn reject_move_after_deferred_struct_literal_borrow() -> u32 {
     let r: Res = mkres(1);
     defer peek_holder(.{ .p = &r });
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(r);
+    return consume(move r);
 }
 
 // Rejected: deferred array literal arguments are traversed for hidden cleanup
@@ -360,7 +360,7 @@ fn reject_move_after_deferred_array_literal_borrow() -> u32 {
     let r: Res = mkres(1);
     defer peek_ptr_array(.{ &r });
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(r);
+    return consume(move r);
 }
 
 // Rejected: deferred slice bases are evaluated at cleanup time too, so a
@@ -369,7 +369,7 @@ fn reject_move_after_deferred_slice_literal_borrow() -> u32 {
     let r: Res = mkres(1);
     defer peek_ptr_slice(.{ &r }[0..1]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(r);
+    return consume(move r);
 }
 
 // Accepted: slice range bounds are part of deferred expression evaluation, so
@@ -377,7 +377,7 @@ fn reject_move_after_deferred_slice_literal_borrow() -> u32 {
 fn accept_deferred_slice_bound_consume() -> []mut u8 {
     var buf: [4]u8 = .{ 0, 1, 2, 3 };
     let r: Res = mkres(1);
-    defer buf[consume_index(r)..1];
+    defer buf[consume_index(move r)..1];
     return buf[0..1];
 }
 
@@ -387,7 +387,7 @@ fn reject_defer_block_switch_path_only_consume(flag: bool) -> u32 {
     let r: Res = mkres(1); // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
     defer {
         switch flag {
-            true => { consume(r); },
+            true => { consume(move r); },
             _ => {},
         }
     };
@@ -414,7 +414,7 @@ fn reject_defer_block_loop_consume(flag: bool) -> u32 {
     let r: Res = mkres(1); // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     defer {
         while flag {
-            consume(r);
+            consume(move r);
         }
     };
     return 0;
@@ -439,7 +439,7 @@ fn reject_defer_block_loop_borrow(flag: bool) -> u32 {
 fn reject_defer_block_loop_condition_consume() -> u32 {
     let r: Res = mkres(1); // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     defer {
-        while consume(r) != 0 {
+        while consume(move r) != 0 {
         }
     };
     return 0;
@@ -462,7 +462,7 @@ fn accept_defer_block_loop_consumed_cleanup_local(flag: bool) -> u32 {
     defer {
         while flag {
             let r: Res = mkres(1);
-            consume(r);
+            consume(move r);
         }
     };
     return 0;
@@ -474,7 +474,7 @@ fn reject_whole_after_deferred_field_borrow() -> u32 {
     let p: Pair = mk();
     defer peek(&p.a);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return take_whole(p);
+    return take_whole(move p);
 }
 
 // Rejected: deferred borrows of concrete array elements protect the owning
@@ -502,7 +502,7 @@ fn reject_move_after_deferred_alias_borrow() -> u32 {
     let p: *Res = &r;
     defer peek(p);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(r);
+    return consume(move r);
 }
 
 // Rejected: deferred borrows through named full aliases to nested wildcard
@@ -514,7 +514,7 @@ fn reject_move_after_deferred_full_alias_nested_array_element_borrow(i: usize) -
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: copied full aliases preserve the same nested wildcard deferred
@@ -527,7 +527,7 @@ fn reject_move_after_deferred_copied_full_alias_nested_array_element_borrow(i: u
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: field-rooted nested wildcard full aliases reserve the same composed
@@ -539,7 +539,7 @@ fn reject_move_after_deferred_full_alias_nested_array_field_element_borrow(i: us
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = box.items[0][0];
     unsafe { forget_unchecked(box); } // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: cleanup-block locals that hold full aliases also reserve the nested
@@ -553,7 +553,7 @@ fn reject_move_after_defer_block_full_alias_nested_array_element_borrow(i: usize
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: copied cleanup-block full aliases keep the same nested wildcard
@@ -568,7 +568,7 @@ fn reject_move_after_defer_block_copied_full_alias_nested_array_element_borrow(i
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: cleanup-block full aliases also compose through field-rooted nested
@@ -582,7 +582,7 @@ fn reject_move_after_defer_block_full_alias_nested_array_field_element_borrow(i:
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = box.items[0][0];
     unsafe { forget_unchecked(box); } // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: cleanup-block locals that hold laundered aliases also reserve the
@@ -596,7 +596,7 @@ fn reject_move_after_defer_block_laundered_nested_array_element_borrow(i: usize)
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: cleanup-block laundered aliases compose through field-rooted nested
@@ -610,7 +610,7 @@ fn reject_move_after_defer_block_laundered_nested_array_field_element_borrow(i: 
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = box.items[0][0];
     unsafe { forget_unchecked(box); } // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: deferred borrows through laundered nested wildcard aliases reserve
@@ -621,7 +621,7 @@ fn reject_move_after_deferred_laundered_nested_array_element_borrow(i: usize) ->
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: the same deferred laundered nested wildcard borrow composes through
@@ -632,7 +632,7 @@ fn reject_move_after_deferred_laundered_nested_array_field_element_borrow(i: usi
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = box.items[0][0];
     unsafe { forget_unchecked(box); } // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: borrow-only statements such as assert must still inspect binary
@@ -640,7 +640,7 @@ fn reject_move_after_deferred_laundered_nested_array_field_element_borrow(i: usi
 fn reject_assert_binary_stale_alias_after_move() -> u32 {
     let r: Res = mkres(1);
     let p: *Res = &r;
-    let y: u32 = consume(r);
+    let y: u32 = consume(move r);
     assert(peek(p) != 0); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return y;
 }
@@ -649,8 +649,8 @@ fn reject_assert_binary_stale_alias_after_move() -> u32 {
 // moved-out subplaces reached through address-of.
 fn reject_assert_binary_moved_field_borrow() -> u32 {
     let p: Pair = mk();
-    let a: Res = p.a;
-    let y: u32 = consume(a);
+    let a: Res = move p.a;
+    let y: u32 = consume(move a);
     assert(peek(&p.a) != 0); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(p); }
     return y;
@@ -661,7 +661,7 @@ fn reject_assert_binary_moved_field_borrow() -> u32 {
 fn reject_assert_block_stale_alias_after_move() -> u32 {
     let r: Res = mkres(1);
     let p: *Res = &r;
-    let y: u32 = consume(r);
+    let y: u32 = consume(move r);
     assert({
         peek(p) != 0; // EXPECT_ERROR: E_USE_AFTER_MOVE
     });
@@ -673,14 +673,14 @@ fn reject_assert_block_stale_alias_after_move() -> u32 {
 fn reject_assert_block_field_move_then_reuse() -> u32 {
     let p: Pair = mk();
     assert({
-        let a: Res = p.a;
-        let y: u32 = consume(a);
+        let a: Res = move p.a;
+        let y: u32 = consume(move a);
         y != 0;
     });
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let z: Res = p.a;
+    let z: Res = move p.a;
     unsafe { forget_unchecked(p); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Rejected: a deferred borrow hidden under an ordinary binary expression still
@@ -689,7 +689,7 @@ fn reject_move_after_deferred_binary_borrow() -> u32 {
     let r: Res = mkres(1);
     defer peek(&r) != 0;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(r);
+    return consume(move r);
 }
 
 // Rejected: a deferred borrow hidden only on the RHS of a short-circuit cleanup
@@ -705,7 +705,7 @@ fn reject_deferred_short_circuit_rhs_borrow(flag: bool) -> u32 {
 // expression would leave cleanup ownership path-dependent.
 fn reject_deferred_short_circuit_rhs_consume(flag: bool) -> u32 {
     let r: Res = mkres(1);
-    defer flag && (consume(r) != 0); // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    defer flag && (consume(move r) != 0); // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
     return 0;
 }
 
@@ -716,7 +716,7 @@ fn accept_move_array_alias_elements() -> u32 {
     let x: Res = arr[0];
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: nested aliases are still resolved into stable constant-index places.
@@ -725,7 +725,7 @@ fn accept_move_nested_array_alias_element() -> u32 {
     let x: Res = arr[0][0];
     let y: Res = arr[0][1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: ordinary internal function parameters that are fixed arrays of move
@@ -734,7 +734,7 @@ fn accept_move_array_param_elements(arr: ResArray) -> u32 {
     let x: Res = arr[0];
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: internal parameter-rooted nested move arrays also produce stable
@@ -743,7 +743,7 @@ fn accept_move_matrix_param_elements(matrix: ResMatrix) -> u32 {
     let x: Res = matrix[0][0];
     let y: Res = matrix[1][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: an index local initialized from a constant denotes the same stable
@@ -754,7 +754,7 @@ fn accept_const_index_variable_array_element() -> u32 {
     let x: Res = arr[i];
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: reassigning a tracked constant-index local to another constant updates
@@ -766,7 +766,7 @@ fn accept_reassigned_const_index_variable_array_element() -> u32 {
     let x: Res = arr[0];
     let y: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: arithmetic over a tracked constant-index local can still fold to a
@@ -777,7 +777,7 @@ fn accept_const_index_variable_arithmetic_array_element() -> u32 {
     let x: Res = arr[i];
     let y: Res = arr[i + 1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: copied constant-index locals keep their stable element-place fact.
@@ -788,7 +788,7 @@ fn accept_copied_const_index_variable_array_element() -> u32 {
     let x: Res = arr[i];
     let y: Res = arr[j];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: reassigning from another constant-index local updates the tracked
@@ -801,7 +801,7 @@ fn accept_reassigned_copied_const_index_variable_array_element() -> u32 {
     let x: Res = arr[0];
     let y: Res = arr[j];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: a const-index local remains precise across a branch join when every
@@ -817,7 +817,7 @@ fn accept_branch_preserves_matching_const_index(cond: bool) -> u32 {
     let x: Res = arr[0];
     let y: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: a const-index local also remains precise across a switch join when
@@ -836,7 +836,7 @@ fn accept_switch_preserves_matching_const_index(cond: bool) -> u32 {
     let x: Res = arr[0];
     let y: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: the same switch-join const-index fact is used for move-struct array
@@ -852,10 +852,10 @@ fn accept_switch_preserves_matching_const_index_array_field_element(cond: bool) 
             i = 1;
         },
     }
-    let x: Res = box.items[0];
-    let y: Res = box.items[i];
+    let x: Res = move box.items[0];
+    let y: Res = move box.items[i];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: matching branch arms preserve symbolic index identity, so `j` can
@@ -872,7 +872,7 @@ fn accept_branch_preserves_matching_symbolic_index(cond: bool, i: usize) -> u32 
     arr[j] = mkres(3);
     let y: Res = arr[0 + i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: matching switch arms preserve symbolic index identity too.
@@ -891,7 +891,7 @@ fn accept_switch_preserves_matching_symbolic_index(cond: bool, i: usize) -> u32 
     arr[j] = mkres(3);
     let y: Res = arr[i - 0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: matching branch arms preserve equivalent symbolic offset facts.
@@ -907,7 +907,7 @@ fn accept_branch_preserves_matching_symbolic_offset_index(cond: bool, i: usize) 
     arr[j] = mkres(3);
     let y: Res = arr[j];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: switch joins preserve matching symbolic offset facts too.
@@ -926,7 +926,7 @@ fn accept_switch_preserves_matching_symbolic_offset_index(cond: bool, i: usize) 
     arr[j] = mkres(3);
     let y: Res = arr[j];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: branch joins preserve matching canonical linear symbolic facts.
@@ -942,7 +942,7 @@ fn accept_branch_preserves_matching_symbolic_linear_index(cond: bool, i: usize, 
     arr[k] = mkres(3);
     let y: Res = arr[k];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: switch joins preserve matching canonical linear symbolic facts too.
@@ -961,7 +961,7 @@ fn accept_switch_preserves_matching_symbolic_linear_index(cond: bool, i: usize, 
     arr[k] = mkres(3);
     let y: Res = arr[k];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: compile-time constant index expressions also denote stable places.
@@ -970,7 +970,7 @@ fn accept_comptime_const_index_array_element() -> u32 {
     let x: Res = arr[FIRST_INDEX];
     let y: Res = arr[SECOND_INDEX];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: an internal function can transfer a fixed array of move resources by
@@ -993,14 +993,14 @@ fn accept_consume_returned_move_array() -> u32 {
     let x: Res = arr[0];
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: an arbitrary pointer to a move array has no local owner place the
 // checker can update when a dynamic element is moved out.
 fn reject_dynamic_pointer_to_move_array_element(pa: *mut ResArray, i: usize) -> u32 {
     let x: Res = pa.*[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: assignment through an arbitrary pointer-to-array dynamic element
@@ -1012,21 +1012,21 @@ fn reject_dynamic_pointer_to_move_array_element_assignment(pa: *mut ResArray, i:
 // Rejected: deferred cleanup needs a stable owner place too; an arbitrary
 // pointer-to-array dynamic element has no local place to reserve.
 fn reject_defer_dynamic_pointer_to_move_array_element(pa: *mut ResArray, i: usize) -> void {
-    defer consume(pa.*[i]); // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+    defer consume(move pa.*[i]); // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
 }
 
 // Rejected: an arbitrary pointer to a nested move array has no local owner
 // place for a dynamic outer element plus concrete suffix.
 fn reject_dynamic_pointer_to_move_matrix_outer_element(pm: *mut ResMatrix, i: usize) -> u32 {
     let x: Res = pm.*[i][0]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: a concrete outer index still leaves an arbitrary pointee array with
 // no local owner place for the dynamic inner element.
 fn reject_dynamic_pointer_to_move_matrix_inner_element(pm: *mut ResMatrix, i: usize) -> u32 {
     let x: Res = pm.*[0][i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: assigning through a nested arbitrary pointer-to-array element cannot
@@ -1038,14 +1038,14 @@ fn reject_dynamic_pointer_to_move_matrix_element_assignment(pm: *mut ResMatrix, 
 // Rejected: deferred cleanup cannot reserve a nested dynamic element behind an
 // arbitrary pointer-to-array pointee.
 fn reject_defer_dynamic_pointer_to_move_matrix_element(pm: *mut ResMatrix, i: usize) -> void {
-    defer consume(pm.*[i][0]); // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+    defer consume(move pm.*[i][0]); // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
 }
 
 // Rejected: a returned move array is not a nameable local place, so a dynamic
 // element move cannot be tracked precisely and must fail closed.
 fn reject_dynamic_returned_move_array_element(i: usize) -> u32 {
     let x: Res = make_res_array()[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: deferred cleanup needs a stable place reservation too; a dynamic
@@ -1059,7 +1059,7 @@ fn reject_defer_dynamic_returned_move_array_element(i: usize) -> u32 {
 // in-bounds dynamic index denotes the only element.
 fn accept_dynamic_returned_singleton_move_array_element(i: usize) -> u32 {
     let x: Res = make_single_res_array()[i];
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: deferred cleanup of a returned singleton element is also precise
@@ -1073,14 +1073,14 @@ fn accept_defer_dynamic_returned_singleton_move_array_element(i: usize) -> u32 {
 // dynamically through the returned value.
 fn reject_dynamic_returned_matrix_element(i: usize) -> u32 {
     let x: Res = make_res_matrix()[i][0]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: a concrete outer index into a returned nested move array still
 // leaves the inner dynamic element without a nameable owner place.
 fn reject_dynamic_inner_returned_matrix_element(i: usize) -> u32 {
     let x: Res = make_res_matrix()[0][i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: deferred cleanup of a nested returned move-array element has no
@@ -1101,7 +1101,7 @@ fn reject_defer_dynamic_inner_returned_matrix_element(i: usize) -> u32 {
 // inner singleton dynamic index denotes the only resource.
 fn accept_dynamic_inner_returned_singleton_matrix_element(i: usize) -> u32 {
     let x: Res = make_single_res_matrix()[0][i];
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: deferred cleanup is precise for the same nested singleton shape.
@@ -1114,7 +1114,7 @@ fn accept_defer_dynamic_inner_returned_singleton_matrix_element(i: usize) -> u32
 // a dynamic outer index plus concrete inner index denotes the only resource.
 fn accept_dynamic_outer_returned_singleton_matrix_element(i: usize) -> u32 {
     let x: Res = make_single_res_matrix()[i][0];
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: deferred cleanup is precise for the same dynamic-outer singleton
@@ -1128,7 +1128,7 @@ fn accept_defer_dynamic_outer_returned_singleton_matrix_element(i: usize) -> u32
 // move cannot be represented as a stable local place.
 fn reject_dynamic_array_literal_move_element(i: usize) -> u32 {
     let x: Res = .{ mkres(1), mkres(2) }[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: deferred cleanup of a dynamic array-literal element has no stable
@@ -1141,7 +1141,7 @@ fn reject_defer_dynamic_array_literal_move_element(i: usize) -> u32 {
 // Accepted: a singleton move array literal has no untracked sibling resource.
 fn accept_dynamic_singleton_array_literal_move_element(i: usize) -> u32 {
     let x: Res = .{ mkres(1) }[i];
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: the deferred form is precise for the same singleton reason.
@@ -1154,13 +1154,13 @@ fn accept_defer_dynamic_singleton_array_literal_move_element(i: usize) -> u32 {
 // index followed by a concrete suffix cannot be represented as a stable place.
 fn reject_dynamic_nested_array_literal_move_element(i: usize) -> u32 {
     let x: Res = .{ .{ mkres(1) }, .{ mkres(2) } }[i][0]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: nested singleton literals have no untracked outer or inner sibling.
 fn accept_dynamic_inner_nested_singleton_array_literal_move_element(i: usize) -> u32 {
     let x: Res = .{ .{ mkres(1) } }[0][i];
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: the deferred singleton nested-literal form is precise too.
@@ -1173,7 +1173,7 @@ fn accept_defer_dynamic_inner_nested_singleton_array_literal_move_element(i: usi
 // when every dimension contains exactly one possible resource.
 fn accept_dynamic_outer_nested_singleton_array_literal_move_element(i: usize) -> u32 {
     let x: Res = .{ .{ mkres(1) } }[i][0];
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: deferred cleanup can reserve the same dynamic-outer singleton
@@ -1187,7 +1187,7 @@ fn accept_defer_dynamic_outer_nested_singleton_array_literal_move_element(i: usi
 // would remain untracked.
 fn reject_dynamic_inner_nested_array_literal_move_element(i: usize) -> u32 {
     let x: Res = .{ .{ mkres(1) }, .{ mkres(2) } }[0][i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: deferred cleanup of a nested dynamic array-literal element also has
@@ -1211,14 +1211,14 @@ fn accept_dynamic_singleton_array_element(i: usize) -> u32 {
     let arr: SingleResArray = .{ mkres(1) };
     let x: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: a dynamic index into a singleton array still denotes the only
 // element, so deferred cleanup can reserve that stable place.
 fn accept_defer_dynamic_singleton_array_element(i: usize) -> u32 {
     let arr: SingleResArray = .{ mkres(1) };
-    defer consume(arr[i]);
+    defer consume(move arr[i]);
     unsafe { forget_unchecked(arr); }
     return 0;
 }
@@ -1231,7 +1231,7 @@ fn accept_reinitialize_dynamic_singleton_array_element(i: usize) -> u32 {
     arr[i] = mkres(2);
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: singleton dynamic assignment still observes live-element overwrite
@@ -1252,7 +1252,7 @@ fn accept_reinitialize_mod_one_dynamic_multi_array_element(i: usize) -> u32 {
     arr[0] = mkres(3);
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: a symbolic linear expression that is exactly divisible by the modulo
@@ -1263,7 +1263,7 @@ fn accept_reinitialize_symbolic_modulo_zero_dynamic_multi_array_element(i: usize
     arr[0] = mkres(3);
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: non-exact symbolic modulo does not name a concrete element and
@@ -1274,18 +1274,18 @@ fn reject_non_exact_symbolic_modulo_dynamic_multi_array_element_move(i: usize) -
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: exact symbolic modulo-zero identities compose through move-struct
 // array fields, not only direct array roots.
 fn accept_reinitialize_symbolic_modulo_zero_array_field_element(i: usize) -> u32 {
     var box: ResArrayBox = mkbox();
-    let x: Res = box.items[(i + i) % 2];
+    let x: Res = move box.items[(i + i) % 2];
     box.items[0] = mkres(3);
-    let y: Res = box.items[0];
+    let y: Res = move box.items[0];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: the same concrete-zero identity composes through nested array
@@ -1296,7 +1296,7 @@ fn accept_reinitialize_symbolic_modulo_zero_nested_array_element(i: usize) -> u3
     matrix[0][0] = mkres(3);
     let y: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: multiplication by zero has the same concrete identity, so a later
@@ -1307,7 +1307,7 @@ fn reject_duplicate_mul_zero_dynamic_multi_array_element_move(i: usize) -> u32 {
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: subtracting the same index identifier is also the concrete element
@@ -1318,7 +1318,7 @@ fn accept_reinitialize_sub_self_dynamic_multi_array_element(i: usize) -> u32 {
     arr[0] = mkres(3);
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: grouped same-identifier subtraction still aliases `arr[0]`.
@@ -1328,7 +1328,7 @@ fn reject_duplicate_sub_self_dynamic_multi_array_element_move(i: usize) -> u32 {
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: masking with zero has exactly one possible result, so the move
@@ -1339,7 +1339,7 @@ fn accept_reinitialize_bit_and_zero_dynamic_multi_array_element(i: usize) -> u32
     arr[0] = mkres(3);
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: xor with the same identifier is always zero, so it overlaps a later
@@ -1350,7 +1350,7 @@ fn reject_duplicate_xor_self_dynamic_multi_array_element_move(i: usize) -> u32 {
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: equivalent symbolic expressions also fold to concrete zero for
@@ -1363,7 +1363,7 @@ fn accept_reinitialize_symbolic_subtract_zero_dynamic_multi_array_element(i: usi
     arr[0] = mkres(3);
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: equivalent symbolic XOR expressions are also exactly zero, so the
@@ -1375,7 +1375,7 @@ fn reject_duplicate_symbolic_xor_zero_dynamic_multi_array_element_move(i: usize)
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: a stable symbolic index into a multi-element array can reinitialize
@@ -1386,7 +1386,7 @@ fn accept_reinitialize_same_symbolic_dynamic_multi_array_element(i: usize) -> u3
     arr[i] = mkres(3);
     let y: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: copied immutable symbolic index facts keep the same dynamic place
@@ -1398,7 +1398,7 @@ fn accept_reinitialize_copied_symbolic_dynamic_multi_array_element(i: usize) -> 
     arr[j] = mkres(3);
     let y: Res = arr[j];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: identity-preserving arithmetic over a symbolic index keeps the same
@@ -1409,7 +1409,7 @@ fn accept_reinitialize_symbolic_identity_expr_dynamic_multi_array_element(i: usi
     arr[i + 0] = mkres(3);
     let y: Res = arr[0 + i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: bitwise identity expressions over a symbolic index keep the same
@@ -1420,7 +1420,7 @@ fn accept_reinitialize_bitwise_identity_expr_dynamic_multi_array_element(i: usiz
     arr[i | 0] = mkres(3);
     let y: Res = arr[i & i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: copied symbolic facts can also come from identity-preserving index
@@ -1432,7 +1432,7 @@ fn accept_reinitialize_copied_symbolic_identity_expr_dynamic_multi_array_element
     arr[j] = mkres(3);
     let y: Res = arr[j / 1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: bounded constant offsets over a symbolic index are canonicalized, so
@@ -1443,7 +1443,7 @@ fn accept_reinitialize_symbolic_offset_dynamic_multi_array_element(i: usize) -> 
     arr[1 + i] = mkres(3);
     let y: Res = arr[i + 1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: copied symbolic offset facts compose with later opposite offsets,
@@ -1455,7 +1455,7 @@ fn accept_reinitialize_copied_symbolic_offset_dynamic_multi_array_element(i: usi
     arr[j - 1] = mkres(3);
     let y: Res = arr[j - 1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: a different symbolic offset may still denote the same array element,
@@ -1466,7 +1466,7 @@ fn reject_different_symbolic_offset_dynamic_multi_array_element_move(i: usize) -
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[i + 2];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: commutative symbolic sums with a bounded offset canonicalize to the
@@ -1477,7 +1477,7 @@ fn accept_reinitialize_symbolic_linear_sum_dynamic_multi_array_element(i: usize,
     arr[j + i + 1] = mkres(3);
     let y: Res = arr[(i + j) + 1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: symbolic subtraction terms also canonicalize when the term order
@@ -1488,7 +1488,7 @@ fn accept_reinitialize_symbolic_linear_difference_dynamic_multi_array_element(i:
     arr[1 + i - j] = mkres(3);
     let y: Res = arr[i + 1 - j];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: opposite symbolic terms cancel, so `(i + j) - j` names the same
@@ -1499,7 +1499,7 @@ fn accept_reinitialize_symbolic_linear_cancellation_dynamic_multi_array_element(
     arr[(i + j) - j] = mkres(3);
     let y: Res = arr[j + i - j];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: repeated same-sign symbolic terms remain part of the canonical
@@ -1510,7 +1510,7 @@ fn accept_reinitialize_repeated_symbolic_linear_dynamic_multi_array_element(i: u
     arr[(i + i) + 0] = mkres(3);
     let y: Res = arr[i + (0 + i)];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: multiplying a symbolic index by a small constant expands to the same
@@ -1521,7 +1521,7 @@ fn accept_reinitialize_symbolic_scaled_dynamic_multi_array_element(i: usize) -> 
     arr[i + i] = mkres(3);
     let y: Res = arr[2 * i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: copied scaled symbolic expressions compose with later equivalent
@@ -1533,7 +1533,7 @@ fn accept_reinitialize_copied_symbolic_scaled_dynamic_multi_array_element(i: usi
     arr[i + i] = mkres(3);
     let y: Res = arr[2 * i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: left-shifting a symbolic index by a small constant is the same
@@ -1544,7 +1544,7 @@ fn accept_reinitialize_symbolic_shifted_dynamic_multi_array_element(i: usize) ->
     arr[i * 2] = mkres(3);
     let y: Res = arr[i + i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: right-shifting by zero is identity-preserving for symbolic places.
@@ -1554,7 +1554,7 @@ fn accept_reinitialize_symbolic_shift_identity_dynamic_multi_array_element(i: us
     arr[i] = mkres(3);
     let y: Res = arr[i + 0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: right-shifting an exactly divisible bounded-linear symbolic index
@@ -1565,7 +1565,7 @@ fn accept_reinitialize_symbolic_exact_shift_right_dynamic_multi_array_element(i:
     arr[(i << 1) >> 1] = mkres(3);
     let y: Res = arr[(i + i) >> 1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: non-exact symbolic right shifts stay conservative because the
@@ -1577,7 +1577,7 @@ fn reject_non_exact_symbolic_shift_right_dynamic_multi_array_element_move(i: usi
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[(i + i + 1) >> 1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: scale and shift operations that are algebraic identities keep the
@@ -1588,7 +1588,7 @@ fn accept_reinitialize_symbolic_scale_identity_dynamic_multi_array_element(i: us
     arr[1 * i] = mkres(3);
     let y: Res = arr[i / 1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: zero-width symbolic shifts are also stable place identities.
@@ -1598,7 +1598,7 @@ fn accept_reinitialize_symbolic_zero_shift_identity_dynamic_multi_array_element(
     arr[i] = mkres(3);
     let y: Res = arr[i >> 0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: bitwise identity expressions with zero keep the same symbolic
@@ -1609,7 +1609,7 @@ fn accept_reinitialize_symbolic_bitwise_identity_dynamic_multi_array_element(i: 
     arr[0 | i] = mkres(3);
     let y: Res = arr[i ^ 0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: copied symbolic facts also survive identity-preserving bitwise
@@ -1621,7 +1621,7 @@ fn accept_reinitialize_copied_symbolic_bitwise_identity_dynamic_multi_array_elem
     arr[0 ^ j] = mkres(3);
     let y: Res = arr[j | 0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: idempotent bitwise expressions over the same canonical symbolic
@@ -1632,7 +1632,7 @@ fn accept_reinitialize_symbolic_bitwise_idempotent_dynamic_multi_array_element(i
     arr[i] = mkres(3);
     let y: Res = arr[i & i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: the idempotent rule also works after both sides canonicalize through
@@ -1644,7 +1644,7 @@ fn accept_reinitialize_copied_symbolic_bitwise_idempotent_dynamic_multi_array_el
     arr[(i + 1) | j] = mkres(3);
     let y: Res = arr[j & (1 + i)];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: exact division of a scaled symbolic expression returns to the same
@@ -1655,7 +1655,7 @@ fn accept_reinitialize_symbolic_exact_division_dynamic_multi_array_element(i: us
     arr[i] = mkres(3);
     let y: Res = arr[(i * 2) / 2];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: copied exactly-divided symbolic expressions compose with the
@@ -1667,7 +1667,7 @@ fn accept_reinitialize_copied_symbolic_exact_division_dynamic_multi_array_elemen
     arr[i] = mkres(3);
     let y: Res = arr[(i * 2) / 2];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: non-exact symbolic division stays outside stable place identity, so
@@ -1678,7 +1678,7 @@ fn reject_non_exact_symbolic_division_dynamic_multi_array_element_move(i: usize)
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[(i + i + i) / 2];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: a different symbolic linear expression may still denote the same
@@ -1689,7 +1689,7 @@ fn reject_different_symbolic_linear_dynamic_multi_array_element_move(i: usize, j
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[i + j + 1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: a different symbolic index may denote the same element as the
@@ -1699,72 +1699,72 @@ fn reject_reinitialize_different_symbolic_dynamic_multi_array_element(i: usize, 
     let x: Res = arr[i];
     arr[j] = mkres(3); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: stable symbolic dynamic places compose through move-struct array
 // fields, so a moved field element can be reinitialized through the same symbol.
 fn accept_reinitialize_symbolic_dynamic_array_field_element(i: usize) -> u32 {
     var box: ResArrayBox = mkbox();
-    let x: Res = box.items[i];
+    let x: Res = move box.items[i];
     box.items[i + 0] = mkres(3);
-    let y: Res = box.items[i];
+    let y: Res = move box.items[i];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: a different symbolic field index may denote the same field element
 // that was already moved out.
 fn reject_different_symbolic_dynamic_array_field_element_move(i: usize, j: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[i];
+    let x: Res = move box.items[i];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = box.items[j];
+    let y: Res = move box.items[j];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: bounded symbolic offsets compose through move-struct array fields.
 fn accept_reinitialize_symbolic_offset_dynamic_array_field_element(i: usize) -> u32 {
     var box: ResArrayBox = mkbox();
-    let x: Res = box.items[i + 1];
+    let x: Res = move box.items[i + 1];
     box.items[1 + i] = mkres(3);
-    let y: Res = box.items[i + 1];
+    let y: Res = move box.items[i + 1];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: different symbolic offsets through a move-struct array field still
 // conflict conservatively.
 fn reject_different_symbolic_offset_dynamic_array_field_element_move(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[i + 1];
+    let x: Res = move box.items[i + 1];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = box.items[i + 2];
+    let y: Res = move box.items[i + 2];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: canonical linear symbolic places compose through move-struct array
 // fields.
 fn accept_reinitialize_symbolic_linear_dynamic_array_field_element(i: usize, j: usize) -> u32 {
     var box: ResArrayBox = mkbox();
-    let x: Res = box.items[i + j + 1];
+    let x: Res = move box.items[i + j + 1];
     box.items[j + i + 1] = mkres(3);
-    let y: Res = box.items[i + j + 1];
+    let y: Res = move box.items[i + j + 1];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: different symbolic linear expressions through a move-struct field
 // still conflict conservatively.
 fn reject_different_symbolic_linear_dynamic_array_field_element_move(i: usize, j: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[i + j];
+    let x: Res = move box.items[i + j];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = box.items[i + j + 1];
+    let y: Res = move box.items[i + j + 1];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: symbolic dynamic places also compose through nested array suffixes
@@ -1775,7 +1775,7 @@ fn accept_reinitialize_symbolic_dynamic_nested_array_element(i: usize) -> u32 {
     matrix[i + 0][0] = mkres(3);
     let y: Res = matrix[0 + i][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: bounded symbolic offsets also compose through nested array suffixes.
@@ -1785,7 +1785,7 @@ fn accept_reinitialize_symbolic_offset_dynamic_nested_array_element(i: usize) ->
     matrix[1 + i][0] = mkres(3);
     let y: Res = matrix[i + 1][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: canonical linear symbolic places compose through nested array suffixes.
@@ -1795,7 +1795,7 @@ fn accept_reinitialize_symbolic_linear_dynamic_nested_array_element(i: usize, j:
     matrix[j + i + 1][0] = mkres(3);
     let y: Res = matrix[i + j + 1][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: a different symbolic outer index may denote the same nested element.
@@ -1805,7 +1805,7 @@ fn reject_different_symbolic_dynamic_nested_array_element_move(i: usize, j: usiz
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = matrix[j][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: different symbolic offsets through a nested array suffix still
@@ -1816,18 +1816,18 @@ fn reject_different_symbolic_offset_dynamic_nested_array_element_move(i: usize) 
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = matrix[i + 2][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: singleton dynamic indexes compose through move-struct array fields,
 // so assignment can reinitialize the concrete `box.items[0]` place.
 fn accept_reinitialize_dynamic_singleton_array_field_element(i: usize) -> u32 {
     var box: SingleResArrayBox = mksinglebox();
-    let x: Res = box.items[i];
+    let x: Res = move box.items[i];
     box.items[i] = mkres(2);
-    let y: Res = box.items[0];
+    let y: Res = move box.items[0];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: the same field-element path rejects overwriting the live singleton
@@ -1843,44 +1843,44 @@ fn reject_overwrite_dynamic_singleton_array_field_element(i: usize) -> u32 {
 // places, so a move struct can own a fixed array of move resources by value.
 fn accept_move_array_field_elements() -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[0];
-    let y: Res = box.items[1];
+    let x: Res = move box.items[0];
+    let y: Res = move box.items[1];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: a moved-out array field element can be reinitialized before it is
 // moved again.
 fn accept_reinitialize_array_field_element() -> u32 {
     var box: ResArrayBox = mkbox();
-    let x: Res = box.items[0];
-    let y: u32 = consume(x);
+    let x: Res = move box.items[0];
+    let y: u32 = consume(move x);
     box.items[0] = mkres(y + 1);
-    let a: Res = box.items[0];
-    let b: Res = box.items[1];
+    let a: Res = move box.items[0];
+    let b: Res = move box.items[1];
     unsafe { forget_unchecked(box); }
-    return consume(a) + consume(b);
+    return consume(move a) + consume(move b);
 }
 
 // Rejected: moving the same array element twice duplicates the resource.
 fn reject_duplicate_array_element_move() -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };
-    let x: Res = arr[0];
+    let x: Res = move arr[0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = arr[0];
+    let y: Res = move arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: after a deferred cleanup reserves an array element, moving that
 // same element before the defer runs would duplicate the resource.
 fn reject_move_deferred_array_element() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    defer consume(arr[0]);
+    defer consume(move arr[0]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: duplicate moves through nested array aliases are still the same
@@ -1891,7 +1891,7 @@ fn reject_duplicate_nested_array_alias_element_move() -> u32 {
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0][0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: parameter-rooted array element places cannot be moved twice.
@@ -1900,7 +1900,7 @@ fn reject_duplicate_array_param_element_move(arr: ResArray) -> u32 {
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: a constant-index local aliases the same element place as the literal.
@@ -1911,7 +1911,7 @@ fn reject_duplicate_const_index_variable_array_element_move() -> u32 {
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: after reassignment, the index local denotes the new stable element.
@@ -1923,7 +1923,7 @@ fn reject_duplicate_reassigned_const_index_variable_array_element_move() -> u32 
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: arithmetic over a tracked constant-index local aliases the folded
@@ -1935,7 +1935,7 @@ fn reject_duplicate_const_index_variable_arithmetic_array_element_move() -> u32 
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: copied constant-index locals alias the folded literal place.
@@ -1947,7 +1947,7 @@ fn reject_duplicate_copied_const_index_variable_array_element_move() -> u32 {
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: reassignment from another constant-index local updates the aliasing
@@ -1961,7 +1961,7 @@ fn reject_duplicate_reassigned_copied_const_index_variable_array_element_move() 
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: if different branch paths leave an index local with different
@@ -1975,7 +1975,7 @@ fn accept_branch_divergent_const_index_array_element_move(cond: bool) -> u32 {
     }
     let x: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: divergent switch arms likewise clear the stable index fact, so the
@@ -1991,7 +1991,7 @@ fn accept_switch_divergent_const_index_array_element_move(cond: bool) -> u32 {
     }
     let x: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: divergent switch arms clear the stable index fact for move-struct
@@ -2005,9 +2005,9 @@ fn accept_switch_divergent_const_index_array_field_element_move(cond: bool) -> u
         },
         false => {},
     }
-    let x: Res = box.items[i];
+    let x: Res = move box.items[i];
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: divergent symbolic branch arms clear the symbolic fact, so the later
@@ -2020,7 +2020,7 @@ fn accept_branch_divergent_symbolic_index_array_element_move(cond: bool, i: usiz
     }
     let x: Res = arr[k];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: divergent symbolic switch arms also clear the symbolic fact.
@@ -2035,7 +2035,7 @@ fn accept_switch_divergent_symbolic_index_array_element_move(cond: bool, i: usiz
     }
     let x: Res = arr[k];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: a loop may run zero or more times, so an index local changed inside
@@ -2049,7 +2049,7 @@ fn accept_loop_divergent_const_index_array_element_move(cond: bool) -> u32 {
     }
     let x: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: `break` reaches the post-loop code, so a const-index fact changed
@@ -2064,7 +2064,7 @@ fn accept_break_divergent_const_index_array_element_move(cond: bool) -> u32 {
     }
     let x: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: `continue` can run before a later condition exit, so a const-index
@@ -2079,7 +2079,7 @@ fn accept_continue_divergent_const_index_array_element_move(cond: bool) -> u32 {
     }
     let x: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: if a loop changes a symbolic index fact, the post-loop move falls
@@ -2092,7 +2092,7 @@ fn accept_loop_divergent_symbolic_index_array_element_move(cond: bool, i: usize,
     }
     let x: Res = arr[k];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: symbolic facts changed before `break` are invalidated before the
@@ -2106,7 +2106,7 @@ fn accept_break_divergent_symbolic_index_array_element_move(cond: bool, i: usize
     }
     let x: Res = arr[k];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: symbolic facts changed before `continue` are also invalidated before
@@ -2120,7 +2120,7 @@ fn accept_continue_divergent_symbolic_index_array_element_move(cond: bool, i: us
     }
     let x: Res = arr[k];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: a folded const expression aliases the same element place as its value.
@@ -2130,7 +2130,7 @@ fn reject_duplicate_comptime_const_index_array_element_move() -> u32 {
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: returning the whole array after one element was moved out would
@@ -2138,17 +2138,17 @@ fn reject_duplicate_comptime_const_index_array_element_move() -> u32 {
 fn reject_return_move_array_after_partial_move() -> ResArray {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let x: Res = arr[0];
-    let v: u32 = consume(x);
+    let v: u32 = consume(move x);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return arr;
+    return move arr;
 }
 
 // Rejected: returning from a path after moving only one field would leak the
 // remaining aggregate resource on that exit edge.
 fn reject_return_after_partial_field_move() -> u32 {
     let p: Pair = mk(); // EXPECT_ERROR: E_RESOURCE_LEAK
-    let x: Res = p.a;
-    return consume(x);
+    let x: Res = move p.a;
+    return consume(move x);
 }
 
 // Rejected: return-edge leak checks also include constant-index array element
@@ -2156,7 +2156,7 @@ fn reject_return_after_partial_field_move() -> u32 {
 fn reject_return_after_array_element_move() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) }; // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = arr[0];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: return-edge leak checks also include wildcard dynamic array-element
@@ -2164,7 +2164,7 @@ fn reject_return_after_array_element_move() -> u32 {
 fn reject_return_after_dynamic_array_element_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) }; // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = arr[i];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: return-edge leak checks also preserve nested wildcard dynamic array
@@ -2172,86 +2172,86 @@ fn reject_return_after_dynamic_array_element_move(i: usize) -> u32 {
 fn reject_return_after_dynamic_nested_array_element_move(i: usize) -> u32 {
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } }; // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = matrix[i][0];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: return-edge leak checks include parameter-rooted array element
 // places, not only local array roots.
 fn reject_return_after_array_param_element_move(arr: ResArray) -> u32 { // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = arr[0];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: wildcard dynamic parameter-rooted array elements also leak on a
 // return edge when the parameter still owns unconsumed resources.
 fn reject_return_after_dynamic_array_param_element_move(arr: ResArray, i: usize) -> u32 { // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = arr[i];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: parameter-rooted nested wildcard dynamic elements also leak on a
 // return edge.
 fn reject_return_after_dynamic_matrix_param_element_move(matrix: ResMatrix, i: usize) -> u32 { // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = matrix[i][0];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: return-edge leak checks preserve stable symbolic dynamic array places.
 fn reject_return_after_symbolic_array_element_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) }; // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = arr[i + 0];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: return-edge leak checks also preserve parameter-rooted symbolic
 // dynamic array places.
 fn reject_return_after_symbolic_array_param_element_move(arr: ResArray, i: usize) -> u32 { // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = arr[0 + i];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: return-edge leak checks preserve nested symbolic parameter-rooted
 // places as well.
 fn reject_return_after_symbolic_matrix_param_element_move(matrix: ResMatrix, i: usize) -> u32 { // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = matrix[i * 1][0];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: return-edge leak checks also preserve parameter-rooted concrete
 // places reached through exact symbolic modulo-zero indexes.
 fn reject_return_after_symbolic_modulo_zero_array_param_element_move(arr: ResArray, i: usize) -> u32 { // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = arr[(i + i) % 2];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: return-edge leak checks preserve bounded symbolic offset places.
 fn reject_return_after_symbolic_offset_array_element_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) }; // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = arr[i + 1];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: return-edge leak checks also preserve parameter-rooted bounded
 // symbolic offset places.
 fn reject_return_after_symbolic_offset_array_param_element_move(arr: ResArray, i: usize) -> u32 { // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = arr[1 + i];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: return-edge leak checks include move-struct array field element
 // places as well as local array roots.
 fn reject_return_after_array_field_element_move() -> u32 {
     let box: ResArrayBox = mkbox(); // EXPECT_ERROR: E_RESOURCE_LEAK
-    let x: Res = box.items[0];
-    return consume(x);
+    let x: Res = move box.items[0];
+    return consume(move x);
 }
 
 // Rejected: wildcard dynamic array-field element places also leak on a return
 // edge if the containing move struct still owns unconsumed resources.
 fn reject_return_after_dynamic_array_field_element_move(i: usize) -> u32 {
     let box: ResArrayBox = mkbox(); // EXPECT_ERROR: E_RESOURCE_LEAK
-    let x: Res = box.items[i];
-    return consume(x);
+    let x: Res = move box.items[i];
+    return consume(move x);
 }
 
 // Rejected: nested wildcard dynamic array-field element places leak on a return
@@ -2259,7 +2259,7 @@ fn reject_return_after_dynamic_array_field_element_move(i: usize) -> u32 {
 fn reject_return_after_dynamic_nested_array_field_element_move(i: usize) -> u32 {
     let box: ResMatrixBox = mkmatrixbox(); // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = box.items[i][0];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: singleton dynamic array-element moves use the concrete `[0]` place
@@ -2267,45 +2267,45 @@ fn reject_return_after_dynamic_nested_array_field_element_move(i: usize) -> u32 
 fn reject_return_after_dynamic_singleton_array_element_move(i: usize) -> u32 {
     let arr: SingleResArray = .{ mkres(1) }; // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = arr[i];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: singleton dynamic move-struct array-field elements also leak on a
 // return edge through their concrete `items[0]` subplace.
 fn reject_return_after_dynamic_singleton_array_field_element_move(i: usize) -> u32 {
     let box: SingleResArrayBox = mksinglebox(); // EXPECT_ERROR: E_RESOURCE_LEAK
-    let x: Res = box.items[i];
-    return consume(x);
+    let x: Res = move box.items[i];
+    return consume(move x);
 }
 
 // Rejected: borrowing an array element after it was moved out.
 fn reject_borrow_after_array_element_move() -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };
-    let x: Res = arr[0];
+    let x: Res = move arr[0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(&arr[0]);
     unsafe { forget_unchecked(arr); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: moving the same array field element twice duplicates the resource.
 fn reject_duplicate_array_field_element_move() -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[0];
+    let x: Res = move box.items[0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = box.items[0];
+    let y: Res = move box.items[0];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: borrowing an array field element after it was moved out.
 fn reject_borrow_after_array_field_element_move() -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[0];
+    let x: Res = move box.items[0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(&box.items[0]);
     unsafe { forget_unchecked(box); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Accepted: a dynamic index into a multi-element array is tracked as an
@@ -2313,20 +2313,20 @@ fn reject_borrow_after_array_field_element_move() -> u32 {
 // moved-out resource is consumed.
 fn accept_dynamic_multi_array_element_move(i: usize) -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };
-    let x: Res = arr[i];
+    let x: Res = move arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: after an unknown element move, another dynamic element move could
 // duplicate the same resource.
 fn reject_duplicate_dynamic_multi_array_element_move(i: usize, j: usize) -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };
-    let x: Res = arr[i];
+    let x: Res = move arr[i];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = arr[j];
+    let y: Res = move arr[j];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: after a concrete element move, a later unknown dynamic element move
@@ -2336,40 +2336,40 @@ fn reject_dynamic_multi_array_element_move_after_constant() -> u32 {
     let x: Res = arr[0];
     let y: Res = arr[dynamic_index()]; // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: the unknown element move also poisons later constant-index element
 // moves, because the dynamic index may have selected that element.
 fn reject_constant_after_dynamic_multi_array_element_move(i: usize) -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };
-    let x: Res = arr[i];
+    let x: Res = move arr[i];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = arr[0];
+    let y: Res = move arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: borrowing any concrete element after an unknown element move could
 // read the moved-out element.
 fn reject_borrow_after_dynamic_multi_array_element_move(i: usize) -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };
-    let x: Res = arr[i];
+    let x: Res = move arr[i];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(&arr[0]);
     unsafe { forget_unchecked(arr); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: moving the whole array after an unknown element was moved out would
 // duplicate the moved element.
 fn reject_whole_after_dynamic_multi_array_element_move(i: usize) -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };
-    let x: Res = arr[i];
+    let x: Res = move arr[i];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: ResArray = arr;
+    let y: ResArray = move arr;
     unsafe { forget_unchecked(y); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: after an unknown element move, assigning to one concrete element
@@ -2377,10 +2377,10 @@ fn reject_whole_after_dynamic_multi_array_element_move(i: usize) -> u32 {
 // resource instead.
 fn reject_reinitialize_constant_after_dynamic_multi_array_element_move(i: usize) -> u32 {
     var arr: [2]Res = .{ mkres(1), mkres(2) };
-    let x: Res = arr[i];
+    let x: Res = move arr[i];
     arr[0] = mkres(3); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: assigning through a non-symbolic dynamic index into a live
@@ -2402,7 +2402,7 @@ fn reject_dynamic_multi_array_assignment_after_constant_move() -> u32 {
     let x: Res = arr[0];
     arr[dynamic_index()] = mkres(3); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: a second unknown dynamic assignment after an unknown dynamic move
@@ -2413,7 +2413,7 @@ fn reject_dynamic_multi_array_assignment_after_wildcard_move() -> u32 {
     let x: Res = arr[dynamic_index()];
     arr[dynamic_index()] = mkres(3); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: wildcard dynamic moves compose through nested array places. The
@@ -2422,7 +2422,7 @@ fn accept_dynamic_nested_array_element_move(i: usize) -> u32 {
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
     let x: Res = matrix[i][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: after a nested wildcard move, a concrete nested element may be the
@@ -2433,7 +2433,7 @@ fn reject_constant_after_dynamic_nested_array_element_move(i: usize) -> u32 {
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: two nested wildcard moves may select the same outer element.
@@ -2443,7 +2443,7 @@ fn reject_duplicate_dynamic_nested_array_element_move(i: usize, j: usize) -> u32
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = matrix[j][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: nested wildcard moves also conflict with an already moved concrete
@@ -2453,7 +2453,7 @@ fn reject_dynamic_nested_array_element_move_after_constant() -> u32 {
     let x: Res = matrix[0][0];
     let y: Res = matrix[dynamic_index()][0]; // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: moving the whole matrix after a nested wildcard move would duplicate
@@ -2462,9 +2462,9 @@ fn reject_whole_after_dynamic_nested_array_element_move(i: usize) -> u32 {
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
     let x: Res = matrix[i][0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let moved: ResMatrix = matrix;
+    let moved: ResMatrix = move matrix;
     unsafe { forget_unchecked(moved); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: after a nested wildcard move, assigning one concrete nested element
@@ -2474,14 +2474,14 @@ fn reject_reinitialize_constant_after_dynamic_nested_array_element_move(i: usize
     let x: Res = matrix[i][0];
     matrix[0][0] = mkres(3); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(matrix); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: defer can reserve the same nested wildcard place for lexical
 // cleanup.
 fn accept_defer_dynamic_nested_array_element(i: usize) -> u32 {
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
-    defer consume(matrix[i][0]);
+    defer consume(move matrix[i][0]);
     unsafe { forget_unchecked(matrix); }
     return 0;
 }
@@ -2490,52 +2490,52 @@ fn accept_defer_dynamic_nested_array_element(i: usize) -> u32 {
 // the deferred resource.
 fn reject_move_after_defer_dynamic_nested_array_element(i: usize) -> u32 {
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
-    defer consume(matrix[i][0]);
+    defer consume(move matrix[i][0]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: wildcard dynamic element moves also work when the array is rooted
 // in a move-struct field.
 fn accept_dynamic_multi_array_field_element_move(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[i];
+    let x: Res = move box.items[i];
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: after a wildcard move from a move-struct array field, a concrete
 // element move could duplicate the resource already taken.
 fn reject_constant_after_dynamic_multi_array_field_element_move(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[i];
+    let x: Res = move box.items[i];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = box.items[0];
+    let y: Res = move box.items[0];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: field-rooted wildcard moves conflict with an already moved concrete
 // field element.
 fn reject_dynamic_multi_array_field_element_move_after_constant() -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[0];
-    let y: Res = box.items[dynamic_index()]; // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let x: Res = move box.items[0];
+    let y: Res = move box.items[dynamic_index()]; // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: moving the whole move struct after a wildcard element move would
 // duplicate the unknown moved element.
 fn reject_whole_after_dynamic_multi_array_field_element_move(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[i];
+    let x: Res = move box.items[i];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: ResArrayBox = box;
+    let y: ResArrayBox = move box;
     unsafe { forget_unchecked(y); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: wildcard dynamic moves also work for internal parameter-rooted
@@ -2543,7 +2543,7 @@ fn reject_whole_after_dynamic_multi_array_field_element_move(i: usize) -> u32 {
 fn accept_dynamic_multi_array_param_element_move(arr: ResArray, i: usize) -> u32 {
     let x: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: wildcard dynamic moves compose through internal parameter-rooted
@@ -2551,7 +2551,7 @@ fn accept_dynamic_multi_array_param_element_move(arr: ResArray, i: usize) -> u32
 fn accept_dynamic_matrix_param_element_move(matrix: ResMatrix, i: usize) -> u32 {
     let x: Res = matrix[i][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: parameter-rooted move arrays also support stable symbolic dynamic
@@ -2559,7 +2559,7 @@ fn accept_dynamic_matrix_param_element_move(matrix: ResMatrix, i: usize) -> u32 
 fn accept_symbolic_multi_array_param_element_move(arr: ResArray, i: usize) -> u32 {
     let x: Res = arr[i + 0];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: moving the same parameter-rooted symbolic element twice duplicates
@@ -2569,7 +2569,7 @@ fn reject_duplicate_symbolic_multi_array_param_element_move(arr: ResArray, i: us
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0 + i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: a different symbolic parameter index may denote the same resource.
@@ -2578,14 +2578,14 @@ fn reject_different_symbolic_multi_array_param_element_move(arr: ResArray, i: us
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[j];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: parameter-rooted symbolic places preserve bounded constant offsets.
 fn accept_symbolic_offset_multi_array_param_element_move(arr: ResArray, i: usize) -> u32 {
     let x: Res = arr[i + 1];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: duplicate parameter-rooted symbolic offset places are the same
@@ -2595,14 +2595,14 @@ fn reject_duplicate_symbolic_offset_multi_array_param_element_move(arr: ResArray
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[1 + i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: parameter-rooted symbolic places preserve canonical linear terms.
 fn accept_symbolic_linear_multi_array_param_element_move(arr: ResArray, i: usize, j: usize) -> u32 {
     let x: Res = arr[i + j + 1];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: duplicate parameter-rooted canonical linear places are the same
@@ -2612,7 +2612,7 @@ fn reject_duplicate_symbolic_linear_multi_array_param_element_move(arr: ResArray
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[1 + j + i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: exact symbolic modulo-zero parameter-rooted indexes fold to the
@@ -2620,7 +2620,7 @@ fn reject_duplicate_symbolic_linear_multi_array_param_element_move(arr: ResArray
 fn accept_symbolic_modulo_zero_multi_array_param_element_move(arr: ResArray, i: usize) -> u32 {
     let x: Res = arr[(i + i) % 2];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: parameter-rooted nested move arrays also support stable symbolic
@@ -2628,7 +2628,7 @@ fn accept_symbolic_modulo_zero_multi_array_param_element_move(arr: ResArray, i: 
 fn accept_symbolic_matrix_param_element_move(matrix: ResMatrix, i: usize) -> u32 {
     let x: Res = matrix[i + 0][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: moving the same parameter-rooted symbolic nested element twice
@@ -2638,7 +2638,7 @@ fn reject_duplicate_symbolic_matrix_param_element_move(matrix: ResMatrix, i: usi
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = matrix[i - 0][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: a different symbolic nested parameter index may denote the same
@@ -2648,14 +2648,14 @@ fn reject_different_symbolic_matrix_param_element_move(matrix: ResMatrix, i: usi
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = matrix[j][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: parameter-rooted nested symbolic places preserve bounded offsets.
 fn accept_symbolic_offset_matrix_param_element_move(matrix: ResMatrix, i: usize) -> u32 {
     let x: Res = matrix[i + 1][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: duplicate parameter-rooted nested symbolic offset places are the
@@ -2665,7 +2665,7 @@ fn reject_duplicate_symbolic_offset_matrix_param_element_move(matrix: ResMatrix,
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = matrix[1 + i][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: parameter-rooted nested symbolic places preserve canonical linear
@@ -2673,7 +2673,7 @@ fn reject_duplicate_symbolic_offset_matrix_param_element_move(matrix: ResMatrix,
 fn accept_symbolic_linear_matrix_param_element_move(matrix: ResMatrix, i: usize, j: usize) -> u32 {
     let x: Res = matrix[i + j + 1][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: duplicate parameter-rooted nested canonical linear places are the
@@ -2683,7 +2683,7 @@ fn reject_duplicate_symbolic_linear_matrix_param_element_move(matrix: ResMatrix,
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = matrix[1 + j + i][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: exact symbolic modulo-zero also composes through parameter-rooted
@@ -2691,7 +2691,7 @@ fn reject_duplicate_symbolic_linear_matrix_param_element_move(matrix: ResMatrix,
 fn accept_symbolic_modulo_zero_matrix_param_element_move(matrix: ResMatrix, i: usize) -> u32 {
     let x: Res = matrix[(i + i) % 2][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: a later parameter-rooted concrete move conflicts with the wildcard
@@ -2701,7 +2701,7 @@ fn reject_constant_after_dynamic_multi_array_param_element_move(arr: ResArray, i
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: parameter-rooted wildcard moves also conflict with an already moved
@@ -2710,7 +2710,7 @@ fn reject_dynamic_multi_array_param_element_move_after_constant(arr: ResArray) -
     let x: Res = arr[0];
     let y: Res = arr[dynamic_index()]; // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: a later concrete nested parameter element may be the same resource
@@ -2720,14 +2720,14 @@ fn reject_constant_after_dynamic_matrix_param_element_move(matrix: ResMatrix, i:
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: dynamic-index deferred cleanup reserves an unknown element place
 // (`arr[*]`). The array husk is then discarded; no other element may be used.
 fn accept_defer_dynamic_multi_array_element(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    defer consume(arr[i]);
+    defer consume(move arr[i]);
     unsafe { forget_unchecked(arr); }
     return 0;
 }
@@ -2736,20 +2736,20 @@ fn accept_defer_dynamic_multi_array_element(i: usize) -> u32 {
 // element could duplicate the deferred resource.
 fn reject_move_after_defer_dynamic_multi_array_element(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    defer consume(arr[i]);
+    defer consume(move arr[i]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: moving the whole array after a dynamic defer would also duplicate
 // the unknown deferred element.
 fn reject_whole_after_defer_dynamic_multi_array_element(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    defer consume(arr[i]);
+    defer consume(move arr[i]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let moved: ResArray = arr;
+    let moved: ResArray = move arr;
     unsafe { forget_unchecked(moved); }
     return 0;
 }
@@ -2760,15 +2760,15 @@ fn reject_defer_dynamic_multi_array_element_after_constant_move(i: usize) -> u32
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let x: Res = arr[0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    defer consume(arr[i]);
+    defer consume(move arr[i]);
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: defer can reserve a stable symbolic dynamic element place.
 fn accept_defer_symbolic_multi_array_element(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    defer consume(arr[i + 0]);
+    defer consume(move arr[i + 0]);
     unsafe { forget_unchecked(arr); }
     return 0;
 }
@@ -2777,22 +2777,22 @@ fn accept_defer_symbolic_multi_array_element(i: usize) -> u32 {
 // element would duplicate the deferred resource.
 fn reject_move_after_defer_symbolic_multi_array_element(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    defer consume(arr[i]);
+    defer consume(move arr[i]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = arr[0 + i];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: defer reserves bounded symbolic offset places using the same place
 // identity as later equivalent offset expressions.
 fn reject_move_after_defer_symbolic_offset_multi_array_element(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    defer consume(arr[i + 1]);
+    defer consume(move arr[i + 1]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = arr[1 + i];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: exact symbolic modulo-zero defer reserves the concrete element
@@ -2803,25 +2803,25 @@ fn reject_move_after_defer_symbolic_modulo_zero_multi_array_element(i: usize) ->
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: after symbolic defer reserves an element, a different symbolic index
 // may still denote the same deferred resource.
 fn reject_different_symbolic_after_defer_symbolic_multi_array_element(i: usize, j: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    defer consume(arr[i]);
+    defer consume(move arr[i]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = arr[j];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: dynamic defer also reserves an unknown element place inside a
 // move-struct array field.
 fn accept_defer_dynamic_multi_array_field_element(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    defer consume(box.items[i]);
+    defer consume(move box.items[i]);
     unsafe { forget_unchecked(box); }
     return 0;
 }
@@ -2830,20 +2830,20 @@ fn accept_defer_dynamic_multi_array_field_element(i: usize) -> u32 {
 // moving a concrete element could duplicate the deferred resource.
 fn reject_move_after_defer_dynamic_multi_array_field_element(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    defer consume(box.items[i]);
+    defer consume(move box.items[i]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let x: Res = box.items[0];
+    let x: Res = move box.items[0];
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: moving the whole move struct after a dynamic field-element defer
 // would also duplicate the reserved unknown element.
 fn reject_whole_after_defer_dynamic_multi_array_field_element(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    defer consume(box.items[i]);
+    defer consume(move box.items[i]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let moved: ResArrayBox = box;
+    let moved: ResArrayBox = move box;
     unsafe { forget_unchecked(moved); }
     return 0;
 }
@@ -2852,18 +2852,18 @@ fn reject_whole_after_defer_dynamic_multi_array_field_element(i: usize) -> u32 {
 // may target that same element.
 fn reject_defer_dynamic_multi_array_field_element_after_constant_move(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[0];
+    let x: Res = move box.items[0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    defer consume(box.items[i]);
+    defer consume(move box.items[i]);
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: deferred cleanup also reserves an unknown nested element place inside
 // a move-struct array field.
 fn accept_defer_dynamic_nested_array_field_element(i: usize) -> u32 {
     let box: ResMatrixBox = mkmatrixbox();
-    defer consume(box.items[i][0]);
+    defer consume(move box.items[i][0]);
     unsafe { forget_unchecked(box); }
     return 0;
 }
@@ -2872,20 +2872,20 @@ fn accept_defer_dynamic_nested_array_field_element(i: usize) -> u32 {
 // element, moving a concrete nested element could duplicate the deferred resource.
 fn reject_move_after_defer_dynamic_nested_array_field_element(i: usize) -> u32 {
     let box: ResMatrixBox = mkmatrixbox();
-    defer consume(box.items[i][0]);
+    defer consume(move box.items[i][0]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = box.items[0][0];
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: moving the whole move struct after a nested dynamic field-element
 // defer would also duplicate the reserved unknown nested element.
 fn reject_whole_after_defer_dynamic_nested_array_field_element(i: usize) -> u32 {
     let box: ResMatrixBox = mkmatrixbox();
-    defer consume(box.items[i][0]);
+    defer consume(move box.items[i][0]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let moved: ResMatrixBox = box;
+    let moved: ResMatrixBox = move box;
     unsafe { forget_unchecked(moved); }
     return 0;
 }
@@ -2896,16 +2896,16 @@ fn reject_defer_dynamic_nested_array_field_element_after_constant_move(i: usize)
     let box: ResMatrixBox = mkmatrixbox();
     let x: Res = box.items[0][0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    defer consume(box.items[i][0]);
+    defer consume(move box.items[i][0]);
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: defer can reserve symbolic dynamic places through move-struct array
 // fields.
 fn accept_defer_symbolic_array_field_element(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    defer consume(box.items[i + 0]);
+    defer consume(move box.items[i + 0]);
     unsafe { forget_unchecked(box); }
     return 0;
 }
@@ -2913,7 +2913,7 @@ fn accept_defer_symbolic_array_field_element(i: usize) -> u32 {
 // Accepted: internal parameter-rooted move arrays can reserve an unknown
 // element with dynamic defer.
 fn accept_defer_dynamic_multi_array_param_element(arr: ResArray, i: usize) -> u32 {
-    defer consume(arr[i]);
+    defer consume(move arr[i]);
     unsafe { forget_unchecked(arr); }
     return 0;
 }
@@ -2921,14 +2921,14 @@ fn accept_defer_dynamic_multi_array_param_element(arr: ResArray, i: usize) -> u3
 // Accepted: internal parameter-rooted nested move arrays can also reserve an
 // unknown nested element with dynamic defer.
 fn accept_defer_dynamic_matrix_param_element(matrix: ResMatrix, i: usize) -> u32 {
-    defer consume(matrix[i][0]);
+    defer consume(move matrix[i][0]);
     unsafe { forget_unchecked(matrix); }
     return 0;
 }
 
 // Accepted: parameter-rooted symbolic dynamic places can be reserved by defer.
 fn accept_defer_symbolic_multi_array_param_element(arr: ResArray, i: usize) -> u32 {
-    defer consume(arr[i + 0]);
+    defer consume(move arr[i + 0]);
     unsafe { forget_unchecked(arr); }
     return 0;
 }
@@ -2936,7 +2936,7 @@ fn accept_defer_symbolic_multi_array_param_element(arr: ResArray, i: usize) -> u
 // Accepted: nested parameter-rooted symbolic places can also be reserved by
 // defer when the suffix remains nameable.
 fn accept_defer_symbolic_matrix_param_element(matrix: ResMatrix, i: usize) -> u32 {
-    defer consume(matrix[i + 0][0]);
+    defer consume(move matrix[i + 0][0]);
     unsafe { forget_unchecked(matrix); }
     return 0;
 }
@@ -2944,29 +2944,29 @@ fn accept_defer_symbolic_matrix_param_element(matrix: ResMatrix, i: usize) -> u3
 // Rejected: after a parameter-root dynamic defer reserves an unknown element,
 // moving a concrete element could duplicate the deferred resource.
 fn reject_move_after_defer_dynamic_multi_array_param_element(arr: ResArray, i: usize) -> u32 {
-    defer consume(arr[i]);
+    defer consume(move arr[i]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: after a nested parameter-root dynamic defer, moving a concrete nested
 // element could duplicate the deferred resource.
 fn reject_move_after_defer_dynamic_matrix_param_element(matrix: ResMatrix, i: usize) -> u32 {
-    defer consume(matrix[i][0]);
+    defer consume(move matrix[i][0]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let x: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: moving the whole parameter-root array after a dynamic defer would
 // duplicate the reserved unknown element.
 fn reject_whole_after_defer_dynamic_multi_array_param_element(arr: ResArray, i: usize) -> u32 {
-    defer consume(arr[i]);
+    defer consume(move arr[i]);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let moved: ResArray = arr;
+    let moved: ResArray = move arr;
     unsafe { forget_unchecked(moved); }
     return 0;
 }
@@ -2979,56 +2979,56 @@ fn reject_duplicate_dynamic_singleton_array_element_move(i: usize) -> u32 {
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: a nested place (n.p.a) moved twice — place tracking is not just one level deep.
 fn reject_nested_field_move() -> u32 {
     let n: Nest = mknest();
-    let x: Res = n.p.a;
+    let x: Res = move n.p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = n.p.a;
+    let y: Res = move n.p.a;
     unsafe { forget_unchecked(n); } // discard the rest of the husk so only the dup is reported
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: move each field out exactly once, then discard the empty husk.
 fn accept_move_each_field() -> u32 {
     let p: Pair = mk();
-    let x: Res = p.a;
-    let y: Res = p.b;
+    let x: Res = move p.a;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: moving the same field twice duplicates the resource.
 fn reject_duplicate_field_move() -> u32 {
     let p: Pair = mk();
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = p.a;
+    let y: Res = move p.a;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: borrowing a field after it was moved out.
 fn reject_borrow_after_field_move() -> u32 {
     let p: Pair = mk();
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(&p.a);
     unsafe { forget_unchecked(p); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Accepted: a full pointer alias to a move field can move that field precisely.
 fn accept_move_field_through_full_alias() -> u32 {
     let p: Pair = mk();
     let pa: *Res = &p.a;
-    let x: Res = pa.*;
-    let y: Res = p.b;
+    let x: Res = move pa.*;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: a full pointer alias to a constant-index array element can move that
@@ -3036,10 +3036,10 @@ fn accept_move_field_through_full_alias() -> u32 {
 fn accept_move_array_element_through_full_alias() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let p0: *Res = &arr[0];
-    let x: Res = p0.*;
+    let x: Res = move p0.*;
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: an immediate full deref of a move field address consumes the same
@@ -3047,9 +3047,9 @@ fn accept_move_array_element_through_full_alias() -> u32 {
 fn accept_move_field_through_immediate_full_deref() -> u32 {
     let p: Pair = mk();
     let x: Res = (&p.a).*;
-    let y: Res = p.b;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: immediate full deref of a constant-index array element address
@@ -3059,7 +3059,7 @@ fn accept_move_array_element_through_immediate_full_deref() -> u32 {
     let x: Res = (&arr[0]).*;
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: copying a full pointer alias to a move field preserves the same
@@ -3068,10 +3068,10 @@ fn accept_move_field_through_copied_full_alias() -> u32 {
     let p: Pair = mk();
     let pa: *Res = &p.a;
     let qa: *Res = pa;
-    let x: Res = qa.*;
-    let y: Res = p.b;
+    let x: Res = move qa.*;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: copying a full pointer alias to a constant-index array element
@@ -3080,10 +3080,10 @@ fn accept_move_array_element_through_copied_full_alias() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let p0: *Res = &arr[0];
     let q0: *Res = p0;
-    let x: Res = q0.*;
+    let x: Res = move q0.*;
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: a full pointer alias to a dynamic multi-element array index consumes
@@ -3091,9 +3091,9 @@ fn accept_move_array_element_through_copied_full_alias() -> u32 {
 fn accept_move_dynamic_array_element_through_full_alias(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let p: *Res = &arr[i];
-    let x: Res = p.*;
+    let x: Res = move p.*;
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: copied full aliases to dynamic array elements preserve the wildcard
@@ -3102,9 +3102,9 @@ fn accept_move_dynamic_array_element_through_copied_full_alias(i: usize) -> u32 
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let p: *Res = &arr[i];
     let q: *Res = p;
-    let x: Res = q.*;
+    let x: Res = move q.*;
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: after moving through a dynamic element alias, a concrete element
@@ -3112,11 +3112,11 @@ fn accept_move_dynamic_array_element_through_copied_full_alias(i: usize) -> u32 
 fn reject_constant_after_dynamic_array_element_full_alias_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let p: *Res = &arr[i];
-    let x: Res = p.*;
+    let x: Res = move p.*;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: a noalias-wrapped immediate address of a dynamic array element is
@@ -3126,7 +3126,7 @@ fn accept_move_dynamic_array_element_through_noalias_full_deref(i: usize) -> u32
     #[unsafe_contract(noalias)] {
         let x: Res = compiler.assume_noalias_unchecked(&arr[i], 4).*;
         unsafe { forget_unchecked(arr); }
-        return consume(x);
+        return consume(move x);
     }
 }
 
@@ -3139,7 +3139,7 @@ fn reject_constant_after_noalias_dynamic_array_element_full_deref_move(i: usize)
         // EXPECT_ERROR: E_USE_AFTER_MOVE
         let y: Res = arr[0];
         unsafe { forget_unchecked(arr); }
-        return consume(x) + consume(y);
+        return consume(move x) + consume(move y);
     }
 }
 
@@ -3149,9 +3149,9 @@ fn accept_move_dynamic_array_element_through_noalias_full_alias(i: usize) -> u32
     let arr: ResArray = .{ mkres(1), mkres(2) };
     #[unsafe_contract(noalias)] {
         let p: *Res = compiler.assume_noalias_unchecked(&arr[i], 4);
-        let x: Res = p.*;
+        let x: Res = move p.*;
         unsafe { forget_unchecked(arr); }
-        return consume(x);
+        return consume(move x);
     }
 }
 
@@ -3160,11 +3160,11 @@ fn accept_move_dynamic_array_element_through_noalias_full_alias(i: usize) -> u32
 fn reject_whole_after_dynamic_array_element_full_alias_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let p: *Res = &arr[i];
-    let x: Res = p.*;
+    let x: Res = move p.*;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let moved: ResArray = arr;
+    let moved: ResArray = move arr;
     unsafe { forget_unchecked(moved); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: a dynamic element alias becomes stale after an unknown element move.
@@ -3175,7 +3175,7 @@ fn reject_dynamic_array_element_full_alias_after_dynamic_move(i: usize, j: usize
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(p);
     unsafe { forget_unchecked(arr); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Accepted: a full pointer alias to a nested dynamic array element preserves the
@@ -3183,9 +3183,9 @@ fn reject_dynamic_array_element_full_alias_after_dynamic_move(i: usize, j: usize
 fn accept_move_nested_dynamic_array_element_through_full_alias(i: usize) -> u32 {
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
     let p: *Res = &matrix[i][0];
-    let x: Res = p.*;
+    let x: Res = move p.*;
     unsafe { forget_unchecked(matrix); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Accepted: copying that full alias preserves the same nested wildcard place.
@@ -3193,9 +3193,9 @@ fn accept_move_nested_dynamic_array_element_through_copied_full_alias(i: usize) 
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
     let p: *Res = &matrix[i][0];
     let q: *Res = p;
-    let x: Res = q.*;
+    let x: Res = move q.*;
     unsafe { forget_unchecked(matrix); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: after moving through a nested dynamic element alias, a concrete
@@ -3203,20 +3203,20 @@ fn accept_move_nested_dynamic_array_element_through_copied_full_alias(i: usize) 
 fn reject_constant_after_nested_dynamic_array_element_full_alias_move(i: usize) -> u32 {
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
     let p: *Res = &matrix[i][0];
-    let x: Res = p.*;
+    let x: Res = move p.*;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: full pointer aliases also compose through move-struct array fields.
 fn accept_move_nested_dynamic_array_field_element_through_full_alias(i: usize) -> u32 {
     let box: ResMatrixBox = mkmatrixbox();
     let p: *Res = &box.items[i][0];
-    let x: Res = p.*;
+    let x: Res = move p.*;
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: nested field-rooted wildcard alias moves conflict with concrete
@@ -3224,11 +3224,11 @@ fn accept_move_nested_dynamic_array_field_element_through_full_alias(i: usize) -
 fn reject_constant_after_nested_dynamic_array_field_element_full_alias_move(i: usize) -> u32 {
     let box: ResMatrixBox = mkmatrixbox();
     let p: *Res = &box.items[i][0];
-    let x: Res = p.*;
+    let x: Res = move p.*;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = box.items[0][0];
     unsafe { forget_unchecked(box); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: pointer-returning calls that receive a dynamic array-element borrow
@@ -3250,7 +3250,7 @@ fn reject_laundered_dynamic_array_element_alias_after_dynamic_move(i: usize, j: 
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(p);
     unsafe { forget_unchecked(arr); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Accepted: pointer-returning calls preserve nested wildcard referents for
@@ -3272,7 +3272,7 @@ fn reject_laundered_nested_dynamic_array_element_alias_after_move(i: usize, j: u
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(p);
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Accepted: the same laundered nested wildcard alias path composes through
@@ -3294,7 +3294,7 @@ fn reject_laundered_nested_dynamic_array_field_element_alias_after_move(i: usize
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(p);
     unsafe { forget_unchecked(box); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Accepted: a pointer returned from a call that received a subplace borrow can be
@@ -3303,32 +3303,32 @@ fn accept_laundered_subplace_pointer_used_before_move() -> u32 {
     let p: Pair = mk();
     let pa: *Res = id_res(&p.a);
     let v: u32 = peek(pa);
-    let x: Res = p.a;
-    let y: Res = p.b;
+    let x: Res = move p.a;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return v + consume(x) + consume(y);
+    return v + consume(move x) + consume(move y);
 }
 
 // Rejected: moving through a full field alias poisons that field place.
 fn reject_field_after_full_alias_move() -> u32 {
     let p: Pair = mk();
     let pa: *Res = &p.a;
-    let x: Res = pa.*;
+    let x: Res = move pa.*;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = p.a;
+    let y: Res = move p.a;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: moving through a full array-element alias poisons that element place.
 fn reject_array_element_after_full_alias_move() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let p0: *Res = &arr[0];
-    let x: Res = p0.*;
+    let x: Res = move p0.*;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: moving through a copied full field alias still poisons the original
@@ -3337,11 +3337,11 @@ fn reject_field_after_copied_full_alias_move() -> u32 {
     let p: Pair = mk();
     let pa: *Res = &p.a;
     let qa: *Res = pa;
-    let x: Res = qa.*;
+    let x: Res = move qa.*;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Res = p.a;
+    let y: Res = move p.a;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: moving through a copied full array-element alias still poisons the
@@ -3350,11 +3350,11 @@ fn reject_array_element_after_copied_full_alias_move() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let p0: *Res = &arr[0];
     let q0: *Res = p0;
-    let x: Res = q0.*;
+    let x: Res = move q0.*;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: moving the whole aggregate after a full field-alias move would
@@ -3362,10 +3362,10 @@ fn reject_array_element_after_copied_full_alias_move() -> u32 {
 fn reject_whole_after_full_field_alias_move() -> u32 {
     let p: Pair = mk();
     let pa: *Res = &p.a;
-    let x: Res = pa.*;
+    let x: Res = move pa.*;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let r: u32 = take_whole(p);
-    return consume(x) + r;
+    let r: u32 = take_whole(move p);
+    return consume(move x) + r;
 }
 
 // Rejected: moving the whole array after a full element-alias move would
@@ -3373,11 +3373,11 @@ fn reject_whole_after_full_field_alias_move() -> u32 {
 fn reject_whole_array_after_full_element_alias_move() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let p0: *Res = &arr[0];
-    let x: Res = p0.*;
+    let x: Res = move p0.*;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let moved: ResArray = arr;
+    let moved: ResArray = move arr;
     unsafe { forget_unchecked(moved); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: a pointer-returning call can launder a borrow of a move field. The
@@ -3385,12 +3385,12 @@ fn reject_whole_array_after_full_element_alias_move() -> u32 {
 fn reject_laundered_field_alias_after_move() -> u32 {
     let p: Pair = mk();
     let pa: *Res = id_res(&p.a);
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(pa);
-    let y: Res = p.b;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: the same laundering rule applies to constant-index array element
@@ -3403,7 +3403,7 @@ fn reject_laundered_array_element_alias_after_move() -> u32 {
     let v: u32 = peek(p0);
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: reassignment of an existing alias local re-derives the laundered
@@ -3412,12 +3412,12 @@ fn reject_reassigned_laundered_field_alias_after_move() -> u32 {
     let p: Pair = mk();
     var pa: *Res = &p.b;
     pa = id_res(&p.a);
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(pa);
-    let y: Res = p.b;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: reassignment also tracks constant-index array element subplaces.
@@ -3430,7 +3430,7 @@ fn reject_reassigned_laundered_array_element_alias_after_move() -> u32 {
     let v: u32 = peek(p0);
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: reassignment to a direct field subplace alias also re-derives the
@@ -3439,12 +3439,12 @@ fn reject_reassigned_direct_field_alias_after_move() -> u32 {
     let p: Pair = mk();
     var pa: *Res = id_res(&p.b);
     pa = &p.a;
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(pa);
-    let y: Res = p.b;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: reassignment to a direct array-element alias also tracks that
@@ -3458,7 +3458,7 @@ fn reject_reassigned_direct_array_element_alias_after_move() -> u32 {
     let v: u32 = peek(p0);
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: after reassignment to a direct subplace alias, moving through the
@@ -3467,10 +3467,10 @@ fn accept_reassigned_direct_field_alias_move_through() -> u32 {
     let p: Pair = mk();
     var pa: *Res = id_res(&p.b);
     pa = &p.a;
-    let x: Res = pa.*;
-    let y: Res = p.b;
+    let x: Res = move pa.*;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: the same reassignment path grants full-deref authority for constant
@@ -3479,10 +3479,10 @@ fn accept_reassigned_direct_array_element_alias_move_through() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     var p0: *Res = id_res(&arr[1]);
     p0 = &arr[0];
-    let x: Res = p0.*;
+    let x: Res = move p0.*;
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Accepted: assignment into previously uninitialized pointer storage still grants
@@ -3491,10 +3491,10 @@ fn accept_assigned_uninit_pointer_field_alias_move_through() -> u32 {
     let p: Pair = mk();
     var pa: *Res = uninit;
     pa = &p.a;
-    let x: Res = pa.*;
-    let y: Res = p.b;
+    let x: Res = move pa.*;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: assignment into previously uninitialized pointer storage still
@@ -3503,12 +3503,12 @@ fn reject_assigned_uninit_pointer_field_alias_after_move() -> u32 {
     let p: Pair = mk();
     var pa: *Res = uninit;
     pa = &p.a;
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(pa);
-    let y: Res = p.b;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: assignment into previously uninitialized pointer storage preserves
@@ -3517,10 +3517,10 @@ fn accept_assigned_uninit_pointer_array_element_alias_move_through() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     var p0: *Res = uninit;
     p0 = &arr[0];
-    let x: Res = p0.*;
+    let x: Res = move p0.*;
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y);
+    return consume(move x) + consume(move y);
 }
 
 // Rejected: the same uninitialized pointer assignment records the precise array
@@ -3534,7 +3534,7 @@ fn reject_assigned_uninit_pointer_array_element_alias_after_move() -> u32 {
     let v: u32 = peek(p0);
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: assignment into previously uninitialized pointer storage also tracks
@@ -3544,10 +3544,10 @@ fn accept_assigned_uninit_laundered_pointer_field_alias_before_move() -> u32 {
     var pa: *Res = uninit;
     pa = id_res(&p.a);
     let v: u32 = peek(pa);
-    let x: Res = p.a;
-    let y: Res = p.b;
+    let x: Res = move p.a;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return v + consume(x) + consume(y);
+    return v + consume(move x) + consume(move y);
 }
 
 // Rejected: laundered aliases assigned into previously uninitialized pointer
@@ -3556,12 +3556,12 @@ fn reject_assigned_uninit_laundered_pointer_field_alias_after_move() -> u32 {
     let p: Pair = mk();
     var pa: *Res = uninit;
     pa = id_res(&p.a);
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(pa);
-    let y: Res = p.b;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: dynamic array-element aliases assigned into previously
@@ -3570,9 +3570,9 @@ fn accept_assigned_uninit_pointer_dynamic_array_element_alias_move_through(i: us
     let arr: ResArray = .{ mkres(1), mkres(2) };
     var p: *Res = uninit;
     p = &arr[i];
-    let x: Res = p.*;
+    let x: Res = move p.*;
     unsafe { forget_unchecked(arr); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: the same dynamic assignment path records the wildcard element
@@ -3585,7 +3585,7 @@ fn reject_assigned_uninit_pointer_dynamic_array_element_alias_after_move(i: usiz
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(p);
     unsafe { forget_unchecked(arr); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: a struct field can also hold a pointer returned from a call that
@@ -3593,12 +3593,12 @@ fn reject_assigned_uninit_pointer_dynamic_array_element_alias_after_move(i: usiz
 fn reject_laundered_field_alias_in_struct_after_move() -> u32 {
     let p: Pair = mk();
     let h: ResPtrHolder = .{ .p = id_res(&p.a) };
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(h.p);
-    let y: Res = p.b;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: the struct-field laundering path also preserves constant-index
@@ -3611,7 +3611,7 @@ fn reject_laundered_array_element_alias_in_struct_after_move() -> u32 {
     let v: u32 = peek(h.p);
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: direct subplace borrows stored in struct fields are also precise
@@ -3620,10 +3620,10 @@ fn accept_direct_subplace_alias_in_struct_before_move() -> u32 {
     let p: Pair = mk();
     let h: ResPtrHolder = .{ .p = &p.a };
     let v: u32 = peek(h.p);
-    let x: Res = p.a;
-    let y: Res = p.b;
+    let x: Res = move p.a;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return v + consume(x) + consume(y);
+    return v + consume(move x) + consume(move y);
 }
 
 // Rejected: a direct field subplace borrow stored in a struct field is stale
@@ -3631,12 +3631,12 @@ fn accept_direct_subplace_alias_in_struct_before_move() -> u32 {
 fn reject_direct_field_alias_in_struct_after_move() -> u32 {
     let p: Pair = mk();
     let h: ResPtrHolder = .{ .p = &p.a };
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(h.p);
-    let y: Res = p.b;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: direct constant-index array element borrows stored in struct fields
@@ -3649,7 +3649,7 @@ fn reject_direct_array_element_alias_in_struct_after_move() -> u32 {
     let v: u32 = peek(h.p);
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: assigning a laundered subplace alias into a struct field is precise
@@ -3659,10 +3659,10 @@ fn accept_assigned_laundered_struct_field_alias_before_move() -> u32 {
     var h: ResPtrHolder = .{ .p = &p.b };
     h.p = id_res(&p.a);
     let v: u32 = peek(h.p);
-    let x: Res = p.a;
-    let y: Res = p.b;
+    let x: Res = move p.a;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return v + consume(x) + consume(y);
+    return v + consume(move x) + consume(move y);
 }
 
 // Rejected: assigning a pointer returned from a call into a struct field preserves
@@ -3671,12 +3671,12 @@ fn reject_assigned_laundered_field_alias_in_struct_after_move() -> u32 {
     let p: Pair = mk();
     var h: ResPtrHolder = .{ .p = &p.b };
     h.p = id_res(&p.a);
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(h.p);
-    let y: Res = p.b;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: assigned struct-field aliases also preserve constant-index array
@@ -3690,7 +3690,7 @@ fn reject_assigned_laundered_array_element_alias_in_struct_after_move() -> u32 {
     let v: u32 = peek(h.p);
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: direct assignment of a subplace alias into a struct field is precise
@@ -3700,10 +3700,10 @@ fn accept_assigned_direct_subplace_alias_in_struct_before_move() -> u32 {
     var h: ResPtrHolder = .{ .p = &p.b };
     h.p = &p.a;
     let v: u32 = peek(h.p);
-    let x: Res = p.a;
-    let y: Res = p.b;
+    let x: Res = move p.a;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return v + consume(x) + consume(y);
+    return v + consume(move x) + consume(move y);
 }
 
 // Rejected: direct assignment of a field subplace alias into a struct field
@@ -3712,12 +3712,12 @@ fn reject_assigned_direct_field_alias_in_struct_after_move() -> u32 {
     let p: Pair = mk();
     var h: ResPtrHolder = .{ .p = &p.b };
     h.p = &p.a;
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(h.p);
-    let y: Res = p.b;
+    let y: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: direct assignment of a constant-index array element alias into a
@@ -3731,7 +3731,7 @@ fn reject_assigned_direct_array_element_alias_in_struct_after_move() -> u32 {
     let v: u32 = peek(h.p);
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
-    return consume(x) + consume(y) + v;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: struct fields inside constant-index array literal elements are
@@ -3741,8 +3741,8 @@ fn accept_array_struct_element_direct_alias_before_move() -> u32 {
     let r: Res = mkres(1);
     let arr: [1]ResPtrHolder = .{ .{ .p = &r } };
     let v: u32 = peek(arr[0].p);
-    let x: Res = r;
-    return consume(x) + v;
+    let x: Res = move r;
+    return consume(move x) + v;
 }
 
 // Rejected: the same array-element struct-field alias becomes stale after the
@@ -3750,10 +3750,10 @@ fn accept_array_struct_element_direct_alias_before_move() -> u32 {
 fn reject_array_struct_element_direct_alias_after_move() -> u32 {
     let r: Res = mkres(1);
     let arr: [1]ResPtrHolder = .{ .{ .p = &r } };
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(arr[0].p);
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Accepted: pointer-returning calls inside array-element struct fields use the
@@ -3762,8 +3762,8 @@ fn accept_array_struct_element_laundered_alias_before_move() -> u32 {
     let r: Res = mkres(1);
     let arr: [1]ResPtrHolder = .{ .{ .p = id_res(&r) } };
     let v: u32 = peek(arr[0].p);
-    let x: Res = r;
-    return consume(x) + v;
+    let x: Res = move r;
+    return consume(move x) + v;
 }
 
 // Rejected: laundered aliases stored under arr[0].p are also stale after the
@@ -3771,10 +3771,10 @@ fn accept_array_struct_element_laundered_alias_before_move() -> u32 {
 fn reject_array_struct_element_laundered_alias_after_move() -> u32 {
     let r: Res = mkres(1);
     let arr: [1]ResPtrHolder = .{ .{ .p = id_res(&r) } };
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(arr[0].p);
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: when every concrete array-literal element field stores the same
@@ -3782,10 +3782,10 @@ fn reject_array_struct_element_laundered_alias_after_move() -> u32 {
 fn reject_array_struct_literal_alias_dynamic_read_after_move(i: usize) -> u32 {
     let r: Res = mkres(1);
     let arr: [2]ResPtrHolder = .{ .{ .p = &r }, .{ .p = &r } };
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(arr[i].p);
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: the same all-elements dynamic-read rule applies to laundered
@@ -3793,10 +3793,10 @@ fn reject_array_struct_literal_alias_dynamic_read_after_move(i: usize) -> u32 {
 fn reject_array_struct_literal_laundered_alias_dynamic_read_after_move(i: usize) -> u32 {
     let r: Res = mkres(1);
     let arr: [2]ResPtrHolder = .{ .{ .p = id_res(&r) }, .{ .p = id_res(&r) } };
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(arr[i].p);
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: a dynamic field read is also stale if any concrete element may
@@ -3805,11 +3805,11 @@ fn reject_array_struct_literal_mixed_alias_dynamic_read_after_one_move(i: usize)
     let r0: Res = mkres(1);
     let r1: Res = mkres(2);
     let arr: [2]ResPtrHolder = .{ .{ .p = &r0 }, .{ .p = &r1 } };
-    let x: Res = r0;
+    let x: Res = move r0;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(arr[i].p);
-    let y: Res = r1;
-    return consume(x) + consume(y) + v;
+    let y: Res = move r1;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: dynamic reads from pointer array literals consult concrete element
@@ -3817,10 +3817,10 @@ fn reject_array_struct_literal_mixed_alias_dynamic_read_after_one_move(i: usize)
 fn reject_pointer_array_literal_alias_dynamic_read_after_move(i: usize) -> u32 {
     let r: Res = mkres(1);
     let ptrs: [2]*Res = .{ &r, &r };
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i]);
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: laundered concrete pointer array literal elements participate in
@@ -3828,10 +3828,10 @@ fn reject_pointer_array_literal_alias_dynamic_read_after_move(i: usize) -> u32 {
 fn reject_pointer_array_literal_laundered_alias_dynamic_read_after_move(i: usize) -> u32 {
     let r: Res = mkres(1);
     let ptrs: [2]*Res = .{ id_res(&r), id_res(&r) };
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i]);
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: a dynamic pointer-array read is unsafe if any possible concrete
@@ -3840,11 +3840,11 @@ fn reject_pointer_array_literal_mixed_alias_dynamic_read_after_one_move(i: usize
     let r0: Res = mkres(1);
     let r1: Res = mkres(2);
     let ptrs: [2]*Res = .{ &r0, &r1 };
-    let x: Res = r0;
+    let x: Res = move r0;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i]);
-    let y: Res = r1;
-    return consume(x) + consume(y) + v;
+    let y: Res = move r1;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: nested pointer array literal aliases are also consulted for dynamic
@@ -3852,10 +3852,10 @@ fn reject_pointer_array_literal_mixed_alias_dynamic_read_after_one_move(i: usize
 fn reject_nested_pointer_array_literal_alias_dynamic_read_after_move(i: usize) -> u32 {
     let r: Res = mkres(1);
     let ptrs: [2][1]*Res = .{ .{ &r }, .{ &r } };
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i][0]);
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: mixed nested pointer array literals are unsafe when the dynamic
@@ -3864,11 +3864,11 @@ fn reject_nested_pointer_array_literal_mixed_alias_dynamic_read_after_one_move(i
     let r0: Res = mkres(1);
     let r1: Res = mkres(2);
     let ptrs: [2][1]*Res = .{ .{ &r0 }, .{ &r1 } };
-    let x: Res = r0;
+    let x: Res = move r0;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i][0]);
-    let y: Res = r1;
-    return consume(x) + consume(y) + v;
+    let y: Res = move r1;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: two independent dynamic dimensions still range over concrete
@@ -3876,10 +3876,10 @@ fn reject_nested_pointer_array_literal_mixed_alias_dynamic_read_after_one_move(i
 fn reject_matrix_pointer_array_literal_dynamic_read_after_move(i: usize, j: usize) -> u32 {
     let r: Res = mkres(1);
     let ptrs: [2][2]*Res = .{ .{ &r, &r }, .{ &r, &r } };
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i][j]);
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: mixed matrix literals are also unsafe if any possible selected
@@ -3888,11 +3888,11 @@ fn reject_matrix_pointer_array_literal_mixed_dynamic_read_after_one_move(i: usiz
     let r0: Res = mkres(1);
     let r1: Res = mkres(2);
     let ptrs: [2][2]*Res = .{ .{ &r0, &r1 }, .{ &r1, &r1 } };
-    let x: Res = r0;
+    let x: Res = move r0;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i][j]);
-    let y: Res = r1;
-    return consume(x) + consume(y) + v;
+    let y: Res = move r1;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: matrix struct-field aliases recorded by literal initialization are
@@ -3903,10 +3903,10 @@ fn reject_matrix_struct_literal_alias_dynamic_read_after_move(i: usize, j: usize
         .{ .{ .p = &r }, .{ .p = &r } },
         .{ .{ .p = &r }, .{ .p = &r } },
     };
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(grid[i][j].p);
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: mixed matrix struct-field aliases are unsafe if any possible
@@ -3918,11 +3918,11 @@ fn reject_matrix_struct_literal_mixed_alias_dynamic_read_after_one_move(i: usize
         .{ .{ .p = &r0 }, .{ .p = &r1 } },
         .{ .{ .p = &r1 }, .{ .p = &r1 } },
     };
-    let x: Res = r0;
+    let x: Res = move r0;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(grid[i][j].p);
-    let y: Res = r1;
-    return consume(x) + consume(y) + v;
+    let y: Res = move r1;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: if two branch arms assign the same pointer-array slot to different
@@ -3936,11 +3936,11 @@ fn reject_branch_divergent_pointer_array_alias_referent_after_one_move(cond: boo
     } else {
         ptrs[0] = &r1;
     }
-    let x: Res = r1;
+    let x: Res = move r1;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i]);
-    let y: Res = r0;
-    return consume(x) + consume(y) + v;
+    let y: Res = move r0;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: matching alias referents across branch arms remain precise.
@@ -3953,8 +3953,8 @@ fn accept_branch_matching_pointer_array_alias_referent_before_move(cond: bool, i
         ptrs[0] = &r;
     }
     let v: u32 = peek(ptrs[i]);
-    let x: Res = r;
-    return consume(x) + v;
+    let x: Res = move r;
+    return consume(move x) + v;
 }
 
 // Rejected: switch joins have the same divergent alias-referent hazard.
@@ -3966,11 +3966,11 @@ fn reject_switch_divergent_pointer_array_alias_referent_after_one_move(cond: boo
         true => { ptrs[0] = &r0; },
         false => { ptrs[0] = &r1; },
     }
-    let x: Res = r1;
+    let x: Res = move r1;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i]);
-    let y: Res = r0;
-    return consume(x) + consume(y) + v;
+    let y: Res = move r0;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: alias referents changed inside a loop cannot stay precise after the
@@ -3982,11 +3982,11 @@ fn reject_loop_divergent_pointer_array_alias_referent_after_one_move(flag: bool,
     while flag {
         ptrs[0] = &r1;
     }
-    let x: Res = r1;
+    let x: Res = move r1;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i]);
-    let y: Res = r0;
-    return consume(x) + consume(y) + v;
+    let y: Res = move r0;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: break edges also carry divergent alias-referent facts out of loops.
@@ -3998,11 +3998,11 @@ fn reject_break_divergent_pointer_array_alias_referent_after_one_move(flag: bool
         ptrs[0] = &r1;
         break;
     }
-    let x: Res = r1;
+    let x: Res = move r1;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i]);
-    let y: Res = r0;
-    return consume(x) + consume(y) + v;
+    let y: Res = move r0;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: continue edges invalidate alias precision for the later condition
@@ -4015,11 +4015,11 @@ fn reject_continue_divergent_pointer_array_alias_referent_after_one_move(flag: b
         ptrs[0] = &r1;
         continue;
     }
-    let x: Res = r1;
+    let x: Res = move r1;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i]);
-    let y: Res = r0;
-    return consume(x) + consume(y) + v;
+    let y: Res = move r0;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: short-circuit RHS alias changes may or may not execute, so the
@@ -4031,11 +4031,11 @@ fn reject_short_circuit_divergent_pointer_array_alias_referent_after_one_move(fl
     if flag && { ptrs[0] = &r1; true; } {
         let n: u32 = 0;
     }
-    let x: Res = r1;
+    let x: Res = move r1;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(ptrs[i]);
-    let y: Res = r0;
-    return consume(x) + consume(y) + v;
+    let y: Res = move r0;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: if the RHS leaves the alias referent unchanged, the short-circuit
@@ -4047,8 +4047,8 @@ fn accept_short_circuit_matching_pointer_array_alias_referent_before_move(flag: 
         let n: u32 = 0;
     }
     let v: u32 = peek(ptrs[i]);
-    let x: Res = r;
-    return consume(x) + v;
+    let x: Res = move r;
+    return consume(move x) + v;
 }
 
 // Accepted: assigning a direct subplace alias into a struct field inside a
@@ -4059,9 +4059,9 @@ fn accept_assigned_array_struct_element_direct_alias_before_move() -> u32 {
     var arr: [1]ResPtrHolder = .{ .{ .p = &other } };
     arr[0].p = &r;
     let v: u32 = peek(arr[0].p);
-    let x: Res = r;
-    let y: Res = other;
-    return consume(x) + consume(y) + v;
+    let x: Res = move r;
+    let y: Res = move other;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: the assignment path must preserve the same stale-alias check for
@@ -4071,11 +4071,11 @@ fn reject_assigned_array_struct_element_direct_alias_after_move() -> u32 {
     var other: Res = mkres(2);
     var arr: [1]ResPtrHolder = .{ .{ .p = &other } };
     arr[0].p = &r;
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(arr[0].p);
-    let y: Res = other;
-    return consume(x) + consume(y) + v;
+    let y: Res = move other;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: laundered pointer results assigned into array-element struct fields
@@ -4086,9 +4086,9 @@ fn accept_assigned_array_struct_element_laundered_alias_before_move() -> u32 {
     var arr: [1]ResPtrHolder = .{ .{ .p = &other } };
     arr[0].p = id_res(&r);
     let v: u32 = peek(arr[0].p);
-    let x: Res = r;
-    let y: Res = other;
-    return consume(x) + consume(y) + v;
+    let x: Res = move r;
+    let y: Res = move other;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: laundered assignments into array-element struct fields become stale
@@ -4098,11 +4098,11 @@ fn reject_assigned_array_struct_element_laundered_alias_after_move() -> u32 {
     var other: Res = mkres(2);
     var arr: [1]ResPtrHolder = .{ .{ .p = &other } };
     arr[0].p = id_res(&r);
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(arr[0].p);
-    let y: Res = other;
-    return consume(x) + consume(y) + v;
+    let y: Res = move other;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: a successful dynamic index into a singleton array denotes `arr[0]`,
@@ -4113,9 +4113,9 @@ fn accept_assigned_singleton_dynamic_array_struct_field_alias_before_move(i: usi
     var arr: [1]ResPtrHolder = .{ .{ .p = &other } };
     arr[i].p = &r;
     let v: u32 = peek(arr[i].p);
-    let x: Res = r;
-    let y: Res = other;
-    return consume(x) + consume(y) + v;
+    let x: Res = move r;
+    let y: Res = move other;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: singleton dynamic array-element struct-field aliases become stale
@@ -4125,11 +4125,11 @@ fn reject_assigned_singleton_dynamic_array_struct_field_alias_after_move(i: usiz
     var other: Res = mkres(2);
     var arr: [1]ResPtrHolder = .{ .{ .p = &other } };
     arr[i].p = &r;
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(arr[i].p);
-    let y: Res = other;
-    return consume(x) + consume(y) + v;
+    let y: Res = move other;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: laundered aliases assigned into singleton dynamic array-element
@@ -4140,9 +4140,9 @@ fn accept_assigned_singleton_dynamic_array_struct_field_laundered_alias_before_m
     var arr: [1]ResPtrHolder = .{ .{ .p = &other } };
     arr[i].p = id_res(&r);
     let v: u32 = peek(arr[i].p);
-    let x: Res = r;
-    let y: Res = other;
-    return consume(x) + consume(y) + v;
+    let x: Res = move r;
+    let y: Res = move other;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Rejected: laundered singleton dynamic array-element struct-field aliases are
@@ -4152,11 +4152,11 @@ fn reject_assigned_singleton_dynamic_array_struct_field_laundered_alias_after_mo
     var other: Res = mkres(2);
     var arr: [1]ResPtrHolder = .{ .{ .p = &other } };
     arr[i].p = id_res(&r);
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek(arr[i].p);
-    let y: Res = other;
-    return consume(x) + consume(y) + v;
+    let y: Res = move other;
+    return consume(move x) + consume(move y) + v;
 }
 
 // Accepted: assigning through a dynamic index into a multi-element array-element
@@ -4166,8 +4166,8 @@ fn accept_assigned_dynamic_multi_array_struct_field_alias_before_move(i: usize) 
     var arr: [2]ResPtrHolder = .{ .{ .p = &r }, .{ .p = &r } };
     arr[i].p = &r;
     let v: u32 = arr[i].p.v;
-    let x: Res = r;
-    return consume(x) + v;
+    let x: Res = move r;
+    return consume(move x) + v;
 }
 
 // Rejected: a wildcard field alias is stale for a later dynamic element-field
@@ -4176,10 +4176,10 @@ fn reject_assigned_dynamic_multi_array_struct_field_alias_after_move(i: usize, j
     let r: Res = mkres(1);
     var arr: [2]ResPtrHolder = .{ .{ .p = &r }, .{ .p = &r } };
     arr[i].p = &r;
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = arr[j].p.v;
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: wildcard field aliases also poison constant element-field reads,
@@ -4188,10 +4188,10 @@ fn reject_assigned_dynamic_multi_array_struct_field_alias_constant_read_after_mo
     let r: Res = mkres(1);
     var arr: [2]ResPtrHolder = .{ .{ .p = &r }, .{ .p = &r } };
     arr[i].p = &r;
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = arr[0].p.v;
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: passing a concrete aggregate element to a call also scans the
@@ -4200,10 +4200,10 @@ fn reject_assigned_dynamic_multi_array_struct_field_alias_call_arg_after_move(i:
     let r: Res = mkres(1);
     var arr: [2]ResPtrHolder = .{ .{ .p = &r }, .{ .p = &r } };
     arr[i].p = &r;
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = peek_holder(arr[0]);
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Accepted: laundered pointer results assigned into dynamic multi-element
@@ -4213,8 +4213,8 @@ fn accept_assigned_dynamic_multi_array_struct_field_laundered_alias_before_move(
     var arr: [2]ResPtrHolder = .{ .{ .p = &r }, .{ .p = &r } };
     arr[i].p = id_res(&r);
     let v: u32 = arr[i].p.v;
-    let x: Res = r;
-    return consume(x) + v;
+    let x: Res = move r;
+    return consume(move x) + v;
 }
 
 // Rejected: laundered wildcard field aliases are stale after the referent moves.
@@ -4222,10 +4222,10 @@ fn reject_assigned_dynamic_multi_array_struct_field_laundered_alias_after_move(i
     let r: Res = mkres(1);
     var arr: [2]ResPtrHolder = .{ .{ .p = &r }, .{ .p = &r } };
     arr[i].p = id_res(&r);
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = arr[j].p.v;
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Accepted: wildcard aliases also carry nested member paths, so an assignment
@@ -4235,8 +4235,8 @@ fn accept_assigned_dynamic_multi_nested_array_struct_field_alias_before_move(i: 
     var arr: [2]NestedResPtrHolder = .{ .{ .inner = .{ .p = &r } }, .{ .inner = .{ .p = &r } } };
     arr[i].inner.p = &r;
     let v: u32 = arr[i].inner.p.v;
-    let x: Res = r;
-    return consume(x) + v;
+    let x: Res = move r;
+    return consume(move x) + v;
 }
 
 // Rejected: the nested wildcard field alias is stale for any later dynamic
@@ -4245,10 +4245,10 @@ fn reject_assigned_dynamic_multi_nested_array_struct_field_alias_after_move(i: u
     let r: Res = mkres(1);
     var arr: [2]NestedResPtrHolder = .{ .{ .inner = .{ .p = &r } }, .{ .inner = .{ .p = &r } } };
     arr[i].inner.p = &r;
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = arr[j].inner.p.v;
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: nested wildcard field aliases also poison constant element reads,
@@ -4257,10 +4257,10 @@ fn reject_assigned_dynamic_multi_nested_array_struct_field_alias_constant_read_a
     let r: Res = mkres(1);
     var arr: [2]NestedResPtrHolder = .{ .{ .inner = .{ .p = &r } }, .{ .inner = .{ .p = &r } } };
     arr[i].inner.p = &r;
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = arr[0].inner.p.v;
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Accepted: laundered pointer results assigned through nested wildcard field
@@ -4270,8 +4270,8 @@ fn accept_assigned_dynamic_multi_nested_array_struct_field_laundered_alias_befor
     var arr: [2]NestedResPtrHolder = .{ .{ .inner = .{ .p = &r } }, .{ .inner = .{ .p = &r } } };
     arr[i].inner.p = id_res(&r);
     let v: u32 = arr[i].inner.p.v;
-    let x: Res = r;
-    return consume(x) + v;
+    let x: Res = move r;
+    return consume(move x) + v;
 }
 
 // Rejected: laundered nested wildcard field aliases become stale after the
@@ -4280,164 +4280,164 @@ fn reject_assigned_dynamic_multi_nested_array_struct_field_laundered_alias_after
     let r: Res = mkres(1);
     var arr: [2]NestedResPtrHolder = .{ .{ .inner = .{ .p = &r } }, .{ .inner = .{ .p = &r } } };
     arr[i].inner.p = id_res(&r);
-    let x: Res = r;
+    let x: Res = move r;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let v: u32 = arr[j].inner.p.v;
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: moving the whole aggregate after a field was already taken.
 fn reject_whole_after_partial() -> u32 {
     let p: Pair = mk();
-    let x: Res = p.a;
+    let x: Res = move p.a;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let r: u32 = take_whole(p);
-    return consume(x) + r;
+    let r: u32 = take_whole(move p);
+    return consume(move x) + r;
 }
 
 // Rejected: moving the whole move struct after one of its array field elements
 // was taken would duplicate the moved element.
 fn reject_whole_after_array_field_partial() -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[0];
+    let x: Res = move box.items[0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: ResArrayBox = box;
+    let y: ResArrayBox = move box;
     unsafe { forget_unchecked(y); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: moving the whole move struct after a symbolic array-field child
 // move would duplicate that symbolic child place.
 fn reject_whole_after_symbolic_array_field_partial(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[i + 0];
+    let x: Res = move box.items[i + 0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: ResArrayBox = box;
+    let y: ResArrayBox = move box;
     unsafe { forget_unchecked(y); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: moving the array field itself after one concrete element was taken
 // would duplicate that element.
 fn reject_array_field_after_concrete_element_move() -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[0];
-    let moved: ResArray = box.items; // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let x: Res = move box.items[0];
+    let moved: ResArray = move box.items; // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(moved); }
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: moving the array field itself after an unknown dynamic element was
 // taken would duplicate the wildcard-moved element.
 fn reject_array_field_after_wildcard_element_move() -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[dynamic_index()];
-    let moved: ResArray = box.items; // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let x: Res = move box.items[dynamic_index()];
+    let moved: ResArray = move box.items; // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(moved); }
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: moving the array field itself after a symbolic child move would
 // duplicate that symbolic child place.
 fn reject_array_field_after_symbolic_element_move(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[i + 0];
-    let moved: ResArray = box.items; // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let x: Res = move box.items[i + 0];
+    let moved: ResArray = move box.items; // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(moved); }
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: assigning the array field after a concrete child element was moved
 // would overwrite a partially moved field.
 fn reject_array_field_assignment_after_concrete_element_move() -> u32 {
     var box: ResArrayBox = mkbox();
-    let x: Res = box.items[0];
+    let x: Res = move box.items[0];
     box.items = .{ mkres(3), mkres(4) }; // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: assigning the array field after an unknown dynamic child move has
 // the same partial-move conflict.
 fn reject_array_field_assignment_after_wildcard_element_move() -> u32 {
     var box: ResArrayBox = mkbox();
-    let x: Res = box.items[dynamic_index()];
+    let x: Res = move box.items[dynamic_index()];
     box.items = .{ mkres(3), mkres(4) }; // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: assigning the array field after a symbolic child move has the same
 // partial-move conflict.
 fn reject_array_field_assignment_after_symbolic_element_move(i: usize) -> u32 {
     var box: ResArrayBox = mkbox();
-    let x: Res = box.items[i + 0];
+    let x: Res = move box.items[i + 0];
     box.items = .{ mkres(3), mkres(4) }; // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: deferring cleanup of the array field after one child was moved would
 // reserve a field that already contains a moved-out element.
 fn reject_defer_array_field_after_concrete_element_move() -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[0];
-    defer consume(box.items); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let x: Res = move box.items[0];
+    defer consume(move box.items); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: dynamic child moves also poison later deferred cleanup of the whole
 // array field.
 fn reject_defer_array_field_after_wildcard_element_move() -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[dynamic_index()];
-    defer consume(box.items); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let x: Res = move box.items[dynamic_index()];
+    defer consume(move box.items); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: symbolic child moves also poison later deferred cleanup of the whole
 // array field.
 fn reject_defer_array_field_after_symbolic_element_move(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[i + 0];
-    defer consume(box.items); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let x: Res = move box.items[i + 0];
+    defer consume(move box.items); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(box); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: borrowing the array field after a concrete child element was moved
 // would expose a partially moved field as if it were intact.
 fn reject_borrow_array_field_after_concrete_element_move() -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[0];
+    let x: Res = move box.items[0];
     let v: u32 = peek_res_array(&box.items); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(box); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: borrowing the array field after an unknown dynamic child move has
 // the same partial-field conflict.
 fn reject_borrow_array_field_after_wildcard_element_move() -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[dynamic_index()];
+    let x: Res = move box.items[dynamic_index()];
     let v: u32 = peek_res_array(&box.items); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(box); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: symbolic child moves also poison later borrows of the whole
 // array field.
 fn reject_borrow_array_field_after_symbolic_element_move(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    let x: Res = box.items[i + 0];
+    let x: Res = move box.items[i + 0];
     let v: u32 = peek_res_array(&box.items); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(box); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: borrowing the whole array owner after a child element was moved would
@@ -4447,7 +4447,7 @@ fn reject_borrow_array_root_after_concrete_element_move() -> u32 {
     let x: Res = arr[0];
     let v: u32 = peek_res_array(&arr); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(arr); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: symbolic child moves also poison later borrows of the whole
@@ -4457,7 +4457,7 @@ fn reject_borrow_array_root_after_symbolic_element_move(i: usize) -> u32 {
     let x: Res = arr[i + 0];
     let v: u32 = peek_res_array(&arr); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(arr); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: moving the whole array root after a symbolic child move would
@@ -4466,9 +4466,9 @@ fn reject_whole_array_root_after_symbolic_element_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let x: Res = arr[i + 0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let moved: ResArray = arr;
+    let moved: ResArray = move arr;
     unsafe { forget_unchecked(moved); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: nested wildcard child moves also poison later borrows of the whole
@@ -4478,7 +4478,7 @@ fn reject_borrow_matrix_root_after_wildcard_nested_element_move() -> u32 {
     let x: Res = matrix[dynamic_index()][0];
     let v: u32 = peek_res_matrix(&matrix); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: moving the whole matrix root after a symbolic nested child move
@@ -4487,9 +4487,9 @@ fn reject_whole_matrix_root_after_symbolic_nested_element_move(i: usize) -> u32 
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
     let x: Res = matrix[i + 0][0];
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let moved: ResMatrix = matrix;
+    let moved: ResMatrix = move matrix;
     unsafe { forget_unchecked(moved); }
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: nested symbolic child moves poison later borrows of the whole
@@ -4499,7 +4499,7 @@ fn reject_borrow_matrix_root_after_symbolic_nested_element_move(i: usize) -> u32
     let x: Res = matrix[i + 0][0];
     let v: u32 = peek_res_matrix(&matrix); // EXPECT_ERROR: E_USE_AFTER_MOVE
     unsafe { forget_unchecked(matrix); }
-    return consume(x) + v;
+    return consume(move x) + v;
 }
 
 // Rejected: one branch moves a field and the other leaves it live, so the joined
@@ -4507,8 +4507,8 @@ fn reject_borrow_matrix_root_after_symbolic_nested_element_move(i: usize) -> u32
 fn reject_branch_partial_field_move(cond: bool) -> u32 {
     let p: Pair = mk();
     if cond {
-        let x: Res = p.a; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-        let y: u32 = consume(x);
+        let x: Res = move p.a; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+        let y: u32 = consume(move x);
     }
     unsafe { forget_unchecked(p); }
     return 0;
@@ -4522,7 +4522,7 @@ fn reject_labeled_break_outer_move_local_leak(cond: bool) -> u32 {
         while cond {
             break :outer;
         }
-        let v: u32 = consume(r);
+        let v: u32 = consume(move r);
     }
     return 0;
 }
@@ -4535,7 +4535,7 @@ fn reject_labeled_continue_outer_move_local_leak(cond: bool) -> u32 {
         while cond {
             continue :outer;
         }
-        let v: u32 = consume(r);
+        let v: u32 = consume(move r);
     }
     return 0;
 }
@@ -4546,7 +4546,7 @@ fn accept_labeled_break_outer_consumed(cond: bool) -> u32 {
     outer: while cond {
         let r: Res = mkres(1);
         while cond {
-            let v: u32 = consume(r);
+            let v: u32 = consume(move r);
             break :outer;
             return v;
         }
@@ -4559,7 +4559,7 @@ fn accept_labeled_continue_outer_consumed(cond: bool) -> u32 {
     outer: while cond {
         let r: Res = mkres(1);
         while cond {
-            let v: u32 = consume(r);
+            let v: u32 = consume(move r);
             continue :outer;
             return v;
         }
@@ -4571,8 +4571,8 @@ fn accept_labeled_continue_outer_consumed(cond: bool) -> u32 {
 fn reject_branch_array_element_move(cond: bool) -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };
     if cond {
-        let x: Res = arr[0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-        let y: u32 = consume(x);
+        let x: Res = move arr[0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+        let y: u32 = consume(move x);
     }
     unsafe { forget_unchecked(arr); }
     return 0;
@@ -4583,7 +4583,7 @@ fn reject_branch_array_element_move(cond: bool) -> u32 {
 fn reject_branch_array_param_element_move(arr: ResArray, cond: bool) -> u32 {
     if cond {
         let x: Res = arr[0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     unsafe { forget_unchecked(arr); }
     return 0;
@@ -4593,8 +4593,8 @@ fn reject_branch_array_param_element_move(arr: ResArray, cond: bool) -> u32 {
 fn reject_branch_array_field_element_move(cond: bool) -> u32 {
     let box: ResArrayBox = mkbox();
     if cond {
-        let x: Res = box.items[0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-        let y: u32 = consume(x);
+        let x: Res = move box.items[0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+        let y: u32 = consume(move x);
     }
     unsafe { forget_unchecked(box); }
     return 0;
@@ -4605,7 +4605,7 @@ fn reject_branch_dynamic_array_element_move(cond: bool, i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     if cond {
         let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     unsafe { forget_unchecked(arr); }
     return 0;
@@ -4617,7 +4617,7 @@ fn reject_branch_dynamic_nested_array_element_move(cond: bool, i: usize) -> u32 
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
     if cond {
         let x: Res = matrix[i][0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     unsafe { forget_unchecked(matrix); }
     return 0;
@@ -4628,7 +4628,7 @@ fn reject_branch_dynamic_nested_array_element_move(cond: bool, i: usize) -> u32 
 fn reject_branch_dynamic_array_param_element_move(arr: ResArray, cond: bool, i: usize) -> u32 {
     if cond {
         let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     unsafe { forget_unchecked(arr); }
     return 0;
@@ -4638,7 +4638,7 @@ fn reject_branch_dynamic_array_param_element_move(arr: ResArray, cond: bool, i: 
 fn reject_branch_dynamic_matrix_param_element_move(matrix: ResMatrix, cond: bool, i: usize) -> u32 {
     if cond {
         let x: Res = matrix[i][0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     unsafe { forget_unchecked(matrix); }
     return 0;
@@ -4649,8 +4649,8 @@ fn reject_branch_dynamic_matrix_param_element_move(matrix: ResMatrix, cond: bool
 fn reject_branch_dynamic_array_field_element_move(cond: bool, i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
     if cond {
-        let x: Res = box.items[i]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-        let y: u32 = consume(x);
+        let x: Res = move box.items[i]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+        let y: u32 = consume(move x);
     }
     unsafe { forget_unchecked(box); }
     return 0;
@@ -4662,8 +4662,8 @@ fn reject_switch_partial_field_move(cond: bool) -> u32 {
     let p: Pair = mk();
     switch cond {
         true => {
-            let x: Res = p.a; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-            let y: u32 = consume(x);
+            let x: Res = move p.a; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+            let y: u32 = consume(move x);
         },
         false => {},
     }
@@ -4677,7 +4677,7 @@ fn reject_switch_array_element_move(cond: bool) -> u32 {
     switch cond {
         true => {
             let x: Res = arr[0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-            let y: u32 = consume(x);
+            let y: u32 = consume(move x);
         },
         false => {},
     }
@@ -4690,7 +4690,7 @@ fn reject_switch_array_param_element_move(arr: ResArray, cond: bool) -> u32 {
     switch cond {
         true => {
             let x: Res = arr[0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-            let y: u32 = consume(x);
+            let y: u32 = consume(move x);
         },
         false => {},
     }
@@ -4703,8 +4703,8 @@ fn reject_switch_array_field_element_move(cond: bool) -> u32 {
     let box: ResArrayBox = mkbox();
     switch cond {
         true => {
-            let x: Res = box.items[0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-            let y: u32 = consume(x);
+            let x: Res = move box.items[0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+            let y: u32 = consume(move x);
         },
         false => {},
     }
@@ -4719,7 +4719,7 @@ fn reject_switch_dynamic_array_element_move(cond: bool, i: usize) -> u32 {
     switch cond {
         true => {
             let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-            let y: u32 = consume(x);
+            let y: u32 = consume(move x);
         },
         false => {},
     }
@@ -4734,7 +4734,7 @@ fn reject_switch_dynamic_nested_array_element_move(cond: bool, i: usize) -> u32 
     switch cond {
         true => {
             let x: Res = matrix[i][0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-            let y: u32 = consume(x);
+            let y: u32 = consume(move x);
         },
         false => {},
     }
@@ -4748,7 +4748,7 @@ fn reject_switch_dynamic_array_param_element_move(arr: ResArray, cond: bool, i: 
     switch cond {
         true => {
             let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-            let y: u32 = consume(x);
+            let y: u32 = consume(move x);
         },
         false => {},
     }
@@ -4761,7 +4761,7 @@ fn reject_switch_dynamic_matrix_param_element_move(matrix: ResMatrix, cond: bool
     switch cond {
         true => {
             let x: Res = matrix[i][0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-            let y: u32 = consume(x);
+            let y: u32 = consume(move x);
         },
         false => {},
     }
@@ -4775,8 +4775,8 @@ fn reject_switch_dynamic_array_field_element_move(cond: bool, i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
     switch cond {
         true => {
-            let x: Res = box.items[i]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-            let y: u32 = consume(x);
+            let x: Res = move box.items[i]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+            let y: u32 = consume(move x);
         },
         false => {},
     }
@@ -4791,7 +4791,7 @@ fn reject_switch_dynamic_nested_array_field_element_move(cond: bool, i: usize) -
     switch cond {
         true => {
             let x: Res = box.items[i][0]; // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
-            let y: u32 = consume(x);
+            let y: u32 = consume(move x);
         },
         false => {},
     }
@@ -4803,7 +4803,7 @@ fn reject_switch_dynamic_nested_array_field_element_move(cond: bool, i: usize) -
 // the left side guarantees that path always runs.
 fn reject_short_circuit_partial_field_move(flag: bool) -> u32 {
     let p: Pair = mk();
-    if flag && consume(p.a) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move p.a) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         return 1;
     }
     return 0;
@@ -4812,7 +4812,7 @@ fn reject_short_circuit_partial_field_move(flag: bool) -> u32 {
 // Rejected: a short-circuit RHS may not move a concrete array element either.
 fn reject_short_circuit_array_element_move(flag: bool) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    if flag && consume(arr[0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move arr[0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4824,7 +4824,7 @@ fn reject_short_circuit_array_element_move(flag: bool) -> u32 {
 // the RHS may not run and the post-expression state would be inconsistent.
 fn reject_short_circuit_dynamic_array_element_move(flag: bool, i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    if flag && consume(arr[i]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move arr[i]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4835,7 +4835,7 @@ fn reject_short_circuit_dynamic_array_element_move(flag: bool, i: usize) -> u32 
 // Rejected: short-circuit RHS joins preserve symbolic dynamic array places.
 fn reject_short_circuit_symbolic_array_element_move(flag: bool, i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    if flag && consume(arr[i + 0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move arr[i + 0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4846,7 +4846,7 @@ fn reject_short_circuit_symbolic_array_element_move(flag: bool, i: usize) -> u32
 // Rejected: short-circuit RHS joins preserve bounded symbolic offset places.
 fn reject_short_circuit_symbolic_offset_array_element_move(flag: bool, i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    if flag && consume(arr[i + 1]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move arr[i + 1]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4857,7 +4857,7 @@ fn reject_short_circuit_symbolic_offset_array_element_move(flag: bool, i: usize)
 // Rejected: short-circuit RHS joins preserve canonical linear symbolic places.
 fn reject_short_circuit_symbolic_linear_array_element_move(flag: bool, i: usize, j: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    if flag && consume(arr[i + j + 1]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move arr[i + j + 1]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4869,7 +4869,7 @@ fn reject_short_circuit_symbolic_linear_array_element_move(flag: bool, i: usize,
 // places.
 fn reject_short_circuit_dynamic_nested_array_element_move(flag: bool, i: usize) -> u32 {
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
-    if flag && consume(matrix[i][0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move matrix[i][0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4880,7 +4880,7 @@ fn reject_short_circuit_dynamic_nested_array_element_move(flag: bool, i: usize) 
 // Rejected: short-circuit RHS joins preserve parameter-rooted array element
 // moves as well as local array roots.
 fn reject_short_circuit_array_param_element_move(arr: ResArray, flag: bool) -> u32 {
-    if flag && consume(arr[0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move arr[0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4891,7 +4891,7 @@ fn reject_short_circuit_array_param_element_move(arr: ResArray, flag: bool) -> u
 // Rejected: wildcard dynamic parameter-rooted array element moves are also
 // preserved on short-circuit RHS edges.
 fn reject_short_circuit_dynamic_array_param_element_move(arr: ResArray, flag: bool, i: usize) -> u32 {
-    if flag && consume(arr[i]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move arr[i]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4902,7 +4902,7 @@ fn reject_short_circuit_dynamic_array_param_element_move(arr: ResArray, flag: bo
 // Rejected: short-circuit RHS joins preserve nested wildcard parameter-rooted
 // array places.
 fn reject_short_circuit_dynamic_matrix_param_element_move(matrix: ResMatrix, flag: bool, i: usize) -> u32 {
-    if flag && consume(matrix[i][0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move matrix[i][0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4913,7 +4913,7 @@ fn reject_short_circuit_dynamic_matrix_param_element_move(matrix: ResMatrix, fla
 // Rejected: short-circuit RHS joins preserve nested symbolic parameter-rooted
 // places.
 fn reject_short_circuit_symbolic_matrix_param_element_move(matrix: ResMatrix, flag: bool, i: usize) -> u32 {
-    if flag && consume(matrix[i + 0][0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move matrix[i + 0][0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4936,7 +4936,7 @@ fn reject_short_circuit_symbolic_modulo_zero_array_param_element_move(arr: ResAr
 // elements.
 fn reject_short_circuit_array_field_element_move(flag: bool) -> u32 {
     let box: ResArrayBox = mkbox();
-    if flag && consume(box.items[0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move box.items[0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(box); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4948,7 +4948,7 @@ fn reject_short_circuit_array_field_element_move(flag: bool) -> u32 {
 // short-circuit RHS edges too.
 fn reject_short_circuit_dynamic_array_field_element_move(flag: bool, i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    if flag && consume(box.items[i]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move box.items[i]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(box); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4960,7 +4960,7 @@ fn reject_short_circuit_dynamic_array_field_element_move(flag: bool, i: usize) -
 // elements inside move-struct fields.
 fn reject_short_circuit_dynamic_nested_array_field_element_move(flag: bool, i: usize) -> u32 {
     let box: ResMatrixBox = mkmatrixbox();
-    if flag && consume(box.items[i][0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move box.items[i][0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(box); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4972,7 +4972,7 @@ fn reject_short_circuit_dynamic_nested_array_field_element_move(flag: bool, i: u
 // through move-struct array fields.
 fn reject_short_circuit_symbolic_array_field_element_move(flag: bool, i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    if flag && consume(box.items[i + 0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move box.items[i + 0]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(box); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4984,7 +4984,7 @@ fn reject_short_circuit_symbolic_array_field_element_move(flag: bool, i: usize) 
 // on short-circuit RHS edges.
 fn reject_short_circuit_dynamic_singleton_array_element_move(flag: bool, i: usize) -> u32 {
     let arr: SingleResArray = .{ mkres(1) };
-    if flag && consume(arr[i]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move arr[i]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -4996,7 +4996,7 @@ fn reject_short_circuit_dynamic_singleton_array_element_move(flag: bool, i: usiz
 // through move-struct array fields.
 fn reject_short_circuit_dynamic_singleton_array_field_element_move(flag: bool, i: usize) -> u32 {
     let box: SingleResArrayBox = mksinglebox();
-    if flag && consume(box.items[i]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move box.items[i]) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         unsafe { forget_unchecked(box); } // EXPECT_ERROR: E_USE_AFTER_MOVE
         return 1;
     }
@@ -5009,8 +5009,8 @@ fn reject_short_circuit_dynamic_singleton_array_field_element_move(flag: bool, i
 fn reject_loop_partial_field_move(flag: bool) -> u32 {
     let p: Pair = mk();
     while flag {
-        let x: Res = p.a; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let x: Res = move p.a; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+        let y: u32 = consume(move x);
     }
     return 0;
 }
@@ -5020,8 +5020,8 @@ fn reject_loop_partial_field_move(flag: bool) -> u32 {
 fn reject_loop_array_element_move(flag: bool) -> u32 {
     let arr: [2]Res = .{ mkres(1), mkres(2) };
     while flag {
-        let x: Res = arr[0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let x: Res = move arr[0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+        let y: u32 = consume(move x);
     }
     return 0;
 }
@@ -5031,8 +5031,8 @@ fn reject_loop_array_element_move(flag: bool) -> u32 {
 fn reject_break_after_partial_field_move(flag: bool) -> u32 {
     let p: Pair = mk();
     while flag {
-        let x: Res = p.a; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let x: Res = move p.a; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+        let y: u32 = consume(move x);
         break;
     }
     unsafe { forget_unchecked(p); }
@@ -5044,7 +5044,7 @@ fn reject_break_after_array_element_move(flag: bool) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     while flag {
         let x: Res = arr[0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         break;
     }
     unsafe { forget_unchecked(arr); }
@@ -5057,7 +5057,7 @@ fn reject_break_after_dynamic_array_element_move(flag: bool, i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     while flag {
         let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         break;
     }
     unsafe { forget_unchecked(arr); }
@@ -5070,7 +5070,7 @@ fn reject_break_after_symbolic_array_element_move(flag: bool, i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     while flag {
         let x: Res = arr[i + 0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         break;
     }
     unsafe { forget_unchecked(arr); }
@@ -5082,7 +5082,7 @@ fn reject_break_after_symbolic_offset_array_element_move(flag: bool, i: usize) -
     let arr: ResArray = .{ mkres(1), mkres(2) };
     while flag {
         let x: Res = arr[i + 1]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         break;
     }
     unsafe { forget_unchecked(arr); }
@@ -5094,7 +5094,7 @@ fn reject_break_after_dynamic_nested_array_element_move(flag: bool, i: usize) ->
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
     while flag {
         let x: Res = matrix[i][0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         break;
     }
     unsafe { forget_unchecked(matrix); }
@@ -5105,8 +5105,8 @@ fn reject_break_after_dynamic_nested_array_element_move(flag: bool, i: usize) ->
 fn reject_break_after_array_field_element_move(flag: bool) -> u32 {
     let box: ResArrayBox = mkbox();
     while flag {
-        let x: Res = box.items[0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let x: Res = move box.items[0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+        let y: u32 = consume(move x);
         break;
     }
     unsafe { forget_unchecked(box); }
@@ -5118,8 +5118,8 @@ fn reject_break_after_array_field_element_move(flag: bool) -> u32 {
 fn reject_break_after_dynamic_array_field_element_move(flag: bool, i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
     while flag {
-        let x: Res = box.items[i]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let x: Res = move box.items[i]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+        let y: u32 = consume(move x);
         break;
     }
     unsafe { forget_unchecked(box); }
@@ -5132,7 +5132,7 @@ fn reject_break_after_dynamic_nested_array_field_element_move(flag: bool, i: usi
     let box: ResMatrixBox = mkmatrixbox();
     while flag {
         let x: Res = box.items[i][0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         break;
     }
     unsafe { forget_unchecked(box); }
@@ -5144,8 +5144,8 @@ fn reject_break_after_dynamic_nested_array_field_element_move(flag: bool, i: usi
 fn reject_continue_after_partial_field_move(flag: bool) -> u32 {
     let p: Pair = mk();
     while flag {
-        let x: Res = p.a; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let x: Res = move p.a; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+        let y: u32 = consume(move x);
         continue;
     }
     unsafe { forget_unchecked(p); }
@@ -5157,7 +5157,7 @@ fn reject_continue_after_array_element_move(flag: bool) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     while flag {
         let x: Res = arr[0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         continue;
     }
     unsafe { forget_unchecked(arr); }
@@ -5169,7 +5169,7 @@ fn reject_continue_after_dynamic_array_element_move(flag: bool, i: usize) -> u32
     let arr: ResArray = .{ mkres(1), mkres(2) };
     while flag {
         let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         continue;
     }
     unsafe { forget_unchecked(arr); }
@@ -5182,7 +5182,7 @@ fn reject_continue_after_symbolic_array_element_move(flag: bool, i: usize) -> u3
     let arr: ResArray = .{ mkres(1), mkres(2) };
     while flag {
         let x: Res = arr[0 + i]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         continue;
     }
     unsafe { forget_unchecked(arr); }
@@ -5194,7 +5194,7 @@ fn reject_continue_after_symbolic_offset_array_element_move(flag: bool, i: usize
     let arr: ResArray = .{ mkres(1), mkres(2) };
     while flag {
         let x: Res = arr[1 + i]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         continue;
     }
     unsafe { forget_unchecked(arr); }
@@ -5206,7 +5206,7 @@ fn reject_continue_after_dynamic_nested_array_element_move(flag: bool, i: usize)
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
     while flag {
         let x: Res = matrix[i][0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         continue;
     }
     unsafe { forget_unchecked(matrix); }
@@ -5218,7 +5218,7 @@ fn reject_continue_after_dynamic_nested_array_element_move(flag: bool, i: usize)
 fn reject_break_after_dynamic_matrix_param_element_move(matrix: ResMatrix, flag: bool, i: usize) -> u32 {
     while flag {
         let x: Res = matrix[i][0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         break;
     }
     unsafe { forget_unchecked(matrix); }
@@ -5230,7 +5230,7 @@ fn reject_break_after_dynamic_matrix_param_element_move(matrix: ResMatrix, flag:
 fn reject_continue_after_dynamic_matrix_param_element_move(matrix: ResMatrix, flag: bool, i: usize) -> u32 {
     while flag {
         let x: Res = matrix[i][0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         continue;
     }
     unsafe { forget_unchecked(matrix); }
@@ -5241,8 +5241,8 @@ fn reject_continue_after_dynamic_matrix_param_element_move(matrix: ResMatrix, fl
 fn reject_continue_after_array_field_element_move(flag: bool) -> u32 {
     let box: ResArrayBox = mkbox();
     while flag {
-        let x: Res = box.items[0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let x: Res = move box.items[0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+        let y: u32 = consume(move x);
         continue;
     }
     unsafe { forget_unchecked(box); }
@@ -5254,8 +5254,8 @@ fn reject_continue_after_array_field_element_move(flag: bool) -> u32 {
 fn reject_continue_after_dynamic_array_field_element_move(flag: bool, i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
     while flag {
-        let x: Res = box.items[i]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let x: Res = move box.items[i]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+        let y: u32 = consume(move x);
         continue;
     }
     unsafe { forget_unchecked(box); }
@@ -5268,7 +5268,7 @@ fn reject_continue_after_dynamic_nested_array_field_element_move(flag: bool, i: 
     let box: ResMatrixBox = mkmatrixbox();
     while flag {
         let x: Res = box.items[i][0]; // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
         continue;
     }
     unsafe { forget_unchecked(box); }
@@ -5278,7 +5278,7 @@ fn reject_continue_after_dynamic_nested_array_field_element_move(flag: bool, i: 
 // Rejected: the same place rule applies to a while condition.
 fn reject_while_condition_partial_field_move() -> u32 {
     let p: Pair = mk();
-    while consume(p.a) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(move p.a) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     return 0;
 }
@@ -5287,7 +5287,7 @@ fn reject_while_condition_partial_field_move() -> u32 {
 // places, not only aggregate fields.
 fn reject_while_condition_array_element_move() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    while consume(arr[0]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(move arr[0]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
     return 0;
@@ -5297,7 +5297,7 @@ fn reject_while_condition_array_element_move() -> u32 {
 // array-element places, because the condition may run zero or multiple times.
 fn reject_while_condition_dynamic_array_element_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    while consume(arr[i]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(move arr[i]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
     return 0;
@@ -5307,7 +5307,7 @@ fn reject_while_condition_dynamic_array_element_move(i: usize) -> u32 {
 // array-element places.
 fn reject_while_condition_symbolic_array_element_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    while consume(arr[i * 1]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(move arr[i * 1]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
     return 0;
@@ -5317,7 +5317,7 @@ fn reject_while_condition_symbolic_array_element_move(i: usize) -> u32 {
 // array-element places.
 fn reject_while_condition_symbolic_offset_array_element_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
-    while consume(arr[i + 1]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(move arr[i + 1]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
     return 0;
@@ -5327,7 +5327,7 @@ fn reject_while_condition_symbolic_offset_array_element_move(i: usize) -> u32 {
 // dynamic array places.
 fn reject_while_condition_dynamic_nested_array_element_move(i: usize) -> u32 {
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
-    while consume(matrix[i][0]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(move matrix[i][0]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
     return 0;
@@ -5336,7 +5336,7 @@ fn reject_while_condition_dynamic_nested_array_element_move(i: usize) -> u32 {
 // Rejected: while-condition resource changes also include parameter-rooted
 // concrete array element places.
 fn reject_while_condition_array_param_element_move(arr: ResArray) -> u32 {
-    while consume(arr[0]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(move arr[0]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
     return 0;
@@ -5345,7 +5345,7 @@ fn reject_while_condition_array_param_element_move(arr: ResArray) -> u32 {
 // Rejected: wildcard dynamic parameter-rooted array elements use the same
 // while-condition place rule.
 fn reject_while_condition_dynamic_array_param_element_move(arr: ResArray, i: usize) -> u32 {
-    while consume(arr[i]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(move arr[i]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     unsafe { forget_unchecked(arr); } // EXPECT_ERROR: E_USE_AFTER_MOVE
     return 0;
@@ -5354,7 +5354,7 @@ fn reject_while_condition_dynamic_array_param_element_move(arr: ResArray, i: usi
 // Rejected: while-condition checks preserve nested wildcard parameter-rooted
 // array places too.
 fn reject_while_condition_dynamic_matrix_param_element_move(matrix: ResMatrix, i: usize) -> u32 {
-    while consume(matrix[i][0]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(move matrix[i][0]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     unsafe { forget_unchecked(matrix); } // EXPECT_ERROR: E_USE_AFTER_MOVE
     return 0;
@@ -5373,7 +5373,7 @@ fn reject_while_condition_symbolic_modulo_zero_array_param_element_move(arr: Res
 // while-condition place rule.
 fn reject_while_condition_array_field_element_move() -> u32 {
     let box: ResArrayBox = mkbox();
-    while consume(box.items[0]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(move box.items[0]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     unsafe { forget_unchecked(box); } // EXPECT_ERROR: E_USE_AFTER_MOVE
     return 0;
@@ -5383,7 +5383,7 @@ fn reject_while_condition_array_field_element_move() -> u32 {
 // wildcard place rule when consumed by a while condition.
 fn reject_while_condition_dynamic_array_field_element_move(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
-    while consume(box.items[i]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
+    while consume(move box.items[i]) != 0 { // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     }
     unsafe { forget_unchecked(box); } // EXPECT_ERROR: E_USE_AFTER_MOVE
     return 0;
@@ -5394,13 +5394,13 @@ fn reject_while_condition_dynamic_array_field_element_move(i: usize) -> u32 {
 fn reject_block_partial_field_move() -> u32 {
     let p: Pair = mk();
     {
-        let x: Res = p.a;
-        let y: u32 = consume(x);
+        let x: Res = move p.a;
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let z: Res = p.a;
+    let z: Res = move p.a;
     unsafe { forget_unchecked(p); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Rejected: a partial field move inside a nested block also blocks a later
@@ -5408,11 +5408,11 @@ fn reject_block_partial_field_move() -> u32 {
 fn reject_block_whole_after_partial() -> u32 {
     let p: Pair = mk();
     {
-        let x: Res = p.a;
-        let y: u32 = consume(x);
+        let x: Res = move p.a;
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let r: u32 = take_whole(p);
+    let r: u32 = take_whole(move p);
     return r;
 }
 
@@ -5422,12 +5422,12 @@ fn reject_block_array_element_move() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     {
         let x: Res = arr[0];
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let z: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Rejected: wildcard dynamic array-element moves inside a nested block remain
@@ -5436,12 +5436,12 @@ fn reject_block_dynamic_array_element_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     {
         let x: Res = arr[i];
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let z: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Rejected: symbolic dynamic array-element moves inside a nested block remain
@@ -5450,12 +5450,12 @@ fn reject_block_symbolic_array_element_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     {
         let x: Res = arr[i + 0];
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let z: Res = arr[i];
     unsafe { forget_unchecked(arr); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Rejected: bounded symbolic offset moves inside a nested block remain visible
@@ -5464,12 +5464,12 @@ fn reject_block_symbolic_offset_array_element_move(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     {
         let x: Res = arr[i + 1];
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let z: Res = arr[1 + i];
     unsafe { forget_unchecked(arr); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Rejected: nested wildcard dynamic array places moved inside a block remain
@@ -5478,50 +5478,50 @@ fn reject_block_dynamic_nested_array_element_move(i: usize) -> u32 {
     let matrix: ResMatrix = .{ .{ mkres(1) }, .{ mkres(2) } };
     {
         let x: Res = matrix[i][0];
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let z: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Rejected: scoped blocks preserve flat wildcard parameter-rooted array places.
 fn reject_block_dynamic_array_param_element_move(arr: ResArray, i: usize) -> u32 {
     {
         let x: Res = arr[i];
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let z: Res = arr[0];
     unsafe { forget_unchecked(arr); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Rejected: scoped blocks preserve nested wildcard parameter-rooted array places.
 fn reject_block_dynamic_matrix_param_element_move(matrix: ResMatrix, i: usize) -> u32 {
     {
         let x: Res = matrix[i][0];
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let z: Res = matrix[0][0];
     unsafe { forget_unchecked(matrix); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Rejected: function-exit leak checks preserve flat wildcard parameter-rooted
 // array places after a dynamic element move.
 fn reject_return_dynamic_array_param_element_leak(arr: ResArray, i: usize) -> u32 { // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = arr[i];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: function-exit leak checks preserve nested wildcard parameter-rooted
 // array places after a dynamic element move.
 fn reject_return_dynamic_matrix_param_element_leak(matrix: ResMatrix, i: usize) -> u32 { // EXPECT_ERROR: E_RESOURCE_LEAK
     let x: Res = matrix[i][0];
-    return consume(x);
+    return consume(move x);
 }
 
 // Rejected: concrete array field-element moves inside a nested block also
@@ -5529,13 +5529,13 @@ fn reject_return_dynamic_matrix_param_element_leak(matrix: ResMatrix, i: usize) 
 fn reject_block_array_field_element_move() -> u32 {
     let box: ResArrayBox = mkbox();
     {
-        let x: Res = box.items[0];
-        let y: u32 = consume(x);
+        let x: Res = move box.items[0];
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let z: Res = box.items[0];
+    let z: Res = move box.items[0];
     unsafe { forget_unchecked(box); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Rejected: wildcard dynamic array field-element moves inside a nested block
@@ -5543,13 +5543,13 @@ fn reject_block_array_field_element_move() -> u32 {
 fn reject_block_dynamic_array_field_element_move(i: usize) -> u32 {
     let box: ResArrayBox = mkbox();
     {
-        let x: Res = box.items[i];
-        let y: u32 = consume(x);
+        let x: Res = move box.items[i];
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let z: Res = box.items[0];
+    let z: Res = move box.items[0];
     unsafe { forget_unchecked(box); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Rejected: nested wildcard dynamic array field-element moves inside a block
@@ -5558,12 +5558,12 @@ fn reject_block_dynamic_nested_array_field_element_move(i: usize) -> u32 {
     let box: ResMatrixBox = mkmatrixbox();
     {
         let x: Res = box.items[i][0];
-        let y: u32 = consume(x);
+        let y: u32 = consume(move x);
     }
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let z: Res = box.items[0][0];
     unsafe { forget_unchecked(box); }
-    return consume(z);
+    return consume(move z);
 }
 
 // Accepted: a field moved inside a nested block can be reinitialized inside the
@@ -5571,14 +5571,14 @@ fn reject_block_dynamic_nested_array_field_element_move(i: usize) -> u32 {
 fn accept_block_reinitialize_moved_field() -> u32 {
     var p: Pair = mk();
     {
-        let x: Res = p.a;
-        let y: u32 = consume(x);
+        let x: Res = move p.a;
+        let y: u32 = consume(move x);
         p.a = mkres(y + 1);
     }
-    let a: Res = p.a;
-    let b: Res = p.b;
+    let a: Res = move p.a;
+    let b: Res = move p.b;
     unsafe { forget_unchecked(p); }
-    return consume(a) + consume(b);
+    return consume(move a) + consume(move b);
 }
 
 // Accepted: deferred cleanup analysis routes if-let arms through the same CFG

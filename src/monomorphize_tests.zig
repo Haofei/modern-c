@@ -358,9 +358,9 @@ test "monomorphize total specialization cap reports a focused diagnostic" {
     const module = try p.parseModule(arena.allocator());
     try testing.expect(!reporter.has_errors);
 
-    _ = try monomorphize.transformReportOptions(arena.allocator(), module, &reporter, .{
+    try testing.expectError(error.MonomorphizationLimit, monomorphize.transformReportOptions(arena.allocator(), module, &reporter, .{
         .limits = .{ .max_instances = 3 },
-    });
+    }));
 
     try testing.expect(reporter.has_errors);
     try testing.expect(hasDiagnosticMessage(&reporter, "E_MONOMORPHIZATION_LIMIT"));
@@ -395,9 +395,9 @@ test "monomorphize instantiation depth cap reports a focused diagnostic" {
     const module = try p.parseModule(arena.allocator());
     try testing.expect(!reporter.has_errors);
 
-    _ = try monomorphize.transformReportOptions(arena.allocator(), module, &reporter, .{
+    try testing.expectError(error.MonomorphizationLimit, monomorphize.transformReportOptions(arena.allocator(), module, &reporter, .{
         .limits = .{ .max_depth = 2 },
-    });
+    }));
 
     try testing.expect(reporter.has_errors);
     try testing.expect(hasDiagnosticMessage(&reporter, "E_MONOMORPHIZATION_LIMIT"));
@@ -447,7 +447,7 @@ test "monomorphize OOM fail-closes instead of returning a clean transform" {
     }
 }
 
-test "monomorphize OOM while synthesizing limit body does not emit empty body" {
+test "monomorphize limit rejects before producing a partial specialization module" {
     const source =
         \\fn make(comptime N: usize) -> [N]u8 {
         \\    var scratch: [N]u8 = uninit;
@@ -471,27 +471,8 @@ test "monomorphize OOM while synthesizing limit body does not emit empty body" {
     const module = try p.parseModule(parse_arena.allocator());
     try testing.expect(!parse_reporter.has_errors);
 
-    var saw_oom = false;
-    for (0..256) |fail_index| {
-        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
-        var fail_arena = std.heap.ArenaAllocator.init(failing.allocator());
-        defer fail_arena.deinit();
-
-        const result = monomorphize.transformReportOptions(fail_arena.allocator(), module, null, .{
-            .limits = .{ .max_instances = 0 },
-        });
-        if (result) |specialized| {
-            defer specialized.deinit(fail_arena.allocator());
-            for (specialized.decls) |decl| {
-                if (decl.kind != .fn_decl) continue;
-                const fn_decl = decl.kind.fn_decl;
-                if (!std.mem.startsWith(u8, fn_decl.name.text, "make__")) continue;
-                try testing.expect(fn_decl.body.?.items.len > 0);
-            }
-        } else |err| {
-            try testing.expectEqual(error.OutOfMemory, err);
-            saw_oom = true;
-        }
-    }
-    try testing.expect(saw_oom);
+    try testing.expectError(error.MonomorphizationLimit, monomorphize.transformReportOptions(parse_arena.allocator(), module, &parse_reporter, .{
+        .limits = .{ .max_instances = 0 },
+    }));
+    try testing.expect(parse_reporter.has_errors);
 }

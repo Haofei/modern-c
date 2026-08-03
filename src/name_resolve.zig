@@ -142,7 +142,8 @@ fn resolveExpr(symbols: *const QualifiedMap, expr: *ast.Expr) std.mem.Allocator.
     switch (expr.kind) {
         .array_literal => |items| for (items) |*item| try resolveExpr(symbols, item),
         .struct_literal => |fields| for (fields) |*field| try resolveExpr(symbols, &field.value),
-        .grouped, .address_of, .deref, .await_expr => |inner| try resolveExpr(symbols, inner),
+        .grouped, .move_expr, .address_of, .deref, .await_expr => |inner| try resolveExpr(symbols, inner),
+        .borrow_expr => |node| try resolveExpr(symbols, node.value),
         .block => |*block| try resolveBlock(symbols, block),
         .unary => |*unary_node| try resolveExpr(symbols, unary_node.expr),
         .binary => |*binary| {

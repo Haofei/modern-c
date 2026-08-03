@@ -823,7 +823,7 @@ fn e_fact_ty(p: *mut Parser, node: u32) -> SmType {
     if p.facts_addr == 0 {
         return .{ .kind = .unknown, .ptr_depth = 0, .nstart = 0, .nlen = 0, .arr_len = 0, .elem = .unknown };
     }
-    var facts: *mut Vec<Fact> = raw.ptr<Vec<Fact>>(0);
+    var facts: *mut Vec<Fact> = uninit;
     unsafe {
         facts = raw.ptr<Vec<Fact>>(p.facts_addr);
     }
@@ -836,7 +836,7 @@ fn e_fact_decl(p: *mut Parser, node: u32) -> u32 {
     if p.facts_addr == 0 {
         return 0;
     }
-    var facts: *mut Vec<Fact> = raw.ptr<Vec<Fact>>(0);
+    var facts: *mut Vec<Fact> = uninit;
     unsafe {
         facts = raw.ptr<Vec<Fact>>(p.facts_addr);
     }
@@ -1780,7 +1780,7 @@ fn e_enum_lit(p: *mut Parser, sb: *mut StrBuf, node: u32) -> void {
     let nd: Node = e_node(p, node);
     let vtext: []const u8 = e_tok_text(p, nd.main_token);
     if p.facts_addr != 0 {
-        var facts: *mut Vec<Fact> = raw.ptr<Vec<Fact>>(0);
+        var facts: *mut Vec<Fact> = uninit;
         unsafe {
             facts = raw.ptr<Vec<Fact>>(p.facts_addr);
         }

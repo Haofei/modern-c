@@ -65,7 +65,16 @@ pub fn isStaticGlobalInitializer(expr: ast.Expr, ctx: Context) bool {
 pub fn addressOfOperand(expr: ast.Expr) ?*ast.Expr {
     return switch (expr.kind) {
         .address_of => |inner| inner,
+        .borrow_expr => |node| node.value,
         .grouped => |inner| addressOfOperand(inner.*),
+        else => null,
+    };
+}
+
+pub fn explicitBorrowMutability(expr: ast.Expr) ?ast.Mutability {
+    return switch (expr.kind) {
+        .borrow_expr => |node| node.mutability,
+        .grouped => |inner| explicitBorrowMutability(inner.*),
         else => null,
     };
 }

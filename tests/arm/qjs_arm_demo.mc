@@ -185,7 +185,10 @@ fn qa_sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
     // Re-read the snapshot through the same raw address the copy filled: definite-init
     // (S0.1) cannot see writes made through a raw address, so direct `req_buf.` reads
     // would be rejected (the kernel/core/uaccess.mc fetch idiom).
-    let req: *ToolReq = raw.ptr<ToolReq>(pa((&req_buf) as usize));
+    var req: *ToolReq = uninit;
+    unsafe {
+        req = raw.ptr<ToolReq>(pa((&req_buf) as usize));
+    }
 
     if req.in_len > MAX_REQ_BYTES {
         return bitcast<u64>(E_NOCAP);

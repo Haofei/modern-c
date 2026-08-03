@@ -11,10 +11,10 @@
 // instantiations so no generic `extern fn` is needed. Two guarantees that were previously NOT
 // enforced by the type system are proven structural here:
 //
-//   1. A capability is `opaque MOVE struct`: opaque alone is field-privacy only, orthogonal
-//      to `move`, so without `move` a `Cap` is freely COPYABLE — `cap_revoke` could "consume"
+//   1. A capability is `linear opaque struct`: opaque alone is field-privacy only, orthogonal
+//      to `linear`, so without `linear` a `Cap` is freely COPYABLE — `cap_revoke` could "consume"
 //      one copy while a prior copy stays usable, so revocation does not revoke and the
-//      attenuation law breaks. With `move`, a cap has exactly one owner: copying it (using it
+//      attenuation law breaks. With `linear`, a cap has exactly one owner: copying it (using it
 //      after it was moved into revoke/attenuate) is E_USE_AFTER_MOVE, and dropping it without
 //      consuming is E_RESOURCE_LEAK — revoke/attenuate are now its only linear ends of life.
 //
@@ -22,8 +22,8 @@
 //      code CANNOT read `t.raw` (E_PRIVATE_FIELD) to bypass the bound-check validators, nor
 //      forge a tainted-looking value with a struct literal. The taint discipline is structural.
 
-// ---- capability: opaque MOVE struct (unforgeable + linear) ----
-opaque move struct Cap {
+// ---- capability: linear opaque struct (unforgeable + exactly-once) ----
+linear opaque struct Cap {
     resource: usize,
 }
 
@@ -38,14 +38,14 @@ fn cap_revoke(c: Cap) -> void {
     unsafe { forget_unchecked(c); }
 }
 
-// ---- rights-bearing capability: opaque MOVE struct ----
+// ---- rights-bearing capability: linear opaque struct ----
 opaque struct Rights { bits: u32 }
 impl Rights {
     fn grant(bits: u32) -> Rights { return .{ .bits = bits }; }
     fn attenuate(r: Rights, keep: Rights) -> Rights { return .{ .bits = r.bits & keep.bits }; }
 }
 
-opaque move struct RCap {
+linear opaque struct RCap {
     resource: usize,
     rights: Rights,
 }
@@ -80,7 +80,7 @@ impl Tainted {
 fn accept_cap_borrow_then_revoke() -> usize {
     let c: Cap = Cap.mint(0x1000_0000);
     let base: usize = Cap.resource_of(&c); // borrow, does not consume
-    cap_revoke(c);                          // single linear end of life
+    cap_revoke(move c);                          // single linear end of life
     return base;
 }
 
@@ -88,9 +88,9 @@ fn accept_cap_borrow_then_revoke() -> usize {
 fn accept_rcap_attenuate_consumes_parent() -> void {
     let parent: RCap = RCap.mint(0x1000_0000, Rights.grant(0xF));
     let narrowed: Rights = Rights.attenuate(RCap.rights_of(&parent), Rights.grant(0x3));
-    rcap_revoke(parent);                    // parent consumed (forget_unchecked in the real code)
+    rcap_revoke(move parent);                    // parent consumed (forget_unchecked in the real code)
     let child: RCap = RCap.mint(0x1000_0000, narrowed);
-    rcap_revoke(child);
+    rcap_revoke(move child);
 }
 
 // A tainted value goes through the validator (which names .raw inside its impl) — the only
@@ -113,7 +113,7 @@ fn reject_forge_cap() -> Cap {
 // genuinely cannot be used again.
 fn reject_copy_cap_after_revoke() -> usize {
     let c: Cap = Cap.mint(0x1000_0000);
-    cap_revoke(c);                          // c moved (consumed) here
+    cap_revoke(move c);                          // c moved (consumed) here
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return Cap.resource_of(&c);             // stale use of the revoked cap
 }
@@ -121,10 +121,10 @@ fn reject_copy_cap_after_revoke() -> usize {
 // Binding a cap to a second name is a copy of a linear value — rejected.
 fn reject_alias_cap() -> void {
     let c: Cap = Cap.mint(0x1000_0000);
-    let d: Cap = c;                         // c moved into d
+    let d: Cap = move c;                         // c moved into d
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    cap_revoke(c);                          // c already moved
-    cap_revoke(d);
+    cap_revoke(move c);                          // c already moved
+    cap_revoke(move d);
 }
 
 // A minted cap that is never consumed leaks — there is no implicit drop for a linear cap.
@@ -137,7 +137,7 @@ fn reject_leak_cap() -> usize {
 // Using an RCap after it was moved into attenuation/revoke: the parent is gone.
 fn reject_rcap_use_after_revoke() -> void {
     let parent: RCap = RCap.mint(0x1000_0000, Rights.grant(0xF));
-    rcap_revoke(parent);                    // parent consumed
+    rcap_revoke(move parent);                    // parent consumed
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let r: Rights = RCap.rights_of(&parent);
     rcap_revoke(RCap.mint(0, r));

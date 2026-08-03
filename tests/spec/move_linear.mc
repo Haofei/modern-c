@@ -20,7 +20,7 @@ fn consume(t: Token) -> u32 {
     return v;
 }
 fn relabel(t: Token) -> Token {
-    return t;
+    return move t;
 }
 fn peek(t: *Token) -> u32 {
     return t.v;
@@ -30,28 +30,28 @@ fn peek(t: *Token) -> u32 {
 
 fn accept_consume_once() -> u32 {
     let t: Token = make();
-    return consume(t);
+    return consume(move t);
 }
 
 fn accept_transition_distinct() -> u32 {
     let a: Token = make();
-    let b: Token = relabel(a); // a moved into relabel; b is the new handle
-    return consume(b);
+    let b: Token = relabel(move a); // a moved into relabel; b is the new handle
+    return consume(move b);
 }
 
 fn accept_borrow_then_consume() -> u32 {
     let t: Token = make();
     let x: u32 = peek(&t); // &t borrows, does not consume
-    return consume(t) + x;
+    return consume(move t) + x;
 }
 
 // --- rejected ---
 
 fn reject_use_after_move() -> u32 {
     let t: Token = make();
-    let a: u32 = consume(t);
+    let a: u32 = consume(move t);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let b: u32 = consume(t);
+    let b: u32 = consume(move t);
     return a + b;
 }
 
@@ -63,24 +63,24 @@ fn reject_leak() -> u32 {
 
 fn reject_copy() -> u32 {
     let t: Token = make();
-    let x: Token = t;
+    let x: Token = move t;
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let y: Token = t;
-    return consume(x) + consume(y);
+    let y: Token = move t;
+    return consume(move x) + consume(move y);
 }
 
 fn reject_overwrite_live() -> u32 {
     var t: Token = make();
     // EXPECT_ERROR: E_RESOURCE_OVERWRITE
     t = make();
-    return consume(t);
+    return consume(move t);
 }
 
 fn reject_branch_mismatch(flag: bool) -> u32 {
     // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
     let t: Token = make();
     switch flag {
-        true => { let a: u32 = consume(t); }
+        true => { let a: u32 = consume(move t); }
         false => { }
     }
     return 0;
@@ -90,7 +90,7 @@ fn reject_return_path_leak(flag: bool) -> u32 {
     let t: Token = make(); // EXPECT_ERROR: E_RESOURCE_LEAK
     switch flag {
         true => { return 0; }
-        false => { return consume(t); }
+        false => { return consume(move t); }
     }
 }
 
@@ -107,21 +107,21 @@ fn reject_branch_local_leak(flag: bool) -> u32 {
 fn reject_loop_outer_move(flag: bool) -> u32 {
     let t: Token = make(); // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
     while flag {
-        let a: u32 = consume(t);
+        let a: u32 = consume(move t);
     }
     return 0;
 }
 
 fn reject_while_condition_consumes() -> u32 {
     let t: Token = make(); // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-    while consume(t) != 0 {
+    while consume(move t) != 0 {
     }
     return 0;
 }
 
 fn reject_while_condition_short_circuit_consumes(flag: bool) -> u32 {
     let t: Token = make(); // EXPECT_ERROR: E_MOVE_LOOP_RESOURCE
-    while flag && consume(t) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    while flag && consume(move t) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
     }
     return 0;
 }
@@ -134,12 +134,12 @@ fn accept_while_condition_borrows(flag: bool) -> u32 {
         }
         break;
     }
-    return consume(t);
+    return consume(move t);
 }
 
 fn reject_logical_and_rhs_consumes(flag: bool) -> u32 {
     let t: Token = make();
-    if flag && consume(t) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag && consume(move t) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         return 1;
     }
     return 0;
@@ -147,7 +147,7 @@ fn reject_logical_and_rhs_consumes(flag: bool) -> u32 {
 
 fn reject_logical_or_rhs_consumes(flag: bool) -> u32 {
     let t: Token = make();
-    if flag || consume(t) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
+    if flag || consume(move t) != 0 { // EXPECT_ERROR: E_MOVE_BRANCH_MISMATCH
         return 1;
     }
     return 0;
@@ -155,7 +155,7 @@ fn reject_logical_or_rhs_consumes(flag: bool) -> u32 {
 
 fn accept_logical_left_consumes(flag: bool) -> u32 {
     let t: Token = make();
-    if consume(t) != 0 && flag {
+    if consume(move t) != 0 && flag {
         return 1;
     }
     return 0;
@@ -164,9 +164,9 @@ fn accept_logical_left_consumes(flag: bool) -> u32 {
 fn accept_logical_rhs_borrows(flag: bool) -> u32 {
     let t: Token = make();
     if flag && peek(&t) != 0 {
-        return consume(t);
+        return consume(move t);
     }
-    return consume(t);
+    return consume(move t);
 }
 
 // A loop-body-local move value that is live when `break` exits the iteration leaks
@@ -177,7 +177,7 @@ fn reject_loop_break_leak(flag: bool) -> u32 {
         if flag {
             break;             // t leaks on the break edge
         }
-        let a: u32 = consume(t);
+        let a: u32 = consume(move t);
     }
     return 0;
 }
@@ -189,7 +189,7 @@ fn reject_loop_continue_leak(flag: bool) -> u32 {
         if flag {
             continue;          // t leaks on the continue edge
         }
-        let a: u32 = consume(t);
+        let a: u32 = consume(move t);
     }
     return 0;
 }
@@ -198,7 +198,7 @@ fn reject_loop_continue_leak(flag: bool) -> u32 {
 fn accept_loop_consume_then_continue(flag: bool) -> u32 {
     while flag {
         let t: Token = make();
-        let a: u32 = consume(t);
+        let a: u32 = consume(move t);
         continue;
     }
     return 0;
@@ -212,7 +212,7 @@ extern fn try_make() -> Result<Token, MoveErr>;
 // accepted: the arm binding is consumed exactly once
 fn accept_switch_consume() -> u32 {
     switch try_make() {
-        ok(t) => { return consume(t); }
+        ok(t) => { return consume(move t); }
         err(e) => { return 0; }
     }
 }
@@ -221,8 +221,8 @@ fn accept_switch_consume() -> u32 {
 fn reject_switch_use_after_move() -> u32 {
     switch try_make() {
         ok(t) => {
-            let a: u32 = consume(t);
-            return consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+            let a: u32 = consume(move t);
+            return consume(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
         }
         err(e) => { return 0; }
     }
@@ -240,15 +240,15 @@ fn reject_switch_leak() -> u32 {
 
 fn accept_if_let_consume() -> u32 {
     if let ok(t) = try_make() {
-        return consume(t);
+        return consume(move t);
     }
     return 0;
 }
 
 fn reject_if_let_use_after_move() -> u32 {
     if let ok(t) = try_make() {
-        let a: u32 = consume(t);
-        return consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+        let a: u32 = consume(move t);
+        return consume(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     }
     return 0;
 }
@@ -282,7 +282,7 @@ fn reject_unused_move_try() -> Result<u32, MoveErr> {
 // accepted: binding the move result makes it trackable, then consumed exactly once
 fn accept_bound_move_result() -> u32 {
     let t: Token = make();
-    return consume(t);
+    return consume(move t);
 }
 
 // rejected: a move-returning expression discarded by a switch-arm body leaks, exactly like a
@@ -307,7 +307,7 @@ fn accept_alias_before_move() -> u32 {
     let t: Token = make();
     let p: *Token = &t;
     let x: u32 = peek(p);   // p valid here: t not yet moved
-    return consume(t) + x;  // now t is moved
+    return consume(move t) + x;  // now t is moved
 }
 
 // accepted: an alias of a value that is never moved (only borrowed) is fine
@@ -316,14 +316,14 @@ fn accept_alias_no_move() -> u32 {
     let p: *Token = &t;
     let x: u32 = peek(p);
     let y: u32 = peek(p);   // repeated alias reads are fine while t lives
-    return consume(t) + x + y;
+    return consume(move t) + x + y;
 }
 
 // rejected: the alias is read through (passed to a reader) AFTER t was moved
 fn reject_alias_after_move() -> u32 {
     let t: Token = make();
     let p: *Token = &t;
-    let a: u32 = consume(t);     // t moved out here
+    let a: u32 = consume(move t);     // t moved out here
     let b: u32 = peek(p);        // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
@@ -332,7 +332,7 @@ fn reject_alias_after_move() -> u32 {
 fn reject_alias_deref_after_move() -> u32 {
     let t: Token = make();
     let p: *Token = &t;
-    let a: u32 = consume(t);     // t moved out
+    let a: u32 = consume(move t);     // t moved out
     let b: u32 = (*p).v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
@@ -341,8 +341,8 @@ fn reject_alias_deref_after_move() -> u32 {
 fn accept_move_through_full_alias() -> u32 {
     let t: Token = make();
     let p: *Token = &t;
-    let moved: Token = p.*;
-    return consume(moved);
+    let moved: Token = move p.*;
+    return consume(move moved);
 }
 
 // accepted: an immediate full deref of the owner's address is the same move as
@@ -350,16 +350,16 @@ fn accept_move_through_full_alias() -> u32 {
 fn accept_move_through_immediate_full_deref() -> u32 {
     let t: Token = make();
     let moved: Token = (&t).*;
-    return consume(moved);
+    return consume(move moved);
 }
 
 // rejected: after moving through a full alias, the original owner is moved out.
 fn reject_owner_after_full_alias_move() -> u32 {
     let t: Token = make();
     let p: *Token = &t;
-    let moved: Token = p.*;
-    let a: u32 = consume(moved);
-    let b: u32 = consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let moved: Token = move p.*;
+    let a: u32 = consume(move moved);
+    let b: u32 = consume(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
 
@@ -367,8 +367,8 @@ fn reject_owner_after_full_alias_move() -> u32 {
 fn reject_owner_after_immediate_full_deref_move() -> u32 {
     let t: Token = make();
     let moved: Token = (&t).*;
-    let a: u32 = consume(moved);
-    let b: u32 = consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let a: u32 = consume(move moved);
+    let b: u32 = consume(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
 
@@ -377,9 +377,9 @@ fn reject_owner_after_copied_full_alias_move() -> u32 {
     let t: Token = make();
     let p: *Token = &t;
     let q: *Token = p;
-    let moved: Token = q.*;
-    let a: u32 = consume(moved);
-    let b: u32 = consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let moved: Token = move q.*;
+    let a: u32 = consume(move moved);
+    let b: u32 = consume(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
 
@@ -388,8 +388,8 @@ fn reject_owner_after_copied_full_alias_move() -> u32 {
 fn accept_move_through_grouped_full_alias() -> u32 {
     let t: Token = make();
     let p: *Token = &t;
-    let moved: Token = (p).*;
-    return consume(moved);
+    let moved: Token = move (p).*;
+    return consume(move moved);
 }
 
 // rejected: the grouped full-alias route consumes the owner through its carried
@@ -397,9 +397,9 @@ fn accept_move_through_grouped_full_alias() -> u32 {
 fn reject_owner_after_grouped_full_alias_move() -> u32 {
     let t: Token = make();
     let p: *Token = &t;
-    let moved: Token = (p).*;
-    let a: u32 = consume(moved);
-    let b: u32 = consume(t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let moved: Token = move (p).*;
+    let a: u32 = consume(move moved);
+    let b: u32 = consume(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
 
@@ -411,7 +411,7 @@ fn reject_alias_launder_after_move() -> u32 {
     let t: Token = make();
     let p: *Token = &t;
     let q: *Token = p;           // q is a copy of the alias p; inherits alias-of(t)
-    let a: u32 = consume(t);     // t moved out
+    let a: u32 = consume(move t);     // t moved out
     let b: u32 = peek(q);        // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
@@ -427,7 +427,7 @@ fn accept_reassign_alias_pointer() -> u32 {
     let x: u32 = peek(p);        // p aliases t1
     p = &t2;                     // p now aliases t2 — still a borrow, not a resource
     let y: u32 = peek(p);        // p aliases t2 (valid: t2 not yet moved)
-    return consume(t1) + consume(t2) + x + y;
+    return consume(move t1) + consume(move t2) + x + y;
 }
 
 // rejected (bug #2 dual): after reassigning the alias to t2, reading through it once t2 is
@@ -437,9 +437,9 @@ fn reject_reassigned_alias_after_move() -> u32 {
     let t2: Token = make();
     var p: *Token = &t1;
     p = &t2;                     // p now aliases t2
-    let a: u32 = consume(t2);    // t2 moved out
+    let a: u32 = consume(move t2);    // t2 moved out
     let b: u32 = peek(p);        // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return consume(t1) + a + b;
+    return consume(move t1) + a + b;
 }
 
 // --- T1.2 (bug #3): a borrow of a move binding laundered through a STRUCT FIELD ---
@@ -453,7 +453,7 @@ fn accept_field_alias_before_move() -> u32 {
     let t: Token = make();
     let h: Holder = .{ .p = &t };
     let b: u32 = peek(h.p);      // h.p valid: t not yet moved
-    return consume(t) + b;
+    return consume(move t) + b;
 }
 
 // rejected: `h.p` aliases `t` (`.{ .p = &t }`); reading through it after `t` is moved out is
@@ -462,7 +462,7 @@ fn accept_field_alias_before_move() -> u32 {
 fn reject_field_alias_after_move() -> u32 {
     let t: Token = make();
     let h: Holder = .{ .p = &t };
-    let a: u32 = consume(t);     // t moved out
+    let a: u32 = consume(move t);     // t moved out
     let b: u32 = peek(h.p);      // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }

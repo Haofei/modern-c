@@ -81,8 +81,12 @@ export fn hosted_kernel_run() -> i32 {
     // read_exact through their raw addresses, which definite-init (S0.1) cannot see —
     // re-read them through the same raw addresses (the kernel/core/uaccess.mc fetch
     // idiom; a whole-value [256]f32 literal would be absurd).
-    let av: *[CAP]f32 = raw.ptr<[CAP]f32>(a_addr);
-    let bv: *[CAP]f32 = raw.ptr<[CAP]f32>(b_addr);
+    var av: *[CAP]f32 = uninit;
+    var bv: *[CAP]f32 = uninit;
+    unsafe {
+        av = raw.ptr<[CAP]f32>(a_addr);
+        bv = raw.ptr<[CAP]f32>(b_addr);
+    }
     var i: usize = 0;
     while i < n {
         out[i] = sqrt_f32(av.*[i]) + bv.*[i];

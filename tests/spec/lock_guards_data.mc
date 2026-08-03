@@ -62,7 +62,7 @@ fn accept_access_through_guard() -> u32 {
     let p: *mut u32 = Guard.get(u32, &g);          // borrow the data through the live guard
     p.* = p.* + 1;
     let v: u32 = p.*;
-    Guard.unlock(u32, g);                          // consume the guard (release the lock)
+    Guard.unlock(u32, move g);                          // consume the guard (release the lock)
     return v;                                       // 42
 }
 
@@ -70,10 +70,10 @@ fn accept_relock_after_release() -> u32 {
     var m: Guarded<u32> = Guarded.make(u32, 10);
     var g1: Guard<u32> = Guarded.lock(u32, &m);
     let a: u32 = Guard.get(u32, &g1).*;
-    Guard.unlock(u32, g1);                          // first critical section ends
+    Guard.unlock(u32, move g1);                          // first critical section ends
     var g2: Guard<u32> = Guarded.lock(u32, &m); // distinct, fresh guard — re-acquire is fine
     let b: u32 = Guard.get(u32, &g2).*;
-    Guard.unlock(u32, g2);
+    Guard.unlock(u32, move g2);
     return a + b;
 }
 
@@ -101,7 +101,7 @@ fn reject_forge_guarded() -> Guarded<u32> {
 fn reject_use_after_release() -> u32 {
     var m: Guarded<u32> = Guarded.make(u32, 1);
     var g: Guard<u32> = Guarded.lock(u32, &m);
-    Guard.unlock(u32, g); // consumes the guard
+    Guard.unlock(u32, move g); // consumes the guard
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     let p: *mut u32 = Guard.get(u32, &g);
     return p.*;
@@ -113,7 +113,7 @@ fn reject_guarded_pointer_after_release() -> u32 {
     var m: Guarded<u32> = Guarded.make(u32, 3);
     var g: Guard<u32> = Guarded.lock(u32, &m);
     let p: *mut u32 = Guard.get(u32, &g);
-    Guard.unlock(u32, g);
+    Guard.unlock(u32, move g);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return p.*;
 }

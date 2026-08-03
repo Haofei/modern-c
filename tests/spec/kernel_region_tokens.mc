@@ -44,14 +44,14 @@ fn unregister_callback(registration: CallbackRegistration) -> void {
 fn accept_rcu_use_inside_region(epoch: *const u32) -> u32 {
     let guard: RcuReadGuard = rcu_read_lock(epoch);
     let value: u32 = rcu_lookup(&guard).*;
-    rcu_read_unlock(guard);
+    rcu_read_unlock(move guard);
     return value;
 }
 
 fn reject_rcu_reference_escape(epoch: *const u32) -> u32 {
     let guard: RcuReadGuard = rcu_read_lock(epoch);
     let value: *const u32 = rcu_lookup(&guard);
-    rcu_read_unlock(guard);
+    rcu_read_unlock(move guard);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return value.*;
 }
@@ -59,14 +59,14 @@ fn reject_rcu_reference_escape(epoch: *const u32) -> u32 {
 fn accept_callback_data_while_registered(data: *mut u32) -> u32 {
     let registration: CallbackRegistration = register_callback(data);
     let value: u32 = callback_data(&registration).*;
-    unregister_callback(registration);
+    unregister_callback(move registration);
     return value;
 }
 
 fn reject_callback_data_after_unregister(data: *mut u32) -> u32 {
     let registration: CallbackRegistration = register_callback(data);
     let value: *mut u32 = callback_data(&registration);
-    unregister_callback(registration);
+    unregister_callback(move registration);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return value.*;
 }

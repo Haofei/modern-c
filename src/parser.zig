@@ -213,6 +213,7 @@ pub const Parser = struct {
                 // against the trait method, not just name + self-mode.
                 .params = fn_decl.params,
                 .return_type = fn_decl.return_type,
+                .return_borrow_source = fn_decl.return_borrow_source,
             });
         }
         fn_decl.associated_owner = type_name;
@@ -270,13 +271,14 @@ pub const Parser = struct {
             }
         }
         try self.expect(.r_paren, "expected ')' after trait method parameters");
-        const return_type = if (self.match(.arrow)) try self.parseType() else null;
+        const return_info = try self.parseOptionalReturnType();
         try self.expect(.semicolon, "expected ';' after trait method signature (no body)");
         const self_mode = selfModeOfParams(params.items);
         try methods.append(self.allocator, .{
             .name = m_name,
             .params = try params.toOwnedSlice(self.allocator),
-            .return_type = return_type,
+            .return_type = return_info.ty,
+            .return_borrow_source = return_info.borrow_source,
             .self_mode = self_mode,
             .attrs = m_attrs,
         });
@@ -504,16 +506,62 @@ pub const Parser = struct {
     fn parseDeclBody(self: *Parser, attrs: []ast.Attr) anyerror!ast.Decl {
         const start = if (attrs.len > 0) attrs[0].span else self.current.span;
 
-        // `move` is a contextual qualifier (section 18.1) on a struct declaration
-        // making it a linear resource type. At top level a leading `move` is
-        // unambiguous — declarations otherwise start with a keyword.
+        // `move` is the legacy contextual qualifier for a checked resource
+        // struct. `linear` is the explicit strict spelling from Scoped Affine
+        // Ownership; both currently feed the same exactly-once checker.
         // `opaque` is a contextual qualifier on a (non-extern) struct declaration
-        // (field privacy): `opaque struct …` / `opaque move struct …`. Like `move`
-        // it is unambiguous at top level.
-        const is_opaque = self.matchIdentifierText("opaque");
-        const is_move = self.matchIdentifierText("move");
-        if (is_move and self.current.kind != .kw_extern and self.current.kind != .kw_struct) {
-            return self.fail("'move' applies only to struct declarations");
+        // (field privacy): `opaque struct …` / `opaque move struct …` /
+        // `opaque linear struct …`. Like `move` it is unambiguous at top level.
+        var is_opaque = false;
+        var is_move = false;
+        var is_linear = false;
+        var is_region = false;
+        var is_view = false;
+        var is_thread_move = false;
+        while (self.current.kind == .identifier) {
+            if (std.mem.eql(u8, self.current.lexeme, "opaque")) {
+                if (is_opaque) return self.fail("duplicate 'opaque' qualifier");
+                is_opaque = true;
+                self.advance();
+                continue;
+            }
+            if (std.mem.eql(u8, self.current.lexeme, "move")) {
+                if (is_move) return self.fail("duplicate 'move' qualifier");
+                is_move = true;
+                self.advance();
+                continue;
+            }
+            if (std.mem.eql(u8, self.current.lexeme, "linear")) {
+                if (is_linear) return self.fail("duplicate 'linear' qualifier");
+                is_linear = true;
+                self.advance();
+                continue;
+            }
+            if (std.mem.eql(u8, self.current.lexeme, "region")) {
+                if (is_region) return self.fail("duplicate 'region' qualifier");
+                is_region = true;
+                self.advance();
+                continue;
+            }
+            if (std.mem.eql(u8, self.current.lexeme, "view")) {
+                if (is_view) return self.fail("duplicate 'view' qualifier");
+                is_view = true;
+                self.advance();
+                continue;
+            }
+            if (std.mem.eql(u8, self.current.lexeme, "thread_move")) {
+                if (is_thread_move) return self.fail("duplicate 'thread_move' qualifier");
+                is_thread_move = true;
+                self.advance();
+                continue;
+            }
+            break;
+        }
+        if (is_move and is_linear) {
+            return self.fail("use either 'move' or 'linear' on a struct declaration, not both");
+        }
+        if ((is_move or is_linear or is_region or is_view or is_thread_move) and self.current.kind != .kw_extern and self.current.kind != .kw_struct) {
+            return self.fail("'move'/'linear'/'region'/'view'/'thread_move' applies only to struct declarations");
         }
         if (is_opaque and self.current.kind != .kw_struct) {
             return self.fail("'opaque' applies only to a (non-extern) struct declaration");
@@ -529,20 +577,28 @@ pub const Parser = struct {
                 try self.expect(.kw_struct, "expected 'struct' after extern mmio");
                 var struct_decl = try self.finishStructDecl("mmio");
                 struct_decl.is_move = is_move;
+                struct_decl.is_linear = is_linear;
+                struct_decl.is_region = is_region;
+                struct_decl.is_view = is_view;
+                struct_decl.is_thread_move = is_thread_move;
                 return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .struct_decl = struct_decl } };
             }
             if (self.match(.kw_fn)) {
-                if (is_move) return self.fail("'move' applies only to struct declarations");
+                if (is_move or is_linear or is_region or is_view or is_thread_move) return self.fail("'move'/'linear'/'region'/'view'/'thread_move' applies only to struct declarations");
                 const fn_decl = try self.finishFnDecl(abi, false, false);
                 return .{ .span = joinSpan(start, self.previousSpan(fn_decl.name.span)), .attrs = attrs, .kind = .{ .extern_fn = fn_decl } };
             }
             if (self.match(.kw_struct)) {
                 var struct_decl = try self.finishStructDecl(abi);
                 struct_decl.is_move = is_move;
+                struct_decl.is_linear = is_linear;
+                struct_decl.is_region = is_region;
+                struct_decl.is_view = is_view;
+                struct_decl.is_thread_move = is_thread_move;
                 return .{ .span = joinSpan(start, struct_decl.name.span), .attrs = attrs, .kind = .{ .struct_decl = struct_decl } };
             }
             if (self.matchIdentifierText("global")) {
-                if (is_move) return self.fail("'move' applies only to struct declarations");
+                if (is_move or is_linear or is_region or is_view or is_thread_move) return self.fail("'move'/'linear'/'region'/'view'/'thread_move' applies only to struct declarations");
                 const name = try self.expectName("expected global name");
                 try self.expect(.colon, "expected ':' in extern global declaration");
                 const ty = try self.parseType();
@@ -609,7 +665,11 @@ pub const Parser = struct {
         if (self.match(.kw_struct)) {
             var struct_decl = try self.finishStructDecl(null);
             struct_decl.is_move = is_move;
+            struct_decl.is_linear = is_linear;
             struct_decl.is_opaque = is_opaque;
+            struct_decl.is_region = is_region;
+            struct_decl.is_view = is_view;
+            struct_decl.is_thread_move = is_thread_move;
             // `#[c_union]` — compiler-internal addressable union laid out as a real C `union`
             // (see ast.StructDecl.is_c_union). Recognized as a struct attribute so the async
             // state-machine lowering (and its focused test) can request union layout.
@@ -667,7 +727,7 @@ pub const Parser = struct {
         }
         try self.expect(.r_paren, "expected ')' after parameters");
 
-        const return_type = if (self.match(.arrow)) try self.parseType() else null;
+        const return_info = try self.parseOptionalReturnType();
         // `where T: TraitA, U: TraitB` — bounds on the function's comptime type
         // parameters (Tier 1 trait bounds). Optional; precedes the body.
         const bounds = try self.parseWhereClause();
@@ -680,13 +740,30 @@ pub const Parser = struct {
             .name = name,
             .abi = abi,
             .params = try params.toOwnedSlice(self.allocator),
-            .return_type = return_type,
+            .return_type = return_info.ty,
+            .return_borrow_source = return_info.borrow_source,
             .body = body,
             .is_const = is_const,
             .exported = exported,
             .is_variadic = is_variadic,
             .bounds = bounds,
         };
+    }
+
+    const ReturnTypeInfo = struct {
+        ty: ?ast.TypeExpr,
+        borrow_source: ?ast.Ident = null,
+    };
+
+    fn parseOptionalReturnType(self: *Parser) anyerror!ReturnTypeInfo {
+        if (!self.match(.arrow)) return .{ .ty = null };
+        var borrow_source: ?ast.Ident = null;
+        if (self.matchIdentifierText("borrow")) {
+            try self.expect(.l_paren, "expected '(' after return borrow source");
+            borrow_source = try self.expectName("expected parameter name inside return borrow source");
+            try self.expect(.r_paren, "expected ')' after return borrow source");
+        }
+        return .{ .ty = try self.parseType(), .borrow_source = borrow_source };
     }
 
     // `where T: TraitA, U: TraitB` (Tier 1). Returns an empty slice when absent.
@@ -1563,6 +1640,19 @@ pub const Parser = struct {
             const value = try ast.makePtr(self.allocator, try self.parseExpr(prefix_operand_bp));
             return .{ .span = joinSpan(start, value.span), .kind = .{ .address_of = value } };
         }
+        if (self.current.kind == .identifier and std.mem.eql(u8, self.current.lexeme, "borrow")) {
+            const start = self.current.span;
+            self.advance();
+            const mutability: ast.Mutability = if (self.match(.kw_mut)) .mut else .none;
+            const value = try ast.makePtr(self.allocator, try self.parseExpr(prefix_operand_bp));
+            return .{ .span = joinSpan(start, value.span), .kind = .{ .borrow_expr = .{ .mutability = mutability, .value = value } } };
+        }
+        if (self.current.kind == .identifier and std.mem.eql(u8, self.current.lexeme, "move")) {
+            const start = self.current.span;
+            self.advance();
+            const value = try ast.makePtr(self.allocator, try self.parseExpr(prefix_operand_bp));
+            return .{ .span = joinSpan(start, value.span), .kind = .{ .move_expr = value } };
+        }
         // `await EXPR` — a suspend point inside an `async fn` (Phase D). `await` is contextual
         // (matched as identifier text). It binds as a unary prefix; the pre-sema async transform
         // rewrites it into a child-future poll/take_result. Outside an `async fn` it is rejected
@@ -2069,7 +2159,8 @@ pub const Parser = struct {
                 std.mem.eql(u8, self.current.lexeme, "global") or
                 std.mem.eql(u8, self.current.lexeme, "async") or
                 std.mem.eql(u8, self.current.lexeme, "opaque") or
-                std.mem.eql(u8, self.current.lexeme, "move"),
+                std.mem.eql(u8, self.current.lexeme, "move") or
+                std.mem.eql(u8, self.current.lexeme, "linear"),
             else => false,
         };
     }

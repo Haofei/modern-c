@@ -2,7 +2,7 @@
 // SPEC: milestone=soundness-use-after-move
 // SPEC: phase=sema
 // SPEC: expect=pass,compile_error
-// SPEC: check=E_USE_AFTER_MOVE
+// SPEC: check=E_USE_AFTER_MOVE,E_UNSAFE_REQUIRED
 
 // SOUNDNESS SOURCE OF TRUTH — use-after-move / borrow-escape (T1.2).
 //
@@ -67,7 +67,7 @@ fn reject_direct_alias_chain() -> u32 {
     let t: T = mk();
     let p: *T = &t;
     let q: *T = p;                // alias of an alias of t
-    let a: u32 = cn(t);          // t moved
+    let a: u32 = cn(move t);          // t moved
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + pk(q);            // q is a stale alias of moved t
 }
@@ -77,7 +77,7 @@ fn reject_reassignment_alias() -> u32 {
     let t: T = mk();
     var p: *T = &t;
     p = &t;                       // p re-points at t
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + pk(p);
 }
@@ -86,7 +86,7 @@ fn reject_reassignment_alias() -> u32 {
 fn reject_struct_literal_field() -> u32 {
     let t: T = mk();
     let h: H = .{ .p = &t };      // &t escapes into h.p
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + pk(h.p);          // h.p is a stale alias of moved t
 }
@@ -94,8 +94,9 @@ fn reject_struct_literal_field() -> u32 {
 // 8. call laundering: `id(p)` may retain the borrow; used after move
 fn reject_call_launder_used() -> u32 {
     let t: T = mk();
-    let q: *T = id(&t);           // &t laundered through a pointer-returning call
-    let a: u32 = cn(t);
+    var q: *T = &t;
+    unsafe { q = id(&t); }        // &t laundered through a pointer-returning call
+    let a: u32 = cn(move t);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + pk(q);
 }
@@ -105,8 +106,9 @@ fn reject_call_launder_used() -> u32 {
 fn reject_call_laundered_alias_used() -> u32 {
     let t: T = mk();
     let p: *T = &t;
-    let q: *T = id(p);
-    let a: u32 = cn(t);
+    var q: *T = p;
+    unsafe { q = id(p); }
+    let a: u32 = cn(move t);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + pk(q);
 }
@@ -126,7 +128,7 @@ fn reject_call_laundered_alias_used() -> u32 {
 fn reject_array_literal_element() -> u32 {
     let t: T = mk();
     let arr: [1]*T = .{ &t };     // &t escapes into arr[0] at init
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     return a + arr[0].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
@@ -138,7 +140,7 @@ fn accept_struct_field_assign_before_move() -> u32 {
     var h: H = .{ .p = &t };
     h.p = &t;
     let b: u32 = h.p.v;
-    return cn(t) + b;
+    return cn(move t) + b;
 }
 
 // 6. borrow laundered into an array-ELEMENT ASSIGNMENT, then moved
@@ -146,7 +148,7 @@ fn reject_array_element_assign() -> u32 {
     let t: T = mk();
     var arr: [1]*T = .{ &t };
     arr[0] = &t;
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     return a + arr[0].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
@@ -157,7 +159,7 @@ fn reject_dynamic_singleton_array_element_assign(i: usize) -> u32 {
     let t: T = mk();
     var arr: [1]*T = .{ &t };
     arr[i] = &t;
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     return a + arr[i].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
@@ -168,7 +170,7 @@ fn reject_dynamic_multi_array_element_assign(i: usize) -> u32 {
     let t: T = mk();
     var arr: [2]*T = .{ &t, &t };
     arr[i] = &t;
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     return a + arr[i].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
@@ -176,15 +178,15 @@ fn reject_dynamic_multi_array_element_constant_read(i: usize) -> u32 {
     let t: T = mk();
     var arr: [2]*T = .{ &t, &t };
     arr[i] = &t;
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     return a + arr[0].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 fn reject_dynamic_multi_array_element_laundered(i: usize) -> u32 {
     let t: T = mk();
     var arr: [2]*T = .{ &t, &t };
-    arr[i] = id(&t);
-    let a: u32 = cn(t);
+    unsafe { arr[i] = id(&t); }
+    let a: u32 = cn(move t);
     return a + arr[i].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
@@ -193,7 +195,7 @@ fn reject_subfield_alias() -> u32 {
     let t: T = mk();
     let p: *u32 = &t.v;           // borrow of a sub-place of t
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     return a + rd(p);
 }
 
@@ -203,7 +205,7 @@ fn reject_subfield_alias() -> u32 {
 fn reject_nested_aggregate_element() -> u32 {
     let t: T = mk();
     let arr: [1]Holder = .{ .{ .p = &t } };   // &t is tracked precisely as arr[0].p
-    let a: u32 = cn(t);                       // t moved
+    let a: u32 = cn(move t);                       // t moved
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + arr[0].p.v;
 }
@@ -214,7 +216,7 @@ fn reject_nested_aggregate_element() -> u32 {
 fn reject_nested_array_literal_element() -> u32 {
     let t: T = mk();
     let arr: [1][1]*T = .{ .{ &t } };
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + arr[0][0].v;
 }
@@ -225,7 +227,7 @@ fn reject_nested_array_literal_element() -> u32 {
 fn reject_struct_field_array_literal_element() -> u32 {
     let t: T = mk();
     let h: ArrayHolder = .{ .arr = .{ &t } };
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     return a + h.arr[0].v;        // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
@@ -237,9 +239,10 @@ fn reject_struct_field_array_literal_element() -> u32 {
 // diagnostic; the escape fires at the move.)
 fn reject_ptr_to_int_roundtrip() -> u32 {
     let t: T = mk();
-    let n: usize = &t as usize;   // address-of-move-value -> integer: provenance dropped, ESCAPE
+    let n: usize = &t as usize;   // EXPECT_ERROR: E_UNSAFE_REQUIRED
+                                  // address-of-move-value -> integer: provenance dropped, ESCAPE
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(t);          // moving t refused — its borrow escaped through the integer
+    let a: u32 = cn(move t);          // moving t refused — its borrow escaped through the integer
     return a + (n as u32);
 }
 
@@ -257,7 +260,7 @@ fn reject_ptr_to_int_roundtrip() -> u32 {
 fn reject_nested_struct_decl() -> u32 {
     let t: T = mk();
     let o: Outer = .{ .h = .{ .p = &t } };   // &t buried at o.h.p
-    let a: u32 = cn(t);                       // t moved
+    let a: u32 = cn(move t);                       // t moved
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + pk(o.h.p);                     // o.h.p is a stale alias of moved t
 }
@@ -267,7 +270,7 @@ fn reject_nested_struct_decl() -> u32 {
 fn reject_triple_nested_struct_decl() -> u32 {
     let t: T = mk();
     let d: Deep = .{ .o = .{ .h = .{ .p = &t } } };
-    let a: u32 = cn(t);
+    let a: u32 = cn(move t);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + pk(d.o.h.p);
 }
@@ -281,7 +284,7 @@ fn reject_call_arg_struct() -> u32 {
     let t: T = mk();
     sink(.{ .p = &t });          // &t escapes into the callee
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(t);
+    return cn(move t);
 }
 
 // 13a. The aggregate carries an already registered alias rather than a direct
@@ -291,7 +294,7 @@ fn reject_call_arg_alias_struct() -> u32 {
     let p: *T = &t;
     sink(.{ .p = p });
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(t);
+    return cn(move t);
 }
 
 // 14. borrow laundered into a NESTED aggregate CALL ARGUMENT (`sinkOuter(.{ .h = .{ .p = &t } })`).
@@ -301,7 +304,7 @@ fn reject_call_arg_nested_struct() -> u32 {
     let t: T = mk();
     sinkOuter(.{ .h = .{ .p = &t } });
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(t);
+    return cn(move t);
 }
 
 // 15. borrow laundered into an ARRAY-LITERAL CALL ARGUMENT (`sinkArr(.{ &t })`). An array-literal
@@ -310,7 +313,7 @@ fn reject_call_arg_array() -> u32 {
     let t: T = mk();
     sinkArr(.{ &t });
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(t);
+    return cn(move t);
 }
 
 // 16. borrow hidden in a direct CALL RESULT aggregate (`let h = mkHolder(&t)`). The returned
@@ -321,7 +324,7 @@ fn reject_call_result_aggregate_decl() -> u32 {
     let t: T = mk();
     let h: Holder = mkHolder(&t);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(t);
+    return cn(move t);
 }
 
 // 17. same channel through assignment into an existing aggregate variable.
@@ -330,7 +333,7 @@ fn reject_call_result_aggregate_assignment() -> u32 {
     var h: Holder = uninit;
     h = mkHolder(&t);
     // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(t);
+    return cn(move t);
 }
 
 // ---------------------------------------------------------------------------
@@ -340,14 +343,14 @@ fn reject_call_result_aggregate_assignment() -> u32 {
 // plain move, no borrow at all
 fn accept_plain_move() -> u32 {
     let t: T = mk();
-    return cn(t);
+    return cn(move t);
 }
 
 // borrow taken, used, and dead BEFORE the move (the legitimate transient-borrow pattern)
 fn accept_borrow_use_then_move() -> u32 {
     let t: T = mk();
     let x: u32 = pk(&t);          // borrow used here; nothing escapes into memory
-    return cn(t) + x;            // t may be moved — the borrow is dead
+    return cn(move t) + x;            // t may be moved — the borrow is dead
 }
 
 // whole-value borrow stored in a struct, USED before the move (precise field-alias tracking
@@ -356,15 +359,16 @@ fn accept_struct_field_used_before_move() -> u32 {
     let t: T = mk();
     let h: H = .{ .p = &t };
     let b: u32 = pk(h.p);         // read BEFORE the move
-    return cn(t) + b;            // h.p never read again — t may be moved
+    return cn(move t) + b;            // h.p never read again — t may be moved
 }
 
 // laundered-through-a-call pointer, dead before the move
 fn accept_call_launder_dead_before_move() -> u32 {
     let t: T = mk();
-    let q: *T = id(&t);
+    var q: *T = &t;
+    unsafe { q = id(&t); }
     let b: u32 = pk(q);           // used BEFORE the move
-    return cn(t) + b;
+    return cn(move t) + b;
 }
 
 // A named alias remains valid for the duration of the call result use. The
@@ -372,9 +376,10 @@ fn accept_call_launder_dead_before_move() -> u32 {
 fn accept_call_laundered_alias_dead_before_move() -> u32 {
     let t: T = mk();
     let p: *T = &t;
-    let q: *T = id(p);
+    var q: *T = p;
+    unsafe { q = id(p); }
     let b: u32 = pk(q);
-    return cn(t) + b;
+    return cn(move t) + b;
 }
 
 // NESTED whole-value borrow stored in a struct-of-struct, USED before the move. The recursive
@@ -384,7 +389,7 @@ fn accept_nested_struct_field_used_before_move() -> u32 {
     let t: T = mk();
     let o: Outer = .{ .h = .{ .p = &t } };
     let b: u32 = pk(o.h.p);       // read BEFORE the move
-    return cn(t) + b;            // o.h.p never read again — t may be moved
+    return cn(move t) + b;            // o.h.p never read again — t may be moved
 }
 
 // NESTED array-literal element borrow, USED before the move. This proves the recursive
@@ -393,7 +398,7 @@ fn accept_nested_array_literal_element_used_before_move() -> u32 {
     let t: T = mk();
     let arr: [1][1]*T = .{ .{ &t } };
     let b: u32 = pk(arr[0][0]);
-    return cn(t) + b;
+    return cn(move t) + b;
 }
 
 // Struct-field array literal element borrow, USED before the move. This is the accepted
@@ -402,7 +407,7 @@ fn accept_struct_field_array_literal_element_used_before_move() -> u32 {
     let t: T = mk();
     let h: ArrayHolder = .{ .arr = .{ &t } };
     let b: u32 = pk(h.arr[0]);
-    return cn(t) + b;
+    return cn(move t) + b;
 }
 
 // a transient borrow passed as a BARE call argument (not inside an aggregate), used and dead
@@ -411,7 +416,7 @@ fn accept_struct_field_array_literal_element_used_before_move() -> u32 {
 fn accept_bare_borrow_call_arg() -> u32 {
     let t: T = mk();
     let x: u32 = pk(&t);          // &t is a bare arg — transient, does not escape
-    return cn(t) + x;
+    return cn(move t) + x;
 }
 
 // a direct call that returns a plain function pointer cannot store the `&t` argument in
@@ -420,25 +425,29 @@ fn accept_fn_pointer_call_result() -> u32 {
     let t: T = mk();
     let reader: fn(*T) -> u32 = chooseReader(&t);
     let x: u32 = reader(&t);
-    return cn(t) + x;
+    return cn(move t) + x;
 }
 
 // passing an aggregate with NO move borrow into a callee: nothing escapes, so the move (of an
 // unrelated value) is unaffected. Proves the call-arg scan is scoped to `&<move-binding>`.
 fn accept_call_arg_no_borrow() -> u32 {
     let t: T = mk();
-    let h: Holder = .{ .p = 0 as *T };
+    var p: *T = uninit;
+    unsafe { p = 0 as *T; }
+    let h: Holder = .{ .p = p };
     sink(h);                      // aggregate carries no borrow of t
-    return cn(t);
+    return cn(move t);
 }
 
 // --- narrow-trigger guards: the ptr-to-int escape gate must NOT over-fire ----------------
-// These prove the gate is `&<move-binding> as int` ONLY. A general integer->pointer cast,
-// `&<non-move-local> as usize`, and integer address arithmetic must all still compile clean.
+// These prove the gate is `&<move-binding> as int` ONLY. Address arithmetic and
+// `&<non-move-local> as usize` stay safe; reconstituting a pointer from an integer is now
+// explicitly unsafe, matching the `raw.ptr` boundary.
 
-// integer -> pointer (NO move binding involved): the reverse round-trip is unrestricted.
+// integer -> pointer (NO move binding involved): allowed only inside the raw-pointer escape hatch.
 fn accept_usize_to_ptr_non_move(n: usize) -> u32 {
-    let p: *u32 = n as *u32;      // reconstituting a pointer from an integer is allowed
+    var p: *u32 = uninit;
+    unsafe { p = n as *u32; }
     return rd(p);
 }
 
@@ -449,8 +458,8 @@ fn accept_addr_of_non_move_local() -> usize {
     return n;
 }
 
-// integer address arithmetic / construction (the pervasive MMIO/DMA pattern): allowed.
+// integer address arithmetic stays safe; pointer construction from the result is unsafe.
 fn accept_address_arith(base: usize, off: usize) -> *u32 {
     let addr: usize = base + off; // address math on plain integers — never a move borrow
-    return addr as *u32;          // and the integer->pointer cast back is unrestricted
+    unsafe { return addr as *u32; }
 }

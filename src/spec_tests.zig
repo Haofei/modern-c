@@ -811,6 +811,7 @@ fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *
 fn parseSpecModuleForExpectedDiagnostics(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !?ast.Module {
     return parseSpecModule(source, allocator, reporter) catch |err| switch (err) {
         error.ParseFailed => if (reporter.has_errors) null else err,
+        error.MonomorphizationLimit => if (reporter.has_errors) null else err,
         else => err,
     };
 }

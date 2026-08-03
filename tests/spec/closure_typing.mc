@@ -123,5 +123,6 @@ fn reject_identity_return_closure_param(cb: closure(u32) -> u32) -> closure(u32)
 
 fn reject_return_through_identity() -> closure(u32) -> u32 {
     var env: Env = .{ .base = 1 };
+    // EXPECT_ERROR: E_BORROW_ESCAPES_SCOPE
     return reject_identity_return_closure_param(bind(&env, add_env));
 }

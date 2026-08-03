@@ -189,7 +189,7 @@ fn sh_bget(base: usize, i: usize) -> u8 {
 
 // A `*const u8` view of the bytes at global-array address `base` (for io_open's path argument).
 fn sh_cptr(base: usize) -> *const u8 {
-    var p: *const u8 = raw.ptr<u8>(pa(0));
+    var p: *const u8 = uninit;
     unsafe {
         p = raw.ptr<u8>(pa(base));
     }

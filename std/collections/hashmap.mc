@@ -78,7 +78,7 @@ fn fnv1a(key: []const u8) -> u32 {
 // Typed pointer to slot `idx` of a slot array. The raw mint is the single unsafe site; callers
 // then use ordinary field access (`.used`, `.key`, `.val`).
 fn slot_ptr(comptime V: type, slots: PAddr, idx: usize) -> *mut Entry<V> {
-    var p: *mut Entry<V> = raw.ptr<Entry<V>>(0);
+    var p: *mut Entry<V> = uninit;
     unsafe {
         p = raw.ptr<Entry<V>>(pa_offset(slots, idx * sizeof(Entry<V>)));
     }
@@ -185,7 +185,7 @@ pub fn strmap_get(comptime V: type, m: *StrHashMap<V>, key: []const u8) -> ?*mut
     }
     // `val` is field 0, so the slot base is the value address. `raw.ptr` mints a fresh pointer
     // into the heap slot (not the address of a local), so this does not escape-fault.
-    var vp: *mut V = raw.ptr<V>(0);
+    var vp: *mut V = uninit;
     unsafe {
         vp = raw.ptr<V>(pa_offset(m.slots, idx * sizeof(Entry<V>)));
     }

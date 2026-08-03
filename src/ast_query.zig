@@ -23,7 +23,7 @@ const diagnostics = @import("diagnostics.zig");
 pub fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .ident => |ident| std.mem.eql(u8, ident.text, name),
-        .grouped => |inner| isIdentNamed(inner.*, name),
+        .grouped, .move_expr => |inner| isIdentNamed(inner.*, name),
         else => false,
     };
 }
@@ -32,7 +32,7 @@ pub fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
 pub fn isMmioMapCallName(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |member| std.mem.eql(u8, member.name.text, "map") and isIdentNamed(member.base.*, "mmio"),
-        .grouped => |inner| isMmioMapCallName(inner.*),
+        .grouped, .move_expr => |inner| isMmioMapCallName(inner.*),
         else => false,
     };
 }
@@ -58,7 +58,7 @@ pub fn mmioMapCallPayloadType(call: anytype) ?ast.TypeExpr {
 pub fn exprIsIdentNamed(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .ident => |ident| std.mem.eql(u8, ident.text, name),
-        .grouped => |inner| exprIsIdentNamed(inner.*, name),
+        .grouped, .move_expr => |inner| exprIsIdentNamed(inner.*, name),
         else => false,
     };
 }
@@ -67,7 +67,7 @@ pub fn exprIsIdentNamed(expr: ast.Expr, name: []const u8) bool {
 pub fn boolLiteralValue(expr: ast.Expr) ?bool {
     return switch (expr.kind) {
         .bool_literal => |value| value,
-        .grouped => |inner| boolLiteralValue(inner.*),
+        .grouped, .move_expr => |inner| boolLiteralValue(inner.*),
         else => null,
     };
 }
@@ -76,7 +76,7 @@ pub fn boolLiteralValue(expr: ast.Expr) ?bool {
 pub fn isUninitLiteral(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .uninit_literal => true,
-        .grouped => |inner| isUninitLiteral(inner.*),
+        .grouped, .move_expr => |inner| isUninitLiteral(inner.*),
         else => false,
     };
 }
@@ -85,7 +85,7 @@ pub fn isUninitLiteral(expr: ast.Expr) bool {
 pub fn exprHandlesAnyResult(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .try_expr => true,
-        .grouped, .address_of, .deref => |inner| exprHandlesAnyResult(inner.*),
+        .grouped, .move_expr, .address_of, .deref => |inner| exprHandlesAnyResult(inner.*),
         .block => |block| blockHandlesAnyResult(block),
         .array_literal => |items| {
             for (items) |item| {
@@ -337,7 +337,7 @@ pub const ByteViewCallKind = enum {
 pub fn byteViewCallKind(callee: ast.Expr) ?ByteViewCallKind {
     const member = switch (callee.kind) {
         .member => |node| node,
-        .grouped => |inner| return byteViewCallKind(inner.*),
+        .grouped, .move_expr => |inner| return byteViewCallKind(inner.*),
         else => return null,
     };
     if (!isIdentNamed(member.base.*, "mem")) return null;
@@ -444,7 +444,7 @@ pub fn isBindCallNode(call: anytype) bool {
 pub fn isBindCallExpr(expr: ast.Expr) bool {
     return switch (expr.kind) {
         .call => |call| isBindCallNode(call),
-        .grouped => |inner| isBindCallExpr(inner.*),
+        .grouped, .move_expr => |inner| isBindCallExpr(inner.*),
         else => false,
     };
 }
@@ -476,7 +476,7 @@ pub fn dmaBufInfo(ty: ast.TypeExpr) ?DmaBufInfo {
 pub fn byteViewAddressTarget(expr: ast.Expr) ?ast.Expr {
     return switch (expr.kind) {
         .address_of => |target| target.*,
-        .grouped => |inner| byteViewAddressTarget(inner.*),
+        .grouped, .move_expr => |inner| byteViewAddressTarget(inner.*),
         else => null,
     };
 }
@@ -485,7 +485,7 @@ pub fn byteViewAddressTarget(expr: ast.Expr) ?ast.Expr {
 pub fn calleeIdentName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| ident.text,
-        .grouped => |inner| calleeIdentName(inner.*),
+        .grouped, .move_expr => |inner| calleeIdentName(inner.*),
         else => null,
     };
 }
@@ -500,7 +500,7 @@ pub const CallExpr = struct {
 pub fn callExpr(expr: ast.Expr) ?CallExpr {
     return switch (expr.kind) {
         .call => |node| .{ .callee = node.callee, .type_args = node.type_args, .args = node.args },
-        .grouped => |inner| callExpr(inner.*),
+        .grouped, .move_expr => |inner| callExpr(inner.*),
         else => null,
     };
 }
@@ -511,7 +511,7 @@ pub const MemberExpr = struct { base: *ast.Expr, name: ast.Ident };
 pub fn memberExpr(expr: ast.Expr) ?MemberExpr {
     return switch (expr.kind) {
         .member => |node| .{ .base = node.base, .name = node.name },
-        .grouped => |inner| memberExpr(inner.*),
+        .grouped, .move_expr => |inner| memberExpr(inner.*),
         else => null,
     };
 }
@@ -522,7 +522,7 @@ pub const IndexExpr = struct { base: *ast.Expr, index: *ast.Expr };
 pub fn indexExpr(expr: ast.Expr) ?IndexExpr {
     return switch (expr.kind) {
         .index => |node| .{ .base = node.base, .index = node.index },
-        .grouped => |inner| indexExpr(inner.*),
+        .grouped, .move_expr => |inner| indexExpr(inner.*),
         else => null,
     };
 }
@@ -533,7 +533,7 @@ pub const MemberCallee = struct { base: *ast.Expr, name: ast.Ident };
 pub fn memberCallee(expr: ast.Expr) ?MemberCallee {
     return switch (expr.kind) {
         .member => |node| .{ .base = node.base, .name = node.name },
-        .grouped => |inner| memberCallee(inner.*),
+        .grouped, .move_expr => |inner| memberCallee(inner.*),
         else => null,
     };
 }
@@ -552,7 +552,7 @@ pub fn qualifiedMemberCallee(expr: ast.Expr) ?QualifiedCallee {
             .ident => |base_ident| QualifiedCallee{ .owner = base_ident.text, .member = node.name },
             else => null,
         },
-        .grouped => |inner| qualifiedMemberCallee(inner.*),
+        .grouped, .move_expr => |inner| qualifiedMemberCallee(inner.*),
         else => null,
     };
 }
@@ -561,7 +561,7 @@ pub fn qualifiedMemberCallee(expr: ast.Expr) ?QualifiedCallee {
 pub fn isCpuPauseCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |member| std.mem.eql(u8, member.name.text, "pause") and isIdentNamed(member.base.*, "cpu"),
-        .grouped => |inner| isCpuPauseCall(inner.*),
+        .grouped, .move_expr => |inner| isCpuPauseCall(inner.*),
         else => false,
     };
 }
@@ -570,7 +570,7 @@ pub fn isCpuPauseCall(callee: ast.Expr) bool {
 pub fn isRawLoadCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |member| std.mem.eql(u8, member.name.text, "load") and isIdentNamed(member.base.*, "raw"),
-        .grouped => |inner| isRawLoadCall(inner.*),
+        .grouped, .move_expr => |inner| isRawLoadCall(inner.*),
         else => false,
     };
 }
@@ -585,7 +585,7 @@ pub fn rawLoadCallReturnType(call: anytype) ?ast.TypeExpr {
 pub fn vaCallMember(callee: ast.Expr) ?[]const u8 {
     return switch (callee.kind) {
         .member => |member| if (isIdentNamed(member.base.*, "va")) member.name.text else null,
-        .grouped => |inner| vaCallMember(inner.*),
+        .grouped, .move_expr => |inner| vaCallMember(inner.*),
         else => null,
     };
 }
@@ -614,7 +614,7 @@ pub fn isVaStartCall(callee: ast.Expr) bool {
 pub fn isRawPtrCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |member| std.mem.eql(u8, member.name.text, "ptr") and isIdentNamed(member.base.*, "raw"),
-        .grouped => |inner| isRawPtrCall(inner.*),
+        .grouped, .move_expr => |inner| isRawPtrCall(inner.*),
         else => false,
     };
 }
@@ -638,7 +638,7 @@ pub fn bitcastCallReturnType(call: anytype) ?ast.TypeExpr {
 pub fn isRawStoreCall(callee: ast.Expr) bool {
     return switch (callee.kind) {
         .member => |member| std.mem.eql(u8, member.name.text, "store") and isIdentNamed(member.base.*, "raw"),
-        .grouped => |inner| isRawStoreCall(inner.*),
+        .grouped, .move_expr => |inner| isRawStoreCall(inner.*),
         else => false,
     };
 }
@@ -710,7 +710,7 @@ pub fn isMmioStructAbi(struct_decl: ast.StructDecl) bool {
 pub fn reflectionFieldName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .enum_literal => |literal| literal.text,
-        .grouped => |inner| reflectionFieldName(inner.*),
+        .grouped, .move_expr => |inner| reflectionFieldName(inner.*),
         else => null,
     };
 }
@@ -743,7 +743,7 @@ pub fn overlayArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
 pub fn overlayMemberFromIndexBase(expr: ast.Expr) ?@TypeOf(expr.kind.member) {
     return switch (expr.kind) {
         .member => |member| member,
-        .grouped => |inner| overlayMemberFromIndexBase(inner.*),
+        .grouped, .move_expr => |inner| overlayMemberFromIndexBase(inner.*),
         else => null,
     };
 }
@@ -785,7 +785,7 @@ pub fn enumVariantPathType(enums: *const std.StringHashMap(ast.EnumDecl), member
 pub fn dynCalleeMethodName(callee: ast.Expr) ?[]const u8 {
     return switch (callee.kind) {
         .member => |m| m.name.text,
-        .grouped => |inner| dynCalleeMethodName(inner.*),
+        .grouped, .move_expr => |inner| dynCalleeMethodName(inner.*),
         else => null,
     };
 }
@@ -835,7 +835,7 @@ pub fn reduceCallOpName(kind: ReduceCallKind) []const u8 {
 pub fn reduceCallKind(callee: ast.Expr) ?ReduceCallKind {
     const member = switch (callee.kind) {
         .member => |node| node,
-        .grouped => |inner| return reduceCallKind(inner.*),
+        .grouped, .move_expr => |inner| return reduceCallKind(inner.*),
         else => return null,
     };
     if (!isIdentNamed(member.base.*, "reduce")) return null;

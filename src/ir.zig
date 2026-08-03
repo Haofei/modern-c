@@ -317,7 +317,8 @@ const FunctionIrBuilder = struct {
             .array_literal => |items| for (items) |item| try self.collectExpr(item),
             .struct_literal => |fields| for (fields) |field| try self.collectExpr(field.value),
             .unreachable_expr => try self.addTrap(.Unreachable, .unreachable_expr, expr.span),
-            .grouped, .address_of, .deref => |inner| try self.collectExpr(inner.*),
+            .grouped, .move_expr, .address_of, .deref => |inner| try self.collectExpr(inner.*),
+            .borrow_expr => |node| try self.collectExpr(node.value.*),
             .try_expr => |inner| {
                 try self.addTrap(.Unknown, .unwrap, expr.span);
                 try self.collectExpr(inner.operand.*);
@@ -948,7 +949,8 @@ fn writeExprFacts(collector: *ModuleFactCollector, expr: ast.Expr, writer: anyty
                 );
             }
         },
-        .grouped, .address_of, .deref => |inner| try writeExprFacts(collector, inner.*, writer, ctx),
+        .grouped, .move_expr, .address_of, .deref => |inner| try writeExprFacts(collector, inner.*, writer, ctx),
+        .borrow_expr => |node| try writeExprFacts(collector, node.value.*, writer, ctx),
         .try_expr => |inner| {
             if (ctx.no_lang_trap) {
                 try writer.print(
@@ -1336,6 +1338,7 @@ fn writeExprName(expr: ast.Expr, writer: anytype) anyerror!void {
             try writer.print(".*", .{});
         },
         .grouped, .address_of => |inner| try writeExprName(inner.*, writer),
+        .borrow_expr => |node| try writeExprName(node.value.*, writer),
         .try_expr => |inner| try writeExprName(inner.operand.*, writer),
         else => try writer.print("<expr>", .{}),
     }

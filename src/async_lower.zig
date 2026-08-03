@@ -90,6 +90,7 @@ const paramCarrierTypeName = async_ast.paramCarrierTypeName;
 const ptr = async_ast.ptr;
 const selfMember = async_ast.selfMember;
 const stmtContainsAwait = async_query.stmtContainsAwait;
+const exprContainsAwait = async_query.exprContainsAwait;
 const typeName = async_ast.typeName;
 const unwrapToAwaitCall = async_query.unwrapToAwaitCall;
 const zspan = async_ast.zspan;
@@ -120,6 +121,11 @@ const Lowerer = struct {
     // E2: the CURRENT async fn's param name -> declared type name (reset per fn). The entry point
     // for resolving a field/index await's base type without sema.
     param_types: std.StringHashMap([]const u8),
+    // Syntactic resource inventory available before sema. Async lowering must not copy an explicitly
+    // move/linear parameter, or a non-generic aggregate that stores one by value, into its future
+    // frame; it must generate `move param` in the lowered AST.
+    explicit_resource_types: std.StringHashMap(void),
+    current_result_type: ?ast.TypeExpr = null,
     failed: bool = false,
 
     fn fail(self: *Lowerer, span: diagnostics.Span, comptime fmt: []const u8, args: anytype) Error {
@@ -271,6 +277,7 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
         .async_info = std.StringHashMap(AsyncInfo).init(arena),
         .struct_fields = std.StringHashMap(std.StringHashMap([]const u8)).init(arena),
         .param_types = std.StringHashMap([]const u8).init(arena),
+        .explicit_resource_types = std.StringHashMap(void).init(arena),
     };
 
     // E2 pass 0: record each struct's field -> field-type-name map (and array fields' element type
@@ -278,6 +285,7 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
     for (module.decls) |d| {
         if (d.kind != .struct_decl) continue;
         const sd = d.kind.struct_decl;
+        if (sd.is_move or sd.is_linear) try low.explicit_resource_types.put(sd.name.text, {});
         var fm = std.StringHashMap([]const u8).init(arena);
         for (sd.fields) |f| {
             if (typeName(f.ty)) |tn| {
@@ -288,6 +296,7 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
         }
         try low.struct_fields.put(sd.name.text, fm);
     }
+    try collectAsyncResourceAggregates(&low, module);
 
     // Pass 1: record every fn's return-type name, and each async fn's generated future ABI.
     for (module.decls) |d| {
@@ -412,9 +421,10 @@ fn patchUfcsStmt(arena: std.mem.Allocator, s: ast.Stmt, futs: *std.StringHashMap
 // "poll" }`, overwrite it with `ident(G__poll)`.
 fn patchUfcsExpr(arena: std.mem.Allocator, e: ast.Expr, futs: *std.StringHashMap(void)) void {
     switch (e.kind) {
-        .grouped, .address_of, .deref => |inner| {
+        .grouped, .move_expr, .address_of, .deref => |inner| {
             patchUfcsOne(arena, inner, futs);
         },
+        .borrow_expr => |node| patchUfcsOne(arena, node.value, futs),
         .unary => |u| patchUfcsOne(arena, u.expr, futs),
         .binary => |b| {
             patchUfcsOne(arena, b.left, futs);
@@ -486,8 +496,10 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     const info = low.async_info.get(fname).?;
     const fut_type = info.fut_type;
     const result_type = info.result_type;
+    low.current_result_type = result_type;
 
     const body = fd.body orelse return low.fail(fd.name.span, "async fn '{s}' must have a body", .{fname});
+    try checkNoExplicitBorrowLocalAcrossAwait(low, fd, body);
 
     // FINDING (HIGH): the general path alpha-renames every local to a unique name PRE-sema, so two
     // `let`/`var` of the SAME name in the SAME lexical scope — which ordinary MC rejects with
@@ -691,9 +703,6 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
         .init = try initialSelfLiteral(low, future_fields, fd.params, fd.name.span),
     } } });
     try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
-    for (fd.params) |p| {
-        try cbody.append(arena, assignStmt(try selfMember(arena, p.name.text), identExpr(p.name.text)));
-    }
     // child0 is constructed by value: `self.__c0 = g(args);` — the call's args may reference params,
     // which are now `self.<param>` fields. Rewrite ident args that name a captured field.
     if (steps.items.len > 0) {
@@ -716,7 +725,7 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
         for (b.else_steps.items) |s| if (s.binding) |nm| try appendZeroInit(low, &cbody, nm, s.result_type);
     }
     try appendZeroInit(low, &cbody, "result", result_type);
-    try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = identExpr("self") } });
+    try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = try moveExpr(arena, identExpr("self")) } });
 
     try checkNoSelfBorrow(low, fd, cbody.items);
 
@@ -888,7 +897,7 @@ fn lowerAsyncFn(low: *Lowerer, out: *std.ArrayList(ast.Decl), decl: ast.Decl) Er
     var tr_params = try arena.alloc(ast.Param, 1);
     tr_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
     var tr_body: std.ArrayList(ast.Stmt) = .empty;
-    try tr_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = try selfMember(arena, "result") } });
+    try tr_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = try moveExpr(arena, try selfMember(arena, "result")) } });
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
         .name = id(info.take_result),
         .abi = null,
@@ -1038,14 +1047,13 @@ fn lowerAsyncLoopFn(
         .init = try initialSelfLiteral(low, future_fields, fd.params, fd.name.span),
     } } });
     try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
-    for (fd.params) |p| try cbody.append(arena, assignStmt(try selfMember(arena, p.name.text), identExpr(p.name.text)));
     // Replay the pre-loop straight-line, lifting `let/var x = init` to `self.x = init` and rewriting
     // captured reads to self.*.
     for (pre_loop.items) |stmt| try cbody.append(arena, try rewriteDeclToStore(low, stmt, bind_names));
     // Zero the body-awaited binding fields + result (definite-init for the move/borrow checker).
     for (loopw.steps.items) |s| if (s.binding) |b| try appendZeroInit(low, &cbody, b, s.result_type);
     try appendZeroInit(low, &cbody, "result", result_type);
-    try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = identExpr("self") } });
+    try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = try moveExpr(arena, identExpr("self")) } });
     try checkNoSelfBorrow(low, fd, cbody.items);
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
         .name = id(fd.name.text),
@@ -1158,7 +1166,7 @@ fn lowerAsyncLoopFn(
     var tr_params = try arena.alloc(ast.Param, 1);
     tr_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
     var tr_body: std.ArrayList(ast.Stmt) = .empty;
-    try tr_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = try selfMember(arena, "result") } });
+    try tr_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = try moveExpr(arena, try selfMember(arena, "result")) } });
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
         .name = id(info.take_result),
         .abi = null,
@@ -1668,7 +1676,9 @@ fn renameExpr(rs: *RenameScope, e: ast.Expr) Error!ast.Expr {
     return switch (e.kind) {
         .ident => |i| if (rs.lookup(i.text)) |fresh| .{ .span = e.span, .kind = .{ .ident = .{ .text = fresh, .span = i.span } } } else e,
         .grouped => |inner| .{ .span = e.span, .kind = .{ .grouped = try ptr(arena, ast.Expr, try renameExpr(rs, inner.*)) } },
+        .move_expr => |inner| .{ .span = e.span, .kind = .{ .move_expr = try ptr(arena, ast.Expr, try renameExpr(rs, inner.*)) } },
         .address_of => |inner| .{ .span = e.span, .kind = .{ .address_of = try ptr(arena, ast.Expr, try renameExpr(rs, inner.*)) } },
+        .borrow_expr => |node| .{ .span = e.span, .kind = .{ .borrow_expr = .{ .mutability = node.mutability, .value = try ptr(arena, ast.Expr, try renameExpr(rs, node.value.*)) } } },
         .deref => |inner| .{ .span = e.span, .kind = .{ .deref = try ptr(arena, ast.Expr, try renameExpr(rs, inner.*)) } },
         .await_expr => |inner| .{ .span = e.span, .kind = .{ .await_expr = try ptr(arena, ast.Expr, try renameExpr(rs, inner.*)) } },
         .unary => |u| .{ .span = e.span, .kind = .{ .unary = .{ .op = u.op, .expr = try ptr(arena, ast.Expr, try renameExpr(rs, u.expr.*)) } } },
@@ -1931,7 +1941,6 @@ fn lowerAsyncGeneralFn(
         .init = try initialSelfLiteral(low, future_fields, fd.params, fd.name.span),
     } } });
     try cbody.append(arena, assignStmt(try selfMember(arena, "state"), intExpr("0")));
-    for (fd.params) |p| try cbody.append(arena, assignStmt(try selfMember(arena, p.name.text), identExpr(p.name.text)));
     // Zero every scalar local field for definite-init (the move/borrow checker needs every field
     // initialized before `return self`). Each local's REAL init (`self.x = init;`) runs in the
     // poll-state where its declaration executes — which always runs before any state that reads it
@@ -1943,7 +1952,7 @@ fn lowerAsyncGeneralFn(
     // Zero the scalar awaited-binding fields + result (definite-init).
     for (ctx.awaits.items) |ga| if (ga.step.binding) |b| try appendZeroInit(low, &cbody, b, ga.step.result_type);
     try appendZeroInit(low, &cbody, "result", result_type);
-    try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = identExpr("self") } });
+    try cbody.append(arena, .{ .span = zspan, .kind = .{ .@"return" = try moveExpr(arena, identExpr("self")) } });
     try checkNoSelfBorrow(low, fd, cbody.items);
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
         .name = id(fd.name.text),
@@ -2008,7 +2017,7 @@ fn lowerAsyncGeneralFn(
     var tr_params = try arena.alloc(ast.Param, 1);
     tr_params[0] = .{ .name = id("self"), .ty = try mutPtrType(arena, try nameType(arena, fut_type)) };
     var tr_body: std.ArrayList(ast.Stmt) = .empty;
-    try tr_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = try selfMember(arena, "result") } });
+    try tr_body.append(arena, .{ .span = zspan, .kind = .{ .@"return" = try moveExpr(arena, try selfMember(arena, "result")) } });
     try out.append(arena, .{ .span = zspan, .attrs = &.{}, .kind = .{ .fn_decl = .{
         .name = id(info.take_result),
         .abi = null,
@@ -2331,7 +2340,7 @@ fn futureTypeOf(low: *Lowerer, e: ast.Expr) ?[]const u8 {
             .ident => |i| low.fn_ret_type.get(i.text),
             else => null,
         },
-        .grouped => |inner| futureTypeOf(low, inner.*),
+        .grouped, .move_expr => |inner| futureTypeOf(low, inner.*),
         .member => |m| blk: {
             const base_ty = structTypeOf(low, m.base.*) orelse break :blk null;
             const fm = low.struct_fields.get(base_ty) orelse break :blk null;
@@ -2348,7 +2357,7 @@ fn futureTypeOf(low: *Lowerer, e: ast.Expr) ?[]const u8 {
 fn structTypeOf(low: *Lowerer, e: ast.Expr) ?[]const u8 {
     return switch (e.kind) {
         .ident => |i| low.param_types.get(i.text),
-        .grouped => |inner| structTypeOf(low, inner.*),
+        .grouped, .move_expr => |inner| structTypeOf(low, inner.*),
         .member => |m| blk: {
             const base_ty = structTypeOf(low, m.base.*) orelse break :blk null;
             const fm = low.struct_fields.get(base_ty) orelse break :blk null;
@@ -2387,6 +2396,9 @@ fn buildAwaitStep(low: *Lowerer, stmt: ast.Stmt, acall: ast.Expr, field_index: u
     const arena = low.arena;
     const ld = stmt.kind.let_decl; // (let or var; both carry LocalDecl)
     if (ld.names.len != 1) return low.fail(stmt.span, "async v0: an awaited binding must bind exactly one name", .{});
+    if (exprContainsExplicitBorrow(acall)) {
+        return low.fail(acall.span, "E_ASYNC_BORROW_ACROSS_AWAIT: explicit `borrow` / `borrow mut` cannot be captured by an awaited future in async v0; end the borrow before `await`, move owned state into the future, or rebuild the view after the await", .{});
+    }
     const child = try resolveAwait(low, stmt.span, acall);
     const field = try std.fmt.allocPrint(arena, "__c{d}", .{field_index});
     if (ld.ty == null and typeName(child.result_type) != null and std.mem.eql(u8, typeName(child.result_type).?, "__async_infer")) {
@@ -2624,6 +2636,74 @@ fn checkNoSelfBorrow(low: *Lowerer, fd: ast.FnDecl, ctor_body: []const ast.Stmt)
     }
 }
 
+fn checkNoExplicitBorrowLocalAcrossAwait(low: *Lowerer, fd: ast.FnDecl, body: ast.Block) Error!void {
+    try checkExplicitBorrowBlockAcrossAwait(low, fd, body, 0);
+}
+
+fn checkExplicitBorrowBlockAcrossAwait(low: *Lowerer, fd: ast.FnDecl, block: ast.Block, inherited_active: usize) Error!void {
+    var active = inherited_active;
+    for (block.items) |stmt| {
+        if (active > 0 and stmtContainsAwait(stmt)) {
+            return low.fail(stmt.span, "E_ASYNC_BORROW_ACROSS_AWAIT: explicit `borrow` / `borrow mut` local in async fn '{s}' cannot live across an `await`; end the borrow with a smaller lexical block before awaiting", .{fd.name.text});
+        }
+        if (stmtDeclContainsExplicitBorrowAndAwait(stmt)) {
+            return low.fail(stmt.span, "E_ASYNC_BORROW_ACROSS_AWAIT: explicit `borrow` / `borrow mut` cannot be formed in the same async statement that awaits; split the borrow into a post-await lexical scope", .{});
+        }
+        try checkExplicitBorrowStmtAcrossAwait(low, fd, stmt, active);
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |ld| {
+                if (ld.init) |init| {
+                    if (exprIntroducesExplicitBorrowBinding(init)) active += @max(ld.names.len, 1);
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+fn checkExplicitBorrowStmtAcrossAwait(low: *Lowerer, fd: ast.FnDecl, stmt: ast.Stmt, inherited_active: usize) Error!void {
+    switch (stmt.kind) {
+        .block, .unsafe_block, .comptime_block => |b| try checkExplicitBorrowBlockAcrossAwait(low, fd, b, inherited_active),
+        .contract_block => |cb| try checkExplicitBorrowBlockAcrossAwait(low, fd, cb.block, inherited_active),
+        .loop => |l| try checkExplicitBorrowBlockAcrossAwait(low, fd, l.body, inherited_active),
+        .if_let => |il| {
+            try checkExplicitBorrowBlockAcrossAwait(low, fd, il.then_block, inherited_active);
+            if (il.else_block) |eb| try checkExplicitBorrowBlockAcrossAwait(low, fd, eb, inherited_active);
+        },
+        .@"switch" => |sw| {
+            for (sw.arms) |arm| switch (arm.body) {
+                .block => |b| try checkExplicitBorrowBlockAcrossAwait(low, fd, b, inherited_active),
+                .expr => {},
+            };
+        },
+        else => {},
+    }
+}
+
+fn stmtDeclContainsExplicitBorrowAndAwait(stmt: ast.Stmt) bool {
+    const init = switch (stmt.kind) {
+        .let_decl, .var_decl => |ld| ld.init orelse return false,
+        else => return false,
+    };
+    return exprContainsExplicitBorrow(init) and exprContainsAwait(init);
+}
+
+fn exprIntroducesExplicitBorrowBinding(e: ast.Expr) bool {
+    return switch (e.kind) {
+        .borrow_expr => true,
+        .grouped, .move_expr => |inner| exprIntroducesExplicitBorrowBinding(inner.*),
+        .array_literal => |items| blk: {
+            for (items) |item| if (exprIntroducesExplicitBorrowBinding(item)) break :blk true;
+            break :blk false;
+        },
+        .struct_literal => |fields| blk: {
+            for (fields) |field| if (exprIntroducesExplicitBorrowBinding(field.value)) break :blk true;
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
 // Is `e` rooted at the identifier `self` (a member/index/deref chain bottoming out at `self`)?
 fn rootIsSelf(e: ast.Expr) bool {
     return switch (e.kind) {
@@ -2631,16 +2711,18 @@ fn rootIsSelf(e: ast.Expr) bool {
         .member => |m| rootIsSelf(m.base.*),
         .index => |ix| rootIsSelf(ix.base.*),
         .deref => |inner| rootIsSelf(inner.*),
-        .grouped => |inner| rootIsSelf(inner.*),
+        .grouped, .move_expr => |inner| rootIsSelf(inner.*),
         else => false,
     };
 }
 
-// Does `e` form the address of `self.*` anywhere within it (`&self.x`, `g(&self.x)`, …)?
+// Does `e` form the address of `self.*` anywhere within it (`&self.x`, `borrow self.x`,
+// `g(&self.x)`, …)?
 fn exprFormsSelfBorrow(e: ast.Expr) bool {
     return switch (e.kind) {
         .address_of => |inner| rootIsSelf(inner.*) or exprFormsSelfBorrow(inner.*),
-        .grouped, .deref => |inner| exprFormsSelfBorrow(inner.*),
+        .borrow_expr => |node| rootIsSelf(node.value.*) or exprFormsSelfBorrow(node.value.*),
+        .grouped, .move_expr, .deref => |inner| exprFormsSelfBorrow(inner.*),
         .unary => |u| exprFormsSelfBorrow(u.expr.*),
         .binary => |b| exprFormsSelfBorrow(b.left.*) or exprFormsSelfBorrow(b.right.*),
         .cast => |c| exprFormsSelfBorrow(c.value.*),
@@ -2666,6 +2748,65 @@ fn stmtFormsSelfBorrow(s: ast.Stmt) bool {
     };
 }
 
+fn exprContainsExplicitBorrow(e: ast.Expr) bool {
+    return switch (e.kind) {
+        .borrow_expr => true,
+        .grouped, .move_expr, .deref, .address_of => |inner| exprContainsExplicitBorrow(inner.*),
+        .block => |b| blockContainsExplicitBorrow(b),
+        .array_literal => |items| blk: {
+            for (items) |item| if (exprContainsExplicitBorrow(item)) break :blk true;
+            break :blk false;
+        },
+        .struct_literal => |fields| blk: {
+            for (fields) |field| if (exprContainsExplicitBorrow(field.value)) break :blk true;
+            break :blk false;
+        },
+        .unary => |u| exprContainsExplicitBorrow(u.expr.*),
+        .binary => |b| exprContainsExplicitBorrow(b.left.*) or exprContainsExplicitBorrow(b.right.*),
+        .cast => |c| exprContainsExplicitBorrow(c.value.*),
+        .call => |c| blk: {
+            if (exprContainsExplicitBorrow(c.callee.*)) break :blk true;
+            for (c.args) |a| if (exprContainsExplicitBorrow(a)) break :blk true;
+            break :blk false;
+        },
+        .index => |ix| exprContainsExplicitBorrow(ix.base.*) or exprContainsExplicitBorrow(ix.index.*),
+        .member => |m| exprContainsExplicitBorrow(m.base.*),
+        .try_expr => |t| exprContainsExplicitBorrow(t.operand.*),
+        .await_expr => |inner| exprContainsExplicitBorrow(inner.*),
+        else => false,
+    };
+}
+
+fn blockContainsExplicitBorrow(block: ast.Block) bool {
+    for (block.items) |stmt| if (stmtContainsExplicitBorrow(stmt)) return true;
+    return false;
+}
+
+fn stmtContainsExplicitBorrow(stmt: ast.Stmt) bool {
+    return switch (stmt.kind) {
+        .let_decl, .var_decl => |ld| if (ld.init) |init| exprContainsExplicitBorrow(init) else false,
+        .loop => |l| (if (l.iterable) |it| exprContainsExplicitBorrow(it) else false) or blockContainsExplicitBorrow(l.body),
+        .if_let => |il| exprContainsExplicitBorrow(il.value) or blockContainsExplicitBorrow(il.then_block) or (if (il.else_block) |eb| blockContainsExplicitBorrow(eb) else false),
+        .@"switch" => |sw| blk: {
+            if (exprContainsExplicitBorrow(sw.subject)) break :blk true;
+            for (sw.arms) |arm| {
+                const has = switch (arm.body) {
+                    .block => |b| blockContainsExplicitBorrow(b),
+                    .expr => |e| exprContainsExplicitBorrow(e),
+                };
+                if (has) break :blk true;
+            }
+            break :blk false;
+        },
+        .unsafe_block, .comptime_block, .block => |b| blockContainsExplicitBorrow(b),
+        .contract_block => |cb| blockContainsExplicitBorrow(cb.block),
+        .@"return" => |ret| if (ret) |expr| exprContainsExplicitBorrow(expr) else false,
+        .@"defer", .assert, .expr => |expr| exprContainsExplicitBorrow(expr),
+        .assignment => |a| exprContainsExplicitBorrow(a.target) or exprContainsExplicitBorrow(a.value),
+        .asm_stmt, .@"break", .@"continue" => false,
+    };
+}
+
 // A definite-init zero for a captured scalar field, or null for fields that need a
 // typed `uninit` placeholder in the constructor's whole-future literal. The poll
 // state machine overwrites those placeholders before their states read them.
@@ -2681,9 +2822,64 @@ fn uninitExpr(span: ast.Span) ast.Expr {
     return .{ .span = span, .kind = .uninit_literal };
 }
 
+fn collectAsyncResourceAggregates(low: *Lowerer, module: ast.Module) Error!void {
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (module.decls) |d| {
+            if (d.kind != .struct_decl) continue;
+            const sd = d.kind.struct_decl;
+            if (low.explicit_resource_types.contains(sd.name.text)) continue;
+            for (sd.fields) |field| {
+                if (typeContainsAsyncFrameResource(low, field.ty)) {
+                    try low.explicit_resource_types.put(sd.name.text, {});
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn typeContainsAsyncFrameResource(low: *Lowerer, ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .name => |n| low.explicit_resource_types.contains(n.text),
+        .generic => |g| blk: {
+            if (low.explicit_resource_types.contains(g.base.text)) break :blk true;
+            for (g.args) |arg| if (typeContainsAsyncFrameResource(low, arg)) break :blk true;
+            break :blk false;
+        },
+        .array => |node| typeContainsAsyncFrameResource(low, node.child.*),
+        .qualified => |node| typeContainsAsyncFrameResource(low, node.child.*),
+        .nullable => |child| typeContainsAsyncFrameResource(low, child.*),
+        else => false,
+    };
+}
+
+fn moveExpr(arena: std.mem.Allocator, expr: ast.Expr) Error!ast.Expr {
+    return .{ .span = expr.span, .kind = .{ .move_expr = try ptr(arena, ast.Expr, expr) } };
+}
+
+fn explicitResourceType(low: *Lowerer, ty: ast.TypeExpr) bool {
+    const tn = typeName(ty) orelse return false;
+    return low.explicit_resource_types.contains(tn);
+}
+
+fn moveIfExplicitResource(low: *Lowerer, expr: ast.Expr, ty: ast.TypeExpr) Error!ast.Expr {
+    if (!explicitResourceType(low, ty)) return expr;
+    return moveExpr(low.arena, expr);
+}
+
 fn paramInitializer(params: []const ast.Param, field_name: []const u8) ?ast.Expr {
     for (params) |p| {
         if (std.mem.eql(u8, p.name.text, field_name)) return identExpr(p.name.text);
+    }
+    return null;
+}
+
+fn paramType(params: []const ast.Param, field_name: []const u8) ?ast.TypeExpr {
+    for (params) |p| {
+        if (std.mem.eql(u8, p.name.text, field_name)) return p.ty;
     }
     return null;
 }
@@ -2696,7 +2892,7 @@ fn initialSelfLiteral(low: *Lowerer, fields: []const ast.Field, params: []const 
         const value = if (std.mem.eql(u8, name, "state"))
             intExpr("0")
         else if (paramInitializer(params, name)) |param|
-            param
+            try moveIfExplicitResource(low, param, paramType(params, name).?)
         else if (try zeroFor(low, field.ty)) |zero|
             zero
         else
@@ -2782,7 +2978,9 @@ fn rewriteParamRefs(low: *Lowerer, e: ast.Expr, names: *std.StringHashMap(void))
     return switch (e.kind) {
         .ident => |i| if (names.contains(i.text)) try selfMember(arena, i.text) else e,
         .grouped => |inner| .{ .span = e.span, .kind = .{ .grouped = try ptr(arena, ast.Expr, try rewriteParamRefs(low, inner.*, names)) } },
+        .move_expr => |inner| .{ .span = e.span, .kind = .{ .move_expr = try ptr(arena, ast.Expr, try rewriteParamRefs(low, inner.*, names)) } },
         .address_of => |inner| .{ .span = e.span, .kind = .{ .address_of = try ptr(arena, ast.Expr, try rewriteParamRefs(low, inner.*, names)) } },
+        .borrow_expr => |node| .{ .span = e.span, .kind = .{ .borrow_expr = .{ .mutability = node.mutability, .value = try ptr(arena, ast.Expr, try rewriteParamRefs(low, node.value.*, names)) } } },
         .deref => |inner| .{ .span = e.span, .kind = .{ .deref = try ptr(arena, ast.Expr, try rewriteParamRefs(low, inner.*, names)) } },
         .unary => |u| .{ .span = e.span, .kind = .{ .unary = .{ .op = u.op, .expr = try ptr(arena, ast.Expr, try rewriteParamRefs(low, u.expr.*, names)) } } },
         .binary => |b| .{ .span = e.span, .kind = .{ .binary = .{ .op = b.op, .left = try ptr(arena, ast.Expr, try rewriteParamRefs(low, b.left.*, names)), .right = try ptr(arena, ast.Expr, try rewriteParamRefs(low, b.right.*, names)) } } },
@@ -2834,8 +3032,12 @@ fn rewriteRegionStmt(low: *Lowerer, s: ast.Stmt, names: *std.StringHashMap(void)
         .@"return" => |maybe_expr| {
             const rexpr = maybe_expr orelse return low.fail(s.span, "async v0: `return` must return a value", .{});
             const rewritten = try rewriteParamRefs(low, rexpr, names);
+            const result_value = if (low.current_result_type) |rt|
+                try moveIfExplicitResource(low, rewritten, rt)
+            else
+                rewritten;
             var rb: std.ArrayList(ast.Stmt) = .empty;
-            try rb.append(arena, assignStmt(try selfMember(arena, "result"), rewritten));
+            try rb.append(arena, assignStmt(try selfMember(arena, "result"), result_value));
             try rb.append(arena, assignStmt(try selfMember(arena, "state"), intExpr(done_str)));
             try rb.append(arena, .{ .span = s.span, .kind = .{ .@"return" = .{ .span = s.span, .kind = .{ .bool_literal = true } } } });
             // A `return` is multiple stmts now; wrap them in a block so the caller sees one stmt.

@@ -30,7 +30,10 @@ pub move struct Arc<T> {
 // Allocate a new refcounted block holding `value`, with one owner.
 pub fn arc_new(comptime T: type, a: *mut dyn Allocator, value: T) -> Arc<T> {
     let addr: PAddr = alloc_bytes(a, sizeof(ArcBlock<T>), alignof(ArcBlock<T>));
-    let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(addr);
+    var blk: *mut ArcBlock<T> = uninit;
+    unsafe {
+        blk = raw.ptr<ArcBlock<T>>(addr);
+    }
     blk.count.store(1, .release);
     blk.value = value;
     return .{ .block = addr, .allocator = a };
@@ -40,7 +43,10 @@ pub fn arc_new(comptime T: type, a: *mut dyn Allocator, value: T) -> Arc<T> {
 // fills it via `arc_get_mut` before cloning or publishing it.
 pub fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -> Arc<T> {
     let addr: PAddr = alloc_bytes(a, sizeof(ArcBlock<T>), alignof(ArcBlock<T>));
-    let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(addr);
+    var blk: *mut ArcBlock<T> = uninit;
+    unsafe {
+        blk = raw.ptr<ArcBlock<T>>(addr);
+    }
     blk.count.store(1, .release);
     return .{ .block = addr, .allocator = a };
 }
@@ -48,7 +54,10 @@ pub fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -> Arc<T> {
 // Add an owner: bump the count and return another handle to the same block, carrying
 // the same allocator provenance.
 pub fn arc_clone_from_parts(comptime T: type, block: PAddr, allocator: *mut dyn Allocator) -> Arc<T> {
-    let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(block);
+    var blk: *mut ArcBlock<T> = uninit;
+    unsafe {
+        blk = raw.ptr<ArcBlock<T>>(block);
+    }
     // Check the saturation cap *before* incrementing, so the count is never wrapped to a
     // bogus value. A plain `fetch_add` would write `0` for one instant when the previous
     // value was the maximum — corrupting the refcount before any overflow check could run.
@@ -72,7 +81,7 @@ pub fn arc_clone(comptime T: type, h: *Arc<T>) -> Arc<T> {
 // Borrow the shared value immutably (valid while any handle lives). `value` is at
 // the block's base, so the typed pointer is the block address reinterpreted as T.
 pub fn arc_get(comptime T: type, h: *Arc<T>) -> *const T {
-    var p: *const T = raw.ptr<T>(0);
+    var p: *const T = uninit;
     unsafe {
         p = raw.ptr<T>(h.block);
     }
@@ -85,16 +94,26 @@ pub fn arc_get(comptime T: type, h: *Arc<T>) -> *const T {
 // must not clone or publish the handle while the pointer is live (the checker enforces the
 // unsafe context, not the no-aliasing rule).
 pub fn arc_get_mut(comptime T: type, h: *Arc<T>) -> *mut T {
-    let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(h.block);
+    var blk: *mut ArcBlock<T> = uninit;
+    unsafe {
+        blk = raw.ptr<ArcBlock<T>>(h.block);
+    }
     if blk.count.load(.acquire) != 1 {
         unreachable; // mutable access requires unique ownership
     }
-    return raw.ptr<T>(h.block);
+    var p: *mut T = uninit;
+    unsafe {
+        p = raw.ptr<T>(h.block);
+    }
+    return p;
 }
 
 // The current owner count (for tests / debugging).
 pub fn arc_count(comptime T: type, h: *Arc<T>) -> u32 {
-    let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(h.block);
+    var blk: *mut ArcBlock<T> = uninit;
+    unsafe {
+        blk = raw.ptr<ArcBlock<T>>(h.block);
+    }
     return blk.count.load(.acquire);
 }
 
@@ -102,7 +121,10 @@ pub fn arc_count(comptime T: type, h: *Arc<T>) -> u32 {
 // returns whether it freed. The block is reclaimed through the handle's own
 // allocator provenance, so it can never be freed through the wrong allocator.
 pub fn arc_drop(comptime T: type, h: Arc<T>) -> bool {
-    let blk: *mut ArcBlock<T> = raw.ptr<ArcBlock<T>>(h.block);
+    var blk: *mut ArcBlock<T> = uninit;
+    unsafe {
+        blk = raw.ptr<ArcBlock<T>>(h.block);
+    }
     let prev: u32 = blk.count.fetch_sub(1, .acq_rel);
     var freed: bool = false;
     if prev == 1 {

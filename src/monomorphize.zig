@@ -24,10 +24,11 @@ pub const Options = struct {
 };
 
 // Build the combined conformance key into `buf` (or arena-allocate if it doesn't fit).
-// Names are identifiers, so the stack buffer covers every realistic case.
-fn conformanceKey(arena: std.mem.Allocator, buf: []u8, trait: []const u8, concrete: []const u8) []const u8 {
+// Allocation failure is a compiler failure, never a synthetic key: a synthetic key could
+// accidentally match an unrelated conformance entry.
+fn conformanceKey(arena: std.mem.Allocator, buf: []u8, trait: []const u8, concrete: []const u8) ![]const u8 {
     return std.fmt.bufPrint(buf, "{s}\x00{s}", .{ trait, concrete }) catch
-        std.fmt.allocPrint(arena, "{s}\x00{s}", .{ trait, concrete }) catch "\x00";
+        try std.fmt.allocPrint(arena, "{s}\x00{s}", .{ trait, concrete });
 }
 
 // Comptime-parameter monomorphization (section 22). A *type-generic* function —
@@ -142,7 +143,6 @@ const Instance = struct {
     // resolves, but with an `unreachable` body — the real body would reference a missing
     // `Type__method`, spilling a deep-body cascade the design forbids.
     bound_failed: bool = false,
-    limit_failed: bool = false,
 };
 
 const StructInstance = struct {
@@ -154,7 +154,6 @@ const StructInstance = struct {
     depth: usize = 0,
     origin: ?*const InstantiationOrigin = null,
     generated: bool = false,
-    limit_failed: bool = false,
 };
 
 const UnionInstance = struct {
@@ -166,7 +165,6 @@ const UnionInstance = struct {
     depth: usize = 0,
     origin: ?*const InstantiationOrigin = null,
     generated: bool = false,
-    limit_failed: bool = false,
 };
 
 const InstantiationKind = enum {
@@ -452,13 +450,13 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                 rewriter.current_origin = saved_origin;
             }
             var spec_ctx = CloneCtx{ .arena = arena, .subst = &inst.subst, .rewrite = &rewriter };
-            var spec = if (inst.limit_failed) try cloneFnDeclSignatureCtx(&spec_ctx, inst.decl) else try cloneFnDeclCtx(&spec_ctx, inst.decl);
+            var spec = try cloneFnDeclCtx(&spec_ctx, inst.decl);
             spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
             spec.params = try dropComptimeParams(arena, spec.params);
             // A bound-failed instantiation already reported E_TRAIT_NOT_SATISFIED; emit an
             // `unreachable`-only body so the call resolves but the real body (which would
             // reference a missing `Type__method`) cannot spill a deep-body cascade.
-            if (inst.bound_failed or inst.limit_failed) spec.body = try unreachableBody(arena, inst.decl.name.span);
+            if (inst.bound_failed) spec.body = try unreachableBody(arena, inst.decl.name.span);
             try out.append(arena, .{ .span = inst.decl.name.span, .attrs = try cloneAttrs(&spec_ctx, inst.attrs), .is_pub = inst.is_pub, .kind = .{ .fn_decl = spec } });
         }
     }
@@ -485,10 +483,9 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                     rewriter.current_origin = saved_origin;
                 }
                 var sctx = CloneCtx{ .arena = arena, .subst = &inst.subst, .rewrite = &rewriter };
-                var spec = if (inst.limit_failed) inst.decl else try cloneStructDeclCtx(&sctx, inst.decl);
+                var spec = try cloneStructDeclCtx(&sctx, inst.decl);
                 spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
                 spec.type_params = &.{};
-                if (inst.limit_failed) spec.fields = &.{};
                 try out.append(arena, .{ .span = inst.decl.name.span, .attrs = try cloneAttrs(&sctx, inst.attrs), .is_pub = inst.is_pub, .kind = .{ .struct_decl = spec } });
             }
             while (ui < union_list.items.len) : (ui += 1) {
@@ -504,10 +501,9 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
                     rewriter.current_origin = saved_origin;
                 }
                 var uctx = CloneCtx{ .arena = arena, .subst = &inst.subst, .rewrite = &rewriter };
-                var spec = if (inst.limit_failed) inst.decl else try cloneUnionDeclCtx(&uctx, inst.decl);
+                var spec = try cloneUnionDeclCtx(&uctx, inst.decl);
                 spec.name = .{ .text = inst.mangled, .span = inst.decl.name.span };
                 spec.type_params = &.{};
-                if (inst.limit_failed) spec.cases = &.{};
                 try out.append(arena, .{ .span = inst.decl.name.span, .attrs = try cloneAttrs(&uctx, inst.attrs), .is_pub = inst.is_pub, .kind = .{ .union_decl = spec } });
             }
         }
@@ -674,7 +670,8 @@ fn typeMentionsIdent(ty: ast.TypeExpr, name: []const u8) bool {
 fn exprMentionsIdent(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
         .ident => |id| std.mem.eql(u8, id.text, name),
-        .grouped, .address_of, .deref => |inner| exprMentionsIdent(inner.*, name),
+        .grouped, .address_of, .deref, .move_expr => |inner| exprMentionsIdent(inner.*, name),
+        .borrow_expr => |node| exprMentionsIdent(node.value.*, name),
         .try_expr => |inner| exprMentionsIdent(inner.operand.*, name) or
             if (inner.mapped) |mapped| exprMentionsIdent(mapped.*, name) else false,
         .await_expr => |inner| exprMentionsIdent(inner.*, name),
@@ -780,7 +777,8 @@ fn attrExprMentionsIdent(attr: ast.Attr, name: []const u8) bool {
 
 fn exprTypeMentions(expr: ast.Expr, name: []const u8) bool {
     return switch (expr.kind) {
-        .grouped, .address_of, .deref => |inner| exprTypeMentions(inner.*, name),
+        .grouped, .address_of, .deref, .move_expr => |inner| exprTypeMentions(inner.*, name),
+        .borrow_expr => |node| exprTypeMentions(node.value.*, name),
         .try_expr => |inner| exprTypeMentions(inner.operand.*, name) or if (inner.mapped) |mapped| exprTypeMentions(mapped.*, name) else false,
         .await_expr => |inner| exprTypeMentions(inner.*, name),
         .unary => |node| exprTypeMentions(node.expr.*, name),
@@ -846,6 +844,7 @@ fn cloneFnDeclSignatureCtx(ctx: *const CloneCtx, fn_decl: ast.FnDecl) !ast.FnDec
         .abi = fn_decl.abi,
         .params = params,
         .return_type = if (fn_decl.return_type) |ty| try cloneType(ctx, ty) else null,
+        .return_borrow_source = fn_decl.return_borrow_source,
         .body = null,
         .is_const = fn_decl.is_const,
         .exported = fn_decl.exported,
@@ -878,10 +877,12 @@ fn cloneExprCtx(ctx: *const CloneCtx, expr: ast.Expr) anyerror!ast.Expr {
         .enum_literal,
         => expr.kind,
         .grouped => |inner| .{ .grouped = try clonePtr(ctx, inner.*) },
+        .move_expr => |inner| .{ .move_expr = try clonePtr(ctx, inner.*) },
         .unary => |node| .{ .unary = .{ .op = node.op, .expr = try clonePtr(ctx, node.expr.*) } },
         .binary => |node| .{ .binary = .{ .op = node.op, .left = try clonePtr(ctx, node.left.*), .right = try clonePtr(ctx, node.right.*) } },
         .cast => |node| .{ .cast = .{ .value = try clonePtr(ctx, node.value.*), .ty = try cloneTypePtr(ctx, node.ty.*) } },
         .address_of => |inner| .{ .address_of = try clonePtr(ctx, inner.*) },
+        .borrow_expr => |node| .{ .borrow_expr = .{ .mutability = node.mutability, .value = try clonePtr(ctx, node.value.*) } },
         .deref => |inner| .{ .deref = try clonePtr(ctx, inner.*) },
         .try_expr => |inner| .{ .try_expr = .{ .operand = try clonePtr(ctx, inner.operand.*), .mapped = if (inner.mapped) |m| try clonePtr(ctx, m.*) else null } },
         // `await` is normally eliminated by the async transform before monomorphize; clone it
@@ -994,7 +995,7 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
                 .int => continue,
             };
             var key_buf: [512]u8 = undefined;
-            const conforms = rw.conformance.contains(conformanceKey(rw.arena, &key_buf, bound.trait_name.text, concrete));
+            const conforms = rw.conformance.contains(try conformanceKey(rw.arena, &key_buf, bound.trait_name.text, concrete));
             if (!conforms) {
                 bound_failed = true;
                 reporter.err(node.callee.*.span, "{s}: {s}", .{
@@ -1011,11 +1012,11 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
         .args = canonical_slice,
     };
     const mangled_name = try mangleGenericInstance(rw.arena, info.decl.name.text, canonical_slice);
-    try registerGenericLinkage(rw, mangled_name, instance_key, node.callee.*.span);
     if (!rw.instances.contains(instance_key)) {
         const depth = rw.current_depth + 1;
+        try admitInstance(rw, node.callee.*.span, .function, mangled_name, depth);
+        try registerGenericLinkage(rw, mangled_name, instance_key, node.callee.*.span);
         const origin = createInstantiationOrigin(rw, .function, mangled_name, node.callee.*.span, depth);
-        const limit_failed = !admitInstance(rw, node.callee.*.span, origin, depth);
         const inst = rw.arena.create(Instance) catch {
             rw.oom = true;
             return null;
@@ -1029,7 +1030,6 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
             .depth = depth,
             .origin = origin,
             .bound_failed = bound_failed,
-            .limit_failed = limit_failed,
         };
         rw.instances.put(instance_key, inst) catch {
             rw.oom = true;
@@ -1067,17 +1067,26 @@ fn createInstantiationOrigin(
     return origin;
 }
 
-fn admitInstance(rw: *Rewriter, span: ast.Span, origin: ?*const InstantiationOrigin, depth: usize) bool {
+fn admitInstance(rw: *Rewriter, span: ast.Span, kind: InstantiationKind, name: []const u8, depth: usize) error{MonomorphizationLimit}!void {
+    // The candidate origin lives on this stack frame only; it is sufficient to render
+    // the immediate diagnostic and avoids allocating any specialization state before
+    // admission succeeds.
+    const origin = InstantiationOrigin{
+        .kind = kind,
+        .name = name,
+        .span = span,
+        .depth = depth,
+        .parent = rw.current_origin,
+    };
     if (depth > rw.limits.max_depth) {
-        reportMonomorphizationLimit(rw, span, origin, "instantiation depth", depth, rw.limits.max_depth);
-        return false;
+        reportMonomorphizationLimit(rw, span, &origin, "instantiation depth", depth, rw.limits.max_depth);
+        return error.MonomorphizationLimit;
     }
     const total = rw.instances.count() + rw.struct_instances.count() + rw.union_instances.count();
     if (total >= rw.limits.max_instances) {
-        reportMonomorphizationLimit(rw, span, origin, "total specialization count", total + 1, rw.limits.max_instances);
-        return false;
+        reportMonomorphizationLimit(rw, span, &origin, "total specialization count", total + 1, rw.limits.max_instances);
+        return error.MonomorphizationLimit;
     }
-    return true;
 }
 
 fn reportMonomorphizationLimit(
@@ -1409,7 +1418,6 @@ fn instantiateGeneric(ctx: *const CloneCtx, rw: *Rewriter, base: []const u8, gen
     }
     const semantic = GenericInstanceKey{ .generic_name = base, .generic_offset = generic_offset, .args = canonical_args };
     const name = try mangleGenericInstance(rw.arena, base, canonical_args);
-    try registerGenericLinkage(rw, name, semantic, node.base.span);
     return .{
         .name = name,
         .subst = subst,
@@ -1422,13 +1430,14 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, info: GenericStruct
     const key = (try instantiateGeneric(ctx, rw, sd.name.text, sd.name.span.offset, sd.type_params, node)) orelse return null;
     if (!rw.struct_instances.contains(key.semantic)) {
         const depth = rw.current_depth + 1;
+        try admitInstance(rw, node.base.span, .@"struct", key.name, depth);
+        try registerGenericLinkage(rw, key.name, key.semantic, node.base.span);
         const origin = createInstantiationOrigin(rw, .@"struct", key.name, node.base.span, depth);
-        const limit_failed = !admitInstance(rw, node.base.span, origin, depth);
         const si = rw.arena.create(StructInstance) catch {
             rw.oom = true;
             return key.name;
         };
-        si.* = .{ .decl = sd, .subst = key.subst, .mangled = key.name, .attrs = info.attrs, .is_pub = info.is_pub, .depth = depth, .origin = origin, .limit_failed = limit_failed };
+        si.* = .{ .decl = sd, .subst = key.subst, .mangled = key.name, .attrs = info.attrs, .is_pub = info.is_pub, .depth = depth, .origin = origin };
         rw.struct_instances.put(key.semantic, si) catch {
             rw.oom = true;
         };
@@ -1446,13 +1455,14 @@ fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, info: GenericUnionIn
     const key = (try instantiateGeneric(ctx, rw, ud.name.text, ud.name.span.offset, ud.type_params, node)) orelse return null;
     if (!rw.union_instances.contains(key.semantic)) {
         const depth = rw.current_depth + 1;
+        try admitInstance(rw, node.base.span, .@"union", key.name, depth);
+        try registerGenericLinkage(rw, key.name, key.semantic, node.base.span);
         const origin = createInstantiationOrigin(rw, .@"union", key.name, node.base.span, depth);
-        const limit_failed = !admitInstance(rw, node.base.span, origin, depth);
         const ui = rw.arena.create(UnionInstance) catch {
             rw.oom = true;
             return key.name;
         };
-        ui.* = .{ .decl = ud, .subst = key.subst, .mangled = key.name, .attrs = info.attrs, .is_pub = info.is_pub, .depth = depth, .origin = origin, .limit_failed = limit_failed };
+        ui.* = .{ .decl = ud, .subst = key.subst, .mangled = key.name, .attrs = info.attrs, .is_pub = info.is_pub, .depth = depth, .origin = origin };
         rw.union_instances.put(key.semantic, ui) catch {
             rw.oom = true;
         };
@@ -1465,7 +1475,7 @@ fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, info: GenericUnionIn
 
 fn cloneStructDeclCtx(ctx: *const CloneCtx, sd: ast.StructDecl) anyerror!ast.StructDecl {
     const fields = try cloneFields(ctx, sd.fields);
-    return .{ .name = sd.name, .semantic_identity = sd.semantic_identity orelse sd.name, .abi = sd.abi, .fields = fields, .type_params = sd.type_params, .is_move = sd.is_move, .is_opaque = sd.is_opaque, .is_c_union = sd.is_c_union };
+    return .{ .name = sd.name, .semantic_identity = sd.semantic_identity orelse sd.name, .abi = sd.abi, .fields = fields, .type_params = sd.type_params, .is_move = sd.is_move, .is_linear = sd.is_linear, .is_opaque = sd.is_opaque, .is_region = sd.is_region, .is_view = sd.is_view, .is_thread_move = sd.is_thread_move, .is_c_union = sd.is_c_union };
 }
 
 fn cloneFields(ctx: *const CloneCtx, input: []const ast.Field) anyerror![]ast.Field {
@@ -1510,6 +1520,7 @@ fn cloneTraitDecl(ctx: *const CloneCtx, trait_decl: ast.TraitDecl) anyerror!ast.
             .name = method.name,
             .params = try cloneParams(ctx, method.params),
             .return_type = if (method.return_type) |ret| try cloneType(ctx, ret) else null,
+            .return_borrow_source = method.return_borrow_source,
             .self_mode = method.self_mode,
             .attrs = try cloneAttrs(ctx, method.attrs),
         };
@@ -1527,6 +1538,7 @@ fn cloneImplTrait(ctx: *const CloneCtx, impl: ast.ImplTrait) anyerror!ast.ImplTr
             .attrs = try cloneAttrs(ctx, method.attrs),
             .params = try cloneParams(ctx, method.params),
             .return_type = if (method.return_type) |ret| try cloneType(ctx, ret) else null,
+            .return_borrow_source = method.return_borrow_source,
         };
     }
     return .{ .trait_name = impl.trait_name, .type_name = impl.type_name, .methods = methods };
