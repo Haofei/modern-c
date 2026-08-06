@@ -436,6 +436,36 @@ test "loader rejects decoded import paths containing NUL" {
     try std.testing.expect(found);
 }
 
+test "loader combined-source reporter API fails closed on import diagnostics" {
+    // DIAGNOSTIC_UNIT: E_IMPORT_NOT_FOUND
+    const root_path = "tests/spec_support/qualified_forward_root.mc";
+    const source = "import \"./definitely_missing_loader_fail_closed.mc\";\nfn root() -> u32 { return 1; }\n";
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, root_path, source);
+    defer reporter.deinit();
+    var boundaries: std.ArrayList(loader.FileBoundary) = .empty;
+    defer {
+        for (boundaries.items) |boundary| std.testing.allocator.free(boundary.path);
+        boundaries.deinit(std.testing.allocator);
+    }
+
+    try std.testing.expectError(error.Reported, loader.loadCombinedSourceWithBoundariesOptionsReport(
+        std.testing.allocator,
+        std.testing.io,
+        root_path,
+        source,
+        &boundaries,
+        .{},
+        &reporter,
+    ));
+    try std.testing.expect(reporter.has_errors);
+    try std.testing.expectEqual(@as(usize, 0), boundaries.items.len);
+    var found = false;
+    for (reporter.diagnostics.items) |diagnostic| {
+        if (std.mem.indexOf(u8, diagnostic.message, "E_IMPORT_NOT_FOUND") != null) found = true;
+    }
+    try std.testing.expect(found);
+}
+
 test "loader handles cycles wide DAGs and deep chains iteratively" {
     const cycle_path = "tests/spec_support/import_cycle_a.mc";
     const cycle_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, cycle_path, std.testing.allocator, .limited(1 << 20));

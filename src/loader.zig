@@ -227,7 +227,16 @@ pub fn loadCombinedSourceWithBoundariesOptionsReport(
     options: LoadOptions,
     reporter: ?*diagnostics.Reporter,
 ) LoadError![]u8 {
-    return loadCombinedSourceGraph(allocator, io, root_path, root_source, boundaries, options, reporter, null);
+    const initial_boundary_len = if (boundaries) |b| b.items.len else 0;
+    errdefer if (boundaries) |b| trimBoundariesTo(allocator, b, initial_boundary_len);
+    const initial_reported_diagnostics = if (reporter) |r| r.diagnostics.items.len else 0;
+    const initial_diagnostic_oom = if (reporter) |r| r.diagnostic_oom else false;
+    const source = try loadCombinedSourceGraph(allocator, io, root_path, root_source, boundaries, options, reporter, null);
+    errdefer allocator.free(source);
+    if (reporter) |r| {
+        if (reporterHasNewImportDiagnostic(r, initial_reported_diagnostics) or (!initial_diagnostic_oom and r.diagnostic_oom)) return error.Reported;
+    }
+    return source;
 }
 
 pub fn loadProjectOptionsReport(
@@ -339,11 +348,22 @@ fn loadCombinedSourceGraph(
     return out.toOwnedSlice(allocator);
 }
 
+fn trimBoundariesTo(allocator: std.mem.Allocator, boundaries: *std.ArrayList(FileBoundary), len: usize) void {
+    while (boundaries.items.len > len) {
+        const boundary = boundaries.pop().?;
+        allocator.free(boundary.path);
+    }
+}
+
 fn reporterHasNewImportDiagnostic(reporter: *const diagnostics.Reporter, start: usize) bool {
     for (reporter.diagnostics.items[start..]) |diag| {
-        if (diag.severity == .error_ and std.mem.startsWith(u8, diag.message, "E_IMPORT_")) return true;
+        if (diag.severity == .error_ and isImportDiagnosticMessage(diag.message)) return true;
     }
     return false;
+}
+
+fn isImportDiagnosticMessage(message: []const u8) bool {
+    return message.len > 9 and message[0] == 'E' and message[1] == '_' and std.mem.startsWith(u8, message[2..], "IMPORT_");
 }
 
 fn expandAll(

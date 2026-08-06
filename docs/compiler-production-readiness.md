@@ -2,7 +2,7 @@
 
 Status: **internally qualification-gated supported subset, not an unrestricted or externally audited production language**.
 Current assessment: **updated 2026-07-25, evaluated per checked-out revision and pinned toolchain**.
-Evidence register: **783 bounded implementation or regression entries, 0 active slices, 0 open architectural workstreams**.
+Evidence register: **784 bounded implementation or regression entries, 0 active slices, 0 open architectural workstreams**.
 This count is scoped to the supported subset. Open/closed blocker state is not counted here; use
 [`review-risk-register.yaml`](review-risk-register.yaml) and
 [`profile-manifest.json`](profile-manifest.json) as the current machine-readable
@@ -106,6 +106,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Item | Why it matters | Evidence |
 |---|---|---|
+| Loader reporter APIs fail closed on import diagnostics | The low-level combined-source loader no longer returns partially expanded source after recording an import diagnostic through a reporter. On error it returns `error.Reported`, frees the generated source, and rolls back boundary rows appended by that call; spec diagnostic fixtures now consume loader diagnostics directly instead of relying on partial source continuation. | `src/loader.zig` `loadCombinedSourceWithBoundariesOptionsReport`; `src/parser_tests.zig` `loader combined-source reporter API fails closed on import diagnostics`; `src/spec_tests.zig` import-diagnostic harness path; `zig test src/parser_tests.zig --test-filter "loader"`; `zig test src/spec_tests.zig --test-filter "diagnostic declarations"`; `zig build test`. |
 | Firmware and runtime TCB advisory intake is manifest-gated | OpenSBI, real-board firmware, and the selected Agent runtime slot now sit in the same advisory-intake gate as vendored dependencies. Real-board firmware and the production runtime remain `open-before-production`, but the profile now has explicit advisory sources, retained-subset/profile-slot policy, release-blocker rules, review dates, and waiver-required fields instead of an untracked placeholder. | `docs/tcb-advisory-intake.json`; `tools/toolchain/tcb-advisory-intake-test.py`; `zig build tcb-advisory-intake-test`; `docs/review-risk-register.yaml` `SUPPLY-TCB-CVE-INTAKE`. |
 | Vendored TCB advisory intake is manifest-gated | BearSSL, QuickJS, WAMR, and openlibm no longer rely only on prose/manual watch entries: each vendored TCB component has an offline advisory-intake row with review dates, advisory sources, retained-subset policy, release-blocker rules, and waiver-required fields. This is deterministic local evidence only; live advisory ingestion, firmware/runtime profile closure, and production response SLA remain open in the risk register. | `docs/tcb-advisory-intake.json`; `tools/toolchain/tcb-advisory-intake-test.py`; `zig build tcb-advisory-intake-test`; `docs/review-risk-register.yaml` `SUPPLY-TCB-CVE-INTAKE`. |
 | Parser nesting is bounded | Deep input now produces a diagnostic instead of a compiler crash. | `E_NESTING_TOO_DEEP`; direct deep-paren probe rejects cleanly. |

@@ -356,24 +356,33 @@ test "tests/spec diagnostic declarations and inline EXPECT_ERROR comments match 
         var imported = false;
         var reporter = diagnostics.Reporter.init(allocator, path, source);
         defer reporter.deinit();
-        var spec = try resolveSpecSource(allocator, io, path, source, &imported, &reporter);
-        defer spec.deinit(allocator, imported);
-        reporter.source = spec.source;
-        reporter.file_boundaries = spec.boundaries;
+        var spec = resolveSpecSource(allocator, io, path, source, &imported, &reporter) catch |err| switch (err) {
+            error.Reported => blk: {
+                imported = true;
+                break :blk null;
+            },
+            else => return err,
+        };
+        defer if (spec) |*loaded_spec| loaded_spec.deinit(allocator, imported);
 
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-        const parse_allocator = arena.allocator();
+        if (spec) |loaded_spec| {
+            reporter.source = loaded_spec.source;
+            reporter.file_boundaries = loaded_spec.boundaries;
 
-        const module = try parseSpecModuleForExpectedDiagnostics(spec.source, parse_allocator, &reporter);
-        defer if (module) |m| m.deinit(parse_allocator);
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const parse_allocator = arena.allocator();
 
-        if (module) |m| {
-            var checker = sema.Checker.init(&reporter);
-            checker.file_boundaries = spec.boundaries;
-            checker.checkModule(m);
-            if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
-                try mir.verify(allocator, m, &reporter);
+            const module = try parseSpecModuleForExpectedDiagnostics(loaded_spec.source, parse_allocator, &reporter);
+            defer if (module) |m| m.deinit(parse_allocator);
+
+            if (module) |m| {
+                var checker = sema.Checker.init(&reporter);
+                checker.file_boundaries = loaded_spec.boundaries;
+                checker.checkModule(m);
+                if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
+                    try mir.verify(allocator, m, &reporter);
+                }
             }
         }
 
