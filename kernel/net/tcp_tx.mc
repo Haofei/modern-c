@@ -66,7 +66,7 @@ pub fn tcp_build_frame(
     var w: ByteWriter = byte_writer(cpu_addr(&cpu), cpu.len);
     tcp_write(&w, tcp_at, src_ip, dst_ip, src_port, dst_port, seq, ack, flags, window, payload_len);
 
-    return cpu;
+    return move cpu;
 }
 
 // A received TCP/IPv4 segment parsed into plain copyable fields. `is_tcp` is false

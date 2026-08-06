@@ -41,14 +41,14 @@ export fn arc_demo_run() -> u32 {
         pass = 0;
     }
 
-    if arc_drop(Payload, h1) {
+    if arc_drop(Payload, move h1) {
         pass = 0; // not the last owner -> must NOT free
     }
     if arc_count(Payload, &h2) != 1 {
         pass = 0; // h2 still valid; count back to 1
     }
 
-    if !arc_drop(Payload, h2) {
+    if !arc_drop(Payload, move h2) {
         pass = 0; // last owner -> must free
     }
 

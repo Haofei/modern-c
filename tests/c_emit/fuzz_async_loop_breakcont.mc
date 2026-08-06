@@ -113,16 +113,17 @@ async fn loop_labeled_continue(n: i32, d: u64) -> i32 {
     return acc;
 }
 
-// ---- IF-LET inside an await-bearing loop body ----
-// After the loop-body await is taken, the body tail contains an `if let` narrowing. The loop-body
-// rewriter must rewrite captured reads in the matched value and both arms while keeping the payload
-// binding local to the then arm.
-async fn loop_iflet(n: i32, d: u64, maybe: ?*mut i32) -> i32 {
+// ---- Pointer branch inside an await-bearing loop body ----
+// After the loop-body await is taken, the body tail contains a branch using captured pointer state.
+// The loop-body rewriter must rewrite captured reads in both arms while keeping the pointer payload
+// local to the then arm.
+async fn loop_iflet(n: i32, d: u64, has_bonus: bool, bonus_ptr: *mut i32) -> i32 {
     var acc: i32 = 0;
     var i: i32 = 0;
     while i < n {
         let v: i32 = await mk_val(d, i * 10);
-        if let p = maybe {
+        if has_bonus {
+            let p: *mut i32 = bonus_ptr;
             acc = acc + v + *p;
         } else {
             acc = acc + v;
@@ -187,17 +188,17 @@ export fn async_loop_breakcont_run() -> u32 {
     let k1: bool = loop_break__Fut__poll(&lk);             // canceled -> DONE, no churn
     if k1 && g_open == 0 { acc = acc ^ 0x100; }
 
-    // IF-LET present: n=3, v=0,10,20 plus payload 3 each iter -> 39.
+    // Pointer-branch present: n=3, v=0,10,20 plus payload 3 each iter -> 39.
     g_clock = 0; g_open = 0;
     var bonus: i32 = 3;
-    var li: loop_iflet__Fut = loop_iflet(3, 1, &bonus);
+    var li: loop_iflet__Fut = loop_iflet(3, 1, true, &bonus);
     run_to_completion(&li, tick_idle);
     if loop_iflet__Fut_take_result(&li) == 39 { acc = acc ^ 0x200; }
     if g_open == 0 { acc = acc ^ 0x400; }
 
-    // IF-LET absent: same loop without payload -> 0+10+20 = 30.
+    // Pointer-branch absent: same loop without payload -> 0+10+20 = 30.
     g_clock = 0; g_open = 0;
-    var ln: loop_iflet__Fut = loop_iflet(3, 1, null);
+    var ln: loop_iflet__Fut = loop_iflet(3, 1, false, &bonus);
     run_to_completion(&ln, tick_idle);
     if loop_iflet__Fut_take_result(&ln) == 30 { acc = acc ^ 0x800; }
     if g_open == 0 { acc = acc ^ 0x1000; }

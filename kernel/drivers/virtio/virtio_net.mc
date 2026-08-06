@@ -188,7 +188,7 @@ pub fn nic_poll_arp(dev: *NetDevice) -> u32 {
             unsafe { forget_unchecked(cb); }
             var cpu: CpuBuffer = invalidate_for_cpu(rxbuf);
             let frame: RxFrame = parse_rx_frame(&cpu, recv);
-            free(cpu);
+            free(move cpu);
 
             var sender: u32 = 0;
             if frame.is_arp_reply {
@@ -301,7 +301,7 @@ fn rx_receive(dev: *NetDevice) -> RxFrame {
                     unsafe { forget_unchecked(cb); }
                     var cpu: CpuBuffer = invalidate_for_cpu(rxbuf);
                     out = parse_rx_frame(&cpu, recv);
-                    free(cpu);
+                    free(move cpu);
                     post_rx_buffer(rxq);
                     vq_kick(regs, RX_QUEUE);
                     return out;
@@ -433,7 +433,7 @@ pub fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
                             i = i + 1;
                         }
                     }
-                    free(cpu);
+                    free(move cpu);
                     post_rx_buffer(rxq);
                     vq_kick(regs, RX_QUEUE);
                     return n;

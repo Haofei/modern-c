@@ -707,7 +707,7 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | Filesystems / storage | **GATED**; flat KV stores + **hierarchical `treefs`** (mkdir/`..`/getdents) + capability-checked `fs_toolserver` (M1 skeleton) |
 | Network stack (real DNS/TCP/HTTP/TLS demos) + BearSSL | **GATED** (demo-exercised, not RFC-complete) |
 | Drivers: virtio net/blk, plic, clint | **GATED**; pci **IMPLEMENTED**; e1000 **MOCK** |
-| ELF load | **GATED**; dynlink **DEMO-SCOPE**; agent checkpoint/migrate **IMPLEMENTED** |
+| ELF load | **GATED**; dynlink **DEMO-SCOPE** |
 
 ---
 

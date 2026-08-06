@@ -178,7 +178,7 @@ fn run_workload(heap: *mut Heap) -> bool {
             // Fail the workload immediately: falling through would read the
             // never-initialized handle (a real latent bug definite-init caught —
             // every later step consumes s0).
-            arena_destroy(arena); // consume the linear arena on this exit path too
+            arena_destroy(move arena); // consume the linear arena on this exit path too
             return false;
         }
     }
@@ -229,7 +229,7 @@ fn run_workload(heap: *mut Heap) -> bool {
         err(e) => {}
     }
 
-    arena_destroy(arena); // consume the linear arena
+    arena_destroy(move arena); // consume the linear arena
     return pass;
 }
 

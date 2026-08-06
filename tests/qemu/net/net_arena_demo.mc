@@ -70,6 +70,6 @@ export fn net_arena_run() -> u32 {
         arena_reset(&a); // per-packet scratch reclaim
         i = i + 1;
     }
-    arena_destroy(a);
+    arena_destroy(move a);
     return delivered | (stale_caught << 8);
 }

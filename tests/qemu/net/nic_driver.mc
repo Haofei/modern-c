@@ -83,5 +83,5 @@ export fn nic_transmit(uart: MmioPtr<Uart16550>, l: *SpinLock) -> void {
 
     // 4. Reclaim the buffer for the CPU and free it.
     let cpu1: CpuBuffer = invalidate_for_cpu(dev); // dev consumed
-    free(cpu1);
+    free(move cpu1);
 }

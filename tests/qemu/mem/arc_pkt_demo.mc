@@ -61,10 +61,10 @@ export fn arc_pkt_run() -> u32 {
     var owner2: Arc<Packet> = arc_clone_from_parts(Packet, owner.block, owner.allocator);
 
     let s1_sum: u32 = packet_sum_addr(owner.block);
-    let s1_freed: bool = arc_drop(Packet, owner); // first consumer: reads, drops -> not last
+    let s1_freed: bool = arc_drop(Packet, move owner); // first consumer: reads, drops -> not last
     let s1: u32 = mark_freed(s1_sum, s1_freed);
     let s2_sum: u32 = packet_sum_addr(owner2.block);
-    let s2_freed: bool = arc_drop(Packet, owner2); // second consumer: reads, drops -> frees
+    let s2_freed: bool = arc_drop(Packet, move owner2); // second consumer: reads, drops -> frees
     let s2: u32 = mark_freed(s2_sum, s2_freed);
 
     if s1 != 100 {

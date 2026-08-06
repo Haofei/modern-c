@@ -70,7 +70,8 @@ export fn diskfs_lookup(disk: PAddr, capacity: usize, name_key: u32) -> Result<u
     while i < n {
         let k: u32 = br_be32(&r, DIR_OFF + (i as usize) * DIR_SZ + 0);
         if k == name_key {
-            return ok(br_be32(&r, DIR_OFF + (i as usize) * DIR_SZ + 4));
+            let ino: u32 = br_be32(&r, DIR_OFF + (i as usize) * DIR_SZ + 4);
+            return ok(ino);
         }
         i = i + 1;
     }

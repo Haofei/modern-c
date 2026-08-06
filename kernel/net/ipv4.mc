@@ -8,7 +8,7 @@ const IP_PROTO_ICMP: u8 = 1;
 const IPV4_HDR_LEN: usize = 20;
 
 // One's-complement checksum over [start, start+len) of the buffer (RFC 1071).
-export fn ip_checksum(buf: *CpuBuffer, start: usize, len: usize) -> u16 {
+fn ip_checksum(buf: *CpuBuffer, start: usize, len: usize) -> u16 {
     var sum: u32 = 0;
     var i: usize = 0;
     while i + 1 < len {
@@ -26,7 +26,7 @@ export fn ip_checksum(buf: *CpuBuffer, start: usize, len: usize) -> u16 {
 
 // Write the 20-byte IPv4 header at `at` (with checksum); returns the payload
 // offset (`at + 20`).
-export fn ipv4_write_header(buf: *CpuBuffer, at: usize, proto: u8, src_ip: u32, dst_ip: u32, payload_len: usize) -> usize {
+fn ipv4_write_header(buf: *CpuBuffer, at: usize, proto: u8, src_ip: u32, dst_ip: u32, payload_len: usize) -> usize {
     write_u8(buf, at + 0, 0x45);  // version 4, IHL 5
     write_u8(buf, at + 1, 0x00);  // DSCP/ECN
     write_be16(buf, at + 2, (IPV4_HDR_LEN + payload_len) as u16); // total length
@@ -45,7 +45,7 @@ export fn ipv4_write_header(buf: *CpuBuffer, at: usize, proto: u8, src_ip: u32, 
 // A received IPv4 header is valid when its checksum field re-sums to zero (the
 // ones-complement property), so we recompute over the 20-byte header including
 // the stored checksum.
-export fn ipv4_checksum_valid(buf: *CpuBuffer, at: usize) -> bool {
+fn ipv4_checksum_valid(buf: *CpuBuffer, at: usize) -> bool {
     let sum: u16 = ip_checksum(buf, at, IPV4_HDR_LEN);
     if sum == 0 {
         return true;

@@ -32,6 +32,6 @@ export fn arena_demo_run() -> u32 {
         pass = 0; // reset rewinds the bump frontier — same address reused
     }
 
-    arena_destroy(a); // consume the move Arena (else E_RESOURCE_LEAK)
+    arena_destroy(move a); // consume the move Arena (else E_RESOURCE_LEAK)
     return pass;
 }

@@ -91,7 +91,7 @@ impl Ticket {
 #[test]
 export fn trivial_drop_linear_resource() -> u32 {
     let t: Ticket = Ticket.issue(7);
-    let v: u32 = Ticket.redeem(t); // consumes the linear Ticket (drop inside is safe)
+    let v: u32 = Ticket.redeem(move t); // consumes the linear Ticket (drop inside is safe)
     assert(v == 7);
     return 1;
 }

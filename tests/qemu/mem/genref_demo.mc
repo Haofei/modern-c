@@ -50,6 +50,6 @@ export fn genref_demo_run() -> u32 {
         }
     }
 
-    arena_destroy(a);
+    arena_destroy(move a);
     return pass;
 }

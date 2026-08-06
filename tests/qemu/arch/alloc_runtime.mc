@@ -58,7 +58,7 @@ export fn test_main() -> void {
     if pass != 0 && (check(aa, 100, 0x11) == 0 || check(ba, 200, 0x22) == 0) { pass = 0; } // no aliasing
 
     // Reuse after free: freeing a then allocating the same size should succeed and be writable.
-    free(a);
+    free(move a);
     let c: *mut u8 = malloc(100);
     let ca: usize = c as usize;
     if ca == 0 { pass = 0; }
@@ -94,10 +94,10 @@ export fn test_main() -> void {
     let big: usize = 1 << 40;
     if (calloc(big, big) as usize) != 0 { pass = 0; }
 
-    free(b);
-    free(c);
-    free(z);
-    free(r2);
+    free(move b);
+    free(move c);
+    free(move z);
+    free(move r2);
 
     if pass != 0 {
         put_str("ALLOC-OK\n");

@@ -123,7 +123,7 @@ export fn rng_read(dev: *RngDevice, dst: usize, max: usize) -> Result<usize, Rng
                 unsafe { raw.store<u8>(phys(dst + i), b); }
                 i = i + 1;
             }
-            free(cpu_back);
+            free(move cpu_back);
             if wrote == 0 {
                 return err(.ShortRead);
             }

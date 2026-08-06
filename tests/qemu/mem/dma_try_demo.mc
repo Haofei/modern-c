@@ -16,7 +16,7 @@ export fn dma_try_run() -> u32 {
     switch r1 {
         ok(b) => {
             result = result | 1;
-            free(b);
+            free(move b);
         }
         err(e) => {
             // unexpected: leave bit0 clear so the gate fails
@@ -27,7 +27,7 @@ export fn dma_try_run() -> u32 {
     let r2: Result<CpuBuffer, DmaError> = try_alloc(1024 * 1024);
     switch r2 {
         ok(b) => {
-            free(b); // unexpected: still consume the linear buffer to avoid a leak
+            free(move b); // unexpected: still consume the linear buffer to avoid a leak
         }
         err(e) => {
             switch e {

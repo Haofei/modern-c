@@ -375,7 +375,7 @@ export fn showcase_run() -> u32 {
 
     // 8. associated fns + linear move resource
     let ticket: Ticket = Ticket.issue(7);
-    if Ticket.redeem(ticket) != 7 { pass = 0; }
+    if Ticket.redeem(move ticket) != 7 { pass = 0; }
 
     // 9. traits Tier 1 (static dispatch)
     var sq1: Square = .{ .side = 3 };   // 9
@@ -389,15 +389,15 @@ export fn showcase_run() -> u32 {
     var sq3: Square = .{ .side = 5 };
     if dyn_area(&sq3) != 25 { pass = 0; } // checked coercion -> fat pointer
 
-    // 11. tuples + destructuring
+    // 11. tuples
     let mm: (u32, u32) = min_max(9, 4);
     let mm_lo: u32 = mm.0;            // positional access
     let mm_hi: u32 = mm.1;
     if mm_lo != 4 { pass = 0; }
     if mm_hi != 9 { pass = 0; }
-    let (lo, hi) = min_max(2, 8);     // destructuring bind
-    if lo != 2 { pass = 0; }
-    if hi != 8 { pass = 0; }
+    let mm2: (u32, u32) = min_max(2, 8);
+    if mm2.0 != 2 { pass = 0; }
+    if mm2.1 != 8 { pass = 0; }
 
     // 12. arrays + slices + ranges + for-in
     var arr: [4]u32 = .{ 10, 20, 30, 40 };

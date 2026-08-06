@@ -120,7 +120,7 @@ hardening"; a few are genuinely thin. Current state, with evidence:
 | 5. Resource accounting | Mostly done | Per-dimension budgets are enforced AND gated: CPU (`wamr-fuel-test`, `wasm-watchdog-test`), memory (`wasm-memcap-test`), network requests (`NetCap.requests_left`), tool/output quota (`quota-probe-test`, `qjs/wasm-quota-agent-test`) — multiple backends. **Landed (2026-06-30):** typed `NoMem` on the DMA path — `dma.try_alloc -> Result<_, DmaError>` + `mc_dma_alloc_base_try` across all providers (fail-closed with a typed error instead of trapping on exhaustion); gated `dma-try-test`. Gap: a **single unified accounting/quota model** spanning all dimensions (incl. file handles + spawned tasks). |
 | 6. Broker hardening | Exists, weak | `net_broker` allowlist+budget+audit; back-pressure (async `ok=8 rejected=4`). Gap: retries and tracing. Product policy loading/actuation is out of scope. |
 | 7. Networking | Mostly exists | **DNS exists** (`kernel/net/dns.mc`), TLS (BearSSL), TCP RX hardened (checksums + chunked drain). Gap: retransmit robustness, conn pooling, timeout control, hostile-packet corpus. (Review overstates DNS/TLS as needed.) |
-| 8. Observability | Partial | Audit/trace + record/checkpoint exist (`ipc_trace.mc`, `cap_audit`, provenance, `kernel/lib/record.mc`, `kernel/lib/checkpoint.mc`). Product metrics and replay are out of the current language-oriented kernel scope. |
+| 8. Observability | Partial | Audit/trace exists (`ipc_trace.mc`, `cap_audit`, provenance). Product metrics, replay, checkpoint, and migration are out of the current language-oriented kernel scope. |
 | 9. Update/packaging | External product scope | Reproducible build/package gates remain in the toolchain. Kernel OTA/live-update fixtures have been removed from the current language-oriented kernel scope. |
 | 10. Platform contract | Partly documented | `platform-portability-plan.md`, `qemu-validation-checklist.md`; per-arch compiler-flag rules now explicit (aarch64 strict-align). Gap: **one frozen board profile**. |
 | 11. Security model doc | **Landed (2026-06-30)** | `docs/threat-model.md` written: assets, trust boundaries (TCB vs attacker-controlled), the isolation boundary with enforcing code, per-area threats→mitigations, guarantees G1–G5, accepted failure modes, and how each is gated. Keep it updated as §4.7 work lands. |
@@ -141,7 +141,7 @@ substantially more implemented + gated than first credited):
     typed `OverLimit`/`Underflow` and headroom-compare so a charge never forms an overflowing sum)
     — `ledger-test` both backends. (Wiring the scattered per-dimension budgets onto this ledger is a
     mechanical follow-up; the ledger itself is proven.)
-  - (8) observability remains limited to audit/trace and simple record/checkpoint primitives.
+  - (8) observability remains limited to audit/trace primitives.
     The previous replay/counter fixture has been removed from the current scope.
   - (12) supervision — mechanism (heartbeat-liveness + restart/crash-loop guard +
     `proc_supervise_step` verdict) AND a **running supervisor loop** (`proc_supervisor_scan` scans all

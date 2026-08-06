@@ -113,19 +113,19 @@ sits inside an `unsafe`/`unsafe_contract` region (re-run the lint for the live c
 
 | Category | Count | Gate | Where the load-bearing ones live |
 |---|---:|---|---|
-| `raw.load` / `raw.store` | 69 | unsafe block | The raw-register/MMIO path. Concentrated in the driver/MMIO layer: `kernel/drivers/irq/plic.mc` (9), `std/mmio.mc` (6), `std/bytes.mc` (5), `std/mem.mc`/`std/libc.mc` (4 each), `kernel/core/time.mc`, `kernel/core/shell.mc`, `kernel/drivers/timer/clint.mc`, `kernel/drivers/fb.mc`, `std/dma.mc`, `std/vec.mc`. This is the **S0.3 strict-aliasing** surface. |
+| `raw.load` / `raw.store` | 142 | unsafe block | The raw-register/MMIO path. Concentrated in the driver/MMIO/runtime layers: `kernel/drivers/irq/plic.mc`, `std/mmio.mc`, `std/bytes.mc`, `std/mem.mc`, `std/libc.mc`, `kernel/core/time.mc`, `kernel/core/shell.mc`, `kernel/drivers/timer/clint.mc`, `kernel/drivers/fb.mc`, `std/dma.mc`, `std/vec.mc`. This is the **S0.3 strict-aliasing** surface. |
 | `mmio.map<T>` | 1 | unsafe block | `kernel/drivers/rng/rng.mc:63` (`mmio.map<VirtioMmio>(phys(addr))`) — the typed-MMIO-view mint. |
-| `raw.ptr<T>` | 13 | tracked | Mostly `std/arc.mc` (the `Arc` block pointer plumbing) and `std/hosted_io.mc`. Minting only; derefs are checked. |
+| `raw.ptr<T>` | 20 | tracked | Mostly typed address wrappers and hosted/runtime plumbing. Minting only; derefs are checked. |
 | raw-many `.offset()` | 0 | unsafe block | — none currently. |
-| `forget_unchecked` | 28 | unsafe block | Driver completion/lock release paths: `kernel/drivers/virtio/*`, `kernel/drivers/irq/plic.mc`, etc. — transferring a linear value's ownership out of the checker. |
+| `forget_unchecked` | 43 | unsafe block | Driver completion/lock release paths: `kernel/drivers/virtio/*`, `kernel/drivers/irq/plic.mc`, etc. — transferring a linear value's ownership out of the checker. |
 | `arc_get_mut` | 1 | unsafe block | `std/arc.mc` (definition); call sites require `unsafe`. |
-| inline `asm` | 8 | unsafe block | `kernel/arch/riscv64/csr.mc` (CSR read/write, `asm precise volatile`) and `kernel/arch/riscv64/paging.mc` (SATP/SFENCE). The `precise` forms carry `#[unsafe_contract(precise_asm)]`. |
+| inline `asm` | 23 | unsafe block | Architecture context/CSR/paging paths. The precise forms carry `#[unsafe_contract(precise_asm)]`. |
 | `unchecked.{add,…}` | 0 | `#[unsafe_contract(no_overflow)]` | — none currently in kernel/std. |
 | `assume_noalias_unchecked` | 0 | `#[unsafe_contract(noalias)]` | — none currently in kernel/std. |
 | `bitcast<T>` | 8 | tracked | `std/vec.mc` (typed-slot reinterpret). Alias-safe (memcpy). |
-| `uninit` | 18 | tracked | Buffers written before read: `std/vec.mc`, `std/fmt.mc`, `kernel/drivers/rng/rng.mc`, `kernel/lib/record.mc`, `kernel/lib/checkpoint.mc`, `kernel/core/heap.mc`. Unspecified-not-UB. |
-| **TOTAL (constructs)** | **146** | | |
-| `extern` declarations (FFI) | 44 | trust boundary | The non-MC call surface (runtime, libc shims, platform hooks). Callee correctness is not MC-checked. |
+| `uninit` | 37 | tracked | Buffers written before read across std/kernel/tests. Unspecified-not-UB. |
+| **TOTAL (constructs)** | **275** | | |
+| `extern` declarations (FFI) | 97 | trust boundary | The non-MC call surface (runtime, libc shims, platform hooks). Callee correctness is not MC-checked. |
 
 ### Reading the inventory
 

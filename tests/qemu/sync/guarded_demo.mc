@@ -59,14 +59,14 @@ export fn guarded_run() -> u32 {
     var g1: Guard<u32> = Guarded.lock(u32, &m);
     let p1: *mut u32 = Guard.get(u32, &g1);
     p1.* = 40;
-    Guard.unlock(u32, g1); // releases the lock; consumes the linear guard
+    Guard.unlock(u32, move g1); // releases the lock; consumes the linear guard
 
     // critical section 2: re-acquire a fresh guard and bump by 2
     var g2: Guard<u32> = Guarded.lock(u32, &m);
     let p2: *mut u32 = Guard.get(u32, &g2);
     p2.* = p2.* + 2;
     let result: u32 = p2.*;
-    Guard.unlock(u32, g2);
+    Guard.unlock(u32, move g2);
 
     if result != 42 { return 0; } // 40 + 2, mutated only through the guards
     return 1;
