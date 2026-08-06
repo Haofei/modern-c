@@ -13746,6 +13746,31 @@ test "lower-c cancels auto-drop when affine move local is explicitly transferred
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, body, "close_guard("));
 }
 
+test "lower-c rejects auto-drop ownership holes before lowering" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn reject_return_via_alias() -> Guard {
+        \\    var g: Guard = make_guard(1);
+        \\    let p: *Guard = &g;
+        \\    return move p.*;
+        \\}
+        \\fn reject_forget_auto_drop() -> void {
+        \\    var g: Guard = make_guard(2);
+        \\    unsafe { forget_unchecked(g); }
+        \\}
+        \\fn reject_reinit_after_move() -> Guard {
+        \\    var g: Guard = make_guard(3);
+        \\    let result: Guard = move g;
+        \\    g = make_guard(4);
+        \\    return move result;
+        \\}
+    ;
+    try std.testing.expectError(error.TestUnexpectedResult, test_support.parseCheckedModule("emit_c_auto_drop_v0_rejects.mc", source));
+}
+
 test "lower-c emits scoped borrow expressions as addresses" {
     const source =
         \\struct Cell { value: u32 }

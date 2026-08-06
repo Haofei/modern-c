@@ -750,6 +750,43 @@ test "drop attribute enables deterministic auto-drop and explicit transfer for a
     try std.testing.expectEqual(@as(usize, 0), countDiagnosticCode(&reporter, "E_USE_AFTER_MOVE"));
 }
 
+test "auto-drop v0 rejects alias moves forget and moved reinitialization" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn reject_return_via_alias() -> Guard {
+        \\    var g: Guard = make_guard(1);
+        \\    let p: *Guard = &g;
+        \\    return move p.*;
+        \\}
+        \\fn reject_implicit_alias_move() -> Guard {
+        \\    var g: Guard = make_guard(2);
+        \\    let result: Guard = (&g).*;
+        \\    return move result;
+        \\}
+        \\fn reject_forget_auto_drop() -> void {
+        \\    var g: Guard = make_guard(3);
+        \\    unsafe {
+        \\        forget_unchecked(g);
+        \\    }
+        \\}
+        \\fn reject_reinit_after_move() -> Guard {
+        \\    var g: Guard = make_guard(4);
+        \\    let result: Guard = move g;
+        \\    g = make_guard(5);
+        \\    return move result;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "auto_drop_v0_rejects_unsound_holes.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+    // DIAGNOSTIC_UNIT: E_AUTO_DROP_UNSUPPORTED
+    try std.testing.expectEqual(@as(usize, 4), countDiagnosticCode(&reporter, "E_AUTO_DROP_UNSUPPORTED"));
+}
+
 test "drop attribute shape is restricted to mut pointer checked resource returning void" {
     const source =
         \\move struct Ticket { id: u32 }

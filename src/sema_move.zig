@@ -968,6 +968,8 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                             self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot overwrite a live linear `move` value; consume it first");
                         } else if (slot.deferred) {
                             self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be reassigned");
+                        } else if (slot.auto_drop and !slot.type_only and slot.alias_of == null) {
+                            self.errorCode(a.target.span, "E_AUTO_DROP_UNSUPPORTED", "cannot reinitialize an auto-dropped `move` binding after it was moved in ownership v0; bind the replacement to a fresh local or disable auto-drop with an explicit release path");
                         }
                     }
                     if (exprHasScopedBorrow(self, a.target, state, aliases)) {
@@ -3082,6 +3084,10 @@ fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: dia
 fn consumeTrackedMoveRootPlace(self: *Checker, place: MovePlace, span: diagnostics.Span, state: *MoveState) void {
     const slot = rootMoveSlotPtrForPlace(place, state) orelse return;
     if (slot.type_only) return;
+    if (slot.auto_drop) {
+        self.errorCode(span, "E_AUTO_DROP_UNSUPPORTED", "cannot move an auto-dropped `move` binding through an alias or dereference in ownership v0; move the owning local directly or use an explicit release path");
+        return;
+    }
     if (!slot.live) {
         self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
     } else if (slot.escaped_borrow != null) {
@@ -4359,6 +4365,9 @@ pub fn moveForget(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *c
                 if (slot.place) |place| root_place = place;
                 if (!slot.live) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
+                } else if (slot.auto_drop) {
+                    self.errorCode(expr.span, "E_AUTO_DROP_UNSUPPORTED", "cannot use `forget_unchecked` on an auto-dropped `move` binding in ownership v0; use an explicit release path or a non-auto-drop resource handoff API");
+                    slot.live = false;
                 } else if (slot.deferred) {
                     self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be moved");
                 } else if (slot.deferred_borrow) {
