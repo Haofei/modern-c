@@ -1,146 +1,203 @@
 # Backend abstraction
 
-`src/backend.zig` defines the `Backend` interface: the seam at which `mcc`
-selects a code-generation target and invokes top-level lowering. The two
-built-in backends — the C emitter (`src/lower_c.zig`, `emit-c`/`emit-map`) and
-the LLVM emitter (`src/lower_llvm.zig`, `emit-llvm`) — both register through
-this interface. `src/main.zig` uses that registry for generic backend entry
-points such as `emit-map`; the hot `emit-c` and `emit-llvm` CLI paths build and
-verify MIR once, then call backend-specific prebuilt-MIR helpers so verification
-and lowering consume the same MIR instance.
+`src/backend.zig` defines the backend entry interface: the seam where `mcc`
+selects a code-generation target and asks it to lower an already verified
+program. Concrete built-ins are registered in `src/backend_registry.zig`, which
+is the composition root allowed to import `src/lower_c.zig` and
+`src/lower_llvm.zig`.
 
-## What it abstracts (and what it does not)
+The important current boundary is:
 
-This is the **entry seam** only:
+```text
+parse/sema/MIR build
+        │
+        ▼
+mir.verifyBuiltMir + mir.validateLoweringAdmission
+        │
+        ▼
+backend.VerifiedProgram
+        │
+        ├── C backend
+        └── LLVM backend
+```
 
-- backend **selection** (registry lookup by name), and
-- the top-level **`module -> textual artifact`** call (and, for the C backend,
-  source-map emission).
+Backends should not receive a raw `ast.Module` through the registry interface.
+Legacy helper functions still exist for tests and compatibility, but the CLI
+artifact paths build `VerifiedProgram` before invoking the selected backend.
 
-It does **not** unify per-construct emission. How each statement, expression, or
-type is rendered is still implemented privately inside each `lower_*.zig`
-module. A new backend writes its own per-construct emission today; this
-interface is just where it plugs into the CLI. Deeper sharing of emission logic
-is a separate, incremental effort.
+## What it abstracts
 
-## The contract (`Backend`)
+This is the entry seam only:
+
+- backend selection by registry name (`"c"`, `"llvm"`),
+- top-level verified-program-to-artifact lowering, and
+- optional source-map emission for backends that support it.
+
+It does not unify statement, expression, type, ABI, or debug-info emission.
+Those remain private implementation details of each lowerer.
+
+## Current contract
+
+The key types live in `src/backend.zig`.
 
 ```zig
 pub const LowerOptions = struct {
-    profile: Profile,              // TARGET axis: kernel | hosted (honored iff supports_profiles)
-    source_path: ?[]const u8,      // embedded in #line / !DILocation; null => backend default
+    profile: Profile,
+    source_path: ?[]const u8,
     target_arch: TargetArch = .riscv64,
-    checks: Checks = .{},          // build-safety + sanitizer axis:
-                                   //   optimize, ksan, msan, csan
-    stub_asm: bool = false,        // test-only inline-asm host stub mode
-    reporter: ?*diagnostics.Reporter = null, // backend diagnostics become source-spanned
+    checks: Checks = .{},
+    stub_asm: bool = false,
+    reporter: ?*diagnostics.Reporter = null,
+    source_sha256: ?Sha256Digest = null,
+    compiler_version: ?[]const u8 = null,
+    toolchain_identity: ?[]const u8 = null,
+    linux_kernel: bool = false,
+};
+
+pub const LowerError = std.mem.Allocator.Error || error{
+    UnsupportedCEmission,
+    UnsupportedLlvmEmission,
+    InvalidMirTargetTypeFacts,
+    InvalidMirCallTargetFacts,
+    InvalidMirConstGetFacts,
+    InvalidMirIntegerFacts,
+    InvalidMirRepresentationFacts,
+    StaleMirTargetTypeFacts,
+    GeneratedTypeNameCollision,
+    LayoutStructNotFound,
+    LayoutUnresolved,
+    InternalLoweringFailure,
 };
 
 pub const Backend = struct {
-    name: []const u8,           // CLI/registry id: "c", "llvm"
-    artifact_ext: []const u8,   // ".c", ".ll"
-    supports_profiles: bool,    // c=true, llvm=false
-    ctx: *anyopaque,            // opaque per-backend state (built-ins: undefined)
-    lowerFn: *const fn (ctx, allocator, ast.Module, *ArrayList(u8), LowerOptions) anyerror!void,
-    emitMapFn: ?*const fn (ctx, allocator, ast.Module, *ArrayList(u8), Profile, []const u8) anyerror!void = null,
+    name: []const u8,
+    artifact_ext: []const u8,
+    supports_profiles: bool,
+    ctx: ?*anyopaque,
 
-    pub fn lower(...) anyerror!void;        // calls lowerFn(ctx, ...)
-    pub fn supportsEmitMap(self) bool;      // emitMapFn != null
-    pub fn emitMap(...) anyerror!void;      // calls emitMapFn.?(ctx, ...)
+    lowerFn: *const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        program: VerifiedProgram,
+        out: *std.ArrayList(u8),
+        opts: LowerOptions,
+    ) LowerError!void,
+
+    emitMapFn: ?*const fn (
+        ctx: ?*anyopaque,
+        allocator: std.mem.Allocator,
+        program: VerifiedProgram,
+        out: *std.ArrayList(u8),
+        generated_artifact: []const u8,
+        opts: LowerOptions,
+    ) LowerError!void = null,
 };
-
-pub fn byName(name: []const u8) ?Backend;   // registry lookup
-pub fn all() [N]Backend;                    // all built-ins
 ```
 
-Field/method rationale:
+`Backend.lower` and `Backend.emitMap` are thin vtable calls over those function
+pointers. The registry functions are in `src/backend_registry.zig`:
 
-- **`name`** — the registry id used by `Backend.byName` and generic callers.
-  Current CLI code uses it directly for `emit-map`; `emit-c` and `emit-llvm`
-  use backend-specific prebuilt-MIR helpers after resolving their command-line
-  options.
-- **`artifact_ext`** — the conventional output extension; metadata a driver can
-  use without knowing the backend.
-- **`supports_profiles`** — the C backend has kernel/hosted profiles; the LLVM
-  backend ignores `profile`. The flag lets callers reason about this instead of
-  guessing. (The LLVM backend simply ignores `opts.profile`.)
-- **`checks`** — the build-safety and sanitizer axis. `checks.optimize` selects
-  SAFE (`--checks=all`, default) vs RELEASE (`--checks=elide-proven`);
-  `checks.ksan`/`msan`/`csan` select the sanitizer instrumentation profiles.
-- **`target_arch`** — backend ABI details that are architecture-shaped rather
-  than import-shaped. LLVM uses it for target triple/data-layout and ABI details.
-- **`stub_asm`** — test-only lowering mode for host-native execution of target
-  inline assembly fixtures.
-- **`reporter`** — lets backends report expected unsupported lowering as
-  source-spanned diagnostics instead of raw backend errors.
-- **`ctx` / `*anyopaque`** — the idiomatic Zig vtable shape. Built-in backends
-  are stateless and pass `undefined`; a stateful backend can carry context
-  without changing the interface.
-- **`lowerFn` / `lower`** — the one mandatory operation: append the textual
-  artifact for a module to `out`. C routes to `appendCProfileWithOptions`; LLVM
-  routes to `appendLlvmCheckedReport`. Those compatibility paths build MIR
-  internally and then call the `*WithMir` emitters. The CLI `emit-c` and
-  `emit-llvm` paths bypass that extra build by calling `appendCProfileWithMir` /
-  `appendLlvmCheckedMir` after `main.zig` has built and verified MIR once.
-- **`emitMapFn` / `supportsEmitMap` / `emitMap`** — optional source-map
-  capability. Only the C backend supplies it (`emit-map`); LLVM leaves it null
-  rather than faking an unsupported artifact.
+```zig
+pub fn all() [2]backend.Backend;
+pub fn byName(name: []const u8) ?backend.Backend;
+```
+
+## VerifiedProgram
+
+`VerifiedProgram` is the only code-generation input accepted by a registered
+backend. Construction performs MIR admission first:
+
+- `mir.verifyBuiltMir`,
+- `mir.validateLoweringAdmission`,
+- source-spelling validation against MIR symbol identities.
+
+It then exposes three views:
+
+- `source_spelling`: MIR-owned spelling by typed symbol id.
+- `declarationMetadata()`: transitional declaration metadata that still wraps
+  `[]const ast.Decl`.
+- `sourceMapMechanics()`: transitional source-map row enumeration over syntax
+  spans.
+
+The two transitional views are explicit debt. They are narrower than giving the
+backend a full `ast.Module`, but they are not the final semantic boundary.
+New backend work should prefer MIR identities and typed facts and should avoid
+adding new semantic decisions to these syntax-backed views.
+
+## Error boundary
+
+The registry interface returns `backend.LowerError`, not `anyerror`. C and LLVM
+lowerers still contain internal helper functions with wider error sets, but
+their adapter functions map those errors through `backend.lowerErrorFromAny`.
+
+This keeps the core seam auditable:
+
+- expected unsupported lowering remains a typed backend error,
+- MIR-fact admission failures remain distinct,
+- OOM is preserved,
+- unexpected adapter leaks collapse to `InternalLoweringFailure`.
 
 ## How `main.zig` dispatches
 
-The CLI surface is unchanged. There are two entry styles:
+The CLI artifact paths follow the same shape:
 
-- `emit-c` builds optimized MIR once, verifies it with `mir.verifyBuiltMir`, then
-  calls `lower_c.appendCProfileWithMir(.., checks, stub_asm, reporter)`.
-- `emit-llvm` builds optimized MIR once, verifies it with `mir.verifyBuiltMir`,
-  then calls `lower_llvm.appendLlvmCheckedMir(.., checks, stub_asm, target_arch,
-  reporter)`.
-- `emit-map` resolves the C backend and calls
-  `backend.byName("c").?.emitMap(.., profile, path)`.
-- Direct helper and test callers can still use `Backend.lower`; that route builds
-  MIR internally via the backend's compatibility wrapper.
+1. parse source,
+2. build MIR,
+3. construct `backend.VerifiedProgram`,
+4. look up a backend with `backend_registry.byName`,
+5. call `Backend.lower` or `Backend.emitMap`,
+6. publish artifact metadata.
 
-(`profile` is irrelevant to the LLVM backend, which ignores it.)
+Current command behavior:
 
-## Adding a native MC backend
+- `emit-c` uses the C backend (`"c"`) with C profile/check options.
+- `build` uses the C backend in hosted profile, then invokes clang.
+- `emit-map` lowers C first, then calls the C backend source-map hook.
+- `emit-llvm` uses the LLVM backend (`"llvm"`) with target/debug/runtime options.
 
-1. Create `src/lower_<name>.zig` with the emission logic and a top-level entry
-   `fn append<Name>(allocator, module, out, opts...) anyerror!void`.
+All artifact commands pass the same source digest and sanitized/remapped source
+path into `LowerOptions`, so generated artifacts and metadata use the same
+source identity.
+
+## Adding a backend
+
+1. Implement `src/lower_<name>.zig`.
 2. Expose a constructor:
+
    ```zig
    const backend_mod = @import("backend.zig");
+
    pub fn mcBackend() backend_mod.Backend {
        return .{
            .name = "<name>",
            .artifact_ext = ".<ext>",
-           .supports_profiles = false, // or true
-           .ctx = undefined,
-           .lowerFn = backendLower,    // thunks opts -> your entry fn
-           // .emitMapFn = ...,        // only if you produce a source map
+           .supports_profiles = false,
+           .ctx = null,
+           .lowerFn = backendLower,
        };
    }
    ```
-3. Register it in `builtins()` in `src/backend.zig`.
-4. Add a CLI command in `src/main.zig`. If the backend lowers from MIR in the
-   production path, mirror the current parse/sema/`mir.buildOpt`/
-   `mir.verifyBuiltMir`/prebuilt-MIR pattern in `runEmitC` and `runEmitLlvm`.
-   `.lower(...)` remains available for generic module-to-artifact callers and
-   tests.
 
-### Shared lowering helpers you can reuse
+3. Make `backendLower` accept `backend.VerifiedProgram` and return
+   `backend.LowerError!void`.
+4. Register the backend in `src/backend_registry.zig`.
+5. Add CLI dispatch in `src/main.zig` if it needs a first-class command.
 
-A new backend does not start from scratch. The middle end and these
-backend-agnostic helpers are already shared by both existing backends:
+If the backend needs source-map output, provide `emitMapFn`; otherwise leave it
+null.
 
-- **`mir.zig`** — `mir.buildOpt(allocator, module, .{ .optimize })` builds the
-  mid-level IR both backends lower from. `mir.verifyBuiltMir` validates an
-  already-built module; `mir.verifyOpt` remains the compatibility helper that
-  builds, verifies, and deinitializes MIR in one call.
-- **`layout.zig`** — type sizes/alignment/struct layout (`scalarLayout`,
-  `ComptimeStructLayout`, ...).
-- **`eval.zig`** — compile-time constant evaluation.
-- **`ast_query.zig`** — pure AST-shape queries (intrinsic/call classification,
-  type-name helpers, byte-view/MMIO detection, ...).
-- **`numeric.zig`** — numeric-literal parsing and alignment math.
+## Shared lowerer inputs
 
-Per-construct emission (the actual textual rendering) remains per-backend.
+These modules are legitimate shared inputs for backend work:
+
+- `mir.zig`: typed MIR, facts, verifier/admission.
+- `semantic_db.zig`: transitional query layer for facts not yet indexed by
+  stable typed ids.
+- `layout.zig`: layout calculation shared by semantic and backend code.
+- `eval.zig`: compile-time constant evaluation.
+- `numeric.zig`: numeric literal and arithmetic helpers.
+- `string_literal.zig`: canonical decoded string bytes.
+
+`ast_query.zig` may be used for remaining syntax-shape compatibility helpers,
+but it should not become a new semantic authority. The long-term direction is
+for C/LLVM/native backends to consume typed MIR facts mechanically.
