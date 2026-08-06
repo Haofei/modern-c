@@ -285,9 +285,9 @@ fn backendLower(
     program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     opts: backend_mod.LowerOptions,
-) anyerror!void {
+) backend_mod.LowerError!void {
     _ = ctx;
-    try appendLlvmCheckedMirProfileWithSourceSpelling(allocator, program.declarationMetadata(), program.typed_mir, program.source_spelling, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.linux_kernel, opts.reporter);
+    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, program.declarationMetadata(), program.typed_mir, program.source_spelling, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.linux_kernel, opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {

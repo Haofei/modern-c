@@ -40,9 +40,9 @@ fn backendLower(
     program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     opts: backend_mod.LowerOptions,
-) anyerror!void {
+) backend_mod.LowerError!void {
     _ = ctx;
-    return appendCProfileWithMirSourceSpelling(allocator, program.declarationMetadata(), program.typed_mir, program.source_spelling, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm, opts.reporter);
+    return appendCProfileWithMirSourceSpelling(allocator, program.declarationMetadata(), program.typed_mir, program.source_spelling, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm, opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 fn backendEmitMap(
@@ -52,7 +52,7 @@ fn backendEmitMap(
     out: *std.ArrayList(u8),
     generated_artifact: []const u8,
     opts: backend_mod.LowerOptions,
-) anyerror!void {
+) backend_mod.LowerError!void {
     _ = ctx;
     return appendCSourceMapFromGenerated(
         allocator,
@@ -63,7 +63,7 @@ fn backendEmitMap(
         opts.source_path orelse "-",
         null,
         opts,
-    );
+    ) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
