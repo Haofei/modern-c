@@ -1,7 +1,7 @@
 // UNIFIED RESOURCE LEDGER — correctness + overflow-safety demo (driver logic).
 //
 // Exercises kernel/core/ledger.mc: the one ledger that replaces the per-dimension {used,limit}
-// budgets scattered across process/net_broker/proc_ipc/mcp/policy/proc_sched. `ledger_run`
+// budgets scattered across process/proc_ipc/proc_sched. `ledger_run`
 // returns 1 only if every property below holds; the M-mode runtime (ledger_runtime.mc) prints
 // LEDGER-OK / UNIFIED-LEDGER-OK off that pass code.
 //

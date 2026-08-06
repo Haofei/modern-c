@@ -57,8 +57,8 @@ failure modes we accept. It is the frame for the security-hardening work in §4.
   bad address returns `-EFAULT` via a software page-table walk, never a kernel fault.
 - **wasm sandbox-in-sandbox.** WAMR runs the agent's wasm with bounds-checked linear
   memory and **deterministic instruction-count fuel** (the runaway bound wasm3 lacked).
-- **No ambient authority.** An agent has no FS/network handles by default; all effects
-  go through the FS/net brokers, which check a per-agent capability + budget first.
+- **No ambient authority in fixtures.** Confined payloads have no direct kernel memory access; FS/tool
+  effects go through explicit test fixtures. Product FS/net brokers are out of scope.
 
 ## 4. Per-area threats and mitigations
 
@@ -67,8 +67,7 @@ failure modes we accept. It is the frame for the security-hardening work in §4.
 | Agent reads/writes kernel memory | kernel unmapped in agent AS; uaccess validates every user ptr | — |
 | Agent forges a syscall arg (ptr/len overflow) | checked arithmetic + `fits_within`/bounds checks; EFAULT/EINVAL not trap (recent hardening) | audit syscall-facing index routes (plan §4.7) |
 | Hostile network frame corrupts socket state | bounds-checked frame parser + IPv4/TCP checksum validation (`tcp_tx.mc`) | larger hostile-packet corpus |
-| Agent exfiltrates via network | net broker egress allowlist (`NetCap.allowed`) + budget; denied attempts audited (`NET_DENY_TAG`) | product persistent policy load is out of current scope |
-| Cross-transport confusion in broker | endpoint transport-kind tag checked before dispatch (`net_broker.mc`) | — |
+| Agent exfiltrates via network | Product egress-policy broker removed from scope; remaining net paths are deterministic or driver fixtures | product policy is out of current scope |
 | Runaway CPU (DoS) | WAMR instruction fuel; timer watchdog kill; timer-driven process preemption (`proc_preempt_*`, gated by `agent-preempt-test`) | uniform per-agent CPU-budget policy and accounting |
 | Memory exhaustion (DoS) | confined arena + fixed pools with overflow-safe fit checks | typed `NoMem` on broker/device paths (§3.1 #5); per-agent memory budget enforcement everywhere |
 | Agent crash takes down kernel | fault-confinement: agent faults are contained to its AS | per-agent crash cleanup/reap (§3.1 #4) |

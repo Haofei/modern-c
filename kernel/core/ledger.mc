@@ -2,8 +2,8 @@
 //
 // Resource accounting in this kernel is today scattered across per-dimension budgets, each
 // hand-rolling its own {used, limit} counters and over-limit check: process memory quotas
-// (kernel/core/process.mc / kernel/lib/resacct.mc), the net broker's byte budget
-// (kernel/net/net_broker.mc), IPC message ledgers (kernel/core/proc_ipc.mc), and scheduler accounting
+// (kernel/core/process.mc / kernel/lib/resacct.mc), IPC message ledgers
+// (kernel/core/proc_ipc.mc), and scheduler accounting
 // (kernel/core/proc_sched.mc). Every one repeats the same fragile charge/release arithmetic.
 //
 // This module is the ONE ledger they can all share: a single `Ledger` carries a {used, limit}
@@ -14,7 +14,7 @@
 // `used + amount` sum is NEVER formed and can never overflow/trap.
 //
 // FOLLOW-UP (out of scope here): wiring the existing scattered call-sites
-// (process/net_broker/proc_ipc/mcp/policy/proc_sched budgets) onto this ledger. This task only
+// (process/proc_ipc/proc_sched budgets) onto this ledger. This task only
 // delivers the reusable, proven-correct unified primitive + its gate.
 //
 // CONVENTION — `limit == 0` means UNLIMITED (no ceiling). A fresh `Ledger` is all-zero, so every
@@ -32,8 +32,8 @@ enum Resource {
     DmaBytes,    // bytes pinned for device DMA (virtio drivers)
     IpcMessages, // in-flight IPC messages (proc_ipc.mc)
     BlockIo,     // block-device I/O operations / bytes (block layer)
-    NetBytes,    // network bytes sent/received (net_broker.mc)
-    FileHandles, // open file/tool handles (mcp.mc / fs)
+    NetBytes,    // network bytes sent/received by network fixtures
+    FileHandles, // open file/tool handles (fs/app-run fixtures)
 }
 
 // Why a charge or release was refused.

@@ -1,8 +1,8 @@
 // examples/apps/wasm/wasi_agent.c — Phase-6 basic syscall-driven agent, the WASM mirror of
-// examples/agents/agent.js (qjs-agent-test). The minimal agent loop: submit a brokered tool op over
+// examples/agents/agent.js (qjs-agent-test). The minimal agent loop: submit a tool fixture op over
 // the frozen SYS_SUBMIT/SYS_POLL ABI, then drive it to completion by polling for its id and reading
 // the result. SUM(arg) completes with arg+2. Prints "agent: ok" only on the correct round-trip —
-// the foundational "an agent reaches the broker and demultiplexes a completion by id" proof.
+// the foundational "a payload demultiplexes a completion by id" proof.
 #include <stdio.h>
 #include <stdint.h>
 

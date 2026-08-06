@@ -195,8 +195,7 @@
         "agentos-test",
         "tcb-advisory-intake-test",
         "app-run-test",
-        "qjs-confined-test",
-        "agent-e2e-test"
+        "qjs-confined-test"
       ],
       "tcb_components": [
         "qemu",
@@ -234,7 +233,6 @@
       "blocking_gates": [
         "visionfive2-readiness-test",
         "tcb-advisory-intake-test",
-        "agent-e2e-test",
         "agentos-test"
       ],
       "tcb_components": [

@@ -30,8 +30,6 @@ pub fn register(ctx: *h.Ctx) void {
         "llvm-qjs-realtool-test",
         "qjs-nettool-test",
         "llvm-qjs-nettool-test",
-        "qjs-net-realtool-test",
-        "llvm-qjs-net-realtool-test",
         "qjs-smode-net-irq-tool-test",
         "llvm-qjs-smode-net-irq-tool-test",
         "qjs-smode-blk-irq-tool-test",
@@ -185,8 +183,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-wasm-smode-net-irq-tool-test"));
     m0_full_step.dependOn(ctx.cmd("wasm-smode-blk-irq-tool-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-wasm-smode-blk-irq-tool-test"));
-    m0_full_step.dependOn(ctx.cmd("wasm-net-realtool-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-wasm-net-realtool-test"));
     m0_full_step.dependOn(ctx.cmd("arm-wasm-async-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-arm-wasm-async-test"));
     m0_full_step.dependOn(ctx.cmd("x86-wasm-async-test"));
@@ -217,8 +213,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-qjs-realtool-test"));
     m0_full_step.dependOn(ctx.cmd("qjs-nettool-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-qjs-nettool-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-net-realtool-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-net-realtool-test"));
     m0_full_step.dependOn(ctx.cmd("qjs-smode-net-irq-tool-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-qjs-smode-net-irq-tool-test"));
     m0_full_step.dependOn(ctx.cmd("qjs-smode-blk-irq-tool-test"));
@@ -822,15 +816,6 @@ pub fn register(ctx: *h.Ctx) void {
     // killed+reclaimed via the death path, kernel + other agents survive) under QEMU.
     m0_full_step.dependOn(ctx.cmd("fault-isolation-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-fault-isolation-test"));
-    // agent-e2e-test boots the end-to-end sandboxed-agent showcase under QEMU.
-    m0_full_step.dependOn(ctx.cmd("agent-e2e-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-agent-e2e-test"));
-    m0_full_step.dependOn(ctx.cmd("agent-net-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-agent-net-test"));
-    // agent-net-real-test boots the broker's REAL tcp_socket transport: a sandboxed agent makes a
-    // genuinely brokered (egress-checked/budgeted/audited) network call to a live server under QEMU.
-    m0_full_step.dependOn(ctx.cmd("agent-net-real-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-agent-net-real-test"));
     // vm-switch-test switches satp between two address spaces (per-process VM).
     m0_full_step.dependOn(ctx.cmd("vm-switch-test"));
     // vmspace-test switches satp per process slot (per-process page tables).

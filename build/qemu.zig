@@ -628,12 +628,12 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "agent-async-api-test", "agent-facing async API: an async fn agent awaits read_async/tool_call_async + sleep_async + timeout-then-cancel over the ToolFut/ToolPump leaves under QEMU", &.{ "bash", "tools/proc/agent-async-api-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-agent-async-api-test", "LLVM-lowered agent-facing async API (ToolFut/ToolPump wrappers) end-to-end under QEMU", &.{ "bash", "tools/proc/agent-async-api-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // async-agent-test: the capstone — an agent in real async/await over the kernel broker.
+    // async-agent-test: the capstone — async/await over the app-run tool pump fixture.
     // async-fn-awaiting-async-fn (agent -> tool_fetch/tool_read -> ReqFut) resolves two sequential
     // tool calls (page+cfg==42), then TIMES OUT a slow tool call by racing it against a deadline
     // (slow tool cancelled, inflight count back to 0). FRT + ASYNC-AGENT-OK.
-    _ = h.addScriptTest(ctx, "async-agent-test", "capstone: an agent in real async/await resolves tool calls over the broker + times out a slow call", &.{ "bash", "tools/proc/async-agent-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-async-agent-test", "LLVM-lowered agent async/await over the broker under QEMU", &.{ "bash", "tools/proc/async-agent-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "async-agent-test", "capstone: async/await resolves tool calls over the app-run pump + times out a slow call", &.{ "bash", "tools/proc/async-agent-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-async-agent-test", "LLVM-lowered async/await over the app-run tool pump under QEMU", &.{ "bash", "tools/proc/async-agent-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "cap-test", "capability least-privilege: driver-as-server holds the console cap", &.{ "bash", "tools/proc/cap-test.sh", "zig-out/bin/mcc", "c" });
 
@@ -1088,12 +1088,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "wasm-smode-blk-irq-tool-test", "WASM-agent Phase 6: a confined WASM guest's fs_read completes via a real S-mode virtio-blk PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-wasm-smode-blk-irq-tool-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest's fs_read completes via a real S-mode virtio-blk PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // WASM-agent Phase 6 real-TCP peer: a confined WASM guest's net_fetch reaches a LIVE HTTP server
-    // through the kernel's real TCP transport over virtio-net (validated by UART marker + HTTP access
-    // log + pcap). Mirrors qjs-net-realtool-test. Self-skips if python3 is unavailable.
-    _ = h.addScriptTest(ctx, "wasm-net-realtool-test", "WASM-agent Phase 6: a confined WASM guest's net_fetch reaches a live HTTP server through the real TCP-backed broker over virtio-net under QEMU", &.{ "bash", "tools/lang/wasm-net-realtool-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-net-realtool-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest's net_fetch reaches a live HTTP server through the real TCP-backed broker over virtio-net under QEMU", &.{ "bash", "tools/lang/wasm-net-realtool-test.sh", "zig-out/bin/mcc", "llvm" });
-
     // WASM-agent Phase 7 (docs/wasm-migration-plan.md §5): JS perf benchmark — native QuickJS vs
     // QuickJS-on-WASM on the SAME workload. Gate is functional-parity (same numeric result) + report
     // emission (zig-out/wasm-js-bench-*.json); QEMU timings are indicative (recorded, not gated on).
@@ -1167,13 +1161,9 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-qjs-realtool-test", "M5b.2 (LLVM): a pure-JS agent drives the simple FS tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_fs.js", "fs: ok", "qjs-realtool" });
 
-    _ = h.addScriptTest(ctx, "qjs-nettool-test", "M5b.3: a pure-JS agent drives the brokered network fetch tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_net_tool.js", "net: ok", "qjs-nettool" });
+    _ = h.addScriptTest(ctx, "qjs-nettool-test", "M5b.3: a pure-JS agent drives the deterministic network fetch fixture over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_net_tool.js", "net: ok", "qjs-nettool" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-nettool-test", "M5b.3 (LLVM): a pure-JS agent drives the brokered network fetch tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_net_tool.js", "net: ok", "qjs-nettool" });
-
-    _ = h.addScriptTest(ctx, "qjs-net-realtool-test", "M5b.4: a pure-JS agent drives host_net_fetch through the REAL TCP-backed broker transport over virtio-net", &.{ "bash", "tools/lang/qjs-net-realtool-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-qjs-net-realtool-test", "M5b.4 (LLVM): a pure-JS agent drives host_net_fetch through the REAL TCP-backed broker transport over virtio-net", &.{ "bash", "tools/lang/qjs-net-realtool-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "llvm-qjs-nettool-test", "M5b.3 (LLVM): a pure-JS agent drives the deterministic network fetch fixture over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_net_tool.js", "net: ok", "qjs-nettool" });
 
     _ = h.addScriptTest(ctx, "qjs-smode-net-irq-tool-test", "M5b.5: a pure-JS host_net_fetch completes through production SYS_POLL from a real S-mode virtio-net PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
 
@@ -1288,18 +1278,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "fault-isolation-test", "Boot the F1 fault-isolation keystone (a real agent trap is contained: faulting agent killed+reclaimed, kernel+others survive) under QEMU", &.{ "bash", "tools/proc/fault-isolation-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-fault-isolation-test", "Boot the LLVM-lowered F1 fault-isolation keystone under QEMU", &.{ "bash", "tools/proc/fault-isolation-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "agent-e2e-test", "Boot the end-to-end sandboxed-agent showcase (capability-checked/budgeted/audited tool calls) under QEMU", &.{ "bash", "tools/proc/agent-e2e-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-agent-e2e-test", "Boot the LLVM-lowered end-to-end sandboxed-agent showcase under QEMU", &.{ "bash", "tools/proc/agent-e2e-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "agent-net-test", "Boot the agent-OS network-model showcase (brokered/egress-checked/budgeted/audited network calls) under QEMU", &.{ "bash", "tools/proc/agent-net-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-agent-net-test", "Boot the LLVM-lowered agent-OS network-model showcase under QEMU", &.{ "bash", "tools/proc/agent-net-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "agent-net-real-test", "Boot the agent-OS network model with the REAL tcp_socket transport: a sandboxed agent makes a genuinely brokered (egress-checked/budgeted/audited) network call to a live server under QEMU", &.{ "bash", "tools/proc/agent-net-real-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-agent-net-real-test", "Boot the LLVM-lowered agent-OS real-transport brokered network call under QEMU", &.{ "bash", "tools/proc/agent-net-real-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "kmain-net-test", "Boot the integrated kernel + network in one image under QEMU", &.{ "bash", "tools/net/kmain-net-test.sh", "zig-out/bin/mcc", "c" });
 

@@ -18,8 +18,6 @@ import "std/fmt/fmt_sink.mc";        // fmt_put_str/fmt_put_dec — sbrk map-pat
 import "std/addr.mc";
 import "user/abi.mc"; // SYS_* numbers + E_AGAIN/E_FAULT — the single ABI source of truth
 import "kernel/fs/treefs.mc";       // Tree + tree_init / tree_mkdir / tree_create / tree_read_at / tree_write_at
-import "kernel/net/net_broker.mc";  // net_fetch + registry + NetCap (production tool surface op)
-import "std/mask.mc";               // Mask32 allowlist (mask32_zero/mask32_set)
 
 const SATP_SV39: u64 = 0x8000_0000_0000_0000;
 const COMP_CAP: usize = 8;
@@ -203,24 +201,17 @@ global g_fs_ready: bool;        // app_build set up the broker world (defensive:
 global g_fs_async_override_ready: bool;
 global g_fs_budget: u32;
 
-// ----- Brokered network tool world -----
+// ----- Simple network tool world -----
 // The production JS host exposes `host_net_fetch(endpoint, token)` through the same
-// SYS_SUBMIT/SYS_POLL path as FS. This S-mode QuickJS image has no NIC attached yet, so it uses the
-// shared network broker control plane with registered mock endpoints (`net_fetch`). The TCP-backed
-// sibling (`net_fetch_tcp`) remains in `kernel/net/net_broker_tcp.mc` for NIC runtimes.
+// SYS_SUBMIT/SYS_POLL path as FS. Keep the default as a tiny deterministic fixture: endpoint 1
+// returns token+100, every other endpoint is denied, and the budget is two calls.
 const EP_WEB: u32 = 1;
-const EP_EVIL: u32 = 9;
-global g_net_t: ProcTable;
-global g_net_reg: EndpointRegistry;
-global g_net_sb: Sandbox;
-global g_net_cap: NetCap;
 global g_net_ready: bool;
 global g_net_override_ready: bool;
 global g_net_async_override_ready: bool;
+global g_net_budget: u32;
 
 fn net_ep_web(req: u32) -> u32 { return req + 100; }
-fn net_ep_evil(req: u32) -> u32 { return req; }
-fn net_agent_worker() -> void {}
 
 fn net_override_noop_init() -> void {}
 fn net_override_noop_fetch(endpoint_id: u32, token: u32) -> i32 {
@@ -358,14 +349,6 @@ fn fs_path_allowed(path_len: usize) -> bool {
     return g_fs_path[3] == 0x2F; // "/ws/..."
 }
 
-fn net_err_to_errno(e: BrokerError) -> i32 {
-    switch e {
-        .Denied => { return E_DENIED as i32; }
-        .Budget => { return E_AGAIN as i32; }
-        .NoEndpoint => { return -2; } // ENOENT
-    }
-}
-
 fn is_net_op(op: u32) -> bool {
     return op == TOOL_OP_NET_FETCH;
 }
@@ -446,26 +429,15 @@ export fn app_fs_async_complete_word(id: u64, status: i32, result: i32, out_len:
     g_slot_ready[slot] = g_clock;
 }
 
-// Network-tool hooks. The generic QuickJS runtime uses the shared broker control plane with
-// mock endpoints so it does not need a NIC. A NIC-backed runtime registers an override with
-// app_net_override_set to route `host_net_fetch` through `net_fetch_tcp` instead.
+// Network-tool hooks. The generic runtime uses a deterministic local fixture so it does not need a
+// NIC. A NIC-backed runtime can still register an override with app_net_override_set.
 #[weak]
 export fn app_net_tool_init() -> void {
     if g_net_override_ready {
         g_net_override_init();
         return;
     }
-    proc_table_init(&g_net_t);
-    cap_audit_init();
-    endpoint_registry_init(&g_net_reg);
-    switch endpoint_register(&g_net_reg, EP_WEB, net_ep_web) { ok(s) => {} err(e) => {} }
-    switch endpoint_register(&g_net_reg, EP_EVIL, net_ep_evil) { ok(s) => {} err(e) => {} }
-    let full: Mask32 = mask32_from(0xFFFF_FFFF);
-    let no_tools: Mask32 = mask32_zero();
-    g_net_sb = agent_spawn(&g_net_t, 0x1000, net_agent_worker, full, full, no_tools, 0);
-    var net_allowed: Mask32 = mask32_zero();
-    mask32_set(&net_allowed, EP_WEB);
-    g_net_cap = .{ .allowed = net_allowed, .requests_left = 2 };
+    g_net_budget = 2;
     g_net_ready = true;
 }
 
@@ -477,10 +449,14 @@ export fn app_net_fetch_tool(endpoint_id: u32, token: u32) -> i32 {
     if !g_net_ready {
         return E_DENIED as i32;
     }
-    switch net_fetch(&g_net_t, &g_net_reg, &g_net_sb, &g_net_cap, endpoint_id, token) {
-        ok(v) => { return v as i32; }
-        err(e) => { return net_err_to_errno(e); }
+    if endpoint_id != EP_WEB {
+        return E_DENIED as i32;
     }
+    if g_net_budget == 0 {
+        return E_AGAIN as i32;
+    }
+    g_net_budget = g_net_budget - 1;
+    return net_ep_web(token) as i32;
 }
 
 // SYS_SUBMIT helper for simple FS ops. The ToolReq has already been copied in and its hard size

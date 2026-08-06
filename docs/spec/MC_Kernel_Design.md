@@ -346,39 +346,14 @@ Runnability is **derived** (`Ready|Running` ∧ `block_reasons == 0`), never set
 reused; `endpoint_slot` fails `DeadEndpoint` on generation mismatch. Gates: `exec-test`,
 `endpoint-test`.
 
-### 10.3 Agent runtime — GATED mechanism, **MOCK tool transport**
+### 10.3 Tool ABI fixtures — GATED, not a kernel product layer
 
-`kernel/core/agent.mc`. An **agent = attenuated process + tool layer**:
+The dedicated kernel agent runtime and network broker fixtures have been removed. Kernel tests
+now use smaller tool-ABI fixtures to exercise userspace calls, async polling, confinement, and
+C/LLVM lowering. These fixtures are not a production agent capability broker and do not define a
+native agent OS surface.
 
-```
-struct Sandbox { slot: usize, tools: Mask32, calls_left: u32 }
-```
-
-`agent_spawn(…, allow_subset, kcall_subset, tool_mask, call_budget)` builds the process via
-`proc_spawn_attenuated` and adds a **tool allowlist** and a **call budget**. The tool-call
-ABI is the single checked entry point:
-
-```
-agent_tool_call(t, reg, sb, tool_id, arg) -> Result<u32, ToolError>
-  1. Denied      — tool_id ∉ allowlist     (no budget spent; see §15 for audit policy)
-  2. Exhausted   — calls_left == 0
-  3. NoSuchTool  — not in registry         (checked after deny → no info leak)
-  4. Audit       — record (agent pid, tool_id) into cap_audit
-  5. Dispatch    — calls_left--, run handler, return ok(result)
-```
-
-> **Trust boundary note:** tool handlers are currently **in-process function pointers**
-> (`MAX_TOOLS = 8`) and are therefore **NOT a trust boundary** — an in-process handler runs
-> with kernel authority. The intended real form is **IPC to a tool server** (a separate
-> principal), which is where a future native tool catalog or a QuickJS host-bridge plugs in.
-> Until then, the agent-tool model bounds *which tool ids* an agent may name and *how many*
-> calls it may make, not what a (trusted) handler does.
-
-**Tool paths are demo-scope.** The remaining host/app-run tool ops exist to exercise the
-userspace ABI, async polling, and C/LLVM lowering. They are not a production agent capability
-broker.
-
-Gates: `cap-test`, `agent-e2e-test` (legacy mock); `qjs-realtool-test` (confined-JS FS broker).
+Gates: `cap-test`, `app-run-test`, `qjs-realtool-test`.
 
 ### 10.4 Signals — IMPLEMENTED (kernel primitive only)
 

@@ -26,7 +26,7 @@ Minimizing and pinning this set is the core of the security posture.
 | User-pointer boundary | `kernel/core/uaccess.mc` | Page-table-aware `copy_to/from_user`; the single trusted path for agent-supplied pointers. |
 | Loader | `kernel/core/elf_loader.mc` | Parses untrusted ELF images; segment bounds + overflow checks. |
 | Scheduler + process lifecycle | `kernel/core/process.mc`, `proc_sched.mc` | Spawn/exit/reap, supervision, OOM/fault reclaim, least-privilege masks. |
-| Brokers (the only path to external effect) | `kernel/net/net_broker.mc`, `kernel/fs/treefs.mc` | Capability + budget checks before any FS/net effect. |
+| Tool/FS fixtures | `kernel/fs/treefs.mc`, app-run test fixtures | Bounded FS/tool calls used to validate syscall and async ABI behavior. Product brokers are out of scope. |
 | Resource accounting | `kernel/core/ledger.mc`, `kernel/lib/resacct.mc` | Overflow-safe charge/release; fail-closed over-limit. |
 | Audit trail | `kernel/core/ipc_trace.mc`, `cap_audit` in `process.mc` | Kernel-side allow/deny + capability-use record, out of agent reach. |
 | Vendored engines in the TCB | WAMR (agent wasm), QuickJS (JS-on-wasm), BearSSL (TLS/crypto) | A bug here is a TCB bug; defense is vendoring discipline + gates, not runtime containment. |
@@ -70,22 +70,18 @@ guarantee **G1**.
 Residual: correctness of the page-table setup and TLB/`satp` switching is TCB; there is no
 formal proof, only the gates.
 
-### 2.3 Network broker (egress)
+### 2.3 Network stack fixtures
 
-`kernel/net/net_broker.mc` splits **policy** (egress allowlist `NetCap.allowed` + per-agent
-request budget) from **transport**. A destination not in the allowlist spends no budget,
-sends no packet, and is recorded as a distinct DENY event (`NET_DENY_TAG`) — observable but
-not counted as real egress. Budget exhaustion returns a typed `Budget` error. Hostile inbound
-frames are handled by the bounds-checked parsers (§2.6).
+Network tests remain as language/runtime fixtures for packet parsing, driver paths, and syscall
+plumbing. The removed agent network broker is not part of the current kernel scope.
 
-Residual: product persistent policy load is outside the current language-oriented kernel scope;
-today the allowlist is established in-boot. Larger hostile-packet corpus wanted.
+Residual: hostile-packet corpus and real-board validation remain useful for the network stack,
+but they are not product egress-policy claims.
 
-### 2.4 Filesystem broker + agent runtime
+### 2.4 Filesystem and tool fixtures
 
-Agents have **no ambient FS/net handles**; external effects route through brokers that check a
-per-agent capability first (`kernel/fs/treefs.mc`, `kernel/net/net_broker.mc`). This is guarantee
-**G2** and is audited kernel-side (§2.7).
+The remaining FS/tool paths validate bounded external-effect plumbing (`kernel/fs/treefs.mc`,
+`app-run-test`, `qjs-realtool-test`). They are not a production agent runtime.
 
 Residual: uniform per-agent memory/CPU budget enforcement on *every* broker/device path is
 incomplete (threat-model §5, production-readiness-plan §4.7 / P6). Some exhaustion paths still
@@ -194,7 +190,7 @@ An independent audit of the production kernel should cover, at minimum:
       and confused-deputy issues.
 - [ ] **Address-space setup:** review page-table construction, kernel-unmapping, and `satp`/TTBR
       switching; confirm no agent-reachable window maps kernel/peer memory.
-- [ ] **Brokers:** audit `net_broker.mc` / `treefs.mc` / `mcp.mc` capability + budget checks for
+- [ ] **Fixtures:** audit `treefs.mc` and app-run tool fixtures for
       bypass; confirm every external effect is gated and audited.
 - [ ] **Parsers:** re-fuzz DNS/TCP/IP/TLS/ELF with a larger hostile corpus + a coverage-guided
       fuzzer; look for over-reads the current `br_try_*` routing missed.

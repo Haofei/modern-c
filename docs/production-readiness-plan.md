@@ -117,8 +117,8 @@ hardening"; a few are genuinely thin. Current state, with evidence:
 | 2. Stable agent ABI | Mostly done | Correction: it IS versioned — `AGENT_ABI_VERSION`, `version` fields on req/event structs, `agent_abi_validate_req` rejects a mismatch with `badver` (gated: `agent_abi_demo.mc`), typed `AgentAbiError` status codes, a `CANCEL` op, and `abi-consistency-test` guards syscall-number drift across kernel/userspace. **Landed (2026-06-30):** the versioning/compat policy is now written in `agent_abi.mc` (single monotonic wire version; what forces a bump; status/op-set rules; the pair-kernel-with-agents deployment model). |
 | 3. Durable storage | In progress | KV/blob/fs plus the real **virtio-blk write path** (`blk_write` + full-sector `blk_read_into`) and a **persist-across-reboot gate** — `blk-persist-test` (both backends) boots QEMU twice against the same disk image: a sentinel written on boot 1 is read back on a fresh boot 2 (RAM cleared, disk survives). Product policy/audit persistence fixtures have been removed from the current language-oriented kernel scope. |
 | 4. Isolation boundary | **Most mature** | Confined U-mode Sv39 (kernel unmapped) + WAMR sandbox + deterministic fuel, S-mode + cross-arch. Gap: **per-agent crash cleanup/reap**. (Review overstates this as missing.) |
-| 5. Resource accounting | Mostly done | Per-dimension budgets are enforced AND gated: CPU (`wamr-fuel-test`, `wasm-watchdog-test`), memory (`wasm-memcap-test`), network requests (`NetCap.requests_left`), tool/output quota (`quota-probe-test`, `qjs/wasm-quota-agent-test`) — multiple backends. **Landed (2026-06-30):** typed `NoMem` on the DMA path — `dma.try_alloc -> Result<_, DmaError>` + `mc_dma_alloc_base_try` across all providers (fail-closed with a typed error instead of trapping on exhaustion); gated `dma-try-test`. Gap: a **single unified accounting/quota model** spanning all dimensions (incl. file handles + spawned tasks). |
-| 6. Broker hardening | Exists, weak | `net_broker` allowlist+budget+audit; back-pressure (async `ok=8 rejected=4`). Gap: retries and tracing. Product policy loading/actuation is out of scope. |
+| 5. Resource accounting | Mostly done | Per-dimension budgets are enforced AND gated: CPU (`wamr-fuel-test`, `wasm-watchdog-test`), memory (`wasm-memcap-test`), tool/output quota (`quota-probe-test`, `qjs/wasm-quota-agent-test`) — multiple backends. **Landed (2026-06-30):** typed `NoMem` on the DMA path — `dma.try_alloc -> Result<_, DmaError>` + `mc_dma_alloc_base_try` across all providers (fail-closed with a typed error instead of trapping on exhaustion); gated `dma-try-test`. Gap: a **single unified accounting/quota model** for the remaining language-runtime fixtures. |
+| 6. Broker hardening | Removed from scope | Product agent/network brokers have been deleted from the language-oriented kernel. Remaining tool paths are fixtures for ABI, async, and lowering tests. |
 | 7. Networking | Mostly exists | **DNS exists** (`kernel/net/dns.mc`), TLS (BearSSL), TCP RX hardened (checksums + chunked drain). Gap: retransmit robustness, conn pooling, timeout control, hostile-packet corpus. (Review overstates DNS/TLS as needed.) |
 | 8. Observability | Partial | Audit/trace exists (`ipc_trace.mc`, `cap_audit`, provenance). Product metrics, replay, checkpoint, and migration are out of the current language-oriented kernel scope. |
 | 9. Update/packaging | External product scope | Reproducible build/package gates remain in the toolchain. Kernel OTA/live-update fixtures have been removed from the current language-oriented kernel scope. |
@@ -235,14 +235,10 @@ Current status:
 - Confined QuickJS exists.
 - Structured `SYS_SUBMIT` / `SYS_POLL` exists.
 - Real FS broker operations exist on the RISC-V reference path.
-- Real TCP-backed brokered network fetch is gated on the RISC-V reference path.
-- Brokered network fetch is exposed as `host_net_fetch` through the production JS
-  `SYS_SUBMIT` / `SYS_POLL` tool surface.
-- TCP-backed `host_net_fetch` is proven by `qjs-net-realtool-test` /
-  `llvm-qjs-net-realtool-test`: a pure-JS agent reaches a live HTTP server through
-  `net_fetch_tcp` over virtio-net, with denied egress and budget exhaustion covered.
-- The remaining production-surface gap is out-of-process
-  tool transport, stable version/error rules, and cross-arch real-broker parity.
+- Network fetch remains covered by deterministic app-run and interrupt-backed fixtures where it
+  validates ABI, polling, and driver behavior. Real TCP-backed product broker claims are out of
+  scope for the language-oriented kernel.
+- The remaining production-surface gap is intentionally outside this repository's kernel scope.
 
 Production target:
 
@@ -523,7 +519,7 @@ Tasks:
 - Bring up boot, UART, timer, interrupts.
 - Bring up storage.
 - Bring up Ethernet.
-- Run brokered network fetch through the production agent surface.
+- Run deterministic network/tool fixtures through the app-run ABI.
 - Run watchdog.
 - Run power-cycle loop.
 - Measure memory footprint and idle power.

@@ -54,7 +54,6 @@ dns-test	current host/corpus C build gap; additional skipped fixtures remain cov
 pause-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 ipcsample-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 capaudit-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-agent-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fairsched-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 oom-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 ipcfast-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
