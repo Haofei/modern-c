@@ -44,18 +44,15 @@ fn expectImportBudgetResult(root_path: []const u8, limits: loader.LoadLimits, ex
     var reporter = diagnostics.Reporter.init(std.testing.allocator, root_path, root_source);
     defer reporter.deinit();
 
-    const combined = try loader.loadCombinedSourceWithBoundariesOptionsReport(
-        std.testing.allocator,
-        std.testing.io,
-        root_path,
-        root_source,
-        null,
-        .{ .limits = limits },
-        &reporter,
-    );
-    defer std.testing.allocator.free(combined);
-
     if (expected_code) |code| {
+        try std.testing.expectError(error.Reported, loader.loadProjectOptionsReport(
+            std.testing.allocator,
+            std.testing.io,
+            root_path,
+            root_source,
+            .{ .limits = limits },
+            &reporter,
+        ));
         try std.testing.expect(reporter.has_errors);
         var found = false;
         for (reporter.diagnostics.items) |diagnostic| {
@@ -63,6 +60,16 @@ fn expectImportBudgetResult(root_path: []const u8, limits: loader.LoadLimits, ex
         }
         try std.testing.expect(found);
     } else {
+        const combined = try loader.loadCombinedSourceWithBoundariesOptionsReport(
+            std.testing.allocator,
+            std.testing.io,
+            root_path,
+            root_source,
+            null,
+            .{ .limits = limits },
+            &reporter,
+        );
+        defer std.testing.allocator.free(combined);
         try std.testing.expect(!reporter.has_errors);
     }
 }
@@ -412,17 +419,14 @@ test "loader rejects decoded import paths containing NUL" {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, root_path, source);
     defer reporter.deinit();
 
-    const combined = try loader.loadCombinedSourceWithBoundariesReport(
+    try std.testing.expectError(error.Reported, loader.loadProjectOptionsReport(
         std.testing.allocator,
         std.testing.io,
         root_path,
         source,
-        null,
-        null,
-        null,
+        .{},
         &reporter,
-    );
-    defer std.testing.allocator.free(combined);
+    ));
 
     try std.testing.expect(reporter.has_errors);
     var found = false;

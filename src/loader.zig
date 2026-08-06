@@ -33,7 +33,7 @@ const token = @import("token.zig");
 // needed: the combined source the rest of the pipeline sees contains only
 // ordinary declarations.
 
-pub const LoadError = error{ ImportNotFound, ImportBudgetExceeded } || std.mem.Allocator.Error;
+pub const LoadError = error{ Reported, ImportNotFound, ImportBudgetExceeded } || std.mem.Allocator.Error;
 
 pub const LoadLimits = struct {
     max_files: usize = 10_000,
@@ -252,8 +252,13 @@ pub fn loadProjectOptionsReport(
         graph_builder.files.deinit(allocator);
         graph_builder.imports.deinit(allocator);
     }
+    const initial_reported_diagnostics = if (reporter) |r| r.diagnostics.items.len else 0;
+    const initial_diagnostic_oom = if (reporter) |r| r.diagnostic_oom else false;
     const source = try loadCombinedSourceGraph(allocator, io, root_path, root_source, &boundaries, options, reporter, &graph_builder);
     errdefer allocator.free(source);
+    if (reporter) |r| {
+        if (reporterHasNewImportDiagnostic(r, initial_reported_diagnostics) or (!initial_diagnostic_oom and r.diagnostic_oom)) return error.Reported;
+    }
     const boundary_slice = try boundaries.toOwnedSlice(allocator);
     errdefer {
         for (boundary_slice) |boundary| allocator.free(boundary.path);
@@ -332,6 +337,13 @@ fn loadCombinedSourceGraph(
         graph,
     );
     return out.toOwnedSlice(allocator);
+}
+
+fn reporterHasNewImportDiagnostic(reporter: *const diagnostics.Reporter, start: usize) bool {
+    for (reporter.diagnostics.items[start..]) |diag| {
+        if (diag.severity == .error_ and std.mem.startsWith(u8, diag.message, "E_IMPORT_")) return true;
+    }
+    return false;
 }
 
 fn expandAll(
@@ -645,21 +657,29 @@ fn scanImports(
             if (str.kind == .string_literal and semi.kind == .semicolon) {
                 const storage = try arena.alloc(u8, str.lexeme.len - 2);
                 var rel = string_literal.decodeInto(storage, str.lexeme) catch {
-                    if (outer_reporter) |r| r.err(.{
-                        .offset = file_start + str.span.offset,
-                        .len = str.span.len,
-                        .line = str.span.line,
-                        .column = str.span.column,
-                    }, "E_IMPORT_INVALID_STRING: import path must be a valid string literal", .{});
+                    if (outer_reporter) |r| {
+                        r.err(.{
+                            .offset = file_start + str.span.offset,
+                            .len = str.span.len,
+                            .line = str.span.line,
+                            .column = str.span.column,
+                        }, "E_IMPORT_INVALID_STRING: import path must be a valid string literal", .{});
+                    } else {
+                        return error.ImportNotFound;
+                    }
                     continue;
                 };
                 if (std.mem.indexOfScalar(u8, rel, 0) != null) {
-                    if (outer_reporter) |r| r.err(.{
-                        .offset = file_start + str.span.offset,
-                        .len = str.span.len,
-                        .line = str.span.line,
-                        .column = str.span.column,
-                    }, "E_IMPORT_INVALID_STRING: import path cannot contain NUL", .{});
+                    if (outer_reporter) |r| {
+                        r.err(.{
+                            .offset = file_start + str.span.offset,
+                            .len = str.span.len,
+                            .line = str.span.line,
+                            .column = str.span.column,
+                        }, "E_IMPORT_INVALID_STRING: import path cannot contain NUL", .{});
+                    } else {
+                        return error.ImportNotFound;
+                    }
                     continue;
                 }
                 // Arch-selection seam: rewrite `kernel/arch/active/<x>` to the chosen arch.
@@ -691,6 +711,8 @@ fn scanImports(
                 .column = diag.span.column,
             }, "{s}", .{diag.message});
         }
+    } else if (lex_reporter.has_errors) {
+        return error.ImportNotFound;
     }
     return refs.toOwnedSlice(arena);
 }

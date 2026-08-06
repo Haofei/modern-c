@@ -473,12 +473,25 @@ fn runMain(init: std.process.Init) !void {
             if (entry.len != 0) try mc_path_entries.append(allocator, entry);
         }
     }
-    var loaded = try loader.loadProjectOptionsReport(allocator, init.io, loader_root_path, root_source, .{
+    var loaded = loader.loadProjectOptionsReport(allocator, init.io, loader_root_path, root_source, .{
         .arch = options.arch_flag,
         .platform = options.platform_flag,
         .std_dir = options.std_dir,
         .mc_path = mc_path_entries.items,
-    }, &load_diag);
+    }, &load_diag) catch |err| switch (err) {
+        error.Reported => {
+            if (std.mem.eql(u8, command, "check") and options.json_diagnostics) {
+                var out: std.ArrayList(u8) = .empty;
+                defer out.deinit(allocator);
+                try load_diag.appendJson(&out);
+                try session.writeStdout(out.items);
+            } else {
+                load_diag.render();
+            }
+            return error.ImportNotFound;
+        },
+        else => return err,
+    };
     defer loaded.deinit(allocator);
     const source = loaded.source;
     if (reads_stdin and loaded.boundaries.len > 0) {
