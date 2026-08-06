@@ -735,6 +735,10 @@ pub const FunctionInfo = struct {
     // T(term)1: this function has a statically-constrained termination context:
     // either `#[bounded]` directly or IRQ/atomic context, which is bounded too.
     bounded: bool = false,
+    // Scoped ownership: this function starts work in another thread/task context.
+    // Arguments passed to it must not carry lexical borrows or non-thread-move
+    // resources across the boundary.
+    thread_spawn_boundary: bool = false,
     // G8: this function is an `#[error_from]` conversion `fn(E1) -> E2`, invoked by
     // `?` on the error path when the propagated error type differs from the
     // enclosing function's error type.

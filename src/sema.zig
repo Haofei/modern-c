@@ -76,6 +76,7 @@ const hasMaySleep = sema_decl.hasMaySleep;
 const hasNamedAttr = sema_decl.hasNamedAttr;
 const hasNaked = sema_decl.hasNaked;
 const hasNoLangTrap = sema_decl.hasNoLangTrap;
+const hasThreadSpawnBoundary = sema_decl.hasThreadSpawnBoundary;
 const isArithmeticBinary = sema_type.isArithmeticBinary;
 const isArithmeticDomain = sema_type.isArithmeticDomain;
 const isArithmeticDomainTypeName = sema_builtin.isArithmeticDomainTypeName;
@@ -959,6 +960,7 @@ pub const Checker = struct {
                         .may_sleep = hasMaySleep(decl.attrs),
                         .irq_context = hasIrqContext(decl.attrs),
                         .bounded = hasBoundedContext(decl.attrs),
+                        .thread_spawn_boundary = hasThreadSpawnBoundary(decl.attrs),
                         .error_from = error_from.hasAttr(decl.attrs),
                     }) catch {
                         self.oom = true;
@@ -4180,7 +4182,7 @@ pub const Checker = struct {
                             if (function.is_extern or function.c_abi) {
                                 self.checkFfiResourcePointerArgument(arg, ctx);
                             }
-                            if (isThreadSpawnBoundaryCall(node.callee.*)) {
+                            if (isThreadSpawnBoundaryCall(node.callee.*, function)) {
                                 self.checkThreadSpawnArgument(function.params[index].ty, arg, ctx);
                             }
                             if (function.is_extern) self.checkClosureArgumentDoesNotEscape(function.params[index].ty, arg, ctx, "cannot pass a closure that captures local storage to an extern function");
@@ -10155,7 +10157,11 @@ fn copyingGenericElementCallName(name: []const u8) bool {
         std.mem.eql(u8, name, "strmap_free");
 }
 
-fn isThreadSpawnBoundaryCall(callee: ast.Expr) bool {
+fn isThreadSpawnBoundaryCall(callee: ast.Expr, function: FunctionInfo) bool {
+    if (function.thread_spawn_boundary) return true;
+    // Compatibility fallback for the pre-attribute v0 surface. New thread/task
+    // spawn APIs should declare `#[thread_spawn]` so the boundary is a function
+    // fact instead of a source-name convention.
     if (directCallName(callee)) |name| {
         return std.mem.eql(u8, name, "thread_spawn") or
             std.mem.eql(u8, name, "task_spawn") or
@@ -10171,7 +10177,7 @@ fn isThreadSpawnBoundaryCall(callee: ast.Expr) bool {
             .ident => |base| std.mem.eql(u8, base.text, "thread") or std.mem.eql(u8, base.text, "task"),
             else => false,
         },
-        .grouped => |inner| isThreadSpawnBoundaryCall(inner.*),
+        .grouped => |inner| isThreadSpawnBoundaryCall(inner.*, function),
         else => false,
     };
 }

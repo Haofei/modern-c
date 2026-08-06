@@ -99,6 +99,10 @@ pub fn hasBoundedContext(attrs: []ast.Attr) bool {
     return hasIrqContext(attrs) or hasNamedAttr(attrs, "bounded");
 }
 
+pub fn hasThreadSpawnBoundary(attrs: []const ast.Attr) bool {
+    return hasNamedAttr(attrs, "thread_spawn");
+}
+
 pub fn backendNameAttr(attrs: []ast.Attr) ?[]const u8 {
     for (attrs) |attr| switch (attr.kind) {
         .backend_name => |name| return name,

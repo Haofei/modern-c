@@ -1248,11 +1248,29 @@ test "thread spawn boundaries require explicit thread_move resources" {
         \\fn agent_spawn(view: TicketView) -> void {
         \\    let id: u32 = view.ptr.id;
         \\}
+        \\#[thread_spawn]
+        \\fn handoff(t: Ticket) -> void {
+        \\    unsafe { forget_unchecked(t); }
+        \\}
+        \\#[thread_spawn]
+        \\fn handoff_send(t: SendTicket) -> void {
+        \\    unsafe { forget_unchecked(t); }
+        \\}
+        \\#[thread_spawn]
+        \\fn handoff_ptr(p: *Ticket) -> void {
+        \\    let id: u32 = p.id;
+        \\}
         \\fn reject_plain_resource_transfer() -> void {
         \\    thread_spawn(make_ticket());
         \\}
+        \\fn reject_attr_plain_resource_transfer() -> void {
+        \\    handoff(make_ticket());
+        \\}
         \\fn accept_thread_move_transfer() -> void {
         \\    task_spawn(make_send());
+        \\}
+        \\fn accept_attr_thread_move_transfer() -> void {
+        \\    handoff_send(make_send());
         \\}
         \\fn accept_thread_move_aggregate_transfer() -> void {
         \\    box_spawn(make_send_box());
@@ -1274,6 +1292,9 @@ test "thread spawn boundaries require explicit thread_move resources" {
         \\fn reject_resource_pointer_transfer(t: *Ticket) -> void {
         \\    sched_spawn(t);
         \\}
+        \\fn reject_attr_resource_pointer_transfer(t: *Ticket) -> void {
+        \\    handoff_ptr(t);
+        \\}
         \\fn reject_view_transfer() -> void {
         \\    var t: Ticket = make_ticket();
         \\    let view: TicketView = .{ .ptr = borrow t };
@@ -1286,9 +1307,9 @@ test "thread spawn boundaries require explicit thread_move resources" {
     defer reporter.deinit();
     try checkSource(source, &reporter);
     // DIAGNOSTIC_UNIT: E_THREAD_MOVE_RESOURCE
-    try std.testing.expectEqual(@as(usize, 3), countDiagnosticCode(&reporter, "E_THREAD_MOVE_RESOURCE"));
+    try std.testing.expectEqual(@as(usize, 4), countDiagnosticCode(&reporter, "E_THREAD_MOVE_RESOURCE"));
     // DIAGNOSTIC_UNIT: E_BORROW_THREAD_BOUNDARY
-    try std.testing.expectEqual(@as(usize, 5), countDiagnosticCode(&reporter, "E_BORROW_THREAD_BOUNDARY"));
+    try std.testing.expectEqual(@as(usize, 6), countDiagnosticCode(&reporter, "E_BORROW_THREAD_BOUNDARY"));
 }
 
 test "safe module forbids raw many pointer surface outside unsafe blocks" {

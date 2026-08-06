@@ -1926,6 +1926,20 @@ Rules:
 6. `borrow mut` and ordinary borrow values may not cross `await`.
 ```
 
+Thread/task transfer is an explicit function contract. A function that starts
+work in another thread or task context must be marked:
+
+```mc
+#[thread_spawn]
+fn start_worker(ticket: ThreadTicket) -> void;
+```
+
+Every argument to a `#[thread_spawn]` call is checked as crossing a thread/task
+boundary: explicit borrows, local addresses, resource/view/region pointers, and
+`view struct` values are rejected; owned resources must be declared
+`thread_move`. MC v0 has no inferred `Send`/`Sync` trait solver. Thread safety is
+opt-in by declaration and by trusted library wrappers.
+
 `view struct` is the only aggregate form allowed to carry borrow fields in safe
 code. It remains a lexical view: it cannot be stored as an owned resource, placed
 inside raw byte-copy containers, or returned unless the function signature states
