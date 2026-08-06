@@ -192,6 +192,18 @@ const CompilationSession = struct {
         }
     };
 
+    const MetadataSidecarSnapshot = union(enum) {
+        absent,
+        present: []u8,
+
+        fn deinit(self: *MetadataSidecarSnapshot, allocator: std.mem.Allocator) void {
+            switch (self.*) {
+                .absent => {},
+                .present => |bytes| allocator.free(bytes),
+            }
+        }
+    };
+
     fn ensureReplaceTargetNotDirectory(self: *CompilationSession, path: []const u8, label: []const u8) !void {
         const stat = std.Io.Dir.cwd().statFile(self.io, path, .{}) catch |err| switch (err) {
             error.FileNotFound => return,
@@ -203,6 +215,32 @@ const CompilationSession = struct {
         if (stat.kind == .directory) {
             std.debug.print("error: unable to replace {s} \"{s}\": destination is a directory\n", .{ label, path });
             return error.OutputWriteFailed;
+        }
+    }
+
+    fn snapshotMetadataSidecar(self: *CompilationSession, path: []const u8) !MetadataSidecarSnapshot {
+        const bytes = std.Io.Dir.cwd().readFileAlloc(self.io, path, self.allocator, .limited(max_artifact_metadata_bytes)) catch |err| switch (err) {
+            error.FileNotFound => return .absent,
+            else => {
+                std.debug.print("error: unable to snapshot metadata sidecar \"{s}\": {s}\n", .{ path, @errorName(err) });
+                return error.OutputWriteFailed;
+            },
+        };
+        return .{ .present = bytes };
+    }
+
+    fn restoreMetadataSidecar(self: *CompilationSession, path: []const u8, snapshot: MetadataSidecarSnapshot) !void {
+        switch (snapshot) {
+            .absent => {
+                std.Io.Dir.cwd().deleteFile(self.io, path) catch |err| switch (err) {
+                    error.FileNotFound => return,
+                    else => {
+                        std.debug.print("error: unable to remove rolled-back metadata sidecar \"{s}\": {s}\n", .{ path, @errorName(err) });
+                        return error.OutputWriteFailed;
+                    },
+                };
+            },
+            .present => |bytes| try self.writeOutputPath(path, bytes),
         }
     }
 
@@ -238,6 +276,8 @@ const CompilationSession = struct {
         defer metadata.deinit(self.allocator);
         try self.ensureReplaceTargetNotDirectory(path, "output");
         try self.ensureReplaceTargetNotDirectory(metadata.path, "metadata sidecar");
+        var metadata_snapshot = try self.snapshotMetadataSidecar(metadata.path);
+        defer metadata_snapshot.deinit(self.allocator);
 
         var metadata_file = std.Io.Dir.cwd().createFileAtomic(self.io, metadata.path, .{
             .replace = true,
@@ -274,6 +314,9 @@ const CompilationSession = struct {
         };
         artifact_file.replace(self.io) catch |err| {
             std.debug.print("error: unable to commit output \"{s}\": {s}\n", .{ path, @errorName(err) });
+            self.restoreMetadataSidecar(metadata.path, metadata_snapshot) catch |restore_err| {
+                std.debug.print("error: unable to roll back metadata sidecar \"{s}\" after output commit failure: {s}\n", .{ metadata.path, @errorName(restore_err) });
+            };
             return error.OutputWriteFailed;
         };
     }
@@ -1124,6 +1167,8 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     defer metadata.deinit(allocator);
     try session.ensureReplaceTargetNotDirectory(output_path, "output");
     try session.ensureReplaceTargetNotDirectory(metadata.path, "metadata sidecar");
+    var metadata_snapshot = try session.snapshotMetadataSidecar(metadata.path);
+    defer metadata_snapshot.deinit(allocator);
 
     var metadata_file = std.Io.Dir.cwd().createFileAtomic(io, metadata.path, .{
         .replace = true,
@@ -1146,6 +1191,9 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     };
     std.Io.Dir.cwd().rename(tmp_exe, std.Io.Dir.cwd(), output_path, io) catch |err| {
         std.debug.print("mcc build: unable to commit {s}: {s}\n", .{ output_path, @errorName(err) });
+        session.restoreMetadataSidecar(metadata.path, metadata_snapshot) catch |restore_err| {
+            std.debug.print("error: unable to roll back metadata sidecar \"{s}\" after executable commit failure: {s}\n", .{ metadata.path, @errorName(restore_err) });
+        };
         return error.BuildFailed;
     };
     try session.writeStdout("mcc build: wrote ");
@@ -1634,6 +1682,34 @@ test "CompilationSession keeps parse context request scoped" {
     const module_b = try session_b.parseModuleOrReportMode(source, arena_b.allocator(), &diag_b, false);
     defer module_b.deinit(arena_b.allocator());
     try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, module_b.visibility_mode);
+}
+
+test "CompilationSession restores artifact metadata sidecar snapshots" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const allocator = std.testing.allocator;
+    const artifact_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/artifact", .{tmp.sub_path});
+    defer allocator.free(artifact_path);
+    const metadata_path = try artifactMetadataPath(allocator, artifact_path);
+    defer allocator.free(metadata_path);
+
+    var session = CompilationSession.init(allocator, std.testing.io);
+    try session.writeOutputPath(metadata_path, "old metadata");
+    var present_snapshot = try session.snapshotMetadataSidecar(metadata_path);
+    defer present_snapshot.deinit(allocator);
+    try session.writeOutputPath(metadata_path, "new metadata");
+    try session.restoreMetadataSidecar(metadata_path, present_snapshot);
+    const restored = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, metadata_path, allocator, .limited(1024));
+    defer allocator.free(restored);
+    try std.testing.expectEqualStrings("old metadata", restored);
+
+    try std.Io.Dir.cwd().deleteFile(std.testing.io, metadata_path);
+    var absent_snapshot = try session.snapshotMetadataSidecar(metadata_path);
+    defer absent_snapshot.deinit(allocator);
+    try session.writeOutputPath(metadata_path, "new metadata");
+    try session.restoreMetadataSidecar(metadata_path, absent_snapshot);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, metadata_path, .{}));
 }
 
 test {
