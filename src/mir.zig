@@ -1430,11 +1430,31 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
     }
 }
 
+pub fn validateDropGlueFactsForLowering(module: Module) error{InvalidMirDropGlueFacts}!void {
+    for (module.drop_glue_facts, 0..) |fact, index| {
+        if (fact.resource_type.len == 0 or fact.release_fn.len == 0) return error.InvalidMirDropGlueFacts;
+        if (!moduleHasConcreteFunction(module, fact.release_fn)) return error.InvalidMirDropGlueFacts;
+        for (module.drop_glue_facts[0..index]) |previous| {
+            if (std.mem.eql(u8, previous.resource_type, fact.resource_type)) return error.InvalidMirDropGlueFacts;
+            if (std.mem.eql(u8, previous.release_fn, fact.release_fn)) return error.InvalidMirDropGlueFacts;
+        }
+    }
+}
+
+fn moduleHasConcreteFunction(module: Module, name: []const u8) bool {
+    for (module.functions) |function| {
+        if (!std.mem.eql(u8, function.name, name)) continue;
+        return !function.is_extern;
+    }
+    return false;
+}
+
 pub const LoweringAdmissionError = error{
     InvalidMirRepresentationFacts,
     InvalidMirIntegerFacts,
     InvalidMirConstGetFacts,
     InvalidMirCallTargetFacts,
+    InvalidMirDropGlueFacts,
     InvalidMirTargetTypeFacts,
     StaleMirTargetTypeFacts,
     UnknownMirLoweringType,
@@ -1448,6 +1468,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateIntegerFactsForLowering(module);
     try validateConstGetFactsForLowering(module);
     try validateCallTargetFactsForLowering(module);
+    try validateDropGlueFactsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
 }

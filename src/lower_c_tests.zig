@@ -13759,7 +13759,7 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     module_mir.drop_glue_facts = saved_facts;
 
     const saved_fn = module_mir.drop_glue_facts[0].release_fn;
-    module_mir.drop_glue_facts[0].release_fn = "wrong_close_guard";
+    module_mir.drop_glue_facts[0].release_fn = "make_guard";
     defer module_mir.drop_glue_facts[0].release_fn = saved_fn;
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);

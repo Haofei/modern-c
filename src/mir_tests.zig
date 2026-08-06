@@ -4,6 +4,7 @@ const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
 const mir = @import("mir.zig");
+const test_support = @import("test_support.zig");
 
 const Block = mir.Block;
 const BlockId = mir.BlockId;
@@ -3937,6 +3938,40 @@ test "MIR records drop glue facts for auto-drop resources" {
     try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir drop_glue_fact resource_type=Ticket release_fn=close_ticket recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir drop_glue_fact resource_type=Wrapper release_fn=close_wrapper recorded=true") != null);
+}
+
+test "MIR drop glue fact admission rejects unknown and duplicate release facts" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void {
+        \\    g.id = 0;
+        \\}
+        \\fn use_guard() -> u32 {
+        \\    var g = make_guard();
+        \\    return g.id;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_drop_glue_fact_admission.mc", source);
+    defer parsed.deinit();
+
+    var unknown = try mir.build(std.testing.allocator, parsed.module);
+    defer unknown.deinit();
+    try std.testing.expectEqual(@as(usize, 1), unknown.drop_glue_facts.len);
+    unknown.drop_glue_facts[0].release_fn = "missing_close_guard";
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(unknown));
+
+    var duplicate = try mir.build(std.testing.allocator, parsed.module);
+    defer duplicate.deinit();
+    try std.testing.expectEqual(@as(usize, 1), duplicate.drop_glue_facts.len);
+    const original = duplicate.drop_glue_facts;
+    const forged = try std.testing.allocator.alloc(mir.DropGlueFact, 2);
+    forged[0] = original[0];
+    forged[1] = original[0];
+    duplicate.drop_glue_facts = forged;
+    std.testing.allocator.free(original);
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(duplicate));
 }
 
 test "MIR rejects duplicate call target facts" {
