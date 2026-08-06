@@ -1213,6 +1213,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/ownership_facts.zig": {
         "pub fn makeDropPointerCall": 0,
+        "pub fn movedLocalName": 0,
         "test \"auto-drop cleanup helpers recognize explicit release call shapes\"": 1,
     },
     "src/sema.zig": {
@@ -1284,6 +1285,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "defer_stack: std.ArrayList(ast.Expr)": 0,
         "defer_stack: std.ArrayList(DeferredCleanup)": 1,
         "try ownership_facts.makeDropPointerCall": 0,
+        "ownership_facts.movedLocalName": 0,
+        "fn directMovedLocalName(": 1,
         "self.comptime_module = declarations.moduleForComptimeEvaluation();": 0,
         "self.comptime_decls = declarations.declsForEarlyDeclarationScan();": 0,
         "self.comptime_decls = decls;": 1,
@@ -2085,6 +2088,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "defer_stack: std.ArrayList(ast.Expr)": 0,
         "defer_stack: std.ArrayList(DeferredCleanup)": 1,
         "try ownership_facts.makeDropPointerCall": 0,
+        "ownership_facts.movedLocalName": 0,
+        "fn directMovedLocalName(": 1,
         "try ctx.emitBackendNameAliases(module);": 0,
         "try ctx.emitBackendNameAliases();": 1,
         "fn emitBackendNameAliases(self: *LlvmEmitter, module: ast.Module) !void": 0,

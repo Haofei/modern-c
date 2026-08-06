@@ -58,14 +58,6 @@ pub fn autoDropPointerCleanup(expr: ast.Expr, auto_drop_fns_by_type: *const std.
     return .{ .fn_name = fn_name, .local_name = local_name };
 }
 
-pub fn movedLocalName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| movedLocalName(inner.*),
-        .ident => |ident| ident.text,
-        else => null,
-    };
-}
-
 pub fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .grouped => |inner| addressOfIdentName(inner.*),
@@ -200,5 +192,4 @@ test "auto-drop cleanup helpers recognize explicit release call shapes" {
     const cleanup = autoDropPointerCleanup(call, &map).?;
     try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
     try std.testing.expectEqualStrings("g", cleanup.local_name);
-    try std.testing.expectEqualStrings("g", movedLocalName(.{ .span = span, .kind = .{ .ident = local } }).?);
 }

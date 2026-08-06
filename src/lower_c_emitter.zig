@@ -2878,7 +2878,7 @@ pub const CEmitter = struct {
     }
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr) void {
-        const local_name = ownership_facts.movedLocalName(expr) orelse return;
+        const local_name = directMovedLocalName(expr) orelse return;
         self.cancelAutoDropForLocalName(local_name);
     }
 
@@ -8786,6 +8786,14 @@ pub const CEmitter = struct {
         return self.arrayLenTextForExpr(expr);
     }
 };
+
+fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| directMovedLocalName(inner.*),
+        .ident => |ident| ident.text,
+        else => null,
+    };
+}
 
 fn isSourceSpan(span: ast.Span) bool {
     return span.line != 0 and span.column != 0;

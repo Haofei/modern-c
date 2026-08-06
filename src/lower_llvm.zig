@@ -2920,7 +2920,7 @@ const LlvmEmitter = struct {
     }
 
     fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr) void {
-        const local_name = ownership_facts.movedLocalName(expr) orelse return;
+        const local_name = directMovedLocalName(expr) orelse return;
         self.cancelAutoDropForLocalName(local_name);
     }
 
@@ -10575,6 +10575,14 @@ const LlvmEmitter = struct {
 // module; these aliases keep the existing call sites in this file reading unchanged.
 const ResultSwitchPattern = switch_lower.ResultArmPattern;
 const TaggedUnionBinding = switch_lower.TaggedUnionArmBinding;
+
+fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| directMovedLocalName(inner.*),
+        .ident => |ident| ident.text,
+        else => null,
+    };
+}
 
 fn isSourceSpan(span: ast.Span) bool {
     return span.line != 0 and span.column != 0;
