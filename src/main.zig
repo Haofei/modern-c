@@ -135,6 +135,17 @@ const usage =
 const max_input_bytes = 64 * 1024 * 1024;
 const max_artifact_metadata_bytes = 512 * 1024 * 1024;
 
+const CompilationStageFailure = error{
+    CheckFailed,
+    LowerMirFailed,
+    VerifyFailed,
+    EmitCFailed,
+    BuildFailed,
+    EmitLlvmFailed,
+    EmitLayoutFailed,
+    EmitCStructFailed,
+};
+
 const CompilationSession = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -383,7 +394,7 @@ const CompilationSession = struct {
         diag: *diagnostics.Reporter,
         optimize: bool,
         render_errors: bool,
-        failure_error: anyerror,
+        failure_error: CompilationStageFailure,
     ) !ast.Module {
         const module = try self.parseModuleOrReportMode(source, allocator, diag, render_errors);
         if (diag.has_errors) {
@@ -404,7 +415,7 @@ const CompilationSession = struct {
         diag: *diagnostics.Reporter,
         optimize: bool,
         module_mir: *mir.Module,
-        failure_error: anyerror,
+        failure_error: CompilationStageFailure,
     ) !backend.VerifiedProgram {
         module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });
         errdefer module_mir.deinit();
@@ -1710,6 +1721,21 @@ test "CompilationSession restores artifact metadata sidecar snapshots" {
     try session.writeOutputPath(metadata_path, "new metadata");
     try session.restoreMetadataSidecar(metadata_path, absent_snapshot);
     try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, metadata_path, .{}));
+}
+
+test "CompilationSession diagnostic stage failures use a bounded error set" {
+    const allowed = [_]CompilationStageFailure{
+        error.CheckFailed,
+        error.LowerMirFailed,
+        error.VerifyFailed,
+        error.EmitCFailed,
+        error.BuildFailed,
+        error.EmitLlvmFailed,
+        error.EmitLayoutFailed,
+        error.EmitCStructFailed,
+    };
+    comptime std.debug.assert(@TypeOf(allowed[0]) == CompilationStageFailure);
+    try std.testing.expectEqual(@as(usize, 8), allowed.len);
 }
 
 test {
