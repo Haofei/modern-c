@@ -14,8 +14,8 @@
 //      the prior good image; a separate SUCCESS path commits the candidate.
 //   5. BUNDLE-METADATA-OK prints only if every assertion above held.
 //
-// Cryptographic RSA/SHA-256 exact-byte verification is tested separately. This gate
-// does not establish a verifier-to-loader byte binding and must not be called secure boot.
+// This gate does not establish a cryptographic verifier-to-loader byte binding
+// and must not be called a production boot-chain gate.
 
 import "tests/qemu/lib/test_report.mc";
 import "kernel/core/production_ops.mc";
@@ -138,8 +138,7 @@ export fn test_main() -> void {
         all_ok = false;
     }
 
-    // 3b. REJECT: missing signature metadata. Cryptographic signature validity
-    // is qualified separately by rsa-verify-test over exact bytes.
+    // 3b. REJECT: missing signature metadata.
     var missing: BundleHeader = bundle_header_init(.Kernel, GOOD_VERSION, EXPECTED_ABI, POLICY_VERSION, TRUSTED_KEY, img_hash, 0);
     if !is_reject_with(bundle_validate_metadata(&missing, .Kernel, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY), E_BADSIG) {
         uputs("BUNDLE-SIGNATURE-METADATA-FAIL\n");
@@ -153,7 +152,7 @@ export fn test_main() -> void {
         all_ok = false;
     }
 
-    // 3d. REJECT: version below the minimum (anti-rollback floor / downgrade attack).
+    // 3d. REJECT: version below the fixture's accepted range.
     var tooold: BundleHeader = bundle_header_init(.Kernel, 50, EXPECTED_ABI, POLICY_VERSION, TRUSTED_KEY, img_hash, SIG_LEN);
     if !is_reject_with(bundle_validate_metadata(&tooold, .Kernel, EXPECTED_ABI, MIN_VERSION, MAX_VERSION, TRUSTED_KEY), E_BADVERSION) {
         uputs("BUNDLE-MINVER-FAIL\n");

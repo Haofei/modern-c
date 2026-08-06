@@ -115,7 +115,7 @@ def main() -> None:
     assert_gates(
         module,
         ["kernel/core/production_ops.mc", "tests/qemu/proc/production_ops_demo.mc", "tests/qemu/lang/qjs_confined_runtime.mc", "tests/qemu/arch/qjs_smode_demo.mc"],
-        ["production-ops-test", "bundle-metadata-test", "rsa-verify-test", "app-run-test", "qjs-confined-test", "qjs-smode-confined-test"],
+        ["production-ops-test", "bundle-metadata-test", "app-run-test", "qjs-confined-test", "qjs-smode-confined-test"],
     )
     assert_checks(module, ["docs/compiler-production-readiness.md"], ["git diff --check"])
     docs_only = subprocess.run(
@@ -210,7 +210,7 @@ def main() -> None:
     assert_gates(
         module,
         ["tests/qemu/proc/production_ops_demo.mc"],
-        ["production-ops-test", "bundle-metadata-test", "rsa-verify-test", "app-run-test", "qjs-confined-test", "qjs-smode-confined-test"],
+        ["production-ops-test", "bundle-metadata-test", "app-run-test", "qjs-confined-test", "qjs-smode-confined-test"],
     )
     assert_gates(module, ["tools/toolchain/diagnostics-test.sh"], ["diagnostics-test"])
     assert_gates(module, ["tools/toolchain/mcc-cli-test.sh"], ["mcc-cli-test"])

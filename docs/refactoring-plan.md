@@ -44,7 +44,7 @@ boundary is stable:
 - LLVM as an equal production backend where facts are still incomplete;
 - self-host expansion beyond the declared bootstrap subset;
 - advanced LSP/indexing work that requires a persistent query service;
-- production kernel, Agent, secure boot, or real hardware claims;
+- production kernel, Agent, production boot-chain, or real hardware claims;
 - new vendored runtimes in the default production TCB.
 
 ## Active phases

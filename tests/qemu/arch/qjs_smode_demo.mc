@@ -91,7 +91,7 @@ export fn qjs_smode_build(image_base: usize, image_len: usize, region_base: usiz
     return qjs_smode_finish_build(app_build(image_base, image_len, region_base, region_len));
 }
 
-// Production-shaped S-mode agent startup: require the same signed-bundle admission as the
+// Production-shaped S-mode agent startup: require the same bundle-metadata admission as the
 // M-mode confined runtime before adding the supervisor-only S-mode mappings.
 export fn qjs_smode_build_admitted(image_base: usize, image_len: usize, region_base: usize, region_len: usize, expected_hash: u64) -> u64 {
     return qjs_smode_finish_build(app_build_agent_metadata_checked(image_base, image_len, region_base, region_len, expected_hash));

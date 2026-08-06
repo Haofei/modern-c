@@ -20,7 +20,7 @@
         "experimental_or_excluded": [
           "selfhost/",
           "production-kernel claims",
-          "secure-boot runtime admission",
+          "production boot-chain policy",
           "advanced incremental LSP",
           "QuickJS/WAMR runtime profiles"
         ]
@@ -196,7 +196,6 @@
         "agentos-test",
         "production-ops-test",
         "bundle-metadata-test",
-        "rsa-verify-test",
         "tcb-advisory-intake-test",
         "app-run-test",
         "qjs-confined-test",
@@ -220,13 +219,13 @@
         "blocking": [
           "kernel/",
           "platform profile",
-          "secure bundle loader",
+          "product bundle loader",
           "policy/audit persistence",
           "real-board validation"
         ],
         "experimental_or_excluded": [
           "QEMU-only qualification",
-          "metadata-only secure-boot demos",
+          "metadata-only boot-chain demos",
           "unreviewed third-party kernel components"
         ]
       },
@@ -241,7 +240,6 @@
         "visionfive2-readiness-test",
         "production-ops-test",
         "bundle-metadata-test",
-        "rsa-verify-test",
         "tcb-advisory-intake-test",
         "agent-e2e-test",
         "agentos-test"

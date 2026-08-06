@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 # Bundle-metadata admission + rollback gate. This deliberately does NOT claim secure
-# boot: cryptographic RSA/SHA-256 verification is qualified by rsa-verify-test, while
-# this QEMU fixture covers metadata policy and the A/B rollback state machine. The
-# verifier-to-loader exact-byte binding remains a separate integration requirement.
+# boot: this QEMU fixture covers metadata policy and the A/B rollback state machine.
 #
 # Usage: tools/fs/bundle-metadata-test.sh <path-to-mcc> [c|llvm]
 # Skips (exit 0) when the riscv toolchain or QEMU is unavailable.
@@ -45,7 +43,7 @@ echo "--------------------------"
 if printf '%s' "$OUT" | grep -q "BUNDLE-METADATA-ACCEPT" \
    && printf '%s' "$OUT" | grep -q "BUNDLE-ROLLBACK-OK" \
    && printf '%s' "$OUT" | grep -q "BUNDLE-METADATA-OK"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend enforced bundle metadata policy and rolled back a failed candidate under QEMU (cryptographic verification is qualified separately)"
+    echo "PASS: $TEST_NAME — $BACKEND backend enforced prototype bundle metadata policy and rolled back a failed candidate under QEMU"
     exit 0
 fi
 echo "FAIL: $TEST_NAME — expected BUNDLE-METADATA-ACCEPT, BUNDLE-ROLLBACK-OK and BUNDLE-METADATA-OK in kernel output"

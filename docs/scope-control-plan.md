@@ -35,11 +35,11 @@ summary.
 
 | Profile | Blocking scope | Non-blocking / experimental scope |
 |---|---|---|
-| `compiler-subset` | Parser/sema/MIR verifier, C backend reference path, diagnostics, source loading, C/LLVM differential for covered fixtures | Selfhost, kernel production claims, secure boot, advanced LSP, runtime TCB profiles |
+| `compiler-subset` | Parser/sema/MIR verifier, C backend reference path, diagnostics, source loading, C/LLVM differential for covered fixtures | Selfhost, kernel production claims, production boot-chain policy, advanced LSP, runtime TCB profiles |
 | `llvm-experimental` | LLVM verifier/object/differential smoke for supported fixtures | Full language-surface parity until typed MIR/fact boundaries are complete |
 | `selfhost-experimental` | Explicit bootstrap subset tests and fixpoint evidence | Any claim that selfhost is the production compiler or language authority |
 | `kernel-qemu` | QEMU boot/runtime workloads, kernel API model tests | Real hardware production support, power-loss/durable security claims |
-| `production-kernel` | Exact-byte bundle, persistent policy/audit, real hardware soak, external audit, minimal TCB | QEMU-only evidence, metadata-only secure-boot demos |
+| `production-kernel` | Exact-byte bundle, persistent policy/audit, real hardware soak, external audit, minimal TCB | QEMU-only evidence, metadata-only boot-chain demos |
 | `developer-tools` | Basic diagnostics, formatting, navigation smoke, LSP resource limits | Low-latency incremental service claims until a query DB / persistent compiler service exists |
 
 ## Immediate simplification rules

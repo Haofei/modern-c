@@ -81,7 +81,7 @@ The first production target should not try to provide:
 | L0: Development kernel | current | QEMU-gated kernel with real confinement and agent substrate | Existing `m0`/QEMU gates; confined QuickJS; broker ABI; S-mode path |
 | L1: Alpha appliance kernel | 1-3 months | One reference target with production-shaped I/O and agent loop | interrupt-driven virtio, brokered net fetch, stable async agent loop |
 | L2: Field pilot | 3-6 months | Runs on one real board under controlled deployment | board boot, UART/net/storage, watchdog, persistent audit/policy |
-| L3: Fixed-device production | 9-18 months | Safe to ship on one device class with rollback and operations | signed bundles, OTA, secure boot story, soak/fault tests, recovery |
+| L3: Fixed-device production | 9-18 months | Safe to ship on one device class with recovery and operations | OTA lifecycle, soak/fault tests, recovery |
 | L4: Multi-board platform | 18-36+ months | Reusable platform across several boards/architectures | board profiles, BSP matrix, cross-arch parity, sustained CI |
 
 These estimates assume focused engineering, a narrow product target, and no attempt to
@@ -122,7 +122,7 @@ hardening"; a few are genuinely thin. Current state, with evidence:
 | 6. Broker hardening | Exists, weak | `net_broker` policy+budget+audit; back-pressure (async `ok=8 rejected=4`); revoke/throttle/kill actuation gated. Gap: **persistent policy load, revocation propagation, retries, tracing**. |
 | 7. Networking | Mostly exists | **DNS exists** (`kernel/net/dns.mc`), TLS (BearSSL), TCP RX hardened (checksums + chunked drain). Gap: retransmit robustness, conn pooling, timeout control, hostile-packet corpus. (Review overstates DNS/TLS as needed.) |
 | 8. Observability | Partial | Audit/trace + record/checkpoint exist (`ipc_trace.mc`, `cap_audit`, provenance, `kernel/lib/record.mc`, `kernel/lib/checkpoint.mc`). Gap: **structured metrics, per-agent event timelines, deterministic replay**. |
-| 9. Update/packaging | Partial | Agent signature verify (`kernel/crypto/rsa_verify.mc`), `liveupdate.mc`. Gap: **signed kernel images, reproducible builds, OTA, rollback**. |
+| 9. Update/packaging | Partial | `liveupdate.mc`, prototype bundle metadata fixtures, reproducible build/package gates. Gap: **product OTA policy and recovery wiring**. |
 | 10. Platform contract | Partly documented | `platform-portability-plan.md`, `qemu-validation-checklist.md`; per-arch compiler-flag rules now explicit (aarch64 strict-align). Gap: **one frozen board profile**. |
 | 11. Security model doc | **Landed (2026-06-30)** | `docs/threat-model.md` written: assets, trust boundaries (TCB vs attacker-controlled), the isolation boundary with enforcing code, per-area threats→mitigations, guarantees G1–G5, accepted failure modes, and how each is gated. Keep it updated as §4.7 work lands. |
 | 12. Long-running lifecycle | Partial | Core lifecycle exists: `proc_spawn` / `proc_exit` / `proc_kill` (+ `proc_signals`) / `proc_reap` (parent reaps a dead child — crash cleanup) / pause/resume, and `liveupdate.mc` (version handoff). **Added (2026-06-30):** supervision mechanism — heartbeat-liveness detection (`proc_supervise`/`proc_heartbeat`/`proc_liveness_expired`/`proc_unsupervise`, per-slot deadline) AND a restart/crash-loop guard (`proc_restart_record`/`proc_restart_allowed`/`proc_restart_reset` — bound restarts so a slot that keeps dying is declared crash-looping instead of thrashing); both gated in `scheduler-test`. **Also landed:** `proc_supervise_step` — the per-slot supervisor verdict that folds liveness + restart-budget into `None`/`Restart`/`GiveUp` (the loop primitive: a supervisor runs it over its children each tick, actuating respawn/kill); gated. Gap: an actual running supervisor task wired to a timer + supervision trees + leases + persistent identity (policy on top of the now-complete mechanism). |
@@ -146,10 +146,10 @@ substantially more implemented + gated than first credited):
   - (8) structured **metrics + deterministic replay** (`kernel/core/metrics.mc`: saturating named
     counters + a bounded event log whose `evlog_replay` reconstructs byte-identical state) —
     `metrics-test` both backends. (Wiring into hot paths is the follow-up; the subsystem is proven.)
-  - (9) **bundle metadata admission + A/B rollback** (`bundle-metadata-test`, both backends):
+  - (9) **bundle metadata admission + A/B rollback fixture** (`bundle-metadata-test`, both backends):
     `bundle_validate_metadata` enforces kind/key/ABI/version/signature-length metadata and a failed
-    candidate rolls back. RSA-2048/SHA-256 is qualified separately by `rsa-verify-test`; an opaque
-    exact-byte verifier-to-loader binding remains open and this is not an end-to-end secure-boot gate.
+    candidate rolls back. This is not a production trust-chain gate and no cryptographic
+    bundle-authentication claim is made.
   - (12) supervision — mechanism (heartbeat-liveness + restart/crash-loop guard +
     `proc_supervise_step` verdict) AND a **running supervisor loop** (`proc_supervisor_scan` scans all
     supervised slots and actuates Restart/GiveUp) — `proc-supervisor-test` both backends.
@@ -166,13 +166,11 @@ substantially more implemented + gated than first credited):
     clean; `soak-test`, both backends), a **fuzz** gate (>200k adversarial bundle headers + 50k
     rollback op-sequences, deterministic seed; `bundle-fuzz-test`), and `docs/security-review.md`.
 
-- **Genuinely remaining:** (10) a real **board profile + hardware bring-up**, plus the secure-boot
-  integration described above. The latter requires canonical bundle parsing, cryptographic
-  verification, exact-byte loader consumption, and runtime identity audit; it is not closed merely
-  by the independent RSA and metadata gates. Local dev VM: `tools/run-kernel.sh` boots demos in QEMU.
+- **Genuinely remaining:** (10) a real **board profile + hardware bring-up** and product-specific
+  OTA/recovery policy. Local dev VM: `tools/run-kernel.sh` boots demos in QEMU.
 
-The point of this section is to distinguish qualified mechanisms from end-to-end claims. Metadata,
-rollback, and RSA primitives are gated, but secure-boot integration and real hardware remain open.
+The point of this section is to distinguish qualified mechanisms from end-to-end claims. Metadata
+and rollback fixtures are gated, but they are not a production trust chain.
 
 ## 4. Main production blockers
 
@@ -318,22 +316,17 @@ Acceptance gates:
 - Policy can throttle or kill a noisy agent.
 - Tests cover audit ring wraparound and storage-full behavior.
 
-### 4.4 Update, rollback, and trust chain
+### 4.4 Update and recovery lifecycle
 
 Current status:
 
-- The kernel has agent bundle and runtime direction, but production loader/update mechanics are
+- The kernel has agent bundle and runtime direction, but product loader/update mechanics are
   not complete.
-- The **signature-verification primitive exists**: `kernel/crypto/rsa_verify.mc` is a thin MC
-  binding over the vendored constant-time BearSSL "i31" engine for RSA-PKCS#1/SHA-256. The
-  `rsa-verify-test` gate (both backends, in m0) verifies a real RSA-2048 signature and rejects a
-  tampered signature and a wrong message. Crypto stays in the audited BearSSL library; MC only
-  marshals arguments.
 - `production-ops-test` gates bundle admission metadata: bundle kind/version, ABI version,
   policy version, key id, signature presence/status, rejected bad ABI, rejected wrong key, and
   two-slot rollback state after failed boot.
-- What remains for P4 is key management/rotation, auditing bundle identities, and wiring
-  RSA verification plus bundle admission into the loader before untrusted bundles run.
+- What remains for P4 is product OTA policy, auditing bundle identities, and wiring the selected
+  update flow into actual agent startup.
 
 Production target:
 
@@ -547,7 +540,7 @@ Goal: make update and trust-chain behavior shippable.
 Tasks:
 
 - Define bundle format for kernel, policy, and agent. **Header/admission seed exists.**
-- Add signature verification. **Crypto primitive exists; loader wiring remains.**
+- Add product update authentication if/when the kernel profile requires it. **Out of current language scope.**
 - Add version compatibility checks. **Admission seed exists.**
 - Add A/B or fallback update slot. **Two-slot rollback state exists.**
 - Add rollback after failed boot. **State transition gate exists.**
@@ -624,8 +617,8 @@ remain open — QEMU is the only validated platform today.
 - [ ] Policy persists across reboot.
 - [ ] Watchdog and reboot reason work.
 - [x] Watchdog/reboot-reason state records are gated.
-- [ ] Signed agent bundles exist.
-- [x] Signed-bundle admission metadata and rejection semantics are gated.
+- [ ] Product agent update policy exists.
+- [x] Bundle metadata rejection semantics are gated.
 - [ ] Update rollback works.
 - [x] Two-slot rollback state transition is gated.
 - [ ] Syscall and broker fuzz tests exist.
@@ -647,7 +640,7 @@ The schedule depends mostly on:
 - How narrow the first hardware target is.
 - Whether wireless is deferred.
 - Whether the product requires `exec` or only brokered file/network tools.
-- How much OTA/secure-boot infrastructure already exists outside the kernel.
+- How much OTA/update infrastructure already exists outside the kernel.
 - How strict the release bar is for certification, audit retention, and physical attack resistance.
 
 ## 8. Strategic guidance

@@ -74,7 +74,7 @@ failure modes we accept. It is the frame for the security-hardening work in §4.
 | Agent crash takes down kernel | fault-confinement: agent faults are contained to its AS | per-agent crash cleanup/reap (§3.1 #4) |
 | Agent forges/suppresses audit | audit written kernel-side (`ipc_trace`/`cap_audit`), agent cannot reach it | persist-across-reboot (§4.3) |
 | Hostile ELF traps the loader | segment bounds + pre-align overflow check → `BadSegment`, not trap (`elf_loader.mc`) | — |
-| Untrusted agent image | agent signature verify (`kernel/crypto/rsa_verify.mc`, BearSSL i31) | signed kernel images, reproducible builds, rollback (§4.4) |
+| Untrusted agent image | prototype bundle metadata admission + loader bounds checks | product-specific update authentication, reproducible builds, recovery policy (§4.4) |
 
 ## 5. Compiler as attack surface
 

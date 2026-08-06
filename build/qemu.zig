@@ -353,7 +353,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "block-persistent-audit-test", "Block-backed persistent policy/audit checkpoint: policy metadata and audited IPC events survive BlockDevice remount", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "block-persistent-audit-test" });
     _ = h.addScriptTest(ctx, "agent-abi-test", "Versioned agent SYS_SUBMIT/SYS_POLL ABI: request validation and stable typed completion status mapping", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-test" });
     _ = h.addScriptTest(ctx, "agent-abi-fuzz-test", "Adversarial agent SYS_SUBMIT/SYS_POLL ABI fuzz: validation precedence, typed events, and fail-closed syscall dispatch", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-fuzz-test" });
-    _ = h.addScriptTest(ctx, "production-ops-test", "Production ops primitives: signed-bundle metadata, rollback, watchdog/reboot reason, policy actuation", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "production-ops-test" });
+    _ = h.addScriptTest(ctx, "production-ops-test", "Production ops primitives: bundle metadata, rollback, watchdog/reboot reason, policy actuation", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "production-ops-test" });
 
     _ = h.addScriptTest(ctx, "netcap-test", "Capability-gated network egress: default-deny NetCap, audited+attributed allow/deny, attenuation only narrows (milestone #3)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "netcap-test" });
 
@@ -714,14 +714,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "bearssl-smoke-test", "Compute a SHA-256 vector via freestanding BearSSL and pull live virtio-rng entropy in a bare-metal riscv64 kernel under QEMU (Phase 1 TLS de-risking)", &.{ "bash", "tools/tls/bearssl-smoke-test.sh", "zig-out/bin/mcc", "c" });
 
-    // rsa-verify-test: the MC RSA-PKCS#1/SHA-256 signature-verify binding
-    // (kernel/crypto/rsa_verify.mc) over the constant-time BearSSL i31 engine — the
-    // signed-bundle / image-verification primitive (production plan P4). Host-based and
-    // deterministic; a real RSA-2048 signature must VERIFY while a tampered signature and a
-    // wrong message are REJECTED. Both backends, so a green run is the parity proof.
-    _ = h.addScriptTest(ctx, "rsa-verify-test", "Verify a real RSA-2048/SHA-256 signature (accept valid, reject tampered+wrong) via the MC BearSSL-i31 binding", &.{ "bash", "tools/crypto/rsa-verify-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-rsa-verify-test", "LLVM-backend RSA-2048/SHA-256 signature verify via the MC BearSSL-i31 binding", &.{ "bash", "tools/crypto/rsa-verify-test.sh", "zig-out/bin/mcc", "llvm" });
-
     // bearssl-smode-test revalidates the SAME freestanding BearSSL SHA-256 vector +
     // live virtio-rng entropy under REAL OpenSBI in S-mode (boot seam only: SBI
     // console/shutdown, sbi.ld, rdtime CSR; no `-bios none`). Deterministic — no
@@ -793,7 +785,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-soak-test", "Run the LLVM-lowered single-boot soak workload under QEMU", &.{ "bash", "tools/proc/soak-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "bundle-metadata-test", "Run bundle metadata admission + A/B rollback under QEMU (cryptographic verification is qualified separately)", &.{ "bash", "tools/fs/bundle-metadata-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "bundle-metadata-test", "Run prototype bundle metadata admission + A/B rollback under QEMU", &.{ "bash", "tools/fs/bundle-metadata-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-bundle-metadata-test", "Run LLVM-lowered bundle metadata admission + A/B rollback under QEMU", &.{ "bash", "tools/fs/bundle-metadata-test.sh", "zig-out/bin/mcc", "llvm" });
 

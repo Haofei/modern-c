@@ -29,8 +29,7 @@ Minimizing and pinning this set is the core of the security posture.
 | Brokers (the only path to external effect) | `kernel/net/net_broker.mc`, `kernel/fs/treefs.mc`, `kernel/agent/mcp.mc` | Capability + budget checks before any FS/net effect. |
 | Resource accounting | `kernel/core/ledger.mc`, `kernel/lib/resacct.mc` | Overflow-safe charge/release; fail-closed over-limit. |
 | Audit trail | `kernel/core/ipc_trace.mc`, `cap_audit` in `process.mc` | Kernel-side allow/deny + capability-use record, out of agent reach. |
-| Crypto | `kernel/crypto/rsa_verify.mc` + vendored BearSSL (i31) | Agent-image signature verify. |
-| OTA / boot admission | `kernel/core/production_ops.mc` | Bundle header validation, A/B rollback state machine, watchdog, reboot reason. |
+| OTA / update fixture | `kernel/core/production_ops.mc` | Bundle metadata validation, A/B rollback state machine, watchdog, reboot reason. |
 | Vendored engines in the TCB | WAMR (agent wasm), QuickJS (JS-on-wasm), BearSSL (TLS/crypto) | A bug here is a TCB bug; defense is vendoring discipline + gates, not runtime containment. |
 | Firmware / platform | OpenSBI (RISC-V), QEMU virt / real board | Below the kernel; assumed correct. |
 
@@ -142,26 +141,19 @@ Production kernel profiles still need a boot-time root lifecycle, delegation pol
 persistent audit identity before third-party kernel components can be treated as outside the
 mint TCB.
 
-### 2.9 OTA metadata / cryptographic primitive / rollback
+### 2.9 OTA metadata / rollback fixture
 
 `kernel/core/production_ops.mc` gates bundle metadata (magic, kind, ABI, version range,
 trusted key id, and signature-field presence) and implements the A/B rollback state
-machine. Creating a `VerifiedBundle` now also requires a positive signature-verification
-result from the caller; metadata-only validation cannot mint the token. The confined-agent
-bundle builder consumes that token through `elf_load_verified_bundle_for` instead of loading
-raw bytes after a hash-only metadata check. The metadata and rollback path is gated as
-`bundle-metadata-test` / `llvm-bundle-metadata-test`, while
-the BearSSL RSA-2048/SHA-256 primitive is qualified separately by `rsa-verify-test` /
-`llvm-rsa-verify-test`. The metadata surface is fuzzed over >200k adversarial headers +
+machine. Creating a `VerifiedBundle` requires the prototype admission API, and the confined-agent
+bundle builder consumes that token through `elf_load_verified_bundle_for` instead of loading raw
+bytes directly. The metadata and rollback path is gated as `bundle-metadata-test` /
+`llvm-bundle-metadata-test`; the metadata surface is fuzzed over >200k adversarial headers +
 50k rollback sequences (`bundle-fuzz-test`, §4).
 
-Residual — **production blocker:** these gates do not yet establish one opaque
-`VerifiedBundle` from canonical SHA-256 bytes, key policy, anti-rollback storage, and the
-actual loader/admission path. The FNV-1a-32 value used by the OTA/metadata fixtures is
-only a non-cryptographic transport checksum and MUST NOT be described as signed-image integrity.
-Until verifier, policy admission, loader consumption, and runtime identity audit are wired
-into one byte-bound path, the repository does not claim end-to-end secure boot. A
-reproducible-build determinism gate has **landed**
+Residual — **scope note:** these gates are kernel/update fixtures. They intentionally make no
+cryptographic bundle-authentication or production boot-chain claims.
+A reproducible-build determinism gate has **landed**
 (`reproducible-build-test`: byte-identical emitted C/LLVM across rebuilds); an OTA transport
 delivers + hash-verifies images (`ota-test`).
 
@@ -171,8 +163,8 @@ delivers + hash-verifies images (`ota-test`).
 
 1. **TCB bugs are undefended at runtime.** A defect in the compiler, WAMR, QuickJS, or BearSSL
    can break any guarantee. Defense is vendoring discipline + the differential/fuzz gates.
-2. **Secure boot remains open** — the RSA/SHA-256 primitive and metadata/rollback gates are
-   independent; an opaque exact-byte verifier-to-loader binding is still required (§2.9).
+2. **Production boot-chain policy is out of current language scope** — the metadata/rollback gates
+   remain prototype kernel fixtures, not a production trust chain (§2.9).
 3. **Availability is best-effort** — agent preemption has landed (§2.5), so the remaining risk is
    finer-grained / uniform per-agent CPU/memory budget enforcement, not preemption itself.
 4. **Policy/audit persistence + revocation** across reboot are not yet wired (§2.3, §2.7).
@@ -204,7 +196,7 @@ CI gates plus this review:
 
 These extend, not replace, the existing security gates (confined-agent family, broker
 allow+deny audit gates, `parser-fuzz-test`/`net-fuzz-test`, ELF/syscall hostile-input gates,
-`bundle-metadata-test`, `rsa-verify-test`, `ledger-test`, `proc-supervisor-test`).
+`bundle-metadata-test`, `ledger-test`, `proc-supervisor-test`).
 
 ---
 
@@ -225,11 +217,8 @@ An independent audit of the production kernel should cover, at minimum:
       bypass; confirm every external effect is gated and audited.
 - [ ] **Parsers:** re-fuzz DNS/TCP/IP/TLS/ELF with a larger hostile corpus + a coverage-guided
       fuzzer; look for over-reads the current `br_try_*` routing missed.
-- [ ] **OTA/boot:** construct an opaque byte-bound `VerifiedBundle`; canonicalize, hash and
-      verify the raw bundle; force policy admission and the ELF loader to consume that exact
-      verified payload; audit rollback and runtime image identity (§2.9).
-- [ ] **Crypto:** review `kernel/crypto/rsa_verify.mc` integration with BearSSL i31 (constant-time
-      assumptions, key-id trust, padding).
+- [ ] **OTA fixture:** audit the prototype metadata/recovery state machine for fail-closed
+      behavior, while keeping production boot-chain policy out of the current language scope (§2.9).
 - [ ] **Resource accounting:** confirm every allocation/broker/device path charges the ledger and
       that no path can leak or double-release; drive the soak gate longer.
 - [ ] **Audit trail:** review for suppress/forge resistance and add persistence.

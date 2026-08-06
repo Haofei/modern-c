@@ -546,11 +546,6 @@ pub fn register(ctx: *h.Ctx) void {
     // entropy (the TLS crypto stack) under REAL OpenSBI in S-mode. Deterministic (no
     // network egress), so gated in m0.
     m0_full_step.dependOn(ctx.cmd("bearssl-smode-test"));
-    // rsa-verify-test proves the MC signature-verify binding over BearSSL i31 (signed-bundle
-    // primitive, P4): a real RSA-2048/SHA-256 signature verifies; tampered + wrong-message
-    // are rejected. Host-based, deterministic, both backends.
-    m0_full_step.dependOn(ctx.cmd("rsa-verify-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-rsa-verify-test"));
     // https-smode-test revalidates the in-kernel REAL BearSSL TLS 1.2 handshake +
     // HTTPS GET under REAL OpenSBI in S-mode. Deterministic — the TLS peer is a
     // LOCAL python server over slirp loopback (no internet egress) — so gated in m0
@@ -829,7 +824,7 @@ pub fn register(ctx: *h.Ctx) void {
     // soak-test runs the single-boot soak workload (thousands of spawn/charge/supervise/reclaim/
     // reap cycles return to baseline; no leak, no counter-overflow trap) under QEMU.
     m0_full_step.dependOn(ctx.cmd("soak-test"));
-    // Metadata admission and rollback are distinct from RSA/SHA-256 byte verification.
+    // Metadata admission and rollback are prototype kernel fixtures, not a production trust chain.
     m0_full_step.dependOn(ctx.cmd("bundle-metadata-test"));
     // ota-test runs chunked OTA transport (kernel/core/ota) + admission + rollback end to end under QEMU.
     m0_full_step.dependOn(ctx.cmd("ota-test"));

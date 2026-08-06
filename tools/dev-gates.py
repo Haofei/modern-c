@@ -501,7 +501,7 @@ RULES: tuple[Rule, ...] = (
             "tools/lang/qjs-confined-test.sh",
             "tools/arch/qjs-smode-confined-test.sh",
         ),
-        ("production-ops-test", "bundle-metadata-test", "rsa-verify-test", "app-run-test", "qjs-confined-test", "qjs-smode-confined-test"),
+        ("production-ops-test", "bundle-metadata-test", "app-run-test", "qjs-confined-test", "qjs-smode-confined-test"),
         "agent-admission changes need bundle metadata, cryptographic verification, raw app loading, and the canonical M/S-mode confined runtimes",
     ),
     Rule(

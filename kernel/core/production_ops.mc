@@ -2,8 +2,8 @@
 //
 // These are host-testable, data-oriented pieces behind the production checklist: bundle
 // admission, rollback decision state, watchdog/reboot reason reporting, and policy actuation.
-// Hardware-specific reset and crypto verification remain behind callers, but the kernel-visible
-// state transitions are explicit and gated here.
+// Hardware-specific reset and product update authentication remain behind callers, but the
+// kernel-visible state transitions are explicit and gated here.
 
 import "std/math.mc";
 
@@ -38,13 +38,9 @@ pub struct BundleHeader {
     signature_len: usize,
 }
 
-// Opaque admission token for a bundle whose metadata, signature-verification
-// result, and exact image bytes have been checked together. Metadata-only
-// validation deliberately cannot create a `VerifiedBundle`: loader and rollback
-// consumers must receive a token whose byte range is bound to the same image
-// they will consume. The digest is still the FNV-era u64 image_hash bridge; the
-// cryptographic secure-boot path must replace that with a real SHA-256 digest
-// over immutable storage bytes without weakening the token shape.
+// Opaque admission token for a bundle whose prototype metadata and exact image
+// bytes have been checked together. This is a QEMU/kernel fixture boundary, not
+// a production signature or cryptographic trust-chain claim.
 pub linear opaque struct VerifiedBundle {
     kind: BundleKind,
     version: u64,
@@ -93,11 +89,8 @@ fn bundle_kind_matches(actual: BundleKind, expected: BundleKind) -> bool {
     }
 }
 
-// Validate canonical bundle metadata only. `signature_len != 0` means the header
-// has a signature-shaped field, not that the signature has been cryptographically
-// accepted. Only `bundle_verify_and_admit_image` can create a `VerifiedBundle`,
-// and it requires the caller to pass the result of the crypto verification seam.
-// Callers cannot inject a `.Valid` enum into this metadata state machine.
+// Validate bundle metadata only. `signature_len != 0` means the header has a
+// signature-shaped field; this fixture does not verify a cryptographic signature.
 pub fn bundle_validate_metadata(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32) -> Result<bool, BundleError> {
     if h.magic != BUNDLE_MAGIC {
         return err(.BadMagic);
