@@ -177,8 +177,8 @@ Work items:
 
 1. Close the exact-byte `VerifiedBundle` API so production load cannot express
    verify-A/load-B.
-2. Require an unforgeable root token or module-private API for capability/right
-   minting.
+2. Replace the prototype capability/right root tokens with production boot
+   authority provenance, delegation policy, and audit.
 3. Bind audit, rollback, signer identity, version, payload digest, and loaded
    image identity.
 4. Add vendored TCB advisory intake.

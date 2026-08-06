@@ -27,7 +27,9 @@ global g_rbuf: [512]u8;
 global g_verify: u32;
 
 fn storage_server() -> void {
-    var cap: Cap<usize> = cap_mint(usize, (&g_disk[0]) as usize); // granted the disk
+    var boot: BootAuthority = boot_authority_unchecked();
+    var cap: Cap<usize> = cap_mint(usize, &boot, (&g_disk[0]) as usize); // granted the disk
+    boot_authority_revoke(move boot);
     var running: bool = true;
     while running {
         var req: Message = message_zero();
@@ -46,7 +48,7 @@ fn storage_server() -> void {
             ipc_reply(&g_procs, &req, TAG_REPLY, 0, 0, 0);
         }
     }
-    cap_revoke(usize, cap);
+    cap_revoke(usize, move cap);
     proc_exit(&g_procs, 0);
 }
 
@@ -87,8 +89,10 @@ export fn block_server_demo(region_base: usize, region_len: usize) -> u32 {
     proc_table_init(&g_procs);
     install_idle(&g_procs); // wfi when nothing runnable
     g_verify = 0;
-    proc_spawn(&g_procs, alloc_stack(&heap), storage_server);
-    proc_spawn(&g_procs, alloc_stack(&heap), client);
+    let storage_stack: usize = alloc_stack(&heap);
+    proc_spawn(&g_procs, storage_stack, storage_server);
+    let client_stack: usize = alloc_stack(&heap);
+    proc_spawn(&g_procs, client_stack, client);
     var done: u32 = 0;
     while done < 2 {
         switch proc_wait(&g_procs, 0) {

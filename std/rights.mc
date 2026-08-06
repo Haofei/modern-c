@@ -8,9 +8,10 @@
 //     this module's associated functions (`impl Rights`), so code in OTHER modules cannot
 //     construct one with a struct literal `.{ .bits = X }` (that is `E_PRIVATE_FIELD`), nor
 //     read/write the field to mint authority. The only way to obtain or combine a `Rights`
-//     is through the `rights_*` API below. `rights_grant` (the full-authority
-//     mint) is the privileged root — by convention the kernel/bootstrap is the only caller,
-//     exactly as `cap_mint` is the privileged capability constructor.
+//     is through the `rights_*` API below. `rights_grant` / `rights_single` (the
+//     authority mints) require a `RightsAuthority` root token, so bootstrap code
+//     must make the privilege boundary explicit instead of relying on caller
+//     convention.
 //
 //   - WIDENED: there is NO operation that turns a bit on given an existing `Rights`. The
 //     only combinators that take a caller's `Rights` and produce another (`rights_attenuate`,
@@ -33,6 +34,32 @@ import "std/math.mc";
 
 pub opaque struct Rights {
     bits: u32,
+}
+
+pub linear opaque struct RightsAuthority {
+    marker: u32,
+}
+
+impl RightsAuthority {
+    fn mint() -> RightsAuthority {
+        return .{ .marker = 0x52494748 };
+    }
+    fn require(auth: *RightsAuthority) -> void {
+        if auth.marker == 0 {
+        }
+    }
+}
+
+// Privileged root creation seam. The current language has unsafe blocks but no
+// `unsafe fn` declaration syntax, so source-level gates audit calls to this
+// unchecked root. Ordinary code can attenuate existing rights but cannot mint
+// new authority without possessing this opaque linear token.
+pub fn rights_authority_unchecked() -> RightsAuthority {
+    return RightsAuthority.mint();
+}
+
+pub fn rights_authority_revoke(auth: RightsAuthority) -> void {
+    unsafe { forget_unchecked(auth); }
 }
 
 impl Rights {
@@ -95,16 +122,17 @@ pub fn rights_none() -> Rights {
     return Rights.none();
 }
 
-// PRIVILEGED full-authority mint. Constructs a `Rights` from a raw bit set — the single
-// point where authority is created. By convention only the kernel/bootstrap calls it at
-// setup, exactly as `cap_mint` is the privileged capability constructor. Everything
-// downstream can only attenuate what it is given.
-pub fn rights_grant(bits: u32) -> Rights {
+// PRIVILEGED full-authority mint. Constructs a `Rights` from a raw bit set — the
+// point where authority is created. Callers must possess the explicit root token;
+// everything downstream can only attenuate what it is given.
+pub fn rights_grant(auth: *RightsAuthority, bits: u32) -> Rights {
+    RightsAuthority.require(auth);
     return Rights.grant(bits);
 }
 
 // A single-right capability (right id = bit `b`, 0..31). A privileged mint, like grant.
-pub fn rights_single(b: u32) -> Rights {
+pub fn rights_single(auth: *RightsAuthority, b: u32) -> Rights {
+    RightsAuthority.require(auth);
     return Rights.single(b);
 }
 

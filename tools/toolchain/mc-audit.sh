@@ -5,7 +5,8 @@
 #   --mode unsafe        (S0.2) enforce + inventory the MC `unsafe` boundary
 #   --mode double-fetch  (U2)   flag double-fetch / TOCTOU on user memory
 #   --mode taint         (U3)   flag user-derived lengths/indices used without a bound check
-#   --mode capability-mint (K1) flag direct capability mint outside the approved TCB root
+#   --mode capability-mint (K1) flag direct capability/right mint or root authority
+#        creation outside the approved TCB roots
 #
 # These modes share the same awk machinery (comment/string `strip()`, brace-depth /
 # function-scope tracking, the `nth_arg`/`call_args` argument splitter, the
@@ -166,24 +167,38 @@ MC
       ;;
     capability-mint)
       cat > "$SELF_TMP/kernel/core/capability.mc" <<'MC'
-pub fn cap_mint(comptime R: type, resource: R) -> R { return resource; }
-pub fn rcap_mint(comptime R: type, resource: R, rights: u32) -> R { return resource; }
+pub linear opaque struct BootAuthority { marker: u32 }
+pub fn boot_authority_unchecked() -> BootAuthority { return .{ .marker = 1 }; }
+pub fn cap_mint(comptime R: type, auth: *BootAuthority, resource: R) -> R { return resource; }
+pub fn rcap_mint(comptime R: type, auth: *BootAuthority, resource: R, rights: u32) -> R { return resource; }
+MC
+      mkdir -p "$SELF_TMP/std"
+      cat > "$SELF_TMP/std/rights.mc" <<'MC'
+pub linear opaque struct RightsAuthority { marker: u32 }
+pub fn rights_authority_unchecked() -> RightsAuthority { return .{ .marker = 1 }; }
+pub fn rights_grant(auth: *RightsAuthority, bits: u32) -> u32 { return bits; }
+pub fn rights_single(auth: *RightsAuthority, bit: u32) -> u32 { return bit; }
 MC
       mkdir -p "$SELF_TMP/kernel/driver"
       cat > "$SELF_TMP/kernel/driver/bad_mint.mc" <<'MC'
 import "kernel/core/capability.mc";
+import "std/rights.mc";
 
-// NEGATIVE TEST (must be flagged): ordinary kernel code must not directly call the privileged
-// setup-time mint primitive. Authority should be delegated from the boot/TCB root instead.
+// NEGATIVE TEST (must be flagged): ordinary kernel code must not directly call the
+// privileged setup-time mint/root primitives. Authority should be delegated from
+// the boot/TCB root instead.
 export fn bad_driver_mint() -> usize {
-    return cap_mint(usize, 0x1000);
+    var boot: BootAuthority = boot_authority_unchecked();
+    var rights_root: RightsAuthority = rights_authority_unchecked();
+    let rights: u32 = rights_grant(&rights_root, 0x3);
+    return rcap_mint(usize, &boot, cap_mint(usize, &boot, 0x1000), rights);
 }
 MC
       ;;
   esac
   DIRS=("$SELF_TMP/kernel")
   [ "$MODE" = unsafe ] && DIRS=("$SELF_TMP/kernel" "$SELF_TMP/std")
-  [ "$MODE" = capability-mint ] && DIRS=("$SELF_TMP/kernel")
+  [ "$MODE" = capability-mint ] && DIRS=("$SELF_TMP/kernel" "$SELF_TMP/std")
 fi
 
 FILES=$(find "${DIRS[@]}" -name '*.mc' 2>/dev/null | sort)
@@ -573,19 +588,20 @@ function end_taint() {
 # ===================== MODE: capability-mint (K1) =====================
 
 function approved_capability_mint_file(file) {
-  return (file ~ /(^|\/)kernel\/core\/capability\.mc$/)
+  return (file ~ /(^|\/)kernel\/core\/capability\.mc$/ || file ~ /(^|\/)std\/rights\.mc$/)
 }
 
 function do_capability_mint(l, startfnr,   cur, call) {
   if (approved_capability_mint_file(FILENAME)) return
-  if (l ~ /(^|[^A-Za-z0-9_])fn[ \t]+(cap_mint|rcap_mint)[ \t]*\(/) return
   cur = l
-  while (match(cur, /(^|[^A-Za-z0-9_])(cap_mint|rcap_mint)[ \t]*\(/)) {
+  while (match(cur, /(^|[^A-Za-z0-9_])(cap_mint|rcap_mint|rights_grant|rights_single|boot_authority_unchecked|rights_authority_unchecked)[ \t]*\(/)) {
     call = substr(cur, RSTART, RLENGTH)
     if (call ~ /rcap_mint/) nrcapmint++
-    else ncapmint++
+    else if (call ~ /cap_mint/) ncapmint++
+    else if (call ~ /rights_grant|rights_single/) nrightsmint++
+    else nauthroot++
     findings++
-    printf("CAP-MINT  %s:%d  direct capability mint `%s` outside kernel/core/capability.mc; delegate from the boot/TCB root instead\n",
+    printf("CAP-MINT  %s:%d  direct capability/right mint `%s` outside the approved authority roots; delegate from the boot/TCB root instead\n",
            FILENAME, startfnr, trim(call)) > "/dev/stderr"
     cur = substr(cur, RSTART + RLENGTH)
   }
@@ -596,11 +612,13 @@ function end_capability_mint() {
   printf("scanned %d .mc file(s)\n\n", nfiles)
   printf("Unapproved direct mint call sites:\n")
   printf("  cap_mint                  %5d\n", ncapmint)
-  printf("  rcap_mint                 %5d\n\n", nrcapmint)
+  printf("  rcap_mint                 %5d\n", nrcapmint)
+  printf("  rights_grant/single       %5d\n", nrightsmint)
+  printf("  root authority creation   %5d\n\n", nauthroot)
   if (findings==0)
-    print "RESULT: clean — no production source directly calls capability mint outside the approved TCB root."
+    print "RESULT: clean — no production source directly calls capability/right mint or root authority creation outside the approved TCB roots."
   else
-    printf("RESULT: %d unapproved capability mint call(s) found (see CAP-MINT lines on stderr).\n", findings)
+    printf("RESULT: %d unapproved capability/right mint call(s) found (see CAP-MINT lines on stderr).\n", findings)
   print  "================================================================"
   print "__COUNT__=" findings > "/dev/stderr"
 }

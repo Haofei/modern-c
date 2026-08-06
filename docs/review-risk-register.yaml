@@ -113,11 +113,11 @@ risks:
     severity: high
     scope: kernel-capability
     status: open
-    admitted_subset_status: research-profile-only
+    admitted_subset_status: authority-token-gated-prototype
     blocks:
       - third-party-kernel-components
       - production-kernel
-    summary: Privileged capability/right mint APIs must require an unforgeable root token or become module-private.
+    summary: Privileged capability/right mint APIs now require explicit opaque root tokens and the source audit gates root creation; production boot authority provenance and delegation policy remain open.
 
   - id: SUPPLY-TCB-CVE-INTAKE
     severity: high

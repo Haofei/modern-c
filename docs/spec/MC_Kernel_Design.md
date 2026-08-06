@@ -424,18 +424,23 @@ The kernel owns *mechanism*; policy can be set externally (`proc_schedctl`).
 
 `kernel/core/capability.mc`:
 
-- **`Cap<R>`** — `opaque move struct`. Unforgeable (private field; only `cap_mint`
-  constructs), linear (`move` — single owner), revoked by consuming (`cap_revoke`).
+- **`BootAuthority`** — opaque linear setup token. Creating it is the audited TCB
+  root seam; ordinary code cannot mint capabilities just by importing the module.
+- **`Cap<R>`** — `opaque move struct`. Unforgeable (private field; only
+  `cap_mint(auth, ...)` constructs), linear (`move` — single owner), revoked by
+  consuming (`cap_revoke`).
 - **`RCap<R>`** — `Cap<R>` + opaque `Rights`. `rcap_allows(c, bit)` checks authority;
   **`rcap_attenuate(c, keep)` is the only derivation** — result = `parent ∩ keep`. **No
   widening operation exists in the API.**
 
 ### 12.2 Rights — GATED
 
-`std/rights.mc`: `opaque struct Rights { bits: u32 }`. Minting from raw bits is privileged
-(`rights_grant`); every other combinator is **narrow-only** (`rights_attenuate` = `∩`,
-`rights_without`, `rights_none`). `rights_subset_of` checks `child ⊆ parent`. Opacity makes
-"restore a dropped right" unrepresentable outside the module.
+`std/rights.mc`: `opaque struct Rights { bits: u32 }`. Minting from raw bits is
+privileged and requires a `RightsAuthority` root token (`rights_grant(auth, ...)`
+or `rights_single(auth, ...)`); every other combinator is **narrow-only**
+(`rights_attenuate` = `∩`, `rights_without`, `rights_none`). `rights_subset_of`
+checks `child ⊆ parent`. Opacity makes "restore a dropped right" unrepresentable
+outside the module.
 
 ### 12.3 Memory grants — GATED
 

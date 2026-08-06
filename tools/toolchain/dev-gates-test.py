@@ -245,7 +245,12 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/compiler-coverage-baseline.tsv"], ["compiler-coverage"])
     assert_route(module, ["docs/compiler-coverage.md"], ["compiler-coverage"], ["git diff --check"])
     assert_gates(module, ["tools/toolchain/lowering-cov-instrument.py"], ["lowering-coverage", "compiler-coverage"])
-    assert_gates(module, ["tools/toolchain/mc-audit.sh"], ["unsafe-audit", "double-fetch-audit", "taint-audit", "capability-mint-audit"])
+    assert_route(
+        module,
+        ["tools/toolchain/mc-audit.sh"],
+        ["unsafe-audit", "double-fetch-audit", "taint-audit", "capability-mint-audit"],
+        ["bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '"],
+    )
     assert_checks(
         module,
         ["tools/toolchain/unsafe-audit.sh"],

@@ -4,8 +4,8 @@
 //
 //   - unforgeable: `Cap` is a `linear opaque struct` (section 31), so its `resource` field is
 //     private to this module — outside code CANNOT construct one with a struct literal
-//     `.{ .resource = X }` (that is `E_PRIVATE_FIELD`). `cap_mint` is the only constructor,
-//     and it is the kernel's setup-time primitive, so possession is the audit point;
+//     `.{ .resource = X }` (that is `E_PRIVATE_FIELD`). `cap_mint` is the only public
+//     constructor, and it requires the explicit `BootAuthority` root token;
 //   - linear: a cap has exactly one owner and cannot be copied, so a process
 //     without the cap simply cannot name the resource — it must ask the server that
 //     holds it (via IPC). Transfer is explicit (move into a spawn or an IPC handoff).
@@ -19,6 +19,33 @@
 // rights (never widen) — the attenuated-subgrant property as a type law (hardening K1).
 
 import "std/rights.mc";
+
+pub linear opaque struct BootAuthority {
+    marker: u32,
+}
+
+impl BootAuthority {
+    fn mint() -> BootAuthority {
+        return .{ .marker = 0x424f4f54 };
+    }
+    fn require(auth: *BootAuthority) -> void {
+        if auth.marker == 0 {
+        }
+    }
+}
+
+// Privileged root creation seam. MC currently has unsafe blocks but not unsafe
+// function declarations, so the source audit gate restricts this unchecked root
+// to approved boot/TCB sites. Possessing the opaque linear token is required to
+// mint new caps; non-root holders can only use, attenuate, transfer, or revoke
+// capabilities they already received.
+pub fn boot_authority_unchecked() -> BootAuthority {
+    return BootAuthority.mint();
+}
+
+pub fn boot_authority_revoke(auth: BootAuthority) -> void {
+    unsafe { forget_unchecked(auth); }
+}
 
 pub linear opaque struct Cap<R> {
     resource: R,
@@ -36,9 +63,10 @@ impl Cap {
     }
 }
 
-// Grant a capability over `resource` (the kernel's setup-time primitive). Thin wrapper over
-// the privileged `Cap.mint` so the public name and call shape are unchanged.
-pub fn cap_mint(comptime R: type, resource: R) -> Cap<R> {
+// Grant a capability over `resource` (the kernel setup-time primitive). The explicit
+// authority parameter prevents ordinary imports of this module from being ambient mint roots.
+pub fn cap_mint(comptime R: type, auth: *BootAuthority, resource: R) -> Cap<R> {
+    BootAuthority.require(auth);
     return Cap.mint(R, resource);
 }
 
@@ -89,7 +117,8 @@ impl RCap {
 }
 
 // Mint a rights-bearing capability (kernel setup-time primitive).
-pub fn rcap_mint(comptime R: type, resource: R, rights: Rights) -> RCap<R> {
+pub fn rcap_mint(comptime R: type, auth: *BootAuthority, resource: R, rights: Rights) -> RCap<R> {
+    BootAuthority.require(auth);
     return RCap.mint(R, resource, rights);
 }
 

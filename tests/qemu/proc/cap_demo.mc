@@ -22,7 +22,9 @@ global g_reaped: u32;
 
 // The console driver server: holds the console capability, serves PRINT requests.
 fn console_server() -> void {
-    var cap: Cap<usize> = cap_mint(usize, UART_BASE); // granted the console at setup
+    var boot: BootAuthority = boot_authority_unchecked();
+    var cap: Cap<usize> = cap_mint(usize, &boot, UART_BASE); // granted the console at setup
+    boot_authority_revoke(move boot);
     var running: bool = true;
     while running {
         var req: Message = message_zero();
@@ -37,7 +39,7 @@ fn console_server() -> void {
             }
         }
     }
-    cap_revoke(usize, cap); // consume the (linear) capability before exiting
+    cap_revoke(usize, move cap); // consume the (linear) capability before exiting
     proc_exit(&g_procs, 0);
 }
 
@@ -60,8 +62,10 @@ export fn cap_demo(region_base: usize, region_len: usize) -> u32 {
     proc_table_init(&g_procs);
     install_idle(&g_procs); // wfi when nothing runnable
     g_reaped = 0;
-    proc_spawn(&g_procs, alloc_stack(&heap), console_server); // pid 1
-    proc_spawn(&g_procs, alloc_stack(&heap), client); // pid 2
+    let console_stack: usize = alloc_stack(&heap);
+    proc_spawn(&g_procs, console_stack, console_server); // pid 1
+    let client_stack: usize = alloc_stack(&heap);
+    proc_spawn(&g_procs, client_stack, client); // pid 2
     var done: u32 = 0;
     while done < 2 {
         switch proc_wait(&g_procs, 0) {

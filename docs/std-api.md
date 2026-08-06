@@ -11,7 +11,7 @@ The extractor is static: it records `pub`/`export` function signatures, public c
 public type declarations, and local types named by public declarations.
 
 Total modules: **41**.
-Total public functions: **354**.
+Total public functions: **356**.
 Total public constants: **6**.
 Total public type declarations: **46**.
 Total referenced local types: **15**.
@@ -295,13 +295,13 @@ Source: `std/collections/arc.mc`
 | Signature | Source |
 |---|---|
 | <code>pub fn arc_new(comptime T: type, a: *mut dyn Allocator, value: T) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:31` |
-| <code>pub fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:41` |
-| <code>pub fn arc_clone_from_parts(comptime T: type, block: PAddr, allocator: *mut dyn Allocator) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:50` |
-| <code>pub fn arc_clone(comptime T: type, h: *Arc&lt;T&gt;) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:68` |
-| <code>pub fn arc_get(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *const T</code> | `std/collections/arc.mc:74` |
-| <code>pub fn arc_get_mut(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *mut T</code> | `std/collections/arc.mc:87` |
-| <code>pub fn arc_count(comptime T: type, h: *Arc&lt;T&gt;) -&gt; u32</code> | `std/collections/arc.mc:96` |
-| <code>pub fn arc_drop(comptime T: type, h: Arc&lt;T&gt;) -&gt; bool</code> | `std/collections/arc.mc:104` |
+| <code>pub fn arc_new_uninit(comptime T: type, a: *mut dyn Allocator) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:44` |
+| <code>pub fn arc_clone_from_parts(comptime T: type, block: PAddr, allocator: *mut dyn Allocator) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:56` |
+| <code>pub fn arc_clone(comptime T: type, h: *Arc&lt;T&gt;) -&gt; Arc&lt;T&gt;</code> | `std/collections/arc.mc:77` |
+| <code>pub fn arc_get(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *const T</code> | `std/collections/arc.mc:83` |
+| <code>pub fn arc_get_mut(comptime T: type, h: *Arc&lt;T&gt;) -&gt; *mut T</code> | `std/collections/arc.mc:96` |
+| <code>pub fn arc_count(comptime T: type, h: *Arc&lt;T&gt;) -&gt; u32</code> | `std/collections/arc.mc:112` |
+| <code>pub fn arc_drop(comptime T: type, h: Arc&lt;T&gt;) -&gt; bool</code> | `std/collections/arc.mc:123` |
 
 ## `std/collections/dynarray`
 
@@ -690,22 +690,24 @@ Source: `std/rights.mc`
 
 | Signature | Source |
 |---|---|
-| <code>pub opaque struct Rights</code> | `std/rights.mc:34` |
+| <code>pub opaque struct Rights</code> | `std/rights.mc:35` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>pub fn rights_none() -&gt; Rights</code> | `std/rights.mc:94` |
-| <code>pub fn rights_grant(bits: u32) -&gt; Rights</code> | `std/rights.mc:102` |
-| <code>pub fn rights_single(b: u32) -&gt; Rights</code> | `std/rights.mc:107` |
-| <code>pub fn rights_attenuate(r: Rights, keep: Rights) -&gt; Rights</code> | `std/rights.mc:114` |
-| <code>pub fn rights_attenuate_mask(r: Rights, keep_bits: u32) -&gt; Rights</code> | `std/rights.mc:120` |
-| <code>pub fn rights_without(r: Rights, b: u32) -&gt; Rights</code> | `std/rights.mc:125` |
-| <code>pub fn rights_allows(r: Rights, b: u32) -&gt; bool</code> | `std/rights.mc:130` |
-| <code>pub fn rights_subset_of(child: Rights, parent: Rights) -&gt; bool</code> | `std/rights.mc:137` |
-| <code>pub fn rights_is_empty(r: Rights) -&gt; bool</code> | `std/rights.mc:142` |
-| <code>pub fn rights_eq(a: Rights, b: Rights) -&gt; bool</code> | `std/rights.mc:147` |
+| <code>pub fn rights_authority_unchecked() -&gt; RightsAuthority</code> | `std/rights.mc:57` |
+| <code>pub fn rights_authority_revoke(auth: RightsAuthority) -&gt; void</code> | `std/rights.mc:61` |
+| <code>pub fn rights_none() -&gt; Rights</code> | `std/rights.mc:121` |
+| <code>pub fn rights_grant(auth: *RightsAuthority, bits: u32) -&gt; Rights</code> | `std/rights.mc:128` |
+| <code>pub fn rights_single(auth: *RightsAuthority, b: u32) -&gt; Rights</code> | `std/rights.mc:134` |
+| <code>pub fn rights_attenuate(r: Rights, keep: Rights) -&gt; Rights</code> | `std/rights.mc:142` |
+| <code>pub fn rights_attenuate_mask(r: Rights, keep_bits: u32) -&gt; Rights</code> | `std/rights.mc:148` |
+| <code>pub fn rights_without(r: Rights, b: u32) -&gt; Rights</code> | `std/rights.mc:153` |
+| <code>pub fn rights_allows(r: Rights, b: u32) -&gt; bool</code> | `std/rights.mc:158` |
+| <code>pub fn rights_subset_of(child: Rights, parent: Rights) -&gt; bool</code> | `std/rights.mc:165` |
+| <code>pub fn rights_is_empty(r: Rights) -&gt; bool</code> | `std/rights.mc:170` |
+| <code>pub fn rights_eq(a: Rights, b: Rights) -&gt; bool</code> | `std/rights.mc:175` |
 
 ## `std/scan`
 

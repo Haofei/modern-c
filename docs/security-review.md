@@ -130,7 +130,19 @@ captured too). This is guarantee **G5**.
 Residual: **persist-across-reboot** of the audit trail is not yet done (threat-model §4.3);
 today it is in-memory.
 
-### 2.8 OTA metadata / cryptographic primitive / rollback
+### 2.8 Capability/right mint roots
+
+`Cap` / `RCap` remain opaque linear capability tokens, but minting is no longer ambient:
+`cap_mint` and `rcap_mint` require a `BootAuthority` token, while `rights_grant` and
+`rights_single` require a `RightsAuthority` token. The source audit gate flags direct
+capability/right mint calls and root-authority creation outside the approved TCB root files.
+
+Residual — **production blocker:** root-authority provenance is still a prototype seam.
+Production kernel profiles still need a boot-time root lifecycle, delegation policy, and
+persistent audit identity before third-party kernel components can be treated as outside the
+mint TCB.
+
+### 2.9 OTA metadata / cryptographic primitive / rollback
 
 `kernel/core/production_ops.mc` gates bundle metadata (magic, kind, ABI, version range,
 trusted key id, and signature-field presence) and implements the A/B rollback state
@@ -160,7 +172,7 @@ delivers + hash-verifies images (`ota-test`).
 1. **TCB bugs are undefended at runtime.** A defect in the compiler, WAMR, QuickJS, or BearSSL
    can break any guarantee. Defense is vendoring discipline + the differential/fuzz gates.
 2. **Secure boot remains open** — the RSA/SHA-256 primitive and metadata/rollback gates are
-   independent; an opaque exact-byte verifier-to-loader binding is still required (§2.8).
+   independent; an opaque exact-byte verifier-to-loader binding is still required (§2.9).
 3. **Availability is best-effort** — agent preemption has landed (§2.5), so the remaining risk is
    finer-grained / uniform per-agent CPU/memory budget enforcement, not preemption itself.
 4. **Policy/audit persistence + revocation** across reboot are not yet wired (§2.3, §2.7).
@@ -215,7 +227,7 @@ An independent audit of the production kernel should cover, at minimum:
       fuzzer; look for over-reads the current `br_try_*` routing missed.
 - [ ] **OTA/boot:** construct an opaque byte-bound `VerifiedBundle`; canonicalize, hash and
       verify the raw bundle; force policy admission and the ELF loader to consume that exact
-      verified payload; audit rollback and runtime image identity (§2.8).
+      verified payload; audit rollback and runtime image identity (§2.9).
 - [ ] **Crypto:** review `kernel/crypto/rsa_verify.mc` integration with BearSSL i31 (constant-time
       assumptions, key-id trust, padding).
 - [ ] **Resource accounting:** confirm every allocation/broker/device path charges the ledger and

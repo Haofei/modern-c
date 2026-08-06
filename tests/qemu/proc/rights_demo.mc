@@ -9,14 +9,16 @@ import "kernel/core/capability.mc";
 
 export fn rights_run() -> u32 {
     var pass: u32 = 1;
+    var rights_root: RightsAuthority = rights_authority_unchecked();
+    var boot: BootAuthority = boot_authority_unchecked();
 
     // Privileged root mint: full authority over rights {0,1,2,3}.
-    let parent: Rights = rights_grant(0xF);
+    let parent: Rights = rights_grant(&rights_root, 0xF);
     if !rights_allows(parent, 0) { pass = 0; }
     if !rights_allows(parent, 3) { pass = 0; }
 
     // Attenuation NARROWS: parent {0,1,2,3} ∩ keep {0,1} = child {0,1}.
-    let child: Rights = rights_attenuate(parent, rights_grant(0x3));
+    let child: Rights = rights_attenuate(parent, rights_grant(&rights_root, 0x3));
     if !rights_allows(child, 0) { pass = 0; }
     if !rights_allows(child, 1) { pass = 0; }
     if rights_allows(child, 2) { pass = 0; }   // dropped
@@ -48,12 +50,12 @@ export fn rights_run() -> u32 {
 
     // ----- rights-bearing capability: narrow-only delegation over a resource -----
     // Mint a cap over a fake MMIO base with rights {0,1,2,3}.
-    let cap: RCap<usize> = rcap_mint(usize, 0x1000_0000, rights_grant(0xF));
+    let cap: RCap<usize> = rcap_mint(usize, &boot, 0x1000_0000, rights_grant(&rights_root, 0xF));
     if !rcap_allows(usize, &cap, 2) { pass = 0; }
     let cap_rights: Rights = rcap_rights(usize, &cap);
 
     // Delegate a NARROWED sub-cap: rights ∩ {0,1} = {0,1}. Consumes the parent cap.
-    let sub: RCap<usize> = rcap_attenuate(usize, cap, rights_grant(0x3));
+    let sub: RCap<usize> = rcap_attenuate(usize, move cap, rights_grant(&rights_root, 0x3));
     if !rcap_allows(usize, &sub, 0) { pass = 0; }
     if rcap_allows(usize, &sub, 2) { pass = 0; }  // narrowed away
     // The resource is unchanged by attenuation; only the rights shrank.
@@ -61,7 +63,9 @@ export fn rights_run() -> u32 {
     // The sub-cap's rights ⊆ the original cap's rights (parent ⊇ child).
     if !rights_subset_of(rcap_rights(usize, &sub), cap_rights) { pass = 0; }
 
-    rcap_revoke(usize, sub); // consume the linear cap
+    rcap_revoke(usize, move sub); // consume the linear cap
+    boot_authority_revoke(move boot);
+    rights_authority_revoke(move rights_root);
 
     return pass;
 }
