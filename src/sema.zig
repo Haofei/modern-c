@@ -255,6 +255,7 @@ fn isReservedCBackendPrefixName(name: []const u8) bool {
 
 fn isCBackendReservedLocalName(name: []const u8) bool {
     return isCBackendRuntimeHelperName(name) or
+        isReservedCBackendPrefixName(name) or
         std.mem.startsWith(u8, name, "mc_tmp") or
         std.mem.startsWith(u8, name, "mc_acc") or
         std.mem.startsWith(u8, name, "mc_xs") or

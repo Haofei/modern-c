@@ -77,8 +77,30 @@ fn reject_reserved_param(mc_checked_add_u32: u32) -> u32 {
     return 0;
 }
 
+// EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
+fn reject_reserved_param_prefix(mc_user_param: u32) -> u32 {
+    return 0;
+}
+
+// EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
+fn reject_reserved_param_upper_prefix(MC_USER_PARAM: u32) -> u32 {
+    return 0;
+}
+
 fn reject_reserved_local() -> u32 {
     // EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
     let mc_tmp0: u32 = 1;
+    return 0;
+}
+
+fn reject_reserved_local_prefix() -> u32 {
+    // EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
+    let mc_user_local: u32 = 1;
+    return 0;
+}
+
+fn reject_reserved_local_upper_prefix() -> u32 {
+    // EXPECT_ERROR: E_RESERVED_C_IDENTIFIER
+    let MC_USER_LOCAL: u32 = 1;
     return 0;
 }

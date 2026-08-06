@@ -2090,13 +2090,14 @@ with one known `getelementptr inbounds` exception on the va_list path,
   sites propagate as raw Zig errors out of `main` (`src/main.zig:558-562,634-638`) —
   loud but undebuggable in a 476-file std/kernel codebase. Fix: thread the Reporter
   into backends; attach spans at bailout sites. Effort M (mechanical).
-- **[P2] C identifier collision surface.** `isCReservedWord` covers C11 + a few
-  extras (`src/lower_c_type.zig:294-314`) but the prelude includes
-  `<stdint.h>/<limits.h>/<stddef.h>`, and user identifiers like `uint32_t`,
-  `offsetof`, GNU/C23 keywords, or `mc_`-prefixed names share the emitted namespace
-  — mostly loud `-Werror` failures with confusing errors; a nested shadowing of an
-  `mc_tmpN` name is the quiet corner. Fix: extend the reserved list; have sema
-  reserve `mc_`/`MC_` prefixes. Effort S.
+- **[P2] C identifier collision surface.** **fixed for the generated-helper
+  namespace**; sema rejects ordinary top-level declarations, parameters, and
+  locals using C-prelude/header spellings or the backend-reserved `mc_` / `MC_`
+  prefixes before C emission. Explicit `extern`/exported entry points keep their
+  ABI escape hatch, so runtime hooks such as `mc_malloc` remain expressible while
+  ordinary source bindings cannot collide with `mc_tmp*`, `mc_trap_*`, slice/dyn
+  typedefs, or MC prelude macros. `tests/spec/c_identifier_hygiene.mc` locks the
+  bad cases.
 - **[P2] Targets are hardcoded 64-bit little-endian** (`usize`/addr types fixed at 8
   bytes, `src/layout.zig:101-114`; `TargetArch` = riscv64/x86_64/aarch64,
   `src/backend.zig:44-48`; endianness implicit). Fine as a scoped v0 decision;
