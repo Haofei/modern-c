@@ -1782,6 +1782,23 @@ test "scoped borrow ends at lexical block before move" {
     try std.testing.expect(!reporter.has_errors);
 }
 
+test "scoped borrow aliases of ordinary locals remain usable" {
+    const source =
+        \\struct Cell { value: u32 }
+        \\fn use_plain_borrow() -> u32 {
+        \\    var c: Cell = .{ .value = 0 };
+        \\    let p: *mut Cell = borrow mut c;
+        \\    p.value = 2;
+        \\    return p.value;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "plain_borrow_alias.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+    try std.testing.expect(!reporter.has_errors);
+}
+
 test "shared borrow cannot satisfy mutable pointer targets" {
     const source =
         \\struct Cell { value: u32 }

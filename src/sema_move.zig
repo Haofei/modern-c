@@ -5286,7 +5286,7 @@ fn aliasSlotReferentMoved(slot: MoveSlot, state: *const MoveState) bool {
 
 fn referentPlaceMoved(place: MovePlace, state: *const MoveState) bool {
     if (rootMoveSlotForPlace(place, state)) |root| {
-        if (!root.live) return true;
+        if (!root.type_only and !root.live) return true;
     }
     return stateHasMovedPlaceChildOrConflict(place, state);
 }
