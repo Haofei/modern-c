@@ -53,6 +53,10 @@ jobs:
           sudo apt-get install -y clang-18 lld-18 llvm-18 qemu-system-arm qemu-system-misc qemu-system-x86
           echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
 
+      - name: Assert qualified tool versions
+        shell: bash
+        run: bash tools/ci/assert-toolchain-versions.sh
+
       - name: Derive release metadata
         id: meta
         shell: bash

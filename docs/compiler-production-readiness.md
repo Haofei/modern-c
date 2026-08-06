@@ -2269,11 +2269,12 @@ serially; honest self-documentation of limits).
   Define: CI green (both jobs) + Docker `m0` + `riscv-qemu-validation` + N-hour
   rotating-seed fuzz + coverage no-regress + reproducible-build — as *the* release
   checklist. Effort S (checklist), M (automation).
-- **[P1] Single unpinned toolchain leg.** Bare `apt-get install clang lld llvm
-  qemu-system-*` on `ubuntu-latest` and in the Dockerfile — an image/LLVM bump
-  silently changes what green means; the version-print step asserts nothing. Fix:
-  pin the LLVM major, assert printed versions, add one matrix leg on the next major.
-  Effort M.
+- **[P1] Single unpinned toolchain leg.** **fixed for the qualified major**;
+  Linux and release workflows install versioned LLVM 18 packages on Ubuntu 24.04,
+  macOS uses Homebrew `llvm@18`, the Dockerfile asserts the same LLVM major, and
+  `tools/ci/assert-toolchain-versions.sh` now makes CI/release fail if Zig is not
+  `0.16.0` or the selected LLVM tools do not report `MC_LLVM_MAJOR`. Apt/Homebrew
+  microversions remain documented supply-chain inputs, not silent major drift.
 - **[P1] Merge discipline is convention, not enforcement.** No git hooks, no branch
   protection evident, single author committing to master at ~44 commits/day; CI
   validates after the fact; host-side runs silently skip all LLVM/QEMU gates. Fix:
