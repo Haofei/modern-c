@@ -115,17 +115,17 @@ hardening"; a few are genuinely thin. Current state, with evidence:
 | Area | Status | Evidence / gap |
 | --- | --- | --- |
 | 1. Preemptive scheduling | **Mostly done** | Correction (review and my first pass both understated this): **real timer-driven preemption already exists and is gated** — `preempt_demo`/`preempt-test` (both backends) runs three never-yielding threads that the timer ISR (`timer_preempt` → `sched_yield` from the trap, full frame preserved by the asm vector) rotates through; **per-agent CPU budget** is enforced (`wasm-watchdog-test`: the machine-timer watchdog preempts + KILLS a runaway agent); priorities/quantum/fair-share/throttle (`proc_sched.mc`, gated `scheduler-test`/`fairsched`); cancellation (`AGENT_OP_CANCEL`, `qjs-cancel-test`). **Added (2026-06-30):** a process-level (ProcTable) quantum→`need_resched` decision layer (`proc_preempt_tick`/`_pending`/`_clear`/`_point`) so the agent scheduler has a voluntary-preemption-point path tied to quantum (gated `scheduler-test`). **Landed (2026-06-30):** `agent-preempt-test` (both backends) — three never-yielding ProcTable processes are rotated by the CLINT timer ISR (which runs the irq-safe `proc_preempt_tick`; the switch happens at a safe point), printing A/B/C + AGENT-PREEMPT-OK. Preemption is now proven for agents, not just kernel threads. #1 is complete. |
-| 2. Stable agent ABI | Mostly done | Correction: it IS versioned — `AGENT_ABI_VERSION`, `version` fields on req/event structs, `agent_abi_validate_req` rejects a mismatch with `badver` (gated: `agent_abi_demo.mc`), typed `AgentAbiError` status codes, a `CANCEL` op, `abi-consistency-test` guards syscall-number drift across kernel/userspace, and `liveupdate_demo` exercises a version transition. **Landed (2026-06-30):** the versioning/compat policy is now written in `agent_abi.mc` (single monotonic wire version; what forces a bump; status/op-set rules; the pair-kernel-with-agents deployment model). |
+| 2. Stable agent ABI | Mostly done | Correction: it IS versioned — `AGENT_ABI_VERSION`, `version` fields on req/event structs, `agent_abi_validate_req` rejects a mismatch with `badver` (gated: `agent_abi_demo.mc`), typed `AgentAbiError` status codes, a `CANCEL` op, and `abi-consistency-test` guards syscall-number drift across kernel/userspace. **Landed (2026-06-30):** the versioning/compat policy is now written in `agent_abi.mc` (single monotonic wire version; what forces a bump; status/op-set rules; the pair-kernel-with-agents deployment model). |
 | 3. Durable storage | In progress | KV/blob/fs + `persistent_audit.mc`, `block_persistent_audit.mc`. **Landed (2026-06-30):** a real **virtio-blk write path** (`blk_write` + full-sector `blk_read_into`) and a **persist-across-reboot gate** — `blk-persist-test` (both backends) boots QEMU twice against the same disk image: a sentinel written on boot 1 is read back on a fresh boot 2 (RAM cleared, disk survives). Durable storage now demonstrably survives a real reboot. **Also landed:** `impl BlockDevice for BlkDevice` (in `virtio_blk.mc`, beside the type per the orphan-impl rule) + `blk-audit-persist-test` (both backends) — a `block_persistent_audit` POLICY checkpoint written on boot 1 is loaded + field-verified on a fresh boot 2 (durable policy state survives reboot). **Also landed:** `blk-audit-frame-persist-test` (both backends) — the audit FRAME (drained IpcTrace events) is captured to virtio-blk on boot 1 and field-verified on a fresh boot 2. Policy AND audit now survive a real reboot — #3's core is complete. **Remaining (lower priority):** journaling/CRC, compaction, schema migration. |
 | 4. Isolation boundary | **Most mature** | Confined U-mode Sv39 (kernel unmapped) + WAMR sandbox + deterministic fuel, S-mode + cross-arch. Gap: **per-agent crash cleanup/reap**. (Review overstates this as missing.) |
 | 5. Resource accounting | Mostly done | Per-dimension budgets are enforced AND gated: CPU (`wamr-fuel-test`, `wasm-watchdog-test`), memory (`wasm-memcap-test`), network requests (`NetCap.requests_left`), tool/output quota (`quota-probe-test`, `qjs/wasm-quota-agent-test`) — multiple backends. **Landed (2026-06-30):** typed `NoMem` on the DMA path — `dma.try_alloc -> Result<_, DmaError>` + `mc_dma_alloc_base_try` across all providers (fail-closed with a typed error instead of trapping on exhaustion); gated `dma-try-test`. Gap: a **single unified accounting/quota model** spanning all dimensions (incl. file handles + spawned tasks). |
 | 6. Broker hardening | Exists, weak | `net_broker` policy+budget+audit; back-pressure (async `ok=8 rejected=4`); revoke/throttle/kill actuation gated. Gap: **persistent policy load, revocation propagation, retries, tracing**. |
 | 7. Networking | Mostly exists | **DNS exists** (`kernel/net/dns.mc`), TLS (BearSSL), TCP RX hardened (checksums + chunked drain). Gap: retransmit robustness, conn pooling, timeout control, hostile-packet corpus. (Review overstates DNS/TLS as needed.) |
 | 8. Observability | Partial | Audit/trace + record/checkpoint exist (`ipc_trace.mc`, `cap_audit`, provenance, `kernel/lib/record.mc`, `kernel/lib/checkpoint.mc`). Gap: **structured metrics, per-agent event timelines, deterministic replay**. |
-| 9. Update/packaging | Partial | `liveupdate.mc`, prototype bundle metadata fixtures, reproducible build/package gates. Gap: **product OTA policy and recovery wiring**. |
+| 9. Update/packaging | External product scope | Reproducible build/package gates remain in the toolchain. Kernel OTA/live-update fixtures have been removed from the current language-oriented kernel scope. |
 | 10. Platform contract | Partly documented | `platform-portability-plan.md`, `qemu-validation-checklist.md`; per-arch compiler-flag rules now explicit (aarch64 strict-align). Gap: **one frozen board profile**. |
 | 11. Security model doc | **Landed (2026-06-30)** | `docs/threat-model.md` written: assets, trust boundaries (TCB vs attacker-controlled), the isolation boundary with enforcing code, per-area threats→mitigations, guarantees G1–G5, accepted failure modes, and how each is gated. Keep it updated as §4.7 work lands. |
-| 12. Long-running lifecycle | Partial | Core lifecycle exists: `proc_spawn` / `proc_exit` / `proc_kill` (+ `proc_signals`) / `proc_reap` (parent reaps a dead child — crash cleanup) / pause/resume, and `liveupdate.mc` (version handoff). **Added (2026-06-30):** supervision mechanism — heartbeat-liveness detection (`proc_supervise`/`proc_heartbeat`/`proc_liveness_expired`/`proc_unsupervise`, per-slot deadline) AND a restart/crash-loop guard (`proc_restart_record`/`proc_restart_allowed`/`proc_restart_reset` — bound restarts so a slot that keeps dying is declared crash-looping instead of thrashing); both gated in `scheduler-test`. **Also landed:** `proc_supervise_step` — the per-slot supervisor verdict that folds liveness + restart-budget into `None`/`Restart`/`GiveUp` (the loop primitive: a supervisor runs it over its children each tick, actuating respawn/kill); gated. Gap: an actual running supervisor task wired to a timer + supervision trees + leases + persistent identity (policy on top of the now-complete mechanism). |
+| 12. Long-running lifecycle | Partial | Core lifecycle exists: `proc_spawn` / `proc_exit` / `proc_kill` (+ `proc_signals`) / `proc_reap` (parent reaps a dead child — crash cleanup) / pause/resume. **Added (2026-06-30):** supervision mechanism — heartbeat-liveness detection (`proc_supervise`/`proc_heartbeat`/`proc_liveness_expired`/`proc_unsupervise`, per-slot deadline) AND a restart/crash-loop guard (`proc_restart_record`/`proc_restart_allowed`/`proc_restart_reset` — bound restarts so a slot that keeps dying is declared crash-looping instead of thrashing); both gated in `scheduler-test`. **Also landed:** `proc_supervise_step` — the per-slot supervisor verdict that folds liveness + restart-budget into `None`/`Restart`/`GiveUp` (the loop primitive: a supervisor runs it over its children each tick, actuating respawn/kill); gated. |
 
 Net (revised after grounding each row against the tree — the recurring finding is that items are
 substantially more implemented + gated than first credited):
@@ -146,10 +146,6 @@ substantially more implemented + gated than first credited):
   - (8) structured **metrics + deterministic replay** (`kernel/core/metrics.mc`: saturating named
     counters + a bounded event log whose `evlog_replay` reconstructs byte-identical state) —
     `metrics-test` both backends. (Wiring into hot paths is the follow-up; the subsystem is proven.)
-  - (9) **bundle metadata admission + A/B rollback fixture** (`bundle-metadata-test`, both backends):
-    `bundle_validate_metadata` enforces kind/key/ABI/version/signature-length metadata and a failed
-    candidate rolls back. This is not a production trust-chain gate and no cryptographic
-    bundle-authentication claim is made.
   - (12) supervision — mechanism (heartbeat-liveness + restart/crash-loop guard +
     `proc_supervise_step` verdict) AND a **running supervisor loop** (`proc_supervisor_scan` scans all
     supervised slots and actuates Restart/GiveUp) — `proc-supervisor-test` both backends.
@@ -159,12 +155,9 @@ substantially more implemented + gated than first credited):
   - unified ledger + metrics **wired into hot paths** (IPC/blk/DMA charges gate real ops without
     trapping; spawn/exit/ipc/preempt/blk counters) + **supervision trees + leases** (`instrument-test`,
     both backends).
-  - **OTA transport** — chunked, hash-verified image delivery on top of #9's admission/rollback
-    (`ota-test`, both backends) — and a **reproducible-build determinism** gate
-    (`reproducible-build-test`; byte-identical emitted C/LLVM across rebuilds).
+  - **Reproducible-build determinism** (`reproducible-build-test`; byte-identical emitted C/LLVM across rebuilds).
   - **P6 hardening**: a **soak** gate (~12k spawn/charge/supervise/reclaim/reap cycles, leak/overflow
-    clean; `soak-test`, both backends), a **fuzz** gate (>200k adversarial bundle headers + 50k
-    rollback op-sequences, deterministic seed; `bundle-fuzz-test`), and `docs/security-review.md`.
+    clean; `soak-test`, both backends), and `docs/security-review.md`.
 
 - **Genuinely remaining:** (10) a real **board profile + hardware bring-up** and product-specific
   OTA/recovery policy. Local dev VM: `tools/run-kernel.sh` boots demos in QEMU.
@@ -294,8 +287,6 @@ Current status:
 - `block-persistent-audit-test` gates the same policy/audit checkpoint shape through the
   generic `BlockDevice` trait, so the bytes survive a remount/reopen of block-backed storage
   instead of only BlobStore memory.
-- `production-ops-test` gates watchdog/reboot-reason records and policy actuation state
-  transitions for throttle, revoke, and kill.
 - Production virtio-blk journal/reboot integration is still pending.
 - Policy actuation against live running agents is still pending.
 
@@ -320,13 +311,9 @@ Acceptance gates:
 
 Current status:
 
-- The kernel has agent bundle and runtime direction, but product loader/update mechanics are
-  not complete.
-- `production-ops-test` gates bundle admission metadata: bundle kind/version, ABI version,
-  policy version, key id, signature presence/status, rejected bad ABI, rejected wrong key, and
-  two-slot rollback state after failed boot.
-- What remains for P4 is product OTA policy, auditing bundle identities, and wiring the selected
-  update flow into actual agent startup.
+- Kernel OTA/live-update mechanics are not part of the current language-oriented kernel scope.
+- Product update policy should be specified outside the language core and reintroduced only when
+  a concrete product profile needs it.
 
 Production target:
 
@@ -520,11 +507,10 @@ Tasks:
 
 - Add persistent policy store. **Seed exists:** BlobStore and BlockDevice gates.
 - Add persistent audit log. **Seed exists:** BlobStore and BlockDevice gates.
-- Add watchdog integration. **State primitive exists:** `production-ops-test`.
-- Add panic/reboot reason record. **State primitive exists:** `production-ops-test`.
+- Add watchdog integration only if a concrete kernel product profile needs it.
+- Add panic/reboot reason record only if a concrete kernel product profile needs it.
 - Add storage-full behavior for audit and policy.
-- Add policy actuation for revoke/throttle/kill. **State primitive exists:** `production-ops-test`;
-  live-agent wiring remains.
+- Add policy actuation for revoke/throttle/kill only if a concrete agent product profile needs it.
 
 Exit criteria:
 

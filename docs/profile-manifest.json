@@ -184,7 +184,6 @@
         ]
       },
       "blocking_risks": [
-        "KERNEL-VERIFIED-BUNDLE",
         "KERNEL-CAPABILITY-MINT",
         "SUPPLY-TCB-CVE-INTAKE",
         "HARDWARE-PRODUCTION-QUALIFICATION"
@@ -194,8 +193,6 @@
         "qemu-test",
         "kmain-test",
         "agentos-test",
-        "production-ops-test",
-        "bundle-metadata-test",
         "tcb-advisory-intake-test",
         "app-run-test",
         "qjs-confined-test",
@@ -230,7 +227,6 @@
         ]
       },
       "blocking_risks": [
-        "KERNEL-VERIFIED-BUNDLE",
         "KERNEL-CAPABILITY-MINT",
         "SUPPLY-TCB-CVE-INTAKE",
         "TCB-PROFILE-MINIMIZATION",
@@ -238,8 +234,6 @@
       ],
       "blocking_gates": [
         "visionfive2-readiness-test",
-        "production-ops-test",
-        "bundle-metadata-test",
         "tcb-advisory-intake-test",
         "agent-e2e-test",
         "agentos-test"

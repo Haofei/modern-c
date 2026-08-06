@@ -26,7 +26,6 @@
 // freshly-zeroed frame. This handles the first and last partial pages uniformly.
 
 import "kernel/core/elf.mc";
-import "kernel/core/production_ops.mc";
 import "kernel/arch/active/paging.mc"; // arch-selection seam (R0b): --arch picks the paging module
 import "kernel/core/heap.mc";
 import "std/bytes.mc";
@@ -345,14 +344,4 @@ export fn elf_load_image_for(image_base: usize, image_len: usize, expected_machi
     }
 
     return ok(hdr.entry);
-}
-
-#[mc_abi]
-export fn elf_load_verified_bundle_for(bundle: VerifiedBundle, image_base: usize, image_len: usize, expected_machine: u16, user_start: usize, user_end: usize, pt: *mut PageTable, h: *mut Heap) -> Result<u64, LoadError> {
-    if !verified_bundle_matches_image(&bundle, image_base, image_len) {
-        unsafe { forget_unchecked(bundle); }
-        return err(.BadElf);
-    }
-    unsafe { forget_unchecked(bundle); }
-    return elf_load_image_for(image_base, image_len, expected_machine, user_start, user_end, pt, h);
 }

@@ -114,8 +114,8 @@ def main() -> None:
     )
     assert_gates(
         module,
-        ["kernel/core/production_ops.mc", "tests/qemu/proc/production_ops_demo.mc", "tests/qemu/lang/qjs_confined_runtime.mc", "tests/qemu/arch/qjs_smode_demo.mc"],
-        ["production-ops-test", "bundle-metadata-test", "app-run-test", "qjs-confined-test", "qjs-smode-confined-test"],
+        ["tests/qemu/proc/app_run_demo.mc", "tests/qemu/lang/qjs_confined_runtime.mc", "tests/qemu/arch/qjs_smode_demo.mc"],
+        ["app-run-test", "qjs-confined-test", "qjs-smode-confined-test"],
     )
     assert_checks(module, ["docs/compiler-production-readiness.md"], ["git diff --check"])
     docs_only = subprocess.run(
@@ -206,12 +206,6 @@ def main() -> None:
     assert_gates(module, ["tests/qemu/net/parser_fuzz_demo.mc"], ["parser-fuzz-test"])
     assert_gates(module, ["tools/lib/host-drivers/parser-fuzz-test.c"], ["parser-fuzz-test"])
     assert_gates(module, ["tests/qemu/proc/agent_abi_demo.mc"], ["agent-abi-test"])
-    assert_gates(module, ["tests/qemu/proc/bundle_fuzz_demo.mc"], ["bundle-fuzz-test"])
-    assert_gates(
-        module,
-        ["tests/qemu/proc/production_ops_demo.mc"],
-        ["production-ops-test", "bundle-metadata-test", "app-run-test", "qjs-confined-test", "qjs-smode-confined-test"],
-    )
     assert_gates(module, ["tools/toolchain/diagnostics-test.sh"], ["diagnostics-test"])
     assert_gates(module, ["tools/toolchain/mcc-cli-test.sh"], ["mcc-cli-test"])
     assert_gates(module, ["tools/toolchain/install-layout-test.sh"], ["install-layout-test"])
@@ -252,12 +246,6 @@ def main() -> None:
         ["tools/toolchain/mc-audit.sh"],
         ["unsafe-audit", "double-fetch-audit", "taint-audit", "capability-mint-audit"],
         ["bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '"],
-    )
-    assert_route(
-        module,
-        ["tools/toolchain/verified-bundle-loader-audit.py"],
-        ["verified-bundle-loader-audit"],
-        ["python3 tools/toolchain/verified-bundle-loader-audit.py --self-test 2>&1 | rg '^RAW-ELF-LOAD '"],
     )
     assert_checks(
         module,

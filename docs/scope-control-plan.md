@@ -20,7 +20,6 @@ profile while the following core items remain open:
 - typed MIR identity and verified facts as the backend boundary;
 - removal of backend-local semantic inference;
 - real module graph and incrementality;
-- exact-byte `VerifiedBundle`;
 - per-profile TCB definition.
 
 ## Profile policy
@@ -108,7 +107,6 @@ This plan does not recommend deleting:
 
 - `CompilationSession`;
 - typed MIR;
-- `VerifiedBundle`;
 - atomic artifact output;
 - OOM/resource-limit handling;
 - capability mint isolation;

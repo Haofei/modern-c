@@ -1831,7 +1831,7 @@ A type opts into owned resource tracking with `move struct` or `linear struct`:
 
 ```mc
 move struct File { fd: i32 }
-linear struct VerifiedBundle { /* opaque admission token */ }
+linear struct TransactionToken { id: u64 }
 ```
 
 Common rules for checked resources:

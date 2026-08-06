@@ -98,16 +98,6 @@ risks:
       - low-latency-incremental-lsp-claim
     summary: LSP currently has substantial subprocess orchestration because no persistent query-based compiler service exists yet.
 
-  - id: KERNEL-VERIFIED-BUNDLE
-    severity: critical
-    scope: kernel-product-boot-chain
-    status: open
-    admitted_subset_status: exact-byte-prototype-gated
-    blocks:
-      - production-kernel
-      - untrusted-agent-loading
-    summary: A production-shaped exact-byte VerifiedBundle wrapper now binds current image bytes before ELF loading, the app-run compatibility entry routes through that token path, and raw ELF loader call sites are source-audited to approved loader/arch demos. Product update authentication, persistence/audit identity, and hardware qualification remain open.
-
   - id: KERNEL-CAPABILITY-MINT
     severity: high
     scope: kernel-capability

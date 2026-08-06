@@ -185,7 +185,6 @@ def main() -> None:
     if production_kernel["production_claim"]:
         fail("production-kernel must remain non-production until blockers close")
     for required_risk in (
-        "KERNEL-VERIFIED-BUNDLE",
         "KERNEL-CAPABILITY-MINT",
         "SUPPLY-TCB-CVE-INTAKE",
         "TCB-PROFILE-MINIMIZATION",

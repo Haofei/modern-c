@@ -653,8 +653,6 @@ dynamic loading is ABSENT.** Gate: `driver-test`.
   `phoff/phnum/phentsize` validated up front. **GATED** (`elf-test`, `elf-run-test`).
 - **Dynamic linking** — `dynlink.mc`: `R_RISCV_RELATIVE` relocations for PIE. **DEMO-SCOPE**
   — no symbol resolution / PLT-GOT (`dynlink-test`).
-- **Service live-update** — `liveupdate.mc`: MINIX-style checkpoint→update-code→restore of
-  simple `ServiceState`. **DEMO-SCOPE** (`liveupdate-test`).
 - **Agent checkpoint/restore/migrate** — `checkpoint.mc`: serialize `{ pid, FdSpace,
   ResourceAccount }` to a durable blob; restore spawns a **fresh** slot; `migrate` =
   save(src)→restore(dst)→exit(src), atomic on failure. **IMPLEMENTED** for fd-space +

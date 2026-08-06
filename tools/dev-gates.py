@@ -275,12 +275,6 @@ RULES: tuple[Rule, ...] = (
         ("bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '",),
     ),
     Rule(
-        ("tools/toolchain/verified-bundle-loader-audit.py",),
-        ("verified-bundle-loader-audit",),
-        "VerifiedBundle loader-admission audit changes need the raw-loader boundary gate",
-        ("python3 tools/toolchain/verified-bundle-loader-audit.py --self-test 2>&1 | rg '^RAW-ELF-LOAD '",),
-    ),
-    Rule(
         ("tools/toolchain/unsafe-audit.sh",),
         (),
         "unsafe audit shim changes need the shim self-test because the Zig gate calls mc-audit directly",
@@ -489,20 +483,16 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         (
-            "kernel/core/production_ops.mc",
-            "tests/qemu/arch/bundle_metadata_demo.mc",
             "tests/qemu/proc/app_run_demo.mc",
-            "tests/qemu/proc/production_ops_demo.mc",
             "tests/qemu/lang/qjs_confined_runtime.mc",
             "tests/qemu/arch/qjs_smode_demo.mc",
             "tests/qemu/arch/qjs_smode_confined_runtime.mc",
-            "tools/fs/bundle-metadata-test.sh",
             "tools/proc/app-run-test.sh",
             "tools/lang/qjs-confined-test.sh",
             "tools/arch/qjs-smode-confined-test.sh",
         ),
-        ("production-ops-test", "bundle-metadata-test", "app-run-test", "qjs-confined-test", "qjs-smode-confined-test"),
-        "agent-admission changes need bundle metadata, cryptographic verification, raw app loading, and the canonical M/S-mode confined runtimes",
+        ("app-run-test", "qjs-confined-test", "qjs-smode-confined-test"),
+        "agent loader changes need raw app loading and the canonical M/S-mode confined runtimes",
     ),
     Rule(
         ("tools/qemu/kernel-boot-lib.sh",),
@@ -651,14 +641,10 @@ RULES: tuple[Rule, ...] = (
             "tools/mem/heap-bench.sh",
             "tools/mem/uaccess-bench.sh",
             "tools/net/kmain-net-test.sh",
-            "kernel/core/production_ops.mc",
-            "tests/qemu/arch/bundle_metadata_demo.mc",
             "tests/qemu/proc/app_run_demo.mc",
-            "tests/qemu/proc/production_ops_demo.mc",
             "tests/qemu/lang/qjs_confined_runtime.mc",
             "tests/qemu/arch/qjs_smode_demo.mc",
             "tests/qemu/arch/qjs_smode_confined_runtime.mc",
-            "tools/fs/bundle-metadata-test.sh",
             "tools/proc/app-run-test.sh",
             "tools/lang/qjs-confined-test.sh",
             "tools/arch/qjs-smode-confined-test.sh",
@@ -696,10 +682,6 @@ def matches(path: str, pattern: str) -> bool:
 def host_manifest_gates(path: str) -> tuple[list[str], list[str]]:
     """Return the exact host-test gate for a qemu fixture or bespoke driver."""
     if not (path.startswith("tests/qemu/") or path.startswith("tools/lib/host-drivers/")):
-        return [], []
-    # production_ops_demo is intentionally routed with its surrounding signed-agent
-    # admission smoke gates, not only its host-harness row.
-    if path == "tests/qemu/proc/production_ops_demo.mc":
         return [], []
     try:
         with HOST_TESTS.open("r", encoding="utf-8") as manifest:

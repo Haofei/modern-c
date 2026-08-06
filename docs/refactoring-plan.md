@@ -56,7 +56,7 @@ boundary is stable:
 | 2 | `VerifiedProgram` narrowing | `ARCH-TYPED-MIR`, `ARCH-BACKEND-FACTS` | production backend entrypoints no longer expose AST as semantic input. |
 | 3 | Artifact provenance | `ARCH-SOURCE-MAP-DIGEST` | emitted bytes, source maps, lowering options, source/MIR digests, and tool identity are bound together. |
 | 4 | Manifest-backed governance | `GATE-MANIFEST`, `TCB-PROFILE-MINIMIZATION` | build/CI/release/docs read status from manifests instead of Markdown counters. |
-| 5 | Profile-scoped kernel hardening | `KERNEL-VERIFIED-BUNDLE`, `KERNEL-CAPABILITY-MINT`, `HARDWARE-PRODUCTION-QUALIFICATION` | production loader/capability/hardware claims are type-gated and evidence-backed. |
+| 5 | Profile-scoped kernel hardening | `KERNEL-CAPABILITY-MINT`, `HARDWARE-PRODUCTION-QUALIFICATION` | production capability/hardware claims are type-gated and evidence-backed. |
 
 Phases 0–2 are the default work. Phases 3–5 should not displace compiler P0
 unless the patch is small, isolated, and directly closes a listed risk.
@@ -168,29 +168,6 @@ Done when:
 - active Markdown has no independent High/Critical open/closed counters;
 - profile claims point to manifest IDs and risk IDs.
 
-## Phase 5 — close profile-scoped kernel blockers
-
-Purpose: keep kernel/security production work explicit without letting it
-displace compiler authority work.
-
-Work items:
-
-1. Close the exact-byte `VerifiedBundle` API so production load cannot express
-   verify-A/load-B.
-2. Replace the prototype capability/right root tokens with production boot
-   authority provenance, delegation policy, and audit.
-3. Bind audit, rollback, signer identity, version, payload digest, and loaded
-   image identity.
-4. Add vendored TCB advisory intake.
-5. Add real hardware qualification gates for any real-device production claim.
-
-Done when:
-
-- production ELF/Agent loading consumes `VerifiedBundle`, not raw bytes plus a
-  boolean;
-- ordinary kernel components cannot mint authority by import convention;
-- QEMU evidence is clearly separated from real-device production evidence.
-
 ## Immediate implementation queue
 
 Do these in order unless a failing test forces a narrower slice:
@@ -204,7 +181,6 @@ Do these in order unless a failing test forces a narrower slice:
 | 5 | Bind C source-map output to artifact digest. | Complete for consumer admission: `.mcmap` verification now requires `artifact_kind=c-source-map`, `backend=c`, payload digest, MIR-facts digest, and matching generated artifact digest. |
 | 6 | Make `mcc build` final output transactional. | Complete: `mcc build` writes through exclusive temporary C/executable artifacts, preserves the previous executable on clang/hosted-boundary/preflight failures, leaks no `*.mc-build-*` temps on tested failures, and binds the `.mcmeta` sidecar to exact executable bytes so stale sidecars are rejected. The portable contract is digest-bound fail-closed pairing, not an impossible two-path crash-atomic filesystem commit. |
 | 7 | Convert one build/CI assertion to consume `gate-manifest.json`. | Complete for `ci-m0-pass`: CI PASS assertions now come from `docs/gate-manifest.json` `ci_pass_assertions`, and `gate-manifest-test` rejects unregistered, duplicate, under-floor, or non-m0 assertion gates. |
-| 8 | Prototype the next `VerifiedBundle` closure step behind the kernel profile. | Complete for rollback and confined-agent admission: metadata-only validation no longer creates `VerifiedBundle`; the app-run bundle path calls `bundle_verify_and_admit_image` and passes the resulting token into `elf_load_verified_bundle_for`, while rollback also consumes only exact-byte verified tokens. |
 | 9 | Continue C source-cast authority reduction. | Complete for nullable and floating source-cast classifiers: both now go through the shared target/result fact helper, and `explicit_cast_target` inventory dropped from 9 to 7 C emitter reads. |
 | 10 | Centralize C source-cast result admission. | Complete for enum, tagged-union, numeric, and pointer-pointee source-cast classifiers: they now share `castResultTypeForEmission`, and C emitter `explicit_cast_target` inventory dropped from 7 to 3 reads. |
 | 11 | Split C dyn pass-through detection from dyn coercion source authority. | Complete: new vtable wrapper construction consumes `dyn_coercion_source` directly; operand/call typing is limited to existing-dyn pass-through detection, and missing source facts have a focused C regression. |

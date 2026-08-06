@@ -1,6 +1,6 @@
 // Load a REAL multi-segment app ELF (built by tools/user/build-app.sh from an MC `main`)
-// into an ISOLATED Sv39 space through the VerifiedBundle admission path, register the
-// userspace syscall ABI, and return the satp to activate. The C runtime (app_runtime.c)
+// into an ISOLATED Sv39 space, register the userspace syscall ABI, and return the satp
+// to activate. The C runtime (app_runtime.c)
 // sets satp + enter_user; SYS_EXIT is handled by the shared M-mode trap
 // (usermode_runtime.c). The kernel is NOT mapped in the agent's address space — that
 // omission is the confinement; the agent reaches the kernel only through `ecall`, and
@@ -11,7 +11,6 @@ import "kernel/core/elf_loader.mc";
 import "kernel/arch/riscv64/paging.mc";
 import "kernel/core/heap.mc";
 import "kernel/core/ledger.mc";     // unified resource ledger: enforces the per-agent memory grow cap
-import "kernel/core/production_ops.mc";
 import "kernel/core/syscall.mc";
 import "kernel/core/uaccess.mc";
 import "kernel/core/console.mc";
@@ -167,21 +166,6 @@ const LS_BADELF: u32 = 1;   // LoadError.BadElf — header / program-header tabl
 const LS_TOOMANY: u32 = 2;  // LoadError.TooManyPages — a segment exceeds MAX_SEGMENT_PAGES
 const LS_NOFRAME: u32 = 3;  // LoadError.NoFrame — heap exhausted (root, leaf, or interior table)
 const LS_BADSEG: u32 = 4;   // LoadError.BadSegment — absurd/overlapping vaddr/memsz/filesz
-const LS_BUNDLE_BADMAGIC: u32 = 5;
-const LS_BUNDLE_BADKIND: u32 = 6;
-const LS_BUNDLE_BADABI: u32 = 7;
-const LS_BUNDLE_BADVERSION: u32 = 8;
-const LS_BUNDLE_BADSIG: u32 = 9;
-const LS_BUNDLE_WRONGKEY: u32 = 10;
-const LS_BUNDLE_HASH: u32 = 11;
-
-const AGENT_BUNDLE_ABI: u32 = 1;
-const AGENT_BUNDLE_MIN_VERSION: u64 = 1;
-const AGENT_BUNDLE_MAX_VERSION: u64 = 1_000_000;
-const AGENT_BUNDLE_DEFAULT_VERSION: u64 = 10;
-const AGENT_BUNDLE_POLICY_VERSION: u64 = 41;
-const AGENT_BUNDLE_TRUSTED_KEY: u32 = 7;
-const AGENT_BUNDLE_SIG_LEN: usize = 256;
 
 global g_heap: Heap;
 global g_pt: PageTable;
@@ -1028,18 +1012,6 @@ export fn mc_syscall(number: u64, arg0: u64, arg1: u64, arg2: u64) -> u64 {
 // class in g_load_status (readable via app_build_status), so a loader failure is no longer
 // collapsed indistinguishably to 0. Every allocation here is fallible: a hostile image cannot
 // trap the kernel, only produce a typed status.
-fn app_bundle_error_status(e: BundleError) -> u32 {
-    switch e {
-        .BadMagic => { return LS_BUNDLE_BADMAGIC; }
-        .BadKind => { return LS_BUNDLE_BADKIND; }
-        .BadAbi => { return LS_BUNDLE_BADABI; }
-        .BadVersion => { return LS_BUNDLE_BADVERSION; }
-        .BadSignature => { return LS_BUNDLE_BADSIG; }
-        .WrongKey => { return LS_BUNDLE_WRONGKEY; }
-        .BadImageHash => { return LS_BUNDLE_HASH; }
-    }
-}
-
 fn app_load_error_status(e: LoadError) -> u32 {
     switch e {
         .BadElf => { return LS_BADELF; }
@@ -1049,20 +1021,20 @@ fn app_load_error_status(e: LoadError) -> u32 {
     }
 }
 
-fn app_build_verified(image_base: usize, image_len: usize, region_base: usize, region_len: usize, bundle: VerifiedBundle) -> u64 {
+export fn app_build(image_base: usize, image_len: usize, region_base: usize, region_len: usize) -> u64 {
+    g_load_status = LS_OK;
     heap_init_untracked(&g_heap, phys_range(pa(region_base), region_len));
 
     // Root page table fallibly: even root-frame exhaustion is a typed NoFrame, not a trap.
     switch page_table_try_new(&g_heap) {
         ok(pt) => { g_pt = pt; }
         err(e) => {
-            unsafe { forget_unchecked(bundle); }
             g_load_status = LS_NOFRAME;
             return 0;
         }
     }
 
-    switch elf_load_verified_bundle_for(move bundle, image_base, image_len, 243, USER_BASE, USER_LIMIT, &g_pt, &g_heap) {
+    switch elf_load_image_for(image_base, image_len, 243, USER_BASE, USER_LIMIT, &g_pt, &g_heap) {
         ok(e) => { g_entry = e; }
         err(e) => {
             g_load_status = app_load_error_status(e);
@@ -1134,30 +1106,6 @@ fn app_build_verified(image_base: usize, image_len: usize, region_base: usize, r
 
     let root: PAddr = page_table_root(&g_pt);
     return SATP_SV39 | ((pa_value(root) >> 12) as u64);
-}
-
-export fn app_build_agent_bundle_metadata(image_base: usize, image_len: usize, region_base: usize, region_len: usize, h: *BundleHeader, signature_verified: bool) -> u64 {
-    g_load_status = LS_OK;
-
-    switch bundle_verify_and_admit_image(h, .Agent, AGENT_BUNDLE_ABI, AGENT_BUNDLE_MIN_VERSION, AGENT_BUNDLE_MAX_VERSION, AGENT_BUNDLE_TRUSTED_KEY, signature_verified, image_base, image_len) {
-        ok(vb) => {
-            return app_build_verified(image_base, image_len, region_base, region_len, move vb);
-        }
-        err(e) => {
-            g_load_status = app_bundle_error_status(e);
-            return 0;
-        }
-    }
-}
-
-export fn app_build_agent_metadata_checked(image_base: usize, image_len: usize, region_base: usize, region_len: usize, expected_hash: u64) -> u64 {
-    var h: BundleHeader = bundle_header_init(.Agent, AGENT_BUNDLE_DEFAULT_VERSION, AGENT_BUNDLE_ABI, AGENT_BUNDLE_POLICY_VERSION, AGENT_BUNDLE_TRUSTED_KEY, expected_hash, AGENT_BUNDLE_SIG_LEN);
-    return app_build_agent_bundle_metadata(image_base, image_len, region_base, region_len, &h, true);
-}
-
-export fn app_build(image_base: usize, image_len: usize, region_base: usize, region_len: usize) -> u64 {
-    let expected_hash: u64 = bundle_hash_bytes(image_base, image_len);
-    return app_build_agent_metadata_checked(image_base, image_len, region_base, region_len, expected_hash);
 }
 
 // The typed outcome of the most recent app_build (LS_*). The C runtime prints this on a load

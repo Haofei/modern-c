@@ -353,8 +353,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "block-persistent-audit-test", "Block-backed persistent policy/audit checkpoint: policy metadata and audited IPC events survive BlockDevice remount", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "block-persistent-audit-test" });
     _ = h.addScriptTest(ctx, "agent-abi-test", "Versioned agent SYS_SUBMIT/SYS_POLL ABI: request validation and stable typed completion status mapping", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-test" });
     _ = h.addScriptTest(ctx, "agent-abi-fuzz-test", "Adversarial agent SYS_SUBMIT/SYS_POLL ABI fuzz: validation precedence, typed events, and fail-closed syscall dispatch", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-fuzz-test" });
-    _ = h.addScriptTest(ctx, "production-ops-test", "Production ops primitives: bundle metadata, rollback, watchdog/reboot reason, policy actuation", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "production-ops-test" });
-
     _ = h.addScriptTest(ctx, "netcap-test", "Capability-gated network egress: default-deny NetCap, audited+attributed allow/deny, attenuation only narrows (milestone #3)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "netcap-test" });
 
     _ = h.addScriptTest(ctx, "agent-containment-test", "Capstone M6-shape integration: every containment layer over a shared audit ring; benign task completes, all injected forbidden actions denied+audited, policy escalates", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-containment-test" });
@@ -424,7 +422,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-arm-vm-test", "LLVM-lowered AArch64 stage-1 page-table VM + MMU enable", &.{ "bash", "tools/arch/arm-vm-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "arm-user-test", "AArch64 EL0 user hello: SYS_WRITE via svc #0, bad user ptr -> -EFAULT via a software page-table walk (no data abort), clean SYS_EXIT", &.{ "bash", "tools/arch/arm-user-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-arm-user-test", "LLVM-lowered AArch64 EL0 user hello: EL0 syscall round-trip + bad-ptr -EFAULT software walk under QEMU", &.{ "bash", "tools/arch/arm-user-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "liveupdate-test", "Live update (state handoff)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "liveupdate-test" });
     _ = h.addScriptTest(ctx, "sbi-boot-test", "Boot under OpenSBI (real firmware)", &.{ "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-sbi-boot-test", "LLVM-lowered boot under OpenSBI (real firmware)", &.{ "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "fdt-boot-test", "Boot under OpenSBI + parse DTB /memory (FDT discovery)", &.{ "bash", "tools/arch/fdt-boot-test.sh", "zig-out/bin/mcc", "c" });
@@ -701,11 +698,6 @@ pub fn register(ctx: *h.Ctx) void {
     // (each read now routes through std/bytes' total checked reader, br_try_*).
     _ = h.addScriptTest(ctx, "parser-fuzz-test", "Fuzz the DNS+TCP parsers with malformed bytes (total, no over-read)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "parser-fuzz-test" });
 
-    // P6: bundle/OTA admission fuzz oracle — drive kernel/core/production_ops.mc's
-    // bundle metadata validation over >200k adversarial headers + 50k random
-    // rollback A/B op-sequences (slot-index invariant); every call total, never a trap.
-    _ = h.addScriptTest(ctx, "bundle-fuzz-test", "Fuzz bundle metadata admission + rollback with adversarial input (total, fail-closed, no trap)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "bundle-fuzz-test" });
-
     _ = h.addScriptTest(ctx, "net-rx-live-test", "Route a real virtio-net RX frame through net_rx_deliver under QEMU", &.{ "bash", "tools/net/net-rx-live-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-net-rx-live-test", "Route a real LLVM-lowered virtio-net RX frame through net_rx_deliver under QEMU", &.{ "bash", "tools/net/net-rx-live-test.sh", "zig-out/bin/mcc", "llvm" });
 
@@ -784,14 +776,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "soak-test", "Run the single-boot soak workload (thousands of spawn/charge/supervise/reclaim/reap cycles return to baseline, no leak/overflow) under QEMU", &.{ "bash", "tools/proc/soak-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-soak-test", "Run the LLVM-lowered single-boot soak workload under QEMU", &.{ "bash", "tools/proc/soak-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "bundle-metadata-test", "Run prototype bundle metadata admission + A/B rollback under QEMU", &.{ "bash", "tools/fs/bundle-metadata-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-bundle-metadata-test", "Run LLVM-lowered bundle metadata admission + A/B rollback under QEMU", &.{ "bash", "tools/fs/bundle-metadata-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "ota-test", "Run chunked OTA transport (kernel/core/ota) + admission + rollback end to end under QEMU", &.{ "bash", "tools/fs/ota-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-ota-test", "Run the LLVM-lowered chunked OTA transport + admission + rollback end to end under QEMU", &.{ "bash", "tools/fs/ota-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "metrics-test", "Run structured metrics + deterministic event-log replay under QEMU", &.{ "bash", "tools/proc/metrics-test.sh", "zig-out/bin/mcc", "c" });
 

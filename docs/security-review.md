@@ -29,7 +29,6 @@ Minimizing and pinning this set is the core of the security posture.
 | Brokers (the only path to external effect) | `kernel/net/net_broker.mc`, `kernel/fs/treefs.mc`, `kernel/agent/mcp.mc` | Capability + budget checks before any FS/net effect. |
 | Resource accounting | `kernel/core/ledger.mc`, `kernel/lib/resacct.mc` | Overflow-safe charge/release; fail-closed over-limit. |
 | Audit trail | `kernel/core/ipc_trace.mc`, `cap_audit` in `process.mc` | Kernel-side allow/deny + capability-use record, out of agent reach. |
-| OTA / update fixture | `kernel/core/production_ops.mc` | Bundle metadata validation, A/B rollback state machine, watchdog, reboot reason. |
 | Vendored engines in the TCB | WAMR (agent wasm), QuickJS (JS-on-wasm), BearSSL (TLS/crypto) | A bug here is a TCB bug; defense is vendoring discipline + gates, not runtime containment. |
 | Firmware / platform | OpenSBI (RISC-V), QEMU virt / real board | Below the kernel; assumed correct. |
 
@@ -141,21 +140,11 @@ Production kernel profiles still need a boot-time root lifecycle, delegation pol
 persistent audit identity before third-party kernel components can be treated as outside the
 mint TCB.
 
-### 2.9 OTA metadata / rollback fixture
+### 2.9 Product update path
 
-`kernel/core/production_ops.mc` gates bundle metadata (magic, kind, ABI, version range,
-trusted key id, and signature-field presence) and implements the A/B rollback state
-machine. Creating a `VerifiedBundle` requires the prototype admission API, and the confined-agent
-bundle builder consumes that token through `elf_load_verified_bundle_for` instead of loading raw
-bytes directly. The metadata and rollback path is gated as `bundle-metadata-test` /
-`llvm-bundle-metadata-test`; the metadata surface is fuzzed over >200k adversarial headers +
-50k rollback sequences (`bundle-fuzz-test`, §4).
-
-Residual — **scope note:** these gates are kernel/update fixtures. They intentionally make no
-cryptographic bundle-authentication or production boot-chain claims.
-A reproducible-build determinism gate has **landed**
-(`reproducible-build-test`: byte-identical emitted C/LLVM across rebuilds); an OTA transport
-delivers + hash-verifies images (`ota-test`).
+The previous prototype bundle metadata / OTA / rollback fixture has been removed from the current
+kernel scope. Product update authentication, reboot recovery, and boot-chain policy are deliberately
+not language features and should be reintroduced only behind a concrete product profile.
 
 ---
 
@@ -187,16 +176,9 @@ CI gates plus this review:
   asserting the lifecycle + accounting invariants return to baseline (zero live agents, zero
   zombies, ledger `used == 0`, bounded slot table) with no leak and no counter-overflow trap.
   Runs on both backends under QEMU. Deterministic (no RNG, no wall-clock).
-- **`bundle-fuzz-test`** (`tools/lib/host-drivers/bundle-fuzz-test.c`,
-  `tests/qemu/proc/bundle_fuzz_demo.mc`): the OTA/bundle admission fuzz oracle — >200k
-  adversarial `BundleHeader`s to `bundle_validate_metadata` (fail-closed typed reject) +
-  50k random rollback A/B op-sequences (the active/
-  previous slot index must stay a valid index — a `1 - active` checked-usize underflow would
-  trap and abort the driver). Deterministic (seeded xorshift, fixed corpus), bounded.
-
 These extend, not replace, the existing security gates (confined-agent family, broker
 allow+deny audit gates, `parser-fuzz-test`/`net-fuzz-test`, ELF/syscall hostile-input gates,
-`bundle-metadata-test`, `ledger-test`, `proc-supervisor-test`).
+`ledger-test`, `proc-supervisor-test`).
 
 ---
 

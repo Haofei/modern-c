@@ -307,9 +307,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-ledger-test"));
     // llvm-soak-test runs the LLVM-lowered single-boot soak workload under QEMU.
     m0_full_step.dependOn(ctx.cmd("llvm-soak-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-bundle-metadata-test"));
-    // llvm-ota-test runs the LLVM-lowered chunked OTA transport + admission + rollback under QEMU.
-    m0_full_step.dependOn(ctx.cmd("llvm-ota-test"));
     // llvm-metrics-test runs the LLVM-lowered structured metrics + deterministic replay under QEMU.
     m0_full_step.dependOn(ctx.cmd("llvm-metrics-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-page-test"));
@@ -641,8 +638,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("agent-abi-test"));
     // agent-abi-fuzz-test adversarially checks validation precedence and fail-closed syscall dispatch.
     m0_full_step.dependOn(ctx.cmd("agent-abi-fuzz-test"));
-    // production-ops-test gates bundle/update/watchdog/reboot/policy-actuation state transitions.
-    m0_full_step.dependOn(ctx.cmd("production-ops-test"));
     // netcap-test links + runs capability-gated network egress (milestone #3); LLVM side via llvm-host-suite-test.
     m0_full_step.dependOn(ctx.cmd("netcap-test"));
     // agent-containment-test links + runs the capstone M6-shape integration; LLVM side via llvm-host-suite-test.
@@ -721,7 +716,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("arm-qjs-async-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-arm-qjs-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-arm-qjs-async-test"));
-    m0_full_step.dependOn(ctx.cmd("liveupdate-test"));
     m0_full_step.dependOn(ctx.cmd("sbi-boot-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-sbi-boot-test"));
     m0_full_step.dependOn(ctx.cmd("smode-user-test"));
@@ -785,9 +779,6 @@ pub fn register(ctx: *h.Ctx) void {
     // parser-fuzz-test (P1) fuzzes the DNS+TCP parsers with malformed/truncated bytes:
     // every parse is total over its finite buffer — no over-read, garbage rejected (clang).
     m0_full_step.dependOn(ctx.cmd("parser-fuzz-test"));
-    // bundle-fuzz-test (P6) fuzzes bundle metadata admission + rollback.
-    // over adversarial headers + random op-sequences: every call total, fail-closed, no trap (clang).
-    m0_full_step.dependOn(ctx.cmd("bundle-fuzz-test"));
     // net-rx-live-test routes a real virtio-net RX frame through net_rx_deliver under QEMU.
     m0_full_step.dependOn(ctx.cmd("net-rx-live-test"));
     // http-get-test active-opens a real TCP connection and HTTP GETs a live server under QEMU.
@@ -824,10 +815,6 @@ pub fn register(ctx: *h.Ctx) void {
     // soak-test runs the single-boot soak workload (thousands of spawn/charge/supervise/reclaim/
     // reap cycles return to baseline; no leak, no counter-overflow trap) under QEMU.
     m0_full_step.dependOn(ctx.cmd("soak-test"));
-    // Metadata admission and rollback are prototype kernel fixtures, not a production trust chain.
-    m0_full_step.dependOn(ctx.cmd("bundle-metadata-test"));
-    // ota-test runs chunked OTA transport (kernel/core/ota) + admission + rollback end to end under QEMU.
-    m0_full_step.dependOn(ctx.cmd("ota-test"));
     // metrics-test runs structured metrics + deterministic event-log replay under QEMU.
     m0_full_step.dependOn(ctx.cmd("metrics-test"));
     // syscall-test runs the ecall syscall dispatch skeleton under QEMU.
