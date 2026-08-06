@@ -38,13 +38,13 @@ pub struct BundleHeader {
     signature_len: usize,
 }
 
-// Opaque admission token for a bundle whose metadata and expected image digest
-// have been checked together. The legacy metadata bridge can still create a
-// token with no byte identity, but production-shaped admission must use
-// `bundle_verify_and_admit_image`, which binds the exact byte range and digest
-// consumed by the loader. The digest is still the FNV-era u64 image_hash bridge;
-// the cryptographic secure-boot path must replace that with a real SHA-256
-// digest over immutable storage bytes without weakening the token shape.
+// Opaque admission token for a bundle whose metadata and exact image bytes have
+// been checked together. Metadata-only validation deliberately cannot create a
+// `VerifiedBundle`: loader and rollback consumers must receive a token whose
+// byte range is bound to the same image they will consume. The digest is still
+// the FNV-era u64 image_hash bridge; the cryptographic secure-boot path must
+// replace that with a real SHA-256 digest over immutable storage bytes without
+// weakening the token shape.
 pub linear opaque struct VerifiedBundle {
     kind: BundleKind,
     version: u64,
@@ -156,27 +156,6 @@ pub fn bundle_hash_bytes(base: usize, len: usize) -> u64 {
 }
 
 impl VerifiedBundle {
-    fn admit(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, expected_image_hash: u64) -> Result<VerifiedBundle, BundleError> {
-        switch bundle_validate_metadata(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id) {
-            ok(v) => {}
-            err(e) => { return err(e); }
-        }
-        if h.image_hash != expected_image_hash {
-            return err(.BadImageHash);
-        }
-        return ok(.{
-            .kind = h.kind,
-            .version = h.version,
-            .abi_version = h.abi_version,
-            .policy_version = h.policy_version,
-            .key_id = h.key_id,
-            .image_hash = h.image_hash,
-            .image_base = 0,
-            .image_len = 0,
-            .exact_bytes = false,
-        });
-    }
-
     fn admit_image(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, image_base: usize, image_len: usize) -> Result<VerifiedBundle, BundleError> {
         switch bundle_validate_metadata(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id) {
             ok(v) => {}
@@ -225,8 +204,15 @@ impl VerifiedBundle {
     }
 }
 
-pub fn bundle_verify_and_admit_metadata(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, expected_image_hash: u64) -> Result<VerifiedBundle, BundleError> {
-    return VerifiedBundle.admit(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id, expected_image_hash);
+pub fn bundle_validate_metadata_hash(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, expected_image_hash: u64) -> Result<bool, BundleError> {
+    switch bundle_validate_metadata(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id) {
+        ok(v) => {}
+        err(e) => { return err(e); }
+    }
+    if h.image_hash != expected_image_hash {
+        return err(.BadImageHash);
+    }
+    return ok(true);
 }
 
 pub fn bundle_verify_and_admit_image(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, image_base: usize, image_len: usize) -> Result<VerifiedBundle, BundleError> {
@@ -342,7 +328,7 @@ pub fn rollback_install_verified_candidate(r: *mut RollbackState, bundle: Verifi
     let version: u64 = VerifiedBundle.version(&bundle);
     unsafe { forget_unchecked(bundle); } // installation consumes the admission token
     if !exact {
-        return 2; // metadata-only admission is not enough to install a boot candidate
+        return 2; // defensive guard: boot candidates require exact-byte admission
     }
     return rollback_install_candidate(r, version);
 }

@@ -31,24 +31,12 @@ export fn production_ops_run() -> u32 {
     }
     if !bundle_image_hash_matches(&agent, 0xAA55) { pass = 0; }
     if bundle_image_hash_matches(&agent, 0x55AA) { pass = 0; }
-    switch bundle_verify_and_admit_metadata(&agent, .Agent, 1, 8, 12, 7, 0xAA55) {
-        ok(vb) => {
-            switch verified_bundle_kind(&vb) {
-                .Agent => {}
-                _ => { pass = 0; }
-            }
-            if verified_bundle_version(&vb) != 10 { pass = 0; }
-            if verified_bundle_image_hash(&vb) != 0xAA55 { pass = 0; }
-            if verified_bundle_key_id(&vb) != 7 { pass = 0; }
-            unsafe { forget_unchecked(vb); }
-        }
+    switch bundle_validate_metadata_hash(&agent, .Agent, 1, 8, 12, 7, 0xAA55) {
+        ok(v) => {}
         err(e) => { pass = 0; }
     }
-    switch bundle_verify_and_admit_metadata(&agent, .Agent, 1, 8, 12, 7, 0x55AA) {
-        ok(vb) => {
-            pass = 0;
-            unsafe { forget_unchecked(vb); }
-        }
+    switch bundle_validate_metadata_hash(&agent, .Agent, 1, 8, 12, 7, 0x55AA) {
+        ok(v) => { pass = 0; }
         err(e) => {
             switch e {
                 .BadImageHash => {}
@@ -142,16 +130,15 @@ export fn production_ops_run() -> u32 {
     if rollback_active_version(&rb) != 10 { pass = 0; }
     if rollback_mark_boot_failed(&rb, 0) { pass = 0; }
     var next_agent: BundleHeader = bundle_header_init(.Agent, 12, 1, 41, 7, exact_hash, 256);
-    switch bundle_verify_and_admit_metadata(&next_agent, .Agent, 1, 8, 13, 7, exact_hash) {
-        ok(vb) => {
-            if rollback_install_verified_candidate(&rb, vb) != 2 { pass = 0; }
+    switch bundle_validate_metadata_hash(&next_agent, .Agent, 1, 8, 13, 7, exact_hash) {
+        ok(v) => {
             if rollback_active_version(&rb) != 10 { pass = 0; }
         }
         err(e) => { pass = 0; }
     }
     switch bundle_verify_and_admit_image(&next_agent, .Agent, 1, 8, 13, 7, image_base, 4) {
         ok(vb) => {
-            let verified_slot: usize = rollback_install_verified_candidate(&rb, vb);
+            let verified_slot: usize = rollback_install_verified_candidate(&rb, move vb);
             if verified_slot != 1 { pass = 0; }
         }
         err(e) => { pass = 0; }
