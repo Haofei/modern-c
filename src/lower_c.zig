@@ -13,13 +13,13 @@ pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *
     return lower_c_inspect.appendInspection(allocator, module, out);
 }
 
-// The target conformance profile (spec §0). `kernel` is freestanding-by-default
-// and has no ambient I/O. `hosted` opts in to a host C runtime (libc/libm); it
-// changes only the toolchain link step (link libc + `-lm`) — the generated C is
-// the same shape, so emitting hosted code with no hosted features is harmless.
-// The profile is stamped into the C as a marker so the toolchain driver and a
-// reader can see which target was selected.
-pub const Profile = enum { kernel, hosted };
+// The target conformance profile is owned by the backend seam. `kernel` is
+// freestanding-by-default and has no ambient I/O. `hosted` opts in to a host C
+// runtime (libc/libm); it changes only the toolchain link step (link libc +
+// `-lm`) — the generated C is the same shape, so emitting hosted code with no
+// hosted features is harmless. The profile is stamped into the C as a marker so
+// the toolchain driver and a reader can see which target was selected.
+pub const Profile = backend_mod.Profile;
 
 /// Construct the `Backend` registry entry for the C backend. The C backend is
 /// profile-aware and supports source-map emission (`emit-map`).

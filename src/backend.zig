@@ -3,8 +3,6 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir.zig");
-const lower_c = @import("lower_c.zig");
-const lower_llvm = @import("lower_llvm.zig");
 
 pub const Sha256Digest = [std.crypto.hash.sha2.Sha256.digest_length]u8;
 
@@ -172,10 +170,10 @@ fn appendEscapedMetadataValue(allocator: std.mem.Allocator, out: *std.ArrayList(
     };
 }
 
-/// Code-generation profile. Re-exported from `lower_c.zig`, which owns the
-/// definition (`kernel`/`hosted`). Only profile-aware backends (currently the C
-/// backend) act on it; profile-agnostic backends ignore it.
-pub const Profile = lower_c.Profile;
+/// Code-generation profile (`kernel`/`hosted`). The backend seam owns this
+/// request-level option; profile-aware backends act on it and profile-agnostic
+/// backends ignore it.
+pub const Profile = enum { kernel, hosted };
 
 /// The sanitizer/build-safety instrumentation axis (the `--checks=` profiles),
 /// bundled into one value so it can be threaded as a unit instead of as four
@@ -415,10 +413,9 @@ pub const VerifiedProgram = struct {
 /// implemented privately inside each backend module; this interface does not
 /// unify that.
 ///
-/// To add a native MC backend: create `src/lower_<name>.zig`, implement a
-/// `lowerFn` (module -> output bytes), expose a `pub fn mcBackend() Backend`
-/// constructor, and register it in `builtins` below. See
-/// `docs/backend-abstraction.md`.
+/// Concrete backend constructors are registered in `backend_registry.zig`, the
+/// composition root for built-in lowerers. This interface module deliberately
+/// does not import concrete C/LLVM lowering implementations.
 pub const Backend = struct {
     /// Stable identifier used for CLI selection and the registry ("c", "llvm").
     name: []const u8,
@@ -482,25 +479,6 @@ pub const Backend = struct {
     }
 };
 
-/// Registry of built-in backends. Adding a backend means adding its constructor
-/// here.
-fn builtins() [2]Backend {
-    return .{ lower_c.mcBackend(), lower_llvm.mcBackend() };
-}
-
-/// All registered built-in backends.
-pub fn all() [2]Backend {
-    return builtins();
-}
-
-/// Look up a backend by its CLI name ("c"/"llvm"); null if unknown.
-pub fn byName(name: []const u8) ?Backend {
-    for (builtins()) |b| {
-        if (std.mem.eql(u8, b.name, name)) return b;
-    }
-    return null;
-}
-
 test "VerifiedProgram exposes MIR-owned source spelling view" {
     const source =
         \\fn add_one(value: u32) -> u32 {
@@ -530,6 +508,14 @@ test "VerifiedProgram exposes MIR-owned source spelling view" {
     );
     try std.testing.expect(program.source_spelling.definesFunctionSpelling(module_mir, "add_one"));
     try std.testing.expect(!program.source_spelling.definesFunctionSpelling(module_mir, "missing"));
+}
+
+test "backend interface does not import concrete lowerers" {
+    const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "src/backend.zig", std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(source);
+
+    try std.testing.expect(std.mem.indexOf(u8, source, "@import(\"lower_c.zig\")") == null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "@import(\"lower_llvm.zig\")") == null);
 }
 
 test "ArtifactBundle emits shared source-map provenance headers" {

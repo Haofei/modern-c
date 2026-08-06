@@ -3,11 +3,10 @@ const builtin = @import("builtin");
 
 const ast = @import("ast.zig");
 const backend = @import("backend.zig");
-const lower_c = @import("lower_c.zig");
 const path_policy = @import("path_policy.zig");
 
 pub const Options = struct {
-    profile: lower_c.Profile = .kernel,
+    profile: backend.Profile = .kernel,
     checks: backend.Checks = .{},
     check_fmt: bool = false,
     json_diagnostics: bool = false,

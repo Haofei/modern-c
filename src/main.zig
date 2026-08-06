@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const backend = @import("backend.zig");
+const backend_registry = @import("backend_registry.zig");
 const build_options = @import("build_options");
 const cli = @import("cli.zig");
 const diagnostics = @import("diagnostics.zig");
@@ -959,7 +960,7 @@ fn runLowerC(session: *CompilationSession, path: []const u8, source: []const u8)
     try session.writeStdout(output.items);
 }
 
-fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
+fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: backend.Profile, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
     const allocator = session.allocator;
     const optimize = checks.optimize;
     const source_sha256 = backend.sha256Bytes(source);
@@ -979,7 +980,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    const be = backend.byName("c").?;
+    const be = backend_registry.byName("c").?;
     const lower_opts = backend.LowerOptions{
         .profile = profile,
         .source_path = artifact_source_path,
@@ -1025,7 +1026,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
 
     var raw_c: std.ArrayList(u8) = .empty;
     defer raw_c.deinit(allocator);
-    const be = backend.byName("c").?;
+    const be = backend_registry.byName("c").?;
     const lower_opts = backend.LowerOptions{
         .profile = .hosted,
         .source_path = artifact_source_path,
@@ -1346,7 +1347,7 @@ fn isCIdentifierContinue(ch: u8) bool {
     return isCIdentifierStart(ch) or (ch >= '0' and ch <= '9');
 }
 
-fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: lower_c.Profile, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
+fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: backend.Profile, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
     const allocator = session.allocator;
     const optimize = checks.optimize;
     var source_sha256: backend.Sha256Digest = undefined;
@@ -1365,7 +1366,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.EmitCFailed);
     defer module_mir.deinit();
 
-    const be = backend.byName("c").?;
+    const be = backend_registry.byName("c").?;
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
     be.lower(allocator, program, &generated_c, .{
@@ -1421,7 +1422,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, source: []const u
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    const be = backend.byName("llvm").?;
+    const be = backend_registry.byName("llvm").?;
     const lower_opts = backend.LowerOptions{
         .profile = .kernel,
         .source_path = path,
