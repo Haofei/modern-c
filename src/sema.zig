@@ -390,6 +390,10 @@ pub const Checker = struct {
     // its state to track a `move` field that has been moved out of its aggregate. Freed at
     // the end of each function's analysis.
     move_place_keys: std.ArrayListUnmanaged([]const u8) = .empty,
+    // Source offsets that already reported E_OWNERSHIP_PLACE_TOO_DEEP during the current
+    // function's move analysis. Some checks probe the same expression through multiple
+    // place-construction paths; this keeps the diagnostic precise without duplicating it.
+    move_place_depth_diagnostic_offsets: std.ArrayListUnmanaged(usize) = .empty,
     // Block-scoping (G20): the innermost-last stack of local names that are CURRENTLY LIVE
     // across all open lexical scopes (params + every enclosing block's locals). A `let`/`var`
     // may reuse a name that belongs to an already-exited SIBLING block (popped from here), but
@@ -736,6 +740,7 @@ pub const Checker = struct {
             defer self.move_ctx = null;
             defer self.move_loop_stack.deinit(self.reporter.allocator); // free the loop-entry snapshot stack
             defer self.move_place_keys.deinit(self.reporter.allocator); // free the field-move place-key list
+            defer self.move_place_depth_diagnostic_offsets.deinit(self.reporter.allocator);
             for (module.decls) |decl| {
                 if (decl.kind == .fn_decl) sema_move.checkMoveLinearity(self, decl.kind.fn_decl, &type_aliases);
             }

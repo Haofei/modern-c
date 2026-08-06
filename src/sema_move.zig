@@ -552,6 +552,7 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
     defer {
         for (self.move_place_keys.items) |k| self.reporter.allocator.free(k);
         self.move_place_keys.clearRetainingCapacity();
+        self.move_place_depth_diagnostic_offsets.clearRetainingCapacity();
     }
     for (fn_decl.params) |param| {
         if (self.typeEmbedsMoveByValue(param.ty, aliases)) {
@@ -3382,6 +3383,24 @@ pub const PlaceKeyTy = struct {
     ty: ast.TypeExpr,
 };
 
+fn projectMovePlace(self: *Checker, base: MovePlace, projection: MoveProjection, span: diagnostics.Span) ?MovePlace {
+    return base.project(projection) orelse {
+        reportMovePlaceTooDeep(self, span);
+        return null;
+    };
+}
+
+fn reportMovePlaceTooDeep(self: *Checker, span: diagnostics.Span) void {
+    for (self.move_place_depth_diagnostic_offsets.items) |offset| {
+        if (offset == span.offset) return;
+    }
+    self.move_place_depth_diagnostic_offsets.append(self.reporter.allocator, span.offset) catch {
+        self.oom = true;
+        return;
+    };
+    self.errorCode(span, "E_OWNERSHIP_PLACE_TOO_DEEP", "ownership place exceeds the supported projection depth; reduce nested field/index depth or split the resource into a shallower owner");
+}
+
 const AliasPlaceInfo = struct {
     key: []const u8,
     place: MovePlace,
@@ -3410,7 +3429,7 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const MoveState) 
             self.move_place_keys.append(self.reporter.allocator, key) catch {
                 self.oom = true;
             };
-            const place = base.place.project(.{ .field = m.name.text }) orelse return null;
+            const place = projectMovePlace(self, base.place, .{ .field = m.name.text }, m.name.span) orelse return null;
             return .{ .key = key, .place = place, .ty = field_ty };
         },
         .index => |ix| {
@@ -3434,7 +3453,7 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const MoveState) 
                         self.reporter.allocator.free(key);
                         return null;
                     };
-                    const place = base.place.project(.{ .symbolic_index = symbol }) orelse return null;
+                    const place = projectMovePlace(self, base.place, .{ .symbolic_index = symbol }, ix.index.span) orelse return null;
                     return .{ .key = key, .place = place, .ty = child_ty };
                 }
                 if (len != 1) return null;
@@ -3448,7 +3467,7 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const MoveState) 
             self.move_place_keys.append(self.reporter.allocator, key) catch {
                 self.oom = true;
             };
-            const place = base.place.project(.{ .constant_index = k }) orelse return null;
+            const place = projectMovePlace(self, base.place, .{ .constant_index = k }, ix.index.span) orelse return null;
             return .{ .key = key, .place = place, .ty = child_ty };
         },
         else => return null,
@@ -4017,7 +4036,7 @@ fn wildcardMoveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const Mov
                 self.reporter.allocator.free(key);
                 return null;
             };
-            const place = base.place.project(.wildcard_index) orelse return null;
+            const place = projectMovePlace(self, base.place, .wildcard_index, ix.index.span) orelse return null;
             return .{ .key = key, .place = place, .ty = array.child.* };
         },
         else => return null,
@@ -4049,7 +4068,7 @@ fn nestedWildcardIndexedPlaceKeyAndType(self: *Checker, expr: ast.Expr, state: *
                     self.reporter.allocator.free(key);
                     return null;
                 };
-                const place = direct_base.place.project(.wildcard_index) orelse return null;
+                const place = projectMovePlace(self, direct_base.place, .wildcard_index, ix.index.span) orelse return null;
                 return .{ .key = key, .place = place, .ty = direct_array.child.* };
             };
             const base_ty = resolveAliasType(base.ty, ctx.*);
@@ -4089,7 +4108,7 @@ fn nestedWildcardIndexedPlaceKeyAndType(self: *Checker, expr: ast.Expr, state: *
                 .{ .constant_index = 0 }
             else
                 .wildcard_index;
-            const place = base.place.project(projection) orelse return null;
+            const place = projectMovePlace(self, base.place, projection, ix.index.span) orelse return null;
             return .{ .key = key, .place = place, .ty = child_ty };
         },
         else => return null,
@@ -4968,7 +4987,7 @@ pub fn registerAggregateFieldAliases(
         else => return,
     };
     for (fields) |field| {
-        const field_place = if (base_place) |place| place.project(.{ .field = field.name.text }) else null;
+        const field_place = if (base_place) |place| projectMovePlace(self, place, .{ .field = field.name.text }, field.name.span) else null;
         // A nested struct literal: descend so a borrow buried at `base.f.g…` is tracked at its
         // dotted place. The dotted `key` is owned by `move_place_keys` (so the recursive call
         // can borrow it as the new base, and it is freed at function end).
@@ -5098,7 +5117,7 @@ pub fn registerArrayElementAliases(
         else => return,
     };
     for (items, 0..) |item, index| {
-        const element_place = if (base_place) |place| place.project(.{ .constant_index = index }) else null;
+        const element_place = if (base_place) |place| projectMovePlace(self, place, .{ .constant_index = index }, item.span) else null;
         const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[{d}]", .{ base, index }) catch {
             self.oom = true;
             continue;
@@ -5291,7 +5310,7 @@ fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const MoveStat
                 self.oom = true;
                 return null;
             };
-            const place = base.place.project(.{ .field = m.name.text }) orelse {
+            const place = projectMovePlace(self, base.place, .{ .field = m.name.text }, m.name.span) orelse {
                 self.reporter.allocator.free(key);
                 return null;
             };
@@ -5309,7 +5328,7 @@ fn aliasWildcardPlaceInfo(self: *Checker, expr: ast.Expr, state: *const MoveStat
             };
             const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse return null;
             if (len <= 1) return null;
-            const place = base.place.project(.wildcard_index) orelse return null;
+            const place = projectMovePlace(self, base.place, .wildcard_index, ix.index.span) orelse return null;
             const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{base.key}) catch {
                 self.oom = true;
                 return null;

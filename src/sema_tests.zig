@@ -35,6 +35,26 @@ fn countDiagnosticCode(reporter: *const diagnostics.Reporter, code: []const u8) 
     return count;
 }
 
+fn appendProjectionDepthLiteral(source: *std.ArrayList(u8), depth: usize) !void {
+    for (0..depth) |_| try source.appendSlice(std.testing.allocator, ".{ .f = ");
+    try source.appendSlice(std.testing.allocator, "make_res(1)");
+    for (0..depth) |_| try source.appendSlice(std.testing.allocator, " }");
+}
+
+fn appendProjectionDepthFunction(source: *std.ArrayList(u8), name: []const u8, depth: usize) !void {
+    try source.print(std.testing.allocator, "fn {s}() -> u32 {{\n    var root: N{d} = ", .{ name, depth });
+    try appendProjectionDepthLiteral(source, depth);
+    try source.appendSlice(std.testing.allocator, ";\n    let moved: Res = move root");
+    for (0..depth) |_| try source.appendSlice(std.testing.allocator, ".f");
+    try source.appendSlice(std.testing.allocator,
+        \\;
+        \\    unsafe { forget_unchecked(root); }
+        \\    return consume(move moved);
+        \\}
+        \\
+    );
+}
+
 fn parseWithAllocator(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !ast.Module {
     var p = parser.Parser.init(source, reporter);
     return p.parseModule(allocator);
@@ -817,6 +837,39 @@ test "auto-drop v0 rejects alias moves forget and moved reinitialization" {
     try checkSource(source, &reporter);
     // DIAGNOSTIC_UNIT: E_AUTO_DROP_UNSUPPORTED
     try std.testing.expectEqual(@as(usize, 4), countDiagnosticCode(&reporter, "E_AUTO_DROP_UNSUPPORTED"));
+}
+
+test "ownership place projection depth emits explicit diagnostic" {
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(std.testing.allocator);
+
+    try source.appendSlice(std.testing.allocator,
+        \\move struct Res { id: u32 }
+        \\fn make_res(id: u32) -> Res { return .{ .id = id }; }
+        \\fn consume(r: Res) -> u32 {
+        \\    let id: u32 = r.id;
+        \\    unsafe { forget_unchecked(r); }
+        \\    return id;
+        \\}
+    );
+
+    for (1..18) |depth| {
+        if (depth == 1) {
+            try source.print(std.testing.allocator, "struct N1 {{ f: Res }}\n", .{});
+        } else {
+            try source.print(std.testing.allocator, "struct N{d} {{ f: N{d} }}\n", .{ depth, depth - 1 });
+        }
+    }
+
+    try appendProjectionDepthFunction(&source, "accept_projection_depth_15", 15);
+    try appendProjectionDepthFunction(&source, "accept_projection_depth_16", 16);
+    try appendProjectionDepthFunction(&source, "reject_projection_depth_17", 17);
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move_place_projection_depth.mc", source.items);
+    defer reporter.deinit();
+    try checkSource(source.items, &reporter);
+    // DIAGNOSTIC_UNIT: E_OWNERSHIP_PLACE_TOO_DEEP
+    try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_OWNERSHIP_PLACE_TOO_DEEP"));
 }
 
 test "drop attribute shape is restricted to mut pointer checked resource returning void" {
