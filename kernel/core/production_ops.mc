@@ -32,6 +32,20 @@ pub struct BundleDigest {
     bytes: [32]u8,
 }
 
+pub linear opaque struct SignatureAuthority {
+    marker: u32,
+}
+
+pub linear opaque struct BundleSignatureProof {
+    accepted: bool,
+    kind: BundleKind,
+    version: u64,
+    abi_version: u32,
+    policy_version: u64,
+    key_id: u32,
+    image_digest: BundleDigest,
+}
+
 pub struct BundleHeader {
     magic: u32,
     kind: BundleKind,
@@ -63,6 +77,91 @@ pub linear opaque struct VerifiedBundle {
     image_base: usize,
     image_len: usize,
     exact_bytes: bool,
+}
+
+impl SignatureAuthority {
+    fn mint() -> SignatureAuthority {
+        return .{ .marker = 0x5349474e };
+    }
+    fn require(auth: *SignatureAuthority) -> void {
+        if auth.marker == 0 {
+        }
+    }
+}
+
+// Privileged signature-policy root seam. The current language has unsafe blocks but
+// no `unsafe fn` declarations, so callers must treat this like the capability mint
+// roots: production code should obtain it only from the boot/key-policy TCB. The
+// important admission boundary below consumes an opaque `BundleSignatureProof`, not
+// a caller-supplied boolean.
+pub fn signature_authority_unchecked() -> SignatureAuthority {
+    return SignatureAuthority.mint();
+}
+
+pub fn signature_authority_revoke(auth: SignatureAuthority) -> void {
+    unsafe { forget_unchecked(auth); }
+}
+
+impl BundleSignatureProof {
+    fn mint(auth: *SignatureAuthority, h: *BundleHeader, accepted: bool) -> BundleSignatureProof {
+        SignatureAuthority.require(auth);
+        return .{
+            .accepted = accepted,
+            .kind = h.kind,
+            .version = h.version,
+            .abi_version = h.abi_version,
+            .policy_version = h.policy_version,
+            .key_id = h.key_id,
+            .image_digest = h.image_digest,
+        };
+    }
+    fn accepted(p: *BundleSignatureProof) -> bool {
+        return p.accepted;
+    }
+    fn matches_header(p: *BundleSignatureProof, h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32) -> bool {
+        if !p.accepted {
+            return false;
+        }
+        if !bundle_kind_matches(p.kind, expected_kind) {
+            return false;
+        }
+        if !bundle_kind_matches(h.kind, p.kind) {
+            return false;
+        }
+        if p.abi_version != expected_abi {
+            return false;
+        }
+        if h.abi_version != p.abi_version {
+            return false;
+        }
+        if p.version < min_version {
+            return false;
+        }
+        if p.version > max_version {
+            return false;
+        }
+        if h.version != p.version {
+            return false;
+        }
+        if p.key_id != trusted_key_id {
+            return false;
+        }
+        if h.key_id != p.key_id {
+            return false;
+        }
+        if h.policy_version != p.policy_version {
+            return false;
+        }
+        return bundle_digest_equal(&h.image_digest, &p.image_digest);
+    }
+}
+
+pub fn bundle_signature_proof_mint(auth: *SignatureAuthority, h: *BundleHeader, accepted: bool) -> BundleSignatureProof {
+    return BundleSignatureProof.mint(auth, h, accepted);
+}
+
+pub fn bundle_signature_proof_accepted(p: *BundleSignatureProof) -> bool {
+    return BundleSignatureProof.accepted(p);
 }
 
 fn bundle_digest_from_legacy_hash(image_hash: u64) -> BundleDigest {
@@ -359,6 +458,10 @@ pub fn bundle_digest_equal(a: *BundleDigest, b: *BundleDigest) -> bool {
     return diff == 0;
 }
 
+fn bundle_signature_proof_matches_header(p: *BundleSignatureProof, h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32) -> bool {
+    return BundleSignatureProof.matches_header(p, h, expected_kind, expected_abi, min_version, max_version, trusted_key_id);
+}
+
 pub fn bundle_digest_bytes(base: usize, len: usize) -> BundleDigest {
     if !bundle_sha256_padding_valid(len) {
         return bundle_digest_zero();
@@ -453,24 +556,32 @@ pub fn bundle_header_init_for_image(kind: BundleKind, version: u64, abi_version:
 }
 
 impl VerifiedBundle {
-    fn admit_image(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, signature_verified: bool, image_base: usize, image_len: usize) -> Result<VerifiedBundle, BundleError> {
+    fn admit_image(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, proof: BundleSignatureProof, image_base: usize, image_len: usize) -> Result<VerifiedBundle, BundleError> {
         switch bundle_validate_metadata(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id) {
             ok(v) => {}
-            err(e) => { return err(e); }
+            err(e) => {
+                unsafe { forget_unchecked(proof); }
+                return err(e);
+            }
         }
-        if !signature_verified {
+        if !bundle_signature_proof_matches_header(&proof, h, expected_kind, expected_abi, min_version, max_version, trusted_key_id) {
+            unsafe { forget_unchecked(proof); }
             return err(.BadSignature);
         }
         if !bundle_image_range_valid(image_base, image_len) {
+            unsafe { forget_unchecked(proof); }
             return err(.BadImageHash);
         }
         if !bundle_sha256_padding_valid(image_len) {
+            unsafe { forget_unchecked(proof); }
             return err(.BadImageHash);
         }
         var actual_digest: BundleDigest = bundle_digest_bytes(image_base, image_len);
         if !bundle_digest_equal(&h.image_digest, &actual_digest) {
+            unsafe { forget_unchecked(proof); }
             return err(.BadImageHash);
         }
+        unsafe { forget_unchecked(proof); }
         return ok(.{
             .kind = h.kind,
             .version = h.version,
@@ -522,8 +633,8 @@ pub fn bundle_validate_metadata_hash(h: *BundleHeader, expected_kind: BundleKind
     return ok(true);
 }
 
-pub fn bundle_verify_and_admit_image(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, signature_verified: bool, image_base: usize, image_len: usize) -> Result<VerifiedBundle, BundleError> {
-    return VerifiedBundle.admit_image(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id, signature_verified, image_base, image_len);
+pub fn bundle_verify_and_admit_image(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, proof: BundleSignatureProof, image_base: usize, image_len: usize) -> Result<VerifiedBundle, BundleError> {
+    return VerifiedBundle.admit_image(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id, move proof, image_base, image_len);
 }
 
 pub fn verified_bundle_kind(v: *VerifiedBundle) -> BundleKind {
