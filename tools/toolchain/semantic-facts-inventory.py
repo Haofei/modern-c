@@ -1214,6 +1214,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/ownership_facts.zig": {
         "pub fn makeDropPointerCall": 0,
         "pub fn movedLocalName": 0,
+        "pub fn dropGlueDeclMatches(": 1,
+        "test \"drop glue declaration matching centralizes attr ABI and eligibility checks\"": 1,
         "test \"auto-drop cleanup helpers recognize explicit release call shapes\"": 1,
     },
     "src/sema.zig": {
@@ -1286,6 +1288,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "defer_stack: std.ArrayList(DeferredCleanup)": 1,
         "try ownership_facts.makeDropPointerCall": 0,
         "ownership_facts.movedLocalName": 0,
+        "ownership_facts.dropGlueDeclMatches(": 1,
+        "ownership_facts.dropPointerReleaseParamTypeName(artifact.fn_decl)": 0,
         "fn directMovedLocalName(": 1,
         "self.comptime_module = declarations.moduleForComptimeEvaluation();": 0,
         "self.comptime_decls = declarations.declsForEarlyDeclarationScan();": 0,
@@ -2089,6 +2093,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "defer_stack: std.ArrayList(DeferredCleanup)": 1,
         "try ownership_facts.makeDropPointerCall": 0,
         "ownership_facts.movedLocalName": 0,
+        "ownership_facts.dropGlueDeclMatches(": 1,
+        "ownership_facts.dropPointerReleaseParamTypeName(artifact.fn_decl)": 0,
         "fn directMovedLocalName(": 1,
         "try ctx.emitBackendNameAliases(module);": 0,
         "try ctx.emitBackendNameAliases();": 1,

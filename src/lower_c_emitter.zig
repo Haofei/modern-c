@@ -584,12 +584,15 @@ pub const CEmitter = struct {
         for (self.mir_module.drop_glue_facts) |fact| {
             var matched = false;
             for (self.function_decl_artifacts.items) |artifact| {
-                if (artifact.is_extern) continue;
-                if (!std.mem.eql(u8, artifact.fn_decl.name.text, fact.release_fn)) continue;
-                if (!hasNamedAttr(artifact.attrs, "drop")) return error.UnsupportedCEmission;
-                const resource_type = ownership_facts.dropPointerReleaseParamTypeName(artifact.fn_decl) orelse return error.UnsupportedCEmission;
-                if (!std.mem.eql(u8, resource_type, fact.resource_type)) return error.UnsupportedCEmission;
-                if (!self.autoDropEligibleTypeName(resource_type)) return error.UnsupportedCEmission;
+                if (!ownership_facts.dropGlueDeclMatches(
+                    fact.resource_type,
+                    fact.release_fn,
+                    artifact.fn_decl,
+                    artifact.attrs,
+                    artifact.is_extern,
+                    &self.structs,
+                    &self.type_aliases,
+                )) continue;
                 matched = true;
                 break;
             }
