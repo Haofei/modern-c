@@ -1995,8 +1995,11 @@ keeps the name-keyed analyses sound).
   proceed with the planned CFG/place-based rewrite; patch short-circuit modeling
   meanwhile. Effort L / S.
 - **[P2] Spec drift: the orphan rule is stated unqualified but enforced only for
-  opaque owners** (spec §32.2 vs `if (!sd.is_opaque) continue;`,
-  `src/sema.zig:5215`). Qualify the spec or extend the check. Effort S.
+  opaque owners.** **fixed**; `checkOrphanImpls` records declaring files for
+  non-opaque nominal types as well as opaque owners, and rejects foreign
+  `impl Trait for Type` blocks with `E_ORPHAN_IMPL`. The normative §32.2 rule
+  remains unqualified, and `tests/spec/traits_orphan_nonopaque_reject.mc` locks
+  the non-opaque regression.
 - **[P2] No "required from here" instantiation backtrace.** Specialized clones keep
   generic-source spans (`src/monomorphize.zig:257-264`); post-substitution errors
   point at code that is correct for other instantiations. Fix: thread an
