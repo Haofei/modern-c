@@ -15,7 +15,6 @@ import "kernel/lib/mailbox.mc";
 import "kernel/lib/fdspace.mc";
 import "kernel/lib/resacct.mc";
 import "kernel/core/ledger.mc";  // unified per-dimension resource ledger (charged from hot paths)
-import "kernel/core/metrics.mc"; // structured counters incremented at hot-path sites
 // Re-export the concerns split out of this file. MC imports are textual inclusion deduped
 // by path, so every existing `import "kernel/core/process.mc"` consumer transitively gets
 // the full process API (scheduling, signals, IPC) without changing any consumer import site.
@@ -136,9 +135,6 @@ struct ProcTable {
     // seam); a dimension with limit 0 is unlimited, so an un-configured ledger never gates work.
     // An over-limit charge fails the operation cleanly (its existing error/drop path), never traps.
     ledger: Ledger,
-    // Structured hot-path counters (kernel/core/metrics.mc): a single metrics_inc at each of the
-    // spawn/exit/ipc-send/ipc-recv/preempt/blk-read/blk-write sites gives a live view of activity.
-    metrics: Metrics,
 }
 
 // The no-op default idle action.
@@ -265,19 +261,12 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
     t.idle_hook = idle_noop; // platform overrides with wfi via proc_set_idle
     t.death_hook = death_noop; // subsystems override via proc_set_death_hook
     ledger_init(&t.ledger);   // every dimension starts unlimited (limit 0); callers opt in per dimension
-    metrics_init(&t.metrics); // all hot-path counters start at zero
 }
 
 // The table's unified resource ledger — for the hot paths that charge/release against it and for
 // policy/introspection to set limits (ledger_set_limit) and read usage (ledger_used).
 export fn proc_ledger(t: *mut ProcTable) -> *mut Ledger {
     return &t.ledger;
-}
-
-// The table's hot-path metrics counters — for the sites that increment them and for a monitor to
-// read totals back (metrics_get).
-export fn proc_metrics(t: *mut ProcTable) -> *mut Metrics {
-    return &t.metrics;
 }
 
 // Set the platform's CPU-idle action (e.g. a `wfi` wrapper). Called when the scheduler has
@@ -367,7 +356,6 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     // A fresh process starts at zero memory usage — it does NOT inherit the parent's usage.
     // Re-init in case this slot was reaped from an earlier (possibly heavily-charged) process.
     resacct_init(&t.procs[slot].macct, MEM_QUOTA_DEFAULT);
-    metrics_inc(&t.metrics, .ProcSpawn); // hot-path counter: a process was spawned
     return slot as u32;
 }
 
@@ -775,7 +763,6 @@ fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
 // one. Never returns to the caller (its slot is now a Zombie awaiting reap).
 export fn proc_exit(t: *mut ProcTable, code: u32) -> void {
     let from: usize = t.current;
-    metrics_inc(&t.metrics, .ProcExit); // hot-path counter: a process exited
     t.procs[from].exit_code = code;
     proc_death_cleanup(t, from); // release waiters + clear IPC before the slot becomes a zombie
     t.procs[from].state = .Zombie;

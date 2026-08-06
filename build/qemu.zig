@@ -757,10 +757,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-proc-supervisor-test", "Run the LLVM-lowered running supervisor loop (proc_supervisor_scan) over 3 supervised PROCESSES under QEMU", &.{ "bash", "tools/proc/proc-supervisor-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "instrument-test", "Run the instrumented ProcTable (unified ledger gating real IPC/blk/DMA ops + exact hot-path metrics + supervision-tree cascade with leases) under QEMU", &.{ "bash", "tools/proc/instrument-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-instrument-test", "Run the LLVM-lowered instrumented ProcTable (ledger + metrics + supervision-tree/leases) under QEMU", &.{ "bash", "tools/proc/instrument-test.sh", "zig-out/bin/mcc", "llvm" });
-
     _ = h.addScriptTest(ctx, "ledger-test", "Run the unified resource ledger (charge/release + overflow-edge) under QEMU", &.{ "bash", "tools/proc/ledger-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-ledger-test", "Run the LLVM-lowered unified resource ledger under QEMU", &.{ "bash", "tools/proc/ledger-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -768,10 +764,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "soak-test", "Run the single-boot soak workload (thousands of spawn/charge/supervise/reclaim/reap cycles return to baseline, no leak/overflow) under QEMU", &.{ "bash", "tools/proc/soak-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-soak-test", "Run the LLVM-lowered single-boot soak workload under QEMU", &.{ "bash", "tools/proc/soak-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "metrics-test", "Run structured metrics + deterministic event-log replay under QEMU", &.{ "bash", "tools/proc/metrics-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-metrics-test", "Run LLVM-lowered structured metrics + deterministic event-log replay under QEMU", &.{ "bash", "tools/proc/metrics-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "syscall-test", "Run the ecall syscall dispatch skeleton under QEMU", &.{ "bash", "tools/lang/syscall-test.sh", "zig-out/bin/mcc", "c" });
 

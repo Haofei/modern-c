@@ -14,6 +14,7 @@ import "std/addr.mc";
 const STACK_SIZE: usize = 8192;
 
 global g_procs: ProcTable;
+global g_heap: Heap;
 
 fn proc_a() -> void {
     console_putc('A');
@@ -49,13 +50,12 @@ fn wait_one(t: *mut ProcTable) -> u32 {
 }
 
 export fn process_demo(region_base: usize, region_len: usize) -> u32 {
-    var heap: Heap = uninit;
-    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
+    heap_init_untracked(&g_heap, phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
     install_idle(&g_procs); // wfi when nothing runnable
-    proc_spawn(&g_procs, alloc_stack(&heap), proc_a);
-    proc_spawn(&g_procs, alloc_stack(&heap), proc_b);
-    proc_spawn(&g_procs, alloc_stack(&heap), proc_c);
+    proc_spawn(&g_procs, alloc_stack(&g_heap), proc_a);
+    proc_spawn(&g_procs, alloc_stack(&g_heap), proc_b);
+    proc_spawn(&g_procs, alloc_stack(&g_heap), proc_c);
 
     // Blocking-wait for all three children (proc_wait runs them, then reaps each).
     var reaped: u32 = 0;

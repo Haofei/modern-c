@@ -2,9 +2,8 @@
 //
 // The block layer (kernel/fs/blockdev.mc) does device I/O through a `*dyn BlockDevice` vtable but
 // carries no per-table accounting. These thin wrappers route a block read/write through the
-// ProcTable's UNIFIED ledger (charge one BlockIo unit per op) and the hot-path metrics (BlkRead /
-// BlkWrite), then perform the real device I/O via bd_read_block / bd_write_block. This is the
-// representative wiring of task (A)/(B) for the block dimension: a caller that wants I/O accounted
+// ProcTable's UNIFIED ledger (charge one BlockIo unit per op), then perform the real device I/O
+// via bd_read_block / bd_write_block. A caller that wants I/O accounted
 // against the table's budgets calls these instead of the bare bd_* funnels; the raw funnels remain
 // for un-accounted internal use.
 //
@@ -16,7 +15,7 @@
 import "kernel/core/process.mc";
 import "kernel/fs/blockdev.mc";
 
-// Charged block read: charge one BlockIo unit, meter BlkRead, then read block `blk` into `dst`
+// Charged block read: charge one BlockIo unit, then read block `blk` into `dst`
 // through the device. err(.IoError) with the device untouched if the ledger refuses the charge.
 #[mc_abi]
 export fn proc_blk_read(t: *mut ProcTable, dev: *dyn BlockDevice, blk: u64, dst: usize) -> Result<bool, BlockError> {
@@ -24,11 +23,10 @@ export fn proc_blk_read(t: *mut ProcTable, dev: *dyn BlockDevice, blk: u64, dst:
         ok(v) => {}
         err(e) => { return err(.IoError); } // over the BlockIo ceiling — gate the I/O, do not trap
     }
-    metrics_inc(proc_metrics(t), .BlkRead); // hot-path counter: a block read was issued
     return bd_read_block(dev, blk, dst);
 }
 
-// Charged block write: charge one BlockIo unit, meter BlkWrite, then write block `blk` from `src`
+// Charged block write: charge one BlockIo unit, then write block `blk` from `src`
 // through the device. err(.IoError) with the device untouched if the ledger refuses the charge.
 #[mc_abi]
 export fn proc_blk_write(t: *mut ProcTable, dev: *dyn BlockDevice, blk: u64, src: usize) -> Result<bool, BlockError> {
@@ -36,7 +34,6 @@ export fn proc_blk_write(t: *mut ProcTable, dev: *dyn BlockDevice, blk: u64, src
         ok(v) => {}
         err(e) => { return err(.IoError); } // over the BlockIo ceiling — gate the I/O, do not trap
     }
-    metrics_inc(proc_metrics(t), .BlkWrite); // hot-path counter: a block write was issued
     return bd_write_block(dev, blk, src);
 }
 

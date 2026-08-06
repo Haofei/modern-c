@@ -122,7 +122,6 @@ fn ipc_recv_release(t: *mut ProcTable) -> void {
         ok(v) => {}
         err(e) => {}
     }
-    metrics_inc(&t.metrics, .IpcRecv); // hot-path counter: an IPC message was received
 }
 
 // Charge one in-flight IPC message, then post it and wake a blocked receiver. Refuses (returns false)
@@ -136,7 +135,6 @@ fn charged_post(t: *mut ProcTable, dst: usize, msg: Message) -> bool {
     }
     if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid) {
         wake_if_blocked(t, dst);
-        metrics_inc(&t.metrics, .IpcSend); // count endpoint/notify sends too, so IpcSend matches IpcRecv
         return true;
     }
     switch ledger_release(&t.ledger, .IpcMessages, 1) { // mailbox full: undo the charge
@@ -187,7 +185,6 @@ fn ipc_send_try_id_prov(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: 
     let msg: Message = proc_make_msg(t, tag, a0, a1, a2, call_id);
     if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid) {
         wake_if_blocked(t, dst);
-        metrics_inc(&t.metrics, .IpcSend); // hot-path counter: an IPC message was sent
         if record_prov {
             // Observe-only: record provenance for this successful delivery. Does not affect the
             // result — the same sends succeed/fail exactly as before. The fast path skips this

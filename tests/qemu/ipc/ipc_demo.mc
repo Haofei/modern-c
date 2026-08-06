@@ -17,6 +17,7 @@ const TAG_REPLY: u32 = 2;
 const TAG_STOP: u32 = 9;
 
 global g_procs: ProcTable;
+global g_heap: Heap;
 global g_result: u32;
 
 // The service: handle requests (reply a0*2) until a STOP message, then exit.
@@ -52,13 +53,12 @@ fn alloc_stack(h: *mut Heap) -> usize {
 }
 
 export fn ipc_demo(region_base: usize, region_len: usize) -> u32 {
-    var heap: Heap = uninit;
-    heap_init_untracked(&heap, phys_range(pa(region_base), region_len));
+    heap_init_untracked(&g_heap, phys_range(pa(region_base), region_len));
     proc_table_init(&g_procs);
     install_idle(&g_procs); // wfi when nothing runnable
     g_result = 0;
-    proc_spawn(&g_procs, alloc_stack(&heap), server); // pid 1
-    proc_spawn(&g_procs, alloc_stack(&heap), client); // pid 2
+    proc_spawn(&g_procs, alloc_stack(&g_heap), server); // pid 1
+    proc_spawn(&g_procs, alloc_stack(&g_heap), client); // pid 2
 
     // Wait for both to finish; proc_wait yields internally, running the server and
     // client (and their IPC rendezvous) until each exits.

@@ -434,9 +434,6 @@ export fn proc_preempt_tick(t: *mut ProcTable) -> bool {
     let expired: bool = proc_tick(t);
     if expired {
         g_need_resched.store(1, .release);
-        // Hot-path counter: the scheduler preempted the running task (quantum-expiry edge). A plain
-        // saturating counter update — no blocking / context switch — so it stays irq-safe.
-        metrics_inc(&t.metrics, .SchedPreempt);
     }
     return expired;
 }

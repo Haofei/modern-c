@@ -301,14 +301,10 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-agent-preempt-test"));
     // llvm-proc-supervisor-test runs the LLVM-lowered running supervisor loop (proc_supervisor_scan) under QEMU.
     m0_full_step.dependOn(ctx.cmd("llvm-proc-supervisor-test"));
-    // llvm-instrument-test runs the LLVM-lowered instrumented ProcTable (ledger + metrics + supervision-tree/leases) under QEMU.
-    m0_full_step.dependOn(ctx.cmd("llvm-instrument-test"));
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
     m0_full_step.dependOn(ctx.cmd("llvm-ledger-test"));
     // llvm-soak-test runs the LLVM-lowered single-boot soak workload under QEMU.
     m0_full_step.dependOn(ctx.cmd("llvm-soak-test"));
-    // llvm-metrics-test runs the LLVM-lowered structured metrics + deterministic replay under QEMU.
-    m0_full_step.dependOn(ctx.cmd("llvm-metrics-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-page-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-heap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-paging-test"));
@@ -796,15 +792,11 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("agent-preempt-test"));
     // proc-supervisor-test runs the running supervisor loop (proc_supervisor_scan) over supervised PROCESSES under QEMU.
     m0_full_step.dependOn(ctx.cmd("proc-supervisor-test"));
-    // instrument-test proves the instrumented ProcTable end to end (unified ledger gating real IPC/blk/DMA ops + exact hot-path metrics + supervision-tree cascade with leases) under QEMU.
-    m0_full_step.dependOn(ctx.cmd("instrument-test"));
     // ledger-test runs the unified resource ledger (charge/release + overflow-edge) under QEMU.
     m0_full_step.dependOn(ctx.cmd("ledger-test"));
     // soak-test runs the single-boot soak workload (thousands of spawn/charge/supervise/reclaim/
     // reap cycles return to baseline; no leak, no counter-overflow trap) under QEMU.
     m0_full_step.dependOn(ctx.cmd("soak-test"));
-    // metrics-test runs structured metrics + deterministic event-log replay under QEMU.
-    m0_full_step.dependOn(ctx.cmd("metrics-test"));
     // syscall-test runs the ecall syscall dispatch skeleton under QEMU.
     m0_full_step.dependOn(ctx.cmd("syscall-test"));
     // user-test runs the M->U privilege drop + user-mode syscalls under QEMU.
