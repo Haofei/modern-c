@@ -1797,81 +1797,181 @@ The split follows the kind of fact. The primitive checks **spatial / representat
 
 ---
 
-## 18.1 Linear Resource Types (`move`)
+## 18.1 Scoped Affine Ownership (`move`, `linear`, `borrow`)
 
-Hardware resources — DMA buffers, interrupt-disabled witnesses, locks, device
-handles — obey a **use-protocol** the compiler should enforce: a DMA buffer
-handed to the device must not be read until it is handed back; a lock acquired
-must be released exactly once; an `IrqOff` witness must not be duplicated. MC
-expresses these with **linear `move` types**: a narrow, opt-in ownership
-mechanism — *not* a general borrow checker (there are no borrows, lifetimes, or
-aliasing analysis). It enforces exactly one rule kind: **a `move` value is used
-linearly — consumed exactly once.**
+Hardware resources — DMA buffers, interrupt-disabled witnesses, locks, file
+handles, capabilities, verified-image tokens — obey use-protocols the compiler
+should enforce. MC expresses these protocols with **Scoped Affine Ownership**:
+an opt-in, conservative ownership system for resource values and lexical views.
+It is not Rust's lifetime system and does not promise whole-program memory
+safety, but it does give compile-time guarantees for the resource transitions
+that matter in kernels and drivers.
 
-A type is made linear with the `move` qualifier on its declaration:
+MC classifies resource-facing values as follows:
+
+| Class | Meaning | Typical use |
+|---|---|---|
+| `copy` | freely copyable value | integers, floats, plain POD structs |
+| `move struct` | affine resource: cannot be copied; may be moved, explicitly released, or auto-dropped if it has drop glue | files, locks, socket-like handles, DMA mappings |
+| `linear struct` | strict resource: cannot be copied and must be consumed exactly once | capabilities, admission tokens, transaction tokens |
+| `borrow` | shared lexical non-owning view | `*const T`, const slice/string views, read-only wrappers |
+| `borrow mut` | unique lexical mutable view | `*mut T`, mutable slice/container view |
+| `view struct` | aggregate that stores scoped borrow fields | parser/backend views derived from one source |
+| `region struct` | node owned by an enclosing region/arena, not independently dropped | AST, MIR, semantic graph nodes |
+| raw pointer / unsafe FFI | outside the ownership proof boundary | hardware addresses, C ABI, low-level page tables |
+
+### 18.1.1 `move` and `linear`
+
+A type opts into owned resource tracking with `move struct` or `linear struct`:
 
 ```mc
-move struct Lock { /* … */ }
-move struct CpuBuffer { /* … */ }
-move struct DeviceBuffer { /* … */ }
+move struct File { fd: i32 }
+linear struct VerifiedBundle { /* opaque admission token */ }
 ```
 
-Semantics of a `move` value:
+Common rules for checked resources:
 
 ```txt
-1. Consumed-on-use: passing a `move` value by value to a function, returning it,
-   or assigning it to another binding *moves* it — the source binding is consumed
-   and becomes dead. Using a dead binding is E_USE_AFTER_MOVE.
-
-2. Linear (must-consume): a live `move` binding that reaches the end of its scope
-   without being moved (consumed) is E_RESOURCE_LEAK. Every resource is released
-   exactly once — no leaks, no double-free.
-
-3. No aliasing: a `move` value has a single owner at any time; it cannot be
-   copied. (`move` types therefore cannot be plain-`Copy` scalars.)
+1. A checked resource cannot be implicitly copied.
+2. Passing it by value, returning it by value, or assigning it into another
+   binding consumes the source binding.
+3. Using a consumed binding is E_USE_AFTER_MOVE.
+4. A type that stores a checked resource by value is itself checked-resource
+   storage; byte-copy APIs, C variadics, raw memory operations, and ordinary
+   globals cannot materialize such storage without an explicit ownership-aware
+   boundary.
+5. CFG joins are conservative: the same place must have compatible ownership
+   state on every reachable predecessor path.
 ```
 
-Typestate is expressed with ordinary type parameters: an operation consumes a
-handle in one state and returns it in another, so the old state is unreachable
-after the transition.
+`move struct` is **affine**. A live value may complete by:
+
+- being moved to another owner;
+- being consumed by an ownership-aware function;
+- being released by a matching `#[drop]` function;
+- reaching scope exit when a matching `#[drop]` function provides auto-drop;
+- being explicitly `drop`ped only if its type is marked `#[trivial_drop]`;
+- being forgotten with `unsafe { forget_unchecked(x) }` only for non-auto-drop
+  handoff paths.
+
+`linear struct` is stricter. It must be consumed exactly once by a consuming API,
+returned/moved to another owner, or otherwise discharged by an explicit linear
+operation. Silent scope-exit completion is not enough unless the type's declared
+protocol explicitly permits it.
+
+`#[drop]` declares deterministic release glue for a checked resource type:
 
 ```mc
-fn lock(l: Lock) -> Held;            // consumes the unlocked Lock, returns Held
-fn unlock(h: Held) -> Lock;          // consumes Held, returns the Lock
+move struct Guard { id: u32 }
+
+#[drop]
+fn close_guard(g: *mut Guard) -> void {
+    g.id = 0;
+}
 ```
 
-`move` is a **compile-time** contract only: a `move` value lowers to its ordinary
-representation with no runtime cost; the linearity is checked by a per-function
-control-flow move/liveness pass (annex D) and erased. This keeps MC's stance — *explicit
-machine contract, not memory safety*: `move` enforces **hardware ownership
-protocols** for resource handles, and is deliberately *not* a whole-program
-borrow/lifetime system.
+The ABI is intentionally narrow:
 
-**Control-flow model.** The liveness pass tracks each binding through the function's
-control-flow graph with four states — **Live**, **Moved**, **Deferred** (reserved by a
-`defer`, §21), and **Unreachable** — and leak-checks the live set at every edge that
-*exits the function normally*: a `return`, and the error branch of `?` (which returns
-`err(e)`, §21). At a branch join the per-binding states must agree, otherwise the value
-is consumed on one path but not another (E_MOVE_BRANCH_MISMATCH).
+```txt
+#[drop] fn release(x: *mut T) -> void
+```
 
-A path that ends by **aborting or being unreachable** — `trap(...)` (§20), `unreachable`,
-or a call to a `-> never` function — is *not* a normal exit. It transfers control out of
-the function without running cleanup and reaches no successor, so it is the **Unreachable**
-state: it carries **no leak obligation** (a live resource there is not E_RESOURCE_LEAK —
-the program halts, or the path is provably impossible), and it is dropped from the join
-rather than merged. Consuming a resource and then aborting on one branch, while another
-branch consumes and falls through, is therefore well-formed. Only `trap`/`unreachable`/
-`never` edges are exempt; an ordinary early `return` still leak-checks the whole live set.
-(A `-> never` call is recognized for this leak/join analysis, but — by deliberate
-design, not oversight — it does not by itself satisfy the *caller's* return-path
-requirement. A `-> never` **function body** is a true terminator: falling off its
-end is a compile error (§4). But for a value-returning *caller*, a trailing
-`-> never` *call* must still be closed with an explicit `trap`, `unreachable`, or
-`return`. The frontend's return-path check does not treat an arbitrary call's
-`never`-ness as a terminator — keeping the rule syntactic and identical across both
-backends — rather than depending on whole-program divergence analysis. The explicit
-terminator is one token and makes the diverging tail visible at the call site; the
-mild redundancy is the intended trade.)
+It must have exactly one non-variadic `*mut T` parameter, return `void`, and each
+canonical checked resource type may have at most one such release function. The
+call is real codegen; the ownership checker treats `release(&local)` or
+`defer release(&local)` as consuming that **specific place**. It does not disable
+auto-drop for unrelated locals.
+
+Auto-drop is deterministic and lexical. On a normal exit edge, the compiler
+evaluates the return expression first, then runs active cleanups, then returns
+the saved value. Cleanup order is the reverse of lexical registration/declaration
+order. `goto`/`longjmp`-style non-local jumps may not cross live ownership state.
+
+Ownership is place-sensitive for locals, fields, array elements, and tracked
+alias roots. Places are canonicalized before use where the checker can prove the
+provenance. Dynamic array indexes are conservative and may be represented as a
+wildcard place. The current implementation admits at most 16 projections in one
+ownership place; exceeding that limit is `E_OWNERSHIP_PLACE_TOO_DEEP` and must
+fail closed rather than silently losing ownership state.
+
+Current auto-drop v0 deliberately rejects several unsound holes until cleanup
+obligations are fully represented in MIR:
+
+```txt
+- moving an auto-dropped binding through an alias or dereference;
+- using forget_unchecked on an auto-dropped binding;
+- reinitializing an auto-dropped binding after it has been moved.
+```
+
+### 18.1.2 Lexical borrow and view values
+
+`borrow` and `borrow mut` create explicit lexical non-owning views:
+
+```mc
+let p: *const T = borrow value;
+let q: *mut T = borrow mut mutable_value;
+```
+
+Rules:
+
+```txt
+1. Any number of shared borrows may coexist.
+2. One mutable borrow may exist only when no other borrow of the same place is live.
+3. A borrowed owner cannot be moved, dropped, released, or reassigned while the
+   borrow is live.
+4. Borrow lifetime is lexical in v0: it lasts until the binding's scope ends, the
+   target storage is reassigned, or the full-expression ends for call arguments.
+5. Borrow values cannot escape into globals, ordinary heap objects, closures,
+   thread/task spawn boundaries, or extern/C ABI calls.
+6. `borrow mut` and ordinary borrow values may not cross `await`.
+```
+
+`view struct` is the only aggregate form allowed to carry borrow fields in safe
+code. It remains a lexical view: it cannot be stored as an owned resource, placed
+inside raw byte-copy containers, or returned unless the function signature states
+a single source parameter:
+
+```mc
+fn subspan(source: borrow Bytes, begin: usize, end: usize) -> borrow(source) Bytes;
+```
+
+Multiple-source borrowed returns are intentionally out of scope for v0. Return
+an owned value, make the choice in the caller, use a tagged view whose source is
+unambiguous, or cross an explicit unsafe boundary.
+
+### 18.1.3 Regions
+
+`region struct` values are owned by an enclosing arena/region. Region nodes may
+form graphs, cycles, and dense indices inside the region. They are not independent
+`move` or `linear` resources, cannot declare `#[drop]`, and cannot escape by
+value into ordinary storage or C ABI calls. This is the intended model for AST,
+MIR, semantic facts, module graphs, and other compiler/kernel object graphs that
+should be freed as a unit rather than individually borrow-checked.
+
+### 18.1.4 Control-flow and trap edges
+
+The ownership pass tracks each checked place through the function's control-flow
+graph. Normal exits — `return`, lexical block exit, and the error branch of `?` —
+are leak-checked and run required deterministic cleanup. At a branch join,
+ownership state must be compatible on every reachable predecessor, otherwise the
+program is rejected.
+
+A path that ends by `trap(...)` (§20), `unreachable`, or a call to a `-> never`
+function is an abnormal no-successor edge. In the default fatal-trap profile it
+runs no cleanup and carries no leak obligation. Environments with recoverable
+faults or unwinding must use an explicit recoverable-fault/unwind profile whose
+edges are normal cleanup edges; the fatal-trap exemption cannot be used to bypass
+resource protocols in code that may resume.
+
+A `-> never` function body is a true terminator (§4). In an ordinary
+value-returning caller, a trailing `-> never` call must still be closed with an
+explicit `trap`, `unreachable`, or `return` so the diverging tail is syntactically
+visible and both backends agree.
+
+`move`, `linear`, `borrow`, `view`, and `region` are compile-time contracts over
+ordinary representations. They are erased after checking unless needed for debug
+metadata or verifier facts. Unsafe raw pointer code and unsafe FFI remain outside
+the proof boundary.
 
 ---
 
@@ -2342,9 +2442,11 @@ fn load_module(path: []const u8) -> Result<Module, LoadError> {
 }
 ```
 
-`defer` is lexical only.
+`defer` is lexical only. It composes with `#[drop]` auto-drop: explicit
+`defer release(&x)` consumes that specific release obligation, while unrelated
+auto-drop locals still clean up normally.
 
-It does not prove lifetime safety.
+It does not prove arbitrary lifetime safety.
 
 This may still be wrong:
 
@@ -2354,11 +2456,16 @@ fn parse() -> Result<View, Error> {
     defer alloc.free(image);
 
     let view = parse_view(image)?;
-    return ok(view);     // may dangle if view borrows image
+    return ok(view);     // rejected only if `view` is an explicit borrow/view
+                         // the checker can see; raw/unsafe aliases remain
+                         // outside the proof boundary
 }
 ```
 
-MC core does not have a borrow checker.
+MC core has the scoped borrow checker described in §18.1, not a general
+lifetime/alias solver. It protects explicit `borrow`, `borrow mut`, and
+`view struct` values in safe code. Raw pointers, unsafe FFI, and unannotated
+external aliasing require an unsafe wrapper and review.
 
 ---
 
@@ -2777,14 +2884,21 @@ The compiler cannot pretend the wrong case is impossible unless the programmer e
 
 Rust aims for general memory safety through ownership, borrowing, lifetimes, and stronger aliasing rules.
 
-MC deliberately does not adopt borrowing, lifetimes, or whole-program aliasing analysis. It does provide one narrow, opt-in slice of ownership — the **linear `move` qualifier** (section 18.1) — but only to enforce *hardware resource use-protocols* (DMA buffer handoff, lock release, capability witnesses), not as a general memory-safety system.
+MC deliberately does not adopt Rust's full lifetime system, trait-integrated
+borrow polymorphism, non-lexical lifetime inference, Pin/self-reference model,
+or whole-program aliasing analysis. It provides a narrower **Scoped Affine
+Ownership** model (§18.1): move-only resources, stricter linear tokens, lexical
+borrow/borrow-mut views, deterministic cleanup, explicit unsafe/FFI boundaries,
+and region-owned object graphs. The goal is to enforce hardware/resource
+use-protocols — DMA handoff, lock guards, capability witnesses, verified bundles,
+transaction tokens — not to make all memory access safe.
 
 MC is for code where the programmer often manipulates physical addresses, MMIO, raw memory, DMA buffers, interrupt state, page tables, and device-specific invariants that no general language can fully verify.
 
 MC chooses:
 
 ```txt
-less lifetime safety
+lexical resource safety instead of general lifetime polymorphism
 more explicit machine modeling
 smaller language core
 ```
@@ -2849,7 +2963,7 @@ registers, DMA descriptor rings plus packet buffers, completion interrupts,
 locking against concurrent producers, memory ordering between descriptor writes
 and the doorbell register, and network byte-order conversion. This section
 specifies the library modules a NIC driver composes. Each is a thin, typed layer
-over a core primitive (sections 16–19) plus the linear `move` qualifier
+over a core primitive (sections 16–19) plus Scoped Affine Ownership
 (section 18.1); none introduces new language semantics.
 
 ```txt
@@ -2878,8 +2992,8 @@ virtio-net  ──uses──▶  std/virtio     virtio-mmio transport: the @offs
 
 ## 28.1 `std/sync` — Locks with Linear Guards
 
-Locks are the second use of the linear `move` qualifier (after DMA). Acquiring a
-lock yields a `move` (linear) `Guard`; releasing consumes it. The compiler then
+Locks are a direct use of Scoped Affine Ownership. Acquiring a lock yields a
+move-only `Guard`; releasing consumes it. The compiler then
 rejects forgetting to unlock (`E_RESOURCE_LEAK`), double-unlock and
 use-after-unlock (`E_USE_AFTER_MOVE`).
 
@@ -4211,35 +4325,69 @@ Like the trap verifier, this is a call-graph contract, not a theorem-proving mod
 
 ---
 
-## D.7 Linear (`move`) Verifier
+## D.7 Scoped Ownership Verifier
 
-The linear verifier (section 18.1) enforces single-use ownership of `move`-typed
-values with a per-function move/liveness analysis over explicit control-flow
-edges. It is not a borrow checker — there are no borrows, lifetimes, or aliasing
-analysis.
+The ownership verifier (§18.1) enforces move-only resources, strict linear tokens,
+lexical borrows, and deterministic cleanup with a per-function analysis over
+explicit control-flow edges. It is conservative and modular: function calls are
+checked from their declared parameter/return ownership summaries, not by solving
+arbitrary lifetime equations.
+
+For each checked place, the verifier tracks:
 
 ```txt
-For each binding of a `move` type:
-    - moved when passed by value, returned, or assigned to another binding;
-      a moved binding becomes dead.
-    - using a dead binding is E_USE_AFTER_MOVE.
-    - a live (unmoved) binding reaching the end of its scope is E_RESOURCE_LEAK
-      (linear: every resource is consumed exactly once).
-    - a `move` value cannot be copied/aliased (it has a single owner).
+storage state:
+    Uninitialized | Live | Moved | Deferred | Dropped | Unreachable
+
+borrow state:
+    NoBorrow | SharedBorrow(count) | MutableBorrow
 ```
 
-Every **normal** function-exit edge — a `return` and the `err(e)` branch of `?` —
-is leak-checked for still-live resources. Abnormal exits (`trap`, `unreachable`,
-or a call to a `-> never` function) are recognized but **exempt**: they reach no
-successor and run no cleanup, so per section 18.1 they carry no leak obligation and
-are dropped from the join rather than leak-checked. (Consuming a resource and then
-aborting on one branch, while another branch consumes and falls through, is
-well-formed.) Conditional control flow joins
-conservatively: a binding is live after a join only if it is live on every
-reachable predecessor path; otherwise a later use is rejected. Loops are
-conservative unless proven one-shot: moving an outer `move` resource inside a
-loop is rejected because the loop may execute zero or multiple times. `move` is
-erased after checking — it has no runtime representation or cost.
+Core transitions:
+
+```txt
+move place:
+    requires Live and NoBorrow
+    produces Moved for that place/generation
+
+borrow place:
+    requires Live and no MutableBorrow
+    creates a lexical shared borrow
+
+borrow mut place:
+    requires Live and NoBorrow
+    creates a lexical unique mutable borrow
+
+drop/release place:
+    requires Live and NoBorrow
+    consumes that place/generation
+
+auto-drop place:
+    emitted on normal cleanup edges only when the type has unique #[drop] glue
+```
+
+The verifier is place-sensitive for tracked locals, fields, fixed array elements,
+symbolic/wildcard dynamic indexes, and carried pointer alias roots. It rejects
+unknown or over-deep places instead of falling back to string identity. The
+current projection limit is specified in §18.1 and must diagnose
+`E_OWNERSHIP_PLACE_TOO_DEEP`.
+
+Every normal function-exit edge — a `return`, lexical block exit, and the
+`err(e)` branch of `?` — is leak-checked for still-live obligations and must run
+deterministic cleanup. Abnormal fatal exits (`trap`, `unreachable`, or a call to
+a `-> never` function) are no-successor edges in the default profile and carry no
+cleanup obligation. A recoverable-fault or unwind profile must model those exits
+as cleanup edges instead.
+
+Conditional control-flow joins are conservative: a place is usable after a join
+only if all reachable predecessor paths agree on compatible ownership and borrow
+state. Loops are conservative unless proven one-shot: moving an outer resource
+inside a loop is rejected because the loop may execute zero or multiple times.
+
+The verifier is not a full memory-safety proof. Raw pointers, unsafe FFI, hardware
+aliases, and unannotated external storage are outside this proof boundary. The
+checked ownership facts are erased after verification except where retained as
+MIR/source-map/debug metadata for backend consistency.
 
 ---
 
