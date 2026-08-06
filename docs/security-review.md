@@ -152,14 +152,12 @@ the SHA-256 image digest; metadata-only validation cannot mint the token. The
 confined-agent bundle builder consumes that token through `elf_load_verified_bundle_for`
 instead of loading raw bytes after a hash-only metadata check. The metadata and rollback path is gated as
 `bundle-metadata-test` / `llvm-bundle-metadata-test`, while
-the optional `production_ops_rsa` adapter is qualified by `rsa-verify-test` /
-`llvm-rsa-verify-test`: a real RSA-2048/SHA-256 image signature mints an accepted
-`BundleSignatureProof` and admits the matching `VerifiedBundle`, while tampered-signature
-and wrong-message proofs are rejected. The metadata surface is fuzzed over >200k adversarial headers +
+the BearSSL RSA-2048/SHA-256 primitive is qualified separately by `rsa-verify-test` /
+`llvm-rsa-verify-test`. The metadata surface is fuzzed over >200k adversarial headers +
 50k rollback sequences (`bundle-fuzz-test`, §4).
 
 Residual — **production blocker:** these gates do not yet establish one opaque
-`VerifiedBundle` from canonical signed header+payload bytes, production key-policy provenance,
+`VerifiedBundle` from real signature verification, production key-policy proof minting,
 anti-rollback storage, and runtime identity audit. The FNV-1a-32 value still used by OTA/metadata compatibility
 fixtures is only a non-cryptographic transport checksum and MUST NOT be described as
 signed-image integrity. Until verifier, policy admission, loader consumption, and runtime

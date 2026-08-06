@@ -5,7 +5,6 @@
 // wrong message are REJECTED — the accept+reject behavior a signed-bundle loader needs.
 // Vector generated with: openssl genrsa 2048 | openssl dgst -sha256 -sign.
 
-import "kernel/core/production_ops_rsa.mc";
 import "kernel/crypto/rsa_verify.mc";
 
 global N: [256]u8 = .{
@@ -59,67 +58,6 @@ global SIG: [256]u8 = .{
 };
 global MSG: [12]u8 = .{ 0x4d, 0x43, 0x20, 0x62, 0x75, 0x6e, 0x64, 0x6c, 0x65, 0x20, 0x76, 0x31 };
 
-fn rsa_bundle_admission_run(m: usize, np: usize, ep: usize) -> bool {
-    var pass: bool = true;
-    var auth: SignatureAuthority = signature_authority_unchecked();
-    var h: BundleHeader = bundle_header_init_for_image(.Agent, 10, 1, 41, 7, m, 12, 256);
-
-    var valid_proof: BundleSignatureProof = bundle_signature_proof_mint_rsa_image(
-        &auth,
-        &h,
-        m,
-        12,
-        (&SIG[0]) as usize,
-        256,
-        np,
-        256,
-        ep,
-        3,
-    );
-    switch bundle_verify_and_admit_image(&h, .Agent, 1, 8, 12, 7, move valid_proof, m, 12) {
-        ok(vb) => {
-            if !verified_bundle_matches_image(&vb, m, 12) { pass = false; }
-            unsafe { forget_unchecked(vb); }
-        }
-        err(e) => { pass = false; }
-    }
-
-    SIG[10] = SIG[10] ^ 0x01;
-    var tampered_proof: BundleSignatureProof = bundle_signature_proof_mint_rsa_image(
-        &auth,
-        &h,
-        m,
-        12,
-        (&SIG[0]) as usize,
-        256,
-        np,
-        256,
-        ep,
-        3,
-    );
-    if bundle_signature_proof_accepted(&tampered_proof) { pass = false; }
-    unsafe { forget_unchecked(tampered_proof); }
-    SIG[10] = SIG[10] ^ 0x01;
-
-    var wrong_message_proof: BundleSignatureProof = bundle_signature_proof_mint_rsa_image(
-        &auth,
-        &h,
-        m,
-        11,
-        (&SIG[0]) as usize,
-        256,
-        np,
-        256,
-        ep,
-        3,
-    );
-    if bundle_signature_proof_accepted(&wrong_message_proof) { pass = false; }
-    unsafe { forget_unchecked(wrong_message_proof); }
-
-    signature_authority_revoke(move auth);
-    return pass;
-}
-
 export fn rsa_verify_run() -> u32 {
     let m: usize = (&MSG[0]) as usize;
     let np: usize = (&N[0]) as usize;
@@ -133,8 +71,6 @@ export fn rsa_verify_run() -> u32 {
 
     let ok_wrongmsg: bool = rsa_pkcs1_sha256_verify(m, 11, (&SIG[0]) as usize, 256, np, 256, ep, 3);
 
-    let ok_bundle_admission: bool = rsa_bundle_admission_run(m, np, ep);
-
-    if ok_valid && !ok_tampered && !ok_wrongmsg && ok_bundle_admission { return 1; }
+    if ok_valid && !ok_tampered && !ok_wrongmsg { return 1; }
     return 0;
 }

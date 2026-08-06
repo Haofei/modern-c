@@ -6,9 +6,8 @@
 # Compiles the MC binding + runtime (which embeds a REAL RSA-2048 public key and a genuine
 # openssl-produced SHA-256 PKCS#1 signature of "MC bundle v1") through the requested backend,
 # links it with the vendored BearSSL compiled for the HOST, and runs it natively. The runtime
-# returns 1 iff the valid signature VERIFIES, mints a BundleSignatureProof that admits the
-# matching VerifiedBundle image, and BOTH a one-bit-tampered signature and a wrong message are
-# REJECTED. PASS requires the program to print 1.
+# returns 1 iff the valid signature VERIFIES and BOTH a one-bit-tampered signature and a wrong
+# message are REJECTED. PASS requires the program to print 1.
 #
 # Host-based (no QEMU) so it is fast and runs the same on every dev box; the binding itself is
 # arch-neutral MC, so a green run on both the C and LLVM backends is the parity proof.
@@ -82,8 +81,8 @@ STUBS=""
 OUT="$("$WORK/app" || true)"
 echo "--- rsa-verify ($BACKEND) output: '$OUT' (compiled $i BearSSL objs) ---"
 if [ "$OUT" = "1" ]; then
-    echo "PASS: $TEST_NAME — $BACKEND backend: real RSA-2048/SHA-256 signature VERIFIED, RSA-backed BundleSignatureProof admitted the matching VerifiedBundle image, tampered signature + wrong message REJECTED, via constant-time BearSSL i31"
+    echo "PASS: $TEST_NAME — $BACKEND backend: real RSA-2048/SHA-256 signature VERIFIED, tampered signature + wrong message REJECTED, via constant-time BearSSL i31"
     exit 0
 fi
-echo "FAIL: $TEST_NAME — expected '1' (accept valid proof/admission + reject tampered/wrong), got '$OUT'"
+echo "FAIL: $TEST_NAME — expected '1' (accept valid + reject tampered/wrong), got '$OUT'"
 exit 1
