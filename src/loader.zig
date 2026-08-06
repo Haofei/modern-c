@@ -33,7 +33,7 @@ const token = @import("token.zig");
 // needed: the combined source the rest of the pipeline sees contains only
 // ordinary declarations.
 
-pub const LoadError = error{ Reported, ImportNotFound, ImportBudgetExceeded } || std.mem.Allocator.Error;
+pub const LoadError = error{ Reported, ImportNotFound, ImportBudgetExceeded, AccessDenied, InputOutput } || std.mem.Allocator.Error;
 
 pub const LoadLimits = struct {
     max_files: usize = 10_000,
@@ -828,10 +828,22 @@ fn canonicalizeConfiguredRoot(allocator: std.mem.Allocator, io: std.Io, path: []
     return lexical;
 }
 
-fn realPathFileDupe(allocator: std.mem.Allocator, io: std.Io, path: []const u8) std.mem.Allocator.Error!?[]u8 {
+fn realPathFileDupe(allocator: std.mem.Allocator, io: std.Io, path: []const u8) LoadError!?[]u8 {
     var buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const len = std.Io.Dir.cwd().realPathFile(io, path, &buffer) catch return null;
+    const len = std.Io.Dir.cwd().realPathFile(io, path, &buffer) catch |err| {
+        if (realPathMissingResult(err)) return null;
+        return realPathLoadError(err);
+    };
     return try allocator.dupe(u8, buffer[0..len]);
+}
+
+fn realPathMissingResult(err: anyerror) bool {
+    return err == error.FileNotFound or err == error.NotDir;
+}
+
+fn realPathLoadError(err: anyerror) LoadError {
+    if (err == error.AccessDenied) return error.AccessDenied;
+    return error.InputOutput;
 }
 
 fn displayPath(arena: std.mem.Allocator, sandbox_root: []const u8, path: []const u8) ![]const u8 {
@@ -839,7 +851,7 @@ fn displayPath(arena: std.mem.Allocator, sandbox_root: []const u8, path: []const
     return std.fs.path.relative(arena, sandbox_root, null, sandbox_root, path) catch arena.dupe(u8, path);
 }
 
-fn defaultSandboxRoot(allocator: std.mem.Allocator, io: std.Io, canon_root: []const u8) std.mem.Allocator.Error![]const u8 {
+fn defaultSandboxRoot(allocator: std.mem.Allocator, io: std.Io, canon_root: []const u8) LoadError![]const u8 {
     const cwd = (try realPathFileDupe(allocator, io, ".")) orelse try allocator.dupe(u8, ".");
     if (pathWithin(cwd, canon_root)) return cwd;
     allocator.free(cwd);
@@ -856,4 +868,12 @@ test "import path predicates accept native and Windows separators without siblin
     try std.testing.expect(pathWithin("/project", "/project/child.mc"));
     try std.testing.expect(!pathWithin("/project", "/project2/child.mc"));
     try std.testing.expect(!pathWithin("/project", "/project\\escape/child.mc"));
+}
+
+test "realPathFileDupe only treats missing paths as absent" {
+    try std.testing.expect(realPathMissingResult(error.FileNotFound));
+    try std.testing.expect(realPathMissingResult(error.NotDir));
+    try std.testing.expect(!realPathMissingResult(error.AccessDenied));
+    try std.testing.expectEqual(error.AccessDenied, realPathLoadError(error.AccessDenied));
+    try std.testing.expectEqual(error.InputOutput, realPathLoadError(error.Unexpected));
 }
