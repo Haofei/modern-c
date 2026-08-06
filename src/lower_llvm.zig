@@ -163,6 +163,17 @@ const DebugLocation = lower_llvm_model.DebugLocation;
 const DebugLocal = lower_llvm_model.DebugLocal;
 const DebugLocalKind = lower_llvm_model.DebugLocalKind;
 const LoopLabels = lower_llvm_model.LoopLabels;
+
+const AutoDropCleanupEntry = struct {
+    fn_name: []const u8,
+    local_name: []const u8,
+    span: ast.Span,
+};
+
+const DeferredCleanup = union(enum) {
+    expr: ast.Expr,
+    auto_drop: AutoDropCleanupEntry,
+};
 const RawManyOffsetInfo = lower_llvm_model.RawManyOffsetInfo;
 const EnumRawCallInfo = lower_llvm_model.EnumRawCallInfo;
 const ReduceTypes = struct {
@@ -386,7 +397,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .local_slice_aggregate_pointer_array_fields = std.StringHashMap([]const u8).init(allocator),
         .aggregate_return_pointer_fields = std.StringHashMap(mir.PointerProvenance).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
-        .defer_stack = std.ArrayList(ast.Expr).empty,
+        .defer_stack = std.ArrayList(DeferredCleanup).empty,
         .string_literals = std.ArrayList(StringLiteralGlobal).empty,
         .debug_functions = std.ArrayList(DebugFunction).empty,
         .debug_locations = std.ArrayList(DebugLocation).empty,
@@ -502,7 +513,7 @@ const LlvmEmitter = struct {
     // outside a function body, in which case `emitAlloca` falls back to streaming inline.
     entry_allocas: ?*std.ArrayList(u8) = null,
     loop_stack: std.ArrayList(LoopLabels) = undefined,
-    defer_stack: std.ArrayList(ast.Expr) = undefined,
+    defer_stack: std.ArrayList(DeferredCleanup) = undefined,
     string_literals: std.ArrayList(StringLiteralGlobal) = undefined,
     debug_functions: std.ArrayList(DebugFunction) = undefined,
     debug_locations: std.ArrayList(DebugLocation) = undefined,
@@ -1868,7 +1879,7 @@ const LlvmEmitter = struct {
             .assignment => |node| try self.emitAssignment(node.target, node.value, stmt.span),
             .@"defer" => |expr| {
                 self.cancelAutoDropForReleaseCall(expr);
-                try self.defer_stack.append(self.allocator, expr);
+                try self.defer_stack.append(self.allocator, .{ .expr = expr });
             },
             .loop => |node| {
                 if (try self.emitLoop(node, ret_ty)) return true;
@@ -1986,19 +1997,27 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitDeferredCleanup(self: *LlvmEmitter, expr: ast.Expr, ret_ty: ast.TypeExpr) !void {
-        switch (expr.kind) {
-            .block => |block| {
-                if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission;
+    fn emitDeferredCleanup(self: *LlvmEmitter, cleanup: DeferredCleanup, ret_ty: ast.TypeExpr) !void {
+        switch (cleanup) {
+            .expr => |expr| switch (expr.kind) {
+                .block => |block| {
+                    if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission;
+                },
+                else => {
+                    if (try self.emitDeferredDropPointerRelease(expr)) return;
+                    try self.emitExprStatement(expr);
+                },
             },
-            else => {
-                if (try self.emitAutoDropPointerCleanup(expr)) return;
-                try self.emitExprStatement(expr);
-            },
+            .auto_drop => |entry| try self.emitAutoDropPointerCleanup(entry),
         }
     }
 
-    fn emitAutoDropPointerCleanup(self: *LlvmEmitter, expr: ast.Expr) !bool {
+    fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: AutoDropCleanupEntry) !void {
+        const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
+        try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
+    }
+
+    fn emitDeferredDropPointerRelease(self: *LlvmEmitter, expr: ast.Expr) !bool {
         const cleanup = self.autoDropPointerCleanup(expr) orelse return false;
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
@@ -2893,7 +2912,11 @@ const LlvmEmitter = struct {
     fn registerAutoDropLocal(self: *LlvmEmitter, name: ast.Ident, ty: ast.TypeExpr) !void {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
-        try self.defer_stack.append(self.allocator, try ownership_facts.makeDropPointerCall(self.scratch.allocator(), drop_fn, name));
+        try self.defer_stack.append(self.allocator, .{ .auto_drop = .{
+            .fn_name = drop_fn,
+            .local_name = name.text,
+            .span = name.span,
+        } });
     }
 
     fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr) void {
@@ -2910,10 +2933,14 @@ const LlvmEmitter = struct {
         var index = self.defer_stack.items.len;
         while (index > 0) {
             index -= 1;
-            const cleanup = self.autoDropPointerCleanup(self.defer_stack.items[index]) orelse continue;
-            if (!std.mem.eql(u8, cleanup.local_name, local_name)) continue;
-            _ = self.defer_stack.orderedRemove(index);
-            return;
+            switch (self.defer_stack.items[index]) {
+                .auto_drop => |cleanup| {
+                    if (!std.mem.eql(u8, cleanup.local_name, local_name)) continue;
+                    _ = self.defer_stack.orderedRemove(index);
+                    return;
+                },
+                .expr => continue,
+            }
         }
     }
 
@@ -3915,7 +3942,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitSwitchBody(self: *LlvmEmitter, body: ast.SwitchBody, ret_ty: ast.TypeExpr) !bool {
-        const saved_defer_stack = try self.allocator.dupe(ast.Expr, self.defer_stack.items);
+        const saved_defer_stack = try self.allocator.dupe(DeferredCleanup, self.defer_stack.items);
         defer self.allocator.free(saved_defer_stack);
         errdefer self.restoreDeferStackSnapshot(saved_defer_stack);
         const terminated = switch (body) {
@@ -3934,7 +3961,7 @@ const LlvmEmitter = struct {
         return terminated;
     }
 
-    fn restoreDeferStackSnapshot(self: *LlvmEmitter, saved: []const ast.Expr) void {
+    fn restoreDeferStackSnapshot(self: *LlvmEmitter, saved: []const DeferredCleanup) void {
         self.defer_stack.items.len = saved.len;
         @memcpy(self.defer_stack.items[0..saved.len], saved);
     }

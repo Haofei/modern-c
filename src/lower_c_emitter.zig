@@ -245,6 +245,17 @@ pub fn appendModuleMir(
     try emitter.emitModule(declarations);
 }
 
+const AutoDropCleanupEntry = struct {
+    fn_name: []const u8,
+    local_name: []const u8,
+    span: ast.Span,
+};
+
+const DeferredCleanup = union(enum) {
+    expr: ast.Expr,
+    auto_drop: AutoDropCleanupEntry,
+};
+
 pub const CEmitter = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
@@ -339,13 +350,11 @@ pub const CEmitter = struct {
     // null), used to resolve labeled `break :outer` / `continue :outer`.
     loop_labels: std.ArrayList(?[]const u8) = .empty,
     next_loop_id: u32 = 0,
-    // Active `defer` expressions for the function currently being emitted, in source
-    // order (a function-scoped stack). Every exit edge — `return`, `break`, `continue`,
-    // and `?` error propagation — flushes the appropriate suffix of this stack so lexical
-    // cleanup runs on all paths, including across nested blocks. `loop_defer_marks` records
-    // the stack depth at each enclosing loop's entry, so a `break`/`continue` flushes only
-    // the defers declared inside that loop, not the whole function.
-    defer_stack: std.ArrayList(ast.Expr) = .empty,
+    // Active cleanups for the function currently being emitted, in source order
+    // (a function-scoped stack). User `defer` keeps its expression, but auto-drop
+    // obligations are recorded as backend facts instead of self-parsing a
+    // compiler-synthesized AST call on every cancel/emit path.
+    defer_stack: std.ArrayList(DeferredCleanup) = .empty,
     loop_defer_marks: std.ArrayList(usize) = .empty,
 
     fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8), mir_module: *const mir.Module, source_path: ?[]const u8, reporter: ?*diagnostics.Reporter) CEmitter {
@@ -2861,7 +2870,11 @@ pub const CEmitter = struct {
         const ty = maybe_ty orelse if (locals.get(name.text)) |info| info.source_ty orelse return else return;
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
-        try self.defer_stack.append(self.allocator, try ownership_facts.makeDropPointerCall(self.scratch.allocator(), drop_fn, name));
+        try self.defer_stack.append(self.allocator, .{ .auto_drop = .{
+            .fn_name = drop_fn,
+            .local_name = name.text,
+            .span = name.span,
+        } });
     }
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr) void {
@@ -2878,10 +2891,14 @@ pub const CEmitter = struct {
         var index = self.defer_stack.items.len;
         while (index > 0) {
             index -= 1;
-            const cleanup = self.autoDropPointerCleanup(self.defer_stack.items[index]) orelse continue;
-            if (!std.mem.eql(u8, cleanup.local_name, local_name)) continue;
-            _ = self.defer_stack.orderedRemove(index);
-            return;
+            switch (self.defer_stack.items[index]) {
+                .auto_drop => |cleanup| {
+                    if (!std.mem.eql(u8, cleanup.local_name, local_name)) continue;
+                    _ = self.defer_stack.orderedRemove(index);
+                    return;
+                },
+                .expr => continue,
+            }
         }
     }
 
@@ -3478,7 +3495,7 @@ pub const CEmitter = struct {
 
     fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr) !void {
         self.cancelAutoDropForReleaseCall(expr);
-        self.defer_stack.append(self.allocator, expr) catch return error.OutOfMemory;
+        self.defer_stack.append(self.allocator, .{ .expr = expr }) catch return error.OutOfMemory;
     }
 
     // The defer-stack mark from which a `break`/`continue` must run cleanups. A LABELED jump
@@ -3563,16 +3580,24 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitDeferredCleanup(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        try self.writeLineDirective(expr.span);
-        switch (expr.kind) {
-            .block => |block| try self.emitBracedBlockBody(block, locals, return_ty),
-            else => try self.emitDeferredExpressionCleanup(expr, locals, return_ty),
+    fn emitDeferredCleanup(self: *CEmitter, cleanup: DeferredCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        switch (cleanup) {
+            .expr => |expr| {
+                try self.writeLineDirective(expr.span);
+                switch (expr.kind) {
+                    .block => |block| try self.emitBracedBlockBody(block, locals, return_ty),
+                    else => try self.emitDeferredExpressionCleanup(expr, locals, return_ty),
+                }
+            },
+            .auto_drop => |entry| {
+                try self.writeLineDirective(entry.span);
+                try self.emitAutoDropPointerCleanup(entry);
+            },
         }
     }
 
     fn emitDeferredExpressionCleanup(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        if (try self.emitAutoDropPointerCleanup(expr)) return;
+        if (try self.emitDeferredDropPointerRelease(expr)) return;
         if (try self.emitNeverExprStmt(expr, locals)) return;
         if (try lower_c_mmio.emitWriteStmt(self.mmioEmitContext(), expr, locals)) return;
         if (try self.emitRawStoreStmt(expr, locals)) return;
@@ -3590,7 +3615,12 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
-    fn emitAutoDropPointerCleanup(self: *CEmitter, expr: ast.Expr) !bool {
+    fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: AutoDropCleanupEntry) !void {
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
+    }
+
+    fn emitDeferredDropPointerRelease(self: *CEmitter, expr: ast.Expr) !bool {
         const cleanup = self.autoDropPointerCleanup(expr) orelse return false;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
@@ -3752,7 +3782,7 @@ pub const CEmitter = struct {
     }
 
     fn emitSwitchBody(self: *CEmitter, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        const saved_defer_stack = try self.allocator.dupe(ast.Expr, self.defer_stack.items);
+        const saved_defer_stack = try self.allocator.dupe(DeferredCleanup, self.defer_stack.items);
         defer self.allocator.free(saved_defer_stack);
         errdefer self.restoreDeferStackSnapshot(saved_defer_stack);
         switch (body) {
@@ -3762,7 +3792,7 @@ pub const CEmitter = struct {
         self.restoreDeferStackSnapshot(saved_defer_stack);
     }
 
-    fn restoreDeferStackSnapshot(self: *CEmitter, saved: []const ast.Expr) void {
+    fn restoreDeferStackSnapshot(self: *CEmitter, saved: []const DeferredCleanup) void {
         self.defer_stack.items.len = saved.len;
         @memcpy(self.defer_stack.items[0..saved.len], saved);
     }
