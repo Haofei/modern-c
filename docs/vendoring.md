@@ -38,11 +38,20 @@ license, local provenance file, local license file, advisory status, review
 date, local modifications, and the profiles that include the component. Profile
 manifests may reference only component IDs present in that file.
 
+Vendored TCB components must also have a row in
+[`tcb-advisory-intake.json`](tcb-advisory-intake.json). That row records the
+offline advisory-intake sources to check, retained-subset policy, review dates,
+and waiver fields required before a security advisory can be declared not
+applicable. This is a deterministic local gate; it does not perform live network
+CVE ingestion and does not close production-kernel supply-chain risk by itself.
+
 Run the static check before sending a vendoring change:
 
 ```sh
 python3 tools/toolchain/vendoring-test.py
+python3 tools/toolchain/tcb-advisory-intake-test.py
 zig build vendoring-test
+zig build tcb-advisory-intake-test
 zig build profile-manifest-test
 ```
 
@@ -73,8 +82,9 @@ zig build profile-manifest-test
    dependency.
 8. Document the update in the dependency README with the new version/commit,
    source checksum, security advisory/CVE review result, local diffs kept, and
-   tests run. Update `docs/tcb-components.json` in the same patch so the
-   profile TCB view and vendored-source README cannot drift.
+   tests run. Update `docs/tcb-components.json` and
+   `docs/tcb-advisory-intake.json` in the same patch so the profile TCB view,
+   advisory-intake evidence, and vendored-source README cannot drift.
 
 ## CVE and advisory watch
 
@@ -93,3 +103,6 @@ For every dependency update and release-readiness pass, check these upstreams:
 
 Security fixes should be treated as release blockers until either re-vendored or
 documented as not applicable to the retained subset and local build flags.
+Any not-applicable claim must use the waiver fields listed in
+`docs/tcb-advisory-intake.json`; an informal note in a commit message is not
+enough release evidence.

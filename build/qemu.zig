@@ -61,6 +61,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTestOpts(ctx, "kernel-contract-inventory-test", "Check the bounded kernel region/effect/FFI contract surface stays explicit", &.{ "python3", "tools/toolchain/kernel-contract-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "std-api-docs-test", "Check docs/std-api.md covers exported stdlib declarations", &.{ "python3", "tools/toolchain/std-api-docs.py", "--check" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "vendoring-test", "Check vendored dependency provenance and CVE process docs", &.{ "python3", "tools/toolchain/vendoring-test.py" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "tcb-advisory-intake-test", "Check vendored TCB advisory-intake manifest coverage and waiver policy", &.{ "python3", "tools/toolchain/tcb-advisory-intake-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "third-party-licenses-test", "Check the aggregated third-party license manifest", &.{ "python3", "tools/toolchain/third-party-licenses-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "no-committed-private-keys-test", "Reject committed PEM private keys", &.{ "python3", "tools/toolchain/no-committed-private-keys.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "readiness-ledger-test", "Check the production-readiness ledger count and umbrella contract", &.{ "python3", "tools/toolchain/readiness-ledger-test.py" }, .{ .install = false });

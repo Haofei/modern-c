@@ -388,6 +388,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("std-api-docs-test"));
     // vendoring-test keeps third_party provenance and CVE/advisory process docs present.
     m0_full_step.dependOn(ctx.cmd("vendoring-test"));
+    m0_full_step.dependOn(ctx.cmd("tcb-advisory-intake-test"));
     // third-party-licenses-test keeps the aggregated license manifest complete.
     m0_full_step.dependOn(ctx.cmd("third-party-licenses-test"));
     // no-committed-private-keys-test keeps test/private key material out of the repo.
@@ -924,6 +925,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("profile-manifest-test"));
     m0_step.dependOn(ctx.cmd("std-api-docs-test"));
     m0_step.dependOn(ctx.cmd("vendoring-test"));
+    m0_step.dependOn(ctx.cmd("tcb-advisory-intake-test"));
     m0_step.dependOn(ctx.cmd("third-party-licenses-test"));
     m0_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
 
@@ -950,6 +952,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("parallel-runner-test"));
     fast_step.dependOn(ctx.cmd("std-api-docs-test"));
     fast_step.dependOn(ctx.cmd("vendoring-test"));
+    fast_step.dependOn(ctx.cmd("tcb-advisory-intake-test"));
     fast_step.dependOn(ctx.cmd("third-party-licenses-test"));
     fast_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
     fast_step.dependOn(ctx.cmd("profile-manifest-test"));
@@ -996,6 +999,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("parallel-runner-test")); // full-tier acceleration retains the exact gate inventory and CPU budget
     c0_step.dependOn(ctx.cmd("std-api-docs-test")); // generated stdlib API index stays current
     c0_step.dependOn(ctx.cmd("vendoring-test")); // third_party provenance and CVE/advisory process stay documented
+    c0_step.dependOn(ctx.cmd("tcb-advisory-intake-test")); // vendored TCB advisory intake stays manifest-gated
     c0_step.dependOn(ctx.cmd("third-party-licenses-test")); // aggregated third-party license manifest stays complete
     c0_step.dependOn(ctx.cmd("no-committed-private-keys-test")); // test/private key material stays generated, not committed
     c0_step.dependOn(ctx.cmd("profile-manifest-test")); // product/profile claims stay tied to known risks and gates

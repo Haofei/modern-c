@@ -123,11 +123,11 @@ risks:
     severity: high
     scope: supply-chain
     status: open
-    admitted_subset_status: vendored-component-metadata-gated-manual-watch
+    admitted_subset_status: advisory-intake-manifest-gated
     blocks:
       - stable-release
       - production-kernel
-    summary: Vendored BearSSL, QuickJS, WAMR, openlibm, and firmware TCB require automated advisory intake and waiver policy.
+    summary: Vendored BearSSL, QuickJS, WAMR, and openlibm now have gated offline advisory-intake metadata, retained-subset policy, review dates, and waiver fields; live advisory ingestion, firmware TCB intake, release response SLA, and production waiver review remain open.
 
   - id: TCB-PROFILE-MINIMIZATION
     severity: medium
@@ -136,7 +136,7 @@ risks:
     admitted_subset_status: profile-and-tcb-component-manifests-gated
     blocks:
       - production-profile-minimal-tcb-claim
-    summary: Product profiles now name their TCB components in profile-manifest.json; full vendored component metadata and advisory policy remain open before any minimal production TCB claim.
+    summary: Product profiles now name their TCB components in profile-manifest.json, and vendored component metadata/advisory-intake manifests are gated; minimal production TCB claims still require profile-specific firmware/runtime closure.
 
   - id: HARDWARE-PRODUCTION-QUALIFICATION
     severity: high

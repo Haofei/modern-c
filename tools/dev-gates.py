@@ -182,6 +182,11 @@ RULES: tuple[Rule, ...] = (
         "vendoring provenance checker changes need the vendoring gate",
     ),
     Rule(
+        ("tools/toolchain/tcb-advisory-intake-test.py",),
+        ("tcb-advisory-intake-test",),
+        "TCB advisory-intake checker changes need the advisory intake gate",
+    ),
+    Rule(
         ("tools/toolchain/third-party-licenses-test.py",),
         ("third-party-licenses-test",),
         "third-party license checker changes need the license manifest gate",
@@ -198,8 +203,13 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("docs/tcb-components.json",),
-        ("profile-manifest-test", "vendoring-test"),
+        ("profile-manifest-test", "vendoring-test", "tcb-advisory-intake-test"),
         "TCB component manifest changes need profile linkage and vendored provenance gates",
+    ),
+    Rule(
+        ("docs/tcb-advisory-intake.json",),
+        ("tcb-advisory-intake-test",),
+        "TCB advisory-intake manifest changes need the advisory intake gate",
     ),
     Rule(
         (
@@ -304,8 +314,8 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("docs/vendoring.md", "docs/tcb-components.json"),
-        ("vendoring-test",),
-        "vendoring process docs need the vendoring provenance gate",
+        ("vendoring-test", "tcb-advisory-intake-test"),
+        "vendoring process docs need provenance and advisory-intake gates",
     ),
     Rule(
         ("THIRD-PARTY-LICENSES.md",),

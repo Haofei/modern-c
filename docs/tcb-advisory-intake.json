@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "source_of_truth": "docs/tcb-advisory-intake.json",
+  "tcb_components": "docs/tcb-components.json",
+  "scope": "offline advisory-intake evidence for vendored TCB components",
+  "policy": {
+    "release_rule": "A security advisory affecting a retained, built, or exposed subset is a release blocker until re-vendored or waived.",
+    "waiver_required_fields": [
+      "component_id",
+      "advisory_id",
+      "source_url",
+      "affected_versions",
+      "retained_subset_analysis",
+      "local_build_flags",
+      "owner",
+      "approval",
+      "expires_on"
+    ],
+    "non_goal": "This manifest is a deterministic local gate. It does not perform live network CVE ingestion and does not close production-kernel supply-chain risk by itself."
+  },
+  "components": [
+    {
+      "component_id": "bearssl",
+      "owner": "kernel-crypto",
+      "status": "advisory-intake-manifest-gated",
+      "reviewed_on": "2026-08-06",
+      "review_after": "2026-09-01",
+      "queries": [
+        "BearSSL",
+        "BearSSL TLS",
+        "BearSSL RSA SHA-256"
+      ],
+      "advisory_sources": [
+        {
+          "name": "BearSSL upstream repository",
+          "kind": "upstream",
+          "url": "https://www.bearssl.org/git/BearSSL"
+        },
+        {
+          "name": "NVD keyword search for BearSSL",
+          "kind": "cve-database",
+          "url": "https://nvd.nist.gov/vuln/search/results?query=BearSSL&search_type=all"
+        },
+        {
+          "name": "Debian security tracker source-package search",
+          "kind": "distro-tracker",
+          "url": "https://security-tracker.debian.org/tracker/source-package/bearssl"
+        }
+      ],
+      "retained_subset_policy": "Assess only retained BearSSL crypto/TLS sources and the freestanding shim listed in third_party/bearssl/README.vendored.md. Advisories for unvendored tools, examples, or unused protocol features require a documented not-applicable waiver.",
+      "release_blocker_if": [
+        "the advisory affects retained crypto, TLS parsing, RSA, hashing, entropy, or constant-time primitives",
+        "the advisory affects local freestanding shim behavior",
+        "the affected upstream range cannot be compared with revision 7bea48e5e850ab4cafbe68d3765cdaba13a86d6f"
+      ]
+    },
+    {
+      "component_id": "quickjs",
+      "owner": "agent-runtime",
+      "status": "advisory-intake-manifest-gated",
+      "reviewed_on": "2026-08-06",
+      "review_after": "2026-09-01",
+      "queries": [
+        "QuickJS",
+        "QuickJS-NG",
+        "quickjs-ng/quickjs"
+      ],
+      "advisory_sources": [
+        {
+          "name": "QuickJS-NG GitHub security advisories",
+          "kind": "security-advisory",
+          "url": "https://github.com/quickjs-ng/quickjs/security/advisories"
+        },
+        {
+          "name": "QuickJS-NG GitHub releases",
+          "kind": "release-notes",
+          "url": "https://github.com/quickjs-ng/quickjs/releases"
+        },
+        {
+          "name": "NVD keyword search for QuickJS",
+          "kind": "cve-database",
+          "url": "https://nvd.nist.gov/vuln/search/results?query=QuickJS&search_type=all"
+        }
+      ],
+      "retained_subset_policy": "Assess the retained QuickJS-NG engine and local quickjs.h build flags documented in third_party/quickjs/README.vendored.md. Advisories limited to omitted examples, tooling, or disabled optional modules require a retained-subset waiver.",
+      "release_blocker_if": [
+        "the advisory affects bytecode parsing, JS parsing, runtime isolation, allocator behavior, or host callback boundaries used by confined agents",
+        "the advisory affects BUILDING_QJS_SHARED or QUICKJS_NG_MODULE_BUILD local configuration",
+        "the affected upstream range cannot be compared with version 0.15.1 / revision fd0a0210b7be00957751871e7e01b8291268fc29"
+      ]
+    },
+    {
+      "component_id": "wamr",
+      "owner": "agent-runtime",
+      "status": "advisory-intake-manifest-gated",
+      "reviewed_on": "2026-08-06",
+      "review_after": "2026-09-01",
+      "queries": [
+        "WAMR",
+        "wasm-micro-runtime",
+        "bytecodealliance/wasm-micro-runtime"
+      ],
+      "advisory_sources": [
+        {
+          "name": "WAMR GitHub security advisories",
+          "kind": "security-advisory",
+          "url": "https://github.com/bytecodealliance/wasm-micro-runtime/security/advisories"
+        },
+        {
+          "name": "WAMR GitHub releases",
+          "kind": "release-notes",
+          "url": "https://github.com/bytecodealliance/wasm-micro-runtime/releases"
+        },
+        {
+          "name": "NVD keyword search for wasm-micro-runtime",
+          "kind": "cve-database",
+          "url": "https://nvd.nist.gov/vuln/search/results?query=wasm-micro-runtime&search_type=all"
+        }
+      ],
+      "retained_subset_policy": "Assess the retained WAMR interpreter/runtime subset and the local mc platform port documented in third_party/wamr/README.vendored.md. Advisories limited to omitted embedders, examples, or unused build modes require a retained-subset waiver.",
+      "release_blocker_if": [
+        "the advisory affects WASM validation, interpreter execution, sandbox memory access, host calls, or allocator integration used by confined agents",
+        "the advisory affects core/shared/platform/mc local integration",
+        "the affected upstream range cannot be compared with version 2.4.3 / revision 0e65961d8e560b3d8a125045a29336ce6a0b16ad"
+      ]
+    },
+    {
+      "component_id": "openlibm",
+      "owner": "agent-runtime",
+      "status": "advisory-intake-manifest-gated",
+      "reviewed_on": "2026-08-06",
+      "review_after": "2026-09-01",
+      "queries": [
+        "openlibm",
+        "JuliaMath/openlibm",
+        "libm"
+      ],
+      "advisory_sources": [
+        {
+          "name": "openlibm GitHub security advisories",
+          "kind": "security-advisory",
+          "url": "https://github.com/JuliaMath/openlibm/security/advisories"
+        },
+        {
+          "name": "openlibm GitHub releases",
+          "kind": "release-notes",
+          "url": "https://github.com/JuliaMath/openlibm/releases"
+        },
+        {
+          "name": "NVD keyword search for openlibm",
+          "kind": "cve-database",
+          "url": "https://nvd.nist.gov/vuln/search/results?query=openlibm&search_type=all"
+        }
+      ],
+      "retained_subset_policy": "Assess the retained freestanding libm subset and build integration documented in third_party/openlibm/README.vendored.md. Because the retained tree records a comparison commit rather than a uniquely provable upstream version, release waivers must explicitly account for that provenance limit.",
+      "release_blocker_if": [
+        "the advisory affects retained math routines used by confined C apps, QuickJS, or WAMR hosts",
+        "the advisory affects build integration that changes runtime object contents",
+        "the affected upstream range cannot be compared with retained-subset comparison commit b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8"
+      ]
+    }
+  ]
+}

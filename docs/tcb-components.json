@@ -172,7 +172,7 @@
       "license_file": "third_party/bearssl/LICENSE.txt",
       "provenance_file": "third_party/bearssl/README.vendored.md",
       "local_modifications": ["third_party/bearssl/freestanding-shim/string.h"],
-      "advisory_status": "manual-watch-required",
+      "advisory_status": "advisory-intake-manifest-gated",
       "review_after": "2026-09-01",
       "profiles": ["kernel-qemu", "production-kernel"]
     },
@@ -189,7 +189,7 @@
       "license_file": "third_party/quickjs/LICENSE",
       "provenance_file": "third_party/quickjs/README.vendored.md",
       "local_modifications": ["third_party/quickjs/quickjs.h"],
-      "advisory_status": "manual-watch-required",
+      "advisory_status": "advisory-intake-manifest-gated",
       "review_after": "2026-09-01",
       "profiles": ["kernel-qemu"]
     },
@@ -206,7 +206,7 @@
       "license_file": "third_party/wamr/LICENSE",
       "provenance_file": "third_party/wamr/README.vendored.md",
       "local_modifications": ["third_party/wamr/core/shared/platform/mc"],
-      "advisory_status": "manual-watch-required",
+      "advisory_status": "advisory-intake-manifest-gated",
       "review_after": "2026-09-01",
       "profiles": ["kernel-qemu"]
     },
@@ -222,7 +222,7 @@
       "license_file": "third_party/openlibm/LICENSE.md",
       "provenance_file": "third_party/openlibm/README.vendored.md",
       "local_modifications": ["tools/user/build-openlibm.sh integration only"],
-      "advisory_status": "manual-watch-required",
+      "advisory_status": "advisory-intake-manifest-gated",
       "review_after": "2026-09-01",
       "profiles": ["kernel-qemu"]
     }

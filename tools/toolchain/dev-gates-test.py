@@ -220,10 +220,12 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/mcc-symbols-test.sh"], ["mcc-symbols-test"])
     assert_gates(module, ["tools/toolchain/std-api-docs.py"], ["std-api-docs-test"])
     assert_gates(module, ["tools/toolchain/vendoring-test.py"], ["vendoring-test"])
+    assert_gates(module, ["tools/toolchain/tcb-advisory-intake-test.py"], ["tcb-advisory-intake-test"])
     assert_gates(module, ["tools/toolchain/third-party-licenses-test.py"], ["third-party-licenses-test"])
     assert_gates(module, ["tools/toolchain/profile-manifest-test.py"], ["profile-manifest-test"])
     assert_gates(module, ["docs/profile-manifest.json"], ["profile-manifest-test"])
-    assert_gates(module, ["docs/tcb-components.json"], ["profile-manifest-test", "vendoring-test"])
+    assert_gates(module, ["docs/tcb-components.json"], ["profile-manifest-test", "vendoring-test", "tcb-advisory-intake-test"])
+    assert_gates(module, ["docs/tcb-advisory-intake.json"], ["tcb-advisory-intake-test"])
     assert_route(module, ["docs/scope-control-plan.md"], ["profile-manifest-test"], ["git diff --check"])
     assert_gates(module, ["docs/review-risk-register.yaml"], ["profile-manifest-test"])
     assert_gates(module, ["tools/toolchain/gate-manifest-test.py"], ["gate-manifest-test"])
@@ -270,7 +272,7 @@ def main() -> None:
     assert_gates(module, ["tools/check/abi-consistency-test.sh"], ["abi-consistency-test"])
     assert_gates(module, ["tools/check/arch-emit-test.sh"], ["arch-emit-test"])
     assert_route(module, ["docs/std-api.md"], ["std-api-docs-test"], ["git diff --check"])
-    assert_route(module, ["docs/vendoring.md"], ["vendoring-test"], ["git diff --check"])
+    assert_route(module, ["docs/vendoring.md"], ["vendoring-test", "tcb-advisory-intake-test"], ["git diff --check"])
     assert_route(module, ["THIRD-PARTY-LICENSES.md"], ["third-party-licenses-test"], ["git diff --check"])
     assert_route(
         module,

@@ -186,6 +186,7 @@
       "blocking_risks": [
         "KERNEL-VERIFIED-BUNDLE",
         "KERNEL-CAPABILITY-MINT",
+        "SUPPLY-TCB-CVE-INTAKE",
         "HARDWARE-PRODUCTION-QUALIFICATION"
       ],
       "blocking_gates": [
@@ -196,6 +197,7 @@
         "production-ops-test",
         "bundle-metadata-test",
         "rsa-verify-test",
+        "tcb-advisory-intake-test",
         "app-run-test",
         "qjs-confined-test",
         "agent-e2e-test"
@@ -240,6 +242,7 @@
         "production-ops-test",
         "bundle-metadata-test",
         "rsa-verify-test",
+        "tcb-advisory-intake-test",
         "agent-e2e-test",
         "agentos-test"
       ],
