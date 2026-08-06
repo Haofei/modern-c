@@ -1,13 +1,12 @@
 // examples/apps/wasm/wasi_fs.c — the Phase-2 guest: a stock wasm32-wasi program (POSIX file I/O
-// via zig's wasi-libc) that drives the REAL capability-checked FS tool path, the WASM mirror of
-// examples/agents/agent_fs.js. The kernel minted the agent a path-cap rooted at "/ws" with
-// read+write and an allowlist of {FS_WRITE, FS_READ} ONLY, so:
+// via zig's wasi-libc) that drives the simple FS tool path, the WASM mirror of
+// examples/agents/agent_fs.js. The fixture allows read/write under "/ws" and denies mkdir, so:
 //   - write then read under /ws  -> ALLOWED (round-trip returns "hi")
 //   - mkdir under /ws            -> DENIED  (not allowlisted) -> EACCES (from the broker's E_DENIED)
 // It prints "fs: ok" ONLY on the fully-correct path (round-trip correct AND mkdir denied), so a
-// broken capability mapping cannot print the success sentinel. wasi-libc lowers these POSIX calls
+// broken FS dispatch cannot print the success sentinel. wasi-libc lowers these POSIX calls
 // to path_open/fd_read/fd_write/fd_close/path_create_directory against the "/ws" preopen, which the
-// shim routes to TOOL_OP_FS_* through agent_fs_call. See docs/wasm-migration-plan.md Phase 2.
+// shim routes to TOOL_OP_FS_*. See docs/wasm-migration-plan.md Phase 2.
 
 #include <fcntl.h>
 #include <unistd.h>

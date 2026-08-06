@@ -339,10 +339,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "treefs-test", "Hierarchical tree FS: nested mkdir/create, path resolution, ./.. traversal, getdents listing, typed errors", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "treefs-test" });
 
-    _ = h.addScriptTest(ctx, "fs-toolserver-test", "Capability-checked FS tool server: workspace-scoped path caps deny /etc + .. escapes with audit/attribution (M1 walking skeleton)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fs-toolserver-test" });
-
-    _ = h.addScriptTest(ctx, "agent-fs-test", "Agent FS tool front door: allowlist+budget gate over the path-capability server; M6-shape acceptance (deny+audit+attribute)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-fs-test" });
-
     _ = h.addScriptTest(ctx, "agent-abi-test", "Versioned agent SYS_SUBMIT/SYS_POLL ABI: request validation and stable typed completion status mapping", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-test" });
     _ = h.addScriptTest(ctx, "agent-abi-fuzz-test", "Adversarial agent SYS_SUBMIT/SYS_POLL ABI fuzz: validation precedence, typed events, and fail-closed syscall dispatch", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-fuzz-test" });
     // examples/feature_showcase.mc — one self-verifying tour of the language; emit-c via
@@ -997,15 +993,14 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-wasm-wasi-hello-test", "WASM-agent Phase 1 (LLVM): run a stock wasm32-wasi guest confined via the WASI P1 shim under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // WASM-agent Phase 2 (docs/wasm-migration-plan.md §5): WASI filesystem via preopen -> PathCap.
+    // WASM-agent Phase 2 (docs/wasm-migration-plan.md §5): WASI filesystem via the simple app-run FS path.
     // A stock wasm32-wasi guest does POSIX file I/O (open/write/read/close + mkdir) which wasi-libc
     // lowers to path_open/fd_read/fd_write/path_create_directory against the "/ws" preopen; the shim
-    // routes these to TOOL_OP_FS_* through agent_fs_call (allowlist -> budget -> path-cap, allow+deny
-    // audit). Write/read round-trip is ALLOWED; mkdir is DENIED (not allowlisted) and the guest
+    // routes these to TOOL_OP_FS_*. Write/read round-trip is ALLOWED; mkdir is DENIED and the guest
     // observes EACCES — the WASM mirror of qjs-realtool-test. Both backends.
-    _ = h.addScriptTest(ctx, "wasm-realtool-test", "WASM-agent Phase 2: a stock wasm32-wasi guest drives the real capability-checked FS tool path (allow + deny audit) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_fs.c", "fs: ok", "wasm-realtool" });
+    _ = h.addScriptTest(ctx, "wasm-realtool-test", "WASM-agent Phase 2: a stock wasm32-wasi guest drives the simple FS tool path confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_fs.c", "fs: ok", "wasm-realtool" });
 
-    _ = h.addScriptTest(ctx, "llvm-wasm-realtool-test", "WASM-agent Phase 2 (LLVM): a stock wasm32-wasi guest drives the real capability-checked FS tool path (allow + deny audit) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_fs.c", "fs: ok", "wasm-realtool" });
+    _ = h.addScriptTest(ctx, "llvm-wasm-realtool-test", "WASM-agent Phase 2 (LLVM): a stock wasm32-wasi guest drives the simple FS tool path confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_fs.c", "fs: ok", "wasm-realtool" });
 
     // WASM-agent Phase 3 (docs/wasm-migration-plan.md §5): brokered FETCH-ONLY network egress via
     // NetCap. A WASM guest calls the MC host tool net_fetch(endpoint, token) (module "mc", not
@@ -1164,15 +1159,13 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-qjs-smode-async-agent-test", "M3 (LLVM): a pure-JS agent proves overlap + back-pressure/denial over async host I/O under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "qjs-smode-async-agent" });
 
-    // M5b.2: a pure-JS agent drives the REAL, capability-checked FS tool path through the SAME
+    // M5b.2: a pure-JS agent drives the simple FS tool path through the SAME
     // async ABI (SYS_SUBMIT/SYS_POLL). The shared app_run_demo broker dispatches host_fs_write /
-    // host_fs_read / host_fs_mkdir through agent_fs_call (allowlist -> budget -> path cap), so the
-    // agent proves allow (read=hi), deny (mkdir not allowlisted -> structured error), and audit
-    // end-to-end from JS. EXPECT "fs: ok" is reached only AFTER both the read-back and the denied
-    // mkdir, so the gate fails if the real capability checks did not run.
-    _ = h.addScriptTest(ctx, "qjs-realtool-test", "M5b.2: a pure-JS agent drives the REAL capability-checked FS tool path (allow/deny/audit) over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_fs.js", "fs: ok", "qjs-realtool" });
+    // host_fs_read / host_fs_mkdir through TOOL_OP_FS_*; write/read are allowed and mkdir is denied.
+    // EXPECT "fs: ok" is reached only AFTER both the read-back and the denied mkdir.
+    _ = h.addScriptTest(ctx, "qjs-realtool-test", "M5b.2: a pure-JS agent drives the simple FS tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_fs.js", "fs: ok", "qjs-realtool" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-realtool-test", "M5b.2 (LLVM): a pure-JS agent drives the REAL capability-checked FS tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_fs.js", "fs: ok", "qjs-realtool" });
+    _ = h.addScriptTest(ctx, "llvm-qjs-realtool-test", "M5b.2 (LLVM): a pure-JS agent drives the simple FS tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_fs.js", "fs: ok", "qjs-realtool" });
 
     _ = h.addScriptTest(ctx, "qjs-nettool-test", "M5b.3: a pure-JS agent drives the brokered network fetch tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_net_tool.js", "net: ok", "qjs-nettool" });
 
@@ -1263,9 +1256,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-qjs-mc-host-test", "An MC host drives QuickJS, confined under QEMU (LLVM)", &.{ "bash", "tools/lang/qjs-mc-host-test.sh", "zig-out/bin/mcc", "llvm", "", "6*7 -> 42", "qjs-mc-host" });
 
-    _ = h.addScriptTest(ctx, "agent-confined-tool-test", "Step 0 + M1: a confined U-mode agent drives the capability tool front door via syscalls; /workspace allowed, /etc denied under QEMU", &.{ "bash", "tools/proc/agent-confined-tool-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-agent-confined-tool-test", "Step 0 + M1 (LLVM): a confined U-mode agent drives the capability tool front door; /workspace allowed, /etc denied under QEMU", &.{ "bash", "tools/proc/agent-confined-tool-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "driver-test", "Run the char-device driver framework (vtable dispatch) under QEMU", &.{ "bash", "tools/arch/driver-test.sh", "zig-out/bin/mcc", "c" });
 

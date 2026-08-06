@@ -60,16 +60,13 @@ export const TOOL_OP_TIMEOUT: u32 = 4; // completes (after its delay) with statu
 export const TOOL_OP_SPURIOUS: u32 = 5; // TEST-ONLY: completes carrying a BOGUS id (exercises the host's
                                         // fatal "unknown completion id" path); submit still returns the real id
 
-// REAL, capability-checked FS tool ops (M5b.2). Unlike the mock ops above, these dispatch through
-// the kernel's capability front door (agent_fs_call -> fs_toolserver: allowlist -> budget ->
-// path-cap), proving allow/deny/audit end-to-end from pure JS. They complete READY IMMEDIATELY
-// (no delay), so the first SYS_POLL delivers them. Op -> tool_id: FS_WRITE->0, FS_READ->1,
-// FS_MKDIR->2 (the agent_fs.mc TOOL_FS_* catalog). Request-payload convention (in_ptr/in_len):
+// Simple FS tool ops for runtime fixtures. They complete READY IMMEDIATELY (no delay), so the
+// first SYS_POLL delivers them. Request-payload convention (in_ptr/in_len):
 //   arg (u64)          = path length in bytes
 //   in_payload[0..arg] = the path bytes (a KERNEL-resident copy is made before dispatch)
 //   in_payload[arg..in_len] = the data bytes (FS_WRITE only; FS_READ/FS_MKDIR have in_len == arg)
 // Result: ToolEvent.status = 0 on success or -errno; ToolEvent.result = bytes written/read (or the
-// directory count). For FS_READ the file bytes are staged into the request's out_ptr (<= out_cap)
+// directory count). For FS_READ the file bytes are staged into the request's out_ptr (<= out_cap).
 // with out_len set, so the host resolves the read with the returned string.
 export const TOOL_OP_FS_WRITE: u32 = 6; // write data to a path under the agent's workspace cap
 export const TOOL_OP_FS_READ: u32 = 7;  // read a path's bytes back (staged to out_ptr)

@@ -253,7 +253,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-qjs-spurious-agent-test"));
     m0_full_step.dependOn(ctx.cmd("qjs-mc-host-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-qjs-mc-host-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-agent-confined-tool-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-fs-syscall-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-socket-syscall-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-exec-test"));
@@ -614,10 +613,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("vfsmount-test"));
     // treefs-test links + runs the hierarchical tree filesystem (needs clang); LLVM side via llvm-host-suite-test.
     m0_full_step.dependOn(ctx.cmd("treefs-test"));
-    // fs-toolserver-test links + runs the capability-checked FS tool server (M1); LLVM side via llvm-host-suite-test.
-    m0_full_step.dependOn(ctx.cmd("fs-toolserver-test"));
-    // agent-fs-test links + runs the agent FS tool front door (M3 seed); LLVM side via llvm-host-suite-test.
-    m0_full_step.dependOn(ctx.cmd("agent-fs-test"));
     // agent-abi-test pins the versioned SYS_SUBMIT/SYS_POLL request/completion contract.
     m0_full_step.dependOn(ctx.cmd("agent-abi-test"));
     // agent-abi-fuzz-test adversarially checks validation precedence and fail-closed syscall dispatch.
@@ -808,8 +803,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("agent-confined-test"));
     m0_full_step.dependOn(ctx.cmd("app-run-test"));
     m0_full_step.dependOn(ctx.cmd("compute-app-test"));
-    // agent-confined-tool-test (step 0 + M1): confined U-mode agent drives the capability front door.
-    m0_full_step.dependOn(ctx.cmd("agent-confined-tool-test"));
     // driver-test runs the char-device driver framework (vtable dispatch) under QEMU.
     m0_full_step.dependOn(ctx.cmd("driver-test"));
     // fs-syscall-test runs U-mode file syscalls over the VFS under QEMU.

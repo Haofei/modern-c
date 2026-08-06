@@ -211,18 +211,9 @@ ToolCap
   timeout
   max in-flight calls
 
-NetCap
-  allowed hosts/IP ranges
-  allowed ports
-  allowed protocols
-  max request/response bytes
-  timeout
-
-PathCap
-  root path or object id
-  read/write/append flags
-  max file size
-  persistent or ephemeral
+Network/file capabilities are out of the current language-kernel scope. The remaining kernel
+fixtures keep only enough syscall, async, filesystem, and network behavior to validate the
+language and backends.
 
 DeviceCap
   device class
@@ -751,8 +742,7 @@ Done when:
 
 - ✓ Toy `arg + 2` async path is replaced by the structured request/event ABI
   (`SYS_SUBMIT(req_ptr)` + vector `SYS_POLL(events_ptr, max, timeout)`).
-- ✓ Tool broker enforces capabilities (allowlist → budget → path-cap via `agent_fs_call`).
-- ✓ Audit events are emitted (on both allow and deny).
+- ✓ Tool request/event mechanics are exercised by demo-scope runtime fixtures.
 - ✓ JS receives structured errors.
 
 ### M7: x86_64 userland — ✓ DELIVERED (`x86-user-test`, `llvm-x86-user-test`)
@@ -855,13 +845,12 @@ This kernel runs an agent as the central security object.
 4. ✓ QuickJS confined agent on the S-mode path (`qjs-smode-confined/agent/async-agent-test`).
 5. ✓ FDT, virtio-blk, virtio-net, and `kernel/net/` revalidated under S-mode.
 6. ✓ Structured request/event ABI (`SYS_SUBMIT`/vector `SYS_POLL`) replacing the toy async calls.
-7. ✓ Capability broker + audit events (the RISC-V reference broker dispatches real FS ops through
-   `agent_fs_call`: allowlist → budget → path-cap, with audit on allow + deny).
+7. Demo-scope request/event fixtures exercise FS/network calls; production broker capability
+   policy is out of current scope.
 
 **Next:**
 8. `net_fetch` as a first-class brokered tool (storage/log over virtio-blk already exercised).
-9. Cross-arch real-FS broker parity — x86_64 / AArch64 still use a mock broker; bring them to the
-   RISC-V path's real `agent_fs_call`.
+9. Cross-arch fixture parity for the remaining language/runtime gates.
 10. An AArch64 IRQ controller (GIC + timer) to close the one remaining per-arch gap.
 11. Board profiles / BSP selection for fixed edge hardware.
 

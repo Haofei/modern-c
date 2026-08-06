@@ -1,8 +1,6 @@
-// agent_fs.js — a PURE-JavaScript agent driving the REAL, capability-checked FS tool path
-// (M5b.2). Unlike host_async (a mock SUM op), host_fs_write/read/mkdir dispatch through the
-// kernel's capability front door (agent_fs_call -> fs_toolserver: allowlist -> budget -> path
-// cap). The agent has NO authority of its own; the kernel minted it a cap rooted at "/ws" with
-// read+write, and an allowlist of {FS_WRITE, FS_READ} ONLY. So:
+// agent_fs.js — a PURE-JavaScript agent driving the simple FS tool path.
+// host_fs_write/read/mkdir dispatch through TOOL_OP_FS_*; the fixture allows read/write under
+// "/ws" and denies mkdir. So:
 //   - write then read under /ws  -> ALLOWED  (proves the real tool ran: read back == "hi")
 //   - mkdir                      -> DENIED   (not allowlisted) -> a STRUCTURED error
 //

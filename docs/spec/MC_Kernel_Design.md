@@ -374,19 +374,9 @@ agent_tool_call(t, reg, sb, tool_id, arg) -> Result<u32, ToolError>
 > Until then, the agent-tool model bounds *which tool ids* an agent may name and *how many*
 > calls it may make, not what a (trusted) handler does.
 
-**Two distinct tool paths — do not conflate them:**
-- **Legacy cooperative `agent_tool_call`** (this section, `kernel/core/agent.mc`): a **MOCK,
-  in-process** transport. The caller is trusted MC; the "agent" is cooperative; handlers are
-  in-process function pointers. It demonstrates the *allowlist + budget + audit* checks, not a
-  real trust boundary.
-- **Confined-JS effect broker** (the agent-sandbox milestone, `qjs-realtool-test`): a pure-JS
-  agent in U-mode drives the **real** capability-checked **FS** path through
-  `SYS_SUBMIT`/`SYS_POLL` into `agent_fs_call` (allow/deny/audit) under S-mode. This *is* a
-  real path on RISC-V/S-mode for the FS vector; the secret/sum demo paths and the in-process
-  mock above still coexist. A real TCP-backed network broker path exists; the production
-  JS/tool-catalog now exposes `host_net_fetch` over the broker control plane, with TCP-backed
-  transport integration gated. Both `host_net_fetch` and `host_fs_read` have S-mode
-  IRQ-backed `SYS_POLL` completion gates.
+**Tool paths are demo-scope.** The remaining host/app-run tool ops exist to exercise the
+userspace ABI, async polling, and C/LLVM lowering. They are not a production agent capability
+broker.
 
 Gates: `cap-test`, `agent-e2e-test` (legacy mock); `qjs-realtool-test` (confined-JS FS broker).
 
@@ -573,9 +563,7 @@ safety machinery (§9.3) is GATED.
 `kernel/fs/`. All **IMPLEMENTED/GATED**. The flat/durable stores (`blobstore.mc`,
 `ramfs.mc`, `diskfs.mc`) remain; **hierarchical** paths now exist for real in
 `treefs.mc` (`treefs-test`: nested mkdir/create, `.`/`..` traversal, path resolution, `getdents`
-listing, typed errors), and `fs_toolserver.mc` (`fs-toolserver-test`) layers workspace-scoped,
-capability-checked, audited path access over it (M1 walking skeleton — the start of the native
-agent tool catalog, not yet the full read/ls/grep/edit/find surface).
+listing, typed errors).
 
 | File | Role | Capacity |
 |------|------|----------|
@@ -673,7 +661,7 @@ drift between MC and mirrored C structs is a compile error via generated
 Every kernel capability has a gate, wired in `build.zig` (≈297 steps) and aggregated by the
 master `m0` step. The gates come in two forms: many **boot under QEMU on both compiler
 backends** (`*-test` + `llvm-*-test`), while several capability layers run as **host fixtures**
-through `tools/lib/host-harness.sh` (e.g. `treefs-test`, `fs-toolserver-test`, `agent-fs-test`) — they exercise the host-compiled MC
+through `tools/lib/host-harness.sh` (e.g. `treefs-test`) — they exercise the host-compiled MC
 logic directly, not under QEMU. The confined-agent **acceptance bar** (§6: a genuinely
 isolated U-mode agent under QEMU) is therefore met only by selected QEMU boots, not by the
 host fixtures. Fixtures are self-verifying (assert expected output / exit codes / typed
@@ -694,14 +682,14 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | mmap / demand paging / COW | mmap **GATED**; demand paging & COW **DEMO-SCOPE** (single-region / one-page) |
 | Process lifecycle, attenuation, endpoints | **GATED** · demo-scale (`MAX_PROCS=8`) |
 | Scheduler (RR/priority/fair-share, preemption) | **GATED**; SMP **DEMO-SCOPE** (`NCORES=2`) |
-| Agent sandbox + tool-call ABI | **GATED**. Legacy `agent_tool_call` transport **MOCK** (in-process, not a trust boundary); confined-JS **FS** broker **REAL** on RISC-V/S-mode (§10.3); brokered JS `host_net_fetch` is gated over the network broker control plane, the real TCP-backed transport (`qjs-net-realtool-test` / LLVM), and S-mode IRQ-backed `SYS_POLL` completion from virtio-net (`qjs-smode-net-irq-tool-test` / LLVM); JS `host_fs_read` is gated through S-mode IRQ-backed `SYS_POLL` completion from virtio-blk (`qjs-smode-blk-irq-tool-test` / LLVM); real TCP-backed network broker **GATED** in the RISC-V agent-net demo; out-of-process tool-server transport **pending** |
+| Agent sandbox + tool-call ABI | **DEMO-SCOPE**. Remaining tool ops exercise syscall/async/runtime mechanics, not a production agent broker. |
 | Capabilities, grants + delegation/cascade | **GATED** |
 | IPC (sync rendezvous + notify, endpoint-safe) | **GATED** (copying, not zero-copy) |
 | Resource governance: quota + OOM-kill + fault containment | **GATED** (mechanism under explicit charge sites; full allocator wiring follow-up) |
 | Provenance + cap audit | **GATED** (kcall audits allowed+denied; tool calls audit dispatched only) |
 | Supervisor + manifests | **GATED** · demo-scale (`SVC_MAX=8`) |
 | Syscall table mechanism | **GATED**; registered surface **DEMO-SCOPE** (5 POSIX calls) |
-| Filesystems / storage | **GATED**; flat KV stores + **hierarchical `treefs`** (mkdir/`..`/getdents) + capability-checked `fs_toolserver` (M1 skeleton) |
+| Filesystems / storage | **GATED**; flat stores + **hierarchical `treefs`** (mkdir/`..`/getdents) |
 | Network stack (real DNS/TCP/HTTP/TLS demos) + BearSSL | **GATED** (demo-exercised, not RFC-complete) |
 | Drivers: virtio net/blk, plic, clint | **GATED**; pci **IMPLEMENTED**; e1000 **MOCK** |
 | ELF load | **GATED**; dynlink **DEMO-SCOPE** |
@@ -733,10 +721,8 @@ The safety keystone (governance) has landed. The open frontier, per the vision d
 - **Hierarchical VFS** — *partially delivered*: `treefs.mc` provides real paths (nested
   mkdir/create, `.`/`..`, `getdents`); the remaining work is mounting it as the primary VFS
   surface and broadening the catalog (read/ls/grep/edit/find over real paths).
-- **Native tool catalog over `agent_tool_call`** — *skeleton delivered*: `fs_toolserver.mc`
-  (`fs-toolserver-test`) is a workspace-scoped, capability-checked, audited FS tool server
-  (M1 walking skeleton). The remaining frontier is making the transport fully IPC-isolated
-  and expanding beyond the FS tools into a real, broad trust boundary.
+- **Native tool catalog** — out of current language-kernel scope. The kernel tree now keeps only
+  demo-scope tool ops needed to exercise the userspace ABI and async runtime.
 - **Agent code execution** — *delivered*: QuickJS runs as a confined userspace ELF on all three
   arches (riscv64 M+S-mode, x86_64 ring-3, AArch64 EL0), evaluating pure-JS agents under kernel
   confinement (BearSSL was the C-linking precedent). The remaining roadmap is broader: wider

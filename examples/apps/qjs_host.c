@@ -25,9 +25,8 @@ size_t strlen(const char *s);
 // convention the timer FIRING surfaces as that rejection — so host_sleep(ticks) is "await a timer".
 #define TOOL_OP_TIMEOUT 4u
 #define TOOL_OP_SPURIOUS 5u
-// REAL capability-checked FS ops (M5b.2): the kernel dispatches these through agent_fs_call (the
-// capability front door). The request payload packs the path then the data (FS_WRITE only); arg =
-// path length. FS_READ stages the file bytes back to out_ptr (host resolves with the string).
+// Simple FS ops: the request payload packs the path then the data (FS_WRITE only); arg = path
+// length. FS_READ stages the file bytes back to out_ptr (host resolves with the string).
 #define TOOL_OP_FS_WRITE 6u
 #define TOOL_OP_FS_READ 7u
 #define TOOL_OP_FS_MKDIR 8u
@@ -271,11 +270,10 @@ static JSValue js_host_sleep(JSContext *ctx, JSValueConst this_val, int argc, JS
     return start_request(ctx, TOOL_OP_TIMEOUT, 0, ticks);
 }
 
-// ---- REAL capability-checked FS bindings (M5b.2): host_fs_write/read/mkdir ----
+// ---- Simple FS bindings: host_fs_write/read/mkdir ----
 // Each packs the request payload (path bytes, then data bytes for write), sets arg = path length,
-// and submits the matching TOOL_OP_FS_*. The kernel routes it through agent_fs_call (allowlist ->
-// budget -> path cap) and completes it immediately; the result comes back through the SAME
-// poll/ToolEvent path. WRITE/MKDIR resolve with a scalar (bytes written / dir count); READ resolves
+// and submits the matching TOOL_OP_FS_*. The kernel completes it immediately; the result comes back
+// through the SAME poll/ToolEvent path. WRITE/MKDIR resolve with a scalar (bytes written / dir count); READ resolves
 // with the file bytes as a JS string. A denied/failed op rejects with the kernel -errno, which the
 // host prelude turns into a structured error — exactly like host_async.
 #define FS_PAYLOAD_CAP 384 /* path (<=128) + data (<=256), comfortably within MAX_REQ_BYTES checks */
