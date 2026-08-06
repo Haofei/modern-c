@@ -998,9 +998,10 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
             const conforms = rw.conformance.contains(try conformanceKey(rw.arena, &key_buf, bound.trait_name.text, concrete));
             if (!conforms) {
                 bound_failed = true;
+                const message = try std.fmt.allocPrint(rw.arena, "type '{s}' does not satisfy the bound '{s}: {s}' (no `impl {s} for {s}`)", .{ concrete, bound.type_param.text, bound.trait_name.text, bound.trait_name.text, concrete });
                 reporter.err(node.callee.*.span, "{s}: {s}", .{
                     "E_TRAIT_NOT_SATISFIED",
-                    std.fmt.allocPrint(rw.arena, "type '{s}' does not satisfy the bound '{s}: {s}' (no `impl {s} for {s}`)", .{ concrete, bound.type_param.text, bound.trait_name.text, bound.trait_name.text, concrete }) catch "trait bound not satisfied",
+                    message,
                 });
             }
         }

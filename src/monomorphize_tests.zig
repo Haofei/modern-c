@@ -447,6 +447,50 @@ test "monomorphize OOM fail-closes instead of returning a clean transform" {
     }
 }
 
+test "monomorphize trait-bound diagnostic OOM fail-closes" {
+    const source =
+        \\trait Shape {
+        \\    fn area(self: *Self) -> u32;
+        \\}
+        \\struct Circle { radius: u32 }
+        \\fn use_shape(comptime T: type, x: *T) -> u32 where T: Shape {
+        \\    return x.area();
+        \\}
+        \\fn trigger(c: *Circle) -> u32 {
+        \\    return use_shape(Circle, c);
+        \\}
+    ;
+
+    var parse_reporter = diagnostics.Reporter.init(testing.allocator, "mono_bound_oom.mc", source);
+    defer parse_reporter.deinit();
+
+    var parse_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer parse_arena.deinit();
+
+    var p = parser.Parser.init(source, &parse_reporter);
+    const module = try p.parseModule(parse_arena.allocator());
+    try testing.expect(!parse_reporter.has_errors);
+
+    var saw_oom = false;
+    for (0..64) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        var fail_arena = std.heap.ArenaAllocator.init(failing.allocator());
+        defer fail_arena.deinit();
+
+        var reporter = diagnostics.Reporter.init(testing.allocator, "mono_bound_oom.mc", source);
+        defer reporter.deinit();
+
+        const result = monomorphize.transformReport(fail_arena.allocator(), module, &reporter);
+        if (result) |_| {
+            try testing.expect(reporter.has_errors);
+        } else |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            saw_oom = true;
+        }
+    }
+    try testing.expect(saw_oom);
+}
+
 test "monomorphize limit rejects before producing a partial specialization module" {
     const source =
         \\fn make(comptime N: usize) -> [N]u8 {
