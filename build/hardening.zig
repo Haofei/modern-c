@@ -1,7 +1,8 @@
 const std = @import("std");
 const h = @import("helpers.zig");
 
-// Opt-in static audits (unsafe boundary / double-fetch / taint / capability mint / coverage),
+// Opt-in static audits (unsafe boundary / double-fetch / taint / capability mint /
+// VerifiedBundle loader admission / coverage),
 // the ASan/UBSan sanitize pass, the SAFE/RELEASE parity gate, and the KASAN/KMSAN/KCSAN
 // + redzone sanitizer-profile QEMU boots.
 pub fn register(ctx: *h.Ctx) void {
@@ -32,6 +33,10 @@ pub fn register(ctx: *h.Ctx) void {
 
     // K1: source-level audit of capability mint authority.
     _ = h.addScriptTestOpts(ctx, "capability-mint-audit", "Audit capability authority roots: flag direct cap_mint/rcap_mint calls outside kernel/core/capability.mc (K1)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "capability-mint" }, .{ .install = false });
+
+    // K2: source-level audit of raw ELF loader admission. `elf_load_image_for` remains the
+    // low-level primitive, but app/agent admission paths must consume VerifiedBundle.
+    _ = h.addScriptTestOpts(ctx, "verified-bundle-loader-audit", "Audit raw ELF loader admission: flag elf_load_image_for calls outside approved loader/arch demo files", &.{ "python3", "tools/toolchain/verified-bundle-loader-audit.py" }, .{ .install = false });
 
     // D2.5: explicit SAFE vs RELEASE build-safety profile (`--checks=all|elide-proven`).
     // Asserts the two profiles agree functionally and that RELEASE elides exactly the

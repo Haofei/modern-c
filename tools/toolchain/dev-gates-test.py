@@ -253,6 +253,12 @@ def main() -> None:
         ["unsafe-audit", "double-fetch-audit", "taint-audit", "capability-mint-audit"],
         ["bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '"],
     )
+    assert_route(
+        module,
+        ["tools/toolchain/verified-bundle-loader-audit.py"],
+        ["verified-bundle-loader-audit"],
+        ["python3 tools/toolchain/verified-bundle-loader-audit.py --self-test 2>&1 | rg '^RAW-ELF-LOAD '"],
+    )
     assert_checks(
         module,
         ["tools/toolchain/unsafe-audit.sh"],

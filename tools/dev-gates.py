@@ -275,6 +275,12 @@ RULES: tuple[Rule, ...] = (
         ("bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '",),
     ),
     Rule(
+        ("tools/toolchain/verified-bundle-loader-audit.py",),
+        ("verified-bundle-loader-audit",),
+        "VerifiedBundle loader-admission audit changes need the raw-loader boundary gate",
+        ("python3 tools/toolchain/verified-bundle-loader-audit.py --self-test 2>&1 | rg '^RAW-ELF-LOAD '",),
+    ),
+    Rule(
         ("tools/toolchain/unsafe-audit.sh",),
         (),
         "unsafe audit shim changes need the shim self-test because the Zig gate calls mc-audit directly",
