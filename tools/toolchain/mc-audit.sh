@@ -7,6 +7,8 @@
 #   --mode taint         (U3)   flag user-derived lengths/indices used without a bound check
 #   --mode capability-mint (K1) flag direct capability/right mint or root authority
 #        creation outside the approved TCB roots
+#   --mode signature-proof (K2) flag direct VerifiedBundle signature-proof mint or
+#        signature authority root creation outside the approved TCB/fixture roots
 #
 # These modes share the same awk machinery (comment/string `strip()`, brace-depth /
 # function-scope tracking, the `nth_arg`/`call_args` argument splitter, the
@@ -35,6 +37,7 @@
 #   mc-audit.sh --mode double-fetch  [DIR ...]   (default dir:  kernel)
 #   mc-audit.sh --mode taint         [DIR ...]   (default dir:  kernel)
 #   mc-audit.sh --mode capability-mint [DIR ...] (default dirs: kernel std)
+#   mc-audit.sh --mode signature-proof  [DIR ...] (default dirs: kernel tests/qemu/proc)
 #   mc-audit.sh --mode MODE --self-test          (run the built-in negative fixture)
 
 set -uo pipefail
@@ -55,13 +58,19 @@ while [ $# -gt 0 ]; do
 done
 
 case "$MODE" in
-  unsafe|double-fetch|taint|capability-mint) : ;;
-  *) echo "mc-audit: --mode must be one of: unsafe | double-fetch | taint | capability-mint" >&2; exit 2 ;;
+  unsafe|double-fetch|taint|capability-mint|signature-proof) : ;;
+  *) echo "mc-audit: --mode must be one of: unsafe | double-fetch | taint | capability-mint | signature-proof" >&2; exit 2 ;;
 esac
 
 # Default scan roots per mode.
 if [ ${#DIRS[@]} -eq 0 ]; then
-  if [ "$MODE" = unsafe ] || [ "$MODE" = capability-mint ]; then DIRS=(kernel std); else DIRS=(kernel); fi
+  if [ "$MODE" = unsafe ] || [ "$MODE" = capability-mint ]; then
+    DIRS=(kernel std)
+  elif [ "$MODE" = signature-proof ]; then
+    DIRS=(kernel tests/qemu/proc)
+  else
+    DIRS=(kernel)
+  fi
 fi
 
 SELF_TMP=""
@@ -195,6 +204,29 @@ export fn bad_driver_mint() -> usize {
 }
 MC
       ;;
+    signature-proof)
+      mkdir -p "$SELF_TMP/kernel/core"
+      cat > "$SELF_TMP/kernel/core/production_ops.mc" <<'MC'
+pub linear opaque struct SignatureAuthority { marker: u32 }
+pub linear opaque struct BundleSignatureProof { accepted: bool }
+pub struct BundleHeader { image_hash: u64 }
+pub fn signature_authority_unchecked() -> SignatureAuthority { return .{ .marker = 1 }; }
+pub fn bundle_signature_proof_mint(auth: *SignatureAuthority, h: *BundleHeader, accepted: bool) -> BundleSignatureProof { return .{ .accepted = accepted }; }
+MC
+      mkdir -p "$SELF_TMP/kernel/driver"
+      cat > "$SELF_TMP/kernel/driver/bad_signature_proof.mc" <<'MC'
+import "kernel/core/production_ops.mc";
+
+// NEGATIVE TEST (must be flagged): ordinary kernel code must not directly create
+// a signature authority root or mint a VerifiedBundle admission proof. Production
+// code should receive a delegated proof from the boot/key-policy TCB.
+export fn bad_driver_signature_proof(h: *BundleHeader) -> bool {
+    var auth: SignatureAuthority = signature_authority_unchecked();
+    var proof: BundleSignatureProof = bundle_signature_proof_mint(&auth, h, true);
+    return true;
+}
+MC
+      ;;
   esac
   DIRS=("$SELF_TMP/kernel")
   [ "$MODE" = unsafe ] && DIRS=("$SELF_TMP/kernel" "$SELF_TMP/std")
@@ -311,6 +343,7 @@ function process(logical, startfnr) {
   else if (MODE=="double-fetch") do_doublefetch(logical, startfnr)
   else if (MODE=="taint")        do_taint(logical, startfnr)
   else if (MODE=="capability-mint") do_capability_mint(logical, startfnr)
+  else if (MODE=="signature-proof") do_signature_proof(logical, startfnr)
 }
 
 # True if the buffered logical line is incomplete and the next physical line `nsl` continues it.
@@ -350,6 +383,7 @@ END {
   else if (MODE=="double-fetch") end_doublefetch()
   else if (MODE=="taint")        end_taint()
   else if (MODE=="capability-mint") end_capability_mint()
+  else if (MODE=="signature-proof") end_signature_proof()
 }
 
 # ===================== brace/scope helpers (shared) =====================
@@ -622,10 +656,46 @@ function end_capability_mint() {
   print  "================================================================"
   print "__COUNT__=" findings > "/dev/stderr"
 }
+
+# ===================== MODE: signature-proof (K2) =====================
+
+function approved_signature_proof_file(file) {
+  return (file ~ /(^|\/)kernel\/core\/production_ops\.mc$/ ||
+          file ~ /(^|\/)tests\/qemu\/proc\/production_ops_demo\.mc$/ ||
+          file ~ /(^|\/)tests\/qemu\/proc\/app_run_demo\.mc$/)
+}
+
+function do_signature_proof(l, startfnr,   cur, call) {
+  if (approved_signature_proof_file(FILENAME)) return
+  cur = l
+  while (match(cur, /(^|[^A-Za-z0-9_])(signature_authority_unchecked|bundle_signature_proof_mint)[ \t]*\(/)) {
+    call = substr(cur, RSTART, RLENGTH)
+    if (call ~ /signature_authority_unchecked/) nsigroot++
+    else nproofmint++
+    findings++
+    printf("SIG-PROOF  %s:%d  direct signature proof/root call `%s` outside approved TCB or fixture roots; delegate proof creation from the boot/key-policy root instead\n",
+           FILENAME, startfnr, trim(call)) > "/dev/stderr"
+    cur = substr(cur, RSTART + RLENGTH)
+  }
+}
+
+function end_signature_proof() {
+  print  "============== MC signature proof audit (K2) ===================="
+  printf("scanned %d .mc file(s)\n\n", nfiles)
+  printf("Unapproved direct signature proof call sites:\n")
+  printf("  signature_authority_unchecked %5d\n", nsigroot)
+  printf("  bundle_signature_proof_mint   %5d\n\n", nproofmint)
+  if (findings==0)
+    print "RESULT: clean — no production source directly creates signature proof roots or mints bundle admission proofs outside approved TCB/fixture roots."
+  else
+    printf("RESULT: %d unapproved signature proof call(s) found (see SIG-PROOF lines on stderr).\n", findings)
+  print  "================================================================"
+  print "__COUNT__=" findings > "/dev/stderr"
+}
 ' $FILES 2> "$TMP"
 
 # Surface the per-mode finding lines (awk wrote them to stderr/$TMP).
-grep -E '^(VIOLATION|DOUBLE-FETCH|TAINT|CAP-MINT)' "$TMP" >&2 || true
+grep -E '^(VIOLATION|DOUBLE-FETCH|TAINT|CAP-MINT|SIG-PROOF)' "$TMP" >&2 || true
 count=$(grep -o '__COUNT__=[0-9]*' "$TMP" | head -1 | cut -d= -f2)
 count=${count:-0}
 

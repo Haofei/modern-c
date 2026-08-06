@@ -2,7 +2,7 @@ const std = @import("std");
 const h = @import("helpers.zig");
 
 // Opt-in static audits (unsafe boundary / double-fetch / taint / capability mint /
-// VerifiedBundle loader admission / coverage),
+// signature proof mint / VerifiedBundle loader admission / coverage),
 // the ASan/UBSan sanitize pass, the SAFE/RELEASE parity gate, and the KASAN/KMSAN/KCSAN
 // + redzone sanitizer-profile QEMU boots.
 pub fn register(ctx: *h.Ctx) void {
@@ -18,7 +18,7 @@ pub fn register(ctx: *h.Ctx) void {
     // uncovered function count against a checked-in ratchet.
     _ = h.addScriptTestOpts(ctx, "compiler-coverage", "Report and ratchet parser/sema/monomorphize/async compiler frontend function coverage", &.{ "bash", "tools/toolchain/compiler-coverage.sh", "--check" }, .{ .install = false });
 
-    // The source-level security audits (unsafe boundary / double-fetch / taint / capability mint) are
+    // The source-level security audits (unsafe boundary / double-fetch / taint / capability mint / signature proof mint) are
     // now one parameterized tool, tools/toolchain/mc-audit.sh, invoked with `--mode`. Pure
     // source scans (no mcc dependency), so they do not depend on the install step.
 
@@ -34,7 +34,10 @@ pub fn register(ctx: *h.Ctx) void {
     // K1: source-level audit of capability mint authority.
     _ = h.addScriptTestOpts(ctx, "capability-mint-audit", "Audit capability authority roots: flag direct cap_mint/rcap_mint calls outside kernel/core/capability.mc (K1)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "capability-mint" }, .{ .install = false });
 
-    // K2: source-level audit of raw ELF loader admission. `elf_load_image_for` remains the
+    // K2: source-level audit of VerifiedBundle signature proof mint authority.
+    _ = h.addScriptTestOpts(ctx, "signature-proof-audit", "Audit VerifiedBundle signature proof authority: flag proof mint/root calls outside approved TCB and QEMU fixture roots (K2)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "signature-proof" }, .{ .install = false });
+
+    // K3: source-level audit of raw ELF loader admission. `elf_load_image_for` remains the
     // low-level primitive, but app/agent admission paths must consume VerifiedBundle.
     _ = h.addScriptTestOpts(ctx, "verified-bundle-loader-audit", "Audit raw ELF loader admission: flag elf_load_image_for calls outside approved loader/arch demo files", &.{ "python3", "tools/toolchain/verified-bundle-loader-audit.py" }, .{ .install = false });
 
