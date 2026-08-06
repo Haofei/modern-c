@@ -491,6 +491,56 @@ test "monomorphize trait-bound diagnostic OOM fail-closes" {
     try testing.expect(saw_oom);
 }
 
+test "monomorphize specialization registration OOM fail-closes" {
+    const source =
+        \\struct Box<T> { value: T }
+        \\union Slot<T> {
+        \\    some: T,
+        \\    none,
+        \\}
+        \\fn make(comptime T: type, value: T) -> Box<T> {
+        \\    return .{ .value = value };
+        \\}
+        \\fn trigger() -> u32 {
+        \\    let b: Box<u32> = make(u32, 1);
+        \\    let s: Slot<u32> = uninit;
+        \\    return b.value;
+        \\}
+    ;
+
+    var parse_reporter = diagnostics.Reporter.init(testing.allocator, "mono_register_oom.mc", source);
+    defer parse_reporter.deinit();
+
+    var parse_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer parse_arena.deinit();
+
+    var p = parser.Parser.init(source, &parse_reporter);
+    const module = try p.parseModule(parse_arena.allocator());
+    try testing.expect(!parse_reporter.has_errors);
+
+    var saw_oom = false;
+    var saw_success = false;
+    for (0..96) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        var fail_arena = std.heap.ArenaAllocator.init(failing.allocator());
+        defer fail_arena.deinit();
+
+        var reporter = diagnostics.Reporter.init(testing.allocator, "mono_register_oom.mc", source);
+        defer reporter.deinit();
+
+        const result = monomorphize.transformReport(fail_arena.allocator(), module, &reporter);
+        if (result) |_| {
+            try testing.expect(!reporter.has_errors);
+            saw_success = true;
+        } else |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            saw_oom = true;
+        }
+    }
+    try testing.expect(saw_oom);
+    try testing.expect(saw_success);
+}
+
 test "monomorphize limit rejects before producing a partial specialization module" {
     const source =
         \\fn make(comptime N: usize) -> [N]u8 {

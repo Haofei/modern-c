@@ -1017,11 +1017,8 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
         const depth = rw.current_depth + 1;
         try admitInstance(rw, node.callee.*.span, .function, mangled_name, depth);
         try registerGenericLinkage(rw, mangled_name, instance_key, node.callee.*.span);
-        const origin = createInstantiationOrigin(rw, .function, mangled_name, node.callee.*.span, depth);
-        const inst = rw.arena.create(Instance) catch {
-            rw.oom = true;
-            return null;
-        };
+        const origin = try createInstantiationOrigin(rw, .function, mangled_name, node.callee.*.span, depth);
+        const inst = try rw.arena.create(Instance);
         inst.* = .{
             .decl = info.decl,
             .subst = subst,
@@ -1032,12 +1029,8 @@ fn rewriteGenericCall(ctx: *const CloneCtx, rw: *Rewriter, info: TypeGenericInfo
             .origin = origin,
             .bound_failed = bound_failed,
         };
-        rw.instances.put(instance_key, inst) catch {
-            rw.oom = true;
-        };
-        rw.inst_list.append(rw.arena, inst) catch {
-            rw.oom = true;
-        };
+        try rw.instances.put(instance_key, inst);
+        try rw.inst_list.append(rw.arena, inst);
     }
     const callee = try ast.makePtr(rw.arena, ast.Expr{ .span = node.callee.*.span, .kind = .{ .ident = .{ .text = mangled_name, .span = node.callee.*.span } } });
     return ast.Expr{ .span = node.callee.*.span, .kind = .{ .call = .{
@@ -1053,11 +1046,8 @@ fn createInstantiationOrigin(
     name: []const u8,
     span: ast.Span,
     depth: usize,
-) ?*const InstantiationOrigin {
-    const origin = rw.arena.create(InstantiationOrigin) catch {
-        rw.oom = true;
-        return null;
-    };
+) !*const InstantiationOrigin {
+    const origin = try rw.arena.create(InstantiationOrigin);
     origin.* = .{
         .kind = kind,
         .name = name,
@@ -1433,18 +1423,11 @@ fn rewriteGenericStruct(ctx: *const CloneCtx, rw: *Rewriter, info: GenericStruct
         const depth = rw.current_depth + 1;
         try admitInstance(rw, node.base.span, .@"struct", key.name, depth);
         try registerGenericLinkage(rw, key.name, key.semantic, node.base.span);
-        const origin = createInstantiationOrigin(rw, .@"struct", key.name, node.base.span, depth);
-        const si = rw.arena.create(StructInstance) catch {
-            rw.oom = true;
-            return key.name;
-        };
+        const origin = try createInstantiationOrigin(rw, .@"struct", key.name, node.base.span, depth);
+        const si = try rw.arena.create(StructInstance);
         si.* = .{ .decl = sd, .subst = key.subst, .mangled = key.name, .attrs = info.attrs, .is_pub = info.is_pub, .depth = depth, .origin = origin };
-        rw.struct_instances.put(key.semantic, si) catch {
-            rw.oom = true;
-        };
-        rw.struct_list.append(rw.arena, si) catch {
-            rw.oom = true;
-        };
+        try rw.struct_instances.put(key.semantic, si);
+        try rw.struct_list.append(rw.arena, si);
     }
     return key.name;
 }
@@ -1458,18 +1441,11 @@ fn rewriteGenericUnion(ctx: *const CloneCtx, rw: *Rewriter, info: GenericUnionIn
         const depth = rw.current_depth + 1;
         try admitInstance(rw, node.base.span, .@"union", key.name, depth);
         try registerGenericLinkage(rw, key.name, key.semantic, node.base.span);
-        const origin = createInstantiationOrigin(rw, .@"union", key.name, node.base.span, depth);
-        const ui = rw.arena.create(UnionInstance) catch {
-            rw.oom = true;
-            return key.name;
-        };
+        const origin = try createInstantiationOrigin(rw, .@"union", key.name, node.base.span, depth);
+        const ui = try rw.arena.create(UnionInstance);
         ui.* = .{ .decl = ud, .subst = key.subst, .mangled = key.name, .attrs = info.attrs, .is_pub = info.is_pub, .depth = depth, .origin = origin };
-        rw.union_instances.put(key.semantic, ui) catch {
-            rw.oom = true;
-        };
-        rw.union_list.append(rw.arena, ui) catch {
-            rw.oom = true;
-        };
+        try rw.union_instances.put(key.semantic, ui);
+        try rw.union_list.append(rw.arena, ui);
     }
     return key.name;
 }
