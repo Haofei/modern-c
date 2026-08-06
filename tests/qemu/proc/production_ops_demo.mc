@@ -50,7 +50,6 @@ fn action_code(a: RuntimeAction) -> u32 {
 
 export fn production_ops_run() -> u32 {
     var pass: u32 = 1;
-    var sig_auth: SignatureAuthority = signature_authority_unchecked();
 
     var agent: BundleHeader = bundle_header_init(.Agent, 10, 1, 41, 7, 0xAA55, 256);
     switch bundle_validate_metadata(&agent, .Agent, 1, 8, 12, 7) {
@@ -98,8 +97,7 @@ export fn production_ops_run() -> u32 {
     var exact_digest: BundleDigest = bundle_digest_bytes(image_base, 4);
     if !digest_is_sha256_01020304(&exact_digest) { pass = 0; }
     var exact: BundleHeader = bundle_header_init_for_image(.Agent, 10, 1, 41, 7, image_base, 4, 256);
-    var exact_proof: BundleSignatureProof = bundle_signature_proof_mint(&sig_auth, &exact, true);
-    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, move exact_proof, image_base, 4) {
+    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, true, image_base, 4) {
         ok(vb) => {
             if !verified_bundle_has_exact_bytes(&vb) { pass = 0; }
             if verified_bundle_image_base(&vb) != image_base { pass = 0; }
@@ -113,8 +111,7 @@ export fn production_ops_run() -> u32 {
         }
         err(e) => { pass = 0; }
     }
-    var rejected_proof: BundleSignatureProof = bundle_signature_proof_mint(&sig_auth, &exact, false);
-    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, move rejected_proof, image_base, 4) {
+    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, false, image_base, 4) {
         ok(vb) => {
             pass = 0;
             unsafe { forget_unchecked(vb); }
@@ -127,8 +124,7 @@ export fn production_ops_run() -> u32 {
         }
     }
     exact.image_digest.bytes[0] = exact.image_digest.bytes[0] ^ 1;
-    var bad_digest_proof: BundleSignatureProof = bundle_signature_proof_mint(&sig_auth, &exact, true);
-    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, move bad_digest_proof, image_base, 4) {
+    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, true, image_base, 4) {
         ok(vb) => {
             pass = 0;
             unsafe { forget_unchecked(vb); }
@@ -190,8 +186,7 @@ export fn production_ops_run() -> u32 {
         }
         err(e) => { pass = 0; }
     }
-    var next_agent_proof: BundleSignatureProof = bundle_signature_proof_mint(&sig_auth, &next_agent, true);
-    switch bundle_verify_and_admit_image(&next_agent, .Agent, 1, 8, 13, 7, move next_agent_proof, image_base, 4) {
+    switch bundle_verify_and_admit_image(&next_agent, .Agent, 1, 8, 13, 7, true, image_base, 4) {
         ok(vb) => {
             let verified_slot: usize = rollback_install_verified_candidate(&rb, move vb);
             if verified_slot != 1 { pass = 0; }
@@ -250,6 +245,5 @@ export fn production_ops_run() -> u32 {
     if action_code(.Revoke) != 2 { pass = 0; }
     if action_code(.Kill) != 3 { pass = 0; }
 
-    signature_authority_revoke(move sig_auth);
     return pass;
 }

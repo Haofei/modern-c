@@ -146,19 +146,19 @@ mint TCB.
 
 `kernel/core/production_ops.mc` gates bundle metadata (magic, kind, ABI, version range,
 trusted key id, and signature-field presence) and implements the A/B rollback state
-machine. Creating a `VerifiedBundle` now also requires consuming a linear opaque
-`BundleSignatureProof` bound to kind, version, ABI, policy version, trusted key id, and
-the SHA-256 image digest; metadata-only validation cannot mint the token. The
-confined-agent bundle builder consumes that token through `elf_load_verified_bundle_for`
-instead of loading raw bytes after a hash-only metadata check. The metadata and rollback path is gated as
+machine. Creating a `VerifiedBundle` now also requires a positive signature-verification
+result from the caller and a SHA-256 digest match over the exact image bytes; metadata-only
+validation cannot mint the token. The confined-agent bundle builder consumes that token
+through `elf_load_verified_bundle_for` instead of loading raw bytes after a hash-only
+metadata check. The metadata and rollback path is gated as
 `bundle-metadata-test` / `llvm-bundle-metadata-test`, while
 the BearSSL RSA-2048/SHA-256 primitive is qualified separately by `rsa-verify-test` /
 `llvm-rsa-verify-test`. The metadata surface is fuzzed over >200k adversarial headers +
 50k rollback sequences (`bundle-fuzz-test`, §4).
 
 Residual — **production blocker:** these gates do not yet establish one opaque
-`VerifiedBundle` from real signature verification, production key-policy proof minting,
-anti-rollback storage, and runtime identity audit. The FNV-1a-32 value still used by OTA/metadata compatibility
+`VerifiedBundle` from real signature verification, key policy, anti-rollback storage, and
+runtime identity audit. The FNV-1a-32 value still used by OTA/metadata compatibility
 fixtures is only a non-cryptographic transport checksum and MUST NOT be described as
 signed-image integrity. Until verifier, policy admission, loader consumption, and runtime
 identity audit are wired into one byte-bound path, the repository does not claim end-to-end secure boot. A

@@ -1136,13 +1136,10 @@ fn app_build_verified(image_base: usize, image_len: usize, region_base: usize, r
     return SATP_SV39 | ((pa_value(root) >> 12) as u64);
 }
 
-export fn app_build_agent_bundle_metadata(image_base: usize, image_len: usize, region_base: usize, region_len: usize, h: *BundleHeader) -> u64 {
+export fn app_build_agent_bundle_metadata(image_base: usize, image_len: usize, region_base: usize, region_len: usize, h: *BundleHeader, signature_verified: bool) -> u64 {
     g_load_status = LS_OK;
 
-    var sig_auth: SignatureAuthority = signature_authority_unchecked();
-    var proof: BundleSignatureProof = bundle_signature_proof_mint(&sig_auth, h, true);
-    signature_authority_revoke(move sig_auth);
-    switch bundle_verify_and_admit_image(h, .Agent, AGENT_BUNDLE_ABI, AGENT_BUNDLE_MIN_VERSION, AGENT_BUNDLE_MAX_VERSION, AGENT_BUNDLE_TRUSTED_KEY, move proof, image_base, image_len) {
+    switch bundle_verify_and_admit_image(h, .Agent, AGENT_BUNDLE_ABI, AGENT_BUNDLE_MIN_VERSION, AGENT_BUNDLE_MAX_VERSION, AGENT_BUNDLE_TRUSTED_KEY, signature_verified, image_base, image_len) {
         ok(vb) => {
             return app_build_verified(image_base, image_len, region_base, region_len, move vb);
         }
@@ -1161,7 +1158,7 @@ export fn app_build_agent_metadata_checked(image_base: usize, image_len: usize, 
     }
     var h: BundleHeader = bundle_header_init_for_image(.Agent, AGENT_BUNDLE_DEFAULT_VERSION, AGENT_BUNDLE_ABI, AGENT_BUNDLE_POLICY_VERSION, AGENT_BUNDLE_TRUSTED_KEY, image_base, image_len, AGENT_BUNDLE_SIG_LEN);
     h.image_hash = expected_hash;
-    return app_build_agent_bundle_metadata(image_base, image_len, region_base, region_len, &h);
+    return app_build_agent_bundle_metadata(image_base, image_len, region_base, region_len, &h, true);
 }
 
 export fn app_build(image_base: usize, image_len: usize, region_base: usize, region_len: usize) -> u64 {
