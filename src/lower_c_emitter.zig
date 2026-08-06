@@ -2831,11 +2831,11 @@ pub const CEmitter = struct {
         const ty = maybe_ty orelse if (locals.get(name.text)) |info| info.source_ty orelse return else return;
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
-        try self.defer_stack.append(self.allocator, try makeDropPointerCall(self.scratch.allocator(), drop_fn, name));
+        try self.defer_stack.append(self.allocator, try ownership_facts.makeDropPointerCall(self.scratch.allocator(), drop_fn, name));
     }
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr) void {
-        const local_name = movedLocalName(expr) orelse return;
+        const local_name = ownership_facts.movedLocalName(expr) orelse return;
         self.cancelAutoDropForLocalName(local_name);
     }
 
@@ -2891,14 +2891,6 @@ pub const CEmitter = struct {
             },
             else => {},
         }
-    }
-
-    fn autoDropReleaseFunctionName(self: *CEmitter, name: []const u8) bool {
-        var it = self.auto_drop_fns_by_type.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.*, name)) return true;
-        }
-        return false;
     }
 
     fn localDeclInfo(self: *CEmitter, local: ast.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo)) !LocalInfo {
@@ -3575,21 +3567,8 @@ pub const CEmitter = struct {
         return true;
     }
 
-    const AutoDropCleanup = struct {
-        fn_name: []const u8,
-        local_name: []const u8,
-    };
-
-    fn autoDropPointerCleanup(self: *CEmitter, expr: ast.Expr) ?AutoDropCleanup {
-        const call = switch (expr.kind) {
-            .call => |node| node,
-            else => return null,
-        };
-        const fn_name = calleeIdentName(call.callee.*) orelse return null;
-        if (!self.autoDropReleaseFunctionName(fn_name)) return null;
-        if (call.args.len != 1) return null;
-        const local_name = addressOfIdentName(call.args[0]) orelse return null;
-        return .{ .fn_name = fn_name, .local_name = local_name };
+    fn autoDropPointerCleanup(self: *CEmitter, expr: ast.Expr) ?ownership_facts.AutoDropCleanup {
+        return ownership_facts.autoDropPointerCleanup(expr, &self.auto_drop_fns_by_type);
     }
 
     fn writeIndent(self: *CEmitter) !void {
@@ -8747,40 +8726,6 @@ pub const CEmitter = struct {
         return self.arrayLenTextForExpr(expr);
     }
 };
-
-fn makeDropPointerCall(allocator: std.mem.Allocator, fn_name: []const u8, local: ast.Ident) !ast.Expr {
-    const ident = ast.Expr{ .span = local.span, .kind = .{ .ident = .{ .text = local.text, .span = local.span } } };
-    const address = ast.Expr{ .span = local.span, .kind = .{ .address_of = try ast.makePtr(allocator, ident) } };
-    const args = try allocator.dupe(ast.Expr, &[_]ast.Expr{address});
-    return .{
-        .span = local.span,
-        .kind = .{ .call = .{
-            .callee = try ast.makePtr(allocator, ast.Expr{ .span = local.span, .kind = .{ .ident = .{ .text = fn_name, .span = local.span } } }),
-            .type_args = &.{},
-            .args = args,
-        } },
-    };
-}
-
-fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| addressOfIdentName(inner.*),
-        .address_of => |inner| switch (inner.kind) {
-            .grouped => addressOfIdentName(inner.*),
-            .ident => |ident| ident.text,
-            else => null,
-        },
-        else => null,
-    };
-}
-
-fn movedLocalName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| movedLocalName(inner.*),
-        .ident => |ident| ident.text,
-        else => null,
-    };
-}
 
 fn isSourceSpan(span: ast.Span) bool {
     return span.line != 0 and span.column != 0;

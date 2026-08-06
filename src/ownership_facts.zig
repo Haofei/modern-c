@@ -3,6 +3,11 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 
+pub const AutoDropCleanup = struct {
+    fn_name: []const u8,
+    local_name: []const u8,
+};
+
 /// Extract the canonical resource type name from the narrow `#[drop]` ABI:
 ///
 ///     #[drop] fn release(x: *mut T) -> void
@@ -39,6 +44,52 @@ pub fn autoDropEligibleTypeName(
     const self_ty = ast.TypeExpr{ .span = decl.name.span, .kind = .{ .name = decl.name } };
     return typeEmbedsMoveByValue(self_ty, structs, aliases, 0) and
         !typeEmbedsLinearByValue(self_ty, structs, aliases, 0);
+}
+
+pub fn makeDropPointerCall(allocator: std.mem.Allocator, fn_name: []const u8, local: ast.Ident) !ast.Expr {
+    const ident = ast.Expr{ .span = local.span, .kind = .{ .ident = .{ .text = local.text, .span = local.span } } };
+    const address = ast.Expr{ .span = local.span, .kind = .{ .address_of = try ast.makePtr(allocator, ident) } };
+    const args = try allocator.dupe(ast.Expr, &[_]ast.Expr{address});
+    return .{
+        .span = local.span,
+        .kind = .{ .call = .{
+            .callee = try ast.makePtr(allocator, ast.Expr{ .span = local.span, .kind = .{ .ident = .{ .text = fn_name, .span = local.span } } }),
+            .type_args = &.{},
+            .args = args,
+        } },
+    };
+}
+
+pub fn autoDropPointerCleanup(expr: ast.Expr, auto_drop_fns_by_type: *const std.StringHashMap([]const u8)) ?AutoDropCleanup {
+    const call = switch (expr.kind) {
+        .call => |node| node,
+        else => return null,
+    };
+    const fn_name = ast_query.calleeIdentName(call.callee.*) orelse return null;
+    if (!autoDropReleaseFunctionName(fn_name, auto_drop_fns_by_type)) return null;
+    if (call.args.len != 1) return null;
+    const local_name = addressOfIdentName(call.args[0]) orelse return null;
+    return .{ .fn_name = fn_name, .local_name = local_name };
+}
+
+pub fn movedLocalName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| movedLocalName(inner.*),
+        .ident => |ident| ident.text,
+        else => null,
+    };
+}
+
+pub fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| addressOfIdentName(inner.*),
+        .address_of => |inner| switch (inner.kind) {
+            .grouped => addressOfIdentName(inner.*),
+            .ident => |ident| ident.text,
+            else => null,
+        },
+        else => null,
+    };
 }
 
 pub fn typeEmbedsMoveByValue(
@@ -102,6 +153,14 @@ fn leadingTypeName(ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
+fn autoDropReleaseFunctionName(name: []const u8, auto_drop_fns_by_type: *const std.StringHashMap([]const u8)) bool {
+    var it = auto_drop_fns_by_type.iterator();
+    while (it.next()) |entry| {
+        if (std.mem.eql(u8, entry.value_ptr.*, name)) return true;
+    }
+    return false;
+}
+
 test "drop pointer release parameter accepts named and generic mut pointers only" {
     const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
     const name_t = ast.Ident{ .text = "Wrapper", .span = span };
@@ -125,4 +184,25 @@ test "drop pointer release parameter accepts named and generic mut pointers only
     };
 
     try std.testing.expectEqualStrings("Wrapper", dropPointerReleaseParamTypeName(fn_decl).?);
+}
+
+test "auto-drop cleanup helpers preserve backend-visible call shapes" {
+    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+    var map = std.StringHashMap([]const u8).init(std.testing.allocator);
+    defer map.deinit();
+    try map.put("Guard", "close_guard");
+
+    const local = ast.Ident{ .text = "g", .span = span };
+    const call = try makeDropPointerCall(std.testing.allocator, "close_guard", local);
+    defer {
+        const node = call.kind.call;
+        std.testing.allocator.destroy(node.callee);
+        std.testing.allocator.destroy(node.args[0].kind.address_of);
+        std.testing.allocator.free(node.args);
+    }
+
+    const cleanup = autoDropPointerCleanup(call, &map).?;
+    try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
+    try std.testing.expectEqualStrings("g", cleanup.local_name);
+    try std.testing.expectEqualStrings("g", movedLocalName(.{ .span = span, .kind = .{ .ident = local } }).?);
 }
