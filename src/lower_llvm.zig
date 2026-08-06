@@ -3367,7 +3367,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, body_label, end_label, try self.debugCallSuffix(), body_label });
         try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = cond_label, .cleanup_start = self.defer_stack.items.len, .label = if (loop.loop_label) |l| l.text else null });
         defer _ = self.loop_stack.pop();
-        const body_terminated = try self.emitBlock(loop.body, ret_ty);
+        const body_terminated = try self.emitBlockWithDeferStackSnapshot(loop.body, ret_ty);
         if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ cond_label, try self.debugCallSuffix() });
         try self.out.print(self.allocator, "{s}:\n", .{end_label});
         return false;
@@ -3542,7 +3542,7 @@ const LlvmEmitter = struct {
 
         try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = step_label, .cleanup_start = self.defer_stack.items.len, .label = if (loop.loop_label) |l| l.text else null });
         defer _ = self.loop_stack.pop();
-        const body_terminated = try self.emitBlock(loop.body, ret_ty);
+        const body_terminated = try self.emitBlockWithDeferStackSnapshot(loop.body, ret_ty);
         if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ step_label, try self.debugCallSuffix() });
         try self.out.print(self.allocator, "{s}:\n", .{step_label});
         const step_index = try self.nextTemp();
