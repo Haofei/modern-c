@@ -37,7 +37,7 @@
 #   mc-audit.sh --mode double-fetch  [DIR ...]   (default dir:  kernel)
 #   mc-audit.sh --mode taint         [DIR ...]   (default dir:  kernel)
 #   mc-audit.sh --mode capability-mint [DIR ...] (default dirs: kernel std)
-#   mc-audit.sh --mode signature-proof  [DIR ...] (default dirs: kernel tests/qemu/proc)
+#   mc-audit.sh --mode signature-proof  [DIR ...] (default dirs: kernel tests/qemu)
 #   mc-audit.sh --mode MODE --self-test          (run the built-in negative fixture)
 
 set -uo pipefail
@@ -67,7 +67,7 @@ if [ ${#DIRS[@]} -eq 0 ]; then
   if [ "$MODE" = unsafe ] || [ "$MODE" = capability-mint ]; then
     DIRS=(kernel std)
   elif [ "$MODE" = signature-proof ]; then
-    DIRS=(kernel tests/qemu/proc)
+    DIRS=(kernel tests/qemu)
   else
     DIRS=(kernel)
   fi
@@ -661,8 +661,10 @@ function end_capability_mint() {
 
 function approved_signature_proof_file(file) {
   return (file ~ /(^|\/)kernel\/core\/production_ops\.mc$/ ||
+          file ~ /(^|\/)kernel\/core\/production_ops_rsa\.mc$/ ||
           file ~ /(^|\/)tests\/qemu\/proc\/production_ops_demo\.mc$/ ||
-          file ~ /(^|\/)tests\/qemu\/proc\/app_run_demo\.mc$/)
+          file ~ /(^|\/)tests\/qemu\/proc\/app_run_demo\.mc$/ ||
+          file ~ /(^|\/)tests\/qemu\/crypto\/rsa_verify_runtime\.mc$/)
 }
 
 function do_signature_proof(l, startfnr,   cur, call) {

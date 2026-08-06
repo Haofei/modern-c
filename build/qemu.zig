@@ -717,10 +717,11 @@ pub fn register(ctx: *h.Ctx) void {
     // rsa-verify-test: the MC RSA-PKCS#1/SHA-256 signature-verify binding
     // (kernel/crypto/rsa_verify.mc) over the constant-time BearSSL i31 engine — the
     // signed-bundle / image-verification primitive (production plan P4). Host-based and
-    // deterministic; a real RSA-2048 signature must VERIFY while a tampered signature and a
-    // wrong message are REJECTED. Both backends, so a green run is the parity proof.
-    _ = h.addScriptTest(ctx, "rsa-verify-test", "Verify a real RSA-2048/SHA-256 signature (accept valid, reject tampered+wrong) via the MC BearSSL-i31 binding", &.{ "bash", "tools/crypto/rsa-verify-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-rsa-verify-test", "LLVM-backend RSA-2048/SHA-256 signature verify via the MC BearSSL-i31 binding", &.{ "bash", "tools/crypto/rsa-verify-test.sh", "zig-out/bin/mcc", "llvm" });
+    // deterministic; a real RSA-2048 signature must VERIFY, mint a BundleSignatureProof that
+    // admits the matching image, and reject a tampered signature and wrong message. Both
+    // backends, so a green run is the parity proof.
+    _ = h.addScriptTest(ctx, "rsa-verify-test", "Verify a real RSA-2048/SHA-256 signature and RSA-backed BundleSignatureProof admission (reject tampered+wrong) via BearSSL-i31", &.{ "bash", "tools/crypto/rsa-verify-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-rsa-verify-test", "LLVM-backend RSA-2048/SHA-256 signature proof admission via the MC BearSSL-i31 binding", &.{ "bash", "tools/crypto/rsa-verify-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // bearssl-smode-test revalidates the SAME freestanding BearSSL SHA-256 vector +
     // live virtio-rng entropy under REAL OpenSBI in S-mode (boot seam only: SBI
