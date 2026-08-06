@@ -260,7 +260,7 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("tools/toolchain/mc-audit.sh",),
-        ("unsafe-audit", "double-fetch-audit", "taint-audit"),
+        ("unsafe-audit", "double-fetch-audit", "taint-audit", "capability-mint-audit"),
         "shared MC audit changes need every security audit mode",
     ),
     Rule(

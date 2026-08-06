@@ -1,7 +1,7 @@
 const std = @import("std");
 const h = @import("helpers.zig");
 
-// Opt-in static audits (unsafe boundary / double-fetch / taint / coverage),
+// Opt-in static audits (unsafe boundary / double-fetch / taint / capability mint / coverage),
 // the ASan/UBSan sanitize pass, the SAFE/RELEASE parity gate, and the KASAN/KMSAN/KCSAN
 // + redzone sanitizer-profile QEMU boots.
 pub fn register(ctx: *h.Ctx) void {
@@ -17,7 +17,7 @@ pub fn register(ctx: *h.Ctx) void {
     // uncovered function count against a checked-in ratchet.
     _ = h.addScriptTestOpts(ctx, "compiler-coverage", "Report and ratchet parser/sema/monomorphize/async compiler frontend function coverage", &.{ "bash", "tools/toolchain/compiler-coverage.sh", "--check" }, .{ .install = false });
 
-    // The three source-level security audits (unsafe boundary / double-fetch / taint) are
+    // The source-level security audits (unsafe boundary / double-fetch / taint / capability mint) are
     // now one parameterized tool, tools/toolchain/mc-audit.sh, invoked with `--mode`. Pure
     // source scans (no mcc dependency), so they do not depend on the install step.
 
@@ -29,6 +29,9 @@ pub fn register(ctx: *h.Ctx) void {
 
     // U3: source-level audit of untrusted (user-derived) lengths/indices.
     _ = h.addScriptTestOpts(ctx, "taint-audit", "Audit user-derived (tainted) values: flag a value from copy_from_user/fetch_user used as a length/index/loop-bound without passing checked_len/checked_index/validate_bound (U3)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "taint" }, .{ .install = false });
+
+    // K1: source-level audit of capability mint authority.
+    _ = h.addScriptTestOpts(ctx, "capability-mint-audit", "Audit capability authority roots: flag direct cap_mint/rcap_mint calls outside kernel/core/capability.mc (K1)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "capability-mint" }, .{ .install = false });
 
     // D2.5: explicit SAFE vs RELEASE build-safety profile (`--checks=all|elide-proven`).
     // Asserts the two profiles agree functionally and that RELEASE elides exactly the

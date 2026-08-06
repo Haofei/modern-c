@@ -5,8 +5,9 @@
 #   --mode unsafe        (S0.2) enforce + inventory the MC `unsafe` boundary
 #   --mode double-fetch  (U2)   flag double-fetch / TOCTOU on user memory
 #   --mode taint         (U3)   flag user-derived lengths/indices used without a bound check
+#   --mode capability-mint (K1) flag direct capability mint outside the approved TCB root
 #
-# All three shared the same awk machinery (comment/string `strip()`, brace-depth /
+# These modes share the same awk machinery (comment/string `strip()`, brace-depth /
 # function-scope tracking, the `nth_arg`/`call_args` argument splitter, the
 # `__COUNT__=N`->stderr plumbing). Consolidating them means a single fix — e.g. the
 # cross-line logical-line joining below — applies to all three at once.
@@ -25,12 +26,14 @@
 #     comma splitting is not corrupted by an arrow/shift/compare.
 #
 # Exit non-zero only on a real finding (a gated unsafe op outside a region / a likely
-# double-fetch / an unvalidated tainted use). A clean run prints the inventory and exits 0.
+# double-fetch / an unvalidated tainted use / an unapproved capability mint). A clean run prints
+# the inventory and exits 0.
 #
 # Usage:
 #   mc-audit.sh --mode unsafe        [DIR ...]   (default dirs: kernel std)
 #   mc-audit.sh --mode double-fetch  [DIR ...]   (default dir:  kernel)
 #   mc-audit.sh --mode taint         [DIR ...]   (default dir:  kernel)
+#   mc-audit.sh --mode capability-mint [DIR ...] (default dirs: kernel std)
 #   mc-audit.sh --mode MODE --self-test          (run the built-in negative fixture)
 
 set -uo pipefail
@@ -51,13 +54,13 @@ while [ $# -gt 0 ]; do
 done
 
 case "$MODE" in
-  unsafe|double-fetch|taint) : ;;
-  *) echo "mc-audit: --mode must be one of: unsafe | double-fetch | taint" >&2; exit 2 ;;
+  unsafe|double-fetch|taint|capability-mint) : ;;
+  *) echo "mc-audit: --mode must be one of: unsafe | double-fetch | taint | capability-mint" >&2; exit 2 ;;
 esac
 
 # Default scan roots per mode.
 if [ ${#DIRS[@]} -eq 0 ]; then
-  if [ "$MODE" = unsafe ]; then DIRS=(kernel std); else DIRS=(kernel); fi
+  if [ "$MODE" = unsafe ] || [ "$MODE" = capability-mint ]; then DIRS=(kernel std); else DIRS=(kernel); fi
 fi
 
 SELF_TMP=""
@@ -161,9 +164,26 @@ export fn bad_validate_wrong_value(us: *UserSpace, lenp: UserPtr<u8>, dst: PAddr
 }
 MC
       ;;
+    capability-mint)
+      cat > "$SELF_TMP/kernel/core/capability.mc" <<'MC'
+pub fn cap_mint(comptime R: type, resource: R) -> R { return resource; }
+pub fn rcap_mint(comptime R: type, resource: R, rights: u32) -> R { return resource; }
+MC
+      mkdir -p "$SELF_TMP/kernel/driver"
+      cat > "$SELF_TMP/kernel/driver/bad_mint.mc" <<'MC'
+import "kernel/core/capability.mc";
+
+// NEGATIVE TEST (must be flagged): ordinary kernel code must not directly call the privileged
+// setup-time mint primitive. Authority should be delegated from the boot/TCB root instead.
+export fn bad_driver_mint() -> usize {
+    return cap_mint(usize, 0x1000);
+}
+MC
+      ;;
   esac
   DIRS=("$SELF_TMP/kernel")
   [ "$MODE" = unsafe ] && DIRS=("$SELF_TMP/kernel" "$SELF_TMP/std")
+  [ "$MODE" = capability-mint ] && DIRS=("$SELF_TMP/kernel")
 fi
 
 FILES=$(find "${DIRS[@]}" -name '*.mc' 2>/dev/null | sort)
@@ -275,6 +295,7 @@ function process(logical, startfnr) {
   if (MODE=="unsafe")            do_unsafe(logical, startfnr)
   else if (MODE=="double-fetch") do_doublefetch(logical, startfnr)
   else if (MODE=="taint")        do_taint(logical, startfnr)
+  else if (MODE=="capability-mint") do_capability_mint(logical, startfnr)
 }
 
 # True if the buffered logical line is incomplete and the next physical line `nsl` continues it.
@@ -313,6 +334,7 @@ END {
   if (MODE=="unsafe")            end_unsafe()
   else if (MODE=="double-fetch") end_doublefetch()
   else if (MODE=="taint")        end_taint()
+  else if (MODE=="capability-mint") end_capability_mint()
 }
 
 # ===================== brace/scope helpers (shared) =====================
@@ -547,10 +569,45 @@ function end_taint() {
   print  "================================================================"
   print "__COUNT__=" findings > "/dev/stderr"
 }
+
+# ===================== MODE: capability-mint (K1) =====================
+
+function approved_capability_mint_file(file) {
+  return (file ~ /(^|\/)kernel\/core\/capability\.mc$/)
+}
+
+function do_capability_mint(l, startfnr,   cur, call) {
+  if (approved_capability_mint_file(FILENAME)) return
+  if (l ~ /(^|[^A-Za-z0-9_])fn[ \t]+(cap_mint|rcap_mint)[ \t]*\(/) return
+  cur = l
+  while (match(cur, /(^|[^A-Za-z0-9_])(cap_mint|rcap_mint)[ \t]*\(/)) {
+    call = substr(cur, RSTART, RLENGTH)
+    if (call ~ /rcap_mint/) nrcapmint++
+    else ncapmint++
+    findings++
+    printf("CAP-MINT  %s:%d  direct capability mint `%s` outside kernel/core/capability.mc; delegate from the boot/TCB root instead\n",
+           FILENAME, startfnr, trim(call)) > "/dev/stderr"
+    cur = substr(cur, RSTART + RLENGTH)
+  }
+}
+
+function end_capability_mint() {
+  print  "============== MC capability mint audit (K1) ===================="
+  printf("scanned %d .mc file(s)\n\n", nfiles)
+  printf("Unapproved direct mint call sites:\n")
+  printf("  cap_mint                  %5d\n", ncapmint)
+  printf("  rcap_mint                 %5d\n\n", nrcapmint)
+  if (findings==0)
+    print "RESULT: clean — no production source directly calls capability mint outside the approved TCB root."
+  else
+    printf("RESULT: %d unapproved capability mint call(s) found (see CAP-MINT lines on stderr).\n", findings)
+  print  "================================================================"
+  print "__COUNT__=" findings > "/dev/stderr"
+}
 ' $FILES 2> "$TMP"
 
 # Surface the per-mode finding lines (awk wrote them to stderr/$TMP).
-grep -E '^(VIOLATION|DOUBLE-FETCH|TAINT)' "$TMP" >&2 || true
+grep -E '^(VIOLATION|DOUBLE-FETCH|TAINT|CAP-MINT)' "$TMP" >&2 || true
 count=$(grep -o '__COUNT__=[0-9]*' "$TMP" | head -1 | cut -d= -f2)
 count=${count:-0}
 
