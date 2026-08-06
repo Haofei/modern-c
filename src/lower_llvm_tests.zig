@@ -1412,6 +1412,44 @@ test "LLVM emits auto-drop release for implicit move aggregate locals" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "call void @close_wrapper(ptr %w.addr"));
 }
 
+test "LLVM consumes MIR drop glue facts and fails closed when absent or stale" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn auto_drop_from_mir_fact() -> u32 {
+        \\    var g = make_guard();
+        \\    return g.id;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_drop_glue_mir_facts.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 1), module_mir.drop_glue_facts.len);
+
+    var valid_output: std.ArrayList(u8) = .empty;
+    defer valid_output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &valid_output, "llvm_drop_glue_mir_facts.mc", .{}, false, .riscv64, null);
+    try expectContains(valid_output.items, "call void @close_guard(ptr %g.addr");
+
+    const saved_facts = module_mir.drop_glue_facts;
+    module_mir.drop_glue_facts = &[_]mir.DropGlueFact{};
+    var missing_output: std.ArrayList(u8) = .empty;
+    defer missing_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &missing_output, "llvm_drop_glue_mir_facts.mc", .{}, false, .riscv64, null));
+    module_mir.drop_glue_facts = saved_facts;
+
+    const saved_fn = module_mir.drop_glue_facts[0].release_fn;
+    module_mir.drop_glue_facts[0].release_fn = "wrong_close_guard";
+    defer module_mir.drop_glue_facts[0].release_fn = saved_fn;
+    var stale_output: std.ArrayList(u8) = .empty;
+    defer stale_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &stale_output, "llvm_drop_glue_mir_facts.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM cancels auto-drop when affine move local is explicitly transferred" {
     const source =
         \\move struct Guard { id: u32 }

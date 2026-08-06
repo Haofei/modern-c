@@ -499,6 +499,18 @@ pub const CEmitter = struct {
         });
     }
 
+    pub fn collectDropGlueFactsFromMir(self: *CEmitter) !void {
+        for (self.mir_module.drop_glue_facts) |fact| {
+            if (!self.autoDropEligibleTypeName(fact.resource_type)) return error.UnsupportedCEmission;
+            const entry = try self.auto_drop_fns_by_type.getOrPut(fact.resource_type);
+            if (entry.found_existing) {
+                if (!std.mem.eql(u8, entry.value_ptr.*, fact.release_fn)) return error.UnsupportedCEmission;
+                continue;
+            }
+            entry.value_ptr.* = fact.release_fn;
+        }
+    }
+
     pub fn collectDeclArtifactsFromDecls(self: *CEmitter, decls: []const ast.Decl) anyerror!void {
         for (decls) |decl| {
             try self.collectDeclArtifact(decl);
@@ -548,7 +560,8 @@ pub const CEmitter = struct {
         if (!is_extern and hasNamedAttr(attrs, "drop")) {
             if (ownership_facts.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
                 if (self.autoDropEligibleTypeName(type_name)) {
-                    try self.auto_drop_fns_by_type.put(type_name, fn_decl.name.text);
+                    const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return error.UnsupportedCEmission;
+                    if (!std.mem.eql(u8, drop_fn, fn_decl.name.text)) return error.UnsupportedCEmission;
                 }
             }
         }
@@ -556,6 +569,23 @@ pub const CEmitter = struct {
         if (!is_extern and fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
         if (!is_extern) if (backendNameOverride(attrs)) |name| try self.backend_names.put(fn_decl.name.text, name);
         try self.collectFunctionSliceTypes(fn_decl);
+    }
+
+    pub fn validateDropGlueFactsAgainstDecls(self: *CEmitter) !void {
+        for (self.mir_module.drop_glue_facts) |fact| {
+            var matched = false;
+            for (self.function_decl_artifacts.items) |artifact| {
+                if (artifact.is_extern) continue;
+                if (!std.mem.eql(u8, artifact.fn_decl.name.text, fact.release_fn)) continue;
+                if (!hasNamedAttr(artifact.attrs, "drop")) return error.UnsupportedCEmission;
+                const resource_type = ownership_facts.dropPointerReleaseParamTypeName(artifact.fn_decl) orelse return error.UnsupportedCEmission;
+                if (!std.mem.eql(u8, resource_type, fact.resource_type)) return error.UnsupportedCEmission;
+                if (!self.autoDropEligibleTypeName(resource_type)) return error.UnsupportedCEmission;
+                matched = true;
+                break;
+            }
+            if (!matched) return error.UnsupportedCEmission;
+        }
     }
 
     fn collectImplTraitArtifact(self: *CEmitter, impl_trait: ast.ImplTrait) !void {

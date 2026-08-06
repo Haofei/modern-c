@@ -410,7 +410,9 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
     });
     try ctx.collectNonStructTypeArtifacts();
     try ctx.collectStructArtifacts();
+    try ctx.collectDropGlueFactsFromMir();
     try ctx.collectCallableAndValueDeclArtifacts();
+    try ctx.validateDropGlueFactsAgainstDecls();
     try ctx.collectMirAggregateReturnPointerFieldFacts();
     // Tier 2: one rodata vtable global per `impl Trait for Type` of an object-safe
     // trait. Function pointers may be forward-referenced in LLVM IR, so this can run
@@ -713,7 +715,8 @@ const LlvmEmitter = struct {
         if (hasNamedAttr(attrs, "drop")) {
             if (ownership_facts.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
                 if (self.autoDropEligibleTypeName(type_name)) {
-                    try self.auto_drop_fns_by_type.put(type_name, fn_decl.name.text);
+                    const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return error.UnsupportedLlvmEmission;
+                    if (!std.mem.eql(u8, drop_fn, fn_decl.name.text)) return error.UnsupportedLlvmEmission;
                 }
             }
         }
@@ -721,6 +724,18 @@ const LlvmEmitter = struct {
             .backend_name => |name| try self.backend_names.put(fn_decl.name.text, name),
             else => {},
         };
+    }
+
+    fn collectDropGlueFactsFromMir(self: *LlvmEmitter) !void {
+        for (self.mir_module.drop_glue_facts) |fact| {
+            if (!self.autoDropEligibleTypeName(fact.resource_type)) return error.UnsupportedLlvmEmission;
+            const entry = try self.auto_drop_fns_by_type.getOrPut(fact.resource_type);
+            if (entry.found_existing) {
+                if (!std.mem.eql(u8, entry.value_ptr.*, fact.release_fn)) return error.UnsupportedLlvmEmission;
+                continue;
+            }
+            entry.value_ptr.* = fact.release_fn;
+        }
     }
 
     fn collectCallableAndValueDeclArtifacts(self: *LlvmEmitter) !void {
@@ -742,6 +757,23 @@ const LlvmEmitter = struct {
                 },
                 else => {},
             }
+        }
+    }
+
+    fn validateDropGlueFactsAgainstDecls(self: *LlvmEmitter) !void {
+        for (self.mir_module.drop_glue_facts) |fact| {
+            var matched = false;
+            for (self.function_decl_artifacts.items) |artifact| {
+                if (artifact.is_extern) continue;
+                if (!std.mem.eql(u8, artifact.fn_decl.name.text, fact.release_fn)) continue;
+                if (!hasNamedAttr(artifact.attrs, "drop")) return error.UnsupportedLlvmEmission;
+                const resource_type = ownership_facts.dropPointerReleaseParamTypeName(artifact.fn_decl) orelse return error.UnsupportedLlvmEmission;
+                if (!std.mem.eql(u8, resource_type, fact.resource_type)) return error.UnsupportedLlvmEmission;
+                if (!self.autoDropEligibleTypeName(resource_type)) return error.UnsupportedLlvmEmission;
+                matched = true;
+                break;
+            }
+            if (!matched) return error.UnsupportedLlvmEmission;
         }
     }
 
