@@ -361,6 +361,12 @@ pub const CallTargetFact = struct {
     source: SourcePoint,
 };
 
+pub const DropGlueFact = struct {
+    resource_type: []const u8,
+    release_fn: []const u8,
+    source: SourcePoint,
+};
+
 pub const TargetTypeKind = enum {
     assert_condition,
     direct_call_result,
@@ -627,6 +633,7 @@ pub const Module = struct {
     allocator: std.mem.Allocator,
     symbol_identities: []SymbolIdentity = &.{},
     functions: []Function,
+    drop_glue_facts: []DropGlueFact = &.{},
     aggregate_return_summaries: []AggregateReturnSummaryFact = &.{},
     aggregate_return_pointer_facts: []AggregateReturnPointerFact = &.{},
 
@@ -664,6 +671,7 @@ pub const Module = struct {
         }
         if (self.symbol_identities.len != 0) self.allocator.free(self.symbol_identities);
         self.allocator.free(self.functions);
+        if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);
         if (self.aggregate_return_summaries.len != 0) self.allocator.free(self.aggregate_return_summaries);
         for (self.aggregate_return_pointer_facts) |fact| self.allocator.free(fact.field_path);
         if (self.aggregate_return_pointer_facts.len != 0) self.allocator.free(self.aggregate_return_pointer_facts);

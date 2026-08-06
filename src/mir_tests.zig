@@ -3898,6 +3898,47 @@ test "MIR owns discard call identities and argument types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 
+test "MIR records drop glue facts for auto-drop resources" {
+    const source =
+        \\move struct Ticket { id: u32 }
+        \\struct Wrapper { ticket: Ticket }
+        \\#[drop]
+        \\fn close_ticket(ticket: *mut Ticket) -> void {
+        \\    ticket.id = 0;
+        \\}
+        \\#[drop]
+        \\fn close_wrapper(wrapper: *mut Wrapper) -> void {
+        \\    wrapper.ticket.id = 0;
+        \\}
+        \\fn use_wrapper() -> u32 {
+        \\    var wrapper: Wrapper = .{ .ticket = .{ .id = 1 } };
+        \\    return wrapper.ticket.id;
+        \\}
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_drop_glue_facts.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 2), module_mir.drop_glue_facts.len);
+    try std.testing.expectEqualStrings("Ticket", module_mir.drop_glue_facts[0].resource_type);
+    try std.testing.expectEqualStrings("close_ticket", module_mir.drop_glue_facts[0].release_fn);
+    try std.testing.expectEqualStrings("Wrapper", module_mir.drop_glue_facts[1].resource_type);
+    try std.testing.expectEqualStrings("close_wrapper", module_mir.drop_glue_facts[1].release_fn);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir drop_glue_fact resource_type=Ticket release_fn=close_ticket recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir drop_glue_fact resource_type=Wrapper release_fn=close_wrapper recorded=true") != null);
+}
+
 test "MIR rejects duplicate call target facts" {
     const source =
         \\fn checked(xs: []const u32) -> Result<u32, Overflow> {

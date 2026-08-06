@@ -6,6 +6,7 @@ const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const numeric = @import("numeric.zig");
+const ownership_facts = @import("ownership_facts.zig");
 const parser = @import("parser.zig");
 const sema_builtin = @import("sema_builtin.zig");
 const sema_type = @import("sema_type.zig");
@@ -90,6 +91,7 @@ pub const BoundsFactKind = mir_model.BoundsFactKind;
 pub const IntegerFact = mir_model.IntegerFact;
 pub const CallTargetKind = mir_model.CallTargetKind;
 pub const CallTargetFact = mir_model.CallTargetFact;
+pub const DropGlueFact = mir_model.DropGlueFact;
 pub const TargetTypeKind = mir_model.TargetTypeKind;
 pub const AggregateConstructionKind = mir_model.AggregateConstructionKind;
 pub const TargetTypeFact = mir_model.TargetTypeFact;
@@ -308,11 +310,16 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
     defer aliases.deinit();
     var traits = std.StringHashMap(ast.TraitDecl).init(allocator);
     defer traits.deinit();
+    var ast_structs = std.StringHashMap(ast.StructDecl).init(allocator);
+    defer ast_structs.deinit();
 
     for (module.decls) |decl| {
         switch (decl.kind) {
             .enum_decl => |enum_decl| try enums.put(enum_decl.name.text, .{ .is_open = enum_decl.is_open, .cases = enum_decl.cases, .repr = enum_decl.repr }),
-            .struct_decl => |struct_decl| try structs.put(struct_decl.name.text, .{ .fields = struct_decl.fields, .is_c_union = struct_decl.is_c_union }),
+            .struct_decl => |struct_decl| {
+                try structs.put(struct_decl.name.text, .{ .fields = struct_decl.fields, .is_c_union = struct_decl.is_c_union });
+                try ast_structs.put(struct_decl.name.text, struct_decl);
+            },
             .union_decl => |union_decl| try unions.put(union_decl.name.text, .{ .cases = union_decl.cases }),
             .overlay_union_decl => |overlay_union_decl| try structs.put(overlay_union_decl.name.text, .{ .fields = overlay_union_decl.fields }),
             .packed_bits_decl => |decl_packed_bits| try packed_bits.put(decl_packed_bits.name.text, .{ .repr = decl_packed_bits.repr, .fields = decl_packed_bits.fields }),
@@ -379,6 +386,9 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
 
     var aggregate_return_facts = try collectDirectAggregateReturnPointerFacts(allocator, module, &globals, &enums, &structs, &packed_bits, &aliases, &pointer_return_summaries);
     errdefer aggregate_return_facts.deinit(allocator);
+
+    const drop_glue_facts = try collectDropGlueFacts(allocator, module, &ast_structs, &aliases);
+    errdefer allocator.free(drop_glue_facts);
 
     var functions: std.ArrayList(Function) = .empty;
     errdefer {
@@ -455,6 +465,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
         .allocator = allocator,
         .symbol_identities = symbol_identities,
         .functions = try functions.toOwnedSlice(allocator),
+        .drop_glue_facts = drop_glue_facts,
         .aggregate_return_summaries = aggregate_return_facts.summaries,
         .aggregate_return_pointer_facts = aggregate_return_facts.pointer_facts,
     };
@@ -466,6 +477,38 @@ fn internSymbolId(symbol_ids: *std.StringHashMap(SymbolId), spelling: []const u8
         entry.value_ptr.* = SymbolId.fromIndex(symbol_ids.count() - 1);
     }
     return entry.value_ptr.*;
+}
+
+fn collectDropGlueFacts(
+    allocator: std.mem.Allocator,
+    module: ast.Module,
+    structs: *const std.StringHashMap(ast.StructDecl),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+) ![]DropGlueFact {
+    var facts: std.ArrayList(DropGlueFact) = .empty;
+    errdefer facts.deinit(allocator);
+
+    for (module.decls) |decl| {
+        if (!hasAttr(decl.attrs, "drop")) continue;
+        const fn_decl = switch (decl.kind) {
+            .fn_decl => |node| node,
+            else => continue,
+        };
+        const resource_type = ownership_facts.dropPointerReleaseParamTypeName(fn_decl) orelse continue;
+        if (!ownership_facts.autoDropEligibleTypeName(resource_type, structs, aliases)) continue;
+        try facts.append(allocator, .{
+            .resource_type = resource_type,
+            .release_fn = fn_decl.name.text,
+            .source = .{
+                .line = fn_decl.name.span.line,
+                .column = fn_decl.name.span.column,
+                .offset = fn_decl.name.span.offset,
+                .len = fn_decl.name.span.len,
+            },
+        });
+    }
+
+    return facts.toOwnedSlice(allocator);
 }
 
 fn buildSymbolIdentities(allocator: std.mem.Allocator, symbol_ids: *std.StringHashMap(SymbolId)) ![]SymbolIdentity {
@@ -569,6 +612,13 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             allocator,
             "mir symbol_identity id={} spelling={s}\n",
             .{ identity.id.index(), identity.spelling },
+        );
+    }
+    for (module_mir.drop_glue_facts) |fact| {
+        try out.print(
+            allocator,
+            "mir drop_glue_fact resource_type={s} release_fn={s} recorded=true line={} column={}\n",
+            .{ fact.resource_type, fact.release_fn, fact.source.line, fact.source.column },
         );
     }
     for (module_mir.functions) |function| {
