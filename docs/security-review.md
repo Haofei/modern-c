@@ -26,7 +26,7 @@ Minimizing and pinning this set is the core of the security posture.
 | User-pointer boundary | `kernel/core/uaccess.mc` | Page-table-aware `copy_to/from_user`; the single trusted path for agent-supplied pointers. |
 | Loader | `kernel/core/elf_loader.mc` | Parses untrusted ELF images; segment bounds + overflow checks. |
 | Scheduler + process lifecycle | `kernel/core/process.mc`, `proc_sched.mc` | Spawn/exit/reap, supervision, OOM/fault reclaim, least-privilege masks. |
-| Brokers (the only path to external effect) | `kernel/net/net_broker.mc`, `kernel/fs/treefs.mc`, `kernel/agent/mcp.mc` | Capability + budget checks before any FS/net effect. |
+| Brokers (the only path to external effect) | `kernel/net/net_broker.mc`, `kernel/fs/treefs.mc` | Capability + budget checks before any FS/net effect. |
 | Resource accounting | `kernel/core/ledger.mc`, `kernel/lib/resacct.mc` | Overflow-safe charge/release; fail-closed over-limit. |
 | Audit trail | `kernel/core/ipc_trace.mc`, `cap_audit` in `process.mc` | Kernel-side allow/deny + capability-use record, out of agent reach. |
 | Vendored engines in the TCB | WAMR (agent wasm), QuickJS (JS-on-wasm), BearSSL (TLS/crypto) | A bug here is a TCB bug; defense is vendoring discipline + gates, not runtime containment. |
@@ -83,9 +83,9 @@ today the allowlist is established in-boot. Larger hostile-packet corpus wanted.
 
 ### 2.4 Filesystem broker + agent runtime
 
-Agents have **no ambient FS/net handles**; all effects route through brokers that check a
-per-agent capability first (`kernel/fs/treefs.mc`, `kernel/agent/mcp.mc`). The MCP tool budget
-is enforced (`kernel/agent/mcp.mc`). This is guarantee **G2** and is audited kernel-side (§2.7).
+Agents have **no ambient FS/net handles**; external effects route through brokers that check a
+per-agent capability first (`kernel/fs/treefs.mc`, `kernel/net/net_broker.mc`). This is guarantee
+**G2** and is audited kernel-side (§2.7).
 
 Residual: uniform per-agent memory/CPU budget enforcement on *every* broker/device path is
 incomplete (threat-model §5, production-readiness-plan §4.7 / P6). Some exhaustion paths still

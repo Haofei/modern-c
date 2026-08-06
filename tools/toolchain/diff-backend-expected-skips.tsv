@@ -10,10 +10,7 @@ fs-toolserver-test	current host/corpus C build gap; additional skipped fixtures 
 agent-fs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 blockfs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 fdspace-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-agent-containment-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 agent-abi-fuzz-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-mcp-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-netcap-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 grant-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 forkfd-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 granttab-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
@@ -56,7 +53,6 @@ procmem-test	current LLVM backend unsupported fixture; additional skipped fixtur
 ipcprov-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 attenuate-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 dns-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-kvstore-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 pause-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 ipcsample-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 capaudit-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions

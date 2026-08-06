@@ -622,12 +622,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("agent-abi-test"));
     // agent-abi-fuzz-test adversarially checks validation precedence and fail-closed syscall dispatch.
     m0_full_step.dependOn(ctx.cmd("agent-abi-fuzz-test"));
-    // netcap-test links + runs capability-gated network egress (milestone #3); LLVM side via llvm-host-suite-test.
-    m0_full_step.dependOn(ctx.cmd("netcap-test"));
-    // agent-containment-test links + runs the capstone M6-shape integration; LLVM side via llvm-host-suite-test.
-    m0_full_step.dependOn(ctx.cmd("agent-containment-test"));
-    // mcp-test links + runs the MCP-compatible facade (M4); LLVM side via llvm-host-suite-test.
-    m0_full_step.dependOn(ctx.cmd("mcp-test"));
     // showcase-test links + runs the language feature showcase (emit-c); LLVM side via llvm-host-suite-test.
     m0_full_step.dependOn(ctx.cmd("showcase-test"));
     // mc-test runs the native #[test] facility (process-isolated) on both backends.

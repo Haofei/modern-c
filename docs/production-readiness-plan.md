@@ -249,7 +249,6 @@ Production target:
 - Cross-arch real-FS broker parity.
 - Native tool catalog for the first appliance workload.
 - Out-of-process tool server transport.
-- MCP-compatible JSON-RPC descriptors and envelope, with MC capabilities as the authority layer.
 
 Initial tool catalog:
 

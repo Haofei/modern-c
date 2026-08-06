@@ -570,8 +570,8 @@ safety machinery (§9.3) is GATED.
 
 ## 18. Filesystem & Storage
 
-`kernel/fs/`. All **IMPLEMENTED/GATED**. The flat key/value stores (`kvstore.mc`,
-`blobstore.mc`, `ramfs.mc`, `diskfs.mc`) remain; **hierarchical** paths now exist for real in
+`kernel/fs/`. All **IMPLEMENTED/GATED**. The flat/durable stores (`blobstore.mc`,
+`ramfs.mc`, `diskfs.mc`) remain; **hierarchical** paths now exist for real in
 `treefs.mc` (`treefs-test`: nested mkdir/create, `.`/`..` traversal, path resolution, `getdents`
 listing, typed errors), and `fs_toolserver.mc` (`fs-toolserver-test`) layers workspace-scoped,
 capability-checked, audited path access over it (M1 walking skeleton — the start of the native
@@ -585,11 +585,9 @@ agent tool catalog, not yet the full read/ls/grep/edit/find surface).
 | `diskfs.mc` | persistent superblock+inode fs (magic `MCFS`); survives remount. | one block/file |
 | `blockdev.mc` | `trait BlockDevice` (512 B) via `*dyn` dispatch. | — |
 | `bcache.mc` | 4-slot write-back block cache + hit/miss counters. | `NSLOTS=4` |
-| `kvstore.mc` | mutable `u64 → bytes` agent-state map, delete-compaction. | `MAX_KEYS=8`, 4 KiB |
-| `blobstore.mc` | durable `u32 → bytes` checkpoint sink; `blob_reopen`. | `MAX_BLOBS=8`, 4 KiB |
+| `blobstore.mc` | durable `u32 → bytes` blob sink; `blob_reopen`. | `MAX_BLOBS=8`, 4 KiB |
 
-`blobstore` + `kvstore` are the agent-OS durable sinks. Gates: `diskfs-test`, `bcache-test`,
-`blockfs-test`, `fs-server-test`.
+Storage gates: `diskfs-test`, `bcache-test`, `blockfs-test`, `fs-server-test`.
 
 ---
 
@@ -675,8 +673,7 @@ drift between MC and mirrored C structs is a compile error via generated
 Every kernel capability has a gate, wired in `build.zig` (≈297 steps) and aggregated by the
 master `m0` step. The gates come in two forms: many **boot under QEMU on both compiler
 backends** (`*-test` + `llvm-*-test`), while several capability layers run as **host fixtures**
-through `tools/lib/host-harness.sh` (e.g. `treefs-test`, `fs-toolserver-test`, `agent-fs-test`,
-`netcap-test`, `agent-containment-test`) — they exercise the host-compiled MC
+through `tools/lib/host-harness.sh` (e.g. `treefs-test`, `fs-toolserver-test`, `agent-fs-test`) — they exercise the host-compiled MC
 logic directly, not under QEMU. The confined-agent **acceptance bar** (§6: a genuinely
 isolated U-mode agent under QEMU) is therefore met only by selected QEMU boots, not by the
 host fixtures. Fixtures are self-verifying (assert expected output / exit codes / typed
