@@ -14,6 +14,7 @@ const switch_lower = @import("switch_lower.zig");
 
 const lower_c_type = @import("lower_c_type.zig");
 const numeric = @import("numeric.zig");
+const ownership_facts = @import("ownership_facts.zig");
 const rawScalarSuffix = lower_c_type.rawScalarSuffix;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
 const intTypeRange = lower_c_type.intTypeRange;
@@ -545,7 +546,7 @@ pub const CEmitter = struct {
     fn collectFnDeclArtifact(self: *CEmitter, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) !void {
         try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = is_extern, .is_variadic = fn_decl.is_variadic, .error_from = error_from.hasAttr(attrs) });
         if (!is_extern and hasNamedAttr(attrs, "drop")) {
-            if (dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
+            if (ownership_facts.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
                 if (self.autoDropEligibleTypeName(type_name)) {
                     try self.auto_drop_fns_by_type.put(type_name, fn_decl.name.text);
                 }
@@ -8738,55 +8739,7 @@ pub const CEmitter = struct {
     }
 
     fn autoDropEligibleTypeName(self: *CEmitter, type_name: []const u8) bool {
-        const decl = self.structs.get(type_name) orelse return false;
-        if (decl.is_linear) return false;
-        if (decl.is_move) return true;
-        return self.typeEmbedsMoveByValue(.{ .span = decl.name.span, .kind = .{ .name = decl.name } }, 0) and
-            !self.typeEmbedsLinearByValue(.{ .span = decl.name.span, .kind = .{ .name = decl.name } }, 0);
-    }
-
-    fn typeEmbedsMoveByValue(self: *CEmitter, ty: ast.TypeExpr, depth: usize) bool {
-        if (depth >= 64) return true;
-        return switch (ty.kind) {
-            .name => |n| blk: {
-                if (self.type_aliases.get(n.text)) |target| break :blk self.typeEmbedsMoveByValue(target, depth + 1);
-                const decl = self.structs.get(n.text) orelse break :blk false;
-                if (decl.is_move) break :blk true;
-                for (decl.fields) |field| if (self.typeEmbedsMoveByValue(field.ty, depth + 1)) break :blk true;
-                break :blk false;
-            },
-            .generic => |g| blk: {
-                if (self.structs.get(g.base.text)) |decl| if (decl.is_move) break :blk true;
-                for (g.args) |arg| if (self.typeEmbedsMoveByValue(arg, depth + 1)) break :blk true;
-                break :blk false;
-            },
-            .array => |node| self.typeEmbedsMoveByValue(node.child.*, depth + 1),
-            .qualified => |node| self.typeEmbedsMoveByValue(node.child.*, depth + 1),
-            .nullable => |child| self.typeEmbedsMoveByValue(child.*, depth + 1),
-            else => false,
-        };
-    }
-
-    fn typeEmbedsLinearByValue(self: *CEmitter, ty: ast.TypeExpr, depth: usize) bool {
-        if (depth >= 64) return true;
-        return switch (ty.kind) {
-            .name => |n| blk: {
-                if (self.type_aliases.get(n.text)) |target| break :blk self.typeEmbedsLinearByValue(target, depth + 1);
-                const decl = self.structs.get(n.text) orelse break :blk false;
-                if (decl.is_linear) break :blk true;
-                for (decl.fields) |field| if (self.typeEmbedsLinearByValue(field.ty, depth + 1)) break :blk true;
-                break :blk false;
-            },
-            .generic => |g| blk: {
-                if (self.structs.get(g.base.text)) |decl| if (decl.is_linear) break :blk true;
-                for (g.args) |arg| if (self.typeEmbedsLinearByValue(arg, depth + 1)) break :blk true;
-                break :blk false;
-            },
-            .array => |node| self.typeEmbedsLinearByValue(node.child.*, depth + 1),
-            .qualified => |node| self.typeEmbedsLinearByValue(node.child.*, depth + 1),
-            .nullable => |child| self.typeEmbedsLinearByValue(child.*, depth + 1),
-            else => false,
-        };
+        return ownership_facts.autoDropEligibleTypeName(type_name, &self.structs, &self.type_aliases);
     }
 
     fn arrayLenTextForInfo(ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8 {
@@ -8794,19 +8747,6 @@ pub const CEmitter = struct {
         return self.arrayLenTextForExpr(expr);
     }
 };
-
-fn dropPointerReleaseParamTypeName(fn_decl: ast.FnDecl) ?[]const u8 {
-    if (fn_decl.params.len == 0) return null;
-    const first = fn_decl.params[0].ty;
-    const child = switch (first.kind) {
-        .pointer => |p| blk: {
-            if (p.mutability != .mut) return null;
-            break :blk p.child.*;
-        },
-        else => return null,
-    };
-    return typeName(child);
-}
 
 fn makeDropPointerCall(allocator: std.mem.Allocator, fn_name: []const u8, local: ast.Ident) !ast.Expr {
     const ident = ast.Expr{ .span = local.span, .kind = .{ .ident = .{ .text = local.text, .span = local.span } } };

@@ -8,6 +8,7 @@ const error_from = @import("error_from.zig");
 const numeric = @import("numeric.zig");
 const eval = @import("eval.zig");
 const loader = @import("loader.zig");
+const ownership_facts = @import("ownership_facts.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const sema_move = @import("sema_move.zig");
 
@@ -999,7 +1000,7 @@ pub const Checker = struct {
                 self.errorCode(fn_decl.params[0].name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function parameter must be runtime storage, not `comptime`");
                 continue;
             }
-            const resource_name = dropPointerReleaseParamTypeName(fn_decl) orelse {
+            const resource_name = ownership_facts.dropPointerReleaseParamTypeName(fn_decl) orelse {
                 self.errorCode(fn_decl.name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function must take exactly one `*mut` checked resource parameter");
                 continue;
             };
@@ -1096,23 +1097,6 @@ pub const Checker = struct {
         return switch (ty.kind) {
             .name => |n| std.mem.eql(u8, n.text, "void"),
             else => false,
-        };
-    }
-
-    fn dropPointerReleaseParamTypeName(fn_decl: ast.FnDecl) ?[]const u8 {
-        if (fn_decl.params.len == 0) return null;
-        const first = fn_decl.params[0].ty;
-        const child = switch (first.kind) {
-            .pointer => |p| blk: {
-                if (p.mutability != .mut) return null;
-                break :blk p.child.*;
-            },
-            else => return null,
-        };
-        return switch (child.kind) {
-            .name => |n| n.text,
-            .generic => |g| g.base.text,
-            else => null,
         };
     }
 
