@@ -1058,7 +1058,7 @@ fn createInstantiationOrigin(
     return origin;
 }
 
-fn admitInstance(rw: *Rewriter, span: ast.Span, kind: InstantiationKind, name: []const u8, depth: usize) error{MonomorphizationLimit}!void {
+fn admitInstance(rw: *Rewriter, span: ast.Span, kind: InstantiationKind, name: []const u8, depth: usize) (error{MonomorphizationLimit} || std.mem.Allocator.Error)!void {
     // The candidate origin lives on this stack frame only; it is sufficient to render
     // the immediate diagnostic and avoids allocating any specialization state before
     // admission succeeds.
@@ -1070,12 +1070,12 @@ fn admitInstance(rw: *Rewriter, span: ast.Span, kind: InstantiationKind, name: [
         .parent = rw.current_origin,
     };
     if (depth > rw.limits.max_depth) {
-        reportMonomorphizationLimit(rw, span, &origin, "instantiation depth", depth, rw.limits.max_depth);
+        try reportMonomorphizationLimit(rw, span, &origin, "instantiation depth", depth, rw.limits.max_depth);
         return error.MonomorphizationLimit;
     }
     const total = rw.instances.count() + rw.struct_instances.count() + rw.union_instances.count();
     if (total >= rw.limits.max_instances) {
-        reportMonomorphizationLimit(rw, span, &origin, "total specialization count", total + 1, rw.limits.max_instances);
+        try reportMonomorphizationLimit(rw, span, &origin, "total specialization count", total + 1, rw.limits.max_instances);
         return error.MonomorphizationLimit;
     }
 }
@@ -1087,14 +1087,15 @@ fn reportMonomorphizationLimit(
     kind: []const u8,
     actual: usize,
     limit: usize,
-) void {
+) std.mem.Allocator.Error!void {
     if (rw.limit_reported) return;
     rw.limit_reported = true;
     if (rw.reporter) |reporter| {
-        const notes = monomorphizationLimitNotes(rw, origin) catch &.{};
+        const notes = try monomorphizationLimitNotes(rw, origin);
+        const message = try monomorphizationLimitMessage(rw, kind, actual, limit);
         reporter.errWithNotes(span, "{s}: {s}", .{
             "E_MONOMORPHIZATION_LIMIT",
-            monomorphizationLimitMessage(rw, kind, actual, limit),
+            message,
         }, notes);
     }
 }
@@ -1104,13 +1105,13 @@ fn monomorphizationLimitMessage(
     kind: []const u8,
     actual: usize,
     limit: usize,
-) []const u8 {
+) std.mem.Allocator.Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
-    out.print(
+    try out.print(
         rw.arena,
         "monomorphization exceeded {s} ({d} > {d}); possible polymorphic recursion or specialization explosion",
         .{ kind, actual, limit },
-    ) catch return "monomorphization limit exceeded";
+    );
     return out.items;
 }
 

@@ -541,6 +541,59 @@ test "monomorphize specialization registration OOM fail-closes" {
     try testing.expect(saw_success);
 }
 
+test "monomorphize limit diagnostic OOM fail-closes" {
+    const source =
+        \\fn make(comptime N: usize) -> [N]u8 {
+        \\    var scratch: [N]u8 = uninit;
+        \\    scratch[0] = 0;
+        \\    return scratch;
+        \\}
+        \\
+        \\fn trigger() -> u8 {
+        \\    let a: [1]u8 = make(1);
+        \\    return a[0];
+        \\}
+    ;
+
+    var parse_reporter = diagnostics.Reporter.init(testing.allocator, "mono_limit_oom.mc", source);
+    defer parse_reporter.deinit();
+
+    var parse_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer parse_arena.deinit();
+
+    var p = parser.Parser.init(source, &parse_reporter);
+    const module = try p.parseModule(parse_arena.allocator());
+    try testing.expect(!parse_reporter.has_errors);
+
+    var saw_oom = false;
+    var saw_limit = false;
+    for (0..64) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        var fail_arena = std.heap.ArenaAllocator.init(failing.allocator());
+        defer fail_arena.deinit();
+
+        var reporter = diagnostics.Reporter.init(testing.allocator, "mono_limit_oom.mc", source);
+        defer reporter.deinit();
+
+        const result = monomorphize.transformReportOptions(fail_arena.allocator(), module, &reporter, .{
+            .limits = .{ .max_instances = 0 },
+        });
+        if (result) |_| {
+            return error.TestUnexpectedResult;
+        } else |err| switch (err) {
+            error.OutOfMemory => saw_oom = true,
+            error.MonomorphizationLimit => {
+                saw_limit = true;
+                try testing.expect(reporter.has_errors);
+                try testing.expect(hasDiagnosticMessage(&reporter, "E_MONOMORPHIZATION_LIMIT"));
+            },
+            else => return err,
+        }
+    }
+    try testing.expect(saw_oom);
+    try testing.expect(saw_limit);
+}
+
 test "monomorphize limit rejects before producing a partial specialization module" {
     const source =
         \\fn make(comptime N: usize) -> [N]u8 {
