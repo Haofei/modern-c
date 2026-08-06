@@ -1502,6 +1502,27 @@ test "LLVM explicit drop release only cancels matching auto-drop local" {
     try std.testing.expect(h_cleanup < final_return);
 }
 
+test "LLVM if-let branches restore auto-drop cleanup stack" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn transfer_in_iflet(maybe: ?*const u8) -> Guard {
+        \\    var g: Guard = make_guard(1);
+        \\    if let p = maybe {
+        \\        return move g;
+        \\    }
+        \\    return make_guard(2);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_iflet_restore_auto_drop_stack.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "@transfer_in_iflet");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "call void @close_guard(ptr %g.addr"));
+}
+
 test "LLVM rejects auto-drop ownership holes before lowering" {
     const source =
         \\move struct Guard { id: u32 }

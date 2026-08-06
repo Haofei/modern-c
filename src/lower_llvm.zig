@@ -2676,7 +2676,7 @@ const LlvmEmitter = struct {
         try self.local_types.put(binding.text, inner_ty);
         try self.local_slots.put(binding.text, .{ .ty = inner_ty, .ptr = binding_ptr });
 
-        const then_terminated = try self.emitBlock(node.then_block, ret_ty);
+        const then_terminated = try self.emitBlockWithDeferStackSnapshot(node.then_block, ret_ty);
         if (!then_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
 
         _ = self.local_types.remove(binding.text);
@@ -2689,7 +2689,7 @@ const LlvmEmitter = struct {
         self.clearLocalArrayPointerElementsForLocal(binding.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{else_label});
-        const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
+        const else_terminated = if (node.else_block) |else_block| try self.emitBlockWithDeferStackSnapshot(else_block, ret_ty) else false;
         if (!else_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
         if (then_terminated and else_terminated) return true;
         try self.out.print(self.allocator, "{s}:\n", .{end_label});
@@ -2752,7 +2752,7 @@ const LlvmEmitter = struct {
         try self.local_types.put(tag_bind.binding.text, binding_ty);
         try self.local_slots.put(tag_bind.binding.text, .{ .ty = binding_ty, .ptr = binding_ptr });
 
-        const then_terminated = try self.emitBlock(node.then_block, ret_ty);
+        const then_terminated = try self.emitBlockWithDeferStackSnapshot(node.then_block, ret_ty);
         if (!then_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
 
         _ = self.local_types.remove(tag_bind.binding.text);
@@ -2765,7 +2765,7 @@ const LlvmEmitter = struct {
         self.clearLocalArrayPointerElementsForLocal(tag_bind.binding.text);
 
         try self.out.print(self.allocator, "{s}:\n", .{else_label});
-        const else_terminated = if (node.else_block) |else_block| try self.emitBlock(else_block, ret_ty) else false;
+        const else_terminated = if (node.else_block) |else_block| try self.emitBlockWithDeferStackSnapshot(else_block, ret_ty) else false;
         if (!else_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ end_label, try self.debugCallSuffix() });
         if (then_terminated and else_terminated) return true;
         try self.out.print(self.allocator, "{s}:\n", .{end_label});
@@ -3960,6 +3960,15 @@ const LlvmEmitter = struct {
                 break :blk true;
             },
         };
+        self.restoreDeferStackSnapshot(saved_defer_stack);
+        return terminated;
+    }
+
+    fn emitBlockWithDeferStackSnapshot(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) !bool {
+        const saved_defer_stack = try self.allocator.dupe(DeferredCleanup, self.defer_stack.items);
+        defer self.allocator.free(saved_defer_stack);
+        errdefer self.restoreDeferStackSnapshot(saved_defer_stack);
+        const terminated = try self.emitBlock(block, ret_ty);
         self.restoreDeferStackSnapshot(saved_defer_stack);
         return terminated;
     }
