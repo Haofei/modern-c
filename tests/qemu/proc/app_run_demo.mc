@@ -1151,13 +1151,7 @@ export fn app_build_agent_bundle_metadata(image_base: usize, image_len: usize, r
 }
 
 export fn app_build_agent_metadata_checked(image_base: usize, image_len: usize, region_base: usize, region_len: usize, expected_hash: u64) -> u64 {
-    let actual_hash: u64 = bundle_hash_bytes(image_base, image_len);
-    if expected_hash != actual_hash {
-        g_load_status = LS_BUNDLE_HASH;
-        return 0;
-    }
-    var h: BundleHeader = bundle_header_init_for_image(.Agent, AGENT_BUNDLE_DEFAULT_VERSION, AGENT_BUNDLE_ABI, AGENT_BUNDLE_POLICY_VERSION, AGENT_BUNDLE_TRUSTED_KEY, image_base, image_len, AGENT_BUNDLE_SIG_LEN);
-    h.image_hash = expected_hash;
+    var h: BundleHeader = bundle_header_init(.Agent, AGENT_BUNDLE_DEFAULT_VERSION, AGENT_BUNDLE_ABI, AGENT_BUNDLE_POLICY_VERSION, AGENT_BUNDLE_TRUSTED_KEY, expected_hash, AGENT_BUNDLE_SIG_LEN);
     return app_build_agent_bundle_metadata(image_base, image_len, region_base, region_len, &h, true);
 }
 

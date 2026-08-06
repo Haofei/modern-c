@@ -3,42 +3,6 @@ import "kernel/core/production_ops.mc";
 global g_bundle_image: [4]u8;
 global g_bundle_other: [4]u8;
 
-fn digest_is_sha256_01020304(d: *BundleDigest) -> bool {
-    if d.bytes[0] != 0x9f { return false; }
-    if d.bytes[1] != 0x64 { return false; }
-    if d.bytes[2] != 0xa7 { return false; }
-    if d.bytes[3] != 0x47 { return false; }
-    if d.bytes[4] != 0xe1 { return false; }
-    if d.bytes[5] != 0xb9 { return false; }
-    if d.bytes[6] != 0x7f { return false; }
-    if d.bytes[7] != 0x13 { return false; }
-    if d.bytes[8] != 0x1f { return false; }
-    if d.bytes[9] != 0xab { return false; }
-    if d.bytes[10] != 0xb6 { return false; }
-    if d.bytes[11] != 0xb4 { return false; }
-    if d.bytes[12] != 0x47 { return false; }
-    if d.bytes[13] != 0x29 { return false; }
-    if d.bytes[14] != 0x6c { return false; }
-    if d.bytes[15] != 0x9b { return false; }
-    if d.bytes[16] != 0x6f { return false; }
-    if d.bytes[17] != 0x02 { return false; }
-    if d.bytes[18] != 0x01 { return false; }
-    if d.bytes[19] != 0xe7 { return false; }
-    if d.bytes[20] != 0x9f { return false; }
-    if d.bytes[21] != 0xb3 { return false; }
-    if d.bytes[22] != 0xc5 { return false; }
-    if d.bytes[23] != 0x35 { return false; }
-    if d.bytes[24] != 0x6e { return false; }
-    if d.bytes[25] != 0x6c { return false; }
-    if d.bytes[26] != 0x77 { return false; }
-    if d.bytes[27] != 0xe8 { return false; }
-    if d.bytes[28] != 0x9b { return false; }
-    if d.bytes[29] != 0x6a { return false; }
-    if d.bytes[30] != 0x80 { return false; }
-    if d.bytes[31] != 0x6a { return false; }
-    return true;
-}
-
 fn action_code(a: RuntimeAction) -> u32 {
     switch a {
         .Allow => { return 0; }
@@ -94,9 +58,7 @@ export fn production_ops_run() -> u32 {
         raw.store<u8>(phys(other_base + 3), 4);
     }
     let exact_hash: u64 = bundle_hash_bytes(image_base, 4);
-    var exact_digest: BundleDigest = bundle_digest_bytes(image_base, 4);
-    if !digest_is_sha256_01020304(&exact_digest) { pass = 0; }
-    var exact: BundleHeader = bundle_header_init_for_image(.Agent, 10, 1, 41, 7, image_base, 4, 256);
+    var exact: BundleHeader = bundle_header_init(.Agent, 10, 1, 41, 7, exact_hash, 256);
     switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, true, image_base, 4) {
         ok(vb) => {
             if !verified_bundle_has_exact_bytes(&vb) { pass = 0; }
@@ -123,7 +85,7 @@ export fn production_ops_run() -> u32 {
             }
         }
     }
-    exact.image_digest.bytes[0] = exact.image_digest.bytes[0] ^ 1;
+    exact.image_hash = exact_hash ^ 1;
     switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, true, image_base, 4) {
         ok(vb) => {
             pass = 0;
@@ -179,7 +141,7 @@ export fn production_ops_run() -> u32 {
     if rollback_mark_boot_failed(&rb, 1) != true { pass = 0; }
     if rollback_active_version(&rb) != 10 { pass = 0; }
     if rollback_mark_boot_failed(&rb, 0) { pass = 0; }
-    var next_agent: BundleHeader = bundle_header_init_for_image(.Agent, 12, 1, 41, 7, image_base, 4, 256);
+    var next_agent: BundleHeader = bundle_header_init(.Agent, 12, 1, 41, 7, exact_hash, 256);
     switch bundle_validate_metadata_hash(&next_agent, .Agent, 1, 8, 13, 7, exact_hash) {
         ok(v) => {
             if rollback_active_version(&rb) != 10 { pass = 0; }

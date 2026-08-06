@@ -2,7 +2,7 @@
 # Bundle-metadata admission + rollback gate. This deliberately does NOT claim secure
 # boot: cryptographic RSA/SHA-256 verification is qualified by rsa-verify-test, while
 # this QEMU fixture covers metadata policy and the A/B rollback state machine. The
-# VerifiedBundle verifier-to-loader path is gated separately by app-run/admission tests.
+# verifier-to-loader exact-byte binding remains a separate integration requirement.
 #
 # Usage: tools/fs/bundle-metadata-test.sh <path-to-mcc> [c|llvm]
 # Skips (exit 0) when the riscv toolchain or QEMU is unavailable.
