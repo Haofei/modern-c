@@ -2101,10 +2101,12 @@ with one known `getelementptr inbounds` exception on the va_list path,
   ordinary source bindings cannot collide with `mc_tmp*`, `mc_trap_*`, slice/dyn
   typedefs, or MC prelude macros. `tests/spec/c_identifier_hygiene.mc` locks the
   bad cases.
-- **[P2] Targets are hardcoded 64-bit little-endian** (`usize`/addr types fixed at 8
-  bytes, `src/layout.zig:101-114`; `TargetArch` = riscv64/x86_64/aarch64,
-  `src/backend.zig:44-48`; endianness implicit). Fine as a scoped v0 decision;
-  document as normative and parameterize before any 32-bit/BE port. Effort S (docs).
+- **[P2] Targets are hardcoded 64-bit little-endian.** **fixed as an explicit v0
+  target-data contract**; `src/target_layout.zig` centralizes the current
+  64-bit/little-endian facts, `layout` and comptime `eval` consume that source for
+  `usize`/`isize` and opaque address widths, and the normative spec now states that
+  32-bit or big-endian targets are future extensions rather than current portability
+  claims.
 
 ### 5.4 Zig implementation quality — C+
 

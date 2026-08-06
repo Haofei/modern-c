@@ -3,6 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const numeric = @import("numeric.zig");
 const string_literal = @import("string_literal.zig");
+const target_layout = @import("target_layout.zig");
 
 pub const Trap = enum {
     IntegerOverflow,
@@ -588,7 +589,7 @@ pub const ComptimeScope = struct {
 };
 
 // The declared bit-width of an integer type expression, or null for non-integer
-// (or width-unknown) types. usize/isize follow the 64-bit C ABI this backend targets.
+// (or width-unknown) types. usize/isize follow the explicit v0 target-data contract.
 // The arithmetic domain + width of a comptime integer binding (section 5): a plain `uN`/`iN`
 // is `checked`, `wrap<uN>`/`sat<uN>` carry their domain. Drives overflow handling in the
 // const folder (checked → trap, wrap → mask mod 2^N, sat → clamp).
@@ -606,8 +607,9 @@ fn comptimeIntType(ty: ast.TypeExpr) ?ComptimeIntType {
         .name => |n| n.text,
         else => return null,
     };
-    if (std.mem.eql(u8, name, "usize")) return .{ .bits = 64, .signed = false };
-    if (std.mem.eql(u8, name, "isize")) return .{ .bits = 64, .signed = true };
+    if (target_layout.pointerSizedIntegerBits(name)) |bits| {
+        return .{ .bits = bits, .signed = std.mem.eql(u8, name, "isize") };
+    }
     if (name.len < 2) return null;
     const signed = switch (name[0]) {
         'i' => true,

@@ -319,6 +319,11 @@ usize/isize match pointer width.
 bool is a distinct type.
 ```
 
+The current v0 qualified target set is explicitly **64-bit little-endian**:
+`usize`/`isize` are 64-bit, and opaque address classes such as `PAddr`, `VAddr`, and
+`DmaAddr` occupy one 64-bit word. A 32-bit or big-endian target is a future target
+extension, not an implicit portability promise.
+
 `u128`/`i128` are 128-bit integers (lowered to `unsigned __int128`/`__int128` in the
 C backend and `i128` in the LLVM backend) — primarily for wide-integer math (bignum /
 crypto limbs). The inline operations — widening/truncating casts, add/sub (with carry),
@@ -387,9 +392,9 @@ Digit separators may occur only between digits. The underscore beginning a suffi
 therefore unambiguous; `1__2`, `1_`, `1__u8`, and unknown suffixes are invalid. Unary `-`
 preserves the signed suffix width (`-1_i8` is `i8`); applying it to an unsigned suffixed
 literal is rejected. An enclosing cast or contextual destination never changes the operation
-width already fixed by a suffix. `usize` and `isize` suffixes use the selected target's pointer
-width. Out-of-range suffixed literals and checked operations are diagnosed or trap before
-backend lowering, identically for C and LLVM.
+width already fixed by a suffix. `usize` and `isize` suffixes use the selected target-data
+pointer width; in v0 this is 64 bits. Out-of-range suffixed literals and checked operations
+are diagnosed or trap before backend lowering, identically for C and LLVM.
 
 ---
 
