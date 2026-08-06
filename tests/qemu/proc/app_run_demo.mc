@@ -10,7 +10,6 @@ import "kernel/core/elf_loader.mc";
 import "kernel/arch/riscv64/paging.mc";
 import "kernel/core/heap.mc";
 import "kernel/core/ledger.mc";     // unified resource ledger: enforces the per-agent memory grow cap
-import "kernel/core/ota.mc";
 import "kernel/core/production_ops.mc";
 import "kernel/core/syscall.mc";
 import "kernel/core/uaccess.mc";
@@ -1040,29 +1039,119 @@ fn app_bundle_error_status(e: BundleError) -> u32 {
     }
 }
 
-export fn app_build_agent_bundle_metadata(image_base: usize, image_len: usize, region_base: usize, region_len: usize, h: *BundleHeader) -> u64 {
+fn app_load_error_status(e: LoadError) -> u32 {
+    switch e {
+        .BadElf => { return LS_BADELF; }
+        .TooManyPages => { return LS_TOOMANY; }
+        .NoFrame => { return LS_NOFRAME; }
+        .BadSegment => { return LS_BADSEG; }
+    }
+}
+
+fn app_build_verified(image_base: usize, image_len: usize, region_base: usize, region_len: usize, bundle: VerifiedBundle) -> u64 {
+    heap_init_untracked(&g_heap, phys_range(pa(region_base), region_len));
+
+    // Root page table fallibly: even root-frame exhaustion is a typed NoFrame, not a trap.
+    switch page_table_try_new(&g_heap) {
+        ok(pt) => { g_pt = pt; }
+        err(e) => {
+            unsafe { forget_unchecked(bundle); }
+            g_load_status = LS_NOFRAME;
+            return 0;
+        }
+    }
+
+    switch elf_load_verified_bundle_for(move bundle, image_base, image_len, 243, USER_BASE, USER_LIMIT, &g_pt, &g_heap) {
+        ok(e) => { g_entry = e; }
+        err(e) => {
+            g_load_status = app_load_error_status(e);
+            return 0;
+        }
+    }
+
+    // The user-accessible window must span the ELF image/stack (below USER_LIMIT), the demand-grown heap
+    // region [HEAP_BASE, HEAP_BASE+SBRK_CAP_BYTES), AND the WASM linear-memory demand-paging window
+    // [LM_WINDOW_BASE, LM_WINDOW_BASE+LM_WINDOW_MAX). Otherwise a syscall buffer that lives in one of
+    // those regions is rejected by copy_{from,to}_user_pt with E_FAULT. In particular WASI fd_write
+    // hands SYS_WRITE the guest buffer's NATIVE address, which for the reserved linear memory is a window
+    // VA — so the window MUST be in range or the guest's stdout is silently dropped. The window is a
+    // single [base, limit) span; the gaps (USER_LIMIT..HEAP_BASE and heap-end..LM_WINDOW_BASE) are
+    // in-range but unmapped, so a stray access there still fails the per-page page-table walk (E_FAULT) —
+    // the widening only admits pages that are actually mapped (the ELF, the sbrk heap, or a faulted-in
+    // window page).
+    g_uas = user_addr_space(&g_pt, USER_BASE, LM_WINDOW_BASE + LM_WINDOW_MAX);
+
+    // Stand up the demand-grown-heap frame pool (SYS_SBRK): a trivial monotonic bump frontier over a
+    // fixed physical window. No RAM is touched until the agent actually sbrk's, so this is safe even in
+    // gates whose agents never grow. Self-contained (no page_alloc.mc import — whose PAGE_SIZE would
+    // clash with paging.mc's under emit-c's flattened namespace). The break starts at HEAP_BASE (lazily
+    // on first sbrk).
+    g_pool_next = SBRK_POOL_BASE;
+    g_pool_end = SBRK_POOL_BASE + SBRK_POOL_LEN; // checked add: traps if the window overflows the space
+    g_frames_ready = true;
+    g_brk = HEAP_BASE;
+
+    // Stand up the WASM linear-memory demand-paging pool (Phase 4.1): a dedicated bump frontier over the
+    // upper 48 MiB of the split physical window. Untouched until the confined WASM engine faults a window
+    // page in, so it is inert for every non-WASM agent.
+    g_lm_pool_next = LM_POOL_BASE;
+    g_lm_pool_end = LM_POOL_BASE + LM_POOL_LEN;
+    g_lm_ready = true;
+    // The per-agent grow ceiling lives in the unified ledger: set Resource.Memory's limit to the cap
+    // (bounded by the physical pool). sys_sbrk charges this ledger per grow and fails closed on
+    // over-limit. On real hardware SBRK_CAP_BYTES/the pool would be sized from the FDT free-RAM window.
+    ledger_init(&g_mem_ledger);
+    ledger_set_limit(&g_mem_ledger, .Memory, SBRK_CAP_BYTES as u64);
+
+    // M5b.2: stand up the REAL capability-checked FS tool world before the agent can issue any
+    // SYS_SUBMIT. The agent gets a path cap rooted at "/ws" with read+write rights, and an
+    // allowlist of {FS_WRITE, FS_READ} ONLY — so an FS_MKDIR op is Denied at the front door
+    // (allowlist) without spending budget, and that denial is audited. Budget 16 calls.
+    tree_init(&g_tree);
+    ipc_trace_init(&g_audit);
+    var ws_idx: usize = 0;
+    // "/ws" = 0x2F 0x77 0x73
+    g_fs_path[0] = 0x2F;
+    g_fs_path[1] = 0x77;
+    g_fs_path[2] = 0x73;
+    switch tree_mkdir(&g_tree, (&g_fs_path[0]) as usize, 3) {
+        ok(i) => { ws_idx = i; }
+        err(e) => {}
+    }
+    var allow: Mask32 = mask32_zero();
+    mask32_set(&allow, TOOL_FS_WRITE);
+    mask32_set(&allow, TOOL_FS_READ); // NOT TOOL_FS_MKDIR — mkdir is the deny case
+    g_agent = agent_fs_new(allow, 16, pathcap_root(AGENT_PID as u32, ws_idx, FS_WRITE | FS_READ));
+    g_fs_ready = true;
+    if g_fs_async_override_ready {
+        g_fs_override_init();
+    }
+
+    // Production tool-surface network broker. The default weak hook registers mock endpoints;
+    // NIC-backed runtime gates override it with a TCP transport.
+    app_net_tool_init();
+
+    let root: PAddr = page_table_root(&g_pt);
+    return SATP_SV39 | ((pa_value(root) >> 12) as u64);
+}
+
+export fn app_build_agent_bundle_metadata(image_base: usize, image_len: usize, region_base: usize, region_len: usize, h: *BundleHeader, signature_verified: bool) -> u64 {
     g_load_status = LS_OK;
 
-    switch bundle_validate_metadata(h, .Agent, AGENT_BUNDLE_ABI, AGENT_BUNDLE_MIN_VERSION, AGENT_BUNDLE_MAX_VERSION, AGENT_BUNDLE_TRUSTED_KEY) {
-        ok(v) => {}
+    switch bundle_verify_and_admit_image(h, .Agent, AGENT_BUNDLE_ABI, AGENT_BUNDLE_MIN_VERSION, AGENT_BUNDLE_MAX_VERSION, AGENT_BUNDLE_TRUSTED_KEY, signature_verified, image_base, image_len) {
+        ok(vb) => {
+            return app_build_verified(image_base, image_len, region_base, region_len, move vb);
+        }
         err(e) => {
             g_load_status = app_bundle_error_status(e);
             return 0;
         }
     }
-
-    let actual_hash: u64 = ota_hash_bytes(image_base, image_len);
-    if !bundle_image_hash_matches(h, actual_hash) {
-        g_load_status = LS_BUNDLE_HASH;
-        return 0;
-    }
-
-    return app_build(image_base, image_len, region_base, region_len);
 }
 
 export fn app_build_agent_metadata_checked(image_base: usize, image_len: usize, region_base: usize, region_len: usize, expected_hash: u64) -> u64 {
     var h: BundleHeader = bundle_header_init(.Agent, AGENT_BUNDLE_DEFAULT_VERSION, AGENT_BUNDLE_ABI, AGENT_BUNDLE_POLICY_VERSION, AGENT_BUNDLE_TRUSTED_KEY, expected_hash, AGENT_BUNDLE_SIG_LEN);
-    return app_build_agent_bundle_metadata(image_base, image_len, region_base, region_len, &h);
+    return app_build_agent_bundle_metadata(image_base, image_len, region_base, region_len, &h, true);
 }
 
 export fn app_build(image_base: usize, image_len: usize, region_base: usize, region_len: usize) -> u64 {
@@ -1078,12 +1167,7 @@ export fn app_build(image_base: usize, image_len: usize, region_base: usize, reg
     switch elf_load_image_for(image_base, image_len, 243, USER_BASE, USER_LIMIT, &g_pt, &g_heap) {
         ok(e) => { g_entry = e; }
         err(e) => {
-            switch e {
-                .BadElf => { g_load_status = LS_BADELF; }
-                .TooManyPages => { g_load_status = LS_TOOMANY; }
-                .NoFrame => { g_load_status = LS_NOFRAME; }
-                .BadSegment => { g_load_status = LS_BADSEG; }
-            }
+            g_load_status = app_load_error_status(e);
             return 0;
         }
     }

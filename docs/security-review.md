@@ -135,8 +135,10 @@ today it is in-memory.
 `kernel/core/production_ops.mc` gates bundle metadata (magic, kind, ABI, version range,
 trusted key id, and signature-field presence) and implements the A/B rollback state
 machine. Creating a `VerifiedBundle` now also requires a positive signature-verification
-result from the caller; metadata-only validation cannot mint the token. The metadata and
-rollback path is gated as `bundle-metadata-test` / `llvm-bundle-metadata-test`, while
+result from the caller; metadata-only validation cannot mint the token. The confined-agent
+bundle builder consumes that token through `elf_load_verified_bundle_for` instead of loading
+raw bytes after a hash-only metadata check. The metadata and rollback path is gated as
+`bundle-metadata-test` / `llvm-bundle-metadata-test`, while
 the BearSSL RSA-2048/SHA-256 primitive is qualified separately by `rsa-verify-test` /
 `llvm-rsa-verify-test`. The metadata surface is fuzzed over >200k adversarial headers +
 50k rollback sequences (`bundle-fuzz-test`, §4).

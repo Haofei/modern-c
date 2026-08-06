@@ -203,12 +203,12 @@ fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> Result
     if buf.len > VRING_DESC_LEN_MAX {
         // The length would not fit a descriptor's u32 `len`; reclaim and return a typed
         // error rather than truncating (or trapping) on the `as u32` cast below.
-        free(invalidate_for_cpu(buf));
+        free(invalidate_for_cpu(move buf));
         return err(.LengthTooLarge);
     }
     if vq_free_count(vq) < 1 {
         // No descriptor free: reclaim the buffer and fail closed rather than trap.
-        free(invalidate_for_cpu(buf));
+        free(invalidate_for_cpu(move buf));
         return err(.QueueFull);
     }
     let id: u16 = vq_alloc_desc(vq);
@@ -236,11 +236,11 @@ fn vq_submit(vq: *mut Virtq, buf: DeviceBuffer, device_writable: bool) -> Result
 }
 
 pub fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -> Result<u16, VqSubmitError> {
-    return vq_submit(vq, buf, false);
+    return vq_submit(vq, move buf, false);
 }
 
 pub fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -> Result<u16, VqSubmitError> {
-    return vq_submit(vq, buf, true);
+    return vq_submit(vq, move buf, true);
 }
 
 // Submit a three-descriptor chain (a virtio-blk request): `header` (device reads),
@@ -262,15 +262,15 @@ pub fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer
     if data.len > VRING_DESC_LEN_MAX { too_large = true; }
     if status.len > VRING_DESC_LEN_MAX { too_large = true; }
     if too_large {
-        free(invalidate_for_cpu(header));
-        free(invalidate_for_cpu(data));
-        free(invalidate_for_cpu(status));
+        free(invalidate_for_cpu(move header));
+        free(invalidate_for_cpu(move data));
+        free(invalidate_for_cpu(move status));
         return err(.LengthTooLarge);
     }
     if vq_free_count(vq) < 3 {
-        free(invalidate_for_cpu(header));
-        free(invalidate_for_cpu(data));
-        free(invalidate_for_cpu(status));
+        free(invalidate_for_cpu(move header));
+        free(invalidate_for_cpu(move data));
+        free(invalidate_for_cpu(move status));
         return err(.QueueFull);
     }
     let id0: u16 = vq_alloc_desc(vq);
@@ -527,7 +527,7 @@ pub fn vq_reset_reclaim(vq: *mut Virtq) -> usize {
             var da: DmaAddr = uninit;
             unsafe { da = (addr as usize) as DmaAddr; } // reconstruct device-address class (audited DMA boundary)
             let dev: DeviceBuffer = .{ .dev_addr = da, .len = len };
-            free(invalidate_for_cpu(dev));
+            free(invalidate_for_cpu(move dev));
             reclaimed = reclaimed + 1;
         }
         i = i + 1;
