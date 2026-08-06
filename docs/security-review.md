@@ -85,8 +85,7 @@ today the allowlist is established in-boot. Larger hostile-packet corpus wanted.
 
 Agents have **no ambient FS/net handles**; all effects route through brokers that check a
 per-agent capability first (`kernel/fs/treefs.mc`, `kernel/agent/mcp.mc`). The MCP tool budget
-and policy quotas are enforced (`kernel/agent/mcp.mc`, `kernel/core/policy.mc`). This is
-guarantee **G2** and is audited kernel-side (§2.7).
+is enforced (`kernel/agent/mcp.mc`). This is guarantee **G2** and is audited kernel-side (§2.7).
 
 Residual: uniform per-agent memory/CPU budget enforcement on *every* broker/device path is
 incomplete (threat-model §5, production-readiness-plan §4.7 / P6). Some exhaustion paths still

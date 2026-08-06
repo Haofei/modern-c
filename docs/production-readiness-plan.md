@@ -118,7 +118,7 @@ hardening"; a few are genuinely thin. Current state, with evidence:
 | 3. Durable storage | In progress | KV/blob/fs plus the real **virtio-blk write path** (`blk_write` + full-sector `blk_read_into`) and a **persist-across-reboot gate** — `blk-persist-test` (both backends) boots QEMU twice against the same disk image: a sentinel written on boot 1 is read back on a fresh boot 2 (RAM cleared, disk survives). Product policy/audit persistence fixtures have been removed from the current language-oriented kernel scope. |
 | 4. Isolation boundary | **Most mature** | Confined U-mode Sv39 (kernel unmapped) + WAMR sandbox + deterministic fuel, S-mode + cross-arch. Gap: **per-agent crash cleanup/reap**. (Review overstates this as missing.) |
 | 5. Resource accounting | Mostly done | Per-dimension budgets are enforced AND gated: CPU (`wamr-fuel-test`, `wasm-watchdog-test`), memory (`wasm-memcap-test`), network requests (`NetCap.requests_left`), tool/output quota (`quota-probe-test`, `qjs/wasm-quota-agent-test`) — multiple backends. **Landed (2026-06-30):** typed `NoMem` on the DMA path — `dma.try_alloc -> Result<_, DmaError>` + `mc_dma_alloc_base_try` across all providers (fail-closed with a typed error instead of trapping on exhaustion); gated `dma-try-test`. Gap: a **single unified accounting/quota model** spanning all dimensions (incl. file handles + spawned tasks). |
-| 6. Broker hardening | Exists, weak | `net_broker` policy+budget+audit; back-pressure (async `ok=8 rejected=4`); revoke/throttle/kill actuation gated. Gap: revocation propagation, retries, tracing. Product persistent policy load is out of scope. |
+| 6. Broker hardening | Exists, weak | `net_broker` allowlist+budget+audit; back-pressure (async `ok=8 rejected=4`). Gap: retries and tracing. Product policy loading/actuation is out of scope. |
 | 7. Networking | Mostly exists | **DNS exists** (`kernel/net/dns.mc`), TLS (BearSSL), TCP RX hardened (checksums + chunked drain). Gap: retransmit robustness, conn pooling, timeout control, hostile-packet corpus. (Review overstates DNS/TLS as needed.) |
 | 8. Observability | Partial | Audit/trace + record/checkpoint exist (`ipc_trace.mc`, `cap_audit`, provenance, `kernel/lib/record.mc`, `kernel/lib/checkpoint.mc`). Gap: **structured metrics, per-agent event timelines, deterministic replay**. |
 | 9. Update/packaging | External product scope | Reproducible build/package gates remain in the toolchain. Kernel OTA/live-update fixtures have been removed from the current language-oriented kernel scope. |
@@ -286,19 +286,13 @@ Current status:
 Production target:
 
 - Product policy persistence is out of the current language-oriented kernel scope.
-- Audit survives reboot or crash.
-- Audit records are bounded, structured, and replayable.
-- Policy decisions can act on live agents.
-- Audit records distinguish allowed, denied, throttled, revoked, and killed actions.
+- Audit records are bounded and structured.
+- Product policy decisions and actuation are outside the current kernel scope.
 
 Acceptance gates:
 
-- Policy is loaded during boot before untrusted agents run.
-- Audit is flushed to storage with bounded memory use.
-- A crash/reboot preserves enough audit state to explain the last agent actions.
-- Policy can revoke a capability from a running agent.
-- Policy can throttle or kill a noisy agent.
-- Tests cover audit ring wraparound and storage-full behavior.
+- Tests cover audit attribution and ring wraparound.
+- Product policy load, persistence, and live actuation are reintroduced only behind a concrete product profile.
 
 ### 4.4 Update and recovery lifecycle
 
@@ -581,8 +575,6 @@ remain open — QEMU is the only validated platform today.
 - [x] All external effects go through brokers. (FS/net brokers; confined agents have no ambient handles.)
 - [x] Allowed and denied broker decisions are audited. (QEMU-gated: net allow `NET_TAG` / deny `NET_DENY_TAG`, FS deny audit.)
 - [x] Per-agent memory, request, output, and network budgets are enforced across the production paths. (QEMU-gated: `wasm-memcap`, `wamr-fuel`/`wasm-watchdog`, `quota`/`quota-agent`, `NetCap`.)
-- [x] Policy can revoke/throttle/kill a running agent. (`proc_throttle` + `proc_kill` + machine-timer watchdog kill (`wasm-watchdog-test`) + gated revoke/throttle/kill actuation.)
-- [x] Policy actuation state transitions for revoke/throttle/kill are gated.
 - [ ] Watchdog and reboot reason work.
 - [x] Watchdog/reboot-reason state records are gated.
 - [ ] Product agent update policy exists.

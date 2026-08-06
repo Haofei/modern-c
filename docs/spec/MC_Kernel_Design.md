@@ -676,7 +676,7 @@ Every kernel capability has a gate, wired in `build.zig` (≈297 steps) and aggr
 master `m0` step. The gates come in two forms: many **boot under QEMU on both compiler
 backends** (`*-test` + `llvm-*-test`), while several capability layers run as **host fixtures**
 through `tools/lib/host-harness.sh` (e.g. `treefs-test`, `fs-toolserver-test`, `agent-fs-test`,
-`policy-test`, `netcap-test`, `agent-containment-test`) — they exercise the host-compiled MC
+`netcap-test`, `agent-containment-test`) — they exercise the host-compiled MC
 logic directly, not under QEMU. The confined-agent **acceptance bar** (§6: a genuinely
 isolated U-mode agent under QEMU) is therefore met only by selected QEMU boots, not by the
 host fixtures. Fixtures are self-verifying (assert expected output / exit codes / typed

@@ -4,7 +4,7 @@
 // hand-rolling its own {used, limit} counters and over-limit check: process memory quotas
 // (kernel/core/process.mc / kernel/lib/resacct.mc), the net broker's byte budget
 // (kernel/net/net_broker.mc), IPC message ledgers (kernel/core/proc_ipc.mc), the MCP tool budget
-// (kernel/agent/mcp.mc), policy quotas (kernel/core/policy.mc), and scheduler accounting
+// (kernel/agent/mcp.mc), and scheduler accounting
 // (kernel/core/proc_sched.mc). Every one repeats the same fragile charge/release arithmetic.
 //
 // This module is the ONE ledger they can all share: a single `Ledger` carries a {used, limit}

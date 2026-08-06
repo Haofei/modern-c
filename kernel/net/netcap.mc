@@ -22,7 +22,7 @@ const NETCAP_MAX: usize = 4; // destinations a single cap can name
 pub const NET_CONNECT: u32 = 1;
 
 // Verdict + op codes for the audit trail (same convention as the FS layers:
-// to=verdict, tag=op; ALLOW verdict is 1 so the policy plane folds it correctly).
+// to=verdict, tag=op).
 pub const NV_DENY: u32 = 0;
 pub const NV_ALLOW: u32 = 1;
 pub const OP_NET_CONNECT: u32 = 0x2000;

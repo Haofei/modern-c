@@ -343,12 +343,11 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "agent-fs-test", "Agent FS tool front door: allowlist+budget gate over the path-capability server; M6-shape acceptance (deny+audit+attribute)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-fs-test" });
 
-    _ = h.addScriptTest(ctx, "policy-test", "Policy plane: drain audit provenance into per-agent counters; denial pressure escalates Allow/Throttle/Revoke/Kill (M5 seed)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "policy-test" });
     _ = h.addScriptTest(ctx, "agent-abi-test", "Versioned agent SYS_SUBMIT/SYS_POLL ABI: request validation and stable typed completion status mapping", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-test" });
     _ = h.addScriptTest(ctx, "agent-abi-fuzz-test", "Adversarial agent SYS_SUBMIT/SYS_POLL ABI fuzz: validation precedence, typed events, and fail-closed syscall dispatch", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-fuzz-test" });
     _ = h.addScriptTest(ctx, "netcap-test", "Capability-gated network egress: default-deny NetCap, audited+attributed allow/deny, attenuation only narrows (milestone #3)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "netcap-test" });
 
-    _ = h.addScriptTest(ctx, "agent-containment-test", "Capstone M6-shape integration: every containment layer over a shared audit ring; benign task completes, all injected forbidden actions denied+audited, policy escalates", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-containment-test" });
+    _ = h.addScriptTest(ctx, "agent-containment-test", "Capstone M6-shape integration: every containment layer over a shared audit ring; benign task completes, all injected forbidden actions are denied, audited, and attributed", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-containment-test" });
 
     _ = h.addScriptTest(ctx, "mcp-test", "MCP-compatible facade: method names resolve to native capability-checked tools (speak MCP, enforce with MC caps)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mcp-test" });
 

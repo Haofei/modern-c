@@ -622,8 +622,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("fs-toolserver-test"));
     // agent-fs-test links + runs the agent FS tool front door (M3 seed); LLVM side via llvm-host-suite-test.
     m0_full_step.dependOn(ctx.cmd("agent-fs-test"));
-    // policy-test links + runs the policy-plane drainer (M5 seed); LLVM side via llvm-host-suite-test.
-    m0_full_step.dependOn(ctx.cmd("policy-test"));
     // agent-abi-test pins the versioned SYS_SUBMIT/SYS_POLL request/completion contract.
     m0_full_step.dependOn(ctx.cmd("agent-abi-test"));
     // agent-abi-fuzz-test adversarially checks validation precedence and fail-closed syscall dispatch.

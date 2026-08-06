@@ -21,7 +21,6 @@ grantcascade-test	current host/corpus C build gap; additional skipped fixtures r
 endpoint-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 byteview-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 service-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-policy-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 plugin-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 pipe-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 elf-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions

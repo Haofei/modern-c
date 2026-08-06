@@ -55,7 +55,6 @@ The first production claim should require all of these:
 - [ ] All external effects go through brokers.
 - [ ] Allowed and denied broker decisions are audited.
 - [ ] Per-agent memory, request, output, and network budgets are enforced across the production paths.
-- [ ] Policy can revoke, throttle, or kill a running agent.
 - [ ] Syscall and broker fuzz tests exist.
 - [ ] Long QEMU soak and real-board soak pass.
 - [ ] Security review has no unresolved critical findings.

@@ -2,22 +2,19 @@
 // level, composing every containment layer into one scenario through a SHARED
 // audit ring:
 //   treefs (paths) + fs_toolserver (path cap) + agent_fs (allowlist+budget) +
-//   netcap (egress cap) + policy (consume audit -> escalate).
+//   netcap (egress cap) + audit attribution.
 //
 // One agent works on a task in /workspace. The "prompt injection" drives four
 // forbidden actions; each is denied at the right layer, audited, and attributed,
-// while the benign task completes. A policy plane then drains the shared
-// provenance and escalates the agent on its accumulated denials.
+// while the benign task completes.
 //
 //   benign : read /workspace/task.txt, write /workspace/result.txt   -> succeed
 //   inject : read  /etc/secret     -> Denied (path capability)
 //            write /etc/passwd     -> Denied (path capability), nothing created
 //            call  exec tool (id 5)-> Denied (not in allowlist), audited
 //            connect 6.6.6.6:443   -> Denied (no network capability)
-//   policy : 4 denials attributed to the agent -> escalate to Revoke
-//
 // Returns 1 iff the benign task completed, every forbidden action was denied with
-// no side effect, and the policy escalation is exactly right. The one honest gap
+// no side effect, and the denials are attributed. The one honest gap
 // (tracked as step 0) is that this agent is COOPERATIVE — it proves the
 // enforcement is correct, not yet that an adversarial agent cannot bypass it.
 
@@ -25,14 +22,12 @@ import "kernel/fs/treefs.mc";
 import "kernel/fs/fs_toolserver.mc";
 import "kernel/fs/agent_fs.mc";
 import "kernel/net/netcap.mc";
-import "kernel/core/policy.mc";
 import "kernel/core/ipc_trace.mc";
 import "std/mask.mc";
 import "std/addr.mc";
 
 global g_t: Tree;
 global g_audit: IpcTrace;   // shared provenance ring for FS + net
-global g_pol: Policy;
 global g_path: [64]u8;
 global g_src: [16]u8;
 global g_rd: [16]u8;
@@ -73,15 +68,6 @@ fn call(a: *mut AgentFs, tool: u32, n: usize, buf: usize, blen: usize, capb: usi
     }
 }
 
-fn act(a: PolicyAction) -> u32 {
-    switch a {
-        .Allow => { return 0; }
-        .Throttle => { return 1; }
-        .Revoke => { return 2; }
-        .Kill => { return 3; }
-    }
-}
-
 // ----- paths -----
 fn p_ws() -> usize { // "/workspace"
     put(0,0x2F); put(1,0x77); put(2,0x6F); put(3,0x72); put(4,0x6B);
@@ -119,7 +105,6 @@ export fn agent_containment_run() -> u32 {
     var pass: u32 = 1;
     tree_init(&g_t);
     ipc_trace_init(&g_audit);
-    policy_init(&g_pol, 2, 3, 5); // Throttle@2, Revoke@3, Kill@5
 
     // The repo/world: /workspace with a task input the agent must read, and /etc
     // with a secret the agent is never granted. (Kernel-side setup.)
@@ -167,15 +152,27 @@ export fn agent_containment_run() -> u32 {
         err(e) => {}                 // denied (NoRight: no network capability)
     }
 
-    // --- policy plane: drain the shared provenance and escalate on the denials ---
-    let consumed: usize = policy_scan(&g_pol, &g_audit);
-    if consumed == 0 { pass = 0; }
-    // exactly four forbidden actions, all attributed to the agent
-    if policy_denies(&g_pol, AGENT) != 4 { pass = 0; }
-    // the two benign ops were allowed
-    if policy_allows(&g_pol, AGENT) < 2 { pass = 0; }
-    // 4 denials -> Revoke (>=3, <5)
-    if act(policy_decide(&g_pol, AGENT)) != 2 { pass = 0; }
+    // --- audit attribution: exactly four forbidden actions, all attributed to the agent ---
+    var audit_idx: usize = 0;
+    var allows: u32 = 0;
+    var denies: u32 = 0;
+    while audit_idx < ipc_trace_len(&g_audit) {
+        switch ipc_trace_get(&g_audit, audit_idx) {
+            ok(ev) => {
+                if ev.from == AGENT {
+                    if ev.to == V_ALLOW {
+                        allows = allows + 1;
+                    } else {
+                        denies = denies + 1;
+                    }
+                }
+            }
+            err(e) => { pass = 0; }
+        }
+        audit_idx = audit_idx + 1;
+    }
+    if denies != 4 { pass = 0; }
+    if allows < 2 { pass = 0; }
 
     // --- benign artifacts survived: the result exists, the forbidden file does not ---
     switch tree_resolve(&g_t, gp(), p_result()) { ok(i) => {} err(e) => { pass = 0; } }
