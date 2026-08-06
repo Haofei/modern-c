@@ -1889,12 +1889,12 @@ greppable `E_*` codes across 410 call sites.
 - **[P2] UTF-8 BOM rejected as `unexpected byte`** — **fixed**; `Lexer.init`
   skips an initial UTF-8 BOM and `src/lexer_tests.zig` locks the first real
   token at line 1, column 1.
-- **[P2] OOM fail-open: diagnostics can vanish.** `Reporter.add` does
-  `allocPrint(...) catch return` / `append(...) catch return` *without setting
-  `has_errors`* (`src/diagnostics.zig:52-61`) — under allocation failure an error
-  disappears and compilation proceeds as clean. Same pattern in comptime folding:
-  `widths.put(...) catch {}` (`src/eval.zig:432-441`) silently degrades fold widths.
-  A compiler must fail closed under OOM. Effort S. **[inspected]**
+- **[P2] OOM fail-open: diagnostics can vanish.** **fixed**; diagnostic
+  allocation failures now set `has_errors`/`diagnostic_oom`, and comptime fold
+  width/domain metadata allocation failures return `error.OutOfMemory` while
+  marking the fold scope as OOM. Regression coverage asserts both the fail-closed
+  reporter path and explicit OOM propagation from `ComptimeScope.bindWidth` /
+  `bindTypeInfo`.
 
 ### 5.2 Semantics & soundness — C+
 

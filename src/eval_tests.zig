@@ -110,7 +110,7 @@ test "ComptimeScope records width metadata allocation failure" {
     var scope = ComptimeScope.init(failing.allocator());
     defer scope.deinit();
 
-    scope.bindWidth("x", 32) catch {};
+    try std.testing.expectError(error.OutOfMemory, scope.bindWidth("x", 32));
     try std.testing.expect(scope.hasOom());
 }
 
@@ -120,10 +120,10 @@ test "ComptimeScope records domain metadata allocation failure" {
     defer scope.deinit();
 
     var args = [_]ast.TypeExpr{testType("u32")};
-    scope.bindTypeInfo("x", .{ .span = zero_span, .kind = .{ .generic = .{
+    try std.testing.expectError(error.OutOfMemory, scope.bindTypeInfo("x", .{ .span = zero_span, .kind = .{ .generic = .{
         .base = .{ .text = "wrap", .span = zero_span },
         .args = &args,
-    } } }) catch {};
+    } } }));
     try std.testing.expect(scope.hasOom());
 }
 
