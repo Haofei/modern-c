@@ -259,12 +259,17 @@ const CompilationSession = struct {
             return error.OutputWriteFailed;
         };
 
-        artifact_file.replace(self.io) catch |err| {
-            std.debug.print("error: unable to commit output \"{s}\": {s}\n", .{ path, @errorName(err) });
-            return error.OutputWriteFailed;
-        };
+        // Publish the sidecar before the artifact. The artifact is the
+        // consumer-visible commit point, so a newly visible artifact always has
+        // its matching metadata in place. If the final artifact replace fails,
+        // strict consumers compare the newer sidecar against the still-old
+        // artifact and fail closed on the digest mismatch.
         metadata_file.replace(self.io) catch |err| {
             std.debug.print("error: unable to commit metadata sidecar \"{s}\": {s}\n", .{ metadata.path, @errorName(err) });
+            return error.OutputWriteFailed;
+        };
+        artifact_file.replace(self.io) catch |err| {
+            std.debug.print("error: unable to commit output \"{s}\": {s}\n", .{ path, @errorName(err) });
             return error.OutputWriteFailed;
         };
     }
@@ -1102,12 +1107,15 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         return error.BuildFailed;
     };
 
-    std.Io.Dir.cwd().rename(tmp_exe, std.Io.Dir.cwd(), output_path, io) catch |err| {
-        std.debug.print("mcc build: unable to commit {s}: {s}\n", .{ output_path, @errorName(err) });
-        return error.BuildFailed;
-    };
+    // Commit metadata before publishing the executable. A stale executable
+    // paired with newer metadata is rejected by digest validation; a new
+    // executable without its sidecar is the fail-open state to avoid.
     metadata_file.replace(io) catch |err| {
         std.debug.print("error: unable to commit metadata sidecar \"{s}\": {s}\n", .{ metadata.path, @errorName(err) });
+        return error.BuildFailed;
+    };
+    std.Io.Dir.cwd().rename(tmp_exe, std.Io.Dir.cwd(), output_path, io) catch |err| {
+        std.debug.print("mcc build: unable to commit {s}: {s}\n", .{ output_path, @errorName(err) });
         return error.BuildFailed;
     };
     try session.writeStdout("mcc build: wrote ");
