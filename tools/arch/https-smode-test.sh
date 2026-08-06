@@ -7,9 +7,9 @@
 # OpenSBI payload linker script (sbi.ld), and run WITHOUT `-bios none` so QEMU
 # loads the real OpenSBI firmware which boots our kernel in S-mode at 0x80200000.
 #
-# Starts a LOCAL python HTTPS server using the committed self-signed cert for
-# CN=host.test (third_party/trust-anchors/host_test.{pem,key}); that cert is its own
-# trust anchor, embedded in the kernel (local_ta.c). The guest TCP-connects to
+# Starts a LOCAL python HTTPS server using a per-run self-signed cert for
+# CN=host.test; that cert is converted into a per-run trust anchor and embedded
+# in the kernel. The guest TCP-connects to
 # 10.0.2.2:PORT (slirp -> host loopback), runs a REAL BearSSL handshake validating
 # the self-signed TA + server_name "host.test", sends an HTTPS GET over the
 # encrypted channel, and verifies the DECRYPTED response contains the token
@@ -43,7 +43,7 @@ SRC="$HERE/tests/qemu/tls/tls_demo.mc"
 RUNTIME="$HERE/tests/qemu/tls/https_get_smode_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/sbi.ld"
 BEARSSL="$HERE/third_party/bearssl"
-TA_DIR="$HERE/third_party/trust-anchors"
+TA_GENERATOR="$HERE/tools/tls/local-ta-from-cert.py"
 VIRTIO_DIR="$HERE/kernel/drivers/virtio"
 EXPECT="HTTPS-GET-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-https-smode-test" || echo "https-smode-test")
@@ -58,12 +58,16 @@ if ! python3 -c 'import ssl' 2>/dev/null; then
     echo "SKIP: $TEST_NAME — python3 ssl module unavailable"
     exit 0
 fi
+if ! command -v openssl >/dev/null 2>&1; then
+    echo "SKIP: $TEST_NAME — openssl unavailable for local test certificate generation"
+    exit 0
+fi
 
 WORK="$(mktemp -d)"
 HTTP_PID=""
 cleanup() {
     [ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null || true
-    rm -rf "$WORK"
+    rm -r "$WORK"
 }
 trap cleanup EXIT
 
@@ -71,13 +75,19 @@ trap cleanup EXIT
 mkdir -p "$WORK/docroot"
 printf '<html><body>%s</body></html>\n' "$TOKEN" > "$WORK/docroot/index.html"
 
-# 2. Start a REAL HTTPS server with the committed self-signed cert (CN=host.test) — the
-#    same cert whose TA is embedded in the kernel. Access log captured.
+# 2. Generate a per-run self-signed cert/key and BearSSL trust-anchor C table.
+openssl req -x509 -newkey rsa:2048 -keyout "$WORK/host_test.key" -out "$WORK/host_test.pem" \
+    -days 3650 -nodes -subj "/CN=$SERVERNAME" -addext "subjectAltName=DNS:$SERVERNAME" \
+    >/dev/null 2>&1
+python3 "$TA_GENERATOR" "$WORK/host_test.pem" "$WORK/local_ta.c"
+
+# 3. Start a REAL HTTPS server with the per-run self-signed cert (CN=host.test) — the
+#    same cert whose generated TA is embedded in the kernel. Access log captured.
 cat > "$WORK/https_server.py" <<PYEOF
 import http.server, ssl, sys, os
 os.chdir("$WORK/docroot")
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-ctx.load_cert_chain(certfile="$TA_DIR/host_test.pem", keyfile="$TA_DIR/host_test.key")
+ctx.load_cert_chain(certfile="$WORK/host_test.pem", keyfile="$WORK/host_test.key")
 # Force TLS 1.2 to match BearSSL's br_ssl_client_init_full (TLS 1.2) profile.
 ctx.minimum_version = ssl.TLSVersion.TLSv1_2
 ctx.maximum_version = ssl.TLSVersion.TLSv1_2
@@ -104,7 +114,7 @@ except Exception: sys.exit(1)" 2>/dev/null; then break; fi
     sleep 0.3
 done
 
-# 3. Compile BearSSL freestanding for riscv64.
+# 4. Compile BearSSL freestanding for riscv64.
 EPOCH="$(date +%s)"
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O2 -fno-builtin
@@ -121,9 +131,9 @@ while IFS= read -r f; do
     BEARSSL_OBJS+=("$obj")
 done < <(find "$BEARSSL/src" -name '*.c' | sort)
 
-# 4. The S-mode runtime is now PURE MC (tests/qemu/tls/https_get_smode_runtime.mc); it imports
+# 5. The S-mode runtime is now PURE MC (tests/qemu/tls/https_get_smode_runtime.mc); it imports
 # tls_demo.mc, reads its config from a generated MC unit, gets the trust-anchor pointer from a
-# 2-line C accessor over the vendored local_ta.c, and takes its DMA pool + rdtime clock from
+# 2-line C accessor over the generated local_ta.c, and takes its DMA pool + rdtime clock from
 # sbi_dma_time.mc (the CLINT is not PMP-mapped into S-mode under OpenSBI). time.mc still provides
 # the goldfish-RTC wall clock for X.509 validity.
 CFLAGS_BEARSSL=("${CFLAGS[@]}")
@@ -148,9 +158,9 @@ kernel_boot_compile_mc_object "$BACKEND" "$HERE/kernel/arch/riscv64/sbi_dma_time
 # The real wall-clock seam (goldfish-RTC) — provides time_now_epoch() for X.509 validity.
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/kernel/core/time.mc" "$WORK/time.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
-# Vendored trust anchor (local_ta.c) + the 2-line accessor.
+# Generated trust anchor (local_ta.c) + the 2-line accessor.
 printf '#include "bearssl.h"\n#include "local_ta.c"\nconst br_x509_trust_anchor *mc_trust_anchors(void){return TAs;}\nunsigned long mc_trust_anchors_num(void){return TAs_NUM;}\n' > "$WORK/ta.c"
-"$CLANG" "${CFLAGS_BEARSSL[@]}" -I"$TA_DIR" -c "$WORK/ta.c" -o "$WORK/ta.o"
+"$CLANG" "${CFLAGS_BEARSSL[@]}" -I"$WORK" -c "$WORK/ta.c" -o "$WORK/ta.o"
 # Shared virtio-rng entropy driver (single source of truth, also used by the smoke test).
 "$MCC" emit-c "$HERE/kernel/drivers/virtio/virtio_rng.mc" > "$WORK/virtio_rng_gen.c" # virtio-rng driver is now pure MC
 "$CLANG" "${MCFLAGS[@]}" -c "$WORK/virtio_rng_gen.c" -o "$WORK/virtio_rng.o"

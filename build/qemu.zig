@@ -62,6 +62,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTestOpts(ctx, "std-api-docs-test", "Check docs/std-api.md covers exported stdlib declarations", &.{ "python3", "tools/toolchain/std-api-docs.py", "--check" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "vendoring-test", "Check vendored dependency provenance and CVE process docs", &.{ "python3", "tools/toolchain/vendoring-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "third-party-licenses-test", "Check the aggregated third-party license manifest", &.{ "python3", "tools/toolchain/third-party-licenses-test.py" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "no-committed-private-keys-test", "Reject committed PEM private keys", &.{ "python3", "tools/toolchain/no-committed-private-keys.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "readiness-ledger-test", "Check the production-readiness ledger count and umbrella contract", &.{ "python3", "tools/toolchain/readiness-ledger-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "profile-manifest-test", "Check product profiles reference known risks and registered gates", &.{ "python3", "tools/toolchain/profile-manifest-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "gate-manifest-test", "Check the gate manifest matches registered build tiers", &.{ "python3", "tools/toolchain/gate-manifest-test.py" }, .{ .install = false });

@@ -6,7 +6,7 @@
 // into S-mode) come from sbi_dma_time.mc, and satp stays 0 (Bare). The wall clock for X.509
 // validity is the goldfish RTC via time.mc (OpenSBI's PMP permits S-mode MMIO).
 //
-// BearSSL/openlibm + the brssl-generated trust anchor (local_ta.c) stay vendored C; a 2-line C
+// BearSSL/openlibm + the generated trust anchor (local_ta.c) stay C; a 2-line C
 // accessor hands MC the TAs pointer + count. Opaque BearSSL contexts are over-sized u64 arrays
 // (8-aligned); the static-inline header accessors are inlined via audited field offsets.
 

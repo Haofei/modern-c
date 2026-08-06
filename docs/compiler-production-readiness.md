@@ -2372,9 +2372,11 @@ reproducible with commands; clean secrets hygiene; compatible licenses).
   appended verbatim into C (`src/lower_c_emitter.zig:3866,3872`); safe under the
   current lexer + clang, but trigraph/escape divergence bites under other C
   compilers. Decode and re-emit with an explicit C escaper. Effort S.
-- **[P2] A committed (documented, throwaway) RSA test key**
-  (`third_party/trust-anchors/host_test.key`) — generate at test time instead.
-  Effort S.
+- **[P2] A committed (documented, throwaway) RSA test key** — **fixed**:
+  local HTTPS gates now generate `host_test.key`, `host_test.pem`, and
+  `local_ta.c` inside their per-run temporary directory using OpenSSL plus
+  `tools/tls/local-ta-from-cert.py`; `no-committed-private-keys-test` rejects PEM
+  private-key material in the repository.
 - **[P2] Release-integrity story** — **fixed for the local release workflow slice**:
   release packaging now produces SHA256SUMS, release inventory, CycloneDX SBOM,
   and Sigstore/GitHub artifact attestations, and `release-metadata-test` plus

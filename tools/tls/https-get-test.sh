@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Deterministic in-kernel REAL TLS 1.2 HTTPS GET (CI gate).
 #
-# Starts a LOCAL python HTTPS server using the committed self-signed cert for
-# CN=host.test (third_party/trust-anchors/host_test.{pem,key}); that cert is its own
-# trust anchor, embedded in the kernel (local_ta.c). Compiles every BearSSL src/**/*.c
+# Starts a LOCAL python HTTPS server using a per-run self-signed cert for
+# CN=host.test; that cert is converted into a per-run trust anchor and embedded
+# in the kernel. Compiles every BearSSL src/**/*.c
 # freestanding for riscv64, lowers the MC TCP transport (tests/qemu/tls/tls_demo.mc)
 # through the selected backend, links them with https_get_runtime.c into a bare-metal
 # `virt` image, and boots it under qemu-system-riscv64 with virtio-net (slirp) +
@@ -37,7 +37,7 @@ SRC="$HERE/tests/qemu/tls/tls_demo.mc"
 RUNTIME="$HERE/tests/qemu/tls/https_get_runtime.mc"  # now PURE MC (imports tls_demo.mc)
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
 BEARSSL="$HERE/third_party/bearssl"
-TA_DIR="$HERE/third_party/trust-anchors"
+TA_GENERATOR="$HERE/tools/tls/local-ta-from-cert.py"
 EXPECT="HTTPS-GET-OK"
 TEST_NAME=$([ "$BACKEND" = llvm ] && echo "llvm-https-get-test" || echo "https-get-test")
 
@@ -51,12 +51,16 @@ if ! python3 -c 'import ssl' 2>/dev/null; then
     echo "SKIP: $TEST_NAME — python3 ssl module unavailable"
     exit 0
 fi
+if ! command -v openssl >/dev/null 2>&1; then
+    echo "SKIP: $TEST_NAME — openssl unavailable for local test certificate generation"
+    exit 0
+fi
 
 WORK="$(mktemp -d)"
 HTTP_PID=""
 cleanup() {
     [ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null || true
-    rm -rf "$WORK"
+    rm -r "$WORK"
 }
 trap cleanup EXIT
 
@@ -64,13 +68,19 @@ trap cleanup EXIT
 mkdir -p "$WORK/docroot"
 printf '<html><body>%s</body></html>\n' "$TOKEN" > "$WORK/docroot/index.html"
 
-# 2. Start a REAL HTTPS server with the committed self-signed cert (CN=host.test) — the
-#    same cert whose TA is embedded in the kernel. Access log captured.
+# 2. Generate a per-run self-signed cert/key and BearSSL trust-anchor C table.
+openssl req -x509 -newkey rsa:2048 -keyout "$WORK/host_test.key" -out "$WORK/host_test.pem" \
+    -days 3650 -nodes -subj "/CN=$SERVERNAME" -addext "subjectAltName=DNS:$SERVERNAME" \
+    >/dev/null 2>&1
+python3 "$TA_GENERATOR" "$WORK/host_test.pem" "$WORK/local_ta.c"
+
+# 3. Start a REAL HTTPS server with the per-run self-signed cert (CN=host.test) — the
+#    same cert whose generated TA is embedded in the kernel. Access log captured.
 cat > "$WORK/https_server.py" <<PYEOF
 import http.server, ssl, sys, os
 os.chdir("$WORK/docroot")
 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-ctx.load_cert_chain(certfile="$TA_DIR/host_test.pem", keyfile="$TA_DIR/host_test.key")
+ctx.load_cert_chain(certfile="$WORK/host_test.pem", keyfile="$WORK/host_test.key")
 # Force TLS 1.2 to match BearSSL's br_ssl_client_init_full (TLS 1.2) profile.
 ctx.minimum_version = ssl.TLSVersion.TLSv1_2
 ctx.maximum_version = ssl.TLSVersion.TLSv1_2
@@ -97,7 +107,7 @@ except Exception: sys.exit(1)" 2>/dev/null; then break; fi
     sleep 0.3
 done
 
-# 3. Compile BearSSL freestanding for riscv64.
+# 4. Compile BearSSL freestanding for riscv64.
 EPOCH="$(date +%s)"
 CFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
         -nostdlib -ffreestanding -fno-pic -mcmodel=medany -O2 -fno-builtin
@@ -114,11 +124,11 @@ while IFS= read -r f; do
     BEARSSL_OBJS+=("$obj")
 done < <(find "$BEARSSL/src" -name '*.c' | sort)
 
-# 4. The runtime is now PURE MC (tests/qemu/tls/https_get_runtime.mc); it IMPORTS tls_demo.mc (so
+# 5. The runtime is now PURE MC (tests/qemu/tls/https_get_runtime.mc); it IMPORTS tls_demo.mc (so
 # the TCP transport is in the same object — no separate tls.o), declares BearSSL + virtio_rng +
 # time_now_epoch + the trust-anchor accessor extern, and reads the per-invocation config from a
 # harness-generated MC unit (MC has no -D). The std/dma+std/time platform is mmode_dma_time.mc; the
-# vendored brssl-generated trust anchor (local_ta.c) stays C, compiled with a 2-line accessor that
+# generated trust anchor (local_ta.c) stays C, compiled with a 2-line accessor that
 # hands MC the TAs pointer + count (mc_trust_anchors / mc_trust_anchors_num).
 CFLAGS_BEARSSL=("${CFLAGS[@]}")
 MCFLAGS=(--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64
@@ -143,11 +153,11 @@ kernel_boot_compile_mc_object "$BACKEND" "$HERE/kernel/arch/riscv64/mmode_dma_ti
 kernel_boot_compile_mc_object "$BACKEND" "$HERE/kernel/core/time.mc" "$WORK/time.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
 
-# The vendored trust anchor (local_ta.c — brssl-generated cert DATA, stays C) + a 2-line accessor
+# The generated trust anchor (local_ta.c — cert DATA, stays C) + a 2-line accessor
 # (returns the TAs pointer + count — a function resolves cleanly from MC where extern DATA into a
 # BearSSL-flags object does not). TAs stays file-local static; only the accessors are external.
 printf '#include "bearssl.h"\n#include "local_ta.c"\nconst br_x509_trust_anchor *mc_trust_anchors(void){return TAs;}\nunsigned long mc_trust_anchors_num(void){return TAs_NUM;}\n' > "$WORK/ta.c"
-"$CLANG" "${CFLAGS_BEARSSL[@]}" -I"$TA_DIR" -c "$WORK/ta.c" -o "$WORK/ta.o"
+"$CLANG" "${CFLAGS_BEARSSL[@]}" -I"$WORK" -c "$WORK/ta.c" -o "$WORK/ta.o"
 
 # Shared virtio-rng entropy driver (single source of truth, also used by the smoke test).
 "$MCC" emit-c "$HERE/kernel/drivers/virtio/virtio_rng.mc" > "$WORK/virtio_rng_gen.c" # virtio-rng driver is now pure MC

@@ -6,7 +6,7 @@
 //
 // THE BRIDGE: BearSSL's record layer is wired to our TCP via two callbacks — low_write -> tls_send
 // and low_read -> tls_recv (passed to br_sslio_init as fn pointers). BearSSL + openlibm + the
-// brssl-generated trust anchor (local_ta.c) stay vendored C; a 2-line C accessor (mc_trust_anchors
+// generated trust anchor (local_ta.c) stay C; a 2-line C accessor (mc_trust_anchors
 // / mc_trust_anchors_num, compiled with the cert data) hands MC the TAs pointer + count (an
 // extern-DATA address into a BearSSL-flags object does not resolve cleanly from MC, but a function
 // does). The std/dma + std/time platform (8 MiB pool + CLINT) is the separate mmode_dma_time.mc.
@@ -19,7 +19,7 @@
 import "tests/qemu/lib/test_report.mc";
 import "tests/qemu/tls/tls_demo.mc"; // tls_net_up / tls_connect / tls_send / tls_recv + Virtq/MmioPtr
 
-// The vendored trust anchor, via a C accessor (local_ta.c stays vendored cert data).
+// The generated trust anchor, via a C accessor (local_ta.c stays cert data).
 extern fn mc_trust_anchors() -> usize;
 extern fn mc_trust_anchors_num() -> usize;
 

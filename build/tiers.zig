@@ -390,6 +390,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("vendoring-test"));
     // third-party-licenses-test keeps the aggregated license manifest complete.
     m0_full_step.dependOn(ctx.cmd("third-party-licenses-test"));
+    // no-committed-private-keys-test keeps test/private key material out of the repo.
+    m0_full_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
     // profile-manifest-test keeps product/profile claims tied to known risks and gates.
     m0_full_step.dependOn(ctx.cmd("profile-manifest-test"));
     // gate-manifest-test pilots machine-readable gate ownership for compiler-core gates.
@@ -923,6 +925,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("std-api-docs-test"));
     m0_step.dependOn(ctx.cmd("vendoring-test"));
     m0_step.dependOn(ctx.cmd("third-party-licenses-test"));
+    m0_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
 
     const fast_step = b.step("fast", "Inner-loop gate: host-only unit + spec-coverage tests, emit-C sweep, and C/LLVM differential — no fuzz or QEMU");
     fast_step.dependOn(ctx.cmd("test-spec"));
@@ -948,6 +951,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("std-api-docs-test"));
     fast_step.dependOn(ctx.cmd("vendoring-test"));
     fast_step.dependOn(ctx.cmd("third-party-licenses-test"));
+    fast_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
     fast_step.dependOn(ctx.cmd("profile-manifest-test"));
     fast_step.dependOn(ctx.cmd("gate-manifest-test"));
     fast_step.dependOn(ctx.cmd("mcc-cli-test"));
@@ -993,6 +997,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("std-api-docs-test")); // generated stdlib API index stays current
     c0_step.dependOn(ctx.cmd("vendoring-test")); // third_party provenance and CVE/advisory process stay documented
     c0_step.dependOn(ctx.cmd("third-party-licenses-test")); // aggregated third-party license manifest stays complete
+    c0_step.dependOn(ctx.cmd("no-committed-private-keys-test")); // test/private key material stays generated, not committed
     c0_step.dependOn(ctx.cmd("profile-manifest-test")); // product/profile claims stay tied to known risks and gates
     c0_step.dependOn(ctx.cmd("gate-manifest-test")); // gate manifest stays tied to build tiers
     c0_step.dependOn(ctx.cmd("mcc-cli-test")); // top-level CLI help/version/usage behavior stays documented

@@ -37,7 +37,8 @@
         "profile-manifest-test",
         "std-api-docs-test",
         "vendoring-test",
-        "third-party-licenses-test"
+        "third-party-licenses-test",
+        "no-committed-private-keys-test"
       ]
     }
   },
@@ -368,6 +369,26 @@
       "tier": "pr",
       "required_tools": [
         "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset",
+        "developer-tools"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "no-committed-private-keys-test",
+      "owner": "supply-chain",
+      "category": "secret-material-inventory",
+      "tier": "pr",
+      "required_tools": [
+        "python3",
+        "git"
       ],
       "blocking_profiles": [
         "compiler-subset",
