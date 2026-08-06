@@ -133,16 +133,18 @@ today it is in-memory.
 ### 2.8 OTA metadata / cryptographic primitive / rollback
 
 `kernel/core/production_ops.mc` gates bundle metadata (magic, kind, ABI, version range,
-trusted key id, and signature length) and implements the A/B rollback state machine. The
-metadata and rollback path is gated as `bundle-metadata-test` /
-`llvm-bundle-metadata-test`, while the BearSSL RSA-2048/SHA-256 primitive is qualified
-separately by `rsa-verify-test` / `llvm-rsa-verify-test`. The metadata surface is fuzzed
-over >200k adversarial headers + 50k rollback sequences (`bundle-fuzz-test`, §4).
+trusted key id, and signature-field presence) and implements the A/B rollback state
+machine. Creating a `VerifiedBundle` now also requires a positive signature-verification
+result from the caller; metadata-only validation cannot mint the token. The metadata and
+rollback path is gated as `bundle-metadata-test` / `llvm-bundle-metadata-test`, while
+the BearSSL RSA-2048/SHA-256 primitive is qualified separately by `rsa-verify-test` /
+`llvm-rsa-verify-test`. The metadata surface is fuzzed over >200k adversarial headers +
+50k rollback sequences (`bundle-fuzz-test`, §4).
 
 Residual — **production blocker:** these gates do not yet establish one opaque
-`VerifiedBundle` from canonical raw bytes and force the ELF loader to consume those exact
-verified bytes. The FNV-1a-32 value used by the OTA/metadata fixtures is only a
-non-cryptographic transport checksum and MUST NOT be described as signed-image integrity.
+`VerifiedBundle` from canonical SHA-256 bytes, key policy, anti-rollback storage, and the
+actual loader/admission path. The FNV-1a-32 value used by the OTA/metadata fixtures is
+only a non-cryptographic transport checksum and MUST NOT be described as signed-image integrity.
 Until verifier, policy admission, loader consumption, and runtime identity audit are wired
 into one byte-bound path, the repository does not claim end-to-end secure boot. A
 reproducible-build determinism gate has **landed**

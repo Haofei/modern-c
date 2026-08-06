@@ -38,13 +38,13 @@ pub struct BundleHeader {
     signature_len: usize,
 }
 
-// Opaque admission token for a bundle whose metadata and exact image bytes have
-// been checked together. Metadata-only validation deliberately cannot create a
-// `VerifiedBundle`: loader and rollback consumers must receive a token whose
-// byte range is bound to the same image they will consume. The digest is still
-// the FNV-era u64 image_hash bridge; the cryptographic secure-boot path must
-// replace that with a real SHA-256 digest over immutable storage bytes without
-// weakening the token shape.
+// Opaque admission token for a bundle whose metadata, signature-verification
+// result, and exact image bytes have been checked together. Metadata-only
+// validation deliberately cannot create a `VerifiedBundle`: loader and rollback
+// consumers must receive a token whose byte range is bound to the same image
+// they will consume. The digest is still the FNV-era u64 image_hash bridge; the
+// cryptographic secure-boot path must replace that with a real SHA-256 digest
+// over immutable storage bytes without weakening the token shape.
 pub linear opaque struct VerifiedBundle {
     kind: BundleKind,
     version: u64,
@@ -93,9 +93,10 @@ fn bundle_kind_matches(actual: BundleKind, expected: BundleKind) -> bool {
     }
 }
 
-// Validate canonical bundle metadata only. Cryptographic verification is a
-// separate primitive in kernel/crypto/rsa_verify.mc; the future opaque
-// VerifiedBundle integration must bind its exact verified bytes to the loader.
+// Validate canonical bundle metadata only. `signature_len != 0` means the header
+// has a signature-shaped field, not that the signature has been cryptographically
+// accepted. Only `bundle_verify_and_admit_image` can create a `VerifiedBundle`,
+// and it requires the caller to pass the result of the crypto verification seam.
 // Callers cannot inject a `.Valid` enum into this metadata state machine.
 pub fn bundle_validate_metadata(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32) -> Result<bool, BundleError> {
     if h.magic != BUNDLE_MAGIC {
@@ -156,10 +157,13 @@ pub fn bundle_hash_bytes(base: usize, len: usize) -> u64 {
 }
 
 impl VerifiedBundle {
-    fn admit_image(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, image_base: usize, image_len: usize) -> Result<VerifiedBundle, BundleError> {
+    fn admit_image(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, signature_verified: bool, image_base: usize, image_len: usize) -> Result<VerifiedBundle, BundleError> {
         switch bundle_validate_metadata(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id) {
             ok(v) => {}
             err(e) => { return err(e); }
+        }
+        if !signature_verified {
+            return err(.BadSignature);
         }
         if !bundle_image_range_valid(image_base, image_len) {
             return err(.BadImageHash);
@@ -215,8 +219,8 @@ pub fn bundle_validate_metadata_hash(h: *BundleHeader, expected_kind: BundleKind
     return ok(true);
 }
 
-pub fn bundle_verify_and_admit_image(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, image_base: usize, image_len: usize) -> Result<VerifiedBundle, BundleError> {
-    return VerifiedBundle.admit_image(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id, image_base, image_len);
+pub fn bundle_verify_and_admit_image(h: *BundleHeader, expected_kind: BundleKind, expected_abi: u32, min_version: u64, max_version: u64, trusted_key_id: u32, signature_verified: bool, image_base: usize, image_len: usize) -> Result<VerifiedBundle, BundleError> {
+    return VerifiedBundle.admit_image(h, expected_kind, expected_abi, min_version, max_version, trusted_key_id, signature_verified, image_base, image_len);
 }
 
 pub fn verified_bundle_kind(v: *VerifiedBundle) -> BundleKind {

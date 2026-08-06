@@ -59,7 +59,7 @@ export fn production_ops_run() -> u32 {
     }
     let exact_hash: u64 = bundle_hash_bytes(image_base, 4);
     var exact: BundleHeader = bundle_header_init(.Agent, 10, 1, 41, 7, exact_hash, 256);
-    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, image_base, 4) {
+    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, true, image_base, 4) {
         ok(vb) => {
             if !verified_bundle_has_exact_bytes(&vb) { pass = 0; }
             if verified_bundle_image_base(&vb) != image_base { pass = 0; }
@@ -73,8 +73,20 @@ export fn production_ops_run() -> u32 {
         }
         err(e) => { pass = 0; }
     }
+    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, false, image_base, 4) {
+        ok(vb) => {
+            pass = 0;
+            unsafe { forget_unchecked(vb); }
+        }
+        err(e) => {
+            switch e {
+                .BadSignature => {}
+                _ => { pass = 0; }
+            }
+        }
+    }
     exact.image_hash = exact_hash ^ 1;
-    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, image_base, 4) {
+    switch bundle_verify_and_admit_image(&exact, .Agent, 1, 8, 12, 7, true, image_base, 4) {
         ok(vb) => {
             pass = 0;
             unsafe { forget_unchecked(vb); }
@@ -136,7 +148,7 @@ export fn production_ops_run() -> u32 {
         }
         err(e) => { pass = 0; }
     }
-    switch bundle_verify_and_admit_image(&next_agent, .Agent, 1, 8, 13, 7, image_base, 4) {
+    switch bundle_verify_and_admit_image(&next_agent, .Agent, 1, 8, 13, 7, true, image_base, 4) {
         ok(vb) => {
             let verified_slot: usize = rollback_install_verified_candidate(&rb, move vb);
             if verified_slot != 1 { pass = 0; }
