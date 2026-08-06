@@ -707,6 +707,38 @@ test "drop attribute releases resource through mut pointer call and defer" {
     try std.testing.expectEqual(@as(usize, 1), countDiagnosticCode(&reporter, "E_USE_AFTER_MOVE"));
 }
 
+test "drop attribute explicit release is place-local with auto-drop" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void {
+        \\    g.id = 0;
+        \\}
+        \\fn accept_explicit_release_and_other_auto_drop() -> u32 {
+        \\    var g: Guard = make_guard(1);
+        \\    var h: Guard = make_guard(2);
+        \\    close_guard(&g);
+        \\    return h.id;
+        \\}
+        \\fn accept_deferred_release_and_other_auto_drop(flag: bool) -> u32 {
+        \\    var g: Guard = make_guard(3);
+        \\    var h: Guard = make_guard(4);
+        \\    defer close_guard(&g);
+        \\    if flag {
+        \\        return h.id;
+        \\    }
+        \\    return 5;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "drop_attr_place_local_auto_drop.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+    try std.testing.expectEqual(@as(usize, 0), countDiagnosticCode(&reporter, "E_RESOURCE_LEAK"));
+    try std.testing.expectEqual(@as(usize, 0), countDiagnosticCode(&reporter, "E_USE_AFTER_MOVE"));
+}
+
 test "drop attribute enables deterministic auto-drop and explicit transfer for affine move locals" {
     const source =
         \\move struct Guard { id: u32 }

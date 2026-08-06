@@ -453,7 +453,6 @@ const LlvmEmitter = struct {
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
     auto_drop_fns_by_type: std.StringHashMap([]const u8) = undefined,
-    current_auto_drop_enabled: bool = true,
     // Tier 2 trait objects (traits-design §8): every `trait` by name (vtable layout +
     // dispatch slot resolution) and each `impl Trait for Type`'s mangled methods (the
     // rodata vtable's function-pointer list).
@@ -1262,13 +1261,11 @@ const LlvmEmitter = struct {
         const old_return_ty = self.current_return_ty;
         const old_function = self.current_function;
         const old_params = self.current_params;
-        const old_auto_drop_enabled = self.current_auto_drop_enabled;
         self.current_debug_scope = if (self.fn_sigs.get(fn_decl.name.text)) |sig| sig.debug_id else null;
         self.current_debug_span = fn_decl.name.span;
         self.current_return_ty = ret_ty;
         self.current_function = fn_decl.name.text;
         self.current_params = fn_decl.params;
-        self.current_auto_drop_enabled = !self.blockContainsAutoDropReleaseCall(body);
         const entry_label = try self.functionEntryLabel();
         defer {
             self.current_debug_scope = old_scope;
@@ -1276,7 +1273,6 @@ const LlvmEmitter = struct {
             self.current_return_ty = old_return_ty;
             self.current_function = old_function;
             self.current_params = old_params;
-            self.current_auto_drop_enabled = old_auto_drop_enabled;
         }
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
         // epilogue. The body is a single inline-asm statement that performs the
@@ -1837,7 +1833,10 @@ const LlvmEmitter = struct {
             .let_decl => |local| try self.emitLocalDecl(local, false),
             .var_decl => |local| try self.emitLocalDecl(local, true),
             .assignment => |node| try self.emitAssignment(node.target, node.value, stmt.span),
-            .@"defer" => |expr| try self.defer_stack.append(self.allocator, expr),
+            .@"defer" => |expr| {
+                self.cancelAutoDropForReleaseCall(expr);
+                try self.defer_stack.append(self.allocator, expr);
+            },
             .loop => |node| {
                 if (try self.emitLoop(node, ret_ty)) return true;
             },
@@ -2256,6 +2255,7 @@ const LlvmEmitter = struct {
                 // the program; emit the trap/call followed by `unreachable` (no value needed even
                 // in a value-returning function, since this path does not fall through).
                 if (try self.emitNeverExpr(expr)) return;
+                self.cancelAutoDropForReleaseCall(expr);
                 const call_span = call.callee.*.span;
                 const call_kind = self.mirCallTargetKindAt(call_span);
                 if (call_kind) |kind| {
@@ -2871,7 +2871,6 @@ const LlvmEmitter = struct {
     }
 
     fn registerAutoDropLocal(self: *LlvmEmitter, name: ast.Ident, ty: ast.TypeExpr) !void {
-        if (!self.current_auto_drop_enabled) return;
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
         try self.defer_stack.append(self.allocator, try makeDropPointerCall(self.scratch.allocator(), drop_fn, name));
@@ -2879,6 +2878,15 @@ const LlvmEmitter = struct {
 
     fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr) void {
         const local_name = movedLocalName(expr) orelse return;
+        self.cancelAutoDropForLocalName(local_name);
+    }
+
+    fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) void {
+        const cleanup = self.autoDropPointerCleanup(expr) orelse return;
+        self.cancelAutoDropForLocalName(cleanup.local_name);
+    }
+
+    fn cancelAutoDropForLocalName(self: *LlvmEmitter, local_name: []const u8) void {
         var index = self.defer_stack.items.len;
         while (index > 0) {
             index -= 1;
@@ -2887,89 +2895,6 @@ const LlvmEmitter = struct {
             _ = self.defer_stack.orderedRemove(index);
             return;
         }
-    }
-
-    fn blockContainsAutoDropReleaseCall(self: *LlvmEmitter, block: ast.Block) bool {
-        for (block.items) |stmt| {
-            if (self.stmtContainsAutoDropReleaseCall(stmt)) return true;
-        }
-        return false;
-    }
-
-    fn stmtContainsAutoDropReleaseCall(self: *LlvmEmitter, stmt: ast.Stmt) bool {
-        return switch (stmt.kind) {
-            .let_decl, .var_decl => |decl| blk: {
-                if (decl.init) |initializer| break :blk self.exprContainsAutoDropReleaseCall(initializer);
-                break :blk false;
-            },
-            .loop => |node| (if (node.iterable) |iter| self.exprContainsAutoDropReleaseCall(iter) else false) or self.blockContainsAutoDropReleaseCall(node.body),
-            .if_let => |node| self.exprContainsAutoDropReleaseCall(node.value) or self.blockContainsAutoDropReleaseCall(node.then_block) or (if (node.else_block) |else_block| self.blockContainsAutoDropReleaseCall(else_block) else false),
-            .@"switch" => |node| blk: {
-                if (self.exprContainsAutoDropReleaseCall(node.subject)) break :blk true;
-                for (node.arms) |arm| {
-                    for (arm.patterns) |pattern| {
-                        switch (pattern.kind) {
-                            .literal => |expr| if (self.exprContainsAutoDropReleaseCall(expr)) break :blk true,
-                            else => {},
-                        }
-                    }
-                    switch (arm.body) {
-                        .block => |body| if (self.blockContainsAutoDropReleaseCall(body)) break :blk true,
-                        .expr => |expr| if (self.exprContainsAutoDropReleaseCall(expr)) break :blk true,
-                    }
-                }
-                break :blk false;
-            },
-            .unsafe_block, .comptime_block, .block => |body| self.blockContainsAutoDropReleaseCall(body),
-            .contract_block => |contract| self.blockContainsAutoDropReleaseCall(contract.block),
-            .@"return" => |maybe| if (maybe) |expr| self.exprContainsAutoDropReleaseCall(expr) else false,
-            .@"defer", .assert, .expr => |expr| self.exprContainsAutoDropReleaseCall(expr),
-            .assignment => |assign| self.exprContainsAutoDropReleaseCall(assign.target) or self.exprContainsAutoDropReleaseCall(assign.value),
-            .asm_stmt, .@"break", .@"continue" => false,
-        };
-    }
-
-    fn exprContainsAutoDropReleaseCall(self: *LlvmEmitter, expr: ast.Expr) bool {
-        return switch (expr.kind) {
-            .array_literal => |items| blk: {
-                for (items) |item| if (self.exprContainsAutoDropReleaseCall(item)) break :blk true;
-                break :blk false;
-            },
-            .struct_literal => |fields| blk: {
-                for (fields) |field| if (self.exprContainsAutoDropReleaseCall(field.value)) break :blk true;
-                break :blk false;
-            },
-            .grouped, .move_expr, .address_of, .deref, .await_expr => |inner| self.exprContainsAutoDropReleaseCall(inner.*),
-            .block => |body| self.blockContainsAutoDropReleaseCall(body),
-            .unary => |node| self.exprContainsAutoDropReleaseCall(node.expr.*),
-            .binary => |node| self.exprContainsAutoDropReleaseCall(node.left.*) or self.exprContainsAutoDropReleaseCall(node.right.*),
-            .cast => |node| self.exprContainsAutoDropReleaseCall(node.value.*),
-            .borrow_expr => |node| self.exprContainsAutoDropReleaseCall(node.value.*),
-            .call => |node| blk: {
-                if (calleeIdentName(node.callee.*)) |name| {
-                    if (self.autoDropReleaseFunctionName(name)) break :blk true;
-                }
-                if (self.exprContainsAutoDropReleaseCall(node.callee.*)) break :blk true;
-                for (node.args) |arg| if (self.exprContainsAutoDropReleaseCall(arg)) break :blk true;
-                break :blk false;
-            },
-            .index => |node| self.exprContainsAutoDropReleaseCall(node.base.*) or self.exprContainsAutoDropReleaseCall(node.index.*),
-            .slice => |node| self.exprContainsAutoDropReleaseCall(node.base.*) or self.exprContainsAutoDropReleaseCall(node.start.*) or self.exprContainsAutoDropReleaseCall(node.end.*),
-            .member => |node| self.exprContainsAutoDropReleaseCall(node.base.*),
-            .try_expr => |node| self.exprContainsAutoDropReleaseCall(node.operand.*) or (if (node.mapped) |mapped| self.exprContainsAutoDropReleaseCall(mapped.*) else false),
-            .ident,
-            .int_literal,
-            .float_literal,
-            .string_literal,
-            .char_literal,
-            .bool_literal,
-            .null_literal,
-            .uninit_literal,
-            .unreachable_expr,
-            .void_literal,
-            .enum_literal,
-            => false,
-        };
     }
 
     fn autoDropReleaseFunctionName(self: *LlvmEmitter, name: []const u8) bool {

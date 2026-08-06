@@ -254,7 +254,6 @@ pub const CEmitter = struct {
     type_aliases: std.StringHashMap(ast.TypeExpr),
     functions: std.StringHashMap(FnInfo),
     auto_drop_fns_by_type: std.StringHashMap([]const u8),
-    current_auto_drop_enabled: bool = true,
     function_decl_artifacts: std.ArrayList(FunctionDeclArtifact) = .empty,
     // Source function name -> overridden object/backend symbol (`#[backend_name("Y")]`).
     // Emitted as a C `__asm__("Y")` label so the object symbol is renamed without touching
@@ -1169,9 +1168,6 @@ pub const CEmitter = struct {
         const previous_function = self.current_function;
         self.current_function = fn_decl.name.text;
         defer self.current_function = previous_function;
-        const previous_auto_drop_enabled = self.current_auto_drop_enabled;
-        self.current_auto_drop_enabled = !self.blockContainsAutoDropReleaseCall(body);
-        defer self.current_auto_drop_enabled = previous_auto_drop_enabled;
         self.mir_pointer_local_provenance.clearRetainingCapacity();
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_pointer_array_elements);
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_aggregate_pointer_fields);
@@ -2831,7 +2827,6 @@ pub const CEmitter = struct {
     }
 
     fn registerAutoDropLocal(self: *CEmitter, name: ast.Ident, maybe_ty: ?ast.TypeExpr, locals: *std.StringHashMap(LocalInfo)) !void {
-        if (!self.current_auto_drop_enabled) return;
         const ty = maybe_ty orelse if (locals.get(name.text)) |info| info.source_ty orelse return else return;
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
@@ -2840,6 +2835,15 @@ pub const CEmitter = struct {
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr) void {
         const local_name = movedLocalName(expr) orelse return;
+        self.cancelAutoDropForLocalName(local_name);
+    }
+
+    fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) void {
+        const cleanup = self.autoDropPointerCleanup(expr) orelse return;
+        self.cancelAutoDropForLocalName(cleanup.local_name);
+    }
+
+    fn cancelAutoDropForLocalName(self: *CEmitter, local_name: []const u8) void {
         var index = self.defer_stack.items.len;
         while (index > 0) {
             index -= 1;
@@ -2886,89 +2890,6 @@ pub const CEmitter = struct {
             },
             else => {},
         }
-    }
-
-    fn blockContainsAutoDropReleaseCall(self: *CEmitter, block: ast.Block) bool {
-        for (block.items) |stmt| {
-            if (self.stmtContainsAutoDropReleaseCall(stmt)) return true;
-        }
-        return false;
-    }
-
-    fn stmtContainsAutoDropReleaseCall(self: *CEmitter, stmt: ast.Stmt) bool {
-        return switch (stmt.kind) {
-            .let_decl, .var_decl => |decl| blk: {
-                if (decl.init) |initializer| break :blk self.exprContainsAutoDropReleaseCall(initializer);
-                break :blk false;
-            },
-            .loop => |node| (if (node.iterable) |iter| self.exprContainsAutoDropReleaseCall(iter) else false) or self.blockContainsAutoDropReleaseCall(node.body),
-            .if_let => |node| self.exprContainsAutoDropReleaseCall(node.value) or self.blockContainsAutoDropReleaseCall(node.then_block) or (if (node.else_block) |else_block| self.blockContainsAutoDropReleaseCall(else_block) else false),
-            .@"switch" => |node| blk: {
-                if (self.exprContainsAutoDropReleaseCall(node.subject)) break :blk true;
-                for (node.arms) |arm| {
-                    for (arm.patterns) |pattern| {
-                        switch (pattern.kind) {
-                            .literal => |expr| if (self.exprContainsAutoDropReleaseCall(expr)) break :blk true,
-                            else => {},
-                        }
-                    }
-                    switch (arm.body) {
-                        .block => |body| if (self.blockContainsAutoDropReleaseCall(body)) break :blk true,
-                        .expr => |expr| if (self.exprContainsAutoDropReleaseCall(expr)) break :blk true,
-                    }
-                }
-                break :blk false;
-            },
-            .unsafe_block, .comptime_block, .block => |body| self.blockContainsAutoDropReleaseCall(body),
-            .contract_block => |contract| self.blockContainsAutoDropReleaseCall(contract.block),
-            .@"return" => |maybe| if (maybe) |expr| self.exprContainsAutoDropReleaseCall(expr) else false,
-            .@"defer", .assert, .expr => |expr| self.exprContainsAutoDropReleaseCall(expr),
-            .assignment => |assign| self.exprContainsAutoDropReleaseCall(assign.target) or self.exprContainsAutoDropReleaseCall(assign.value),
-            .asm_stmt, .@"break", .@"continue" => false,
-        };
-    }
-
-    fn exprContainsAutoDropReleaseCall(self: *CEmitter, expr: ast.Expr) bool {
-        return switch (expr.kind) {
-            .array_literal => |items| blk: {
-                for (items) |item| if (self.exprContainsAutoDropReleaseCall(item)) break :blk true;
-                break :blk false;
-            },
-            .struct_literal => |fields| blk: {
-                for (fields) |field| if (self.exprContainsAutoDropReleaseCall(field.value)) break :blk true;
-                break :blk false;
-            },
-            .grouped, .move_expr, .address_of, .deref, .await_expr => |inner| self.exprContainsAutoDropReleaseCall(inner.*),
-            .block => |body| self.blockContainsAutoDropReleaseCall(body),
-            .unary => |node| self.exprContainsAutoDropReleaseCall(node.expr.*),
-            .binary => |node| self.exprContainsAutoDropReleaseCall(node.left.*) or self.exprContainsAutoDropReleaseCall(node.right.*),
-            .cast => |node| self.exprContainsAutoDropReleaseCall(node.value.*),
-            .borrow_expr => |node| self.exprContainsAutoDropReleaseCall(node.value.*),
-            .call => |node| blk: {
-                if (calleeIdentName(node.callee.*)) |name| {
-                    if (self.autoDropReleaseFunctionName(name)) break :blk true;
-                }
-                if (self.exprContainsAutoDropReleaseCall(node.callee.*)) break :blk true;
-                for (node.args) |arg| if (self.exprContainsAutoDropReleaseCall(arg)) break :blk true;
-                break :blk false;
-            },
-            .index => |node| self.exprContainsAutoDropReleaseCall(node.base.*) or self.exprContainsAutoDropReleaseCall(node.index.*),
-            .slice => |node| self.exprContainsAutoDropReleaseCall(node.base.*) or self.exprContainsAutoDropReleaseCall(node.start.*) or self.exprContainsAutoDropReleaseCall(node.end.*),
-            .member => |node| self.exprContainsAutoDropReleaseCall(node.base.*),
-            .try_expr => |node| self.exprContainsAutoDropReleaseCall(node.operand.*) or (if (node.mapped) |mapped| self.exprContainsAutoDropReleaseCall(mapped.*) else false),
-            .ident,
-            .int_literal,
-            .float_literal,
-            .string_literal,
-            .char_literal,
-            .bool_literal,
-            .null_literal,
-            .uninit_literal,
-            .unreachable_expr,
-            .void_literal,
-            .enum_literal,
-            => false,
-        };
     }
 
     fn autoDropReleaseFunctionName(self: *CEmitter, name: []const u8) bool {
@@ -3376,6 +3297,7 @@ pub const CEmitter = struct {
 
     fn emitExpressionStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         if (try self.emitNeverExprStmt(expr, locals)) return;
+        self.cancelAutoDropForReleaseCall(expr);
         if (try lower_c_memory.emitMaybeUninitWriteStmt(self.memoryContext(), expr, locals)) return;
         if (try lower_c_mmio.emitWriteStmt(self.mmioEmitContext(), expr, locals)) return;
         if (try self.emitRawStoreStmt(expr, locals)) return;
@@ -3532,6 +3454,7 @@ pub const CEmitter = struct {
     }
 
     fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr) !void {
+        self.cancelAutoDropForReleaseCall(expr);
         self.defer_stack.append(self.allocator, expr) catch return error.OutOfMemory;
     }
 

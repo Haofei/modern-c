@@ -13746,6 +13746,35 @@ test "lower-c cancels auto-drop when affine move local is explicitly transferred
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, body, "close_guard("));
 }
 
+test "lower-c explicit drop release only cancels matching auto-drop local" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn explicit_release_keeps_other_auto_drop() -> u32 {
+        \\    var g: Guard = make_guard(1);
+        \\    var h: Guard = make_guard(2);
+        \\    close_guard(&g);
+        \\    return h.id;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("emit_c_drop_attr_place_local_release.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uint32_t explicit_release_keeps_other_auto_drop(void)");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, "close_guard("));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, body, "close_guard(&g);"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "close_guard(&h);"));
+    const explicit_release = std.mem.indexOf(u8, body, "close_guard(mc_tmp").?;
+    const h_value = std.mem.indexOf(u8, body, " = h.id;").?;
+    const h_cleanup = std.mem.indexOf(u8, body, "close_guard(&h);").?;
+    const final_return = std.mem.indexOf(u8, body, "return mc_tmp").?;
+    try std.testing.expect(explicit_release < h_value);
+    try std.testing.expect(h_value < h_cleanup);
+    try std.testing.expect(h_cleanup < final_return);
+}
+
 test "lower-c rejects auto-drop ownership holes before lowering" {
     const source =
         \\move struct Guard { id: u32 }

@@ -1430,6 +1430,32 @@ test "LLVM cancels auto-drop when affine move local is explicitly transferred" {
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, body, "call void @close_guard(ptr %g.addr"));
 }
 
+test "LLVM explicit drop release only cancels matching auto-drop local" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn explicit_release_keeps_other_auto_drop() -> u32 {
+        \\    var g: Guard = make_guard(1);
+        \\    var h: Guard = make_guard(2);
+        \\    close_guard(&g);
+        \\    return h.id;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_drop_attr_place_local_release.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @explicit_release_keeps_other_auto_drop");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "call void @close_guard(ptr %g.addr"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "call void @close_guard(ptr %h.addr"));
+    const explicit_release = std.mem.indexOf(u8, body, "call void @close_guard(ptr %g.addr").?;
+    const h_cleanup = std.mem.indexOf(u8, body, "call void @close_guard(ptr %h.addr").?;
+    const final_return = std.mem.indexOf(u8, body, "ret i32 %").?;
+    try std.testing.expect(explicit_release < h_cleanup);
+    try std.testing.expect(h_cleanup < final_return);
+}
+
 test "LLVM rejects auto-drop ownership holes before lowering" {
     const source =
         \\move struct Guard { id: u32 }

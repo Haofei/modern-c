@@ -546,7 +546,7 @@ fn multiArmMoveCfg(self: *Checker, arm_count: usize) ?MultiArmMoveCfg {
 
 pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     const body = fn_decl.body orelse return;
-    const allow_auto_drop = !blockContainsDropPointerReleaseCall(self, body);
+    const allow_auto_drop = true;
     var state = MoveState.init(self.reporter.allocator);
     defer state.deinit();
     defer {
@@ -4411,84 +4411,6 @@ fn typeHasAutoDrop(self: *Checker, ty: ast.TypeExpr, aliases: *const std.StringH
         if (std.mem.eql(u8, entry.value_ptr.*, type_name)) return true;
     }
     return false;
-}
-
-fn blockContainsDropPointerReleaseCall(self: *Checker, block: ast.Block) bool {
-    for (block.items) |stmt| {
-        if (stmtContainsDropPointerReleaseCall(self, stmt)) return true;
-    }
-    return false;
-}
-
-fn stmtContainsDropPointerReleaseCall(self: *Checker, stmt: ast.Stmt) bool {
-    return switch (stmt.kind) {
-        .let_decl, .var_decl => |decl| blk: {
-            if (decl.init) |initializer| break :blk exprContainsDropPointerReleaseCall(self, initializer);
-            break :blk false;
-        },
-        .loop => |node| (if (node.iterable) |iter| exprContainsDropPointerReleaseCall(self, iter) else false) or blockContainsDropPointerReleaseCall(self, node.body),
-        .if_let => |node| exprContainsDropPointerReleaseCall(self, node.value) or blockContainsDropPointerReleaseCall(self, node.then_block) or (if (node.else_block) |else_block| blockContainsDropPointerReleaseCall(self, else_block) else false),
-        .@"switch" => |node| blk: {
-            if (exprContainsDropPointerReleaseCall(self, node.subject)) break :blk true;
-            for (node.arms) |arm| {
-                for (arm.patterns) |pattern| {
-                    if (pattern.kind == .literal and exprContainsDropPointerReleaseCall(self, pattern.kind.literal)) break :blk true;
-                }
-                switch (arm.body) {
-                    .block => |body| if (blockContainsDropPointerReleaseCall(self, body)) break :blk true,
-                    .expr => |expr| if (exprContainsDropPointerReleaseCall(self, expr)) break :blk true,
-                }
-            }
-            break :blk false;
-        },
-        .unsafe_block, .comptime_block, .block => |body| blockContainsDropPointerReleaseCall(self, body),
-        .contract_block => |contract| blockContainsDropPointerReleaseCall(self, contract.block),
-        .@"return" => |maybe| if (maybe) |expr| exprContainsDropPointerReleaseCall(self, expr) else false,
-        .@"defer", .assert, .expr => |expr| exprContainsDropPointerReleaseCall(self, expr),
-        .assignment => |assign| exprContainsDropPointerReleaseCall(self, assign.target) or exprContainsDropPointerReleaseCall(self, assign.value),
-        .asm_stmt, .@"break", .@"continue" => false,
-    };
-}
-
-fn exprContainsDropPointerReleaseCall(self: *Checker, expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .array_literal => |items| blk: {
-            for (items) |item| if (exprContainsDropPointerReleaseCall(self, item)) break :blk true;
-            break :blk false;
-        },
-        .struct_literal => |fields| blk: {
-            for (fields) |field| if (exprContainsDropPointerReleaseCall(self, field.value)) break :blk true;
-            break :blk false;
-        },
-        .grouped, .move_expr, .address_of, .deref, .await_expr => |inner| exprContainsDropPointerReleaseCall(self, inner.*),
-        .block => |body| blockContainsDropPointerReleaseCall(self, body),
-        .unary => |node| exprContainsDropPointerReleaseCall(self, node.expr.*),
-        .binary => |node| exprContainsDropPointerReleaseCall(self, node.left.*) or exprContainsDropPointerReleaseCall(self, node.right.*),
-        .cast => |node| exprContainsDropPointerReleaseCall(self, node.value.*),
-        .borrow_expr => |node| exprContainsDropPointerReleaseCall(self, node.value.*),
-        .call => |node| blk: {
-            if (dropPointerReleaseTypeForCallee(self, node.callee.*) != null) break :blk true;
-            if (exprContainsDropPointerReleaseCall(self, node.callee.*)) break :blk true;
-            for (node.args) |arg| if (exprContainsDropPointerReleaseCall(self, arg)) break :blk true;
-            break :blk false;
-        },
-        .index => |node| exprContainsDropPointerReleaseCall(self, node.base.*) or exprContainsDropPointerReleaseCall(self, node.index.*),
-        .slice => |node| exprContainsDropPointerReleaseCall(self, node.base.*) or exprContainsDropPointerReleaseCall(self, node.start.*) or exprContainsDropPointerReleaseCall(self, node.end.*),
-        .member => |node| exprContainsDropPointerReleaseCall(self, node.base.*),
-        .try_expr => |node| exprContainsDropPointerReleaseCall(self, node.operand.*) or (if (node.mapped) |mapped| exprContainsDropPointerReleaseCall(self, mapped.*) else false),
-        .ident,
-        .int_literal,
-        .float_literal,
-        .string_literal,
-        .char_literal,
-        .bool_literal,
-        .null_literal,
-        .uninit_literal,
-        .unreachable_expr,
-        .void_literal,
-        .enum_literal,
-        => false,
-    };
 }
 
 fn dropPointerReleaseTypeForCallee(self: *Checker, callee: ast.Expr) ?[]const u8 {
