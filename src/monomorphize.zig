@@ -920,7 +920,7 @@ fn cloneCall(ctx: *const CloneCtx, expr: ast.Expr, node: anytype) anyerror!ast.E
     // This completes the `Owner.member` resolution for the case where the owner was a
     // generic type parameter (so the parser could not pre-resolve it). No vtable.
     if (ctx.rewrite) |rw| {
-        if (memberCalleeDirect(rw, cloned_callee.*)) |mangled| {
+        if (try memberCalleeDirect(rw, cloned_callee.*)) |mangled| {
             const callee = try ast.makePtr(rw.arena, ast.Expr{ .span = cloned_callee.span, .kind = .{ .ident = .{ .text = mangled, .span = cloned_callee.span } } });
             return .{ .span = expr.span, .kind = .{ .call = .{
                 .callee = callee,
@@ -939,20 +939,17 @@ fn cloneCall(ctx: *const CloneCtx, expr: ast.Expr, node: anytype) anyerror!ast.E
 // If `callee` is a member access `Concrete.method` on a bare type-name identifier and
 // the desugared impl method `Concrete__method` is a known function, return that mangled
 // name; otherwise null. Used to lower a Tier-1 trait-method call to a direct call.
-fn memberCalleeDirect(rw: *Rewriter, callee: ast.Expr) ?[]const u8 {
+fn memberCalleeDirect(rw: *Rewriter, callee: ast.Expr) std.mem.Allocator.Error!?[]const u8 {
     const m = switch (callee.kind) {
         .member => |node| node,
-        .grouped => |inner| return memberCalleeDirect(rw, inner.*),
+        .grouped => |inner| return try memberCalleeDirect(rw, inner.*),
         else => return null,
     };
     const owner = switch (m.base.*.kind) {
         .ident => |id| id.text,
         else => return null,
     };
-    const mangled = std.fmt.allocPrint(rw.arena, "{s}__{s}", .{ owner, m.name.text }) catch {
-        rw.oom = true;
-        return null;
-    };
+    const mangled = try std.fmt.allocPrint(rw.arena, "{s}__{s}", .{ owner, m.name.text });
     if (rw.fn_names.contains(mangled)) return mangled;
     return null;
 }

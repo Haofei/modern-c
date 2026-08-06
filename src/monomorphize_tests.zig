@@ -594,6 +594,58 @@ test "monomorphize limit diagnostic OOM fail-closes" {
     try testing.expect(saw_limit);
 }
 
+test "monomorphize trait member direct-call OOM fail-closes" {
+    const source =
+        \\trait Shape {
+        \\    fn area(self: *Self) -> u32;
+        \\}
+        \\struct Square { side: u32 }
+        \\impl Shape for Square {
+        \\    fn area(self: *Square) -> u32 {
+        \\        return self.side * self.side;
+        \\    }
+        \\}
+        \\fn doubled_area(comptime T: type, x: *T) -> u32 where T: Shape {
+        \\    return T.area(x) + T.area(x);
+        \\}
+        \\fn trigger(s: *Square) -> u32 {
+        \\    return doubled_area(Square, s);
+        \\}
+    ;
+
+    var parse_reporter = diagnostics.Reporter.init(testing.allocator, "mono_trait_member_oom.mc", source);
+    defer parse_reporter.deinit();
+
+    var parse_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer parse_arena.deinit();
+
+    var p = parser.Parser.init(source, &parse_reporter);
+    const module = try p.parseModule(parse_arena.allocator());
+    try testing.expect(!parse_reporter.has_errors);
+
+    var saw_oom = false;
+    var saw_success = false;
+    for (0..128) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+        var fail_arena = std.heap.ArenaAllocator.init(failing.allocator());
+        defer fail_arena.deinit();
+
+        var reporter = diagnostics.Reporter.init(testing.allocator, "mono_trait_member_oom.mc", source);
+        defer reporter.deinit();
+
+        const result = monomorphize.transformReport(fail_arena.allocator(), module, &reporter);
+        if (result) |_| {
+            try testing.expect(!reporter.has_errors);
+            saw_success = true;
+        } else |err| {
+            try testing.expectEqual(error.OutOfMemory, err);
+            saw_oom = true;
+        }
+    }
+    try testing.expect(saw_oom);
+    try testing.expect(saw_success);
+}
+
 test "monomorphize limit rejects before producing a partial specialization module" {
     const source =
         \\fn make(comptime N: usize) -> [N]u8 {
