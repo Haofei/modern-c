@@ -2,7 +2,7 @@
   "schema_version": 1,
   "source_of_truth": "docs/tcb-advisory-intake.json",
   "tcb_components": "docs/tcb-components.json",
-  "scope": "offline advisory-intake evidence for vendored TCB components",
+  "scope": "offline advisory-intake evidence for kernel profile-facing vendored, firmware, and profile-slot TCB components",
   "policy": {
     "release_rule": "A security advisory affecting a retained, built, or exposed subset is a release blocker until re-vendored or waived.",
     "waiver_required_fields": [
@@ -157,6 +157,111 @@
         "the advisory affects retained math routines used by confined C apps, QuickJS, or WAMR hosts",
         "the advisory affects build integration that changes runtime object contents",
         "the affected upstream range cannot be compared with retained-subset comparison commit b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8"
+      ]
+    },
+    {
+      "component_id": "opensbi",
+      "owner": "kernel",
+      "status": "tracked-by-platform-image",
+      "reviewed_on": "2026-08-06",
+      "review_after": "2026-10-01",
+      "queries": [
+        "OpenSBI",
+        "riscv-software-src/opensbi",
+        "RISC-V SBI firmware"
+      ],
+      "advisory_sources": [
+        {
+          "name": "OpenSBI GitHub security advisories",
+          "kind": "security-advisory",
+          "url": "https://github.com/riscv-software-src/opensbi/security/advisories"
+        },
+        {
+          "name": "OpenSBI GitHub releases",
+          "kind": "release-notes",
+          "url": "https://github.com/riscv-software-src/opensbi/releases"
+        },
+        {
+          "name": "NVD keyword search for OpenSBI",
+          "kind": "cve-database",
+          "url": "https://nvd.nist.gov/vuln/search/results?query=OpenSBI&search_type=all"
+        }
+      ],
+      "retained_subset_policy": "Assess the OpenSBI firmware image selected by the kernel-qemu or production-kernel platform profile. Environment-provided firmware is not production-admitted until the exact platform image, version, build source, and advisory review are recorded by that profile.",
+      "release_blocker_if": [
+        "the advisory affects SBI calls, privilege transitions, trap delegation, firmware memory protection, or boot handoff used by the kernel profile",
+        "the selected platform image cannot be mapped to a reviewed OpenSBI release, tag, commit, or vendor firmware bulletin",
+        "the firmware image differs from the reviewed platform image"
+      ]
+    },
+    {
+      "component_id": "real-board-firmware",
+      "owner": "kernel",
+      "status": "open-before-production",
+      "reviewed_on": "2026-08-06",
+      "review_after": "2026-09-01",
+      "queries": [
+        "selected production board firmware",
+        "selected production board boot ROM",
+        "selected production board DTB"
+      ],
+      "advisory_sources": [
+        {
+          "name": "RISC-V OpenSBI advisories for firmware stacks using OpenSBI",
+          "kind": "security-advisory",
+          "url": "https://github.com/riscv-software-src/opensbi/security/advisories"
+        },
+        {
+          "name": "NVD keyword search for RISC-V firmware",
+          "kind": "cve-database",
+          "url": "https://nvd.nist.gov/vuln/search/results?query=RISC-V%20firmware&search_type=all"
+        },
+        {
+          "name": "Production kernel profile manifest placeholder",
+          "kind": "upstream",
+          "url": "https://github.com/Haofei/modern-c/blob/master/docs/profile-manifest.json"
+        }
+      ],
+      "retained_subset_policy": "No real production board firmware is admitted yet. Before production, the selected board firmware, DTB, boot ROM assumptions, vendor advisory feed, image digest, and update policy must replace this placeholder with concrete platform metadata.",
+      "release_blocker_if": [
+        "a production-kernel profile selects board firmware without exact image identity, vendor/source provenance, and advisory feed",
+        "the board firmware advisory feed reports an unwaived issue affecting boot, SBI, memory protection, device tree, storage, network, DMA, or interrupt behavior",
+        "the selected board image cannot be reproduced or matched to the reviewed profile metadata"
+      ]
+    },
+    {
+      "component_id": "selected-agent-runtime",
+      "owner": "kernel",
+      "status": "open-before-production",
+      "reviewed_on": "2026-08-06",
+      "review_after": "2026-09-01",
+      "queries": [
+        "selected confined agent runtime",
+        "QuickJS confined agent runtime",
+        "WAMR confined agent runtime"
+      ],
+      "advisory_sources": [
+        {
+          "name": "QuickJS-NG GitHub security advisories",
+          "kind": "security-advisory",
+          "url": "https://github.com/quickjs-ng/quickjs/security/advisories"
+        },
+        {
+          "name": "WAMR GitHub security advisories",
+          "kind": "security-advisory",
+          "url": "https://github.com/bytecodealliance/wasm-micro-runtime/security/advisories"
+        },
+        {
+          "name": "NVD keyword search for confined runtime candidates",
+          "kind": "cve-database",
+          "url": "https://nvd.nist.gov/vuln/search/results?query=QuickJS%20WAMR&search_type=all"
+        }
+      ],
+      "retained_subset_policy": "No single production Agent runtime is admitted yet. Before production, this profile slot must resolve to a concrete runtime component with exact revision, retained subset, sandbox boundary, advisory intake row, and release waiver policy.",
+      "release_blocker_if": [
+        "production-kernel selects a runtime without exact component identity, retained-subset policy, and advisory source coverage",
+        "the selected runtime has an unwaived advisory affecting parsing, execution isolation, host calls, allocator behavior, or sandbox memory access",
+        "the runtime profile depends on vendored code not listed in docs/tcb-components.json"
       ]
     }
   ]

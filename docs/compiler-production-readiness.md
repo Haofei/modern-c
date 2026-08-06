@@ -2,7 +2,7 @@
 
 Status: **internally qualification-gated supported subset, not an unrestricted or externally audited production language**.
 Current assessment: **updated 2026-07-25, evaluated per checked-out revision and pinned toolchain**.
-Evidence register: **782 bounded implementation or regression entries, 0 active slices, 0 open architectural workstreams**.
+Evidence register: **783 bounded implementation or regression entries, 0 active slices, 0 open architectural workstreams**.
 This count is scoped to the supported subset. Open/closed blocker state is not counted here; use
 [`review-risk-register.yaml`](review-risk-register.yaml) and
 [`profile-manifest.json`](profile-manifest.json) as the current machine-readable
@@ -106,6 +106,7 @@ flow, arbitrary aggregate-return CFG, or general CFG-based move ownership.
 
 | Item | Why it matters | Evidence |
 |---|---|---|
+| Firmware and runtime TCB advisory intake is manifest-gated | OpenSBI, real-board firmware, and the selected Agent runtime slot now sit in the same advisory-intake gate as vendored dependencies. Real-board firmware and the production runtime remain `open-before-production`, but the profile now has explicit advisory sources, retained-subset/profile-slot policy, release-blocker rules, review dates, and waiver-required fields instead of an untracked placeholder. | `docs/tcb-advisory-intake.json`; `tools/toolchain/tcb-advisory-intake-test.py`; `zig build tcb-advisory-intake-test`; `docs/review-risk-register.yaml` `SUPPLY-TCB-CVE-INTAKE`. |
 | Vendored TCB advisory intake is manifest-gated | BearSSL, QuickJS, WAMR, and openlibm no longer rely only on prose/manual watch entries: each vendored TCB component has an offline advisory-intake row with review dates, advisory sources, retained-subset policy, release-blocker rules, and waiver-required fields. This is deterministic local evidence only; live advisory ingestion, firmware/runtime profile closure, and production response SLA remain open in the risk register. | `docs/tcb-advisory-intake.json`; `tools/toolchain/tcb-advisory-intake-test.py`; `zig build tcb-advisory-intake-test`; `docs/review-risk-register.yaml` `SUPPLY-TCB-CVE-INTAKE`. |
 | Parser nesting is bounded | Deep input now produces a diagnostic instead of a compiler crash. | `E_NESTING_TOO_DEEP`; direct deep-paren probe rejects cleanly. |
 | Parser recovery reports multiple parse errors across scoped bodies | Top-level declarations, block statements, module/impl/trait members, and aggregate fields now resync inside the enclosing syntax body; parse-failed modules still abort before sema, avoiding misleading semantic follow-on errors. | `7d705b12 Improve parser declaration recovery`; `tests/spec/parser_statement_recovery.mc`; `tests/spec/parser_declaration_recovery.mc`; direct `mcc check` emits multiple parse diagnostics without orphan-brace noise. |

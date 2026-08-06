@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check vendored TCB advisory-intake metadata is complete and gated."""
+"""Check profile-facing TCB advisory-intake metadata is complete and gated."""
 
 from __future__ import annotations
 
@@ -17,7 +17,10 @@ INTAKE = ROOT / "docs" / "tcb-advisory-intake.json"
 ALLOWED_STATUSES = {
     "advisory-intake-manifest-gated",
     "open-before-production",
+    "tracked-by-platform-image",
 }
+INTAKE_REQUIRED_CATEGORIES = {"vendored", "firmware", "profile-slot"}
+INTAKE_REQUIRED_PROFILES = {"kernel-qemu", "production-kernel"}
 ALLOWED_SOURCE_KINDS = {
     "upstream",
     "security-advisory",
@@ -106,6 +109,7 @@ def main() -> None:
         fail("docs/tcb-components.json must define components")
 
     component_by_id: dict[str, dict[str, object]] = {}
+    required_component_ids: set[str] = set()
     vendored_ids: set[str] = set()
     for component in components:
         if not isinstance(component, dict):
@@ -114,7 +118,13 @@ def main() -> None:
         if component_id in component_by_id:
             fail(f"duplicate TCB component id {component_id}")
         component_by_id[component_id] = component
-        if component.get("category") == "vendored":
+        category = component.get("category")
+        profiles = component.get("profiles")
+        if not isinstance(profiles, list):
+            fail(f"TCB component {component_id} must list profiles")
+        if category in INTAKE_REQUIRED_CATEGORIES and INTAKE_REQUIRED_PROFILES.intersection(profiles):
+            required_component_ids.add(component_id)
+        if category == "vendored":
             vendored_ids.add(component_id)
             if component.get("advisory_status") != "advisory-intake-manifest-gated":
                 fail(f"vendored TCB component {component_id} must use advisory-intake-manifest-gated")
@@ -138,8 +148,8 @@ def main() -> None:
         seen.add(component_id)
         if component_id not in component_by_id:
             fail(f"{context} references unknown TCB component")
-        if component_id not in vendored_ids:
-            fail(f"{context} is only allowed for vendored TCB components")
+        if component_id not in required_component_ids:
+            fail(f"{context} is not required for a kernel profile-facing vendored/firmware/profile-slot TCB component")
 
         component = component_by_id[component_id]
         owner = require_string(row.get("owner"), "owner", context)
@@ -183,16 +193,16 @@ def main() -> None:
         if not ({"security-advisory", "upstream", "release-notes"} & kinds):
             fail(f"{context} must include an upstream, release, or security-advisory source")
 
-    missing = sorted(vendored_ids - seen)
+    missing = sorted(required_component_ids - seen)
     if missing:
-        fail(f"missing advisory-intake rows for vendored TCB component(s): {', '.join(missing)}")
-    stale = sorted(seen - vendored_ids)
+        fail(f"missing advisory-intake rows for required TCB component(s): {', '.join(missing)}")
+    stale = sorted(seen - required_component_ids)
     if stale:
-        fail(f"stale advisory-intake rows for non-vendored component(s): {', '.join(stale)}")
+        fail(f"stale advisory-intake rows for non-required component(s): {', '.join(stale)}")
 
     print(
         "PASS: tcb-advisory-intake-test - "
-        f"{len(seen)} vendored TCB component(s) have advisory intake metadata"
+        f"{len(seen)} profile-facing TCB component(s) have advisory intake metadata"
     )
 
 

@@ -38,12 +38,15 @@ license, local provenance file, local license file, advisory status, review
 date, local modifications, and the profiles that include the component. Profile
 manifests may reference only component IDs present in that file.
 
-Vendored TCB components must also have a row in
-[`tcb-advisory-intake.json`](tcb-advisory-intake.json). That row records the
-offline advisory-intake sources to check, retained-subset policy, review dates,
-and waiver fields required before a security advisory can be declared not
-applicable. This is a deterministic local gate; it does not perform live network
-CVE ingestion and does not close production-kernel supply-chain risk by itself.
+Kernel profile-facing vendored, firmware, and profile-slot TCB components must
+also have a row in [`tcb-advisory-intake.json`](tcb-advisory-intake.json). That
+row records the offline advisory-intake sources to check, retained-subset
+policy, review dates, and waiver fields required before a security advisory can
+be declared not applicable. `open-before-production` rows are allowed for
+unselected real-board firmware or runtime slots, but only as explicit blockers
+with concrete replacement criteria. This is a deterministic local gate; it does
+not perform live network CVE ingestion and does not close production-kernel
+supply-chain risk by itself.
 
 Run the static check before sending a vendoring change:
 
