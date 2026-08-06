@@ -78,11 +78,11 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
     var data: CpuBuffer = alloc(SECTOR_SIZE); // the device writes the sector here
     var status: CpuBuffer = alloc(1);         // the device writes the status byte here
 
-    let hdr_d: DeviceBuffer = clean_for_device(hdr);
-    let data_d: DeviceBuffer = clean_for_device(data);
-    let status_d: DeviceBuffer = clean_for_device(status);
+    let hdr_d: DeviceBuffer = clean_for_device(move hdr);
+    let data_d: DeviceBuffer = clean_for_device(move data);
+    let status_d: DeviceBuffer = clean_for_device(move status);
 
-    switch vq_submit_chain3(vq, hdr_d, data_d, status_d, true) {
+    switch vq_submit_chain3(vq, move hdr_d, move data_d, move status_d, true) {
         ok(id) => {}
         err(e) => {
             return err(.QueueUnavailable); // not enough descriptors; buffers reclaimed inside
@@ -110,18 +110,18 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
             // (now empty) chain shell. Reclaim each buffer through the typed DMA path
             // (invalidate caches, regain CPU ownership) and read the results through
             // bounds-checked views.
-            let hbuf: DeviceBuffer = done.header;
-            let dbuf: DeviceBuffer = done.data;
-            let sbuf: DeviceBuffer = done.status;
+            let hbuf: DeviceBuffer = move done.header;
+            let dbuf: DeviceBuffer = move done.data;
+            let sbuf: DeviceBuffer = move done.status;
             unsafe { forget_unchecked(done); }
-            let chdr: CpuBuffer = invalidate_for_cpu(hbuf);
-            let cdata: CpuBuffer = invalidate_for_cpu(dbuf);
-            let cstatus: CpuBuffer = invalidate_for_cpu(sbuf);
+            let chdr: CpuBuffer = invalidate_for_cpu(move hbuf);
+            let cdata: CpuBuffer = invalidate_for_cpu(move dbuf);
+            let cstatus: CpuBuffer = invalidate_for_cpu(move sbuf);
             first = read_le32(&cdata, 0);
             io_ok = read_u8(&cstatus, 0) == BLK_STATUS_OK;
-            free(chdr);
-            free(cdata);
-            free(cstatus);
+            free(move chdr);
+            free(move cdata);
+            free(move cstatus);
         }
         err(e) => {
             // The device returned an inconsistent completion (bad id/len/chain). Reset so it
@@ -155,11 +155,11 @@ export fn blk_read_into(dev: *BlkDevice, sector: u64, dst: PAddr) -> Result<bool
     var data: CpuBuffer = alloc(SECTOR_SIZE); // the device writes the sector here
     var status: CpuBuffer = alloc(1);
 
-    let hdr_d: DeviceBuffer = clean_for_device(hdr);
-    let data_d: DeviceBuffer = clean_for_device(data);
-    let status_d: DeviceBuffer = clean_for_device(status);
+    let hdr_d: DeviceBuffer = clean_for_device(move hdr);
+    let data_d: DeviceBuffer = clean_for_device(move data);
+    let status_d: DeviceBuffer = clean_for_device(move status);
 
-    switch vq_submit_chain3(vq, hdr_d, data_d, status_d, true) { // data device-writable (read)
+    switch vq_submit_chain3(vq, move hdr_d, move data_d, move status_d, true) { // data device-writable (read)
         ok(id) => {}
         err(e) => { return err(.QueueUnavailable); }
     }
@@ -171,18 +171,18 @@ export fn blk_read_into(dev: *BlkDevice, sector: u64, dst: PAddr) -> Result<bool
     var io_ok: bool = false;
     switch vq_complete_chain(vq) {
         ok(done) => {
-            let hbuf: DeviceBuffer = done.header;
-            let dbuf: DeviceBuffer = done.data;
-            let sbuf: DeviceBuffer = done.status;
+            let hbuf: DeviceBuffer = move done.header;
+            let dbuf: DeviceBuffer = move done.data;
+            let sbuf: DeviceBuffer = move done.status;
             unsafe { forget_unchecked(done); }
-            let chdr: CpuBuffer = invalidate_for_cpu(hbuf);
-            let cdata: CpuBuffer = invalidate_for_cpu(dbuf);
-            let cstatus: CpuBuffer = invalidate_for_cpu(sbuf);
+            let chdr: CpuBuffer = invalidate_for_cpu(move hbuf);
+            let cdata: CpuBuffer = invalidate_for_cpu(move dbuf);
+            let cstatus: CpuBuffer = invalidate_for_cpu(move sbuf);
             mem_copy(dst, cpu_addr(&cdata), SECTOR_SIZE); // hand the whole sector to the caller
             io_ok = read_u8(&cstatus, 0) == BLK_STATUS_OK;
-            free(chdr);
-            free(cdata);
-            free(cstatus);
+            free(move chdr);
+            free(move cdata);
+            free(move cstatus);
         }
         err(e) => {
             if virtio_reset(regs) { vq_reset_reclaim(vq); }
@@ -212,11 +212,11 @@ export fn blk_write(dev: *BlkDevice, sector: u64, src: PAddr) -> Result<bool, Bl
     mem_copy(cpu_addr(&data), src, SECTOR_SIZE); // the bytes to write, into the DMA buffer
     var status: CpuBuffer = alloc(1);
 
-    let hdr_d: DeviceBuffer = clean_for_device(hdr);
-    let data_d: DeviceBuffer = clean_for_device(data); // flush the write data out to the device
-    let status_d: DeviceBuffer = clean_for_device(status);
+    let hdr_d: DeviceBuffer = clean_for_device(move hdr);
+    let data_d: DeviceBuffer = clean_for_device(move data); // flush the write data out to the device
+    let status_d: DeviceBuffer = clean_for_device(move status);
 
-    switch vq_submit_chain3(vq, hdr_d, data_d, status_d, false) { // data device-READABLE (write)
+    switch vq_submit_chain3(vq, move hdr_d, move data_d, move status_d, false) { // data device-READABLE (write)
         ok(id) => {}
         err(e) => { return err(.QueueUnavailable); }
     }
@@ -228,17 +228,17 @@ export fn blk_write(dev: *BlkDevice, sector: u64, src: PAddr) -> Result<bool, Bl
     var io_ok: bool = false;
     switch vq_complete_chain(vq) {
         ok(done) => {
-            let hbuf: DeviceBuffer = done.header;
-            let dbuf: DeviceBuffer = done.data;
-            let sbuf: DeviceBuffer = done.status;
+            let hbuf: DeviceBuffer = move done.header;
+            let dbuf: DeviceBuffer = move done.data;
+            let sbuf: DeviceBuffer = move done.status;
             unsafe { forget_unchecked(done); }
-            let chdr: CpuBuffer = invalidate_for_cpu(hbuf);
-            let cdata: CpuBuffer = invalidate_for_cpu(dbuf);
-            let cstatus: CpuBuffer = invalidate_for_cpu(sbuf);
+            let chdr: CpuBuffer = invalidate_for_cpu(move hbuf);
+            let cdata: CpuBuffer = invalidate_for_cpu(move dbuf);
+            let cstatus: CpuBuffer = invalidate_for_cpu(move sbuf);
             io_ok = read_u8(&cstatus, 0) == BLK_STATUS_OK;
-            free(chdr);
-            free(cdata);
-            free(cstatus);
+            free(move chdr);
+            free(move cdata);
+            free(move cstatus);
         }
         err(e) => {
             if virtio_reset(regs) { vq_reset_reclaim(vq); }
@@ -256,7 +256,7 @@ export fn blk_write(dev: *BlkDevice, sector: u64, src: PAddr) -> Result<bool, Bl
 // production counterpart to the RAM-disk `impl BlockDevice for Disk` used in the host/proc
 // tests: it routes the trait's read/write through the real virtio-blk full-sector paths
 // (blk_read_into / blk_write, both 512 B), so block-backed services — e.g. durable
-// policy/audit checkpointing (kernel/core/block_persistent_audit.mc) — run unchanged over a
+// block-backed checkpointing fixtures — run unchanged over a
 // real disk under QEMU/board paths. It lives here (not in a peer file) because a trait impl
 // must be in the file that declares the type (E_ORPHAN_IMPL).
 

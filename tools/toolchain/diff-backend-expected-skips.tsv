@@ -7,9 +7,7 @@ ramfs-test	current host/corpus C build gap; additional skipped fixtures remain c
 vfs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 treefs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 fs-toolserver-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-persistent-audit-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 agent-fs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-block-persistent-audit-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 blockfs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 fdspace-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 agent-containment-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions

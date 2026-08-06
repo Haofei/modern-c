@@ -192,11 +192,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "blk-persist-test", "Persist-across-reboot: a sentinel written to virtio-blk survives a second QEMU boot (durable storage)", &.{ "bash", "tools/fs/blk-persist-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-blk-persist-test", "Persist-across-reboot (LLVM): virtio-blk write/read survives a real reboot under QEMU", &.{ "bash", "tools/fs/blk-persist-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "blk-audit-persist-test", "Durable policy/audit: a block_persistent_audit policy checkpoint written to virtio-blk is field-verified after a second QEMU boot", &.{ "bash", "tools/fs/blk-audit-persist-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-blk-audit-persist-test", "Durable policy/audit (LLVM): block-backed policy checkpoint over virtio-blk survives a real reboot under QEMU", &.{ "bash", "tools/fs/blk-audit-persist-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "blk-audit-frame-persist-test", "Durable audit frame: a block_persistent_audit frame (drained IpcTrace provenance records) written to virtio-blk is field-verified after a second QEMU boot", &.{ "bash", "tools/fs/blk-audit-frame-persist-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-blk-audit-frame-persist-test", "Durable audit frame (LLVM): block-backed audit frame over virtio-blk survives a real reboot under QEMU", &.{ "bash", "tools/fs/blk-audit-frame-persist-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "blk-smode-test", "Build and run the virtio-blk driver reading a sector under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-blk-smode-test", "Build and run the LLVM-lowered virtio-blk driver under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -349,8 +344,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "agent-fs-test", "Agent FS tool front door: allowlist+budget gate over the path-capability server; M6-shape acceptance (deny+audit+attribute)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-fs-test" });
 
     _ = h.addScriptTest(ctx, "policy-test", "Policy plane: drain audit provenance into per-agent counters; denial pressure escalates Allow/Throttle/Revoke/Kill (M5 seed)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "policy-test" });
-    _ = h.addScriptTest(ctx, "persistent-audit-test", "Persistent policy/audit checkpoint: policy metadata and audited IPC events survive BlobStore reopen", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "persistent-audit-test" });
-    _ = h.addScriptTest(ctx, "block-persistent-audit-test", "Block-backed persistent policy/audit checkpoint: policy metadata and audited IPC events survive BlockDevice remount", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "block-persistent-audit-test" });
     _ = h.addScriptTest(ctx, "agent-abi-test", "Versioned agent SYS_SUBMIT/SYS_POLL ABI: request validation and stable typed completion status mapping", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-test" });
     _ = h.addScriptTest(ctx, "agent-abi-fuzz-test", "Adversarial agent SYS_SUBMIT/SYS_POLL ABI fuzz: validation precedence, typed events, and fail-closed syscall dispatch", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-fuzz-test" });
     _ = h.addScriptTest(ctx, "netcap-test", "Capability-gated network egress: default-deny NetCap, audited+attributed allow/deny, attenuation only narrows (milestone #3)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "netcap-test" });

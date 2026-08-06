@@ -141,8 +141,7 @@ This section is the authoritative platform backlog and priority order.
 3. **Harden the real broker family in production agent runtimes.**
    RISC-V now has real FS broker, JS `host_net_fetch`, real TCP-backed network broker demos,
    and promoted TCP-backed JS net-tool gates. Keep the x86_64/AArch64 runtime story aligned,
-   then add durable policy/audit semantics, stable error/versioning rules, and isolated
-   out-of-process tool transport.
+   then add stable error/versioning rules and isolated out-of-process tool transport.
 
 4. **Keep non-RISC-V LLVM QuickJS gates promoted.**
    Required gates now include `llvm-x86-qjs-async-test`, `llvm-arm-qjs-test`, and
@@ -190,7 +189,7 @@ The platform portability plan can be called complete for the first production ta
 - timer and external interrupts work on that board;
 - storage and network complete through interrupt-backed paths;
 - brokered FS/network effects run through the production agent surface;
-- policy/audit and watchdog/reboot evidence survive the platform path;
+- watchdog/reboot evidence survives the platform path;
 - `zig build m0-full` remains green;
 - any architecture-specific exceptions are explicitly scoped and not presented as parity.
 

@@ -520,12 +520,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("blk-test"));
     m0_full_step.dependOn(ctx.cmd("blk-persist-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-blk-persist-test"));
-    // blk-audit-persist-test proves a block-backed policy/audit checkpoint survives a real reboot.
-    m0_full_step.dependOn(ctx.cmd("blk-audit-persist-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-blk-audit-persist-test"));
-    // blk-audit-frame-persist-test proves a block-backed AUDIT FRAME (drained IpcTrace provenance) survives a real reboot.
-    m0_full_step.dependOn(ctx.cmd("blk-audit-frame-persist-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-blk-audit-frame-persist-test"));
     // blk-smode-test revalidates the same virtio-blk driver under REAL OpenSBI in S-mode.
     m0_full_step.dependOn(ctx.cmd("blk-smode-test"));
     // smode-timer-test proves REAL S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
@@ -630,10 +624,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("agent-fs-test"));
     // policy-test links + runs the policy-plane drainer (M5 seed); LLVM side via llvm-host-suite-test.
     m0_full_step.dependOn(ctx.cmd("policy-test"));
-    // persistent-audit-test links + runs the BlobStore-backed policy/audit checkpoint substrate.
-    m0_full_step.dependOn(ctx.cmd("persistent-audit-test"));
-    // block-persistent-audit-test moves the policy/audit checkpoint substrate onto BlockDevice.
-    m0_full_step.dependOn(ctx.cmd("block-persistent-audit-test"));
     // agent-abi-test pins the versioned SYS_SUBMIT/SYS_POLL request/completion contract.
     m0_full_step.dependOn(ctx.cmd("agent-abi-test"));
     // agent-abi-fuzz-test adversarially checks validation precedence and fail-closed syscall dispatch.

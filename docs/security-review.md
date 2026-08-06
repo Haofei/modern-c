@@ -34,8 +34,8 @@ Minimizing and pinning this set is the core of the security posture.
 
 **Untrusted (attacker-controlled):** the agent payload (arbitrary wasm/JS) and every
 argument/pointer/length it passes across the syscall ABI; all network input
-(DNS/TCP/TLS/raw frames); agent-supplied filesystem contents; and the bytes of an OTA
-update bundle. See threat-model §2.
+(DNS/TCP/TLS/raw frames); and agent-supplied filesystem contents. Product OTA
+bundles are outside the current kernel scope. See threat-model §2.
 
 ---
 
@@ -78,8 +78,8 @@ sends no packet, and is recorded as a distinct DENY event (`NET_DENY_TAG`) — o
 not counted as real egress. Budget exhaustion returns a typed `Budget` error. Hostile inbound
 frames are handled by the bounds-checked parsers (§2.6).
 
-Residual: **persistent policy load + revocation** across reboot is not yet wired (threat-model
-§4.2); today the allowlist is established in-boot. Larger hostile-packet corpus wanted.
+Residual: product persistent policy load is outside the current language-oriented kernel scope;
+today the allowlist is established in-boot. Larger hostile-packet corpus wanted.
 
 ### 2.4 Filesystem broker + agent runtime
 
@@ -136,8 +136,8 @@ today it is in-memory.
 capability/right mint calls and root-authority creation outside the approved TCB root files.
 
 Residual — **production blocker:** root-authority provenance is still a prototype seam.
-Production kernel profiles still need a boot-time root lifecycle, delegation policy, and
-persistent audit identity before third-party kernel components can be treated as outside the
+Production kernel profiles still need a boot-time root lifecycle and delegation policy
+before third-party kernel components can be treated as outside the
 mint TCB.
 
 ### 2.9 Product update path
@@ -156,7 +156,7 @@ not language features and should be reintroduced only behind a concrete product 
    remain prototype kernel fixtures, not a production trust chain (§2.9).
 3. **Availability is best-effort** — agent preemption has landed (§2.5), so the remaining risk is
    finer-grained / uniform per-agent CPU/memory budget enforcement, not preemption itself.
-4. **Policy/audit persistence + revocation** across reboot are not yet wired (§2.3, §2.7).
+4. **Product policy persistence + revocation** are out of the current language-oriented kernel scope (§2.3, §2.7).
 5. **Residual `unreachable`-on-exhaustion paths** exist off the main attacker-reachable routes;
    they are tracked and must all become typed `NoMem`/errors to fully satisfy G3.
 6. **Side channels, physical attacks, malicious firmware, and supply-chain compromise are out
@@ -199,11 +199,9 @@ An independent audit of the production kernel should cover, at minimum:
       bypass; confirm every external effect is gated and audited.
 - [ ] **Parsers:** re-fuzz DNS/TCP/IP/TLS/ELF with a larger hostile corpus + a coverage-guided
       fuzzer; look for over-reads the current `br_try_*` routing missed.
-- [ ] **OTA fixture:** audit the prototype metadata/recovery state machine for fail-closed
-      behavior, while keeping production boot-chain policy out of the current language scope (§2.9).
 - [ ] **Resource accounting:** confirm every allocation/broker/device path charges the ledger and
       that no path can leak or double-release; drive the soak gate longer.
-- [ ] **Audit trail:** review for suppress/forge resistance and add persistence.
+- [ ] **Audit trail:** review for suppress/forge resistance on the in-boot audit path.
 - [ ] **DoS:** timer-driven process preemption is gated by `agent-preempt-test`; re-evaluate once
       uniform budgets land and confirm no agent can starve the kernel.
 - [ ] **Vendored engines:** track upstream CVEs for WAMR/QuickJS/BearSSL and the vendoring

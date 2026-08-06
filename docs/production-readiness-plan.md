@@ -37,8 +37,7 @@ One board family
 + one agent runtime
 + narrow syscall ABI
 + brokered FS/network/tool effects
-+ persistent policy and audit
-+ signed updates
++ storage persistence for required demos
 + watchdog/recovery
 ```
 
@@ -116,10 +115,10 @@ hardening"; a few are genuinely thin. Current state, with evidence:
 | --- | --- | --- |
 | 1. Preemptive scheduling | **Mostly done** | Correction (review and my first pass both understated this): **real timer-driven preemption already exists and is gated** — `preempt_demo`/`preempt-test` (both backends) runs three never-yielding threads that the timer ISR (`timer_preempt` → `sched_yield` from the trap, full frame preserved by the asm vector) rotates through; **per-agent CPU budget** is enforced (`wasm-watchdog-test`: the machine-timer watchdog preempts + KILLS a runaway agent); priorities/quantum/fair-share/throttle (`proc_sched.mc`, gated `scheduler-test`/`fairsched`); cancellation (`AGENT_OP_CANCEL`, `qjs-cancel-test`). **Added (2026-06-30):** a process-level (ProcTable) quantum→`need_resched` decision layer (`proc_preempt_tick`/`_pending`/`_clear`/`_point`) so the agent scheduler has a voluntary-preemption-point path tied to quantum (gated `scheduler-test`). **Landed (2026-06-30):** `agent-preempt-test` (both backends) — three never-yielding ProcTable processes are rotated by the CLINT timer ISR (which runs the irq-safe `proc_preempt_tick`; the switch happens at a safe point), printing A/B/C + AGENT-PREEMPT-OK. Preemption is now proven for agents, not just kernel threads. #1 is complete. |
 | 2. Stable agent ABI | Mostly done | Correction: it IS versioned — `AGENT_ABI_VERSION`, `version` fields on req/event structs, `agent_abi_validate_req` rejects a mismatch with `badver` (gated: `agent_abi_demo.mc`), typed `AgentAbiError` status codes, a `CANCEL` op, and `abi-consistency-test` guards syscall-number drift across kernel/userspace. **Landed (2026-06-30):** the versioning/compat policy is now written in `agent_abi.mc` (single monotonic wire version; what forces a bump; status/op-set rules; the pair-kernel-with-agents deployment model). |
-| 3. Durable storage | In progress | KV/blob/fs + `persistent_audit.mc`, `block_persistent_audit.mc`. **Landed (2026-06-30):** a real **virtio-blk write path** (`blk_write` + full-sector `blk_read_into`) and a **persist-across-reboot gate** — `blk-persist-test` (both backends) boots QEMU twice against the same disk image: a sentinel written on boot 1 is read back on a fresh boot 2 (RAM cleared, disk survives). Durable storage now demonstrably survives a real reboot. **Also landed:** `impl BlockDevice for BlkDevice` (in `virtio_blk.mc`, beside the type per the orphan-impl rule) + `blk-audit-persist-test` (both backends) — a `block_persistent_audit` POLICY checkpoint written on boot 1 is loaded + field-verified on a fresh boot 2 (durable policy state survives reboot). **Also landed:** `blk-audit-frame-persist-test` (both backends) — the audit FRAME (drained IpcTrace events) is captured to virtio-blk on boot 1 and field-verified on a fresh boot 2. Policy AND audit now survive a real reboot — #3's core is complete. **Remaining (lower priority):** journaling/CRC, compaction, schema migration. |
+| 3. Durable storage | In progress | KV/blob/fs plus the real **virtio-blk write path** (`blk_write` + full-sector `blk_read_into`) and a **persist-across-reboot gate** — `blk-persist-test` (both backends) boots QEMU twice against the same disk image: a sentinel written on boot 1 is read back on a fresh boot 2 (RAM cleared, disk survives). Product policy/audit persistence fixtures have been removed from the current language-oriented kernel scope. |
 | 4. Isolation boundary | **Most mature** | Confined U-mode Sv39 (kernel unmapped) + WAMR sandbox + deterministic fuel, S-mode + cross-arch. Gap: **per-agent crash cleanup/reap**. (Review overstates this as missing.) |
 | 5. Resource accounting | Mostly done | Per-dimension budgets are enforced AND gated: CPU (`wamr-fuel-test`, `wasm-watchdog-test`), memory (`wasm-memcap-test`), network requests (`NetCap.requests_left`), tool/output quota (`quota-probe-test`, `qjs/wasm-quota-agent-test`) — multiple backends. **Landed (2026-06-30):** typed `NoMem` on the DMA path — `dma.try_alloc -> Result<_, DmaError>` + `mc_dma_alloc_base_try` across all providers (fail-closed with a typed error instead of trapping on exhaustion); gated `dma-try-test`. Gap: a **single unified accounting/quota model** spanning all dimensions (incl. file handles + spawned tasks). |
-| 6. Broker hardening | Exists, weak | `net_broker` policy+budget+audit; back-pressure (async `ok=8 rejected=4`); revoke/throttle/kill actuation gated. Gap: **persistent policy load, revocation propagation, retries, tracing**. |
+| 6. Broker hardening | Exists, weak | `net_broker` policy+budget+audit; back-pressure (async `ok=8 rejected=4`); revoke/throttle/kill actuation gated. Gap: revocation propagation, retries, tracing. Product persistent policy load is out of scope. |
 | 7. Networking | Mostly exists | **DNS exists** (`kernel/net/dns.mc`), TLS (BearSSL), TCP RX hardened (checksums + chunked drain). Gap: retransmit robustness, conn pooling, timeout control, hostile-packet corpus. (Review overstates DNS/TLS as needed.) |
 | 8. Observability | Partial | Audit/trace + record/checkpoint exist (`ipc_trace.mc`, `cap_audit`, provenance, `kernel/lib/record.mc`, `kernel/lib/checkpoint.mc`). Gap: **structured metrics, per-agent event timelines, deterministic replay**. |
 | 9. Update/packaging | External product scope | Reproducible build/package gates remain in the toolchain. Kernel OTA/live-update fixtures have been removed from the current language-oriented kernel scope. |
@@ -135,9 +134,8 @@ substantially more implemented + gated than first credited):
   added — and verified that real timer-driven preemption + per-agent CPU-budget kill **already
   exist and are gated**.
 - **Closed (2026-06-30, this work):**
-  - (3) persist-across-reboot — virtio-blk write path + `blk-persist-test` + durable **policy**
-    (`blk-audit-persist-test`) AND **audit frame** (`blk-audit-frame-persist-test`), all two-boot,
-    both backends; plus overflow-safe fit checks across mcp/blockdev/DMA.
+  - (3) persist-across-reboot — virtio-blk write path + `blk-persist-test`, both
+    backends; plus overflow-safe fit checks across mcp/blockdev/DMA.
   - (5) typed `NoMem` DMA (`dma-try-test`) AND a **unified, overflow-safe resource ledger**
     (`kernel/core/ledger.mc`: charge/release across Memory/Dma/Ipc/BlockIo/Net/FileHandles with
     typed `OverLimit`/`Underflow` and headroom-compare so a charge never forms an overflowing sum)
@@ -245,7 +243,7 @@ Current status:
 - TCP-backed `host_net_fetch` is proven by `qjs-net-realtool-test` /
   `llvm-qjs-net-realtool-test`: a pure-JS agent reaches a live HTTP server through
   `net_fetch_tcp` over virtio-net, with denied egress and budget exhaustion covered.
-- The remaining production-surface gap is durable policy/audit semantics, out-of-process
+- The remaining production-surface gap is out-of-process
   tool transport, stable version/error rules, and cross-arch real-broker parity.
 
 Production target:
@@ -282,17 +280,12 @@ Acceptance gates:
 Current status:
 
 - Capability checks, audit rings, and policy decision logic exist.
-- `persistent-audit-test` gates a BlobStore-backed checkpoint seed for policy metadata
-  and drained audit events, including policy version and boot epoch metadata.
-- `block-persistent-audit-test` gates the same policy/audit checkpoint shape through the
-  generic `BlockDevice` trait, so the bytes survive a remount/reopen of block-backed storage
-  instead of only BlobStore memory.
 - Production virtio-blk journal/reboot integration is still pending.
 - Policy actuation against live running agents is still pending.
 
 Production target:
 
-- Policy is stored persistently.
+- Product policy persistence is out of the current language-oriented kernel scope.
 - Audit survives reboot or crash.
 - Audit records are bounded, structured, and replayable.
 - Policy decisions can act on live agents.
@@ -505,38 +498,30 @@ Goal: survive reboot and explain behavior.
 
 Tasks:
 
-- Add persistent policy store. **Seed exists:** BlobStore and BlockDevice gates.
-- Add persistent audit log. **Seed exists:** BlobStore and BlockDevice gates.
+- Keep basic storage persistence gates for active demos.
+- Reintroduce persistent policy/audit only if a concrete product profile requires it.
 - Add watchdog integration only if a concrete kernel product profile needs it.
 - Add panic/reboot reason record only if a concrete kernel product profile needs it.
-- Add storage-full behavior for audit and policy.
 - Add policy actuation for revoke/throttle/kill only if a concrete agent product profile needs it.
 
 Exit criteria:
 
-- Device can reboot and retain policy.
-- Device can reboot and retain recent audit.
+- Device can reboot and retain the demo state required by the selected profile.
 - Device can kill or throttle a misbehaving agent.
-- Device can report last reboot reason.
+- Device can report last reboot reason if that profile keeps reboot telemetry.
 
-### Phase P4: signed bundles and OTA
+### Phase P4: updates and recovery
 
-Goal: make update and trust-chain behavior shippable.
+Goal: keep update/recovery out of the language-oriented kernel unless a product profile needs it.
 
 Tasks:
 
-- Define bundle format for kernel, policy, and agent. **Header/admission seed exists.**
-- Add product update authentication if/when the kernel profile requires it. **Out of current language scope.**
-- Add version compatibility checks. **Admission seed exists.**
-- Add A/B or fallback update slot. **Two-slot rollback state exists.**
-- Add rollback after failed boot. **State transition gate exists.**
-- Add release manifest and reproducible image metadata.
+- Reintroduce product bundle/update mechanics only behind a concrete product profile.
+- Keep release metadata separate from the language/kernel correctness gates.
 
 Exit criteria:
 
-- Unsigned bundles do not run.
-- Failed update rolls back.
-- Audit records identify exact kernel/policy/agent versions.
+- No product-update claim is made by the language-oriented kernel profile.
 
 ### Phase P5: real board pilot
 
@@ -598,13 +583,9 @@ remain open — QEMU is the only validated platform today.
 - [x] Per-agent memory, request, output, and network budgets are enforced across the production paths. (QEMU-gated: `wasm-memcap`, `wamr-fuel`/`wasm-watchdog`, `quota`/`quota-agent`, `NetCap`.)
 - [x] Policy can revoke/throttle/kill a running agent. (`proc_throttle` + `proc_kill` + machine-timer watchdog kill (`wasm-watchdog-test`) + gated revoke/throttle/kill actuation.)
 - [x] Policy actuation state transitions for revoke/throttle/kill are gated.
-- [x] BlockDevice-backed policy/audit checkpoint seed exists.
-- [ ] Audit persists across reboot.
-- [ ] Policy persists across reboot.
 - [ ] Watchdog and reboot reason work.
 - [x] Watchdog/reboot-reason state records are gated.
 - [ ] Product agent update policy exists.
-- [x] Bundle metadata rejection semantics are gated.
 - [ ] Update rollback works.
 - [x] Two-slot rollback state transition is gated.
 - [ ] Syscall and broker fuzz tests exist.

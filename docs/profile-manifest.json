@@ -211,13 +211,12 @@
       "id": "production-kernel",
       "status": "blocked",
       "production_claim": false,
-      "summary": "Production kernel support is blocked until exact-byte bundle admission, privileged capability mint isolation, persistent policy/audit, minimal TCB, real hardware, soak, and external security evidence are complete.",
+      "summary": "Production kernel support is blocked until privileged capability mint isolation, minimal TCB, real hardware, soak, external security evidence, and any selected product-specific update/policy path are complete.",
       "scope": {
         "blocking": [
           "kernel/",
           "platform profile",
-          "product bundle loader",
-          "policy/audit persistence",
+          "product-specific update/policy path",
           "real-board validation"
         ],
         "experimental_or_excluded": [

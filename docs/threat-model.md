@@ -67,7 +67,7 @@ failure modes we accept. It is the frame for the security-hardening work in §4.
 | Agent reads/writes kernel memory | kernel unmapped in agent AS; uaccess validates every user ptr | — |
 | Agent forges a syscall arg (ptr/len overflow) | checked arithmetic + `fits_within`/bounds checks; EFAULT/EINVAL not trap (recent hardening) | audit syscall-facing index routes (plan §4.7) |
 | Hostile network frame corrupts socket state | bounds-checked frame parser + IPv4/TCP checksum validation (`tcp_tx.mc`) | larger hostile-packet corpus |
-| Agent exfiltrates via network | net broker egress allowlist (`NetCap.allowed`) + budget; denied attempts audited (`NET_DENY_TAG`) | persistent policy load/revocation (§4.2) |
+| Agent exfiltrates via network | net broker egress allowlist (`NetCap.allowed`) + budget; denied attempts audited (`NET_DENY_TAG`) | product persistent policy load is out of current scope |
 | Cross-transport confusion in broker | endpoint transport-kind tag checked before dispatch (`net_broker.mc`) | — |
 | Runaway CPU (DoS) | WAMR instruction fuel; timer watchdog kill; timer-driven process preemption (`proc_preempt_*`, gated by `agent-preempt-test`) | uniform per-agent CPU-budget policy and accounting |
 | Memory exhaustion (DoS) | confined arena + fixed pools with overflow-safe fit checks | typed `NoMem` on broker/device paths (§3.1 #5); per-agent memory budget enforcement everywhere |
