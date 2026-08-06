@@ -160,6 +160,17 @@ pub const Options = struct {
         return remappedSourcePathForOs(allocator, remap, path, builtin.os.tag);
     }
 
+    pub fn artifactSourcePath(self: Options, allocator: std.mem.Allocator, path: []const u8, cwd: ?[]const u8) !?[]const u8 {
+        return artifactSourcePathForOs(self, allocator, path, cwd, builtin.os.tag);
+    }
+
+    fn artifactSourcePathForOs(self: Options, allocator: std.mem.Allocator, path: []const u8, cwd: ?[]const u8, os_tag: std.Target.Os.Tag) !?[]const u8 {
+        if (self.remap_prefix) |remap| {
+            if (try remappedSourcePathForOs(allocator, remap, path, os_tag)) |remapped| return remapped;
+        }
+        return defaultArtifactSourcePathForOs(allocator, path, cwd, os_tag);
+    }
+
     fn remappedSourcePathForOs(allocator: std.mem.Allocator, remap: PathRemap, path: []const u8, os_tag: std.Target.Os.Tag) !?[]const u8 {
         if (!path_policy.hasPrefixBoundaryFor(os_tag, remap.from, path)) return null;
         const tail = path[remap.from.len..];
@@ -171,6 +182,54 @@ pub const Options = struct {
         else
             try std.fmt.allocPrint(allocator, "{s}{s}", .{ remap.to, tail });
         return remapped;
+    }
+
+    fn defaultArtifactSourcePathForOs(allocator: std.mem.Allocator, path: []const u8, cwd: ?[]const u8, os_tag: std.Target.Os.Tag) !?[]const u8 {
+        if (!isAbsolutePathFor(os_tag, path)) return null;
+
+        if (cwd) |root| {
+            if (root.len > 0 and path_policy.pathWithinFor(os_tag, root, path)) {
+                const tail = stripLeadingSeparatorsFor(os_tag, path[root.len..]);
+                return try allocVirtualSourcePath(allocator, tail);
+            }
+        }
+
+        const basename = basenameFor(os_tag, path);
+        return try allocVirtualSourcePath(allocator, if (basename.len == 0) "input.mc" else basename);
+    }
+
+    fn allocVirtualSourcePath(allocator: std.mem.Allocator, tail: []const u8) ![]const u8 {
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
+        try out.appendSlice(allocator, "/src");
+        if (tail.len > 0) {
+            try out.append(allocator, '/');
+            for (tail) |ch| try out.append(allocator, if (ch == '\\') '/' else ch);
+        }
+        return try out.toOwnedSlice(allocator);
+    }
+
+    fn isAbsolutePathFor(os_tag: std.Target.Os.Tag, path: []const u8) bool {
+        if (path.len == 0) return false;
+        if (os_tag == .windows) {
+            if (path.len >= 3 and std.ascii.isAlphabetic(path[0]) and path[1] == ':' and path_policy.isSeparatorFor(os_tag, path[2])) return true;
+            return path.len >= 2 and path_policy.isSeparatorFor(os_tag, path[0]) and path_policy.isSeparatorFor(os_tag, path[1]);
+        }
+        return path[0] == '/';
+    }
+
+    fn stripLeadingSeparatorsFor(os_tag: std.Target.Os.Tag, path: []const u8) []const u8 {
+        var index: usize = 0;
+        while (index < path.len and path_policy.isSeparatorFor(os_tag, path[index])) : (index += 1) {}
+        return path[index..];
+    }
+
+    fn basenameFor(os_tag: std.Target.Os.Tag, path: []const u8) []const u8 {
+        var end = path.len;
+        while (end > 0 and path_policy.isSeparatorFor(os_tag, path[end - 1])) : (end -= 1) {}
+        var start = end;
+        while (start > 0 and !path_policy.isSeparatorFor(os_tag, path[start - 1])) : (start -= 1) {}
+        return path[start..end];
     }
 
     pub fn targetArch(self: Options) backend.TargetArch {
@@ -264,6 +323,8 @@ pub const Options = struct {
         const accepts_checks = std.mem.eql(u8, command, "verify") or std.mem.eql(u8, command, "lower-mir") or
             std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map") or
             std.mem.eql(u8, command, "emit-llvm");
+        const accepts_remap_prefix = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map") or
+            std.mem.eql(u8, command, "emit-llvm") or std.mem.eql(u8, command, "build");
         const needs_structs = isEmitLayout(command) or isEmitCStruct(command);
         const is_emit_command = std.mem.eql(u8, command, "emit-c") or std.mem.eql(u8, command, "emit-map") or
             std.mem.eql(u8, command, "emit-llvm");
@@ -278,7 +339,7 @@ pub const Options = struct {
         if (seen.saw_std_dir_flag and !isSourceLoadingCommand(command)) return invalidOptionForCommand("--std-dir", command);
         if (seen.saw_visibility_flag and !isSourceLoadingCommand(command)) return invalidOptionForCommand("--visibility", command);
         if (seen.saw_output_flag and !accepts_output_path) return invalidOptionForCommand("-o", command);
-        if (seen.saw_remap_prefix_flag and !is_c_artifact_command) return invalidOptionForCommand("--remap-prefix", command);
+        if (seen.saw_remap_prefix_flag and !accepts_remap_prefix) return invalidOptionForCommand("--remap-prefix", command);
         if (seen.saw_json_flag and !std.mem.eql(u8, command, "check")) return invalidOptionForCommand("--json", command);
         if (self.checks.csan and (self.checks.ksan or self.checks.msan)) {
             std.debug.print("error: --checks=csan cannot be combined with ksan/msan (a single raw access wraps one shadow protocol)\n", .{});
@@ -323,4 +384,32 @@ test "source remap accepts trailing separators and preserves boundaries" {
     const bounded = Options{ .remap_prefix = .{ .from = "/work/project", .to = "/src" } };
     try std.testing.expect((try bounded.remappedSourcePath(allocator, "/work/project2/file.mc")) == null);
     try std.testing.expect((try bounded.remappedSourcePath(allocator, "/work/project\\other/file.mc")) == null);
+}
+
+test "artifact source path redacts absolute paths by default" {
+    const allocator = std.testing.allocator;
+    const opts: Options = .{};
+
+    try std.testing.expect((try opts.artifactSourcePathForOs(allocator, "src/main.mc", "/work/project", .linux)) == null);
+
+    const under_cwd = (try opts.artifactSourcePathForOs(allocator, "/work/project/src/main.mc", "/work/project", .linux)).?;
+    defer allocator.free(under_cwd);
+    try std.testing.expectEqualStrings("/src/src/main.mc", under_cwd);
+
+    const outside_cwd = (try opts.artifactSourcePathForOs(allocator, "/tmp/build/private/input.mc", "/work/project", .linux)).?;
+    defer allocator.free(outside_cwd);
+    try std.testing.expectEqualStrings("/src/input.mc", outside_cwd);
+
+    const windows = (try opts.artifactSourcePathForOs(allocator, "C:\\work\\project\\src\\main.mc", "C:\\work\\project", .windows)).?;
+    defer allocator.free(windows);
+    try std.testing.expectEqualStrings("/src/src/main.mc", windows);
+}
+
+test "explicit source remap overrides default artifact redaction" {
+    const allocator = std.testing.allocator;
+    const opts = Options{ .remap_prefix = .{ .from = "/work/project", .to = "/repo" } };
+
+    const remapped = (try opts.artifactSourcePathForOs(allocator, "/work/project/src/main.mc", "/work/project", .linux)).?;
+    defer allocator.free(remapped);
+    try std.testing.expectEqualStrings("/repo/src/main.mc", remapped);
 }

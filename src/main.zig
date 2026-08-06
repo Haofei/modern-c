@@ -59,9 +59,9 @@ const usage =
     \\  mcc lower-ir <file.mc>
     \\  mcc lower-c <file.mc>
     \\  mcc emit-c <file.mc> [-o <out.c>] [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm] [--remap-prefix=FROM=TO]
-    \\  mcc build <file.mc> -o <exe>
+    \\  mcc build <file.mc> -o <exe> [--remap-prefix=FROM=TO]
     \\  mcc emit-map <file.mc> [-o <out.mcmap>] [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm] [--remap-prefix=FROM=TO]
-    \\  mcc emit-llvm <file.mc> [-o <out.ll>] [--checks=all|elide-proven] [--stub-asm] [--linux-kernel]
+    \\  mcc emit-llvm <file.mc> [-o <out.ll>] [--checks=all|elide-proven] [--stub-asm] [--linux-kernel] [--remap-prefix=FROM=TO]
     \\  mcc emit-layout <file.mc> --structs=A,B,C
     \\  mcc emit-c-struct <file.mc> --structs=A,B,C
     \\  mcc fmt <file.mc> [--check]
@@ -83,9 +83,11 @@ const usage =
     \\                         legacy keeps per-file `pub` opt-in visibility; explicit
     \\                         makes every file private-by-default except `pub`/`export`.
     \\
-    \\source artifact reproducibility (emit-c and emit-map only):
+    \\source artifact reproducibility (artifact commands only):
     \\  --remap-prefix=FROM=TO replace a matching source path prefix in emitted C
-    \\                         #line directives and emit-map source_path metadata.
+    \\                         #line directives, LLVM debug paths, and metadata.
+    \\                         Without an explicit remap, absolute source paths are
+    \\                         redacted to deterministic /src/... artifact paths.
     \\  -o artifacts            emit-c, emit-llvm, and build also write a sibling
     \\                         <output>.mcmeta sidecar with artifact/source/options
     \\                         provenance. emit-map embeds the same metadata in the
@@ -397,6 +399,15 @@ fn stdinLoaderRootPath(io: std.Io, allocator: std.mem.Allocator) ![]u8 {
     return std.fs.path.join(allocator, &.{ cwd_buffer[0..cwd_len], "-" });
 }
 
+fn artifactSourcePath(allocator: std.mem.Allocator, io: std.Io, options: cli.Options, path: []const u8) !?[]const u8 {
+    var cwd_buffer: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const cwd = if (std.Io.Dir.cwd().realPathFile(io, ".", &cwd_buffer)) |cwd_len|
+        cwd_buffer[0..cwd_len]
+    else |_|
+        null;
+    return options.artifactSourcePath(allocator, path, cwd);
+}
+
 pub fn main(init: std.process.Init) !void {
     runMain(init) catch |err| {
         if (isExpectedCliFailure(err)) std.process.exit(1);
@@ -540,19 +551,21 @@ fn runMain(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(&session, path, source);
     } else if (std.mem.eql(u8, command, "emit-c")) {
-        const remapped_source_path = try options.remappedSourcePath(allocator, path);
-        defer if (remapped_source_path) |p| allocator.free(p);
-        try runEmitC(&session, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.targetArch(), options.output_path);
+        const artifact_source_path = try artifactSourcePath(allocator, init.io, options, path);
+        defer if (artifact_source_path) |p| allocator.free(p);
+        try runEmitC(&session, path, artifact_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.targetArch(), options.output_path);
     } else if (std.mem.eql(u8, command, "build")) {
-        const remapped_source_path = try options.remappedSourcePath(allocator, path);
-        defer if (remapped_source_path) |p| allocator.free(p);
-        try runBuild(&session, path, remapped_source_path orelse path, source, options.targetArch(), options.output_path.?, init.environ_map.get("CLANG") orelse "clang");
+        const artifact_source_path = try artifactSourcePath(allocator, init.io, options, path);
+        defer if (artifact_source_path) |p| allocator.free(p);
+        try runBuild(&session, path, artifact_source_path orelse path, source, options.targetArch(), options.output_path.?, init.environ_map.get("CLANG") orelse "clang");
     } else if (std.mem.eql(u8, command, "emit-map")) {
-        const remapped_source_path = try options.remappedSourcePath(allocator, path);
-        defer if (remapped_source_path) |p| allocator.free(p);
-        try runEmitMap(&session, path, remapped_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.targetArch(), options.output_path);
+        const artifact_source_path = try artifactSourcePath(allocator, init.io, options, path);
+        defer if (artifact_source_path) |p| allocator.free(p);
+        try runEmitMap(&session, path, artifact_source_path orelse path, source, options.profile, options.checks, options.stub_asm, options.targetArch(), options.output_path);
     } else if (std.mem.eql(u8, command, "emit-llvm")) {
-        try runEmitLlvm(&session, path, source, options.checks, options.stub_asm, options.targetArch(), options.linux_kernel, options.output_path);
+        const artifact_source_path = try artifactSourcePath(allocator, init.io, options, path);
+        defer if (artifact_source_path) |p| allocator.free(p);
+        try runEmitLlvm(&session, path, artifact_source_path orelse path, source, options.checks, options.stub_asm, options.targetArch(), options.linux_kernel, options.output_path);
     } else if (std.mem.eql(u8, command, "list-tests")) {
         try runListTests(&session, path, source);
     } else if (is_emit_layout) {
@@ -1402,7 +1415,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     try session.writeArtifact(output.items, output_path);
 }
 
-fn runEmitLlvm(session: *CompilationSession, path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, linux_kernel: bool, output_path: ?[]const u8) !void {
+fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, linux_kernel: bool, output_path: ?[]const u8) !void {
     const allocator = session.allocator;
     const optimize = checks.optimize;
     const source_sha256 = backend.sha256Bytes(source);
@@ -1425,7 +1438,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, source: []const u
     const be = backend_registry.byName("llvm").?;
     const lower_opts = backend.LowerOptions{
         .profile = .kernel,
-        .source_path = path,
+        .source_path = artifact_source_path,
         .target_arch = target_arch,
         .checks = checks,
         .stub_asm = stub_asm,
