@@ -4,6 +4,7 @@ const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
 const mir = @import("mir.zig");
+const semantic_db = @import("semantic_db.zig");
 const test_support = @import("test_support.zig");
 
 const Block = mir.Block;
@@ -264,6 +265,58 @@ test "MIR target-type owner identities mirror direct calls" {
     const expected_fact_owner = try std.fmt.allocPrint(std.testing.allocator, "typed_target_owner_id={}", .{owner.id.index()});
     defer std.testing.allocator.free(expected_fact_owner);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_fact_owner) != null);
+}
+
+test "semantic db can query target-type facts by typed identity" {
+    const source =
+        \\fn callee(x: u32) -> u32 {
+        \\    return x;
+        \\}
+        \\
+        \\fn caller() -> u32 {
+        \\    return callee(7);
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "semantic_db_typed_target_type.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.build(std.testing.allocator, module);
+    defer module_mir.deinit();
+
+    const caller = functionByName(module_mir, "caller").?;
+    const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
+    const db = semantic_db.SemanticDb.init(&module_mir);
+
+    const wrong_span = ast.Span{
+        .line = result_fact.source.line + 100,
+        .column = result_fact.source.column + 100,
+        .offset = result_fact.source.offset + 100,
+        .len = result_fact.source.len,
+    };
+    try std.testing.expect(db.targetTypeFactAtOwned(&caller, .direct_call_result, wrong_span, result_fact.target_owner.?, result_fact.target_index) == null);
+
+    const by_id = db.targetTypeFactById(&caller, .{
+        .kind = .direct_call_result,
+        .typed_span_id = result_fact.typed_span_id,
+        .typed_result_ty = result_fact.typed_result_ty,
+        .typed_target_owner_id = result_fact.typed_target_owner_id,
+        .target_index = result_fact.target_index,
+    }) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.eql(result_fact, by_id));
+
+    try std.testing.expect(db.targetTypeFactById(&caller, .{
+        .kind = .direct_call_result,
+        .typed_span_id = result_fact.typed_span_id,
+        .typed_result_ty = result_fact.typed_result_ty,
+        .target_index = result_fact.target_index,
+    }) == null);
 }
 
 test "MIR verifier rejects target owner instruction identity drift" {

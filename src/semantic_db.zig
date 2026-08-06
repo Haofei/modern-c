@@ -9,6 +9,14 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const mir = @import("mir.zig");
 
+pub const TargetTypeLookupKey = struct {
+    kind: mir.TargetTypeKind,
+    typed_span_id: mir.SpanId,
+    typed_result_ty: ?mir.TypeId = null,
+    typed_target_owner_id: ?mir.SymbolId = null,
+    target_index: ?usize = null,
+};
+
 pub const SemanticDb = struct {
     module: *const mir.Module,
 
@@ -37,6 +45,17 @@ pub const SemanticDb = struct {
         if (!isSourceSpan(span)) return null;
         return uniqueModuleTargetTypeFact(self.module, kind, span, owner, index);
     }
+
+    /// Returns a target-type fact by verified typed identities in `current`.
+    ///
+    /// Typed IDs are function-local interned identities, so this query
+    /// intentionally does not fall back to scanning the whole module by source
+    /// span or owner spelling.  Callers that already have MIR identities should
+    /// use this entry point instead of rebuilding identity from source text.
+    pub fn targetTypeFactById(self: SemanticDb, current: *const mir.Function, key: TargetTypeLookupKey) ?mir.TargetTypeFact {
+        _ = self;
+        return targetTypeFactInFunctionById(current, key);
+    }
 };
 
 fn uniqueModuleTargetTypeFact(module: *const mir.Module, kind: mir.TargetTypeKind, span: ast.Span, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {
@@ -57,6 +76,24 @@ fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeK
         if (fact.kind != kind or fact.target_index != index) continue;
         if (!ownerMatches(fact.target_owner, owner)) continue;
         if (!sourceMatches(kind, span, fact.source)) continue;
+        if (!typedIdentityIsValid(function, fact)) return null;
+        return fact;
+    }
+    return null;
+}
+
+fn targetTypeFactInFunctionById(function: *const mir.Function, key: TargetTypeLookupKey) ?mir.TargetTypeFact {
+    if (!key.typed_span_id.isValid()) return null;
+    if (key.typed_result_ty) |result_ty| if (!result_ty.isValid()) return null;
+    if (key.typed_target_owner_id) |owner_id| if (!owner_id.isValid()) return null;
+
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != key.kind or fact.target_index != key.target_index) continue;
+        if (!fact.typed_span_id.eql(key.typed_span_id)) continue;
+        if (key.typed_result_ty) |result_ty| {
+            if (!fact.typed_result_ty.eql(result_ty)) continue;
+        }
+        if (!typedOwnerIdMatches(fact.typed_target_owner_id, key.typed_target_owner_id)) continue;
         if (!typedIdentityIsValid(function, fact)) return null;
         return fact;
     }
@@ -85,6 +122,11 @@ fn typedIdentityIsValid(function: *const mir.Function, fact: mir.TargetTypeFact)
         return owner_index < function.target_owner_identities.len and std.mem.eql(u8, function.target_owner_identities[owner_index].spelling, owner);
     }
     return !fact.typed_target_owner_id.isValid();
+}
+
+fn typedOwnerIdMatches(actual: mir.SymbolId, expected: ?mir.SymbolId) bool {
+    if (expected) |owner_id| return actual.isValid() and actual.eql(owner_id);
+    return !actual.isValid();
 }
 
 fn ownerMatches(actual: ?[]const u8, expected: ?[]const u8) bool {
