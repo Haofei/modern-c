@@ -2103,7 +2103,7 @@ pub const CEmitter = struct {
 
     fn emitBlockItemsForFlow(ctx: *anyopaque, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        try self.emitBlockItems(block, locals, return_ty);
+        try self.emitBlockItemsWithDeferStackSnapshot(block, locals, return_ty);
     }
 
     fn emitBlockItemsForMmio(ctx: *anyopaque, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
@@ -3464,6 +3464,14 @@ pub const CEmitter = struct {
 
         try self.emitDeferredCleanupsFrom(block_start, locals, return_ty);
         self.defer_stack.items.len = block_start;
+    }
+
+    fn emitBlockItemsWithDeferStackSnapshot(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        const saved_defer_stack = try self.allocator.dupe(DeferredCleanup, self.defer_stack.items);
+        defer self.allocator.free(saved_defer_stack);
+        errdefer self.restoreDeferStackSnapshot(saved_defer_stack);
+        try self.emitBlockItems(block, locals, return_ty);
+        self.restoreDeferStackSnapshot(saved_defer_stack);
     }
 
     const BlockItemAction = enum {

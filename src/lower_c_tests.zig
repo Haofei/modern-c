@@ -13792,6 +13792,27 @@ test "lower-c cancels auto-drop when affine move local is explicitly transferred
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, body, "close_guard("));
 }
 
+test "lower-c loop bodies restore auto-drop cleanup stack" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn transfer_in_loop(flag: bool) -> Guard {
+        \\    var g: Guard = make_guard(1);
+        \\    while flag {
+        \\        return move g;
+        \\    }
+        \\    return make_guard(2);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCTest("c_loop_restore_auto_drop_stack.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static Guard transfer_in_loop(bool flag)");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "close_guard("));
+}
+
 test "lower-c explicit drop release only cancels matching auto-drop local" {
     const source =
         \\move struct Guard { id: u32 }
