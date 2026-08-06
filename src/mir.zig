@@ -387,7 +387,10 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
     var aggregate_return_facts = try collectDirectAggregateReturnPointerFacts(allocator, module, &globals, &enums, &structs, &packed_bits, &aliases, &pointer_return_summaries);
     errdefer aggregate_return_facts.deinit(allocator);
 
-    const drop_glue_facts = try collectDropGlueFacts(allocator, module, &ast_structs, &aliases);
+    var symbol_ids = std.StringHashMap(SymbolId).init(allocator);
+    defer symbol_ids.deinit();
+
+    const drop_glue_facts = try collectDropGlueFacts(allocator, module, &ast_structs, &aliases, &symbol_ids);
     errdefer allocator.free(drop_glue_facts);
 
     var functions: std.ArrayList(Function) = .empty;
@@ -395,8 +398,6 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
         for (functions.items) |function| freeFunction(allocator, function);
         functions.deinit(allocator);
     }
-    var symbol_ids = std.StringHashMap(SymbolId).init(allocator);
-    defer symbol_ids.deinit();
 
     for (module.decls) |decl| {
         switch (decl.kind) {
@@ -484,6 +485,7 @@ fn collectDropGlueFacts(
     module: ast.Module,
     structs: *const std.StringHashMap(ast.StructDecl),
     aliases: *const std.StringHashMap(ast.TypeExpr),
+    symbol_ids: *std.StringHashMap(SymbolId),
 ) ![]DropGlueFact {
     var facts: std.ArrayList(DropGlueFact) = .empty;
     errdefer facts.deinit(allocator);
@@ -499,6 +501,7 @@ fn collectDropGlueFacts(
         try facts.append(allocator, .{
             .resource_type = resource_type,
             .release_fn = fn_decl.name.text,
+            .typed_release_symbol_id = try internSymbolId(symbol_ids, fn_decl.name.text),
             .source = .{
                 .line = fn_decl.name.span.line,
                 .column = fn_decl.name.span.column,
@@ -617,8 +620,8 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
     for (module_mir.drop_glue_facts) |fact| {
         try out.print(
             allocator,
-            "mir drop_glue_fact resource_type={s} release_fn={s} recorded=true line={} column={}\n",
-            .{ fact.resource_type, fact.release_fn, fact.source.line, fact.source.column },
+            "mir drop_glue_fact resource_type={s} release_fn={s} release_symbol={} recorded=true line={} column={}\n",
+            .{ fact.resource_type, fact.release_fn, fact.typed_release_symbol_id.index(), fact.source.line, fact.source.column },
         );
     }
     for (module_mir.functions) |function| {
@@ -1433,12 +1436,20 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
 pub fn validateDropGlueFactsForLowering(module: Module) error{InvalidMirDropGlueFacts}!void {
     for (module.drop_glue_facts, 0..) |fact, index| {
         if (fact.resource_type.len == 0 or fact.release_fn.len == 0) return error.InvalidMirDropGlueFacts;
+        if (!dropGlueReleaseSymbolIdentityValid(module, fact)) return error.InvalidMirDropGlueFacts;
         if (!moduleHasConcreteFunction(module, fact.release_fn)) return error.InvalidMirDropGlueFacts;
         for (module.drop_glue_facts[0..index]) |previous| {
             if (std.mem.eql(u8, previous.resource_type, fact.resource_type)) return error.InvalidMirDropGlueFacts;
             if (std.mem.eql(u8, previous.release_fn, fact.release_fn)) return error.InvalidMirDropGlueFacts;
         }
     }
+}
+
+fn dropGlueReleaseSymbolIdentityValid(module: Module, fact: DropGlueFact) bool {
+    if (!fact.typed_release_symbol_id.isValid()) return false;
+    const index = fact.typed_release_symbol_id.index();
+    if (index >= module.symbol_identities.len) return false;
+    return std.mem.eql(u8, module.symbol_identities[index].spelling, fact.release_fn);
 }
 
 fn moduleHasConcreteFunction(module: Module, name: []const u8) bool {

@@ -364,6 +364,7 @@ pub const CallTargetFact = struct {
 pub const DropGlueFact = struct {
     resource_type: []const u8,
     release_fn: []const u8,
+    typed_release_symbol_id: SymbolId = .invalid,
     source: SourcePoint,
 };
 

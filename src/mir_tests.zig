@@ -3930,14 +3930,18 @@ test "MIR records drop glue facts for auto-drop resources" {
     try std.testing.expectEqual(@as(usize, 2), module_mir.drop_glue_facts.len);
     try std.testing.expectEqualStrings("Ticket", module_mir.drop_glue_facts[0].resource_type);
     try std.testing.expectEqualStrings("close_ticket", module_mir.drop_glue_facts[0].release_fn);
+    try std.testing.expect(module_mir.drop_glue_facts[0].typed_release_symbol_id.isValid());
+    try std.testing.expectEqualStrings("close_ticket", module_mir.symbol_identities[module_mir.drop_glue_facts[0].typed_release_symbol_id.index()].spelling);
     try std.testing.expectEqualStrings("Wrapper", module_mir.drop_glue_facts[1].resource_type);
     try std.testing.expectEqualStrings("close_wrapper", module_mir.drop_glue_facts[1].release_fn);
+    try std.testing.expect(module_mir.drop_glue_facts[1].typed_release_symbol_id.isValid());
+    try std.testing.expectEqualStrings("close_wrapper", module_mir.symbol_identities[module_mir.drop_glue_facts[1].typed_release_symbol_id.index()].spelling);
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir drop_glue_fact resource_type=Ticket release_fn=close_ticket recorded=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir drop_glue_fact resource_type=Wrapper release_fn=close_wrapper recorded=true") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir drop_glue_fact resource_type=Ticket release_fn=close_ticket release_symbol=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir drop_glue_fact resource_type=Wrapper release_fn=close_wrapper release_symbol=") != null);
 }
 
 test "MIR drop glue fact admission rejects unknown and duplicate release facts" {
@@ -3961,6 +3965,12 @@ test "MIR drop glue fact admission rejects unknown and duplicate release facts" 
     try std.testing.expectEqual(@as(usize, 1), unknown.drop_glue_facts.len);
     unknown.drop_glue_facts[0].release_fn = "missing_close_guard";
     try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(unknown));
+
+    var drift = try mir.build(std.testing.allocator, parsed.module);
+    defer drift.deinit();
+    try std.testing.expectEqual(@as(usize, 1), drift.drop_glue_facts.len);
+    drift.drop_glue_facts[0].typed_release_symbol_id = .invalid;
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(drift));
 
     var duplicate = try mir.build(std.testing.allocator, parsed.module);
     defer duplicate.deinit();

@@ -13759,8 +13759,16 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     module_mir.drop_glue_facts = saved_facts;
 
     const saved_fn = module_mir.drop_glue_facts[0].release_fn;
+    const saved_symbol = module_mir.drop_glue_facts[0].typed_release_symbol_id;
+    const make_guard_symbol = for (module_mir.functions) |function| {
+        if (std.mem.eql(u8, function.name, "make_guard")) break function.typed_symbol_id;
+    } else return error.TestUnexpectedResult;
     module_mir.drop_glue_facts[0].release_fn = "make_guard";
-    defer module_mir.drop_glue_facts[0].release_fn = saved_fn;
+    module_mir.drop_glue_facts[0].typed_release_symbol_id = make_guard_symbol;
+    defer {
+        module_mir.drop_glue_facts[0].release_fn = saved_fn;
+        module_mir.drop_glue_facts[0].typed_release_symbol_id = saved_symbol;
+    }
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &stale_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
