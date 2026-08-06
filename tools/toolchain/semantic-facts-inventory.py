@@ -1211,6 +1211,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "source_spelling.definesFunctionSpelling(module_mir, hook)": 1,
         "pub fn appendHeaderAndSanitizerHooks(": 1,
     },
+    "src/ownership_facts.zig": {
+        "pub fn makeDropPointerCall": 0,
+        "test \"auto-drop cleanup helpers recognize explicit release call shapes\"": 1,
+    },
     "src/sema.zig": {
         "fn checkIntegerLiteralInitializer": 1,
         "fn checkTargetlessLiteralInitializer": 1,

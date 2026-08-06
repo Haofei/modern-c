@@ -46,20 +46,6 @@ pub fn autoDropEligibleTypeName(
         !typeEmbedsLinearByValue(self_ty, structs, aliases, 0);
 }
 
-pub fn makeDropPointerCall(allocator: std.mem.Allocator, fn_name: []const u8, local: ast.Ident) !ast.Expr {
-    const ident = ast.Expr{ .span = local.span, .kind = .{ .ident = .{ .text = local.text, .span = local.span } } };
-    const address = ast.Expr{ .span = local.span, .kind = .{ .address_of = try ast.makePtr(allocator, ident) } };
-    const args = try allocator.dupe(ast.Expr, &[_]ast.Expr{address});
-    return .{
-        .span = local.span,
-        .kind = .{ .call = .{
-            .callee = try ast.makePtr(allocator, ast.Expr{ .span = local.span, .kind = .{ .ident = .{ .text = fn_name, .span = local.span } } }),
-            .type_args = &.{},
-            .args = args,
-        } },
-    };
-}
-
 pub fn autoDropPointerCleanup(expr: ast.Expr, auto_drop_fns_by_type: *const std.StringHashMap([]const u8)) ?AutoDropCleanup {
     const call = switch (expr.kind) {
         .call => |node| node,
@@ -186,14 +172,24 @@ test "drop pointer release parameter accepts named and generic mut pointers only
     try std.testing.expectEqualStrings("Wrapper", dropPointerReleaseParamTypeName(fn_decl).?);
 }
 
-test "auto-drop cleanup helpers preserve backend-visible call shapes" {
+test "auto-drop cleanup helpers recognize explicit release call shapes" {
     const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
     var map = std.StringHashMap([]const u8).init(std.testing.allocator);
     defer map.deinit();
     try map.put("Guard", "close_guard");
 
     const local = ast.Ident{ .text = "g", .span = span };
-    const call = try makeDropPointerCall(std.testing.allocator, "close_guard", local);
+    const ident = ast.Expr{ .span = span, .kind = .{ .ident = local } };
+    const address = ast.Expr{ .span = span, .kind = .{ .address_of = try ast.makePtr(std.testing.allocator, ident) } };
+    const args = try std.testing.allocator.dupe(ast.Expr, &[_]ast.Expr{address});
+    const call = ast.Expr{
+        .span = span,
+        .kind = .{ .call = .{
+            .callee = try ast.makePtr(std.testing.allocator, ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "close_guard", .span = span } } }),
+            .type_args = &.{},
+            .args = args,
+        } },
+    };
     defer {
         const node = call.kind.call;
         std.testing.allocator.destroy(node.callee);
