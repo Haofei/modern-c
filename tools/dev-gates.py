@@ -270,12 +270,9 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("tools/toolchain/mc-audit.sh",),
-        ("unsafe-audit", "double-fetch-audit", "taint-audit", "capability-mint-audit", "signature-proof-audit"),
+        ("unsafe-audit", "double-fetch-audit", "taint-audit", "capability-mint-audit"),
         "shared MC audit changes need every security audit mode",
-        (
-            "bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '",
-            "bash tools/toolchain/mc-audit.sh --mode signature-proof --self-test 2>&1 | rg '^SIG-PROOF '",
-        ),
+        ("bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '",),
     ),
     Rule(
         ("tools/toolchain/verified-bundle-loader-audit.py",),

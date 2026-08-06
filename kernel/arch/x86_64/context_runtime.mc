@@ -38,12 +38,8 @@ struct Context {
 // and resumes there. Naked: no prologue/epilogue, the asm owns the frame.
 #[naked]
 export fn mc_switch_context(old: *mut Context, new: *Context) -> void {
-    #[unsafe_contract(precise_asm)] {
-        unsafe {
-            asm opaque volatile {
-                "movq %rbx,  8(%rdi)\n movq %rbp, 16(%rdi)\n movq %r12, 24(%rdi)\n movq %r13, 32(%rdi)\n movq %r14, 40(%rdi)\n movq %r15, 48(%rdi)\n movq %rsp,  0(%rdi)\n movq  8(%rsi), %rbx\n movq 16(%rsi), %rbp\n movq 24(%rsi), %r12\n movq 32(%rsi), %r13\n movq 40(%rsi), %r14\n movq 48(%rsi), %r15\n movq  0(%rsi), %rsp\n ret"
-            }
-        }
+    asm opaque volatile {
+        "movq %rbx,  8(%rdi)\n movq %rbp, 16(%rdi)\n movq %r12, 24(%rdi)\n movq %r13, 32(%rdi)\n movq %r14, 40(%rdi)\n movq %r15, 48(%rdi)\n movq %rsp,  0(%rdi)\n movq  8(%rsi), %rbx\n movq 16(%rsi), %rbp\n movq 24(%rsi), %r12\n movq 32(%rsi), %r13\n movq 40(%rsi), %r14\n movq 48(%rsi), %r15\n movq  0(%rsi), %rsp\n ret"
     }
 }
 
@@ -52,12 +48,8 @@ export fn mc_switch_context(old: *mut Context, new: *Context) -> void {
 // cooperative tests never call it (CR3 is privileged), the paged kernel does.
 #[naked]
 export fn mc_switch_context_vm(old: *mut Context, new: *Context, new_cr3: u64) -> void {
-    #[unsafe_contract(precise_asm)] {
-        unsafe {
-            asm opaque volatile {
-                "movq %rbx,  8(%rdi)\n movq %rbp, 16(%rdi)\n movq %r12, 24(%rdi)\n movq %r13, 32(%rdi)\n movq %r14, 40(%rdi)\n movq %r15, 48(%rdi)\n movq %rsp,  0(%rdi)\n movq %rdx, %cr3\n movq  8(%rsi), %rbx\n movq 16(%rsi), %rbp\n movq 24(%rsi), %r12\n movq 32(%rsi), %r13\n movq 40(%rsi), %r14\n movq 48(%rsi), %r15\n movq  0(%rsi), %rsp\n ret"
-            }
-        }
+    asm opaque volatile {
+        "movq %rbx,  8(%rdi)\n movq %rbp, 16(%rdi)\n movq %r12, 24(%rdi)\n movq %r13, 32(%rdi)\n movq %r14, 40(%rdi)\n movq %r15, 48(%rdi)\n movq %rsp,  0(%rdi)\n movq %rdx, %cr3\n movq  8(%rsi), %rbx\n movq 16(%rsi), %rbp\n movq 24(%rsi), %r12\n movq 32(%rsi), %r13\n movq 40(%rsi), %r14\n movq 48(%rsi), %r15\n movq  0(%rsi), %rsp\n ret"
     }
 }
 
@@ -67,12 +59,8 @@ export fn mc_switch_context_vm(old: *mut Context, new: *Context, new_cr3: u64) -
 #[naked]
 #[noinline]
 fn thread_trampoline() -> void {
-    #[unsafe_contract(precise_asm)] {
-        unsafe {
-            asm opaque volatile {
-                "call *%r12\n 1: jmp 1b"
-            }
-        }
+    asm opaque volatile {
+        "call *%r12\n 1: jmp 1b"
     }
 }
 

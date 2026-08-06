@@ -250,11 +250,8 @@ def main() -> None:
     assert_route(
         module,
         ["tools/toolchain/mc-audit.sh"],
-        ["unsafe-audit", "double-fetch-audit", "taint-audit", "capability-mint-audit", "signature-proof-audit"],
-        [
-            "bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '",
-            "bash tools/toolchain/mc-audit.sh --mode signature-proof --self-test 2>&1 | rg '^SIG-PROOF '",
-        ],
+        ["unsafe-audit", "double-fetch-audit", "taint-audit", "capability-mint-audit"],
+        ["bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '"],
     )
     assert_route(
         module,

@@ -107,7 +107,7 @@ risks:
       - production-kernel
       - secure-boot-claim
       - untrusted-agent-loading
-    summary: A production-shaped exact-byte VerifiedBundle wrapper now binds current image bytes with a SHA-256 digest before ELF loading, admission consumes an opaque signature proof token instead of a caller boolean, proof/root minting and raw ELF loader call sites are source-audited to approved TCB/fixture files, and the app-run compatibility entry routes through that token path. Production signature/key-policy proof minting, persistence/audit identity, anti-rollback storage, and hardware qualification remain open.
+    summary: A production-shaped exact-byte VerifiedBundle wrapper now binds current image bytes with a SHA-256 digest before ELF loading, admission consumes an opaque signature proof token instead of a caller boolean, the app-run compatibility entry routes through that token path, and raw ELF loader call sites are source-audited to approved loader/arch demos. Production signature/key-policy proof minting, persistence/audit identity, anti-rollback storage, and hardware qualification remain open.
 
   - id: KERNEL-CAPABILITY-MINT
     severity: high
