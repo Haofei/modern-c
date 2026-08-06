@@ -240,7 +240,7 @@ if [ ! -s "$WORK/ok.c.mcmeta" ]; then
     echo "FAIL: mcc-cli-test — emit-c -o did not create artifact metadata sidecar"
     exit 1
 fi
-python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.mcmeta" --artifact "$WORK/ok.c" --source "$LOADED_OK" --artifact-kind c --backend c >/dev/null
+python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.mcmeta" --artifact "$WORK/ok.c" --source-map-artifact "$WORK/ok.c" --source "$LOADED_OK" --artifact-kind c --backend c >/dev/null
 if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.mcmeta" --artifact "$WORK/ok.c" --artifact-kind llvm-ir --backend c >/dev/null 2>&1; then
     echo "FAIL: mcc-cli-test — metadata verifier accepted C sidecar as LLVM IR"
     cat "$WORK/ok.c.mcmeta"
@@ -276,11 +276,26 @@ if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.no-artifact-digest.mcmeta" >/d
     cat "$WORK/ok.c.no-artifact-digest.mcmeta"
     exit 1
 fi
+grep -v '^# source_map_payload_sha256=' "$WORK/ok.c.mcmeta" > "$WORK/ok.c.no-source-map-payload.mcmeta"
+if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.c.no-source-map-payload.mcmeta" --artifact "$WORK/ok.c" >/dev/null 2>&1; then
+    echo "FAIL: mcc-cli-test — metadata verifier accepted an incomplete source-map digest binding"
+    cat "$WORK/ok.c.no-source-map-payload.mcmeta"
+    exit 1
+fi
 grep -Fq "# artifact_kind=c" "$WORK/ok.c.mcmeta" || {
     echo "FAIL: mcc-cli-test — emit-c metadata missing artifact kind"; cat "$WORK/ok.c.mcmeta"; exit 1;
 }
 grep -Fq "# backend=c" "$WORK/ok.c.mcmeta" || {
     echo "FAIL: mcc-cli-test — emit-c metadata missing backend"; cat "$WORK/ok.c.mcmeta"; exit 1;
+}
+grep -Eq "# source_map_generated_artifact_sha256=[0-9a-f]{64}" "$WORK/ok.c.mcmeta" || {
+    echo "FAIL: mcc-cli-test — emit-c metadata missing source-map generated artifact digest"; cat "$WORK/ok.c.mcmeta"; exit 1;
+}
+grep -Eq "# source_map_payload_sha256=[0-9a-f]{64}" "$WORK/ok.c.mcmeta" || {
+    echo "FAIL: mcc-cli-test — emit-c metadata missing source-map payload digest"; cat "$WORK/ok.c.mcmeta"; exit 1;
+}
+grep -Eq "# mir_facts_sha256=[0-9a-f]{64}" "$WORK/ok.c.mcmeta" || {
+    echo "FAIL: mcc-cli-test — emit-c metadata missing MIR facts digest"; cat "$WORK/ok.c.mcmeta"; exit 1;
 }
 printf 'old artifact\n' >"$WORK/guard.c"
 mkdir "$WORK/guard.c.mcmeta"

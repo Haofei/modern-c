@@ -95,8 +95,10 @@ fi
 MAP="$W/a.mcmap"
 
 "$MCC" emit-c "$SRC" > "$W/generated.c" 2>/dev/null
+"$MCC" emit-c "$SRC" -o "$W/generated-out.c" > "$W/generated-out.stdout" 2>/dev/null
 require_sha_header generated_artifact_sha256 "$(sha256_file "$W/generated.c")" "$MAP"
 require_sha_header source_map_payload_sha256 "$(mcmap_payload_sha256 "$MAP")" "$MAP"
+require_sha_header source_map_generated_artifact_sha256 "$(sha256_file "$W/generated.c")" "$MAP"
 require_sha_header_present mir_facts_sha256 "$MAP"
 require_sha_header source_sha256 "$(sha256_file "$LOADED_SRC")" "$MAP"
 require_header lower_profile kernel "$MAP"
@@ -106,6 +108,7 @@ require_header lower_checks_msan false "$MAP"
 require_header lower_checks_csan false "$MAP"
 require_header lower_stub_asm false "$MAP"
 python3 "$MCMAP_VERIFY" --map "$MAP" --artifact "$W/generated.c" --source "$LOADED_SRC" >/dev/null
+python3 "$MCMAP_VERIFY" --metadata "$W/generated-out.c.mcmeta" --artifact "$W/generated-out.c" --source-map-artifact "$W/generated-out.c" --source "$LOADED_SRC" --artifact-kind c --backend c >/dev/null
 
 tail -n +2 "$MAP" > "$W/no-magic.mcmap"
 if python3 "$MCMAP_VERIFY" --map "$W/no-magic.mcmap" --artifact "$W/generated.c" --source "$LOADED_SRC" >/dev/null 2>&1; then
@@ -114,6 +117,10 @@ fi
 grep -v '^# generated_artifact_sha256=' "$MAP" > "$W/no-artifact-digest.mcmap"
 if python3 "$MCMAP_VERIFY" --map "$W/no-artifact-digest.mcmap" --source "$LOADED_SRC" >/dev/null 2>&1; then
     echo "FAIL: mcmap-test — verifier accepted a map without generated_artifact_sha256"; exit 1
+fi
+grep -v '^# source_map_payload_sha256=' "$W/generated-out.c.mcmeta" > "$W/no-sidecar-source-map-payload.mcmeta"
+if python3 "$MCMAP_VERIFY" --metadata "$W/no-sidecar-source-map-payload.mcmeta" --artifact "$W/generated-out.c" >/dev/null 2>&1; then
+    echo "FAIL: mcmap-test — verifier accepted metadata with an incomplete source-map digest binding"; exit 1
 fi
 grep -v '^# artifact_kind=' "$MAP" > "$W/no-artifact-kind.mcmap"
 if python3 "$MCMAP_VERIFY" --map "$W/no-artifact-kind.mcmap" --artifact "$W/generated.c" --source "$LOADED_SRC" >/dev/null 2>&1; then

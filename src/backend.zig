@@ -14,6 +14,7 @@ pub const ArtifactBundle = struct {
     artifact_kind: ?[]const u8 = null,
     backend_name: ?[]const u8 = null,
     generated_artifact_sha256: Sha256Digest,
+    source_map_generated_artifact_sha256: ?Sha256Digest = null,
     source_map_payload_sha256: ?Sha256Digest = null,
     mir_facts_sha256: ?Sha256Digest = null,
     source_sha256: ?Sha256Digest = null,
@@ -67,6 +68,7 @@ pub const ArtifactBundle = struct {
             .artifact_kind = "c-source-map",
             .backend_name = "c",
         });
+        bundle.source_map_generated_artifact_sha256 = sha256Bytes(generated_artifact);
         bundle.source_map_payload_sha256 = sha256Bytes(source_map_payload);
         bundle.mir_facts_sha256 = sha256Bytes(mir_facts_input);
         return bundle;
@@ -83,6 +85,7 @@ pub fn appendArtifactBundleHeaders(allocator: std.mem.Allocator, out: *std.Array
     try appendOptionalStringHeader(allocator, out, "artifact_kind", bundle.artifact_kind);
     try appendOptionalStringHeader(allocator, out, "backend", bundle.backend_name);
     try appendDigestValueHeader(allocator, out, "generated_artifact_sha256", bundle.generated_artifact_sha256);
+    try appendOptionalDigestHeader(allocator, out, "source_map_generated_artifact_sha256", bundle.source_map_generated_artifact_sha256);
     try appendOptionalDigestHeader(allocator, out, "source_map_payload_sha256", bundle.source_map_payload_sha256);
     try appendOptionalDigestHeader(allocator, out, "mir_facts_sha256", bundle.mir_facts_sha256);
     try appendOptionalDigestHeader(allocator, out, "source_sha256", bundle.source_sha256);

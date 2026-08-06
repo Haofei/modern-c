@@ -90,8 +90,9 @@ const usage =
     \\                         redacted to deterministic /src/... artifact paths.
     \\  -o artifacts            emit-c, emit-llvm, and build also write a sibling
     \\                         <output>.mcmeta sidecar with artifact/source/options
-    \\                         provenance. emit-map embeds the same metadata in the
-    \\                         .mcmap header.
+    \\                         provenance; C artifacts also bind source-map and
+    \\                         MIR-fact digests. emit-map embeds the same metadata
+    \\                         in the .mcmap header.
     \\
     \\build-safety profile (orthogonal to the --profile target axis):
     \\  --checks=all           SAFE build (DEFAULT): keep every runtime trap check.
@@ -1012,10 +1013,11 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         },
         else => return err,
     };
-    const bundle = backend.ArtifactBundle.forArtifact(output.items, lower_opts, .{
+    var bundle = backend.ArtifactBundle.forArtifact(output.items, lower_opts, .{
         .artifact_kind = "c",
         .backend_name = "c",
     });
+    try attachCSourceMapDigests(allocator, be, program, output.items, lower_opts, &bundle);
     try session.writeArtifactWithMetadata(output.items, output_path, bundle);
 }
 
@@ -1112,11 +1114,12 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     defer allocator.free(executable_bytes);
     const toolchain_identity = try clangToolchainIdentity(allocator, io, clang_bin);
     defer allocator.free(toolchain_identity);
-    const bundle = backend.ArtifactBundle.forArtifact(executable_bytes, lower_opts, .{
+    var bundle = backend.ArtifactBundle.forArtifact(executable_bytes, lower_opts, .{
         .artifact_kind = "host-executable",
         .backend_name = "c",
         .toolchain_identity = toolchain_identity,
     });
+    try attachCSourceMapDigests(allocator, be, program, raw_c.items, lower_opts, &bundle);
     var metadata = try session.prepareArtifactMetadataSidecar(output_path, bundle);
     defer metadata.deinit(allocator);
     try session.ensureReplaceTargetNotDirectory(output_path, "output");
@@ -1148,6 +1151,43 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     try session.writeStdout("mcc build: wrote ");
     try session.writeStdout(output_path);
     try session.writeStdout("\n");
+}
+
+fn attachCSourceMapDigests(
+    allocator: std.mem.Allocator,
+    be: backend.Backend,
+    program: backend.VerifiedProgram,
+    generated_c: []const u8,
+    lower_opts: backend.LowerOptions,
+    bundle: *backend.ArtifactBundle,
+) !void {
+    if (!be.supportsEmitMap()) return;
+    var map_bytes: std.ArrayList(u8) = .empty;
+    defer map_bytes.deinit(allocator);
+    try be.emitMap(allocator, program, &map_bytes, generated_c, lower_opts);
+    bundle.source_map_generated_artifact_sha256 = try metadataDigestHeader(map_bytes.items, "generated_artifact_sha256");
+    bundle.source_map_payload_sha256 = try metadataDigestHeader(map_bytes.items, "source_map_payload_sha256");
+    bundle.mir_facts_sha256 = try metadataDigestHeader(map_bytes.items, "mir_facts_sha256");
+}
+
+fn metadataDigestHeader(bytes: []const u8, name: []const u8) !backend.Sha256Digest {
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, "\r");
+        if (!std.mem.startsWith(u8, line, "# ")) continue;
+        const body = line[2..];
+        const eq = std.mem.indexOfScalar(u8, body, '=') orelse continue;
+        if (!std.mem.eql(u8, body[0..eq], name)) continue;
+        const value = body[eq + 1 ..];
+        if (value.len != 64) return error.InvalidArtifactMetadata;
+        var digest: backend.Sha256Digest = undefined;
+        var index: usize = 0;
+        while (index < digest.len) : (index += 1) {
+            digest[index] = try std.fmt.parseInt(u8, value[index * 2 .. index * 2 + 2], 16);
+        }
+        return digest;
+    }
+    return error.InvalidArtifactMetadata;
 }
 
 fn buildTempPath(allocator: std.mem.Allocator, output_path: []const u8, suffix: []const u8, attempt: usize) ![]const u8 {

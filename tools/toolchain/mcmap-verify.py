@@ -113,6 +113,11 @@ def verify(args: argparse.Namespace) -> None:
     if args.map is not None:
         require_header_value(headers, "artifact_kind", "c-source-map")
         require_header_value(headers, "backend", "c")
+        expected_map_artifact_digest = require_sha256_header(headers, "source_map_generated_artifact_sha256")
+        if expected_map_artifact_digest != expected_artifact_digest:
+            raise VerifyError(
+                "source-map generated artifact digest does not match generated_artifact_sha256"
+            )
         expected_payload_digest = require_sha256_header(headers, "source_map_payload_sha256")
         actual_payload_digest = sha256_bytes(payload)
         if actual_payload_digest != expected_payload_digest:
@@ -122,6 +127,16 @@ def verify(args: argparse.Namespace) -> None:
             )
 
         require_sha256_header(headers, "mir_facts_sha256")
+    else:
+        source_map_headers = [
+            "source_map_generated_artifact_sha256",
+            "source_map_payload_sha256",
+            "mir_facts_sha256",
+        ]
+        present = [name for name in source_map_headers if name in headers]
+        if present:
+            for name in source_map_headers:
+                require_sha256_header(headers, name)
 
     if args.artifact_kind is not None:
         require_header_value(headers, "artifact_kind", args.artifact_kind)
@@ -135,6 +150,15 @@ def verify(args: argparse.Namespace) -> None:
             raise VerifyError(
                 "generated artifact digest mismatch: "
                 f"header={expected_artifact_digest} actual={actual_artifact_digest}"
+            )
+
+    if args.source_map_artifact is not None:
+        expected_map_artifact_digest = require_sha256_header(headers, "source_map_generated_artifact_sha256")
+        actual_map_artifact_digest = sha256_bytes(read_file(args.source_map_artifact))
+        if actual_map_artifact_digest != expected_map_artifact_digest:
+            raise VerifyError(
+                "source-map generated artifact digest mismatch: "
+                f"header={expected_map_artifact_digest} actual={actual_map_artifact_digest}"
             )
 
     if args.source is not None:
@@ -163,6 +187,11 @@ def main() -> int:
         "--source",
         type=Path,
         help="Exact loaded source object that must match source_sha256",
+    )
+    parser.add_argument(
+        "--source-map-artifact",
+        type=Path,
+        help="Generated C artifact that source-map rows describe; must match source_map_generated_artifact_sha256",
     )
     parser.add_argument(
         "--artifact-kind",

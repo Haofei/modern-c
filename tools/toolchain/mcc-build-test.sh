@@ -51,7 +51,8 @@ if [ ! -s "$WORK/ok.mcmeta" ]; then
     echo "FAIL: mcc-build-test - build did not create executable metadata sidecar"
     exit 1
 fi
-python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.mcmeta" --artifact "$WORK/ok" --artifact-kind host-executable --backend c >/dev/null
+"$MCC" emit-c "$WORK/ok.mc" --profile=hosted -o "$WORK/ok.raw.c" >/dev/null 2>"$WORK/emit-c.err"
+python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.mcmeta" --artifact "$WORK/ok" --source-map-artifact "$WORK/ok.raw.c" --artifact-kind host-executable --backend c >/dev/null
 cp "$WORK/ok" "$WORK/ok-mutated"
 printf '\n# stale metadata probe\n' >>"$WORK/ok-mutated"
 if python3 "$MCMAP_VERIFY" --metadata "$WORK/ok.mcmeta" --artifact "$WORK/ok-mutated" --artifact-kind host-executable --backend c >/dev/null 2>&1; then
@@ -72,6 +73,15 @@ grep -Fq "# toolchain_identity=" "$WORK/ok.mcmeta" || {
 }
 grep -Eq "# toolchain_identity=.*sha256=[0-9a-f]{64}" "$WORK/ok.mcmeta" || {
     echo "FAIL: mcc-build-test - build metadata missing clang executable digest"; cat "$WORK/ok.mcmeta"; exit 1;
+}
+grep -Eq "# source_map_generated_artifact_sha256=[0-9a-f]{64}" "$WORK/ok.mcmeta" || {
+    echo "FAIL: mcc-build-test - build metadata missing source-map generated artifact digest"; cat "$WORK/ok.mcmeta"; exit 1;
+}
+grep -Eq "# source_map_payload_sha256=[0-9a-f]{64}" "$WORK/ok.mcmeta" || {
+    echo "FAIL: mcc-build-test - build metadata missing source-map payload digest"; cat "$WORK/ok.mcmeta"; exit 1;
+}
+grep -Eq "# mir_facts_sha256=[0-9a-f]{64}" "$WORK/ok.mcmeta" || {
+    echo "FAIL: mcc-build-test - build metadata missing MIR facts digest"; cat "$WORK/ok.mcmeta"; exit 1;
 }
 
 "$MCC" build "$WORK/void_main.mc" -o "$WORK/void-main" >"$WORK/void-build.out" 2>"$WORK/void-build.err"

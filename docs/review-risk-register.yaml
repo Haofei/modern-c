@@ -66,10 +66,10 @@ risks:
     severity: medium
     scope: artifact-provenance
     status: open
-    admitted_subset_status: artifact-and-release-sidecars-gated
+    admitted_subset_status: c-artifact-source-map-digest-gated
     blocks:
       - release-debug-provenance-claim
-    summary: Bind emitted artifact, source map, toolchain identity, lowering options, and source digest in one metadata object.
+    summary: C/source-map-bearing artifacts now bind generated artifact, source-map generated artifact, source-map payload, MIR facts, source digest, lowering options, and toolchain identity where applicable; full LLVM debug/source-map release provenance remains open.
 
   - id: SELFHOST-PROFILE
     severity: medium
