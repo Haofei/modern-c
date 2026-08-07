@@ -4742,7 +4742,7 @@ const FunctionBuilder = struct {
                 try self.recordLocalAggregatePointerAliasAssignment(node.target, node.value);
                 try self.recordLocalPointerArrayAliasAssignment(node.target, node.value, stmt.span);
                 if (assignmentTargetIdentName(node.target)) |target_name| {
-                    if (self.local_types.contains(target_name)) {
+                    if (self.local_mutability.get(target_name) orelse false) {
                         try self.addLocalOwnershipEvent(.reinit, target_name, node.value.span);
                     }
                 }
@@ -5792,7 +5792,14 @@ const FunctionBuilder = struct {
             try self.addExpressionResultFact(expr);
             expr = switch (expr.kind) {
                 .grouped => expr.kind.grouped.*,
-                .move_expr => expr.kind.move_expr.*,
+                .move_expr => |inner| moved: {
+                    if (directIdentName(inner.*)) |name| {
+                        if (self.local_types.contains(name)) {
+                            try self.addLocalOwnershipEvent(.move_out, name, expr.span);
+                        }
+                    }
+                    break :moved inner.*;
+                },
                 else => unreachable,
             };
         }

@@ -4137,6 +4137,37 @@ test "MIR records local reinit ownership events" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=reassign_local kind=reinit") != null);
 }
 
+test "MIR records simple move-out ownership events" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\fn return_guard() -> Guard {
+        \\    var g = make_guard();
+        \\    return move g;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_ownership_move_out.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "return_guard") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
+    const g_identity = valueIdentityBySpelling(function, "g") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(mir.OwnershipEventKind.storage_live, function.ownership_events[0].kind);
+    try std.testing.expect(function.ownership_events[0].place.root_value_id.eql(g_identity.id));
+    try std.testing.expectEqual(mir.OwnershipEventKind.init, function.ownership_events[1].kind);
+    try std.testing.expect(function.ownership_events[1].place.root_value_id.eql(g_identity.id));
+    try std.testing.expectEqual(mir.OwnershipEventKind.move_out, function.ownership_events[2].kind);
+    try std.testing.expect(function.ownership_events[2].place.root_value_id.eql(g_identity.id));
+    try mir.validateLoweringAdmission(module_mir);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=return_guard kind=move_out") != null);
+}
+
 test "MIR ownership event admission rejects malformed event identity" {
     // DIAGNOSTIC_UNIT: E_MIR_OWNERSHIP_EVENT
     const source =
