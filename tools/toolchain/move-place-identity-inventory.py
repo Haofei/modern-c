@@ -27,7 +27,6 @@ ANCHORS: dict[str, list[str]] = {
         "fn markEscapedBorrowForCarriedAlias",
         "fn hasUntypedBorrowAlias",
         "fn integerCastBorrowedMoveRootPlace",
-        "fn immediateFullDerefMoveReferent",
         "fn typedAliasReferentPlace",
         "fn typedAliasReferentPlace(referent: AliasReferent) ?MovePlace",
         "fn aliasReferentTargetsOuter",
@@ -77,7 +76,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         # embedded unit tests. Production consumers use typed-place scans;
         # changing either count forces an audit rather than silently adding a
         # new compatibility-key authority.
-        "state.get(": 8,
+        "state.get(": 6,
         "state.getPtr(": 0,
         "state.contains(": 1,
         "block_state.get(": 0,
@@ -191,11 +190,10 @@ BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
             "spine.borrowedMoveRoot",
         ],
         ("pub fn moveConsume", "pub fn moveBorrow"): [
+            "consumeTrackedMoveReferent",
+            "consumeTrackedMoveRootPlace",
+            "consumeTrackedMovePlace",
             "slot.alias_of orelse unreachable",
-        ],
-        ("fn consumeTrackedMoveReferent", "// An alias can retain a typed root place"): [
-            "consumeTrackedMoveBinding",
-            "referent.place",
         ],
         ("fn recordLoopEarlyExitInvalidations", "fn recordInvalidatedAliasPlace"): [
             "invalidated_aliases",

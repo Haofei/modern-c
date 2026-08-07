@@ -13,20 +13,17 @@ ANCHORS: dict[str, list[str]] = {
     "src/sema_model.zig": [
         "pub const MovePlaceProjectionRelation = enum",
         "pub fn movePlaceProjectionRelation",
-        ".symbolic_index => switch (right)",
         ".wildcard_index => switch (right)",
-        "Dynamic-index policy: stable dynamic indexes are preserved as symbolic",
+        "Dynamic-index policy: v0 accepts only constant-index ownership places",
     ],
     "src/sema_move.zig": [
         "fn stableIndexPlaceKnown",
-        "fn symbolicIndexValue",
         "fn wildcardMoveIndexedPlaceKey",
         "fn nestedWildcardIndexedPlaceKeyAndType",
-        ".symbolic_index = symbol",
         ".wildcard_index",
     ],
     "src/sema_tests.zig": [
-        "move dynamic-place policy separates symbolic identity from overlap",
+        "move dynamic-place policy rejects symbolic identity and keeps wildcard overlap",
         "move dynamic-place policy keeps wildcard indexes behind field boundaries",
     ],
     "docs/compiler-production-readiness.md": [

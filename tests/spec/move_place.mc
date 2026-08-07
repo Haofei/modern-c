@@ -3023,9 +3023,9 @@ fn reject_move_array_element_through_full_alias() -> u32 {
     return consume(move x) + consume(move y);
 }
 
-// Accepted: an immediate full deref of a move field address consumes the same
-// tracked field place as a named full alias.
-fn accept_move_field_through_immediate_full_deref() -> u32 {
+// Rejected in ownership v0: immediate full deref of a move field address is
+// still a pointer/alias-derived ownership transfer.
+fn reject_move_field_through_immediate_full_deref() -> u32 {
     let p: Pair = mk();
     let x: Res = (&p.a).*; // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = move p.b;
@@ -3033,9 +3033,9 @@ fn accept_move_field_through_immediate_full_deref() -> u32 {
     return consume(move x) + consume(move y);
 }
 
-// Accepted: immediate full deref of a constant-index array element address
-// consumes that precise element place.
-fn accept_move_array_element_through_immediate_full_deref() -> u32 {
+// Rejected in ownership v0: immediate full deref of a constant-index array
+// element address is still a pointer/alias-derived ownership transfer.
+fn reject_move_array_element_through_immediate_full_deref() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let x: Res = (&arr[0]).*; // EXPECT_ERROR: E_USE_AFTER_MOVE
     let y: Res = arr[1];
@@ -3100,9 +3100,9 @@ fn reject_constant_after_dynamic_array_element_full_alias_move(i: usize) -> u32 
     return consume(move x) + consume(move y);
 }
 
-// Accepted: a noalias-wrapped immediate address of a dynamic array element is
+// Rejected in ownership v0: a noalias-wrapped immediate address of a dynamic array element is
 // still a full alias to the same wildcard place when immediately dereferenced.
-fn accept_move_dynamic_array_element_through_noalias_full_deref(i: usize) -> u32 {
+fn reject_move_dynamic_array_element_through_noalias_full_deref(i: usize) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     #[unsafe_contract(noalias)] {
         let x: Res = compiler.assume_noalias_unchecked(&arr[i], 4).*; // EXPECT_ERROR: E_USE_AFTER_MOVE
@@ -4086,9 +4086,9 @@ fn reject_assigned_array_struct_element_laundered_alias_after_move() -> u32 {
     return consume(move x) + consume(move y) + v;
 }
 
-// Accepted: a successful dynamic index into a singleton array denotes `arr[0]`,
+// Rejected in ownership v0: a successful dynamic index into a singleton array denotes `arr[0]`,
 // so assigned aliases into `arr[i].p` are precise too.
-fn accept_assigned_singleton_dynamic_array_struct_field_alias_before_move(i: usize) -> u32 {
+fn reject_assigned_singleton_dynamic_array_struct_field_alias_before_move(i: usize) -> u32 {
     let r: Res = mkres(1);
     var other: Res = mkres(2);
     var arr: [1]ResPtrHolder = .{ .{ .p = &other } };

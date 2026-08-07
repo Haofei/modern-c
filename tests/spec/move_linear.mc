@@ -383,9 +383,9 @@ fn reject_owner_after_copied_full_alias_move() -> u32 {
     return a + b;
 }
 
-// accepted: a grouped full alias still carries the typed source place, so
+// rejected in ownership v0: a grouped full alias still carries the typed source place, so
 // consuming through its dereference poisons the owner rather than its key slot.
-fn accept_move_through_grouped_full_alias() -> u32 {
+fn reject_move_through_grouped_full_alias() -> u32 {
     let t: Token = make(); // EXPECT_ERROR: E_RESOURCE_LEAK
     let p: *Token = &t;
     let moved: Token = move (p).*; // EXPECT_ERROR: E_USE_AFTER_MOVE

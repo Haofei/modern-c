@@ -1764,7 +1764,7 @@ test "move state transports independent index facts through clone and join" {
     try std.testing.expect((joined.index_facts.get("index") orelse unreachable).eql(.{ .constant = 1 }));
     try std.testing.expect(joined.index_bindings.contains("index"));
 
-    try same.index_facts.put("index", .{ .symbolic = "runtime_index" });
+    try same.index_facts.put("index", .{ .constant = 2 });
     mergeMoveBranches(&checker, &joined, &left, &same);
     try std.testing.expect(joined.index_facts.get("index") == null);
     try std.testing.expect(joined.index_bindings.contains("index"));
@@ -2399,30 +2399,6 @@ test "move binding slot removal uses typed place not compatibility key" {
     try std.testing.expectEqual(@as(usize, 1), state.count());
 }
 
-test "move alias root consumption uses typed place rather than compatibility key" {
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-alias-root-place.mc", "");
-    defer reporter.deinit();
-    var checker = Checker.init(&reporter);
-
-    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
-    const root: MovePlace = .{ .root = "owner" };
-    var state = MoveState.init(std.testing.allocator);
-    defer state.deinit();
-
-    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
-    consumeTrackedMoveReferent(&checker, .{ .key = "stale:owner", .place = root, .full_deref = true }, span, &state);
-    try std.testing.expect(!state.get("compat:owner").?.live);
-    try std.testing.expect(!reporter.has_errors);
-
-    // A legacy alias key may happen to name a live owner, but it cannot
-    // establish ownership identity. Refuse the move rather than consuming the
-    // binding selected by that text.
-    try state.put("compat:owner", .{ .live = true, .span = span, .place = root });
-    consumeTrackedMoveReferent(&checker, .{ .key = "compat:owner", .place = null, .full_deref = true }, span, &state);
-    try std.testing.expect(state.get("compat:owner").?.live);
-    try std.testing.expect(reporter.has_errors);
-}
-
 fn divergentAliasSlot(key: []const u8, source: MoveSlot) MoveSlot {
     return .{
         .live = false,
@@ -2691,15 +2667,11 @@ fn moveProjectionsMayOverlap(left: MoveProjection, right: MoveProjection) bool {
         },
         .constant_index => |left_index| switch (right) {
             .constant_index => |right_index| left_index == right_index,
-            .symbolic_index, .wildcard_index => true,
-            else => false,
-        },
-        .symbolic_index => switch (right) {
-            .constant_index, .symbolic_index, .wildcard_index => true,
+            .wildcard_index => true,
             else => false,
         },
         .wildcard_index => switch (right) {
-            .constant_index, .symbolic_index, .wildcard_index => true,
+            .constant_index, .wildcard_index => true,
             else => false,
         },
     };
@@ -3047,69 +3019,6 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
     }
 }
 
-fn consumeTrackedMoveReferent(self: *Checker, referent: AliasReferent, span: diagnostics.Span, state: *MoveState) void {
-    const place = typedAliasReferentPlace(referent) orelse {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "cannot move a linear `move` value through an alias without a typed referent place");
-        return;
-    };
-    if (place.isSubplace()) {
-        consumeTrackedMovePlace(self, referent.key, place, span, state);
-    } else {
-        consumeTrackedMoveRootPlace(self, place, span, state);
-    }
-}
-
-// An alias can retain a typed root place while its compatibility lookup key was
-// rewritten by an assignment or CFG merge. Root consumption must follow that
-// place, not the compatibility spelling, or the owner can be left live.
-fn consumeTrackedMoveRootPlace(self: *Checker, place: MovePlace, span: diagnostics.Span, state: *MoveState) void {
-    const slot = rootMoveSlotPtrForPlace(place, state) orelse return;
-    if (slot.type_only) return;
-    if (slot.auto_drop) {
-        self.errorCode(span, "E_AUTO_DROP_UNSUPPORTED", "cannot move an auto-dropped `move` binding through an alias or dereference in ownership v0; move the owning local directly or use an explicit release path");
-        return;
-    }
-    if (!slot.live) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` value after it was moved");
-    } else if (slot.escaped_borrow != null) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "cannot move this linear `move` value: a borrow of it (or of one of its fields) has been stored into memory and may still be read; the move would leave that borrow dangling");
-        slot.live = false;
-    } else if (slot.deferred) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value is reserved by a `defer` and cannot be moved");
-    } else if (slot.deferred_borrow) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value is borrowed by a deferred expression and cannot be moved before the defer runs");
-        slot.live = false;
-    } else if (slotHasScopedBorrow(slot.*)) {
-        self.errorCode(span, "E_BORROW_CONFLICT", "cannot move a linear `move` value while a scoped borrow is live");
-    } else if (hasMovedSubplace(place, state)) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` value used as a whole after one of its fields was moved out");
-        slot.live = false;
-    } else {
-        slot.live = false;
-    }
-}
-
-fn consumeTrackedMovePlace(self: *Checker, key: []const u8, place: MovePlace, span: diagnostics.Span, state: *MoveState) void {
-    const root = rootMoveSlotForPlace(place, state) orelse return;
-    if (!root.live) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after its owner was moved");
-        return;
-    }
-    if (root.auto_drop) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "cannot move a field out of an auto-dropped `move` value in ownership v0; keep the resource whole until its lexical cleanup runs");
-        return;
-    }
-    if (deferredBorrowConflictsWithTrackedPlace(place, state)) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "linear `move` field is borrowed by a deferred expression and cannot be moved before the defer runs");
-        return;
-    }
-    if (stateHasActivePlaceOrConflict(place, state)) {
-        self.errorCode(span, "E_USE_AFTER_MOVE", "use of linear `move` field after it was moved out");
-        return;
-    }
-    recordOwnershipMovePlace(self, key, place, .{ .live = false, .span = span, .place = place }, state);
-}
-
 // A while condition has a zero-iteration bypass and an evaluated-condition path.
 // The worklist owns transport between those blocks; loop widening remains the
 // existing dedicated rule so condition-only moves retain E_MOVE_LOOP_RESOURCE.
@@ -3337,11 +3246,7 @@ fn moveSlotStateEqual(left: MoveSlot, right: MoveSlot) bool {
 }
 
 fn deferredAliasBorrowPlace(place: ?MovePlace) ?MovePlace {
-    var result = place orelse return null;
-    for (result.projections[0..result.projection_count]) |*projection| {
-        if (projection.* == .symbolic_index) projection.* = .wildcard_index;
-    }
-    return result;
+    return place;
 }
 
 // ----- place sensitivity: track a `move` field moved out of its aggregate -----
@@ -3459,7 +3364,6 @@ fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx:
         .ident => |id| {
             if (state.index_facts.get(id.text)) |fact| return switch (fact) {
                 .constant => |index| index,
-                .symbolic => null,
             };
             return null;
         },

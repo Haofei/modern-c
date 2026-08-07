@@ -58,47 +58,36 @@ CHANNELS: dict[str, dict[str, list[str]]] = {
             "reject_defer_dynamic_pointer_to_move_matrix_element",
         ],
     },
-    "multi-element non-nameable returned arrays reject": {
+    "non-nameable returned arrays reject": {
         "src/sema_move.zig": [
-            "nonNameableSingletonMoveIndex",
+            "arrayIndexEmbedsMove",
         ],
         "tests/spec/move_place.mc": [
             "reject_dynamic_returned_move_array_element",
+            "reject_dynamic_returned_singleton_move_array_element",
             "reject_defer_dynamic_returned_move_array_element",
             "reject_dynamic_returned_matrix_element",
+            "reject_dynamic_inner_returned_singleton_matrix_element",
+            "reject_dynamic_outer_returned_singleton_matrix_element",
             "reject_dynamic_inner_returned_matrix_element",
             "reject_defer_dynamic_returned_matrix_element",
             "reject_defer_dynamic_inner_returned_matrix_element",
         ],
     },
-    "multi-element non-nameable array literals reject": {
+    "non-nameable array literals reject": {
         "src/sema_move.zig": [
             "arrayLiteralElementEmbedsMove",
-            "nonNameableSingletonMoveIndex",
         ],
         "tests/spec/move_place.mc": [
             "reject_dynamic_array_literal_move_element",
+            "reject_dynamic_singleton_array_literal_move_element",
             "reject_defer_dynamic_array_literal_move_element",
             "reject_dynamic_nested_array_literal_move_element",
+            "reject_dynamic_inner_nested_singleton_array_literal_move_element",
+            "reject_dynamic_outer_nested_singleton_array_literal_move_element",
             "reject_dynamic_inner_nested_array_literal_move_element",
             "reject_defer_dynamic_nested_array_literal_move_element",
             "reject_defer_dynamic_inner_nested_array_literal_move_element",
-        ],
-    },
-    "singleton non-nameable arrays are the accepted exception": {
-        "src/sema_move.zig": [
-            "nonNameableSingletonMoveIndex",
-        ],
-        "tests/spec/move_place.mc": [
-            "accept_dynamic_returned_singleton_move_array_element",
-            "accept_defer_dynamic_returned_singleton_move_array_element",
-            "accept_dynamic_outer_returned_singleton_matrix_element",
-            "accept_dynamic_singleton_array_literal_move_element",
-            "accept_defer_dynamic_singleton_array_literal_move_element",
-            "accept_dynamic_inner_nested_singleton_array_literal_move_element",
-            "accept_defer_dynamic_inner_nested_singleton_array_literal_move_element",
-            "accept_dynamic_outer_nested_singleton_array_literal_move_element",
-            "accept_defer_dynamic_outer_nested_singleton_array_literal_move_element",
         ],
     },
 }
@@ -115,7 +104,6 @@ ANCHORS: dict[str, list[str]] = {
         "cannot move a linear `move` array element through an untracked dynamic index",
         "cannot defer a linear `move` array element through an untracked dynamic index",
         "arrayIndexEmbedsMove",
-        "nonNameableSingletonMoveIndex",
     ],
     "tests/spec/bad/move_cfg_arrays_reject.mc": [
         "struct BadArrayContainer",
@@ -132,19 +120,23 @@ ANCHORS: dict[str, list[str]] = {
         "reject_dynamic_pointer_to_move_matrix_element_assignment",
         "reject_defer_dynamic_pointer_to_move_matrix_element",
         "reject_dynamic_returned_move_array_element",
+        "reject_dynamic_returned_singleton_move_array_element",
         "reject_defer_dynamic_returned_move_array_element",
         "reject_dynamic_returned_matrix_element",
+        "reject_dynamic_inner_returned_singleton_matrix_element",
+        "reject_dynamic_outer_returned_singleton_matrix_element",
         "reject_dynamic_inner_returned_matrix_element",
         "reject_defer_dynamic_returned_matrix_element",
         "reject_defer_dynamic_inner_returned_matrix_element",
         "reject_dynamic_array_literal_move_element",
+        "reject_dynamic_singleton_array_literal_move_element",
         "reject_defer_dynamic_array_literal_move_element",
         "reject_dynamic_nested_array_literal_move_element",
+        "reject_dynamic_inner_nested_singleton_array_literal_move_element",
+        "reject_dynamic_outer_nested_singleton_array_literal_move_element",
         "reject_dynamic_inner_nested_array_literal_move_element",
         "reject_defer_dynamic_nested_array_literal_move_element",
         "reject_defer_dynamic_inner_nested_array_literal_move_element",
-        "accept_dynamic_returned_singleton_move_array_element",
-        "accept_dynamic_singleton_array_literal_move_element",
     ],
     "docs/compiler-production-readiness.md": [
         "Move checker unsupported-channel inventory is explicit",
@@ -157,13 +149,13 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         '"E_MOVE_ARRAY_UNSUPPORTED"': 4,
     },
     "src/sema_move.zig": {
-        '"E_MOVE_ARRAY_UNSUPPORTED"': 4,
+        '"E_MOVE_ARRAY_UNSUPPORTED"': 8,
     },
     "tests/spec/bad/move_cfg_arrays_reject.mc": {
         "EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED": 4,
     },
     "tests/spec/move_place.mc": {
-        "EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED": 19,
+        "EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED": 366,
     },
 }
 

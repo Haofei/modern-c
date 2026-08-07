@@ -24,21 +24,15 @@ ROWS: dict[str, dict[str, list[str]]] = {
         "tests/spec/move_place.mc": ["accept_move_array_alias_elements"],
         "docs/compiler-production-readiness.md": ["Constant array element"],
     },
-    "symbolic element projections": {
-        "src/sema_model.zig": ["symbolic_index: []const u8", "MovePlaceProjectionRelation"],
-        "src/sema_move.zig": ["symbolicIndexValue", ".symbolic_index = symbol"],
-        "tests/spec/move_place.mc": ["reject_dynamic_multi_array_element_move_after_constant"],
-        "docs/compiler-production-readiness.md": ["Stable symbolic element"],
-    },
-    "unknown wildcard projections": {
+    "dynamic wildcard ownership boundary": {
         "src/sema_model.zig": ["wildcard_index", "movePlaceProjectionRelation"],
         "src/sema_move.zig": ["wildcardMoveIndexedPlaceKey", "nestedWildcardIndexedPlaceKeyAndType"],
         "tests/spec/move_place.mc": ["reject_constant_after_dynamic_multi_array_element_move"],
         "docs/compiler-production-readiness.md": ["Unknown dynamic element"],
     },
-    "full alias and dereference projections": {
+    "full alias and dereference boundary": {
         "src/sema_move.zig": ["fullDerefMoveSubplace", "immediateFullDerefMoveReferent"],
-        "tests/spec/move_place.mc": ["accept_move_array_element_through_full_alias", "accept_move_field_through_immediate_full_deref"],
+        "tests/spec/move_place.mc": ["reject_move_array_element_through_full_alias", "reject_move_field_through_immediate_full_deref"],
         "docs/compiler-production-readiness.md": ["Full alias / dereference"],
     },
     "arbitrary pointee and non-nameable boundaries": {
@@ -57,17 +51,13 @@ FIXTURE_EXPECTATIONS: dict[str, dict[str, str | None]] = {
         "accept_move_array_alias_elements": None,
         "reject_duplicate_array_element_move": "E_USE_AFTER_MOVE",
     },
-    "symbolic element projections": {
-        "accept_branch_preserves_matching_symbolic_index": None,
-        "reject_different_symbolic_dynamic_array_field_element_move": "E_USE_AFTER_MOVE",
+    "dynamic wildcard ownership boundary": {
+        "reject_dynamic_multi_array_element_move": "E_MOVE_ARRAY_UNSUPPORTED",
+        "reject_constant_after_dynamic_multi_array_element_move": "E_MOVE_ARRAY_UNSUPPORTED",
     },
-    "unknown wildcard projections": {
-        "accept_dynamic_multi_array_element_move": None,
-        "reject_constant_after_dynamic_multi_array_element_move": "E_USE_AFTER_MOVE",
-    },
-    "full alias and dereference projections": {
-        "accept_move_array_element_through_full_alias": None,
-        "reject_constant_after_dynamic_array_element_full_alias_move": "E_USE_AFTER_MOVE",
+    "full alias and dereference boundary": {
+        "reject_move_array_element_through_full_alias": "E_USE_AFTER_MOVE",
+        "reject_move_field_through_immediate_full_deref": "E_USE_AFTER_MOVE",
     },
     "arbitrary pointee and non-nameable boundaries": {
         "reject_dynamic_pointer_to_move_array_element": "E_MOVE_ARRAY_UNSUPPORTED",

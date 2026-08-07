@@ -12,7 +12,6 @@ pub const max_move_place_projections = 16;
 pub const MovePlaceProjection = union(enum) {
     field: []const u8,
     constant_index: usize,
-    symbolic_index: []const u8,
     wildcard_index,
 };
 
@@ -58,9 +57,10 @@ pub const MovePlace = struct {
         return true;
     }
 
-    // Dynamic-index policy: stable dynamic indexes are preserved as symbolic
-    // projections; genuinely unknown indexes become wildcard projections. Both
-    // may overlap other elements, but only exact projection equality is identity.
+    // Dynamic-index policy: v0 accepts only constant-index ownership places.
+    // Unknown dynamic indexes are represented as wildcard projections for
+    // conservative borrow/alias overlap checks, not as transferable ownership
+    // identity.
     pub fn conflicts(self: MovePlace, other: MovePlace) bool {
         if (!std.mem.eql(u8, self.root, other.root) or self.projection_count != other.projection_count) return false;
         for (self.projections[0..self.projection_count], other.projections[0..other.projection_count]) |left, right| {
@@ -83,10 +83,6 @@ fn projectionEql(left: MovePlaceProjection, right: MovePlaceProjection) bool {
             .constant_index => |right_index| left_index == right_index,
             else => false,
         },
-        .symbolic_index => |left_name| switch (right) {
-            .symbolic_index => |right_name| std.mem.eql(u8, left_name, right_name),
-            else => false,
-        },
         .wildcard_index => right == .wildcard_index,
     };
 }
@@ -96,11 +92,7 @@ pub fn movePlaceProjectionRelation(left: MovePlaceProjection, right: MovePlacePr
     return switch (left) {
         .field => .disjoint,
         .constant_index => switch (right) {
-            .symbolic_index, .wildcard_index => .may_overlap,
-            else => .disjoint,
-        },
-        .symbolic_index => switch (right) {
-            .constant_index, .symbolic_index, .wildcard_index => .may_overlap,
+            .wildcard_index => .may_overlap,
             else => .disjoint,
         },
         .wildcard_index => switch (right) {
@@ -286,24 +278,18 @@ pub const MoveSlot = struct {
     full_deref_alias: bool = false,
 };
 
-// Array-index facts are semantic metadata, not ownership state. M1.2 moves
-// these out of MoveSlot in three steps: establish this transportable model,
-// migrate every producer/consumer and CFG transfer, then remove the legacy
-// fields above. Keeping the model independent makes clone/join/invalidation
-// rules explicit instead of encoding them as a non-live ownership slot.
+// Array-index facts are semantic metadata, not ownership state. Ownership v0
+// retains only constant facts so a name such as `i` can stand for a concrete
+// element place after `let i = 0` or through a CFG join. Runtime/symbolic index
+// facts deliberately have no model here; ownership transfer through them fails
+// closed instead of reintroducing symbolic place precision.
 pub const MoveIndexFact = union(enum) {
     constant: usize,
-    symbolic: []const u8,
 
     pub fn eql(self: MoveIndexFact, other: MoveIndexFact) bool {
         return switch (self) {
             .constant => |left| switch (other) {
                 .constant => |right| left == right,
-                .symbolic => false,
-            },
-            .symbolic => |left| switch (other) {
-                .constant => false,
-                .symbolic => |right| std.mem.eql(u8, left, right),
             },
         };
     }
@@ -392,10 +378,8 @@ test "move index facts are independent, clonable metadata" {
     var facts = MoveIndexFacts.init(std.testing.allocator);
     defer facts.deinit();
     try facts.put("constant", .{ .constant = 3 });
-    try facts.put("symbolic", .{ .symbolic = "index" });
 
     try std.testing.expect((facts.get("constant") orelse unreachable).eql(.{ .constant = 3 }));
-    try std.testing.expect((facts.get("symbolic") orelse unreachable).eql(.{ .symbolic = "index" }));
 
     var cloned = try facts.clone(std.testing.allocator);
     defer cloned.deinit();
@@ -411,12 +395,12 @@ test "move index facts retain only equal CFG join facts" {
     defer left.deinit();
     try left.put("same", .{ .constant = 1 });
     try left.put("different", .{ .constant = 2 });
-    try left.put("left_only", .{ .symbolic = "i" });
+    try left.put("left_only", .{ .constant = 4 });
 
     var right = MoveIndexFacts.init(std.testing.allocator);
     defer right.deinit();
     try right.put("same", .{ .constant = 1 });
-    try right.put("different", .{ .symbolic = "i" });
+    try right.put("different", .{ .constant = 5 });
     try right.put("right_only", .{ .constant = 3 });
 
     try std.testing.expect(try left.intersectInto(&right));
