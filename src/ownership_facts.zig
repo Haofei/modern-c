@@ -75,6 +75,18 @@ pub fn autoDropPointerCleanup(expr: ast.Expr, auto_drop_fns_by_type: *const std.
     return .{ .fn_name = fn_name, .local_name = local_name };
 }
 
+/// Transitional backend cleanup cancellation accepts only direct local moves.
+/// MIR remains the authority for whether that syntax is allowed to cancel a
+/// drop obligation; this helper only keeps the source-shape boundary shared
+/// while C/LLVM still maintain legacy cleanup stacks.
+pub fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| directMovedLocalName(inner.*),
+        .ident => |ident| ident.text,
+        else => null,
+    };
+}
+
 pub fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .grouped => |inner| addressOfIdentName(inner.*),
@@ -225,6 +237,19 @@ test "drop glue declaration matching centralizes attr ABI and eligibility checks
     try std.testing.expect(!dropGlueDeclMatches("Other", "close_guard", fn_decl, attrs[0..], false, &structs, &aliases));
     try std.testing.expect(!dropGlueDeclMatches("Guard", "close_guard", fn_decl, &.{}, false, &structs, &aliases));
     try std.testing.expect(!dropGlueDeclMatches("Guard", "close_guard", fn_decl, attrs[0..], true, &structs, &aliases));
+}
+
+test "direct moved local name recognizes only grouped identifiers" {
+    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+    var ident_expr = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "guard", .span = span } } };
+    const grouped_expr = ast.Expr{ .span = span, .kind = .{ .grouped = &ident_expr } };
+    const literal_expr = ast.Expr{ .span = span, .kind = .{ .int_literal = "1" } };
+    const deref_expr = ast.Expr{ .span = span, .kind = .{ .deref = &ident_expr } };
+
+    try std.testing.expectEqualStrings("guard", directMovedLocalName(ident_expr).?);
+    try std.testing.expectEqualStrings("guard", directMovedLocalName(grouped_expr).?);
+    try std.testing.expect(directMovedLocalName(literal_expr) == null);
+    try std.testing.expect(directMovedLocalName(deref_expr) == null);
 }
 
 test "auto-drop cleanup helpers recognize explicit release call shapes" {

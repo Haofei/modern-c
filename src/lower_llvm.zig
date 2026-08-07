@@ -2926,7 +2926,7 @@ const LlvmEmitter = struct {
     }
 
     fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr, move_span: ast.Span) !void {
-        const local_name = directMovedLocalName(expr) orelse return;
+        const local_name = ownership_facts.directMovedLocalName(expr) orelse return;
         const cleanup = self.autoDropCleanupForLocalName(local_name) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         if (!mir_ownership_authority.authorizesMoveOutLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, sourcePointFromSpan(move_span))) return error.UnsupportedLlvmEmission;
@@ -10613,14 +10613,6 @@ const LlvmEmitter = struct {
 // module; these aliases keep the existing call sites in this file reading unchanged.
 const ResultSwitchPattern = switch_lower.ResultArmPattern;
 const TaggedUnionBinding = switch_lower.TaggedUnionArmBinding;
-
-fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| directMovedLocalName(inner.*),
-        .ident => |ident| ident.text,
-        else => null,
-    };
-}
 
 fn sourcePointFromSpan(span: ast.Span) mir.SourcePoint {
     return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };

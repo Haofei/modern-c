@@ -2884,7 +2884,7 @@ pub const CEmitter = struct {
     }
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr, move_span: ast.Span) !void {
-        const local_name = directMovedLocalName(expr) orelse return;
+        const local_name = ownership_facts.directMovedLocalName(expr) orelse return;
         const cleanup = self.autoDropCleanupForLocalName(local_name) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         if (!mir_ownership_authority.authorizesMoveOutLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name, sourcePointFromSpan(move_span))) return error.UnsupportedCEmission;
@@ -8784,14 +8784,6 @@ pub const CEmitter = struct {
         return self.arrayLenTextForExpr(expr);
     }
 };
-
-fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| directMovedLocalName(inner.*),
-        .ident => |ident| ident.text,
-        else => null,
-    };
-}
 
 fn sourcePointFromSpan(span: ast.Span) mir.SourcePoint {
     return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
