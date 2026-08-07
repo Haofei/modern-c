@@ -2876,17 +2876,17 @@ pub const CEmitter = struct {
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr, move_span: ast.Span) !void {
         const local_name = ownership_facts.directMovedLocalName(expr) orelse return;
-        const cleanup = ownership_facts.autoDropCleanupForLocalName(DeferredCleanup, self.defer_stack.items, local_name) orelse return;
+        const cleanup = ownership_facts.autoDropCleanupForLocalName(self.defer_stack.items, local_name) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         if (!mir_ownership_authority.authorizesMoveOutLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(move_span))) return error.UnsupportedCEmission;
-        ownership_facts.removeAutoDropCleanupForLocalName(@TypeOf(self.defer_stack), &self.defer_stack, local_name);
+        ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name);
     }
 
     fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) !void {
         const cleanup = ownership_facts.autoDropPointerCleanup(expr, &self.auto_drop_fns_by_type) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         if (!mir_ownership_authority.authorizesExplicitDropLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(expr.span))) return error.UnsupportedCEmission;
-        ownership_facts.removeAutoDropCleanupForLocalName(@TypeOf(self.defer_stack), &self.defer_stack, cleanup.local_name);
+        ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, cleanup.local_name);
     }
 
     fn localDeclInfo(self: *CEmitter, local: ast.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo)) !LocalInfo {
