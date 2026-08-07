@@ -13745,11 +13745,26 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     var module_mir = try mir.build(std.testing.allocator, parsed.module);
     defer module_mir.deinit();
     try std.testing.expectEqual(@as(usize, 1), module_mir.drop_glue_facts.len);
+    try std.testing.expectEqual(@as(usize, 1), module_mir.type_ownership_facts.len);
 
     var valid_output: std.ArrayList(u8) = .empty;
     defer valid_output.deinit(std.testing.allocator);
     try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &valid_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null);
     try expectContains(valid_output.items, "close_guard(&g);");
+
+    const saved_ownership_facts = module_mir.type_ownership_facts;
+    module_mir.type_ownership_facts = &[_]mir.TypeOwnershipFact{};
+    var missing_ownership_output: std.ArrayList(u8) = .empty;
+    defer missing_ownership_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &missing_ownership_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    module_mir.type_ownership_facts = saved_ownership_facts;
+
+    const saved_kind = module_mir.type_ownership_facts[0].kind;
+    module_mir.type_ownership_facts[0].kind = .copy;
+    var stale_ownership_output: std.ArrayList(u8) = .empty;
+    defer stale_ownership_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &stale_ownership_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    module_mir.type_ownership_facts[0].kind = saved_kind;
 
     const saved_facts = module_mir.drop_glue_facts;
     module_mir.drop_glue_facts = &[_]mir.DropGlueFact{};

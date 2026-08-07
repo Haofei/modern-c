@@ -8789,7 +8789,11 @@ pub const CEmitter = struct {
     }
 
     fn autoDropEligibleTypeName(self: *CEmitter, type_name: []const u8) bool {
-        return ownership_facts.autoDropEligibleTypeName(type_name, &self.structs, &self.type_aliases);
+        for (self.mir_module.type_ownership_facts) |fact| {
+            if (!std.mem.eql(u8, fact.type_name, type_name)) continue;
+            return fact.kind == .affine and fact.drop_glue_symbol_id.isValid();
+        }
+        return false;
     }
 
     fn arrayLenTextForInfo(ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8 {
