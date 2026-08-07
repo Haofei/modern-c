@@ -2882,7 +2882,7 @@ pub const CEmitter = struct {
     }
 
     fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) !void {
-        const cleanup = ownership_facts.autoDropPointerCleanup(expr, &self.auto_drop_fns_by_type) orelse return;
+        const cleanup = ownership_facts.autoDropReleaseCancellation(expr, &self.auto_drop_fns_by_type, self.defer_stack.items) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         if (!mir_ownership_authority.authorizesExplicitDropLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(expr.span))) return error.UnsupportedCEmission;
         ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, cleanup.local_name);
