@@ -146,7 +146,7 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
 # worklist are helper definitions and embedded unit-test calls. Any new direct
 # statement-family merge changes the count and must be routed/audited.
 SPECIALIZED_TRANSFER_EXACT_COUNTS: dict[str, int] = {
-    "mergeMoveBranches(": 6,
+    "mergeMoveBranches(": 4,
     "mergeShortCircuitMoveStates(": 5,
     "reportLoopOuterResourceChanges(": 6,
 }
@@ -200,7 +200,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn preserveOuterScopedMoveState",
         "linearMoveCfg(self, .exit)",
         "linearMoveCfg(self, .branch_join)",
-        "moveLoopCfg(self, l, state, aliases, allow_auto_drop)",
+        "moveLoopCfg(self, l, state, aliases)",
         "moveDeferStmt(self, stmt, block_state, &before, aliases)",
         ".if_let => |n| moveDeferIfLetCfg(self, n, state, aliases)",
         '.@"switch" => |sw| moveDeferSwitchCfg(self, sw, state, aliases)',

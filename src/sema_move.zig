@@ -546,7 +546,6 @@ fn multiArmMoveCfg(self: *Checker, arm_count: usize) ?MultiArmMoveCfg {
 
 pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
     const body = fn_decl.body orelse return;
-    const allow_auto_drop = true;
     var state = MoveState.init(self.reporter.allocator);
     defer state.deinit();
     defer {
@@ -567,7 +566,7 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
             }
         }
     }
-    const fell_through = moveFunctionBodyCfg(self, body, &state, aliases, allow_auto_drop);
+    const fell_through = moveFunctionBodyCfg(self, body, &state, aliases);
     // Implicit fall-through exit at the end of the body (a `void` return): only a
     // real exit edge if control can actually reach it. If the body diverges on every
     // path (e.g. ends in `return`), each such exit edge was already leak-checked.
@@ -578,7 +577,7 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
     }
 }
 
-fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
+fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var linear = linearMoveCfg(self, .exit) orelse return false;
     defer linear.deinit();
 
@@ -590,7 +589,7 @@ fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *MoveState, alias
         if (block == linear.entry) {
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == linear.body) {
-            const diverges = moveBlock(self, body, block_state, aliases, allow_auto_drop);
+            const diverges = moveBlock(self, body, block_state, aliases);
             if (!diverges) {
                 fell_through = true;
                 worklist.propagateSuccessors(self, block, block_state);
@@ -606,9 +605,9 @@ fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *MoveState, alias
 // (every path through it ends in `return`/`break`/`continue`), in which case the
 // join after the block is unreachable. Statements after a diverging statement are
 // dead code and are not analyzed.
-pub fn moveBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
+pub fn moveBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     for (block.items) |stmt| {
-        if (moveStmt(self, stmt, state, aliases, allow_auto_drop)) return true;
+        if (moveStmt(self, stmt, state, aliases)) return true;
     }
     return false;
 }
@@ -616,7 +615,7 @@ pub fn moveBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *
 // A lexical `{ ... }` sub-scope. Returns whether the block diverges. Block-local
 // `move` bindings are dropped from `state` on the way out; if the block falls through
 // (does not diverge) any still-live local is a leak at the scope's normal exit edge.
-pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
+pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var before = cloneMoveState(self, state);
     defer before.deinit();
 
@@ -631,7 +630,7 @@ pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *MoveState, alia
         if (block_id == linear.entry) {
             worklist.propagateSuccessors(self, block_id, block_state);
         } else if (block_id == linear.body) {
-            diverges = moveBlock(self, block, block_state, aliases, allow_auto_drop);
+            diverges = moveBlock(self, block, block_state, aliases);
             if (!diverges) {
                 worklist.propagateSuccessors(self, block_id, block_state);
             } else {
@@ -789,7 +788,7 @@ pub fn checkUnusedMoveResult(self: *Checker, e: ast.Expr, aliases: *const std.St
 // enclosing block on every path (`return`, `break`, `continue`, or a branch all of
 // whose arms diverge) — so the statements that follow are unreachable and the join
 // after it has no predecessor here.
-pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
+pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     switch (stmt.kind) {
         .let_decl, .var_decl => |decl| {
             if (decl.init) |init_expr| moveConsume(self, init_expr, state, aliases);
@@ -813,7 +812,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                             .span = decl.names[0].span,
                             .place = .{ .root = decl.names[0].text },
                             .ty = ty,
-                            .auto_drop = allow_auto_drop and typeHasAutoDrop(self, ty, aliases),
+                            .auto_drop = typeHasAutoDrop(self, ty, aliases),
                         }) catch {
                             self.oom = true;
                         };
@@ -1044,16 +1043,16 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
             moveBorrow(self, e, state, aliases);
             return false;
         },
-        .block, .unsafe_block, .comptime_block => |b| return moveScopedBlock(self, b, state, aliases, allow_auto_drop),
-        .contract_block => |c| return moveScopedBlock(self, c.block, state, aliases, allow_auto_drop),
+        .block, .unsafe_block, .comptime_block => |b| return moveScopedBlock(self, b, state, aliases),
+        .contract_block => |c| return moveScopedBlock(self, c.block, state, aliases),
         .loop => |l| {
-            return moveLoopCfg(self, l, state, aliases, allow_auto_drop);
+            return moveLoopCfg(self, l, state, aliases);
         },
         .if_let => |n| {
-            return moveIfLetCfg(self, n, state, aliases, allow_auto_drop);
+            return moveIfLetCfg(self, n, state, aliases);
         },
         .@"switch" => |sw| {
-            return moveSwitchCfg(self, sw, state, aliases, allow_auto_drop);
+            return moveSwitchCfg(self, sw, state, aliases);
         },
         .@"break" => |target| {
             moveLoopExitEdgeCfg(self, state, target, .break_exit);
@@ -1067,7 +1066,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
     }
 }
 
-fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
+fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     if (loop.iterable) |iter| {
         switch (loop.kind) {
             .@"for" => moveBorrow(self, iter, state, aliases),
@@ -1099,7 +1098,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
             pending_outer_exits_before += outer.pending_exits.items.len;
         }
     }
-    const body_diverges = moveLoopBodyCfg(self, loop.body, state, aliases, allow_auto_drop);
+    const body_diverges = moveLoopBodyCfg(self, loop.body, state, aliases);
     var body_exits_outer_loop = false;
     if (self.move_loop_stack.items.len > 1) {
         var pending_outer_exits_after: usize = 0;
@@ -1124,7 +1123,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
 // transfer runs in entry, arm-local bindings live only in then, and only
 // non-diverging arms reach the join.  This is deliberately the first production
 // CFG slice; switch and loop still use their existing specialized transfer rules.
-fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
+fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var branch = twoArmMoveCfg(self) orelse return false;
     defer branch.deinit();
 
@@ -1143,10 +1142,10 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *co
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == branch.then_block) {
             then_bound_name = addIfLetMoveBinding(self, node.pattern, node.value, block_state, aliases);
-            then_div = moveBlock(self, node.then_block, block_state, aliases, allow_auto_drop);
+            then_div = moveBlock(self, node.then_block, block_state, aliases);
             if (!then_div) worklist.propagateSuccessors(self, block, block_state);
         } else if (block == branch.else_block) {
-            if (node.else_block) |else_body| else_div = moveBlock(self, else_body, block_state, aliases, allow_auto_drop);
+            if (node.else_block) |else_body| else_div = moveBlock(self, else_body, block_state, aliases);
             if (!else_div) worklist.propagateSuccessors(self, block, block_state);
         } else if (block == branch.then_exit) {
             if (then_bound_name) |name| {
@@ -1176,7 +1175,7 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *co
 // Route all switch arms through the same real-state CFG worklist. Each arm gets a
 // cloned post-subject state; only fallthrough arms contribute an incoming state to
 // the shared join block, where MoveStateCfgWorklist performs the ownership merge.
-fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
+fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     if (node.arms.len == 0) {
         moveConsume(self, node.subject, state, aliases);
         return false;
@@ -1210,7 +1209,7 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *
                 }
             }
             if (arm_index) |index| {
-                const result = moveSwitchArm(self, node.arms[index], subject_ty, block_state, aliases, allow_auto_drop);
+                const result = moveSwitchArm(self, node.arms[index], subject_ty, block_state, aliases);
                 bound_names[index] = result.bound_name;
                 if (!result.diverges) {
                     all_diverge = false;
@@ -1240,7 +1239,7 @@ fn moveSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, aliases: *
 
 const SwitchArmMoveResult = struct { diverges: bool, bound_name: ?[]const u8 };
 
-fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) SwitchArmMoveResult {
+fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) SwitchArmMoveResult {
     var bound_name: ?[]const u8 = null;
     for (arm.patterns) |pattern| {
         const payload_ty: ?ast.TypeExpr = switch (pattern.kind) {
@@ -1261,7 +1260,7 @@ fn moveSwitchArm(self: *Checker, arm: ast.SwitchArm, subject_ty: ?ast.TypeExpr, 
         };
     }
     const diverges = switch (arm.body) {
-        .block => |body| moveBlock(self, body, state, aliases, allow_auto_drop),
+        .block => |body| moveBlock(self, body, state, aliases),
         .expr => |expr| blk: {
             moveConsume(self, expr, state, aliases);
             checkUnusedMoveResult(self, expr, aliases);
@@ -2808,7 +2807,7 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
                 else => moveConsume(self, b.right.*, state, aliases),
             }
         },
-        .block => |b| _ = moveScopedBlock(self, b, state, aliases, true),
+        .block => |b| _ = moveScopedBlock(self, b, state, aliases),
         .unary => |u| moveConsume(self, u.expr.*, state, aliases),
         .struct_literal => |fields| for (fields) |f| moveConsume(self, f.value, state, aliases),
         .array_literal => |items| for (items) |item| moveConsume(self, item, state, aliases),
@@ -2895,7 +2894,7 @@ fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *MoveState,
 // evaluated once for diagnostics, then its outgoing state travels over the
 // backedge and joins the zero-iteration path at the head. The existing loop
 // widening below remains the authority for rejecting outer-resource changes.
-fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, body: ast.Block, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool, body_diverges: *bool, body_visited: *bool) void {
+fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, body: ast.Block, aliases: *const std.StringHashMap(ast.TypeExpr), body_diverges: *bool, body_visited: *bool) void {
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
         if (block == loop_cfg.entry) {
@@ -2904,7 +2903,7 @@ fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, work
             worklist.propagateSuccessorsExcept(self, block, block_state, if (body_visited.*) loop_cfg.body else null);
         } else if (block == loop_cfg.body) {
             body_visited.* = true;
-            body_diverges.* = moveBlock(self, body, block_state, aliases, allow_auto_drop);
+            body_diverges.* = moveBlock(self, body, block_state, aliases);
             if (!body_diverges.*) worklist.propagateSuccessors(self, block, block_state);
         } else if (block == loop_cfg.break_source or block == loop_cfg.continue_source) {
             // The queued state belongs to this loop frame, so the active frame
@@ -2940,7 +2939,7 @@ fn finalizeLoopBodyCfgExit(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, wor
     replaceMoveState(self, outer_state, exit_state);
 }
 
-fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr), allow_auto_drop: bool) bool {
+fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var loop_cfg = loopBodyMoveCfg(self) orelse return false;
     defer loop_cfg.deinit();
 
@@ -2952,9 +2951,9 @@ fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, ali
     worklist.useLoopBackedgeJoinPolicy(loop_cfg.loop_head);
     var body_diverges = false;
     var body_visited = false;
-    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, aliases, allow_auto_drop, &body_diverges, &body_visited);
+    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, aliases, &body_diverges, &body_visited);
     enqueuePendingLoopExitStates(self, &loop_cfg, &worklist);
-    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, aliases, allow_auto_drop, &body_diverges, &body_visited);
+    runLoopBodyCfgWorklist(self, &loop_cfg, &worklist, body, aliases, &body_diverges, &body_visited);
     finalizeLoopBodyCfgExit(self, &loop_cfg, &worklist, outer_state, body_diverges);
     return body_diverges;
 }
@@ -4604,7 +4603,7 @@ pub fn moveBorrow(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *c
             moveBorrow(self, b.left.*, state, aliases);
             moveBorrow(self, b.right.*, state, aliases);
         },
-        .block => |b| _ = moveScopedBlock(self, b, state, aliases, true),
+        .block => |b| _ = moveScopedBlock(self, b, state, aliases),
         .call => |c| for (c.args) |arg| {
             checkAggregateAliasArgument(self, arg, state);
             moveBorrow(self, arg, state, aliases);
