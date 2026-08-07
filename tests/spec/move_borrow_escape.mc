@@ -92,8 +92,8 @@ fn reject_dynamic_singleton_array_elem_assign() -> u32 {
     var arr: [1]*T = .{ &t };
     let i: usize = 0;
     arr[i] = &t;
-    let a: u32 = cn(move t);
-    return a + pk(arr[i]); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let a: u32 = cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(arr[0]); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // --- accepted: multi-element dynamic array-element assignment, read, then dead ---
@@ -106,34 +106,31 @@ fn accept_dynamic_multi_array_elem_assign_before_move(i: usize) -> u32 {
     return a + b;
 }
 
-// --- rejected: multi-element dynamic array-element assignment, dynamic read after move ---
-fn reject_dynamic_multi_array_elem_assign() -> u32 {
+// --- rejected: the literal element still carries a stale alias after the owner moves ---
+fn reject_dynamic_multi_array_elem_assign_after_move(i: usize) -> u32 {
     let t: T = mk();
     var arr: [2]*T = .{ &t, &t };
-    let i: usize = 0;
-    arr[i] = &t;
-    let a: u32 = cn(move t);
-    return a + pk(arr[i]); // EXPECT_ERROR: E_USE_AFTER_MOVE
-}
-
-// --- rejected: multi-element dynamic assignment also poisons later constant element reads ---
-fn reject_dynamic_multi_array_elem_constant_read() -> u32 {
-    let t: T = mk();
-    var arr: [2]*T = .{ &t, &t };
-    let i: usize = 0;
     arr[i] = &t;
     let a: u32 = cn(move t);
     return a + pk(arr[0]); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
-// --- rejected: laundered multi-element dynamic array-element assignment, read after move ---
-fn reject_dynamic_multi_array_elem_laundered() -> u32 {
+// --- rejected: a later constant read observes the preexisting stale literal alias ---
+fn reject_dynamic_multi_array_elem_constant_read_after_move(i: usize) -> u32 {
     let t: T = mk();
     var arr: [2]*T = .{ &t, &t };
-    let i: usize = 0;
+    arr[i] = &t;
+    let a: u32 = cn(move t);
+    return a + pk(arr[0]); // EXPECT_ERROR: E_USE_AFTER_MOVE
+}
+
+// --- rejected: laundered dynamic assignment does not clear the stale literal alias ---
+fn reject_dynamic_multi_array_elem_laundered_after_move(i: usize) -> u32 {
+    let t: T = mk();
+    var arr: [2]*T = .{ &t, &t };
     unsafe { arr[i] = id(&t); }
     let a: u32 = cn(move t);
-    return a + pk(arr[i]); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(arr[0]); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // --- rejected: alias of a SUBFIELD, whole value then moved ---

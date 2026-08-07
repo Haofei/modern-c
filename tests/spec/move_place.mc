@@ -727,67 +727,63 @@ fn accept_move_matrix_param_elements(matrix: ResMatrix) -> u32 {
     return consume(move x) + consume(move y);
 }
 
-// Accepted: an index local initialized from a constant denotes the same stable
-// element place as the literal index.
-fn accept_const_index_variable_array_element() -> u32 {
+// Rejected: an index local initialized from a constant is still outside stable
+// ownership place identity in v0.
+fn reject_const_index_variable_array_element() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let i: usize = 0;
-    let x: Res = arr[i];
+    let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
     let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }
 
-// Accepted: reassigning a tracked constant-index local to another constant updates
-// the stable element place.
-fn accept_reassigned_const_index_variable_array_element() -> u32 {
+// Rejected: reassigning an index local does not make it a stable ownership place.
+fn reject_reassigned_const_index_variable_array_element() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     var i: usize = 0;
     i = 1;
     let x: Res = arr[0];
-    let y: Res = arr[i];
+    let y: Res = arr[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }
 
-// Accepted: arithmetic over a tracked constant-index local can still fold to a
-// stable element place.
-fn accept_const_index_variable_arithmetic_array_element() -> u32 {
+// Rejected: arithmetic over an index local is symbolic ownership precision.
+fn reject_const_index_variable_arithmetic_array_element() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let i: usize = 0;
-    let x: Res = arr[i];
-    let y: Res = arr[i + 1];
+    let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+    let y: Res = arr[i + 1]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }
 
-// Accepted: copied constant-index locals keep their stable element-place fact.
-fn accept_copied_const_index_variable_array_element() -> u32 {
+// Rejected: copied index locals are still dynamic ownership places.
+fn reject_copied_const_index_variable_array_element() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let i: usize = 0;
     let j: usize = i + 1;
-    let x: Res = arr[i];
-    let y: Res = arr[j];
+    let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
+    let y: Res = arr[j]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }
 
-// Accepted: reassigning from another constant-index local updates the tracked
-// stable element place.
-fn accept_reassigned_copied_const_index_variable_array_element() -> u32 {
+// Rejected: reassignment from another index local stays dynamic.
+fn reject_reassigned_copied_const_index_variable_array_element() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let i: usize = 1;
     var j: usize = 0;
     j = i;
     let x: Res = arr[0];
-    let y: Res = arr[j];
+    let y: Res = arr[j]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }
 
-// Accepted: a const-index local remains precise across a branch join when every
-// reachable arm leaves it with the same constant value.
-fn accept_branch_preserves_matching_const_index(cond: bool) -> u32 {
+// Rejected: branch-joined index locals do not become stable ownership places.
+fn reject_branch_preserves_matching_const_index(cond: bool) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     var i: usize = 0;
     if cond {
@@ -796,14 +792,13 @@ fn accept_branch_preserves_matching_const_index(cond: bool) -> u32 {
         i = 1;
     }
     let x: Res = arr[0];
-    let y: Res = arr[i];
+    let y: Res = arr[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }
 
-// Accepted: a const-index local also remains precise across a switch join when
-// every reachable arm leaves it with the same constant value.
-fn accept_switch_preserves_matching_const_index(cond: bool) -> u32 {
+// Rejected: switch-joined index locals do not become stable ownership places.
+fn reject_switch_preserves_matching_const_index(cond: bool) -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     var i: usize = 0;
     switch cond {
@@ -815,14 +810,13 @@ fn accept_switch_preserves_matching_const_index(cond: bool) -> u32 {
         },
     }
     let x: Res = arr[0];
-    let y: Res = arr[i];
+    let y: Res = arr[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }
 
-// Accepted: the same switch-join const-index fact is used for move-struct array
-// fields, so `box.items[i]` remains a concrete element place after matching arms.
-fn accept_switch_preserves_matching_const_index_array_field_element(cond: bool) -> u32 {
+// Rejected: move-struct array fields follow the same dynamic-index rule.
+fn reject_switch_preserves_matching_const_index_array_field_element(cond: bool) -> u32 {
     let box: ResArrayBox = mkbox();
     var i: usize = 0;
     switch cond {
@@ -834,7 +828,7 @@ fn accept_switch_preserves_matching_const_index_array_field_element(cond: bool) 
         },
     }
     let x: Res = move box.items[0];
-    let y: Res = move box.items[i];
+    let y: Res = move box.items[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
     unsafe { forget_unchecked(box); }
     return consume(move x) + consume(move y);
 }
@@ -1884,63 +1878,64 @@ fn reject_duplicate_array_param_element_move(arr: ResArray) -> u32 {
     return consume(move x) + consume(move y);
 }
 
-// Rejected: a constant-index local aliases the same element place as the literal.
+// Rejected: an index local is not a stable ownership place in v0, even if it
+// currently stores a constant value.
 fn reject_duplicate_const_index_variable_array_element_move() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let i: usize = 0;
-    let x: Res = arr[i];
+    let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
 
-    let y: Res = arr[0]; // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let y: Res = arr[0];
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }
 
-// Rejected: after reassignment, the index local denotes the new stable element.
+// Rejected: reassigned index locals remain outside stable ownership place identity.
 fn reject_duplicate_reassigned_const_index_variable_array_element_move() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     var i: usize = 0;
     i = 1;
-    let x: Res = arr[i];
+    let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
 
-    let y: Res = arr[1]; // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }
 
-// Rejected: arithmetic over a tracked constant-index local aliases the folded
-// element place.
+// Rejected: arithmetic over an index local is symbolic ownership precision and
+// is outside v0.
 fn reject_duplicate_const_index_variable_arithmetic_array_element_move() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let i: usize = 0;
-    let x: Res = arr[i + 1];
+    let x: Res = arr[i + 1]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
 
-    let y: Res = arr[1]; // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }
 
-// Rejected: copied constant-index locals alias the folded literal place.
+// Rejected: copied index locals remain dynamic ownership places.
 fn reject_duplicate_copied_const_index_variable_array_element_move() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let i: usize = 0;
     let j: usize = i + 1;
-    let x: Res = arr[j];
+    let x: Res = arr[j]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
 
-    let y: Res = arr[1]; // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }
 
-// Rejected: reassignment from another constant-index local updates the aliasing
-// element place.
+// Rejected: reassignment from another index local is still a dynamic ownership
+// place in v0.
 fn reject_duplicate_reassigned_copied_const_index_variable_array_element_move() -> u32 {
     let arr: ResArray = .{ mkres(1), mkres(2) };
     let i: usize = 1;
     var j: usize = 0;
     j = i;
-    let x: Res = arr[j];
+    let x: Res = arr[j]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED
 
-    let y: Res = arr[1]; // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let y: Res = arr[1];
     unsafe { forget_unchecked(arr); }
     return consume(move x) + consume(move y);
 }

@@ -3367,34 +3367,10 @@ fn bindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?MoveSlot 
 }
 
 fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) ?usize {
+    _ = self;
+    _ = state;
     if (parseArrayLen(expr, ctx.const_fns, ctx.const_globals)) |k| return k;
-    switch (expr.kind) {
-        .grouped => |inner| return constIndexValue(self, inner.*, state, ctx),
-        .ident => |id| {
-            if (state.index_facts.get(id.text)) |fact| return switch (fact) {
-                .constant => |index| index,
-            };
-            return null;
-        },
-        .binary => |node| {
-            const left = constIndexValue(self, node.left.*, state, ctx) orelse return null;
-            const right = constIndexValue(self, node.right.*, state, ctx) orelse return null;
-            return switch (node.op) {
-                .add => std.math.add(usize, left, right) catch null,
-                .sub => std.math.sub(usize, left, right) catch null,
-                .mul => std.math.mul(usize, left, right) catch null,
-                .div => if (right == 0) null else @divTrunc(left, right),
-                .mod => if (right == 0) null else @mod(left, right),
-                .bit_or => left | right,
-                .bit_xor => left ^ right,
-                .bit_and => left & right,
-                .shl => if (right >= @bitSizeOf(usize)) null else std.math.shl(usize, left, right),
-                .shr => if (right >= @bitSizeOf(usize)) null else left >> @intCast(right),
-                else => null,
-            };
-        },
-        else => return null,
-    }
+    return null;
 }
 
 fn stableIndexPlaceKnown(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) bool {

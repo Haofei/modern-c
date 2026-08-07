@@ -155,7 +155,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED": 4,
     },
     "tests/spec/move_place.mc": {
-        "EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED": 366,
+        "EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED": 381,
     },
 }
 

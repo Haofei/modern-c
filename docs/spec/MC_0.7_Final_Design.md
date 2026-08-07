@@ -4399,11 +4399,14 @@ auto-drop place:
     emitted on normal cleanup edges only when the type has unique #[drop] glue
 ```
 
-The verifier is place-sensitive for tracked locals, fields, fixed array elements,
-symbolic/wildcard dynamic indexes, and carried pointer alias roots. It rejects
-unknown or over-deep places instead of falling back to string identity. The
-current projection limit is specified in §18.1 and must diagnose
-`E_OWNERSHIP_PLACE_TOO_DEEP`.
+The verifier is place-sensitive for tracked locals, fields, and fixed array
+elements whose index is admitted as a compile-time constant. Dynamic or symbolic
+indexes are not ownership identities in v0; ownership transfer, reinitialization,
+and cleanup reservation through those places fail closed with
+`E_MOVE_ARRAY_UNSUPPORTED`. Pointer alias roots remain conservative transitional
+facts rather than a general provenance proof. Unknown or over-deep places must
+fail closed instead of falling back to string identity. The current projection
+limit is specified in §18.1 and must diagnose `E_OWNERSHIP_PLACE_TOO_DEEP`.
 
 Every normal function-exit edge — a `return`, lexical block exit, and the
 `err(e)` branch of `?` — is leak-checked for still-live obligations and must run
