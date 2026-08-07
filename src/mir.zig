@@ -167,6 +167,11 @@ pub const SymbolIdentity = mir_model.SymbolIdentity;
 pub const SpanIdentity = mir_model.SpanIdentity;
 pub const TypeIdentity = mir_model.TypeIdentity;
 pub const ValueIdentity = mir_model.ValueIdentity;
+pub const OwnershipEventKind = mir_model.OwnershipEventKind;
+pub const OwnershipLoanKind = mir_model.OwnershipLoanKind;
+pub const OwnershipPlaceProjection = mir_model.OwnershipPlaceProjection;
+pub const OwnershipPlace = mir_model.OwnershipPlace;
+pub const OwnershipEvent = mir_model.OwnershipEvent;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
@@ -449,6 +454,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
                         .integer_facts = try allocator.alloc(IntegerFact, 0),
                         .call_target_facts = try allocator.alloc(CallTargetFact, 0),
                         .target_type_facts = try allocator.alloc(TargetTypeFact, 0),
+                        .ownership_events = try allocator.alloc(OwnershipEvent, 0),
                         .pointer_provenance_facts = try allocator.alloc(PointerProvenanceFact, 0),
                         .representation_facts = try allocator.alloc(RepresentationFact, 0),
                         .elided_bounds = try allocator.alloc(SourcePoint, 0),
@@ -657,6 +663,26 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                 allocator,
                 "mir target_owner_identity fn={s} id={} spelling={s}\n",
                 .{ function.name, identity.id.index(), identity.spelling },
+            );
+        }
+        for (function.ownership_events) |event| {
+            try out.print(
+                allocator,
+                "mir ownership_event fn={s} kind={s} block={} generation={} root_value={} root_symbol={} projections={} loan_id={} loan_kind={s} drop_glue_symbol={} line={} column={}\n",
+                .{
+                    function.name,
+                    @tagName(event.kind),
+                    if (event.block_id.isValid()) event.block_id.index() else std.math.maxInt(usize),
+                    event.generation,
+                    if (event.place.root_value_id.isValid()) event.place.root_value_id.index() else std.math.maxInt(usize),
+                    if (event.place.root_symbol_id.isValid()) event.place.root_symbol_id.index() else std.math.maxInt(usize),
+                    event.place.projection_count,
+                    event.loan_id,
+                    if (event.loan_kind) |loan_kind| @tagName(loan_kind) else "none",
+                    if (event.drop_glue_symbol_id.isValid()) event.drop_glue_symbol_id.index() else std.math.maxInt(usize),
+                    event.source.line,
+                    event.source.column,
+                },
             );
         }
         for (function.ffi_param_contracts) |fact| {
@@ -1061,6 +1087,7 @@ pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
     for (mir.functions) |function| {
         verifyFunctionCfg(function, reporter);
         verifyFunctionInstructionIdentities(function, reporter);
+        verifyFunctionOwnershipEvents(mir, function, reporter);
 
         if (!isVoidLike(function.return_ty)) {
             if (functionFallsThrough(function)) |point| {
@@ -1447,6 +1474,67 @@ pub fn validateDropGlueFactsForLowering(module: Module) error{InvalidMirDropGlue
     }
 }
 
+pub fn validateOwnershipEventsForLowering(module: Module) error{InvalidMirOwnershipEvents}!void {
+    for (module.functions) |function| {
+        for (function.ownership_events) |event| {
+            if (!ownershipEventValid(module, function, event)) return error.InvalidMirOwnershipEvents;
+        }
+    }
+}
+
+fn verifyFunctionOwnershipEvents(module: Module, function: Function, reporter: *diagnostics.Reporter) void {
+    for (function.ownership_events) |event| {
+        if (ownershipEventValid(module, function, event)) continue;
+        reporter.err(
+            sourcePointSpan(event.source),
+            "E_MIR_OWNERSHIP_EVENT: MIR verifier found malformed ownership event",
+            .{},
+        );
+    }
+}
+
+fn ownershipEventValid(module: Module, function: Function, event: OwnershipEvent) bool {
+    if (!event.block_id.isValid() or event.block_id.index() >= function.blocks.len) return false;
+    if (event.instruction_index) |index| {
+        if (index >= function.blocks[event.block_id.index()].instructions.len) return false;
+    }
+    if (!ownershipPlaceValid(module, function, event.place)) return false;
+    return switch (event.kind) {
+        .borrow_begin => event.loan_kind != null and event.loan_id != std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
+        .borrow_end => event.loan_kind == null and event.loan_id != std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
+        .explicit_drop, .auto_drop => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and ownershipDropGlueSymbolValid(module, event.drop_glue_symbol_id),
+        else => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
+    };
+}
+
+fn ownershipPlaceValid(module: Module, function: Function, place: OwnershipPlace) bool {
+    const root_value_valid = place.root_value_id.isValid();
+    const root_symbol_valid = place.root_symbol_id.isValid();
+    if (root_value_valid == root_symbol_valid) return false;
+    if (root_value_valid and place.root_value_id.index() >= function.value_identities.len) return false;
+    if (root_symbol_valid and !moduleSymbolIdentityValid(module, place.root_symbol_id)) return false;
+    if (place.projection_count > mir_model.max_ownership_place_projections) return false;
+    for (place.projections[0..place.projection_count]) |projection| {
+        switch (projection) {
+            .field => |field_id| if (!moduleSymbolIdentityValid(module, field_id)) return false,
+            .constant_index, .deref, .wildcard_index => {},
+        }
+    }
+    return true;
+}
+
+fn ownershipDropGlueSymbolValid(module: Module, symbol_id: SymbolId) bool {
+    if (!moduleSymbolIdentityValid(module, symbol_id)) return false;
+    for (module.drop_glue_facts) |fact| {
+        if (fact.typed_release_symbol_id.eql(symbol_id)) return true;
+    }
+    return false;
+}
+
+fn moduleSymbolIdentityValid(module: Module, symbol_id: SymbolId) bool {
+    return symbol_id.isValid() and symbol_id.index() < module.symbol_identities.len;
+}
+
 fn dropGlueResourceSymbolIdentityValid(module: Module, fact: DropGlueFact) bool {
     if (!fact.typed_resource_symbol_id.isValid()) return false;
     const index = fact.typed_resource_symbol_id.index();
@@ -1475,6 +1563,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirConstGetFacts,
     InvalidMirCallTargetFacts,
     InvalidMirDropGlueFacts,
+    InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     StaleMirTargetTypeFacts,
     UnknownMirLoweringType,
@@ -1489,6 +1578,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateConstGetFactsForLowering(module);
     try validateCallTargetFactsForLowering(module);
     try validateDropGlueFactsForLowering(module);
+    try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);
 }
@@ -3985,6 +4075,7 @@ const FunctionBuilder = struct {
     type_ids: std.StringHashMap(TypeId),
     value_ids: std.StringHashMap(ValueId),
     target_owner_ids: std.StringHashMap(SymbolId),
+    ownership_events: std.ArrayList(OwnershipEvent),
     // Bindings introduced by a successful nullable-pointer pattern are
     // non-null by construction for that arm. Keep the representation fact for
     // backend admission, but do not invent a runtime trap edge for their use.
@@ -4068,6 +4159,7 @@ const FunctionBuilder = struct {
             .const_get_facts = .empty,
             .call_target_facts = .empty,
             .target_type_facts = .empty,
+            .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
             .generated_type_expr_args = .empty,
             .pointer_provenance_facts = .empty,
@@ -4143,6 +4235,7 @@ const FunctionBuilder = struct {
             .const_get_facts = .empty,
             .call_target_facts = .empty,
             .target_type_facts = .empty,
+            .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
             .generated_type_expr_args = .empty,
             .pointer_provenance_facts = .empty,
@@ -4194,6 +4287,7 @@ const FunctionBuilder = struct {
         self.const_get_facts.deinit(self.allocator);
         self.call_target_facts.deinit(self.allocator);
         self.target_type_facts.deinit(self.allocator);
+        self.ownership_events.deinit(self.allocator);
         for (self.generated_type_expr_nodes.items) |node| self.allocator.destroy(node);
         self.generated_type_expr_nodes.deinit(self.allocator);
         for (self.generated_type_expr_args.items) |args| self.allocator.free(args);
@@ -4271,6 +4365,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(call_target_facts);
         const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(target_type_facts);
+        const ownership_events = try self.ownership_events.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(ownership_events);
         const span_identities = try self.buildSpanIdentities();
         errdefer self.allocator.free(span_identities);
         const type_identities = try self.buildTypeIdentities();
@@ -4321,6 +4417,7 @@ const FunctionBuilder = struct {
         self.value_ids = std.StringHashMap(ValueId).init(self.allocator);
         self.target_owner_ids.deinit();
         self.target_owner_ids = std.StringHashMap(SymbolId).init(self.allocator);
+        self.ownership_events = .empty;
         self.proven_nonnull_bindings.deinit();
         self.proven_nonnull_bindings = std.StringHashMap(void).init(self.allocator);
         self.local_function_aliases.deinit();
@@ -4364,6 +4461,7 @@ const FunctionBuilder = struct {
             .type_identities = type_identities,
             .value_identities = value_identities,
             .target_owner_identities = target_owner_identities,
+            .ownership_events = ownership_events,
             .generated_type_expr_nodes = generated_type_expr_nodes,
             .generated_type_expr_args = generated_type_expr_args,
             .pointer_provenance_facts = pointer_provenance_facts,
@@ -10272,6 +10370,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.type_identities.len != 0) allocator.free(function.type_identities);
     if (function.value_identities.len != 0) allocator.free(function.value_identities);
     if (function.target_owner_identities.len != 0) allocator.free(function.target_owner_identities);
+    if (function.ownership_events.len != 0) allocator.free(function.ownership_events);
     if (function.ffi_param_contracts.len != 0) allocator.free(function.ffi_param_contracts);
     for (function.generated_type_expr_nodes) |node| allocator.destroy(node);
     if (function.generated_type_expr_nodes.len != 0) allocator.free(function.generated_type_expr_nodes);

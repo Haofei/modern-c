@@ -491,6 +491,57 @@ pub const SourcePoint = struct {
     len: usize = 0,
 };
 
+pub const max_ownership_place_projections = 16;
+
+pub const OwnershipEventKind = enum {
+    storage_live,
+    init,
+    reinit,
+    move_out,
+    forget,
+    explicit_drop,
+    auto_drop,
+    storage_dead,
+    borrow_begin,
+    borrow_end,
+    set_drop_flag,
+};
+
+pub const OwnershipLoanKind = enum {
+    shared,
+    mutable,
+};
+
+pub const OwnershipPlaceProjection = union(enum) {
+    field: SymbolId,
+    constant_index: usize,
+    deref,
+    wildcard_index,
+};
+
+pub const OwnershipPlace = struct {
+    root_value_id: ValueId = .invalid,
+    root_symbol_id: SymbolId = .invalid,
+    projections: [max_ownership_place_projections]OwnershipPlaceProjection = undefined,
+    projection_count: usize = 0,
+
+    pub fn hasValidRoot(self: OwnershipPlace) bool {
+        return self.root_value_id.isValid() or self.root_symbol_id.isValid();
+    }
+};
+
+pub const OwnershipEvent = struct {
+    kind: OwnershipEventKind,
+    place: OwnershipPlace,
+    generation: u32 = 0,
+    loan_id: u32 = std.math.maxInt(u32),
+    loan_kind: ?OwnershipLoanKind = null,
+    drop_glue_symbol_id: SymbolId = .invalid,
+    block_id: BlockId = .invalid,
+    instruction_index: ?u32 = null,
+    source: SourcePoint,
+};
+
 pub const PointerProvenance = enum {
     global_storage,
     local_storage,
@@ -619,6 +670,7 @@ pub const Function = struct {
     type_identities: []TypeIdentity = &.{},
     value_identities: []ValueIdentity = &.{},
     target_owner_identities: []SymbolIdentity = &.{},
+    ownership_events: []OwnershipEvent = &.{},
     generated_type_expr_nodes: []*ast.TypeExpr = &.{},
     generated_type_expr_args: [][]ast.TypeExpr = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
@@ -659,6 +711,7 @@ pub const Module = struct {
             if (function.type_identities.len != 0) self.allocator.free(function.type_identities);
             if (function.value_identities.len != 0) self.allocator.free(function.value_identities);
             if (function.target_owner_identities.len != 0) self.allocator.free(function.target_owner_identities);
+            if (function.ownership_events.len != 0) self.allocator.free(function.ownership_events);
             if (function.ffi_param_contracts.len != 0) self.allocator.free(function.ffi_param_contracts);
             for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);
             if (function.generated_type_expr_nodes.len != 0) self.allocator.free(function.generated_type_expr_nodes);

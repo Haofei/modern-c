@@ -4049,6 +4049,87 @@ test "MIR drop glue fact admission rejects unknown and duplicate release facts" 
     try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(duplicate));
 }
 
+test "MIR ownership events are admitted and dumped through typed MIR" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void {
+        \\    g.id = 0;
+        \\}
+        \\fn use_guard() -> u32 {
+        \\    var g = make_guard();
+        \\    return g.id;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_ownership_event.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 1), module_mir.drop_glue_facts.len);
+    const drop_fact = module_mir.drop_glue_facts[0];
+    const use_guard = functionByNameMut(&module_mir, "use_guard") orelse return error.TestUnexpectedResult;
+    const events = try std.testing.allocator.alloc(mir.OwnershipEvent, 1);
+    events[0] = .{
+        .kind = .explicit_drop,
+        .place = .{ .root_symbol_id = drop_fact.typed_resource_symbol_id },
+        .drop_glue_symbol_id = drop_fact.typed_release_symbol_id,
+        .block_id = BlockId.fromIndex(0),
+        .source = .{ .line = 7, .column = 5 },
+    };
+    use_guard.ownership_events = events;
+
+    try mir.validateLoweringAdmission(module_mir);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=use_guard kind=explicit_drop") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "drop_glue_symbol=") != null);
+}
+
+test "MIR ownership event admission rejects malformed event identity" {
+    // DIAGNOSTIC_UNIT: E_MIR_OWNERSHIP_EVENT
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void {
+        \\    g.id = 0;
+        \\}
+        \\fn use_guard() -> u32 {
+        \\    var g = make_guard();
+        \\    return g.id;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_bad_ownership_event.mc", source);
+    defer parsed.deinit();
+
+    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer bad_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 1), bad_mir.drop_glue_facts.len);
+    const drop_fact = bad_mir.drop_glue_facts[0];
+    const use_guard = functionByNameMut(&bad_mir, "use_guard") orelse return error.TestUnexpectedResult;
+    const events = try std.testing.allocator.alloc(mir.OwnershipEvent, 1);
+    events[0] = .{
+        .kind = .auto_drop,
+        .place = .{ .root_symbol_id = drop_fact.typed_resource_symbol_id },
+        .drop_glue_symbol_id = drop_fact.typed_release_symbol_id,
+        .block_id = BlockId.fromIndex(4096),
+        .source = .{ .line = 8, .column = 5 },
+    };
+    use_guard.ownership_events = events;
+
+    try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));
+
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_bad_ownership_event.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(bad_mir, &verifier_reporter);
+    try std.testing.expect(verifier_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_OWNERSHIP_EVENT") != null);
+}
+
 test "MIR rejects duplicate call target facts" {
     const source =
         \\fn checked(xs: []const u32) -> Result<u32, Overflow> {

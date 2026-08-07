@@ -42,6 +42,9 @@ def main() -> int:
         "pub const ValueId = TypedIndex(\"ValueId\");",
         "pub const BlockId = TypedIndex(\"BlockId\");",
         "pub const SpanId = TypedIndex(\"SpanId\");",
+        "pub const OwnershipEventKind = enum",
+        "pub const OwnershipPlace = struct",
+        "pub const OwnershipEvent = struct",
         "pub fn eql(self: @This(), other: @This()) bool {",
         "typed_symbol_id: SymbolId = .invalid,",
         "typed_span_id: SpanId = .invalid,",
@@ -59,6 +62,7 @@ def main() -> int:
         "typed_target_owner_id: ?SymbolId = null,",
         "typed_target_owner_id: SymbolId = .invalid,",
         "target_owner_identities: []SymbolIdentity = &.{},",
+        "ownership_events: []OwnershipEvent = &.{},",
         "symbol_identities: []SymbolIdentity = &.{},",
         "span_identities: []SpanIdentity = &.{},",
         "type_identities: []TypeIdentity = &.{},",
@@ -69,6 +73,7 @@ def main() -> int:
 
     for needle in (
         "pub const BlockId = mir_model.BlockId;",
+        "pub const OwnershipEvent = mir_model.OwnershipEvent;",
         ".typed_id = BlockId.fromIndex(block.id),",
         ".typed_successors = typed_successors,",
         "if (block.typed_id.isValid() and block.typed_id.index() != block.id) return blockLastSpan(block);",
@@ -79,6 +84,7 @@ def main() -> int:
         "fn buildSymbolIdentities(allocator: std.mem.Allocator, symbol_ids: *std.StringHashMap(SymbolId)) ![]SymbolIdentity {",
         "for (module_mir.symbol_identities) |identity| {",
         "verifyModuleSymbolIdentities(mir, reporter);",
+        "verifyFunctionOwnershipEvents(mir, function, reporter);",
         "fn verifyModuleSymbolIdentities(module: Module, reporter: *diagnostics.Reporter) void {",
         "verifyFunctionInstructionIdentities(function, reporter);",
         "fn verifyFunctionInstructionIdentities(function: Function, reporter: *diagnostics.Reporter) void {",
@@ -115,6 +121,10 @@ def main() -> int:
         "fn representationSourceMatches(instruction: Instruction, fact: RepresentationFact) bool {",
         "fn representationTypedResultTypesCompatible(instruction: Instruction, fact: RepresentationFact) bool {",
         "fn representationTypedValueIdsCompatible(instruction: Instruction, fact: RepresentationFact) bool {",
+        "pub fn validateOwnershipEventsForLowering(module: Module) error{InvalidMirOwnershipEvents}!void {",
+        "fn ownershipEventValid(module: Module, function: Function, event: OwnershipEvent) bool {",
+        "try validateOwnershipEventsForLowering(module);",
+        "mir ownership_event fn={s} kind={s}",
         "pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: *std.ArrayList(u8)) !void {",
     ):
         require_contains("src/mir.zig", needle)
@@ -148,6 +158,8 @@ def main() -> int:
         'test "MIR representation admission rejects typed result type drift"',
         'test "MIR representation admission requires typed result identity"',
         'test "MIR representation admission rejects typed value identity drift"',
+        'test "MIR ownership events are admitted and dumped through typed MIR"',
+        'test "MIR ownership event admission rejects malformed event identity"',
         "try std.testing.expectEqual(BlockId.fromIndex(block.id), block.typed_id);",
         "try std.testing.expectEqual(block.successors.len, block.typed_successors.len);",
         "try std.testing.expect(read_fn.representation_facts[0].typed_span_id.eql(read_load_span_identity.id));",
@@ -170,6 +182,8 @@ def main() -> int:
         "read_fn.representation_facts[0].typed_value_id = ValueId.fromIndex(4096);",
         "fact.typed_target_owner_id = SymbolId.fromIndex(4096);",
         "fact.typed_result_ty = TypeId.fromIndex(4096);",
+        "try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));",
+        'try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=use_guard kind=explicit_drop") != null);',
     ):
         require_contains("src/mir_tests.zig", needle)
 
@@ -177,6 +191,7 @@ def main() -> int:
         ("docs/refactoring-plan.md", "MIR already has typed seeds for block, function symbol, value, type, and span"),
         ("docs/refactoring-plan.md", "Verifier/admission checks reject result/span/owner drift."),
         ("docs/typed-semantic-facts.md", "The typed MIR identity migration has started with `BlockId`"),
+        ("docs/compiler-production-readiness.md", "MIR owns the ownership event envelope"),
         ("build/qemu.zig", "mir-identity-inventory-test"),
         ("build/tiers.zig", 'm0_step.dependOn(ctx.cmd("mir-identity-inventory-test"))'),
         ("build/tiers.zig", 'fast_step.dependOn(ctx.cmd("mir-identity-inventory-test"))'),
