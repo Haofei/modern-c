@@ -1650,6 +1650,7 @@ fn ownershipEventSequenceValid(function: Function) bool {
             },
             .move_out, .forget, .explicit_drop, .auto_drop => {
                 if (state != .live) return false;
+                if (event.kind == .auto_drop and !autoDropClosesStorage(function, index, root)) return false;
             },
             .borrow_begin, .set_drop_flag => {
                 if (state != .live) return false;
@@ -1662,6 +1663,15 @@ fn ownershipEventSequenceValid(function: Function) bool {
     }
     if (!typedOwnershipRootsClosed(function)) return false;
     return true;
+}
+
+fn autoDropClosesStorage(function: Function, event_index: usize, root: ValueId) bool {
+    for (function.ownership_events[event_index + 1 ..]) |event| {
+        const event_root = simpleOwnershipRootValue(event.place) orelse continue;
+        if (!event_root.eql(root)) continue;
+        return event.kind == .storage_dead;
+    }
+    return false;
 }
 
 fn typedOwnershipRootsClosed(function: Function) bool {

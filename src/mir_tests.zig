@@ -4416,6 +4416,40 @@ test "MIR ownership event admission rejects storage-dead without auto-drop" {
     try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_OWNERSHIP_EVENT") != null);
 }
 
+test "MIR ownership event admission rejects auto-drop without storage-dead" {
+    // DIAGNOSTIC_UNIT: E_MIR_OWNERSHIP_EVENT
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn use_guard() -> u32 {
+        \\    var g = make_guard();
+        \\    return g.id;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_auto_drop_without_storage_dead.mc", source);
+    defer parsed.deinit();
+
+    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer bad_mir.deinit();
+    const use_guard = functionByNameMut(&bad_mir, "use_guard") orelse return error.TestUnexpectedResult;
+    const generated_events = use_guard.ownership_events;
+    try std.testing.expectEqual(@as(usize, 4), generated_events.len);
+    const events = try std.testing.allocator.alloc(mir.OwnershipEvent, 3);
+    @memcpy(events, generated_events[0..3]);
+    use_guard.ownership_events = events;
+    std.testing.allocator.free(generated_events);
+
+    try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));
+
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_auto_drop_without_storage_dead.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(bad_mir, &verifier_reporter);
+    try std.testing.expect(verifier_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_OWNERSHIP_EVENT") != null);
+}
+
 test "MIR records local reinit ownership events" {
     const source =
         \\fn reassign_local() -> u32 {

@@ -232,14 +232,17 @@ def main() -> int:
         "fact.typed_result_ty = TypeId.fromIndex(4096);",
         "try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));",
         'try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=use_guard kind=explicit_drop") != null);',
+        "MIR ownership event admission rejects auto-drop without storage-dead",
     ):
         require_contains("src/mir_tests.zig", needle)
 
     for path, needle in (
+        ("src/mir.zig", "fn autoDropClosesStorage"),
         ("docs/refactoring-plan.md", "MIR already has typed seeds for block, function symbol, value, type, and span"),
         ("docs/refactoring-plan.md", "Verifier/admission checks reject result/span/owner drift."),
         ("docs/typed-semantic-facts.md", "The typed MIR identity migration has started with `BlockId`"),
         ("docs/compiler-production-readiness.md", "MIR owns the ownership event envelope"),
+        ("docs/compiler-production-readiness.md", "MIR admission requires auto-drop to close storage"),
         ("build/qemu.zig", "mir-identity-inventory-test"),
         ("build/tiers.zig", 'm0_step.dependOn(ctx.cmd("mir-identity-inventory-test"))'),
         ("build/tiers.zig", 'fast_step.dependOn(ctx.cmd("mir-identity-inventory-test"))'),
