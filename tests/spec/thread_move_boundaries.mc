@@ -4,8 +4,9 @@
 // SPEC: expect=pass,compile_error
 // SPEC: check=E_THREAD_MOVE_RESOURCE,E_BORROW_THREAD_BOUNDARY
 
-// Thread/task spawn boundaries transfer ownership, not lexical borrows.
-// Only resources explicitly declared `thread_move` may cross by value.
+// Thread/task spawn boundaries are outside the safe ownership v0 proof.
+// `thread_move` is only an experimental marker; transfer requires an
+// unsafe/trusted wrapper rather than ordinary safe call admission.
 
 #[trivial_drop]
 move struct Ticket { id: u32 }
@@ -40,8 +41,8 @@ fn reject_non_thread_move_transfer() -> void {
     thread_spawn(make_ticket()); // EXPECT_ERROR: E_THREAD_MOVE_RESOURCE
 }
 
-fn accept_thread_move_transfer() -> void {
-    task_spawn(make_send_ticket());
+fn reject_thread_move_transfer() -> void {
+    task_spawn(make_send_ticket()); // EXPECT_ERROR: E_THREAD_MOVE_RESOURCE
 }
 
 fn reject_explicit_borrow_transfer() -> void {

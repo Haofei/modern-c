@@ -1953,9 +1953,11 @@ fn start_worker(ticket: ThreadTicket) -> void;
 
 Every argument to a `#[thread_spawn]` call is checked as crossing a thread/task
 boundary: explicit borrows, local addresses, resource/view/region pointers, and
-`view struct` values are rejected; owned resources must be declared
-`thread_move`. MC v0 has no inferred `Send`/`Sync` trait solver. Thread safety is
-opt-in by declaration and by trusted library wrappers.
+`view struct` values are rejected. Owned checked resources also fail closed in
+safe ownership v0, even when their type carries the experimental `thread_move`
+marker; cross-thread handoff must be hidden behind an audited unsafe/trusted
+library wrapper. MC v0 has no inferred `Send`/`Sync` trait solver, and
+`thread_move` is not a safe proof of either property.
 
 `view struct` is experimental. It is the intended aggregate form for carrying borrow
 fields in safe code, but it is not part of the stable ownership v0 guarantee. While

@@ -1263,7 +1263,7 @@ test "pointer bitcast cannot reinterpret affine region or view pointees" {
     try std.testing.expectEqual(@as(usize, 6), countDiagnosticCode(&reporter, "E_BITCAST_TYPE"));
 }
 
-test "thread spawn boundaries require explicit thread_move resources" {
+test "thread spawn boundaries require unsafe checked resource handoff" {
     const source =
         \\move struct Ticket { id: u32 }
         \\#[experimental_ownership]
@@ -1286,6 +1286,7 @@ test "thread spawn boundaries require explicit thread_move resources" {
         \\fn task_spawn(t: SendTicket) -> void {
         \\    unsafe { forget_unchecked(t); }
         \\}
+        \\#[thread_spawn]
         \\fn box_spawn(box: SendBox) -> void {
         \\    unsafe { forget_unchecked(box); }
         \\}
@@ -1319,13 +1320,13 @@ test "thread spawn boundaries require explicit thread_move resources" {
         \\fn reject_attr_plain_resource_transfer() -> void {
         \\    handoff(make_ticket());
         \\}
-        \\fn accept_thread_move_transfer() -> void {
+        \\fn reject_thread_move_transfer() -> void {
         \\    task_spawn(make_send());
         \\}
-        \\fn accept_attr_thread_move_transfer() -> void {
+        \\fn reject_attr_thread_move_transfer() -> void {
         \\    handoff_send(make_send());
         \\}
-        \\fn accept_thread_move_aggregate_transfer() -> void {
+        \\fn reject_thread_move_aggregate_transfer() -> void {
         \\    box_spawn(make_send_box());
         \\}
         \\fn reject_borrow_transfer() -> void {
@@ -1360,7 +1361,7 @@ test "thread spawn boundaries require explicit thread_move resources" {
     defer reporter.deinit();
     try checkSource(source, &reporter);
     // DIAGNOSTIC_UNIT: E_THREAD_MOVE_RESOURCE
-    try std.testing.expectEqual(@as(usize, 4), countDiagnosticCode(&reporter, "E_THREAD_MOVE_RESOURCE"));
+    try std.testing.expectEqual(@as(usize, 7), countDiagnosticCode(&reporter, "E_THREAD_MOVE_RESOURCE"));
     // DIAGNOSTIC_UNIT: E_BORROW_THREAD_BOUNDARY
     try std.testing.expectEqual(@as(usize, 6), countDiagnosticCode(&reporter, "E_BORROW_THREAD_BOUNDARY"));
 }

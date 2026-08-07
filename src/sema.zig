@@ -6897,14 +6897,14 @@ pub const Checker = struct {
     fn checkThreadSpawnArgument(self: *Checker, target_ty: ast.TypeExpr, arg: ast.Expr, ctx: Context) void {
         var borrow_boundary_reported = false;
         if (exprHasScopedBorrow(arg)) {
-            self.errorCode(arg.span, "E_BORROW_THREAD_BOUNDARY", "explicit `borrow` cannot cross a thread/task spawn boundary; pass owned state or a `thread_move` resource");
+            self.errorCode(arg.span, "E_BORROW_THREAD_BOUNDARY", "explicit `borrow` cannot cross a thread/task spawn boundary; move owned state through an unsafe/trusted handoff wrapper instead");
             borrow_boundary_reported = true;
         } else if (localAddressInEscapingValue(arg, ctx)) |borrow| {
             self.errorCode(borrow.span, "E_BORROW_THREAD_BOUNDARY", "address of local storage cannot cross a thread/task spawn boundary; move owned state or use a thread-safe handle instead");
             borrow_boundary_reported = true;
         }
         if (!borrow_boundary_reported and (self.exprMayPointAtResourceByValue(arg, ctx) or self.pointerPointeeIsOwnershipResource(target_ty, ctx))) {
-            self.errorCode(arg.span, "E_BORROW_THREAD_BOUNDARY", "pointers to `move`/`linear`, `region`, or `view struct` storage cannot cross a thread/task spawn boundary; transfer an owned `thread_move` resource or stable handle instead");
+            self.errorCode(arg.span, "E_BORROW_THREAD_BOUNDARY", "pointers to `move`/`linear`, `region`, or `view struct` storage cannot cross a thread/task spawn boundary; use a stable handle or unsafe/trusted handoff wrapper instead");
             borrow_boundary_reported = true;
         }
         var empty_aliases = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
@@ -6915,8 +6915,8 @@ pub const Checker = struct {
                 self.errorCode(arg.span, "E_BORROW_THREAD_BOUNDARY", "`view struct` values cannot cross a thread/task spawn boundary; rebuild the view inside the spawned task from owned or thread-safe state");
             }
         }
-        if (self.typeEmbedsNonThreadMoveByValue(target_ty, aliases)) {
-            self.errorCode(arg.span, "E_THREAD_MOVE_RESOURCE", "resource transferred across a thread/task spawn boundary must be declared `thread_move`");
+        if (self.typeEmbedsMoveByValue(target_ty, aliases)) {
+            self.errorCode(arg.span, "E_THREAD_MOVE_RESOURCE", "checked resource transfer across a thread/task spawn boundary is outside safe ownership v0; use an unsafe/trusted thread handoff wrapper");
         }
     }
 
