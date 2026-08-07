@@ -3576,7 +3576,6 @@ pub const CEmitter = struct {
     }
 
     fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: ownership_facts.AutoDropLocalCleanup) !void {
-        if (cleanup.registration != .emit_auto_drop_cleanup) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
     }

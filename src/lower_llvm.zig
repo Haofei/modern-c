@@ -2008,7 +2008,6 @@ const LlvmEmitter = struct {
     }
 
     fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: ownership_facts.AutoDropLocalCleanup) !void {
-        if (cleanup.registration != .emit_auto_drop_cleanup) return error.UnsupportedLlvmEmission;
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
     }
