@@ -42,7 +42,7 @@ pub fn authorizesAutoDropLocal(
             // cleanup stacks may register and then cancel the cleanup on the
             // transfer path. This case is removed once C/LLVM consume MIR
             // cleanup edges directly.
-            .move_out, .forget, .explicit_drop => return true,
+            .move_out, .explicit_drop => return true,
             else => {},
         }
     }

@@ -235,6 +235,7 @@ def main() -> int:
         "MIR ownership event admission rejects auto-drop without storage-dead",
         "MIR ownership event admission accepts sibling copy locals with reused names",
         "MIR records forget events for no-drop move resources",
+        "MIR ownership authority does not let forget authorize auto-drop registration",
         "MIR records explicit drop glue call ownership events",
     ):
         require_contains("src/mir_tests.zig", needle)

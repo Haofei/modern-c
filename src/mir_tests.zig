@@ -4,6 +4,7 @@ const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
 const mir = @import("mir.zig");
+const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const semantic_db = @import("semantic_db.zig");
 const test_support = @import("test_support.zig");
 
@@ -4533,6 +4534,30 @@ test "MIR records forget events for no-drop move resources" {
     try std.testing.expect(function.ownership_events[2].place.root_type_symbol_id.isValid());
     try std.testing.expect(!function.ownership_events[2].drop_glue_symbol_id.isValid());
     try mir.validateLoweringAdmission(module_mir);
+}
+
+test "MIR ownership authority does not let forget authorize auto-drop registration" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn forget_guard() -> u32 {
+        \\    var g: Guard = make_guard();
+        \\    unsafe { forget_unchecked(g); }
+        \\    return 0;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_forget_not_auto_drop_authority.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "forget_guard") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
+    try std.testing.expectEqual(mir.OwnershipEventKind.forget, function.ownership_events[2].kind);
+    try mir.validateLoweringAdmission(module_mir);
+    try std.testing.expect(!mir_ownership_authority.authorizesAutoDropLocal(&module_mir, &function, "g", "Guard", "close_guard"));
 }
 
 test "MIR records explicit drop glue call ownership events" {
