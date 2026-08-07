@@ -7,6 +7,7 @@ const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const mir = @import("mir.zig");
+const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const semantic_db = @import("semantic_db.zig");
 const sema_decl = @import("sema_decl.zig");
 const sema_type = @import("sema_type.zig");
@@ -2873,7 +2874,8 @@ pub const CEmitter = struct {
         const ty = maybe_ty orelse if (locals.get(name.text)) |info| info.source_ty orelse return else return;
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
-        if (!self.mirAuthorizesAutoDropLocal(name.text, type_name, drop_fn)) return error.UnsupportedCEmission;
+        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        if (!mir_ownership_authority.authorizesAutoDropLocal(self.mir_module, function, name.text, type_name, drop_fn)) return error.UnsupportedCEmission;
         try self.defer_stack.append(self.allocator, .{ .auto_drop = .{
             .fn_name = drop_fn,
             .local_name = name.text,
@@ -6126,42 +6128,6 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn mirAuthorizesAutoDropLocal(self: *CEmitter, local_name: []const u8, type_name: []const u8, drop_fn: []const u8) bool {
-        const function = self.currentMirFunction() orelse return false;
-        const root_value_id = mirValueIdForLocal(function, local_name) orelse return false;
-        const drop_glue = self.mirDropGlueFactFor(type_name, drop_fn) orelse return false;
-
-        for (function.ownership_events) |event| {
-            if (!simpleMirOwnershipRootMatches(event.place, root_value_id)) continue;
-            switch (event.kind) {
-                .auto_drop => {
-                    if (!event.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) continue;
-                    if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
-                    return true;
-                },
-                // Transitional allowance: the legacy C cleanup stack still
-                // handles path-sensitive cancellation for simple moves while
-                // cleanup blocks are migrating into MIR. If MIR records an
-                // owning consumption event for this local, the backend may
-                // register the lexical cleanup and later cancel it on the
-                // concrete emitted path. Locals with neither MIR auto_drop nor
-                // consumption fail closed.
-                .move_out, .forget, .explicit_drop => return true,
-                else => {},
-            }
-        }
-        return false;
-    }
-
-    fn mirDropGlueFactFor(self: *CEmitter, type_name: []const u8, drop_fn: []const u8) ?mir.DropGlueFact {
-        for (self.mir_module.drop_glue_facts) |fact| {
-            if (!std.mem.eql(u8, fact.resource_type, type_name)) continue;
-            if (!std.mem.eql(u8, fact.release_fn, drop_fn)) continue;
-            return fact;
-        }
-        return null;
-    }
-
     fn mirCallTargetKindAt(self: *CEmitter, span: ast.Span) ?mir.CallTargetKind {
         const function = self.currentMirFunction() orelse return null;
         for (function.call_target_facts) |fact| {
@@ -8826,19 +8792,11 @@ pub const CEmitter = struct {
     }
 
     fn autoDropEligibleTypeName(self: *CEmitter, type_name: []const u8) bool {
-        for (self.mir_module.type_ownership_facts) |fact| {
-            if (!std.mem.eql(u8, fact.type_name, type_name)) continue;
-            return fact.kind == .affine and fact.drop_glue_symbol_id.isValid();
-        }
-        return false;
+        return mir_ownership_authority.autoDropEligibleTypeName(self.mir_module, type_name);
     }
 
     fn autoDropEligibleTypeNameForDropGlue(self: *CEmitter, type_name: []const u8, release_symbol_id: mir.SymbolId) bool {
-        for (self.mir_module.type_ownership_facts) |fact| {
-            if (!std.mem.eql(u8, fact.type_name, type_name)) continue;
-            return fact.kind == .affine and fact.drop_glue_symbol_id.isValid() and fact.drop_glue_symbol_id.eql(release_symbol_id);
-        }
-        return false;
+        return mir_ownership_authority.autoDropEligibleTypeNameForDropGlue(self.mir_module, type_name, release_symbol_id);
     }
 
     fn arrayLenTextForInfo(ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8 {
@@ -8853,19 +8811,6 @@ fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
         .ident => |ident| ident.text,
         else => null,
     };
-}
-
-fn mirValueIdForLocal(function: *const mir.Function, local_name: []const u8) ?mir.ValueId {
-    for (function.value_identities) |identity| {
-        if (std.mem.eql(u8, identity.spelling, local_name)) return identity.id;
-    }
-    return null;
-}
-
-fn simpleMirOwnershipRootMatches(place: mir.OwnershipPlace, root_value_id: mir.ValueId) bool {
-    return place.root_value_id.eql(root_value_id) and
-        !place.root_symbol_id.isValid() and
-        place.projection_count == 0;
 }
 
 fn isSourceSpan(span: ast.Span) bool {
