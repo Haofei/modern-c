@@ -145,8 +145,11 @@ test "parser accepts linear struct resource qualifier" {
         \\opaque linear struct Token { id: u32 }
         \\linear struct Page { frame: usize }
         \\linear opaque struct Bundle { image: usize }
+        \\#[experimental_ownership]
         \\region struct AstNode { kind: u32 }
+        \\#[experimental_ownership]
         \\opaque region struct SymbolNode { id: u32 }
+        \\#[experimental_ownership]
         \\thread_move move struct SendTicket { id: u32 }
     ;
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "linear_struct.mc", source);
@@ -222,10 +225,12 @@ test "parser accepts scoped borrow expressions" {
 test "parser accepts single-source return borrow contracts" {
     const source =
         \\struct Cell { value: u32 }
+        \\#[experimental_ownership]
         \\fn view(cell: *Cell) -> borrow(cell) *Cell {
         \\    return cell;
         \\}
         \\trait Reader {
+        \\    #[experimental_ownership]
         \\    fn data(self: *Self, bytes: []const u8) -> borrow(bytes) []const u8;
         \\}
     ;

@@ -203,6 +203,7 @@ test "ownership resources cannot be compared by payload value" {
         \\linear struct Token { id: u32 }
         \\enum E { Bad }
         \\struct Cell { value: u32 }
+        \\#[experimental_ownership]
         \\view struct CellView { ptr: *Cell }
         \\fn make_ticket(id: u32) -> Ticket { return .{ .id = id }; }
         \\fn make_token(id: u32) -> Token { return .{ .id = id }; }
@@ -284,8 +285,10 @@ test "ownership resources cannot be compared by payload value" {
 test "for iteration cannot bind ownership resources by value" {
     const source =
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\struct Cell { value: u32 }
+        \\#[experimental_ownership]
         \\view struct CellView { ptr: *Cell }
         \\fn make_ticket(id: u32) -> Ticket { return .{ .id = id }; }
         \\fn accept_pointer_elements(items: [2]*mut Ticket) -> u32 {
@@ -491,8 +494,10 @@ test "uninit cannot create ownership resource storage" {
     const source =
         \\move struct Ticket { id: u32 }
         \\linear struct Token { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\fn accept_plain_uninit() -> u8 {
         \\    var buf: [4]u8 = uninit;
@@ -524,8 +529,10 @@ test "generic structs embedding resource type parameters are resource storage" {
     const source =
         \\move struct Ticket { id: u32 }
         \\linear struct Token { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\struct Cell { value: u32 }
+        \\#[experimental_ownership]
         \\view struct CellView { ptr: *Cell }
         \\struct Box<T> { value: T }
         \\struct ArrayBox<T> { values: [1]T }
@@ -598,8 +605,10 @@ test "generic tagged unions embedding resource type parameters are resource stor
         \\#[trivial_drop]
         \\move struct Ticket { id: u32 }
         \\linear struct Token { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\struct Cell { value: u32 }
+        \\#[experimental_ownership]
         \\view struct CellView { ptr: *Cell }
         \\union Slot<T> { some: T, none }
         \\union ArraySlot<T> { some: [1]T, none }
@@ -921,8 +930,10 @@ test "drop attribute shape is restricted to mut pointer checked resource returni
 test "MaybeUninit cannot store affine, region, or view payloads" {
     const source =
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct RegionNode { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\fn make_ticket() -> Ticket { return .{ .id = 1 }; }
         \\fn accept_plain() -> u32 {
@@ -965,8 +976,10 @@ test "MaybeUninit cannot store affine, region, or view payloads" {
 test "atomic cannot store affine or region payloads" {
     const source =
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct RegionNode { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\fn accept_copyable_atomic() -> u32 {
         \\    var state: atomic<u32> = atomic.init(1);
@@ -1000,8 +1013,10 @@ test "atomic cannot store affine or region payloads" {
 test "external address and DMA payloads cannot store affine or region resources" {
     const source =
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct RegionNode { id: u32 }
         \\struct Packet { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PacketView { ptr: *Packet }
         \\extern mmio struct Uart {
         \\    data: Reg<u32, .read_write>,
@@ -1036,10 +1051,14 @@ test "external address and DMA payloads cannot store affine or region resources"
 
 test "region structs are not independent move or drop resources" {
     const source =
+        \\#[experimental_ownership]
         \\region move struct BadMove { id: u32 }
+        \\#[experimental_ownership]
         \\region linear struct BadLinear { id: u32 }
         \\#[trivial_drop]
+        \\#[experimental_ownership]
         \\region struct BadTrivial { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\#[drop]
         \\fn reject_region_drop(node: *mut Node) -> void {
@@ -1054,10 +1073,30 @@ test "region structs are not independent move or drop resources" {
     try std.testing.expectEqual(@as(usize, 4), countDiagnosticCode(&reporter, "E_REGION_RESOURCE_CONFLICT"));
 }
 
-test "region structs do not escape by value through non-region storage or C ABI" {
+test "advanced ownership forms require explicit experimental opt-in" {
     const source =
         \\region struct Node { id: u32 }
+        \\view struct CellView { ptr: *Cell }
+        \\thread_move move struct SendTicket { id: u32 }
+        \\struct Cell { value: u32 }
+        \\fn view(cell: *Cell) -> borrow(cell) *Cell {
+        \\    return cell;
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "ownership_experimental_gate.mc", source);
+    defer reporter.deinit();
+    try checkSource(source, &reporter);
+    // DIAGNOSTIC_UNIT: E_EXPERIMENTAL_OWNERSHIP_REQUIRED
+    try std.testing.expectEqual(@as(usize, 4), countDiagnosticCode(&reporter, "E_EXPERIMENTAL_OWNERSHIP_REQUIRED"));
+}
+
+test "region structs do not escape by value through non-region storage or C ABI" {
+    const source =
+        \\#[experimental_ownership]
+        \\region struct Node { id: u32 }
         \\type NodeAlias = Node;
+        \\#[experimental_ownership]
         \\region struct GraphNode { child: Node }
         \\struct NodePtrBox { node: *mut Node }
         \\struct BadBox { node: Node }
@@ -1077,8 +1116,10 @@ test "region structs do not escape by value through non-region storage or C ABI"
 
 test "region structs do not escape by value through ordinary locals or signatures" {
     const source =
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\type NodeAlias = Node;
+        \\#[experimental_ownership]
         \\region struct GraphNode { child: Node }
         \\fn bad_local() -> void {
         \\    let node: Node = .{ .id = 1 };
@@ -1102,8 +1143,10 @@ test "union storage cannot contain affine region or view resources by value" {
     const source =
         \\move struct Ticket { id: u32 }
         \\linear struct Cap { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\type TicketAlias = Ticket;
         \\type NodeAlias = Node;
@@ -1141,8 +1184,10 @@ test "byte views cannot expose affine or region resources by value" {
     const source =
         \\#[trivial_drop]
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\fn reject_ticket(ticket: Ticket) -> void {
         \\    mem.as_bytes(&ticket);
@@ -1176,9 +1221,11 @@ test "byte views cannot expose affine or region resources by value" {
 test "pointer bitcast cannot reinterpret affine region or view pointees" {
     const source =
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\struct Plain { id: u32 }
         \\struct Other { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\fn reject_from_ticket(ticket: *mut Ticket) -> *mut Plain {
         \\    return bitcast<*mut Plain>(ticket);
@@ -1219,10 +1266,15 @@ test "pointer bitcast cannot reinterpret affine region or view pointees" {
 test "thread spawn boundaries require explicit thread_move resources" {
     const source =
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\thread_move move struct SendTicket { id: u32 }
+        \\#[experimental_ownership]
         \\thread_move struct SendBox { ticket: SendTicket }
+        \\#[experimental_ownership]
         \\thread_move struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\thread_move move struct BadBox { ticket: Ticket }
+        \\#[experimental_ownership]
         \\view struct TicketView { ptr: *Ticket }
         \\struct Cell { id: u32 }
         \\fn make_ticket() -> Ticket { return .{ .id = 1 }; }
@@ -1518,8 +1570,10 @@ test "c_void casts cannot erase ownership resource provenance in safe code" {
     const source =
         \\#[trivial_drop]
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\fn reject_move_pointer_to_void(ptr: *Ticket) -> *const c_void {
         \\    return ptr as *const c_void;
@@ -1557,8 +1611,10 @@ test "implicit c_void conversions cannot erase ownership resource provenance in 
     const source =
         \\#[trivial_drop]
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\fn take_void(ptr: *const c_void) -> void {}
         \\fn take_ticket(ptr: *Ticket) -> void {}
@@ -1959,13 +2015,17 @@ test "view structs are lexical borrow aggregates" {
     const source =
         \\struct Cell { value: u32 }
         \\struct E { code: u32 }
+        \\#[experimental_ownership]
         \\view struct CellView { ptr: *Cell }
+        \\#[experimental_ownership]
         \\view struct CellViewWithLen { ptr: *Cell, len: usize }
+        \\#[experimental_ownership]
         \\view struct NestedCellView { inner: CellView }
         \\struct BadStoredView { view: CellView }
         \\struct BadStoredViewArray { views: [2]CellView }
         \\struct BadStoredOptionalView { view: ?CellView }
         \\move struct BadMoveStoredView { view: CellView }
+        \\#[experimental_ownership]
         \\region struct BadRegionStoredView { view: CellView }
         \\global saved: CellView = .{ .ptr = null };
         \\fn accept_local_view() -> u32 {
@@ -1973,18 +2033,23 @@ test "view structs are lexical borrow aggregates" {
         \\    let view: CellView = .{ .ptr = borrow c };
         \\    return view.ptr.value;
         \\}
+        \\#[experimental_ownership]
         \\fn accept_return_source_view(cell: *Cell) -> borrow(cell) CellView {
         \\    return .{ .ptr = cell };
         \\}
+        \\#[experimental_ownership]
         \\fn accept_nested_view(cell: *Cell) -> borrow(cell) NestedCellView {
         \\    return .{ .inner = .{ .ptr = cell } };
         \\}
+        \\#[experimental_ownership]
         \\fn reject_borrow_result_view(cell: *Cell) -> borrow(cell) Result<CellView, E> {
         \\    return ok(.{ .ptr = cell });
         \\}
+        \\#[experimental_ownership]
         \\fn reject_borrow_optional_view(cell: *Cell) -> borrow(cell) ?CellView {
         \\    return .{ .ptr = cell };
         \\}
+        \\#[experimental_ownership]
         \\fn reject_borrow_array_view(cell: *Cell) -> borrow(cell) [1]CellView {
         \\    return .{ .{ .ptr = cell } };
         \\}
@@ -2003,9 +2068,11 @@ test "view structs are lexical borrow aggregates" {
         \\    let view: CellView = .{ .ptr = borrow c };
         \\    let wrapped: [1]CellView = .{ view };
         \\}
+        \\#[experimental_ownership]
         \\fn reject_return_other_view(cell: *Cell, other: *Cell) -> borrow(cell) CellView {
         \\    return .{ .ptr = other };
         \\}
+        \\#[experimental_ownership]
         \\fn reject_return_mixed_source_view(cell: *Cell, other: *Cell) -> borrow(cell) CellViewWithLen {
         \\    return .{ .ptr = other, .len = cell.value as usize };
         \\}
@@ -2022,6 +2089,7 @@ test "view structs are lexical borrow aggregates" {
         \\}
         \\fn reject_bad_combo() -> void {
         \\}
+        \\#[experimental_ownership]
         \\view move struct BadView { ptr: *Cell }
     ;
 
@@ -2093,6 +2161,7 @@ test "explicit borrow cannot be stored into escaping storage" {
 test "safe extern calls cannot receive pointers to resource storage" {
     const source =
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\extern "C" fn inspect_ticket(ticket: *const Ticket) -> void;
         \\extern "C" fn inspect_void(handle: *const c_void) -> void;
@@ -2141,27 +2210,34 @@ test "single-source return borrow contracts are checked conservatively" {
     const source =
         \\struct Cell { value: u32 }
         \\struct Box { ptr: *Cell }
+        \\#[experimental_ownership]
         \\fn ok(cell: *Cell) -> borrow(cell) *Cell {
         \\    return cell;
         \\}
+        \\#[experimental_ownership]
         \\fn ok_member(box: *Box) -> borrow(box) *Cell {
         \\    return box.ptr;
         \\}
         \\fn choose(cell: *Cell) -> *Cell {
         \\    return cell;
         \\}
+        \\#[experimental_ownership]
         \\fn reject_call_path(cell: *Cell) -> borrow(cell) *Cell {
         \\    return choose(cell);
         \\}
+        \\#[experimental_ownership]
         \\fn wrong_source(cell: *Cell, other: *Cell) -> borrow(cell) *Cell {
         \\    return other;
         \\}
+        \\#[experimental_ownership]
         \\fn missing_source(cell: *Cell) -> borrow(other) *Cell {
         \\    return cell;
         \\}
+        \\#[experimental_ownership]
         \\fn non_view_source(value: u32) -> borrow(value) *Cell {
         \\    return null;
         \\}
+        \\#[experimental_ownership]
         \\fn non_view_return(cell: *Cell) -> borrow(cell) u32 {
         \\    return 1;
         \\}
@@ -2691,8 +2767,10 @@ test "varargs calls require exact shape and mutable va_list cursor" {
 test "va.arg cannot materialize affine, region, or view resources" {
     const source =
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct RegionNode { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\fn accept_copyable(ap: *mut va_list) -> Plain {
         \\    unsafe {
@@ -2729,8 +2807,10 @@ test "va.arg cannot materialize affine, region, or view resources" {
 test "copying generic APIs cannot use affine, region, or view element types" {
     const source =
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct RegionNode { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\struct State { descending: bool }
         \\global state: State = .{ .descending = false };
@@ -2996,8 +3076,10 @@ test "memcpy style byte copies cannot copy ownership resource storage" {
         \\extern "C" fn bzero(dst: *mut c_void, n: usize) -> void;
         \\move struct Ticket { id: u32 }
         \\linear struct Token { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\fn accept_plain(dst: *mut Plain, src: *Plain) -> void {
         \\    unsafe {
@@ -3064,6 +3146,7 @@ test "longjmp style non-local jumps cannot cross ownership state" {
         \\extern "C" fn longjmp(env: *mut c_void, value: i32) -> never;
         \\move struct Ticket { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\fn accept_no_resource(env: *mut c_void) -> never {
         \\    unsafe {
@@ -3298,8 +3381,10 @@ test "aggregate raw memory operations reject before backend lowering" {
 test "raw memory operations reject resource payloads explicitly" {
     const source =
         \\move struct Ticket { id: u32 }
+        \\#[experimental_ownership]
         \\region struct Node { id: u32 }
         \\struct Plain { id: u32 }
+        \\#[experimental_ownership]
         \\view struct PlainView { ptr: *Plain }
         \\fn reject_move_load(addr: PAddr) -> void {
         \\    unsafe {

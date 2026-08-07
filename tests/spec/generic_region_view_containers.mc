@@ -8,8 +8,10 @@
 // after substitution. Keep region and view containers separate so each template
 // field line has one stable diagnostic.
 
+#[experimental_ownership]
 region struct Node { id: u32 }
 struct Cell { value: u32 }
+#[experimental_ownership]
 view struct CellView { ptr: *Cell }
 
 struct RegionBox<T> {

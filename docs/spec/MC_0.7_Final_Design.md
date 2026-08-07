@@ -1964,6 +1964,7 @@ inside raw byte-copy containers, or returned unless the function signature state
 a single source parameter:
 
 ```mc
+#[experimental_ownership]
 fn subspan(source: borrow Bytes, begin: usize, end: usize) -> borrow(source) Bytes;
 ```
 

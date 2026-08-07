@@ -11,6 +11,7 @@
 move struct Ticket { id: u32 }
 
 #[trivial_drop]
+#[experimental_ownership]
 thread_move move struct SendTicket { id: u32 }
 
 struct Cell { value: u32 }

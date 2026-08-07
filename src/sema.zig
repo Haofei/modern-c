@@ -186,6 +186,10 @@ const secretPayloadType = sema_builtin.secretPayloadType;
 const uncheckedRequirement = sema_builtin.uncheckedRequirement;
 pub const isDropCall = sema_builtin.isDropCall;
 
+fn hasExperimentalOwnership(attrs: []const ast.Attr) bool {
+    return hasNamedAttr(attrs, "experimental_ownership");
+}
+
 // Pure AST-shape queries shared with `mir.zig`/`lower_c.zig` (see `ast_query.zig`). The shared
 // `isIdentNamed` is grouping-transparent (was not, here, before consolidation).
 const isIdentNamed = ast_query.isIdentNamed;
@@ -1188,6 +1192,9 @@ pub const Checker = struct {
         const type_ctx = Context{ .safe_module = safe_module, .mmio_structs = mmio_structs, .structs = structs, .packed_bits = packed_bits, .overlay_unions = overlay_unions, .tagged_unions = tagged_unions, .enums = enums, .type_aliases = type_aliases };
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
+                if (fn_decl.return_borrow_source != null and !hasExperimentalOwnership(decl.attrs)) {
+                    self.errorCode(fn_decl.name.span, "E_EXPERIMENTAL_OWNERSHIP_REQUIRED", "`borrow(source)` return contracts are experimental; add #[experimental_ownership] to opt in while ownership cleanup authority is moving to MIR");
+                }
                 // Bare `extern fn` is an unresolved declaration in the active MC
                 // backend ABI. Only explicit `extern "C"` and exported definitions
                 // cross the stable C ABI boundary.
@@ -1206,6 +1213,9 @@ pub const Checker = struct {
                 }
             },
             .struct_decl => |struct_decl| {
+                if ((struct_decl.is_region or struct_decl.is_view or struct_decl.is_thread_move) and !hasExperimentalOwnership(decl.attrs)) {
+                    self.errorCode(struct_decl.name.span, "E_EXPERIMENTAL_OWNERSHIP_REQUIRED", "`region struct`, `view struct`, and `thread_move` are experimental ownership forms; add #[experimental_ownership] to opt in while the stable subset stays move/linear/drop/lexical-borrow only");
+                }
                 var struct_ctx = type_ctx;
                 if (struct_decl.abi) |abi| {
                     struct_ctx.allow_mmio_register_type = std.mem.eql(u8, abi, "mmio");
@@ -7679,6 +7689,7 @@ pub const Checker = struct {
         for (module.decls) |decl| {
             if (decl.kind == .trait_decl) {
                 const t = decl.kind.trait_decl;
+                const trait_experimental_ownership = hasExperimentalOwnership(decl.attrs);
                 if (traits.contains(t.name.text)) {
                     self.errorCode(t.name.span, "E_DUPLICATE_DECLARATION", "duplicate trait declaration");
                 } else {
@@ -7707,6 +7718,11 @@ pub const Checker = struct {
                         for (t.methods) |method| {
                             for (method.params) |param| self.checkSafeModuleTypeSurface(param.ty);
                             if (method.return_type) |return_ty| self.checkSafeModuleTypeSurface(return_ty);
+                        }
+                    }
+                    for (t.methods) |method| {
+                        if (method.return_borrow_source != null and !trait_experimental_ownership and !hasExperimentalOwnership(method.attrs)) {
+                            self.errorCode(method.name.span, "E_EXPERIMENTAL_OWNERSHIP_REQUIRED", "`borrow(source)` trait method return contracts are experimental; add #[experimental_ownership] to the trait or method to opt in");
                         }
                     }
                 }
@@ -7787,6 +7803,9 @@ pub const Checker = struct {
             }
             // Reject methods the trait does not declare.
             for (it.methods) |im| {
+                if (im.return_borrow_source != null and !hasExperimentalOwnership(im.attrs)) {
+                    self.errorCode(im.name.span, "E_EXPERIMENTAL_OWNERSHIP_REQUIRED", "`borrow(source)` impl method return contracts are experimental; add #[experimental_ownership] to the method to opt in");
+                }
                 if (findTraitMethod(trait.methods, im.name.text) == null) {
                     self.errorCode(im.name.span, "E_TRAIT_UNKNOWN_METHOD", "impl provides a method the trait does not declare");
                 }
