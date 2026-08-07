@@ -2907,7 +2907,7 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         const registration: ownership_facts.AutoDropCleanupRegistration = switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&self.mir_module, function, name.text, type_name, drop_fn)) {
             .emit_auto_drop_cleanup => .emit_auto_drop_cleanup,
-            .legacy_cancellable_cleanup => .legacy_cancellable_cleanup,
+            .legacy_cancellable_cleanup => return,
             .reject => return error.UnsupportedLlvmEmission,
         };
         try self.defer_stack.append(self.allocator, .{ .auto_drop = .{
@@ -2919,17 +2919,24 @@ const LlvmEmitter = struct {
     }
 
     fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr, move_span: ast.Span) !void {
-        const cleanup = ownership_facts.autoDropMoveCancellation(expr, self.defer_stack.items) orelse return;
+        const local_name = ownership_facts.directMovedLocalName(expr) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!mir_ownership_authority.authorizesMoveOutLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(move_span))) return error.UnsupportedLlvmEmission;
-        ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, cleanup.local_name);
+        const source = mir.sourcePointFromSpan(move_span);
+        if (mir_ownership_authority.authorizesMoveOutLocalAutoDrop(&self.mir_module, function, local_name, source)) {
+            ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name);
+            return;
+        }
+        if (mir_ownership_authority.localHasAutoDropOwnershipEvent(&self.mir_module, function, local_name)) return error.UnsupportedLlvmEmission;
     }
 
     fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) !void {
-        const cleanup = ownership_facts.autoDropReleaseCancellation(expr, &self.auto_drop_fns_by_type, self.defer_stack.items) orelse return;
+        const release = ownership_facts.autoDropPointerCleanup(expr, &self.auto_drop_fns_by_type) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!mir_ownership_authority.authorizesExplicitDropLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(expr.span))) return error.UnsupportedLlvmEmission;
-        ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, cleanup.local_name);
+        if (!mir_ownership_authority.authorizesExplicitDropLocal(&self.mir_module, function, release.local_name, release.fn_name, mir.sourcePointFromSpan(expr.span))) {
+            if (mir_ownership_authority.localHasAutoDropOwnershipEvent(&self.mir_module, function, release.local_name)) return error.UnsupportedLlvmEmission;
+            return;
+        }
+        ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, release.local_name);
     }
 
     fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {

@@ -78,21 +78,33 @@ pub fn authorizesExplicitDropLocal(
     return false;
 }
 
-pub fn authorizesMoveOutLocal(
+pub fn localHasAutoDropOwnershipEvent(
     module: *const mir.Module,
     function: *const mir.Function,
     local_name: []const u8,
-    drop_fn: []const u8,
+) bool {
+    const root_value_id = valueIdForLocal(function, local_name) orelse return false;
+    for (function.ownership_events) |event| {
+        if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
+        if (!autoDropTypeSymbolHasGlue(module, event.place.root_type_symbol_id)) continue;
+        return true;
+    }
+    return false;
+}
+
+pub fn authorizesMoveOutLocalAutoDrop(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    local_name: []const u8,
     source: mir.SourcePoint,
 ) bool {
     const root_value_id = valueIdForLocal(function, local_name) orelse return false;
-    const drop_glue = dropGlueFactForReleaseFunction(module, drop_fn) orelse return false;
 
     for (function.ownership_events) |event| {
         if (event.kind != .move_out) continue;
         if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
         if (!sourceMatches(event.source, source)) continue;
-        if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
+        if (!autoDropTypeSymbolHasGlue(module, event.place.root_type_symbol_id)) continue;
         return true;
     }
     return false;
@@ -118,6 +130,15 @@ fn dropGlueFactForReleaseFunction(module: *const mir.Module, drop_fn: []const u8
         if (std.mem.eql(u8, fact.release_fn, drop_fn)) return fact;
     }
     return null;
+}
+
+fn autoDropTypeSymbolHasGlue(module: *const mir.Module, type_symbol_id: mir.SymbolId) bool {
+    if (!type_symbol_id.isValid()) return false;
+    for (module.type_ownership_facts) |fact| {
+        if (!fact.typed_type_symbol_id.eql(type_symbol_id)) continue;
+        return fact.kind == .affine and fact.drop_glue_symbol_id.isValid();
+    }
+    return false;
 }
 
 fn valueIdForLocal(function: *const mir.Function, local_name: []const u8) ?mir.ValueId {

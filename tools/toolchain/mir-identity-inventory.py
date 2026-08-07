@@ -257,7 +257,9 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "pub fn autoDropLocalRegistrationDecision"),
         ("src/mir_ownership_authority.zig", "event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)"),
         ("src/mir_ownership_authority.zig", "fn sourceMatches"),
-        ("src/mir_ownership_authority.zig", "pub fn authorizesMoveOutLocal"),
+        ("src/mir_ownership_authority.zig", "pub fn authorizesMoveOutLocalAutoDrop"),
+        ("src/mir_ownership_authority.zig", "pub fn localHasAutoDropOwnershipEvent"),
+        ("src/mir_ownership_authority.zig", "fn autoDropTypeSymbolHasGlue"),
         ("src/mir_ownership_authority.zig", "pub fn authorizesExplicitDropLocal"),
         ("src/lower_c_tests.zig", "lower-c rejects auto-drop transfer authorization with stale MIR resource type"),
         ("src/lower_c_tests.zig", "lower-c move auto-drop cancellation requires MIR move-out event"),
@@ -275,8 +277,8 @@ def main() -> int:
         ("docs/compiler-production-readiness.md", "MIR owns the ownership event envelope"),
         ("docs/compiler-production-readiness.md", "MIR admission requires auto-drop to close storage"),
         ("docs/compiler-production-readiness.md", "C/LLVM transfer auto-drop authorization requires MIR resource identity"),
-        ("docs/compiler-production-readiness.md", "C/LLVM move auto-drop cancellation is MIR-event gated"),
-        ("docs/compiler-production-readiness.md", "C/LLVM explicit release cancellation is MIR-event gated"),
+        ("docs/compiler-production-readiness.md", "C/LLVM move auto-drop validation is MIR-event gated"),
+        ("docs/compiler-production-readiness.md", "C/LLVM explicit release validation is MIR-event gated"),
         ("docs/compiler-production-readiness.md", "C/LLVM cleanup cancellation requires source-matched MIR events"),
         ("docs/compiler-production-readiness.md", "MIR ownership sequence checks only typed resource roots"),
         ("docs/compiler-production-readiness.md", "MIR local ownership identity covers no-drop resources"),
@@ -291,8 +293,11 @@ def main() -> int:
         require_contains(path, needle)
 
     require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesAutoDropLocal")
+    require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesMoveOutLocal(")
     require_not_contains("src/lower_c_emitter.zig", "authorizesAutoDropLocal(")
     require_not_contains("src/lower_llvm.zig", "authorizesAutoDropLocal(")
+    require_not_contains("src/lower_c_emitter.zig", ".legacy_cancellable_cleanup => .legacy_cancellable_cleanup")
+    require_not_contains("src/lower_llvm.zig", ".legacy_cancellable_cleanup => .legacy_cancellable_cleanup")
 
     print("PASS: mir-identity-inventory - typed MIR identity seed is anchored")
     return 0
