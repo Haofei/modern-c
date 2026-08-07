@@ -36,12 +36,12 @@ pub fn authorizesAutoDropLocal(
                 if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
                 return true;
             },
-            // Transitional allowance: C and LLVM still use legacy cleanup stacks
-            // for path-sensitive cancellation while cleanup edges migrate into
-            // MIR. A matching simple local consumption event means MIR owns the
-            // obligation state and the backend may register its legacy lexical
-            // cleanup for the existing cancellation path. No MIR auto_drop or
-            // consumption event means fail closed.
+            // Transitional allowance: path-sensitive cleanup edges are not yet
+            // fully represented in MIR. A matching consumption event proves MIR
+            // at least owns the local's obligation state, so legacy backend
+            // cleanup stacks may register and then cancel the cleanup on the
+            // transfer path. This case is removed once C/LLVM consume MIR
+            // cleanup edges directly.
             .move_out, .forget, .explicit_drop => return true,
             else => {},
         }

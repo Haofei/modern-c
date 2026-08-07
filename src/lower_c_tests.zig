@@ -13752,6 +13752,23 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     try lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &valid_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null);
     try expectContains(valid_output.items, "close_guard(&g);");
 
+    const saved_events = for (module_mir.functions) |*function| {
+        if (std.mem.eql(u8, function.name, "auto_drop_from_mir_fact")) {
+            const saved = function.ownership_events;
+            function.ownership_events = &[_]mir.OwnershipEvent{};
+            break saved;
+        }
+    } else return error.TestUnexpectedResult;
+    var missing_auto_drop_event_output: std.ArrayList(u8) = .empty;
+    defer missing_auto_drop_event_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &missing_auto_drop_event_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    for (module_mir.functions) |*function| {
+        if (std.mem.eql(u8, function.name, "auto_drop_from_mir_fact")) {
+            function.ownership_events = saved_events;
+            break;
+        }
+    }
+
     const saved_ownership_facts = module_mir.type_ownership_facts;
     module_mir.type_ownership_facts = &[_]mir.TypeOwnershipFact{};
     var missing_ownership_output: std.ArrayList(u8) = .empty;
