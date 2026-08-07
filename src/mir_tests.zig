@@ -4205,6 +4205,39 @@ test "MIR records simple move-out ownership events" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=return_guard kind=move_out") != null);
 }
 
+test "MIR ownership event admission rejects duplicate local consumption" {
+    // DIAGNOSTIC_UNIT: E_MIR_OWNERSHIP_EVENT
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\fn return_guard() -> Guard {
+        \\    var g = make_guard();
+        \\    return move g;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_ownership_duplicate_consume.mc", source);
+    defer parsed.deinit();
+
+    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer bad_mir.deinit();
+    const function = functionByNameMut(&bad_mir, "return_guard") orelse return error.TestUnexpectedResult;
+    const generated_events = function.ownership_events;
+    try std.testing.expectEqual(@as(usize, 3), generated_events.len);
+    const events = try std.testing.allocator.alloc(mir.OwnershipEvent, generated_events.len + 1);
+    @memcpy(events[0..generated_events.len], generated_events);
+    events[generated_events.len] = generated_events[generated_events.len - 1];
+    function.ownership_events = events;
+    std.testing.allocator.free(generated_events);
+
+    try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));
+
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_ownership_duplicate_consume.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(bad_mir, &verifier_reporter);
+    try std.testing.expect(verifier_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_OWNERSHIP_EVENT") != null);
+}
+
 test "MIR ownership event admission rejects malformed event identity" {
     // DIAGNOSTIC_UNIT: E_MIR_OWNERSHIP_EVENT
     const source =

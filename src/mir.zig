@@ -1479,6 +1479,7 @@ pub fn validateOwnershipEventsForLowering(module: Module) error{InvalidMirOwners
         for (function.ownership_events) |event| {
             if (!ownershipEventValid(module, function, event)) return error.InvalidMirOwnershipEvents;
         }
+        if (!ownershipEventSequenceValid(function)) return error.InvalidMirOwnershipEvents;
     }
 }
 
@@ -1488,6 +1489,13 @@ fn verifyFunctionOwnershipEvents(module: Module, function: Function, reporter: *
         reporter.err(
             sourcePointSpan(event.source),
             "E_MIR_OWNERSHIP_EVENT: MIR verifier found malformed ownership event",
+            .{},
+        );
+    }
+    if (!ownershipEventSequenceValid(function)) {
+        reporter.err(
+            sourcePointSpan(function.ownership_events[function.ownership_events.len - 1].source),
+            "E_MIR_OWNERSHIP_EVENT: MIR verifier found inconsistent ownership event sequence",
             .{},
         );
     }
@@ -1522,6 +1530,69 @@ fn ownershipPlaceValid(module: Module, function: Function, place: OwnershipPlace
         }
     }
     return true;
+}
+
+const OwnershipRootState = enum {
+    untracked,
+    storage_live,
+    live,
+    consumed,
+};
+
+fn ownershipEventSequenceValid(function: Function) bool {
+    for (function.ownership_events, 0..) |event, index| {
+        const root = simpleOwnershipRootValue(event.place) orelse continue;
+        if (!ownershipRootHasStorageLive(function, root)) continue;
+        const state = ownershipRootStateBefore(function, index, root);
+        switch (event.kind) {
+            .storage_live => {
+                if (state != .untracked) return false;
+            },
+            .init => {
+                if (state != .storage_live) return false;
+            },
+            .reinit => {
+                if (state == .untracked) return false;
+            },
+            .move_out, .forget, .explicit_drop, .auto_drop => {
+                if (state != .live) return false;
+            },
+            .borrow_begin, .set_drop_flag => {
+                if (state != .live) return false;
+            },
+            .borrow_end, .storage_dead => {},
+        }
+    }
+    return true;
+}
+
+fn ownershipRootStateBefore(function: Function, event_index: usize, root: ValueId) OwnershipRootState {
+    var state: OwnershipRootState = .untracked;
+    for (function.ownership_events[0..event_index]) |event| {
+        const event_root = simpleOwnershipRootValue(event.place) orelse continue;
+        if (!event_root.eql(root)) continue;
+        switch (event.kind) {
+            .storage_live => state = .storage_live,
+            .init, .reinit => state = .live,
+            .move_out, .forget, .explicit_drop, .auto_drop => state = .consumed,
+            .storage_dead => state = .untracked,
+            .borrow_begin, .borrow_end, .set_drop_flag => {},
+        }
+    }
+    return state;
+}
+
+fn ownershipRootHasStorageLive(function: Function, root: ValueId) bool {
+    for (function.ownership_events) |event| {
+        const event_root = simpleOwnershipRootValue(event.place) orelse continue;
+        if (event.kind == .storage_live and event_root.eql(root)) return true;
+    }
+    return false;
+}
+
+fn simpleOwnershipRootValue(place: OwnershipPlace) ?ValueId {
+    if (!place.root_value_id.isValid() or place.root_symbol_id.isValid() or place.projection_count != 0) return null;
+    return place.root_value_id;
 }
 
 fn ownershipDropGlueSymbolValid(module: Module, symbol_id: SymbolId) bool {
