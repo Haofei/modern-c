@@ -2,598 +2,95 @@
 
 Status: **language-validation workload document**.
 
-This file keeps its historical name for link stability, but it no longer defines a
-kernel product roadmap. The kernel is a validation workload for Modern C language,
-ABI, ownership, async, driver, syscall, and freestanding semantics.
+This file keeps its historical name for link stability. It does not define a
+kernel product roadmap, secure-update plan, hardware qualification plan, or
+release-readiness bar.
 
-Related documents:
+The kernel exists in this repository to exercise Modern C under low-level
+conditions that ordinary compiler fixtures do not cover:
 
-- `docs/compiler-production-readiness.md` — compiler supported-subset
-  qualification and semantic closure matrices.
-- `docs/kernel-language-comparison-plan.md` — separate evidence plan for narrow,
-  fair C/Rust/MC kernel machine-contract comparisons.
-- `docs/future-kernel-plan.md` — overall capability-native edge agent OS direction.
-- `docs/platform-portability-plan.md` — platform work for RISC-V S-mode, x86_64, and AArch64.
-- `docs/todo.md` — consolidated current roadmap.
-- `docs/test-architecture.md` — test-system direction.
+- freestanding startup and linker boundaries;
+- C/LLVM backend parity;
+- syscall and user/kernel ABI boundaries;
+- ownership/drop behavior around handles, mappings, pages, locks, and tokens;
+- raw pointer, MMIO, interrupt, and unsafe boundary checks;
+- async submit/poll paths;
+- QEMU/OpenSBI boot and driver smoke coverage.
 
-Language-comparison results and QEMU gates do not create a kernel product claim.
-Each document retains its own exit criteria.
+## Current scope
 
-## 1. Validation scope
-
-The current kernel scope is intentionally narrow: it exists to exercise language
-semantics and backend lowering under realistic low-level constraints.
-
-### 1.1 In scope
-
-The current validation target is:
+The retained kernel validation target is intentionally narrow:
 
 ```text
 QEMU/OpenSBI first
 + selected RISC-V board metadata as an FDT/resource-discovery fixture
-+ fixed CPU/interrupt/device classes required by tests
++ small fixed CPU/interrupt/device classes required by tests
 + narrow syscall ABI
 + brokered FS/network/tool effect fixtures
 + storage persistence only where required by retained demos
-+ watchdog/recovery smoke coverage
++ watchdog/recovery smoke coverage where it exposes language/backend behavior
 ```
 
-The current real-board metadata fixture is:
+The StarFive VisionFive 2 files under
+`kernel/platform/starfive_visionfive2/` are metadata fixtures. They document
+expected FDT resources and keep the adapter path honest through QEMU surrogate
+tests. They are not a hardware release target.
 
-```text
-StarFive VisionFive 2 (JH7110)
-64-bit RISC-V
-S-mode kernel
-OpenSBI firmware
-Sv39 virtual memory
-QEMU virt first
-VisionFive 2 hardware validation only when it serves the language workload
-FDT-described UART + timer + interrupt controller + storage + network
-```
-
-The machine-readable fixture lives in `kernel/platform/starfive_visionfive2/profile.mc`.
-`zig build riscv-qemu-validation` is the repeatable QEMU/OpenSBI validation gate.
-It validates the RISC-V S-mode platform, interrupt, virtio storage/network,
-confined QuickJS, broker, real TCP-backed `host_net_fetch`, and IRQ-backed
-`SYS_POLL` paths across both backends. It remains language/backend evidence,
-not hardware release evidence.
-
-### 1.2 Out of scope
-
-The validation workload should not try to provide:
-
-- Linux/POSIX compatibility.
-- Broad desktop/server workloads.
-- Arbitrary process trees and shell-first operation.
-- Broad hardware driver coverage.
-- Raw device or raw network access for agents.
-- A general package manager.
-- Untrusted third-party runtimes inside the kernel trust boundary.
-
-## 2. Validation levels
+## Validation levels
 
 | Level | Meaning | Required evidence |
 |---|---|---|
-| K0: QEMU smoke workload | Kernel fixtures compile and run under the retained QEMU paths | Existing `m0`/QEMU gates; confined QuickJS; broker ABI; S-mode path |
-| K1: Language stress workload | Kernel fixtures exercise ownership, ABI, MMIO, user-copy, async, and syscall boundaries | Deterministic C/LLVM gates and focused QEMU tests |
-| K2: Optional board metadata fixture | A real-board profile documents FDT/resource expectations without creating a release claim | Profile parser/adapters and QEMU surrogate gates |
-
-No calendar maturity ladder is maintained here. Product pilots, release bars,
-operations, update policy, and hardware qualification belong to a separate
-product profile if one is ever created.
-
-## 3. Current baseline
-
-The kernel is already beyond a toy prototype:
-
-- RISC-V S-mode under OpenSBI is implemented and gated.
-- Confined U-mode agents exist.
-- QuickJS can run as a confined agent.
-- The kernel has page-table-aware user-copy paths.
-- A multi-segment ELF loader exists.
-- Virtio-blk and virtio-net have QEMU gates.
-- The broker ABI supports structured submit/poll.
-- The RISC-V reference path can run real FS broker operations from pure JS.
-- DNS, TCP/HTTP, virtio-rng, FDT, UART, and multiple architecture paths exist in test form.
-- x86_64 and AArch64 have user/VM/agent-level parity, with some device-level gaps.
-
-The remaining work is not "invent an OS from nothing." It is turning a strong gated
-prototype into a reliable appliance runtime.
-
-### 3.1 External review reconciliation (2026-06-30)
-
-An independent review proposed a 12-area "production Agent OS" gap list. It maps almost 1:1
-onto §4 below (independent re-derivation — validating). Grounding each against the tree shows
-several areas it called "missing" already exist and are better characterized as "exists, needs
-hardening"; a few are genuinely thin. Current state, with evidence:
-
-| Area | Status | Evidence / gap |
-| --- | --- | --- |
-| 1. Preemptive scheduling | **Mostly done** | Correction (review and my first pass both understated this): **real timer-driven preemption already exists and is gated** — `preempt_demo`/`preempt-test` (both backends) runs three never-yielding threads that the timer ISR (`timer_preempt` → `sched_yield` from the trap, full frame preserved by the asm vector) rotates through; **per-agent CPU budget** is enforced (`wasm-watchdog-test`: the machine-timer watchdog preempts + KILLS a runaway agent); priorities/quantum/fair-share/throttle (`proc_sched.mc`, gated `scheduler-test`/`fairsched`); cancellation (`AGENT_OP_CANCEL`, `qjs-cancel-test`). **Added (2026-06-30):** a process-level (ProcTable) quantum→`need_resched` decision layer (`proc_preempt_tick`/`_pending`/`_clear`/`_point`) so the agent scheduler has a voluntary-preemption-point path tied to quantum (gated `scheduler-test`). **Landed (2026-06-30):** `agent-preempt-test` (both backends) — three never-yielding ProcTable processes are rotated by the CLINT timer ISR (which runs the irq-safe `proc_preempt_tick`; the switch happens at a safe point), printing A/B/C + AGENT-PREEMPT-OK. Preemption is now proven for agents, not just kernel threads. #1 is complete. |
-| 2. Stable agent ABI | Mostly done | Correction: it IS versioned — `AGENT_ABI_VERSION`, `version` fields on req/event structs, `agent_abi_validate_req` rejects a mismatch with `badver` (gated: `agent_abi_demo.mc`), typed `AgentAbiError` status codes, a `CANCEL` op, and `abi-consistency-test` guards syscall-number drift across kernel/userspace. **Landed (2026-06-30):** the versioning/compat policy is now written in `agent_abi.mc` (single monotonic wire version; what forces a bump; status/op-set rules; the pair-kernel-with-agents deployment model). |
-| 3. Durable storage | In progress | KV/blob/fs plus the real **virtio-blk write path** (`blk_write` + full-sector `blk_read_into`) and a **persist-across-reboot gate** — `blk-persist-test` (both backends) boots QEMU twice against the same disk image: a sentinel written on boot 1 is read back on a fresh boot 2 (RAM cleared, disk survives). Product policy/audit persistence fixtures have been removed from the current language-oriented kernel scope. |
-| 4. Isolation boundary | **Most mature** | Confined U-mode Sv39 (kernel unmapped) + WAMR sandbox + deterministic fuel, S-mode + cross-arch. Gap: **per-agent crash cleanup/reap**. (Review overstates this as missing.) |
-| 5. Resource accounting | Mostly done | Per-dimension budgets are enforced AND gated: CPU (`wamr-fuel-test`, `wasm-watchdog-test`), memory (`wasm-memcap-test`), tool/output quota (`quota-probe-test`, `qjs/wasm-quota-agent-test`) — multiple backends. **Landed (2026-06-30):** typed `NoMem` on the DMA path — `dma.try_alloc -> Result<_, DmaError>` + `mc_dma_alloc_base_try` across all providers (fail-closed with a typed error instead of trapping on exhaustion); gated `dma-try-test`. Gap: a **single unified accounting/quota model** for the remaining language-runtime fixtures. |
-| 6. Broker hardening | Removed from scope | Product agent/network brokers have been deleted from the language-oriented kernel. Remaining tool paths are fixtures for ABI, async, and lowering tests. |
-| 7. Networking | Mostly exists | **DNS exists** (`kernel/net/dns.mc`), and TCP RX is hardened for the retained HTTP/DNS fixtures (checksums + chunked drain). Gap: retransmit robustness, conn pooling, timeout control, hostile-packet corpus. Encrypted transport is outside the current language-oriented kernel scope. |
-| 8. Observability | Partial | Audit/trace exists (`ipc_trace.mc`, `cap_audit`, provenance). Product metrics, replay, checkpoint, and migration are out of the current language-oriented kernel scope. |
-| 9. Update/packaging | External product scope | Reproducible build/package gates remain in the toolchain. Kernel OTA/live-update fixtures have been removed from the current language-oriented kernel scope. |
-| 10. Platform contract | Partly documented | `platform-portability-plan.md`, `qemu-validation-checklist.md`; per-arch compiler-flag rules now explicit (aarch64 strict-align). Gap: **one frozen board profile**. |
-| 11. Security model doc | **Landed (2026-06-30)** | `docs/threat-model.md` written: assets, trust boundaries (TCB vs attacker-controlled), the isolation boundary with enforcing code, per-area threats→mitigations, guarantees G1–G5, accepted failure modes, and how each is gated. Keep it updated as §4.7 work lands. |
-| 12. Long-running lifecycle | Partial | Core lifecycle exists: `proc_spawn` / `proc_exit` / `proc_kill` (+ `proc_signals`) / `proc_reap` (parent reaps a dead child — crash cleanup) / pause/resume. **Added (2026-06-30):** supervision mechanism — heartbeat-liveness detection (`proc_supervise`/`proc_heartbeat`/`proc_liveness_expired`/`proc_unsupervise`, per-slot deadline) AND a restart/crash-loop guard (`proc_restart_record`/`proc_restart_allowed`/`proc_restart_reset` — bound restarts so a slot that keeps dying is declared crash-looping instead of thrashing); both gated in `scheduler-test`. **Also landed:** `proc_supervise_step` — the per-slot supervisor verdict that folds liveness + restart-budget into `None`/`Restart`/`GiveUp` (the loop primitive: a supervisor runs it over its children each tick, actuating respawn/kill); gated. |
-
-Net (revised after grounding each row against the tree — the recurring finding is that items are
-substantially more implemented + gated than first credited):
-
-- **Landed this pass:** (11) threat model written; (2) ABI versioning policy written (the mechanism
-  already existed + was gated); (1) a process-level quantum→`need_resched` preemption-decision layer
-  added — and verified that real timer-driven preemption + per-agent CPU-budget kill **already
-  exist and are gated**.
-- **Closed (2026-06-30, this work):**
-  - (3) persist-across-reboot — virtio-blk write path + `blk-persist-test`, both
-    backends; plus overflow-safe fit checks across mcp/blockdev/DMA.
-  - (5) typed `NoMem` DMA (`dma-try-test`) AND a **unified, overflow-safe resource ledger**
-    (`kernel/core/ledger.mc`: charge/release across Memory/Dma/Ipc/BlockIo/Net/FileHandles with
-    typed `OverLimit`/`Underflow` and headroom-compare so a charge never forms an overflowing sum)
-    — `ledger-test` both backends. (Wiring the scattered per-dimension budgets onto this ledger is a
-    mechanical follow-up; the ledger itself is proven.)
-  - (8) observability remains limited to audit/trace primitives.
-    The previous replay/counter fixture has been removed from the current scope.
-  - (12) supervision — mechanism (heartbeat-liveness + restart/crash-loop guard +
-    `proc_supervise_step` verdict) AND a **running supervisor loop** (`proc_supervisor_scan` scans all
-    supervised slots and actuates Restart/GiveUp) — `proc-supervisor-test` both backends.
-  - (1-tail) `agent-preempt-test` — timer-driven preemption of AGENT processes.
-
-- **Polish delivered (2026-06-30):** selected follow-ups remain landed and gated:
-  - unified ledger wiring for representative hot paths (IPC/blk/DMA charges gate real ops without
-    trapping).
-  - **Reproducible-build determinism** (`reproducible-build-test`; byte-identical emitted C/LLVM across rebuilds).
-  - **P6 hardening**: a **soak** gate (~12k spawn/charge/supervise/reclaim/reap cycles, leak/overflow
-    clean; `soak-test`, both backends), and `docs/security-review.md`.
-
-- **Genuinely remaining:** (10) a real **board profile + hardware bring-up**. Any
-  product-specific update/recovery policy is external to the current language-oriented kernel
-  scope. Local dev VM: `tools/run-kernel.sh` boots demos in QEMU.
-
-The point of this section is to distinguish qualified mechanisms from end-to-end claims. Metadata
-fixtures are gated, but they are not a production trust chain.
-
-## 4. Main production blockers
-
-### 4.1 Interrupt-driven I/O
-
-Current status:
-
-- S-mode timer interrupt delivery is proven (`smode-timer-test`, both backends).
-- S-mode external PLIC delivery is proven with a single-shot UART interrupt
-  (`smode-plic-test`, both backends).
-- A reusable S-mode PLIC dispatch shell exists at `kernel/drivers/irq/smode_plic.mc`;
-  the single-shot and multishot S-mode PLIC demos now route claim/complete through it.
-- Registered S-mode async IRQ completion gates pass on both backends for virtio-blk and
-  virtio-net TX/RX: `blk-smode-irq-test`, `llvm-blk-smode-irq-test`,
-  `net-smode-irq-test`, `llvm-net-smode-irq-test`, `net-smode-rx-irq-test`, and
-  `llvm-net-smode-rx-irq-test`. They drain completed broker ids through
-  `async_poll_many`, the kernel-side `SYS_POLL` shape, and are promoted into `m0`.
-- The production JS `host_net_fetch` surface has an S-mode IRQ-backed proof:
-  `qjs-smode-net-irq-tool-test` / `llvm-qjs-smode-net-irq-tool-test` complete the JS
-  request through `SYS_POLL` from a real virtio-net PLIC interrupt, and are promoted into
-  `m0`.
-- The production JS `host_fs_read` surface has the storage counterpart:
-  `qjs-smode-blk-irq-tool-test` / `llvm-qjs-smode-blk-irq-tool-test` complete the JS
-  request through `SYS_POLL` from a real virtio-blk PLIC interrupt, and are promoted into
-  `m0`.
-
-- The steady-state, re-armed external-interrupt path is now proven on **both** backends
-  (`smode-plic-multishot-test`, in m0): the handler re-arms the UART source and takes 3
-  discrete S-mode external interrupts via the PLIC.
-
-Former blocker (now resolved):
-
-- What looked like a "C-backend async-IRQ reset" — a naked S-mode trap vector that
-  reset-looped on the C backend while LLVM was clean — was **root-caused and fixed**. It was
-  not a reset: the `#[naked]` vector could be placed 2-byte aligned, but a RISC-V
-  `stvec`/`mtvec` base must be 4-byte aligned (its low two bits are the MODE field), so a
-  misaligned vector trapped to the wrong PC. Fixed at the language level with the `#[align(N)]`
-  attribute and a 4-byte alignment default for `#[naked]` functions. The repeated/preemptive
-  S-mode interrupt path (R1b/R2) is therefore unblocked. See
-  `docs/platform-portability-plan.md` §12 "Do now" item 2.
-
-Validation target:
-
-- Virtio-blk and virtio-net interrupts routed through the reusable S-mode PLIC dispatch.
-- Interrupt-driven virtio-blk completion.
-- Interrupt-driven virtio-net TX and RX completion.
-- Device interrupts integrated with the scheduler and async completion queue.
-- No busy polling in steady-state agent I/O.
-
-Acceptance gates:
-
-- `smode-plic-test` remains green.
-- `blk-smode-irq-test` reads a sector by sleeping until interrupt-backed completion.
-- `net-smode-irq-test` sends a frame and sleeps until interrupt-backed TX completion.
-- `net-smode-rx-irq-test` receives a frame by sleeping until interrupt-backed RX completion.
-- The async broker can complete a request from an interrupt-backed event and drain it through
-  `async_poll_many`, not from a polling loop.
-- Production agent syscall/tool-surface gates show the same interrupt-backed completion through
-  `SYS_POLL`: `qjs-smode-net-irq-tool-test` / `llvm-qjs-smode-net-irq-tool-test` for network
-  and `qjs-smode-blk-irq-tool-test` / `llvm-qjs-smode-blk-irq-tool-test` for storage.
-- QEMU tests assert that `wfi` is reached while waiting and that completion is interrupt-driven.
-
-Why this matters:
-
-- Power use matters on edge devices.
-- Polling hides race conditions that appear on real hardware.
-- Async agent I/O needs a real completion path.
-
-### 4.2 Agent validation surface
-
-Current status:
-
-- Confined QuickJS exists.
-- Structured `SYS_SUBMIT` / `SYS_POLL` exists.
-- Real FS broker operations exist on the RISC-V reference path.
-- Network fetch remains covered by deterministic app-run and interrupt-backed fixtures where it
-  validates ABI, polling, and driver behavior. Real TCP-backed product broker claims are out of
-  scope for the language-oriented kernel.
-- Product agent/runtime gaps are intentionally outside this repository's kernel scope.
-
-Validation target:
-
-- Cross-arch broker ABI smoke coverage where it exposes backend or ABI gaps.
-- A small retained tool catalog for language/runtime fixtures.
-- Out-of-process transport only if needed to validate syscall/capability boundaries.
-
-Initial tool catalog:
-
-- `read`
-- `list`
-- `write`
-- `mkdir`
-- `grep`
-- `find`
-- `edit`
-- `exec` only if the product actually needs it
-- `checkpoint`
-- `net_fetch` / `host_net_fetch`
-
-Acceptance gates:
-
-- A pure JS agent performs allowed FS operations and denied FS operations.
-- A pure JS agent performs allowed network fetch and denied network fetch.
-- Denials are audited and attributable to the agent.
-- Tool budget exhaustion returns a typed error and produces policy-visible state.
-- Tool server isolation is covered only by retained syscall/capability fixtures.
-- MCP descriptor output matches the actual capability surface.
-
-### 4.3 Persistent policy and audit
-
-Current status:
-
-- Capability checks, audit rings, and policy decision logic exist.
-- Product virtio-blk journal/reboot integration is outside the current scope.
-- Product policy actuation against live running agents is outside the current scope.
-
-Validation target:
-
-- Product policy persistence is out of the current language-oriented kernel scope.
-- Audit records are bounded and structured.
-- Product policy decisions and actuation are outside the current kernel scope.
-
-Acceptance gates:
-
-- Tests cover audit attribution and ring wraparound.
-- Product policy load, persistence, and live actuation are reintroduced only behind a concrete product profile.
-
-### 4.4 Product update and recovery lifecycle
-
-Current status:
-
-- Kernel OTA/live-update mechanics are not part of the current language-oriented kernel scope.
-- Product update policy should be specified outside the language core and reintroduced only when
-  a concrete product profile needs it.
-
-Current acceptance gate:
-
-- No kernel OTA/live-update gate is treated as language-core readiness evidence.
-- Any future signed image, signed bundle, verified boot, rollback, or recovery-slot mechanism must
-  arrive through a concrete product profile with its own threat model and qualification gates.
-
-### 4.5 Real board metadata fixture
-
-Current status:
-
-- QEMU `virt` is the main reference.
-- Real-board metadata remains useful only as an FDT/resource-discovery fixture
-  for the language workload.
-
-Validation target:
-
-- One board profile records memory map, interrupt controller, timer, UART,
-  storage, and network expectations.
-- FDT/device discovery remains the tested boundary.
-- Extra devices are added only when they exercise a retained language/runtime path.
-
-Acceptance gates:
-
-- QEMU surrogate gates stay green.
-- Optional real hardware experiments are recorded as workload evidence, not
-  release qualification.
-
-Board-selection criteria:
-
-- Open boot documentation.
-- Open interrupt/timer/device docs.
-- Mainline-friendly Ethernet or virtio-like device path.
-- Avoid Wi-Fi chips that require a large Linux-only SDK unless the product absolutely needs them.
-- Prefer vendors with stable firmware interface, documented SDIO/PCIe/USB transport, and redistributable firmware.
-
-### 4.6 Reliability and recovery
-
-Validation target:
-
-- Watchdog integration.
-- Panic capture.
-- Controlled reboot.
-- Agent crash containment.
-- Resource reclamation on exit.
-- Storage-full and memory-pressure handling.
-- No single failed agent can wedge the device.
-
-Acceptance gates:
-
-- Agent page fault kills or restarts only that agent.
-- Agent OOM is contained and audited.
-- Kernel OOM path is deterministic.
-- Tool server crash is detected and restarted or marked unavailable.
-- Watchdog resets a deliberately hung kernel path in a board test.
-- After reboot, the system can report why it restarted.
-
-### 4.7 Security hardening
-
-Current status:
-
-- MC already has useful safety work: unsafe boundary, user-pointer type, parser primitives,
-  capability opacity, IRQ-context discipline, and move/borrow checks.
-- More security work is still needed before any product profile could make
-  release claims.
-
-Validation target:
-
-- Syscall fuzzing.
-- Broker request fuzzing.
-- Network parser fuzzing.
-- ELF loader fuzzing.
-- Capability forge/regression tests.
-- User-copy fault injection.
-- MMIO and DMA ownership checks.
-- Security review of every unsafe boundary used by the kernel.
-
-Acceptance gates:
-
-- Fuzzers run in CI or scheduled jobs.
-- Every syscall rejects malformed pointers and lengths without kernel fault.
-- Every broker input has length bounds and structured parse errors.
-- Every externally reachable parser has malformed-input coverage.
-- Unsafe audit has no unexplained sites.
-
-### 4.8 Operations and observability
-
-Validation target:
-
-- Boot reason reporting.
-- Kernel version, board profile, policy version, and agent bundle version visible in diagnostics.
-- Bounded logs.
-- Health endpoint or serial diagnostic command.
-- Minimal crash dump or panic record.
-- Test hooks that can be disabled in release images.
-
-Acceptance gates:
-
-- A field device can answer: what is running, what policy is active, what the last denied action was, and why it rebooted.
-- Log storage cannot be exhausted by one agent.
-- Diagnostic output does not leak secrets.
-
-## 5. Suggested roadmap
-
-### Phase P0: freeze the validation workload
-
-Goal: define which kernel paths remain useful for language validation.
-
-Tasks:
-
-- Pick the QEMU-to-board metadata path to keep.
-- Define the retained agent workload.
-- Define required tools and network fixtures.
-- Define which storage/recovery checks remain language evidence.
-
-Exit criteria:
-
-- A one-page validation profile exists.
-- The retained device fixture list is fixed.
-- The required broker tool list is fixed.
-- Non-goals are explicitly written down.
-
-### Phase P1: interrupt-driven reference platform
-
-Goal: make the QEMU S-mode path behave like a real low-power kernel.
-
-Prerequisite — DONE: the C-backend async-IRQ "reset" that gated this phase has been
-root-caused and fixed (missing alignment on naked trap vectors; see §4.1 and
-`docs/platform-portability-plan.md` §12 "Do now" item 2). The steady-state, re-armed interrupt path now passes on
-both backends (`smode-plic-multishot-test`), so devices can be converted to interrupt-backed
-wait. Reusable S-mode PLIC dispatch and async virtio-blk / virtio-net TX/RX IRQ demos now
-exist, pass on both backends, and drain completed broker ids through `async_poll_many`; the
-production JS network and storage tool surfaces now also have `SYS_POLL` completion proofs from
-real S-mode virtio-net and virtio-blk PLIC interrupts.
-
-Tasks:
-
-- Keep `zig build riscv-qemu-validation` green as the focused QEMU/OpenSBI
-  board-surrogate gate until hardware validation is available.
-- Keep `blk-smode-irq-test`, `net-smode-irq-test`, `net-smode-rx-irq-test`, and their LLVM
-  variants green as promoted `m0` evidence.
-- Keep `qjs-smode-net-irq-tool-test`, `qjs-smode-blk-irq-tool-test`, and their LLVM variants
-  green as promoted production `SYS_POLL` evidence.
-
-Exit criteria:
-
-- Storage and network tests can sleep while waiting for hardware.
-- Async JS requests complete from device events.
-- Polling remains only as a fallback or diagnostic mode.
-
-### Phase P2: retained agent broker fixtures
-
-Goal: keep only the external-effect fixtures that validate language, ABI, and capability boundaries.
-
-Tasks:
-
-- Keep retained FS/network broker fixtures green.
-- Keep denied-network audit records only where they validate capability/error paths.
-- Add transport or descriptor depth only when it exposes a language/runtime boundary.
-- Keep per-agent quotas for in-flight requests and result buffers as resource-accounting fixtures.
-
-Exit criteria:
-
-- A pure JS agent can complete a useful task using only brokered tools.
-- Every allowed and denied external effect is attributed and policy-visible.
-- No tool runs with the agent's ambient authority.
-
-### Phase P3: persistence and recovery
-
-Goal: survive reboot and explain behavior.
-
-Tasks:
-
-- Keep basic storage persistence gates for active demos.
-- Reintroduce persistent policy/audit only if a concrete product profile requires it.
-- Add watchdog integration only if a concrete kernel product profile needs it.
-- Add panic/reboot reason record only if a concrete kernel product profile needs it.
-- Add policy actuation for revoke/throttle/kill only if a concrete agent product profile needs it.
-
-Exit criteria:
-
-- Device can reboot and retain the demo state required by the selected profile.
-- Device can kill or throttle a misbehaving agent.
-- Device can report last reboot reason if that profile keeps reboot telemetry.
-
-### Phase P4: updates and recovery
-
-Goal: keep update/recovery out of the language-oriented kernel unless a product profile needs it.
-
-Tasks:
-
-- Reintroduce product bundle/update mechanics only behind a concrete product profile.
-- Keep release metadata separate from the language/kernel correctness gates.
-
-Exit criteria:
-
-- No product-update claim is made by the language-oriented kernel profile.
-
-### Phase P5: optional real-board experiment
-
-Goal: collect hardware evidence only when it validates a retained language/runtime path.
-
-Tasks:
-
-- Bring up boot, UART, timer, interrupts.
-- Bring up storage.
-- Bring up Ethernet.
-- Run deterministic network/tool fixtures through the app-run ABI.
-- Run watchdog.
-- Run power-cycle loop.
-- Measure memory footprint and idle power.
-
-Exit criteria:
-
-- Board runs the reference agent workload for days.
-- Power-cycle test passes.
-- Network loss/recovery behaves predictably.
-- Storage corruption tests do not brick the system.
-
-### Phase P6: production hardening
-
-Goal: make failures boring.
-
-Tasks:
-
-- Long soak tests.
-- Fault injection.
-- Fuzzing campaign for syscalls, brokers, parsers, and ELF loader.
-- Security review of unsafe boundary.
-- Release-mode feature audit.
-- CI matrix for C and LLVM backends where supported.
-
-Exit criteria:
-
-- No known critical containment bug.
-- No known kernel panic from malformed agent input.
-- No known update/recovery brick path.
-- CI and board soak are stable enough for release cadence.
-
-## 6. Minimum production checklist
-
-The first production claim should require all of these:
-
-NOTE (2026-06-30): the software-capability items below are marked done where a QEMU gate
-demonstrates them; the *board-hardware* items (real board profile, boot/interrupts on the board)
-remain open — QEMU is the only validated platform today.
-
-- [ ] One real board profile is selected and documented.
-- [ ] Kernel boots on the board in the intended privilege mode.
-- [ ] Timer and external interrupts work on the board. (QEMU: yes — `preempt-test`, CLINT/PLIC gates; board: pending.)
-- [x] Storage works with persistence tests. (QEMU-gated: `blk-persist-test` — a sentinel written to virtio-blk on boot 1 is read back on a fresh boot 2; durable storage survives a real reboot, both backends.)
-- [x] Network works through the retained brokered tool fixture. (QEMU-gated: `net-realtool`/`agent-net-real` over real TCP.)
-- [x] Agent runs confined with no ambient FS/network authority. (QEMU-gated: the confined-agent family — kernel unmapped, syscall-only entry.)
-- [x] All external effects go through brokers. (FS/net brokers; confined agents have no ambient handles.)
-- [x] Allowed and denied broker decisions are audited. (QEMU-gated: net allow `NET_TAG` / deny `NET_DENY_TAG`, FS deny audit.)
-- [x] Per-agent memory, request, output, and network budgets are enforced across the retained fixture paths. (QEMU-gated: `wasm-memcap`, `wamr-fuel`/`wasm-watchdog`, `quota`/`quota-agent`, `NetCap`.)
-- [ ] Watchdog and reboot reason work.
-- [x] Watchdog/reboot-reason state records are gated.
-- [ ] Product agent update policy exists outside the language-oriented kernel scope, if a product profile needs it.
-- [ ] Syscall and broker fuzz tests exist.
-- [ ] Long QEMU soak passes.
-- [ ] Real-board soak passes.
-- [ ] Security review has no unresolved critical findings.
-
-## 7. Timeline
-
-There is no kernel product timeline in the current scope. Near-term work is
-driven by compiler/language validation needs:
-
-- keep QEMU and retained board-metadata gates green;
-- add runtime cases only when they expose ABI, ownership, async, MMIO, syscall,
-  or backend-lowering gaps;
-- move product operations, update policy, release images, and hardware soak to
-  a separate product profile if one is ever created.
-
-The validation workload depends mostly on:
-
-- which hardware-facing paths expose language or backend bugs;
-- which broker/tool fixtures are still useful for ABI and capability checks;
-- whether a future product profile supplies update/recovery infrastructure outside the language-oriented kernel.
-
-## 8. Strategic guidance
-
-The kernel should win by being narrow, inspectable, and agent-native.
-
-Do:
-
-- Keep the syscall ABI small.
-- Keep agents untrusted by default.
-- Keep every external effect brokered.
-- Keep policy and audit mandatory.
-- Keep board support explicit and profile-driven.
-- Prefer Ethernet and documented devices for v1.
-- Use Linux only as a reference or compatibility source, not as the shape of the system.
-
-Avoid:
-
-- Chasing POSIX.
-- Chasing broad Wi-Fi/Bluetooth vendor SDKs too early.
-- Adding generic escape hatches.
-- Letting tools run in the agent's authority context.
-- Calling QEMU success production readiness without real-board soak.
-
-The production path is credible if the scope stays fixed-device and agent-first. The same
-work becomes much harder if the project tries to become a small general-purpose OS.
+| K0: QEMU smoke workload | Kernel fixtures compile and run under retained QEMU paths | Existing `m0` / QEMU gates |
+| K1: language stress workload | Kernel fixtures exercise ownership, ABI, MMIO, user-copy, async, syscall, and backend boundaries | Deterministic C/LLVM gates and focused QEMU tests |
+| K2: optional board metadata fixture | A board profile documents FDT/resource expectations without becoming a product claim | Profile parser/adapters and QEMU surrogate gates |
+
+No calendar maturity ladder is maintained here. Product pilots, operations,
+secure-update policy, release images, and hardware qualification belong in a
+separate product profile if one is ever created.
+
+## In scope
+
+- Keep QEMU/OpenSBI validation green.
+- Keep the narrow syscall, broker, async, virtio, UART, FDT, interrupt, and
+  user-copy fixtures useful for compiler/language validation.
+- Add kernel tests when they expose language, MIR, ownership, backend, ABI, or
+  unsafe-boundary defects.
+- Keep C and LLVM backend evidence separate from architecture evidence.
+- Keep product-scope wording out of kernel docs unless it is explicitly marked
+  outside current scope.
+
+## Out of scope
+
+- Linux/POSIX compatibility.
+- Broad desktop/server workloads.
+- General hardware support.
+- Outside current scope: product broker/runtime parity.
+- Outside current scope: product observability, replay, or fleet operations.
+- Outside current scope: kernel OTA/live-update.
+- Outside current scope: signed images or signed bundles.
+- Outside current scope: secure boot, verified boot, anti-rollback, or recovery-slot policy.
+- Outside current scope: real-board soak or release qualification.
+
+## Current evidence anchors
+
+- `zig build m0-full` remains the broad current-subset validation target.
+- `zig build riscv-qemu-validation` aggregates retained RISC-V QEMU/OpenSBI
+  evidence.
+- `visionfive2-readiness-test` and `llvm-visionfive2-readiness-test` validate
+  the retained board metadata adapter against QEMU surrogate input.
+- `kernel-scope-inventory-test` rejects reintroduced kernel product-scope
+  wording unless the line clearly marks it outside current scope.
+
+## Completion criteria for this document
+
+This validation workload is complete when:
+
+- retained QEMU/OpenSBI kernel gates stay green;
+- the optional board metadata fixture remains documented and tested without
+  becoming a release claim;
+- storage/network/interrupt/user-copy/syscall fixtures continue to expose
+  language and backend bugs;
+- product operations and hardware qualification stay outside this repository's
+  current kernel scope.
+
+Until those conditions are enforced by gates, this document remains active.

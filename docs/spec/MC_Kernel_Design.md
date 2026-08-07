@@ -698,8 +698,8 @@ The safety keystone (governance) has landed. The open frontier, per the vision d
 - **Agent code execution** — *delivered*: QuickJS runs as a confined userspace ELF on all three
   arches (riscv64 M+S-mode, x86_64 ring-3, AArch64 EL0), evaluating pure-JS agents under kernel
   confinement. The remaining roadmap is broader: wider
-  capability-tool coverage, exposing the real network broker as a production JS/tool-catalog
-  operation, cross-arch real-broker parity (x86/AArch64 still need confined-agent runtimes that
+  capability-tool coverage, keeping the real network broker as a JS/tool ABI validation
+  fixture, cross-arch broker-fixture parity (x86/AArch64 still need confined-agent fixtures that
   reuse the shared broker), and optionally a second runtime (e.g. WASM).
 - **Allocator→charge wiring** — close the §9.6/§14 gap so governance enforces on every
   allocation path, not only explicit charge sites.

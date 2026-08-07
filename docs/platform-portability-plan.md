@@ -16,13 +16,13 @@ The platform goal is intentionally narrow:
 
 ```text
 RISC-V S-mode + OpenSBI + QEMU virt first
-then StarFive VisionFive 2 as the first real RISC-V board profile
+with StarFive VisionFive 2 metadata retained as an optional RISC-V FDT fixture
 with x86_64 and AArch64 kept as portability and backend parity targets
 ```
 
 The project is not trying to become a broad hardware OS. Board profiles should remain
-explicit, device sets should stay small, and new portability work should serve the agent
-kernel target.
+explicit, device sets should stay small, and new portability work should serve language,
+ABI, backend, freestanding, and driver-validation evidence.
 
 ## 2. Current baseline
 
@@ -30,7 +30,7 @@ These are implemented and represented by build steps in the current tree:
 
 | Area | Current evidence |
 |---|---|
-| RISC-V QEMU surrogate validation | `riscv-qemu-validation` aggregates the RISC-V QEMU/OpenSBI S-mode boot, PLIC/timer, virtio-blk/net, confined QuickJS, brokered FS/network, real TCP-backed `host_net_fetch`, and IRQ-backed production `SYS_POLL` gates across C and LLVM backends. |
+| RISC-V QEMU surrogate validation | `riscv-qemu-validation` aggregates the RISC-V QEMU/OpenSBI S-mode boot, PLIC/timer, virtio-blk/net, confined QuickJS, brokered FS/network, real TCP-backed `host_net_fetch`, and IRQ-backed `SYS_POLL` validation gates across C and LLVM backends. |
 | RISC-V S-mode boot and user path | OpenSBI S-mode boot, U-mode syscall/fault path, and confined QuickJS S-mode gates. |
 | Architecture selection seam | `arch-emit-test` emits portable core modules under `--arch=riscv64`, `--arch=x86_64`, and `--arch=aarch64`. |
 | Structured async tool ABI | `qjs-realtool-test` / `llvm-qjs-realtool-test` drive FS ops from pure JS over `SYS_SUBMIT` / `SYS_POLL`; `qjs-nettool-test` / `llvm-qjs-nettool-test` exercise deterministic network-fetch ABI behavior; `qjs-smode-net-irq-tool-test` / `llvm-qjs-smode-net-irq-tool-test` prove a JS `host_net_fetch` completion through `SYS_POLL` from a real S-mode virtio-net PLIC interrupt; `qjs-smode-blk-irq-tool-test` / `llvm-qjs-smode-blk-irq-tool-test` prove a JS `host_fs_read` completion through `SYS_POLL` from a real S-mode virtio-blk PLIC interrupt. |
@@ -43,9 +43,9 @@ These are implemented and represented by build steps in the current tree:
 
 | Architecture | Current support | Main remaining gap |
 |---|---|---|
-| `riscv64` | Primary path. M-mode legacy demos and S-mode/OpenSBI demos coexist. S-mode boot, user path, QuickJS, virtio-blk/net, timer, context-aware PLIC delivery, reusable S-mode PLIC dispatch, promoted S-mode async virtio-blk / virtio-net TX/RX IRQ completion gates draining through `async_poll_many`, production JS `SYS_POLL` completion gates from real S-mode virtio-net and virtio-blk PLIC interrupts, UART, retained network demos, and a StarFive VisionFive 2 profile are gated or compile-checked. | VisionFive 2 boot validation, SBI HSM/IPI, and shared S-mode trap-vector work. |
-| `x86_64` | Multiboot to long mode, paging, ring-3 user path, C/LLVM-backed QuickJS sync/async gates, LAPIC timer, PCI discovery, and virtio-pci handshake are gated. | Full virtio-pci data path and production broker/runtime parity. |
-| `aarch64` | QEMU virt EL1/EL0 paging/user path and C/LLVM-backed QuickJS sync/async gates are gated. | GIC/timer/device depth and production broker/runtime parity. |
+| `riscv64` | Primary validation path. M-mode legacy demos and S-mode/OpenSBI demos coexist. S-mode boot, user path, QuickJS, virtio-blk/net, timer, context-aware PLIC delivery, reusable S-mode PLIC dispatch, promoted S-mode async virtio-blk / virtio-net TX/RX IRQ completion gates draining through `async_poll_many`, JS `SYS_POLL` completion gates from S-mode virtio-net and virtio-blk PLIC interrupts, UART, retained network demos, and a StarFive VisionFive 2 metadata fixture are gated or compile-checked. | SBI HSM/IPI only when it exposes language/backend gaps; shared S-mode trap-vector work. |
+| `x86_64` | Multiboot to long mode, paging, ring-3 user path, C/LLVM-backed QuickJS sync/async gates, LAPIC timer, PCI discovery, and virtio-pci handshake are gated. | Full virtio-pci data path only if needed for language/backend validation. |
+| `aarch64` | QEMU virt EL1/EL0 paging/user path and C/LLVM-backed QuickJS sync/async gates are gated. | GIC/timer/device depth only if needed for language/backend validation. |
 
 ## 4. Portability rules
 
@@ -55,7 +55,7 @@ These are implemented and represented by build steps in the current tree:
   architectures.
 - Every new core portability claim needs either a build gate or a narrow source-level
   check like `arch-emit-test`.
-- Do not broaden driver support without a product or test target. Prefer completing the
+- Do not broaden driver support without a language-validation test target. Prefer completing the
   selected virtio, UART, timer, interrupt, and board-profile paths.
 - Treat "both backends" and "all architectures" as separate claims. A gate that passes
   on C and LLVM for RISC-V does not prove x86_64 or AArch64 platform parity.
@@ -82,18 +82,18 @@ Architecture-specific mechanisms that still need better generic hooks:
 `zig build m0-full` is the required baseline for current platform claims. `zig build
 riscv-qemu-validation` is the focused board-surrogate gate for the selected RISC-V
 path when VisionFive 2 hardware is unavailable. Tracking gates that exist but are
-intentionally outside `m0` are not release evidence until they are fixed and promoted.
+intentionally outside `m0` are not validation evidence until they are fixed and promoted.
 
 Keep these distinctions explicit:
 
 - **Required gates:** build steps in `build/tiers.zig` under `m0`.
 - **RISC-V surrogate gate:** `riscv-qemu-validation`, also declared in
-  `build/tiers.zig`, aggregates the QEMU/OpenSBI evidence for the selected
-  board path.
+  `build/tiers.zig`, aggregates QEMU/OpenSBI evidence for the selected
+  RISC-V validation path.
 - **Tracking gates:** build steps registered in `build/qemu.zig` but not required by
   `m0`.
 - **Demo-scope gates:** tests that prove a mechanism in isolation but do not make a
-  production claim, such as flat S-mode PLIC demos.
+  broad platform claim, such as flat S-mode PLIC demos.
 
 ## 7. Current risks
 
@@ -111,14 +111,13 @@ This section is the authoritative platform backlog and priority order.
 
 ### Do now
 
-1. **Bring up the selected real RISC-V board profile.**
-   The first hardware target is StarFive VisionFive 2, recorded in
-   `kernel/platform/starfive_visionfive2/profile.mc`. The QEMU `virt` path is strong, but
-   production now needs this profile validated on real hardware: DTB identity, UART, timer,
-   interrupts, storage, network, boot chain, watchdog, and soak expectations.
+1. **Keep the selected RISC-V metadata fixture honest.**
+   StarFive VisionFive 2 remains recorded in
+   `kernel/platform/starfive_visionfive2/profile.mc` only as an FDT/resource-discovery
+   fixture. The QEMU `virt` path is the repeatable language/backend validation path.
    `visionfive2-readiness-test` / `llvm-visionfive2-readiness-test` validate the profile's
-   FDT-resource adapter against QEMU, and `zig build riscv-qemu-validation` keeps that
-   repeatable surrogate green until hardware is available.
+   FDT-resource adapter against QEMU; real hardware should be used only when it exposes
+   language, ABI, driver, async, MMIO, syscall, freestanding, or backend-lowering gaps.
 
 2. **Complete S-mode interrupt and device wiring.**
    Core delivery is proven: timer interrupts, single-shot PLIC delivery, and re-armed PLIC
@@ -130,17 +129,17 @@ This section is the authoritative platform backlog and priority order.
 
    - keep `blk-smode-irq-test`, `net-smode-irq-test`, `net-smode-rx-irq-test`, and their LLVM
      variants green as promoted `m0` evidence;
-   - keep the IRQ-backed production agent storage/network `SYS_POLL` gates green;
+   - keep the IRQ-backed JS storage/network `SYS_POLL` validation gates green;
    - add the SBI HSM/IPI layer for hart start/stop and inter-hart interrupts;
    - rework the shared S-mode confinement trap vector so agent execution can also take and
      resume from interrupts.
 
 ### Do next
 
-3. **Harden the real broker family in production agent runtimes.**
+3. **Keep broker fixtures aligned across retained runtimes.**
    RISC-V now has real FS broker, JS `host_net_fetch`, real TCP-backed network broker demos,
    and promoted TCP-backed JS net-tool gates. Keep the x86_64/AArch64 runtime story aligned,
-   then add stable error/versioning rules and isolated out-of-process tool transport.
+   but keep product runtime roadmap work outside current scope.
 
 4. **Keep non-RISC-V LLVM QuickJS gates promoted.**
    Required gates now include `llvm-x86-qjs-async-test`, `llvm-arm-qjs-test`, and
@@ -160,12 +159,12 @@ This section is the authoritative platform backlog and priority order.
 5. **Finish the x86_64 virtio-pci data path.**
    `x86-pci-test` proves PCI enumeration and the legacy virtio handshake. It does not prove a
    sector read/write through a virtqueue over PCI. Defer this unless x86_64 becomes a
-   near-term product target.
+   near-term language/backend validation target.
 
 6. **Add AArch64 device interrupt depth.**
    AArch64 has useful EL0/user/QuickJS coverage, but GIC/timer and virtio device depth are not
    yet at the same level as the RISC-V reference path. Defer unless AArch64 becomes a
-   near-term product target.
+   near-term language/backend validation target.
 
 7. **Make COW and demand paging portable only when needed.**
    `kernel/core/cow.mc` and `kernel/core/demand.mc` remain RISC-V/Sv39-oriented. Do not force
@@ -177,18 +176,18 @@ This section is the authoritative platform backlog and priority order.
 8. **Promote tracking gates only after they prove the full claim.**
    A tracking gate can become required only when it covers the relevant architecture,
    backend, and runtime surface. Do not use a narrow host emit check or isolated demo to
-   support a production parity claim.
+   support a platform parity claim.
 
 ## 13. Completion criteria
 
 The platform portability plan can be called complete for the retained validation workload when:
 
-- one real board profile is selected and documented;
-- the kernel boots there in the intended privilege mode;
-- timer and external interrupts work on that board;
-- storage and network complete through interrupt-backed paths;
-- brokered FS/network effects run through the production agent surface;
-- watchdog/reboot evidence survives the platform path;
+- one optional board metadata fixture is selected and documented without becoming a release claim;
+- the QEMU/OpenSBI validation path boots in the intended privilege mode;
+- timer and external interrupts work on the retained validation path;
+- storage and network complete through interrupt-backed paths in QEMU;
+- brokered FS/network effects run through the retained JS/tool ABI fixtures;
+- watchdog/reboot evidence survives the retained validation path;
 - `zig build m0-full` remains green;
 - any architecture-specific exceptions are explicitly scoped and not presented as parity.
 

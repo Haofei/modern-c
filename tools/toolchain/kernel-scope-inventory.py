@@ -22,6 +22,10 @@ FORBIDDEN = [
     ("fixed-device product claim", re.compile(r"\bfixed-device production\b", re.IGNORECASE)),
     ("production-candidate board profile", re.compile(r"\bproduction-candidate\b", re.IGNORECASE)),
     ("production-shaped kernel path", re.compile(r"\bproduction-shaped\b", re.IGNORECASE)),
+    ("production JS fixture claim", re.compile(r"\bproduction JS\b", re.IGNORECASE)),
+    ("agent production surface roadmap", re.compile(r"\bAgent production surface\b", re.IGNORECASE)),
+    ("kernel production checklist", re.compile(r"\bMinimum production checklist\b", re.IGNORECASE)),
+    ("product runtime roadmap", re.compile(r"\bproduct runtime roadmap\b", re.IGNORECASE)),
     ("kernel secure-update claim", re.compile(r"\b(secure boot|verified boot|signed bundle|anti-rollback|OTA/live-update|Kernel OTA|live-update gate)\b", re.IGNORECASE)),
 ]
 
