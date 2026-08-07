@@ -2927,44 +2927,6 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn cancelAutoDropsForMovesInExpr(self: *CEmitter, expr: ast.Expr) !void {
-        switch (expr.kind) {
-            .move_expr => |inner| {
-                try self.cancelAutoDropForMove(inner.*, expr.span);
-                try self.cancelAutoDropsForMovesInExpr(inner.*);
-            },
-            .grouped, .address_of, .deref, .await_expr => |inner| try self.cancelAutoDropsForMovesInExpr(inner.*),
-            .borrow_expr => |node| try self.cancelAutoDropsForMovesInExpr(node.value.*),
-            .array_literal => |items| for (items) |item| try self.cancelAutoDropsForMovesInExpr(item),
-            .struct_literal => |fields| for (fields) |field| try self.cancelAutoDropsForMovesInExpr(field.value),
-            .unary => |node| try self.cancelAutoDropsForMovesInExpr(node.expr.*),
-            .binary => |node| {
-                try self.cancelAutoDropsForMovesInExpr(node.left.*);
-                try self.cancelAutoDropsForMovesInExpr(node.right.*);
-            },
-            .cast => |node| try self.cancelAutoDropsForMovesInExpr(node.value.*),
-            .call => |node| {
-                try self.cancelAutoDropsForMovesInExpr(node.callee.*);
-                for (node.args) |arg| try self.cancelAutoDropsForMovesInExpr(arg);
-            },
-            .index => |node| {
-                try self.cancelAutoDropsForMovesInExpr(node.base.*);
-                try self.cancelAutoDropsForMovesInExpr(node.index.*);
-            },
-            .slice => |node| {
-                try self.cancelAutoDropsForMovesInExpr(node.base.*);
-                try self.cancelAutoDropsForMovesInExpr(node.start.*);
-                try self.cancelAutoDropsForMovesInExpr(node.end.*);
-            },
-            .member => |node| try self.cancelAutoDropsForMovesInExpr(node.base.*),
-            .try_expr => |node| {
-                try self.cancelAutoDropsForMovesInExpr(node.operand.*);
-                if (node.mapped) |mapped| try self.cancelAutoDropsForMovesInExpr(mapped.*);
-            },
-            else => {},
-        }
-    }
-
     fn localDeclInfo(self: *CEmitter, local: ast.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo)) !LocalInfo {
         var info = if (local.ty) |decl_ty| try self.localInfoFromType(decl_ty) else LocalInfo{};
         info.is_mutable = !is_let;
@@ -3586,7 +3548,6 @@ pub const CEmitter = struct {
             return;
         }
 
-        try self.cancelAutoDropsForMovesInExpr(expr);
         try self.writeLineDirective(expr.span);
         const tmp_name = try self.nextTempName();
         try self.writeIndent();
