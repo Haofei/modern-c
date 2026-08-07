@@ -8,10 +8,16 @@ pub const AutoDropCleanup = struct {
     local_name: []const u8,
 };
 
+pub const AutoDropCleanupRegistration = enum {
+    emit_auto_drop_cleanup,
+    legacy_cancellable_cleanup,
+};
+
 pub const AutoDropLocalCleanup = struct {
     fn_name: []const u8,
     local_name: []const u8,
     span: ast.Span,
+    registration: AutoDropCleanupRegistration,
 };
 
 pub const DeferredCleanup = union(enum) {
@@ -327,12 +333,13 @@ test "auto-drop cleanup stack helpers use the latest matching local" {
     var stack: std.ArrayList(DeferredCleanup) = .empty;
     defer stack.deinit(std.testing.allocator);
 
-    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_old", .local_name = "g", .span = span } });
-    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_h", .local_name = "h", .span = span } });
-    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_new", .local_name = "g", .span = span } });
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_old", .local_name = "g", .span = span, .registration = .emit_auto_drop_cleanup } });
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_h", .local_name = "h", .span = span, .registration = .emit_auto_drop_cleanup } });
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_new", .local_name = "g", .span = span, .registration = .legacy_cancellable_cleanup } });
 
     const cleanup = autoDropCleanupForLocalName(stack.items, "g") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("close_new", cleanup.fn_name);
+    try std.testing.expectEqual(AutoDropCleanupRegistration.legacy_cancellable_cleanup, cleanup.registration);
 
     removeAutoDropCleanupForLocalName(&stack, "g");
     try std.testing.expectEqual(@as(usize, 2), stack.items.len);
@@ -345,7 +352,7 @@ test "auto-drop move cancellation combines direct local shape with stack lookup"
     var stack: std.ArrayList(DeferredCleanup) = .empty;
     defer stack.deinit(std.testing.allocator);
 
-    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_guard", .local_name = "g", .span = span } });
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_guard", .local_name = "g", .span = span, .registration = .legacy_cancellable_cleanup } });
 
     var ident_expr = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "g", .span = span } } };
     const grouped_expr = ast.Expr{ .span = span, .kind = .{ .grouped = &ident_expr } };
@@ -397,8 +404,8 @@ test "auto-drop release cancellation combines release shape with stack lookup" {
 
     var stack: std.ArrayList(DeferredCleanup) = .empty;
     defer stack.deinit(std.testing.allocator);
-    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_guard", .local_name = "g", .span = span } });
-    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_other", .local_name = "h", .span = span } });
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_guard", .local_name = "g", .span = span, .registration = .legacy_cancellable_cleanup } });
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_other", .local_name = "h", .span = span, .registration = .emit_auto_drop_cleanup } });
 
     const local_g = ast.Ident{ .text = "g", .span = span };
     const ident_g = ast.Expr{ .span = span, .kind = .{ .ident = local_g } };
@@ -422,6 +429,7 @@ test "auto-drop release cancellation combines release shape with stack lookup" {
     const cleanup = autoDropReleaseCancellation(call_g, &map, stack.items) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
     try std.testing.expectEqualStrings("g", cleanup.local_name);
+    try std.testing.expectEqual(AutoDropCleanupRegistration.legacy_cancellable_cleanup, cleanup.registration);
 
     const local_h = ast.Ident{ .text = "h", .span = span };
     const ident_h = ast.Expr{ .span = span, .kind = .{ .ident = local_h } };

@@ -1214,6 +1214,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/ownership_facts.zig": {
         "pub fn makeDropPointerCall": 0,
         "pub fn movedLocalName": 0,
+        "pub const AutoDropCleanupRegistration": 1,
         "pub const AutoDropLocalCleanup": 1,
         "pub const DeferredCleanup": 1,
         "pub fn autoDropCleanupForLocalName": 1,
