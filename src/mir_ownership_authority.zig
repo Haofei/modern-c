@@ -24,16 +24,6 @@ pub const AutoDropLocalRegistrationDecision = enum {
     legacy_cancellable_cleanup,
 };
 
-pub fn authorizesAutoDropLocal(
-    module: *const mir.Module,
-    function: *const mir.Function,
-    local_name: []const u8,
-    type_name: []const u8,
-    drop_fn: []const u8,
-) bool {
-    return autoDropLocalRegistrationDecision(module, function, local_name, type_name, drop_fn) != .reject;
-}
-
 pub fn autoDropLocalRegistrationDecision(
     module: *const mir.Module,
     function: *const mir.Function,

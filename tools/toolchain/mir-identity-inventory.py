@@ -32,6 +32,11 @@ def require_contains(path: str, needle: str) -> None:
         fail(f"{path} missing {needle!r}")
 
 
+def require_not_contains(path: str, needle: str) -> None:
+    if needle in read(path):
+        fail(f"{path} unexpectedly contains {needle!r}")
+
+
 def main() -> int:
     for needle in (
         "fn TypedIndex(comptime name: []const u8) type {",
@@ -284,6 +289,10 @@ def main() -> int:
         ("tools/toolchain/dev-gates-test.py", "mir-identity-inventory-test"),
     ):
         require_contains(path, needle)
+
+    require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesAutoDropLocal")
+    require_not_contains("src/lower_c_emitter.zig", "authorizesAutoDropLocal(")
+    require_not_contains("src/lower_llvm.zig", "authorizesAutoDropLocal(")
 
     print("PASS: mir-identity-inventory - typed MIR identity seed is anchored")
     return 0

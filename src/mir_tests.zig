@@ -4557,7 +4557,10 @@ test "MIR ownership authority does not let forget authorize auto-drop registrati
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.forget, function.ownership_events[2].kind);
     try mir.validateLoweringAdmission(module_mir);
-    try std.testing.expect(!mir_ownership_authority.authorizesAutoDropLocal(&module_mir, &function, "g", "Guard", "close_guard"));
+    try std.testing.expectEqual(
+        mir_ownership_authority.AutoDropLocalRegistrationDecision.reject,
+        mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard", "close_guard"),
+    );
 }
 
 test "MIR records explicit drop glue call ownership events" {
