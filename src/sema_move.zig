@@ -560,9 +560,6 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
                 self.oom = true;
             };
         } else if (isUsizeType(param.ty)) {
-            state.index_facts.put(param.name.text, .{ .symbolic = param.name.text }) catch {
-                self.oom = true;
-            };
             state.index_bindings.put(param.name.text, {}) catch {
                 self.oom = true;
             };
@@ -859,11 +856,6 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                                 self.oom = true;
                             };
                             bound_as_index_fact = true;
-                        } else if (symbolicIndexValue(self, init, state, mctx.*)) |symbol| {
-                            state.index_facts.put(decl.names[0].text, .{ .symbolic = symbol }) catch {
-                                self.oom = true;
-                            };
-                            bound_as_index_fact = true;
                         }
                     }
                 }
@@ -1056,12 +1048,8 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                         moveConsume(self, a.value, state, aliases);
                         markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                         _ = removeOwnershipMovePlace(pp.place, state);
-                    } else if (wildcardMoveIndexedPlaceKey(self, a.target, state, aliases)) |pp| {
-                        if (stateHasActivePlaceOrConflict(pp.place, state)) {
-                            self.errorCode(a.target.span, "E_USE_AFTER_MOVE", "cannot assign a linear `move` array element through an unknown dynamic index after an overlapping element was moved out");
-                        } else {
-                            self.errorCode(a.target.span, "E_RESOURCE_OVERWRITE", "cannot assign a linear `move` array element through an unknown dynamic index; the selected live element must be consumed first");
-                        }
+                    } else if (wildcardMoveIndexedPlaceKey(self, a.target, state, aliases)) |_| {
+                        self.errorCode(a.target.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot assign a linear `move` array element through a dynamic index in ownership v0; use a constant index or move the whole owner");
                         markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
                         moveConsume(self, a.value, state, aliases);
                     } else if (arrayIndexEmbedsMove(self, a.target, state, aliases)) {
@@ -2908,8 +2896,8 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
                     if (carriedFullDerefAliasReferent(slot)) |referent| full_alias_referent = referent;
                 }
             }
-            if (full_alias_referent) |referent| {
-                consumeTrackedMoveReferent(self, referent, expr.span, state);
+            if (full_alias_referent != null) {
+                self.errorCode(expr.span, "E_USE_AFTER_MOVE", "cannot move a linear `move` value through a pointer alias in ownership v0; move the owning place directly");
             } else if (arrayIndexEmbedsMove(self, inner.*, state, aliases)) {
                 self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot move a linear `move` array element through an untracked dynamic index; the checker has no nameable owner place to update");
             } else if (exprIsMoveTyped(self, expr, state, aliases)) {
@@ -2932,16 +2920,8 @@ pub fn moveConsume(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *
                 } else {
                     recordOwnershipMovePlace(self, pp.key, pp.place, .{ .live = false, .span = expr.span, .place = pp.place }, state);
                 }
-            } else if (wildcardMoveIndexedPlaceKey(self, expr, state, aliases)) |pp| {
-                if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
-                    self.errorCode(expr.span, "E_USE_AFTER_MOVE", "linear `move` array element is borrowed by a deferred expression and cannot be moved before the defer runs");
-                } else if (stateHasActivePlaceOrConflict(pp.place, state)) {
-                    self.errorCode(expr.span, "E_USE_AFTER_MOVE", "use of linear `move` array element after it was moved out");
-                } else {
-                    recordOwnershipMovePlace(self, pp.key, pp.place, .{ .live = false, .span = expr.span, .place = pp.place }, state);
-                }
-            } else if (nonNameableSingletonMoveIndex(self, expr, state, aliases)) {
-                moveConsume(self, ix.base.*, state, aliases);
+            } else if (wildcardMoveIndexedPlaceKey(self, expr, state, aliases)) |_| {
+                self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot move a linear `move` array element through a dynamic index in ownership v0; use a constant index or move the whole owner");
             } else if (arrayIndexEmbedsMove(self, expr, state, aliases)) {
                 self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot move a linear `move` array element through an untracked dynamic index; the checker has no nameable owner place to update");
             }
@@ -3442,23 +3422,7 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const MoveState) 
             };
             const child_ty = array.child.*;
             const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse return null;
-            const k = constIndexValue(self, ix.index.*, state, ctx.*) orelse blk: {
-                if (symbolicIndexValue(self, ix.index.*, state, ctx.*)) |symbol| {
-                    const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[${s}]", .{ base.key, symbol }) catch {
-                        self.oom = true;
-                        return null;
-                    };
-                    self.move_place_keys.append(self.reporter.allocator, key) catch {
-                        self.oom = true;
-                        self.reporter.allocator.free(key);
-                        return null;
-                    };
-                    const place = projectMovePlace(self, base.place, .{ .symbolic_index = symbol }, ix.index.span) orelse return null;
-                    return .{ .key = key, .place = place, .ty = child_ty };
-                }
-                if (len != 1) return null;
-                break :blk 0;
-            };
+            const k = constIndexValue(self, ix.index.*, state, ctx.*) orelse return null;
             if (k >= len) return null;
             const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[{d}]", .{ base.key, k }) catch {
                 self.oom = true;
@@ -3500,35 +3464,6 @@ fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx:
             return null;
         },
         .binary => |node| {
-            switch (node.op) {
-                .mul => {
-                    if (constIndexValue(self, node.left.*, state, ctx)) |left| if (left == 0) return 0;
-                    if (constIndexValue(self, node.right.*, state, ctx)) |right| if (right == 0) return 0;
-                },
-                .mod => {
-                    if (constIndexValue(self, node.right.*, state, ctx)) |right| {
-                        if (right == 1) return 0;
-                        if (right != 0) {
-                            if (symbolicIndexValue(self, node.left.*, state, ctx)) |symbol| {
-                                if (symbolicIndexModuloIsZero(symbol, right)) return 0;
-                            }
-                        }
-                    }
-                },
-                .sub => {
-                    if (sameIndexIdent(node.left.*, node.right.*)) return 0;
-                    if (sameSymbolicIndex(symbolicIndexValue(self, node.left.*, state, ctx), symbolicIndexValue(self, node.right.*, state, ctx))) return 0;
-                },
-                .bit_and => {
-                    if (constIndexValue(self, node.left.*, state, ctx)) |left| if (left == 0) return 0;
-                    if (constIndexValue(self, node.right.*, state, ctx)) |right| if (right == 0) return 0;
-                },
-                .bit_xor => {
-                    if (sameIndexIdent(node.left.*, node.right.*)) return 0;
-                    if (sameSymbolicIndex(symbolicIndexValue(self, node.left.*, state, ctx), symbolicIndexValue(self, node.right.*, state, ctx))) return 0;
-                },
-                else => {},
-            }
             const left = constIndexValue(self, node.left.*, state, ctx) orelse return null;
             const right = constIndexValue(self, node.right.*, state, ctx) orelse return null;
             return switch (node.op) {
@@ -3550,36 +3485,7 @@ fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx:
 }
 
 fn stableIndexPlaceKnown(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) bool {
-    return constIndexValue(self, expr, state, ctx) != null or symbolicIndexValue(self, expr, state, ctx) != null;
-}
-
-fn sameIndexIdent(left: ast.Expr, right: ast.Expr) bool {
-    const left_name = indexIdentName(left) orelse return false;
-    const right_name = indexIdentName(right) orelse return false;
-    return std.mem.eql(u8, left_name, right_name);
-}
-
-fn indexIdentName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| indexIdentName(inner.*),
-        .ident => |id| id.text,
-        else => null,
-    };
-}
-
-fn symbolicIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| symbolicIndexValue(self, inner.*, state, ctx),
-        .ident => |id| {
-            if (state.index_facts.get(id.text)) |fact| return switch (fact) {
-                .constant => null,
-                .symbolic => |symbol| symbol,
-            };
-            return null;
-        },
-        .binary => |node| symbolicIndexBinaryValue(self, node, state, ctx),
-        else => null,
-    };
+    return constIndexValue(self, expr, state, ctx) != null;
 }
 
 fn updateIndependentIndexFact(self: *Checker, binding: []const u8, value: ast.Expr, state: *MoveState) void {
@@ -3591,354 +3497,9 @@ fn updateIndependentIndexFact(self: *Checker, binding: []const u8, value: ast.Ex
         state.index_facts.put(binding, .{ .constant = index }) catch {
             self.oom = true;
         };
-    } else if (symbolicIndexValue(self, value, state, ctx.*)) |symbol| {
-        state.index_facts.put(binding, .{ .symbolic = symbol }) catch {
-            self.oom = true;
-        };
     } else {
         _ = state.index_facts.remove(binding);
     }
-}
-
-fn symbolicIndexBinaryValue(self: *Checker, node: anytype, state: *const MoveState, ctx: Context) ?[]const u8 {
-    const left_symbol = symbolicIndexValue(self, node.left.*, state, ctx);
-    const right_symbol = symbolicIndexValue(self, node.right.*, state, ctx);
-    const left_const = parseArrayLen(node.left.*, ctx.const_fns, ctx.const_globals);
-    const right_const = parseArrayLen(node.right.*, ctx.const_fns, ctx.const_globals);
-    return switch (node.op) {
-        .add => if (left_symbol != null and right_symbol != null)
-            symbolicIndexAddSymbol(self, left_symbol.?, right_symbol.?)
-        else if (left_symbol != null and right_const != null)
-            symbolicIndexWithOffset(self, left_symbol.?, right_const.?)
-        else if (right_symbol != null and left_const != null)
-            symbolicIndexWithOffset(self, right_symbol.?, left_const.?)
-        else
-            null,
-        .sub => if (left_symbol != null and right_symbol != null)
-            symbolicIndexSubtractSymbol(self, left_symbol.?, right_symbol.?)
-        else if (left_symbol != null and right_const != null)
-            symbolicIndexMinusOffset(self, left_symbol.?, right_const.?)
-        else
-            null,
-        .mul => if (left_symbol != null and right_const != null)
-            symbolicIndexScale(self, left_symbol.?, right_const.?)
-        else if (right_symbol != null and left_const != null)
-            symbolicIndexScale(self, right_symbol.?, left_const.?)
-        else
-            null,
-        .div => if (left_symbol != null and right_const != null)
-            symbolicIndexDivideExact(self, left_symbol.?, right_const.?)
-        else
-            null,
-        .shl => if (left_symbol != null and right_const != null)
-            symbolicIndexShiftLeft(self, left_symbol.?, right_const.?)
-        else
-            null,
-        .shr => if (left_symbol != null and right_const != null)
-            symbolicIndexShiftRightExact(self, left_symbol.?, right_const.?)
-        else
-            null,
-        .bit_or => if (left_symbol != null and right_const != null and right_const.? == 0)
-            left_symbol.?
-        else if (right_symbol != null and left_const != null and left_const.? == 0)
-            right_symbol.?
-        else if (sameSymbolicIndex(left_symbol, right_symbol))
-            left_symbol.?
-        else
-            null,
-        .bit_xor => if (left_symbol != null and right_const != null and right_const.? == 0)
-            left_symbol.?
-        else if (right_symbol != null and left_const != null and left_const.? == 0)
-            right_symbol.?
-        else
-            null,
-        .bit_and => if (sameSymbolicIndex(left_symbol, right_symbol))
-            left_symbol.?
-        else
-            null,
-        else => null,
-    };
-}
-
-fn sameSymbolicIndex(left: ?[]const u8, right: ?[]const u8) bool {
-    if (left == null or right == null) return false;
-    return std.mem.eql(u8, left.?, right.?);
-}
-
-fn symbolicIndexWithOffset(self: *Checker, symbol: []const u8, offset: usize) ?[]const u8 {
-    const delta = std.math.cast(isize, offset) orelse return null;
-    return symbolicIndexAddSignedOffset(self, symbol, delta);
-}
-
-fn symbolicIndexMinusOffset(self: *Checker, symbol: []const u8, offset: usize) ?[]const u8 {
-    const delta = std.math.cast(isize, offset) orelse return null;
-    return symbolicIndexAddSignedOffset(self, symbol, -delta);
-}
-
-fn symbolicIndexAddSymbol(self: *Checker, left: []const u8, right: []const u8) ?[]const u8 {
-    return symbolicIndexCombine(self, left, right, 1);
-}
-
-fn symbolicIndexSubtractSymbol(self: *Checker, left: []const u8, right: []const u8) ?[]const u8 {
-    return symbolicIndexCombine(self, left, right, -1);
-}
-
-fn symbolicIndexAddSignedOffset(self: *Checker, symbol: []const u8, delta: isize) ?[]const u8 {
-    var parsed = parseSymbolicLinearIndex(symbol) orelse return null;
-    parsed.offset = std.math.add(isize, parsed.offset, delta) catch return null;
-    return formatSymbolicLinearIndex(self, parsed);
-}
-
-fn symbolicIndexCombine(self: *Checker, left: []const u8, right: []const u8, right_sign: isize) ?[]const u8 {
-    var combined = parseSymbolicLinearIndex(left) orelse return null;
-    const parsed_right = parseSymbolicLinearIndex(right) orelse return null;
-    combined.offset = std.math.add(isize, combined.offset, parsed_right.offset * right_sign) catch return null;
-    var idx: usize = 0;
-    while (idx < parsed_right.len) : (idx += 1) {
-        const term = parsed_right.terms[idx];
-        addSymbolicLinearTerm(&combined, term.name, term.sign * right_sign) orelse return null;
-    }
-    sortSymbolicLinearTerms(&combined);
-    return formatSymbolicLinearIndex(self, combined);
-}
-
-fn symbolicIndexScale(self: *Checker, symbol: []const u8, factor: usize) ?[]const u8 {
-    if (factor == 0) return null;
-    var scaled = SymbolicLinearIndex{ .offset = 0 };
-    const parsed = parseSymbolicLinearIndex(symbol) orelse return null;
-    const signed_factor = std.math.cast(isize, factor) orelse return null;
-    scaled.offset = std.math.mul(isize, parsed.offset, signed_factor) catch return null;
-    var repeat: usize = 0;
-    while (repeat < factor) : (repeat += 1) {
-        var idx: usize = 0;
-        while (idx < parsed.len) : (idx += 1) {
-            const term = parsed.terms[idx];
-            addSymbolicLinearTerm(&scaled, term.name, term.sign) orelse return null;
-        }
-    }
-    sortSymbolicLinearTerms(&scaled);
-    return formatSymbolicLinearIndex(self, scaled);
-}
-
-fn symbolicIndexShiftLeft(self: *Checker, symbol: []const u8, shift: usize) ?[]const u8 {
-    if (shift >= @bitSizeOf(usize)) return null;
-    const factor = std.math.shl(usize, 1, shift);
-    return symbolicIndexScale(self, symbol, factor);
-}
-
-fn symbolicIndexShiftRightExact(self: *Checker, symbol: []const u8, shift: usize) ?[]const u8 {
-    if (shift >= @bitSizeOf(usize)) return null;
-    if (shift == 0) return symbol;
-    const divisor = std.math.shl(usize, 1, shift);
-    return symbolicIndexDivideExact(self, symbol, divisor);
-}
-
-fn symbolicIndexDivideExact(self: *Checker, symbol: []const u8, divisor: usize) ?[]const u8 {
-    if (divisor == 0) return null;
-    if (divisor == 1) return symbol;
-    const signed_divisor = std.math.cast(isize, divisor) orelse return null;
-    var parsed = parseSymbolicLinearIndex(symbol) orelse return null;
-    if (@mod(parsed.offset, signed_divisor) != 0) return null;
-
-    sortSymbolicTermsByNameAndSign(&parsed);
-
-    var divided = SymbolicLinearIndex{ .offset = @divTrunc(parsed.offset, signed_divisor) };
-    var idx: usize = 0;
-    while (idx < parsed.len) {
-        const term = parsed.terms[idx];
-        var count: usize = 1;
-        while (idx + count < parsed.len and
-            term.sign == parsed.terms[idx + count].sign and
-            std.mem.eql(u8, term.name, parsed.terms[idx + count].name)) : (count += 1)
-        {}
-        if (@mod(count, divisor) != 0) return null;
-        var repeat: usize = 0;
-        while (repeat < count / divisor) : (repeat += 1) {
-            addSymbolicLinearTerm(&divided, term.name, term.sign) orelse return null;
-        }
-        idx += count;
-    }
-
-    sortSymbolicLinearTerms(&divided);
-    return formatSymbolicLinearIndex(self, divided);
-}
-
-fn symbolicIndexModuloIsZero(symbol: []const u8, divisor: usize) bool {
-    if (divisor == 0) return false;
-    if (divisor == 1) return true;
-    const signed_divisor = std.math.cast(isize, divisor) orelse return false;
-    var parsed = parseSymbolicLinearIndex(symbol) orelse return false;
-    if (@mod(parsed.offset, signed_divisor) != 0) return false;
-    sortSymbolicTermsByNameAndSign(&parsed);
-
-    var idx: usize = 0;
-    while (idx < parsed.len) {
-        const name = parsed.terms[idx].name;
-        var coefficient: isize = 0;
-        while (idx < parsed.len and std.mem.eql(u8, name, parsed.terms[idx].name)) : (idx += 1) {
-            coefficient += parsed.terms[idx].sign;
-        }
-        if (@mod(coefficient, signed_divisor) != 0) return false;
-    }
-    return true;
-}
-
-const max_symbolic_index_terms = 4;
-
-const SymbolicLinearTerm = struct {
-    name: []const u8,
-    sign: isize,
-};
-
-const SymbolicLinearIndex = struct {
-    terms: [max_symbolic_index_terms]SymbolicLinearTerm = undefined,
-    len: usize = 0,
-    offset: isize,
-};
-
-fn parseSymbolicLinearIndex(symbol: []const u8) ?SymbolicLinearIndex {
-    if (symbol.len == 0) return null;
-    var parsed = SymbolicLinearIndex{ .offset = 0 };
-    var start: usize = 0;
-    var sign: isize = 1;
-    if (symbol[0] == '-') {
-        sign = -1;
-        start = 1;
-    } else if (symbol[0] == '+') {
-        start = 1;
-    }
-    var pos = start;
-    while (pos <= symbol.len) : (pos += 1) {
-        if (pos < symbol.len and symbol[pos] != '+' and symbol[pos] != '-') continue;
-        if (pos == start) return null;
-        const token = symbol[start..pos];
-        if (std.fmt.parseInt(isize, token, 10)) |value| {
-            parsed.offset = std.math.add(isize, parsed.offset, value * sign) catch return null;
-        } else |_| {
-            addSymbolicLinearTerm(&parsed, token, sign) orelse return null;
-        }
-        if (pos < symbol.len) {
-            sign = if (symbol[pos] == '+') 1 else -1;
-            start = pos + 1;
-        }
-    }
-    if (parsed.len == 0) return null;
-    sortSymbolicLinearTerms(&parsed);
-    return parsed;
-}
-
-fn addSymbolicLinearTerm(index: *SymbolicLinearIndex, name: []const u8, sign: isize) ?void {
-    if (sign != 1 and sign != -1) return null;
-    if (name.len == 0) return null;
-    var existing_index: usize = 0;
-    while (existing_index < index.len) : (existing_index += 1) {
-        if (!std.mem.eql(u8, index.terms[existing_index].name, name)) continue;
-        if (index.terms[existing_index].sign == -sign) {
-            var shift = existing_index;
-            while (shift + 1 < index.len) : (shift += 1) {
-                index.terms[shift] = index.terms[shift + 1];
-            }
-            index.len -= 1;
-            return;
-        }
-    }
-    if (index.len >= max_symbolic_index_terms) return null;
-    index.terms[index.len] = .{ .name = name, .sign = sign };
-    index.len += 1;
-}
-
-fn sortSymbolicLinearTerms(index: *SymbolicLinearIndex) void {
-    var i: usize = 1;
-    while (i < index.len) : (i += 1) {
-        const current = index.terms[i];
-        var j = i;
-        while (j > 0 and symbolicLinearTermLess(current, index.terms[j - 1])) : (j -= 1) {
-            index.terms[j] = index.terms[j - 1];
-        }
-        index.terms[j] = current;
-    }
-}
-
-fn sortSymbolicTermsByNameAndSign(index: *SymbolicLinearIndex) void {
-    var i: usize = 1;
-    while (i < index.len) : (i += 1) {
-        const current = index.terms[i];
-        var j = i;
-        while (j > 0 and symbolicLinearTermNameSignLess(current, index.terms[j - 1])) : (j -= 1) {
-            index.terms[j] = index.terms[j - 1];
-        }
-        index.terms[j] = current;
-    }
-}
-
-fn symbolicLinearTermLess(left: SymbolicLinearTerm, right: SymbolicLinearTerm) bool {
-    if (left.sign != right.sign) return left.sign > right.sign;
-    return std.mem.lessThan(u8, left.name, right.name);
-}
-
-fn symbolicLinearTermNameSignLess(left: SymbolicLinearTerm, right: SymbolicLinearTerm) bool {
-    if (!std.mem.eql(u8, left.name, right.name)) return std.mem.lessThan(u8, left.name, right.name);
-    return left.sign > right.sign;
-}
-
-fn formatSymbolicLinearIndex(self: *Checker, index: SymbolicLinearIndex) ?[]const u8 {
-    if (index.len == 0) return null;
-    var out: std.ArrayList(u8) = .empty;
-
-    var idx: usize = 0;
-    while (idx < index.len) : (idx += 1) {
-        const term = index.terms[idx];
-        if (idx == 0) {
-            if (term.sign < 0) out.append(self.reporter.allocator, '-') catch {
-                self.oom = true;
-                return null;
-            };
-        } else {
-            out.append(self.reporter.allocator, if (term.sign > 0) '+' else '-') catch {
-                self.oom = true;
-                return null;
-            };
-        }
-        out.appendSlice(self.reporter.allocator, term.name) catch {
-            self.oom = true;
-            return null;
-        };
-    }
-
-    if (index.offset != 0) {
-        if (index.offset > 0) {
-            const suffix = std.fmt.allocPrint(self.reporter.allocator, "+{d}", .{index.offset}) catch {
-                self.oom = true;
-                return null;
-            };
-            defer self.reporter.allocator.free(suffix);
-            out.appendSlice(self.reporter.allocator, suffix) catch {
-                self.oom = true;
-                return null;
-            };
-        } else {
-            const suffix = std.fmt.allocPrint(self.reporter.allocator, "-{d}", .{-index.offset}) catch {
-                self.oom = true;
-                return null;
-            };
-            defer self.reporter.allocator.free(suffix);
-            out.appendSlice(self.reporter.allocator, suffix) catch {
-                self.oom = true;
-                return null;
-            };
-        }
-    }
-
-    const key = out.toOwnedSlice(self.reporter.allocator) catch {
-        self.oom = true;
-        return null;
-    };
-    self.move_place_keys.append(self.reporter.allocator, key) catch {
-        self.oom = true;
-        self.reporter.allocator.free(key);
-        return null;
-    };
-    return key;
 }
 
 fn isUsizeType(maybe_ty: ?ast.TypeExpr) bool {
@@ -4023,8 +3584,6 @@ fn wildcardMoveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const Mov
                 .array => |node| node,
                 else => return null,
             };
-            const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse return null;
-            if (len <= 1) return null;
             if (stableIndexPlaceKnown(self, ix.index.*, state, ctx.*)) return null;
             if (!self.typeEmbedsMoveByValue(array.child.*, aliases)) return null;
             const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{base.key}) catch {
@@ -4055,8 +3614,6 @@ fn nestedWildcardIndexedPlaceKeyAndType(self: *Checker, expr: ast.Expr, state: *
                     .array => |node| node,
                     else => return null,
                 };
-                const direct_len = parseArrayLen(direct_array.len, ctx.const_fns, ctx.const_globals) orelse return null;
-                if (direct_len <= 1) return null;
                 if (stableIndexPlaceKnown(self, ix.index.*, state, ctx.*)) return null;
                 if (!self.typeEmbedsMoveByValue(direct_array.child.*, aliases)) return null;
                 const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{direct_base.key}) catch {
@@ -4084,11 +3641,6 @@ fn nestedWildcardIndexedPlaceKeyAndType(self: *Checker, expr: ast.Expr, state: *
                     self.oom = true;
                     return null;
                 };
-            } else if (len == 1) blk: {
-                break :blk std.fmt.allocPrint(self.reporter.allocator, "{s}[0]", .{base.key}) catch {
-                    self.oom = true;
-                    return null;
-                };
             } else blk: {
                 if (!self.typeEmbedsMoveByValue(child_ty, aliases)) return null;
                 break :blk std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{base.key}) catch {
@@ -4104,8 +3656,6 @@ fn nestedWildcardIndexedPlaceKeyAndType(self: *Checker, expr: ast.Expr, state: *
             const index_value = constIndexValue(self, ix.index.*, state, ctx.*);
             const projection: MoveProjection = if (index_value) |index|
                 .{ .constant_index = index }
-            else if (len == 1)
-                .{ .constant_index = 0 }
             else
                 .wildcard_index;
             const place = projectMovePlace(self, base.place, projection, ix.index.span) orelse return null;
@@ -4184,77 +3734,6 @@ fn arrayLiteralLenAndElementEmbedsMove(self: *Checker, expr: ast.Expr, ctx: Cont
             return .{ .len = items.len, .embeds = embeds };
         },
         else => return null,
-    }
-}
-
-fn nonNameableSingletonIndexResultType(self: *Checker, expr: ast.Expr, state: *const MoveState) ?ast.TypeExpr {
-    switch (expr.kind) {
-        .grouped => |inner| return nonNameableSingletonIndexResultType(self, inner.*, state),
-        .index => |ix| {
-            if (placeKeyAndType(self, ix.base.*, state) != null) return null;
-            const ctx = self.move_ctx orelse return null;
-            const base_ty_expr = spine.exprResultType(ix.base.*, ctx.*) orelse nonNameableSingletonIndexResultType(self, ix.base.*, state) orelse return null;
-            const base_ty = resolveAliasType(base_ty_expr, ctx.*);
-            const array = switch (base_ty.kind) {
-                .array => |node| node,
-                else => return null,
-            };
-            const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse return null;
-            if (len != 1) return null;
-            return array.child.*;
-        },
-        else => return null,
-    }
-}
-
-fn selectedArrayLiteralItemLenAndElementEmbedsMove(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ArrayMoveShape {
-    switch (expr.kind) {
-        .grouped => |inner| return selectedArrayLiteralItemLenAndElementEmbedsMove(self, inner.*, state, ctx, aliases),
-        .index => |ix| {
-            const items = switch (ix.base.*.kind) {
-                .grouped => |inner| switch (inner.*.kind) {
-                    .array_literal => |items| items,
-                    else => return null,
-                },
-                .array_literal => |items| items,
-                else => return null,
-            };
-            const selected = if (constIndexValue(self, ix.index.*, state, ctx)) |index| blk: {
-                if (index >= items.len) return null;
-                break :blk index;
-            } else blk: {
-                if (items.len != 1) return null;
-                break :blk 0;
-            };
-            return arrayLiteralLenAndElementEmbedsMove(self, items[selected], ctx, aliases);
-        },
-        else => return null,
-    }
-}
-
-fn nonNameableArrayExprLenAndElementEmbedsMove(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context, aliases: *const std.StringHashMap(ast.TypeExpr)) ?ArrayMoveShape {
-    if (arrayLiteralLenAndElementEmbedsMove(self, expr, ctx, aliases)) |literal| return literal;
-    if (selectedArrayLiteralItemLenAndElementEmbedsMove(self, expr, state, ctx, aliases)) |literal| return literal;
-    const ty_expr = nonNameableSingletonIndexResultType(self, expr, state) orelse spine.exprResultType(expr, ctx) orelse return null;
-    const ty = resolveAliasType(ty_expr, ctx);
-    const array = switch (ty.kind) {
-        .array => |node| node,
-        else => return null,
-    };
-    const len = parseArrayLen(array.len, ctx.const_fns, ctx.const_globals) orelse return null;
-    return .{ .len = len, .embeds = self.typeEmbedsMoveByValue(array.child.*, aliases) };
-}
-
-fn nonNameableSingletonMoveIndex(self: *Checker, expr: ast.Expr, state: *const MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
-    switch (expr.kind) {
-        .grouped => |inner| return nonNameableSingletonMoveIndex(self, inner.*, state, aliases),
-        .index => |ix| {
-            if (placeKeyAndType(self, ix.base.*, state) != null) return false;
-            const ctx = self.move_ctx orelse return false;
-            const array = nonNameableArrayExprLenAndElementEmbedsMove(self, ix.base.*, state, ctx.*, aliases) orelse return false;
-            return array.len == 1 and array.embeds;
-        },
-        else => return false,
     }
 }
 
@@ -5517,6 +4996,25 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *co
                 moveBorrow(self, inner.*, state, aliases);
             }
         },
+        .deref => |inner| {
+            const direct_subplace = fullDerefMoveSubplace(self, inner.*, state, aliases);
+            var full_alias_referent: ?AliasReferent = if (direct_subplace) |pp| .{ .key = pp.key, .place = pp.place, .full_deref = true } else immediateFullDerefMoveReferent(self, inner.*, state, aliases);
+            if (inner.*.kind == .ident) {
+                const id = inner.*.kind.ident;
+                if (aliasBindingMoveSlotForIdent(id.text, state)) |slot| {
+                    if (carriedFullDerefAliasReferent(slot)) |referent| full_alias_referent = referent;
+                }
+            }
+            if (full_alias_referent != null) {
+                self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer cannot consume a linear `move` value through a pointer alias in ownership v0; move the owning place directly");
+            } else if (arrayIndexEmbedsMove(self, inner.*, state, aliases)) {
+                self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot defer a linear `move` array element through an untracked dynamic index; the checker has no nameable owner place to reserve");
+            } else if (exprIsMoveTyped(self, expr, state, aliases)) {
+                self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer cannot consume a linear `move` value through a pointer deref in ownership v0; move the owning binding directly");
+            } else {
+                moveBorrow(self, inner.*, state, aliases);
+            }
+        },
         .call => |c| {
             const drop_release_type = dropPointerReleaseTypeForCallee(self, c.callee.*);
             for (c.args, 0..) |arg, index| {
@@ -5568,16 +5066,8 @@ pub fn moveDefer(self: *Checker, expr: ast.Expr, state: *MoveState, aliases: *co
                 } else {
                     recordOwnershipMovePlace(self, pp.key, pp.place, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }, state);
                 }
-            } else if (wildcardMoveIndexedPlaceKey(self, expr, state, aliases)) |pp| {
-                if (deferredBorrowConflictsWithTrackedPlace(pp.place, state)) {
-                    self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer cannot consume a linear `move` array element already borrowed by a deferred expression");
-                } else if (stateHasActivePlaceOrConflict(pp.place, state)) {
-                    self.errorCode(expr.span, "E_USE_AFTER_MOVE", "defer reserves a linear `move` array element already moved out");
-                } else {
-                    recordOwnershipMovePlace(self, pp.key, pp.place, .{ .live = true, .span = expr.span, .place = pp.place, .deferred = true }, state);
-                }
-            } else if (nonNameableSingletonMoveIndex(self, expr, state, aliases)) {
-                moveDefer(self, ix.base.*, state, aliases);
+            } else if (wildcardMoveIndexedPlaceKey(self, expr, state, aliases)) |_| {
+                self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot defer a linear `move` array element through a dynamic index in ownership v0; use a constant index or defer the whole owner");
             } else if (arrayIndexEmbedsMove(self, expr, state, aliases)) {
                 self.errorCode(expr.span, "E_MOVE_ARRAY_UNSUPPORTED", "cannot defer a linear `move` array element through an untracked dynamic index; the checker has no nameable owner place to reserve");
             }

@@ -7,7 +7,7 @@
 // SOUNDNESS SOURCE OF TRUTH — use-after-move / borrow-escape (T1.2).
 //
 // This fixture is the committed, self-verifying encoding of the use-after-move channel
-// matrix. Each `reject_*` case carries an inline `// EXPECT_ERROR:` that the harness
+
 // mechanically matches against a real diagnostic on the target line; each `accept_*` case
 // MUST compile clean (the harness fails the build if any of them emits a compiler-error-coded
 // diagnostic without an EXPECT_ERROR). So if a previously-closed channel silently re-opens
@@ -68,8 +68,8 @@ fn reject_direct_alias_chain() -> u32 {
     let p: *T = &t;
     let q: *T = p;                // alias of an alias of t
     let a: u32 = cn(move t);          // t moved
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return a + pk(q);            // q is a stale alias of moved t
+
+    return a + pk(q); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 2. reassignment of an alias local, then use after move
@@ -78,8 +78,8 @@ fn reject_reassignment_alias() -> u32 {
     var p: *T = &t;
     p = &t;                       // p re-points at t
     let a: u32 = cn(move t);
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return a + pk(p);
+
+    return a + pk(p); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 3. borrow laundered into a STRUCT-LITERAL field, read after move
@@ -87,8 +87,8 @@ fn reject_struct_literal_field() -> u32 {
     let t: T = mk();
     let h: H = .{ .p = &t };      // &t escapes into h.p
     let a: u32 = cn(move t);
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return a + pk(h.p);          // h.p is a stale alias of moved t
+
+    return a + pk(h.p); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 8. call laundering: `id(p)` may retain the borrow; used after move
@@ -97,8 +97,8 @@ fn reject_call_launder_used() -> u32 {
     var q: *T = &t;
     unsafe { q = id(&t); }        // &t laundered through a pointer-returning call
     let a: u32 = cn(move t);
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return a + pk(q);
+
+    return a + pk(q); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 8a. The call argument is itself a named alias. Its typed referent must survive
@@ -109,8 +109,8 @@ fn reject_call_laundered_alias_used() -> u32 {
     var q: *T = p;
     unsafe { q = id(p); }
     let a: u32 = cn(move t);
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return a + pk(q);
+
+    return a + pk(q); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ fn reject_array_literal_element() -> u32 {
     let t: T = mk();
     let arr: [1]*T = .{ &t };     // &t escapes into arr[0] at init
     let a: u32 = cn(move t);
-    return a + arr[0].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + arr[0].v; // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 5. borrow stored into a nameable struct-FIELD ASSIGNMENT, read before move, then dead.
@@ -149,7 +149,7 @@ fn reject_array_element_assign() -> u32 {
     var arr: [1]*T = .{ &t };
     arr[0] = &t;
     let a: u32 = cn(move t);
-    return a + arr[0].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + arr[0].v; // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 6b. borrow laundered into a singleton dynamic array-ELEMENT ASSIGNMENT, then read after move.
@@ -159,8 +159,8 @@ fn reject_dynamic_singleton_array_element_assign(i: usize) -> u32 {
     let t: T = mk();
     var arr: [1]*T = .{ &t };
     arr[i] = &t;
-    let a: u32 = cn(move t);
-    return a + arr[i].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+    let a: u32 = cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + arr[i].v;
 }
 
 // 6c. borrow laundered into a multi-element dynamic array-ELEMENT ASSIGNMENT, then read
@@ -171,7 +171,7 @@ fn reject_dynamic_multi_array_element_assign(i: usize) -> u32 {
     var arr: [2]*T = .{ &t, &t };
     arr[i] = &t;
     let a: u32 = cn(move t);
-    return a + arr[i].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + arr[i].v;
 }
 
 fn reject_dynamic_multi_array_element_constant_read(i: usize) -> u32 {
@@ -179,7 +179,7 @@ fn reject_dynamic_multi_array_element_constant_read(i: usize) -> u32 {
     var arr: [2]*T = .{ &t, &t };
     arr[i] = &t;
     let a: u32 = cn(move t);
-    return a + arr[0].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + arr[0].v; // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 fn reject_dynamic_multi_array_element_laundered(i: usize) -> u32 {
@@ -187,15 +187,15 @@ fn reject_dynamic_multi_array_element_laundered(i: usize) -> u32 {
     var arr: [2]*T = .{ &t, &t };
     unsafe { arr[i] = id(&t); }
     let a: u32 = cn(move t);
-    return a + arr[i].v;         // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + arr[i].v;
 }
 
 // 7. subfield borrow `&t.v`, whole value then moved
 fn reject_subfield_alias() -> u32 {
     let t: T = mk();
     let p: *u32 = &t.v;           // borrow of a sub-place of t
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(move t);
+
+    let a: u32 = cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + rd(p);
 }
 
@@ -206,8 +206,8 @@ fn reject_nested_aggregate_element() -> u32 {
     let t: T = mk();
     let arr: [1]Holder = .{ .{ .p = &t } };   // &t is tracked precisely as arr[0].p
     let a: u32 = cn(move t);                       // t moved
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return a + arr[0].p.v;
+
+    return a + arr[0].p.v; // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 9a. borrow laundered into a nested array literal. The precise array-element scan recurses
@@ -217,8 +217,8 @@ fn reject_nested_array_literal_element() -> u32 {
     let t: T = mk();
     let arr: [1][1]*T = .{ .{ &t } };
     let a: u32 = cn(move t);
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return a + arr[0][0].v;
+
+    return a + arr[0][0].v; // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 9b. borrow buried in a struct field whose value is an array literal. The nested place is
@@ -228,7 +228,7 @@ fn reject_struct_field_array_literal_element() -> u32 {
     let t: T = mk();
     let h: ArrayHolder = .{ .arr = .{ &t } };
     let a: u32 = cn(move t);
-    return a + h.arr[0].v;        // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + h.arr[0].v; // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 10. borrow laundered through a ptr-to-int round-trip. `&t as usize` drops the provenance
@@ -239,10 +239,10 @@ fn reject_struct_field_array_literal_element() -> u32 {
 // diagnostic; the escape fires at the move.)
 fn reject_ptr_to_int_roundtrip() -> u32 {
     let t: T = mk();
-    let n: usize = &t as usize;   // EXPECT_ERROR: E_UNSAFE_REQUIRED
+    let n: usize = &t as usize; // EXPECT_ERROR: E_UNSAFE_REQUIRED
                                   // address-of-move-value -> integer: provenance dropped, ESCAPE
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(move t);          // moving t refused — its borrow escaped through the integer
+
+    let a: u32 = cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + (n as u32);
 }
 
@@ -261,8 +261,8 @@ fn reject_nested_struct_decl() -> u32 {
     let t: T = mk();
     let o: Outer = .{ .h = .{ .p = &t } };   // &t buried at o.h.p
     let a: u32 = cn(move t);                       // t moved
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return a + pk(o.h.p);                     // o.h.p is a stale alias of moved t
+
+    return a + pk(o.h.p); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 12. TRIPLE-nested struct-of-struct-of-struct decl: `d.o.h.p = &t`. One level deeper than
@@ -271,8 +271,8 @@ fn reject_triple_nested_struct_decl() -> u32 {
     let t: T = mk();
     let d: Deep = .{ .o = .{ .h = .{ .p = &t } } };
     let a: u32 = cn(move t);
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return a + pk(d.o.h.p);
+
+    return a + pk(d.o.h.p); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 13. borrow laundered into a CALL ARGUMENT aggregate (`sink(.{ .p = &t })`). The escape scan
@@ -283,8 +283,8 @@ fn reject_triple_nested_struct_decl() -> u32 {
 fn reject_call_arg_struct() -> u32 {
     let t: T = mk();
     sink(.{ .p = &t });          // &t escapes into the callee
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(move t);
+
+    return cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 13a. The aggregate carries an already registered alias rather than a direct
@@ -293,8 +293,8 @@ fn reject_call_arg_alias_struct() -> u32 {
     let t: T = mk();
     let p: *T = &t;
     sink(.{ .p = p });
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(move t);
+
+    return cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 14. borrow laundered into a NESTED aggregate CALL ARGUMENT (`sinkOuter(.{ .h = .{ .p = &t } })`).
@@ -303,8 +303,8 @@ fn reject_call_arg_alias_struct() -> u32 {
 fn reject_call_arg_nested_struct() -> u32 {
     let t: T = mk();
     sinkOuter(.{ .h = .{ .p = &t } });
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(move t);
+
+    return cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 15. borrow laundered into an ARRAY-LITERAL CALL ARGUMENT (`sinkArr(.{ &t })`). An array-literal
@@ -312,8 +312,8 @@ fn reject_call_arg_nested_struct() -> u32 {
 fn reject_call_arg_array() -> u32 {
     let t: T = mk();
     sinkArr(.{ &t });
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(move t);
+
+    return cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 16. borrow hidden in a direct CALL RESULT aggregate (`let h = mkHolder(&t)`). The returned
@@ -323,8 +323,8 @@ fn reject_call_arg_array() -> u32 {
 fn reject_call_result_aggregate_decl() -> u32 {
     let t: T = mk();
     let h: Holder = mkHolder(&t);
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(move t);
+
+    return cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // 17. same channel through assignment into an existing aggregate variable.
@@ -332,8 +332,8 @@ fn reject_call_result_aggregate_assignment() -> u32 {
     let t: T = mk();
     var h: Holder = uninit;
     h = mkHolder(&t);
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return cn(move t);
+
+    return cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // ---------------------------------------------------------------------------

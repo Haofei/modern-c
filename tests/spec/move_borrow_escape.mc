@@ -61,7 +61,7 @@ fn reject_array_elem_assign() -> u32 {
     var arr: [1]*T = .{ &t };
     arr[0] = &t;                  // borrow of t laundered into memory (arr[0])
     let a: u32 = cn(move t);
-    return a + pk(arr[0]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(arr[0]); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // --- rejected: borrow stored into an ARRAY-LITERAL ELEMENT, then read after move ---
@@ -73,7 +73,7 @@ fn reject_array_literal_elem() -> u32 {
     let t: T = mk();
     let arr: [1]*T = .{ &t };     // borrow of t laundered into memory (arr[0]) at init
     let a: u32 = cn(move t);
-    return a + pk(arr[0]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(arr[0]); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // --- accepted: singleton dynamic array-element assignment, read, then dead ---
@@ -82,7 +82,7 @@ fn accept_dynamic_singleton_array_elem_assign_before_move(i: usize) -> u32 {
     var arr: [1]*T = .{ &t };
     arr[i] = &t;                  // in a singleton array, every successful dynamic index is [0]
     let b: u32 = pk(arr[i]);      // legitimate read BEFORE the move; arr[0] is dead afterwards
-    let a: u32 = cn(move t);
+    let a: u32 = cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
 
@@ -93,7 +93,7 @@ fn reject_dynamic_singleton_array_elem_assign() -> u32 {
     let i: usize = 0;
     arr[i] = &t;
     let a: u32 = cn(move t);
-    return a + pk(arr[i]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(arr[i]); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // --- accepted: multi-element dynamic array-element assignment, read, then dead ---
@@ -113,7 +113,7 @@ fn reject_dynamic_multi_array_elem_assign() -> u32 {
     let i: usize = 0;
     arr[i] = &t;
     let a: u32 = cn(move t);
-    return a + pk(arr[i]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(arr[i]); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // --- rejected: multi-element dynamic assignment also poisons later constant element reads ---
@@ -123,7 +123,7 @@ fn reject_dynamic_multi_array_elem_constant_read() -> u32 {
     let i: usize = 0;
     arr[i] = &t;
     let a: u32 = cn(move t);
-    return a + pk(arr[0]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(arr[0]); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // --- rejected: laundered multi-element dynamic array-element assignment, read after move ---
@@ -133,15 +133,15 @@ fn reject_dynamic_multi_array_elem_laundered() -> u32 {
     let i: usize = 0;
     unsafe { arr[i] = id(&t); }
     let a: u32 = cn(move t);
-    return a + pk(arr[i]);        // EXPECT_ERROR: E_USE_AFTER_MOVE
+    return a + pk(arr[i]); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // --- rejected: alias of a SUBFIELD, whole value then moved ---
 fn reject_subfield_alias() -> u32 {
     let t: T = mk();
     let p: *u32 = &t.v;           // borrow of a sub-place of t; not whole-binding-trackable
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(move t);           // moving t as a whole would leave p dangling — rejected
+
+    let a: u32 = cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + *p;
 }
 
@@ -165,8 +165,8 @@ fn accept_subfield_borrow_used() -> u32 {
 fn reject_call_arg_aggregate_literal_escape() -> u32 {
     let t: T = mk();
     let b: u32 = use_holder(.{ .p = &t });
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(move t);           // the callee may retain the copied aggregate's pointer field
+
+    let a: u32 = cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
 
@@ -174,8 +174,8 @@ fn reject_call_arg_aggregate_literal_escape() -> u32 {
 fn reject_captured_aggregate_call_result_escape() -> u32 {
     let t: T = mk();
     let h: H = holder(&t);
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    let a: u32 = cn(move t);           // the returned aggregate may still carry the borrow
+
+    let a: u32 = cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + pk(h.p);
 }
 
@@ -193,8 +193,8 @@ fn reject_call_launder_used_after_move() -> u32 {
     var q: *T = p;
     unsafe { q = id(p); }         // a borrow of t laundered out through id's pointer result
     let a: u32 = cn(move t);           // t is moved
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return a + pk(q);             // q is a stale alias of the moved t — rejected
+
+    return a + pk(q); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // --- rejected: the same, laundering `&t` directly (no intermediate alias) ---
@@ -203,8 +203,8 @@ fn reject_call_launder_direct() -> u32 {
     var q: *T = &t;
     unsafe { q = id(&t); }        // &t laundered through the pointer-returning call
     let a: u32 = cn(move t);           // t is moved
-    // EXPECT_ERROR: E_USE_AFTER_MOVE
-    return a + pk(q);             // q is stale — rejected
+
+    return a + pk(q); // EXPECT_ERROR: E_USE_AFTER_MOVE
 }
 
 // --- accepted: laundered pointer is DEAD before the move (the legitimate pattern) ---

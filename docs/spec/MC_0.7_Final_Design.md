@@ -1825,6 +1825,19 @@ MC classifies resource-facing values as follows:
 | `region struct` | node owned by an enclosing region/arena, not independently dropped | AST, MIR, semantic graph nodes |
 | raw pointer / unsafe FFI | outside the ownership proof boundary | hardware addresses, C ABI, low-level page tables |
 
+**Ownership v0 support boundary.** The stable checked subset is intentionally small:
+`move struct` / `linear struct`, explicit `move`, lexical `borrow` / `borrow mut`, and
+`#[drop]` auto-drop for nameable local places. The following forms are experimental until the
+checker has one whole-function CFG, canonical `PlaceId`, and MIR cleanup/drop authority:
+`view struct`, `region struct`, `thread_move`, `borrow(source)` returned views, async ownership,
+and dynamic-index ownership precision.
+
+In ownership v0, ownership transfer from array places is accepted only for constant-index
+places. Dynamic or symbolic indexes such as `arr[i]`, `arr[i + 1]`, and pointer/alias-derived
+places such as `*p` fail closed for ownership transfer. Ordinary reads and borrows may still use
+dynamic indexes; only moving, deferring, or overwriting a move resource through a dynamic owner
+place is outside the stable proof boundary.
+
 ### 18.1.1 `move` and `linear`
 
 A type opts into owned resource tracking with `move struct` or `linear struct`:
@@ -1892,10 +1905,9 @@ evaluates the return expression first, then runs active cleanups, then returns
 the saved value. Cleanup order is the reverse of lexical registration/declaration
 order. `goto`/`longjmp`-style non-local jumps may not cross live ownership state.
 
-Ownership is place-sensitive for locals, fields, array elements, and tracked
-alias roots. Places are canonicalized before use where the checker can prove the
-provenance. Dynamic array indexes are conservative and may be represented as a
-wildcard place. The current implementation admits at most 16 projections in one
+Ownership is place-sensitive for locals, fields, and constant-index array elements.
+Dynamic array indexes and alias-derived ownership transfers fail closed in v0 rather
+than relying on symbolic index or provenance precision. The current implementation admits at most 16 projections in one
 ownership place; exceeding that limit is `E_OWNERSHIP_PLACE_TOO_DEEP` and must
 fail closed rather than silently losing ownership state.
 
@@ -1945,8 +1957,9 @@ boundary: explicit borrows, local addresses, resource/view/region pointers, and
 `thread_move`. MC v0 has no inferred `Send`/`Sync` trait solver. Thread safety is
 opt-in by declaration and by trusted library wrappers.
 
-`view struct` is the only aggregate form allowed to carry borrow fields in safe
-code. It remains a lexical view: it cannot be stored as an owned resource, placed
+`view struct` is experimental. It is the intended aggregate form for carrying borrow
+fields in safe code, but it is not part of the stable ownership v0 guarantee. While
+enabled, it remains a lexical view: it cannot be stored as an owned resource, placed
 inside raw byte-copy containers, or returned unless the function signature states
 a single source parameter:
 
@@ -1960,7 +1973,7 @@ unambiguous, or cross an explicit unsafe boundary.
 
 ### 18.1.3 Regions
 
-`region struct` values are owned by an enclosing arena/region. Region nodes may
+`region struct` is experimental. Region values are intended to be owned by an enclosing arena/region. Region nodes may
 form graphs, cycles, and dense indices inside the region. They are not independent
 `move` or `linear` resources, cannot declare `#[drop]`, and cannot escape by
 value into ordinary storage or C ABI calls. This is the intended model for AST,

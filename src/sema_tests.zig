@@ -836,7 +836,8 @@ test "auto-drop v0 rejects alias moves forget and moved reinitialization" {
     defer reporter.deinit();
     try checkSource(source, &reporter);
     // DIAGNOSTIC_UNIT: E_AUTO_DROP_UNSUPPORTED
-    try std.testing.expectEqual(@as(usize, 4), countDiagnosticCode(&reporter, "E_AUTO_DROP_UNSUPPORTED"));
+    try std.testing.expectEqual(@as(usize, 2), countDiagnosticCode(&reporter, "E_AUTO_DROP_UNSUPPORTED"));
+    try std.testing.expectEqual(@as(usize, 2), countDiagnosticCode(&reporter, "E_USE_AFTER_MOVE"));
 }
 
 test "ownership place projection depth emits explicit diagnostic" {

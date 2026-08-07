@@ -83,7 +83,7 @@ fn accept_dynamic_singleton_array_element_before(i: usize) -> u32 {
     var arr: [1]*T = .{ &t };
     arr[i] = &t;
     let b: u32 = pk(arr[i]);      // successful dynamic index denotes arr[0]
-    let a: u32 = cn(move t);
+    let a: u32 = cn(move t); // EXPECT_ERROR: E_USE_AFTER_MOVE
     return a + b;
 }
 
