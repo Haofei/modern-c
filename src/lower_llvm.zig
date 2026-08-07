@@ -2913,11 +2913,10 @@ const LlvmEmitter = struct {
     }
 
     fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr, move_span: ast.Span) !void {
-        const local_name = ownership_facts.directMovedLocalName(expr) orelse return;
-        const cleanup = ownership_facts.autoDropCleanupForLocalName(self.defer_stack.items, local_name) orelse return;
+        const cleanup = ownership_facts.autoDropMoveCancellation(expr, self.defer_stack.items) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         if (!mir_ownership_authority.authorizesMoveOutLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(move_span))) return error.UnsupportedLlvmEmission;
-        ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name);
+        ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, cleanup.local_name);
     }
 
     fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) !void {
