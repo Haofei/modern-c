@@ -236,6 +236,7 @@ def main() -> int:
         "MIR ownership event admission accepts sibling copy locals with reused names",
         "MIR records forget events for no-drop move resources",
         "MIR ownership authority does not let forget authorize auto-drop registration",
+        "MIR ownership authority separates auto-drop cleanup from legacy cancellation entries",
         "MIR records explicit drop glue call ownership events",
         "MIR cleanup producer ignores move-out events that cannot reach fallthrough cleanup",
     ):
@@ -247,6 +248,8 @@ def main() -> int:
         ("src/mir.zig", "pub fn sourcePointFromSpan"),
         ("src/mir.zig", "fn typeOwnershipSymbolForTypeName"),
         ("src/mir.zig", "fn addDropGlueCallOwnershipEvent"),
+        ("src/mir_ownership_authority.zig", "pub const AutoDropLocalRegistrationDecision"),
+        ("src/mir_ownership_authority.zig", "pub fn autoDropLocalRegistrationDecision"),
         ("src/mir_ownership_authority.zig", "event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)"),
         ("src/mir_ownership_authority.zig", "fn sourceMatches"),
         ("src/mir_ownership_authority.zig", "pub fn authorizesMoveOutLocal"),

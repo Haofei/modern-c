@@ -2866,11 +2866,16 @@ pub const CEmitter = struct {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!mir_ownership_authority.authorizesAutoDropLocal(self.mir_module, function, name.text, type_name, drop_fn)) return error.UnsupportedCEmission;
+        const registration: ownership_facts.AutoDropCleanupRegistration = switch (mir_ownership_authority.autoDropLocalRegistrationDecision(self.mir_module, function, name.text, type_name, drop_fn)) {
+            .emit_auto_drop_cleanup => .emit_auto_drop_cleanup,
+            .legacy_cancellable_cleanup => .legacy_cancellable_cleanup,
+            .reject => return error.UnsupportedCEmission,
+        };
         try self.defer_stack.append(self.allocator, .{ .auto_drop = .{
             .fn_name = drop_fn,
             .local_name = name.text,
             .span = name.span,
+            .registration = registration,
         } });
     }
 
@@ -3571,6 +3576,7 @@ pub const CEmitter = struct {
     }
 
     fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: ownership_facts.AutoDropLocalCleanup) !void {
+        if (cleanup.registration != .emit_auto_drop_cleanup) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
     }

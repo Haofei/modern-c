@@ -18,6 +18,12 @@ pub fn autoDropEligibleTypeNameForDropGlue(module: *const mir.Module, type_name:
     return false;
 }
 
+pub const AutoDropLocalRegistrationDecision = enum {
+    reject,
+    emit_auto_drop_cleanup,
+    legacy_cancellable_cleanup,
+};
+
 pub fn authorizesAutoDropLocal(
     module: *const mir.Module,
     function: *const mir.Function,
@@ -25,8 +31,18 @@ pub fn authorizesAutoDropLocal(
     type_name: []const u8,
     drop_fn: []const u8,
 ) bool {
-    const root_value_id = valueIdForLocal(function, local_name) orelse return false;
-    const drop_glue = dropGlueFactFor(module, type_name, drop_fn) orelse return false;
+    return autoDropLocalRegistrationDecision(module, function, local_name, type_name, drop_fn) != .reject;
+}
+
+pub fn autoDropLocalRegistrationDecision(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    local_name: []const u8,
+    type_name: []const u8,
+    drop_fn: []const u8,
+) AutoDropLocalRegistrationDecision {
+    const root_value_id = valueIdForLocal(function, local_name) orelse return .reject;
+    const drop_glue = dropGlueFactFor(module, type_name, drop_fn) orelse return .reject;
 
     for (function.ownership_events) |event| {
         if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
@@ -34,19 +50,20 @@ pub fn authorizesAutoDropLocal(
         switch (event.kind) {
             .auto_drop => {
                 if (!event.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) continue;
-                return true;
+                return .emit_auto_drop_cleanup;
             },
             // Transitional allowance: path-sensitive cleanup edges are not yet
             // fully represented in MIR. A matching consumption event proves MIR
-            // at least owns the local's obligation state, so legacy backend
-            // cleanup stacks may register and then cancel the cleanup on the
-            // transfer path. This case is removed once C/LLVM consume MIR
-            // cleanup edges directly.
-            .move_out, .explicit_drop => return true,
+            // at least owns the local's obligation state. Legacy backend
+            // cleanup stacks may create a cancellable stack entry for the
+            // transfer/release path, but this is not true auto-drop cleanup
+            // authority and is removed once C/LLVM consume MIR cleanup edges
+            // directly.
+            .move_out, .explicit_drop => return .legacy_cancellable_cleanup,
             else => {},
         }
     }
-    return false;
+    return .reject;
 }
 
 pub fn authorizesExplicitDropLocal(

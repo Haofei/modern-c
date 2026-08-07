@@ -4651,6 +4651,31 @@ test "MIR records simple move-out ownership events" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=return_guard kind=move_out") != null);
 }
 
+test "MIR ownership authority separates auto-drop cleanup from legacy cancellation entries" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn return_guard() -> Guard {
+        \\    var g: Guard = make_guard();
+        \\    return move g;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_ownership_registration_decision.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "return_guard") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
+    try std.testing.expectEqual(mir.OwnershipEventKind.move_out, function.ownership_events[2].kind);
+    try std.testing.expectEqual(
+        mir_ownership_authority.AutoDropLocalRegistrationDecision.legacy_cancellable_cleanup,
+        mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard", "close_guard"),
+    );
+}
+
 test "MIR cleanup producer ignores move-out events that cannot reach fallthrough cleanup" {
     const source =
         \\move struct Guard { id: u32 }
