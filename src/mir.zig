@@ -1654,7 +1654,10 @@ fn ownershipEventSequenceValid(function: Function) bool {
             .borrow_begin, .set_drop_flag => {
                 if (state != .live) return false;
             },
-            .borrow_end, .storage_dead => {},
+            .borrow_end => {},
+            .storage_dead => {
+                if (event.place.root_type_symbol_id.isValid() and state == .live) return false;
+            },
         }
     }
     if (!typedOwnershipRootsClosed(function)) return false;
