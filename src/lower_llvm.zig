@@ -165,10 +165,7 @@ const DebugLocal = lower_llvm_model.DebugLocal;
 const DebugLocalKind = lower_llvm_model.DebugLocalKind;
 const LoopLabels = lower_llvm_model.LoopLabels;
 
-const DeferredCleanup = union(enum) {
-    expr: ast.Expr,
-    auto_drop: ownership_facts.AutoDropLocalCleanup,
-};
+const DeferredCleanup = ownership_facts.DeferredCleanup;
 const RawManyOffsetInfo = lower_llvm_model.RawManyOffsetInfo;
 const EnumRawCallInfo = lower_llvm_model.EnumRawCallInfo;
 const ReduceTypes = struct {

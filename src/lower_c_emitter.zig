@@ -246,10 +246,7 @@ pub fn appendModuleMir(
     try emitter.emitModule(declarations);
 }
 
-const DeferredCleanup = union(enum) {
-    expr: ast.Expr,
-    auto_drop: ownership_facts.AutoDropLocalCleanup,
-};
+const DeferredCleanup = ownership_facts.DeferredCleanup;
 
 pub const CEmitter = struct {
     allocator: std.mem.Allocator,

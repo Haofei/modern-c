@@ -14,6 +14,11 @@ pub const AutoDropLocalCleanup = struct {
     span: ast.Span,
 };
 
+pub const DeferredCleanup = union(enum) {
+    expr: ast.Expr,
+    auto_drop: AutoDropLocalCleanup,
+};
+
 /// Find the most recent auto-drop cleanup for a local in a backend cleanup stack.
 /// The concrete cleanup union remains backend-local while cleanup edges migrate to
 /// MIR, but the stack search policy must not drift between C and LLVM.
@@ -296,23 +301,19 @@ test "direct moved local name recognizes only grouped identifiers" {
 
 test "auto-drop cleanup stack helpers use the latest matching local" {
     const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
-    const Entry = union(enum) {
-        expr: ast.Expr,
-        auto_drop: AutoDropLocalCleanup,
-    };
-    var stack: std.ArrayList(Entry) = .empty;
+    var stack: std.ArrayList(DeferredCleanup) = .empty;
     defer stack.deinit(std.testing.allocator);
 
     try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_old", .local_name = "g", .span = span } });
     try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_h", .local_name = "h", .span = span } });
     try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_new", .local_name = "g", .span = span } });
 
-    const cleanup = autoDropCleanupForLocalName(Entry, stack.items, "g") orelse return error.TestUnexpectedResult;
+    const cleanup = autoDropCleanupForLocalName(DeferredCleanup, stack.items, "g") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("close_new", cleanup.fn_name);
 
     removeAutoDropCleanupForLocalName(@TypeOf(stack), &stack, "g");
     try std.testing.expectEqual(@as(usize, 2), stack.items.len);
-    const remaining = autoDropCleanupForLocalName(Entry, stack.items, "g") orelse return error.TestUnexpectedResult;
+    const remaining = autoDropCleanupForLocalName(DeferredCleanup, stack.items, "g") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("close_old", remaining.fn_name);
 }
 
