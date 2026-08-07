@@ -539,6 +539,7 @@ pub const OwnershipPlaceProjection = union(enum) {
 pub const OwnershipPlace = struct {
     root_value_id: ValueId = .invalid,
     root_symbol_id: SymbolId = .invalid,
+    root_type_symbol_id: SymbolId = .invalid,
     projections: [max_ownership_place_projections]OwnershipPlaceProjection = undefined,
     projection_count: usize = 0,
 

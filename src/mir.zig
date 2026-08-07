@@ -741,7 +741,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
         for (function.ownership_events) |event| {
             try out.print(
                 allocator,
-                "mir ownership_event fn={s} kind={s} block={} generation={} root_value={} root_symbol={} projections={} loan_id={} loan_kind={s} drop_glue_symbol={} line={} column={}\n",
+                "mir ownership_event fn={s} kind={s} block={} generation={} root_value={} root_symbol={} root_type_symbol={} projections={} loan_id={} loan_kind={s} drop_glue_symbol={} line={} column={}\n",
                 .{
                     function.name,
                     @tagName(event.kind),
@@ -749,6 +749,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     event.generation,
                     if (event.place.root_value_id.isValid()) event.place.root_value_id.index() else std.math.maxInt(usize),
                     if (event.place.root_symbol_id.isValid()) event.place.root_symbol_id.index() else std.math.maxInt(usize),
+                    if (event.place.root_type_symbol_id.isValid()) event.place.root_type_symbol_id.index() else std.math.maxInt(usize),
                     event.place.projection_count,
                     event.loan_id,
                     if (event.loan_kind) |loan_kind| @tagName(loan_kind) else "none",
@@ -1613,6 +1614,8 @@ fn ownershipPlaceValid(module: Module, function: Function, place: OwnershipPlace
     if (root_value_valid == root_symbol_valid) return false;
     if (root_value_valid and place.root_value_id.index() >= function.value_identities.len) return false;
     if (root_symbol_valid and !moduleSymbolIdentityValid(module, place.root_symbol_id)) return false;
+    if (place.root_type_symbol_id.isValid() and !moduleSymbolIdentityValid(module, place.root_type_symbol_id)) return false;
+    if (root_symbol_valid and place.root_type_symbol_id.isValid() and !place.root_type_symbol_id.eql(place.root_symbol_id)) return false;
     if (place.projection_count > mir_model.max_ownership_place_projections) return false;
     for (place.projections[0..place.projection_count]) |projection| {
         switch (projection) {
@@ -1698,6 +1701,7 @@ fn ownershipDropGlueSymbolMatchesPlace(module: Module, event: OwnershipEvent) bo
     if (!ownershipDropGlueSymbolValid(module, event.drop_glue_symbol_id)) return false;
     const fact = dropGlueFactForReleaseSymbol(module, event.drop_glue_symbol_id) orelse return false;
     if (event.place.root_symbol_id.isValid() and !fact.typed_resource_symbol_id.eql(event.place.root_symbol_id)) return false;
+    if (event.place.root_type_symbol_id.isValid() and !fact.typed_resource_symbol_id.eql(event.place.root_type_symbol_id)) return false;
     return true;
 }
 
@@ -7309,8 +7313,13 @@ const FunctionBuilder = struct {
         });
     }
 
+    const DiscardDropGlueIdentity = struct {
+        resource_symbol_id: SymbolId,
+        release_symbol_id: SymbolId,
+    };
+
     fn addDiscardOwnershipEvent(self: *FunctionBuilder, target: CallTargetKind, argument: ast.Expr, call_span: ast.Span) !void {
-        const drop_glue_symbol_id = self.discardArgumentDropGlueSymbol(argument) orelse return;
+        const drop_glue_identity = self.discardArgumentDropGlueIdentity(argument) orelse return;
         const root = directIdentName(argument) orelse return;
         const root_value_id = try self.internValueId(root);
         const block_id = BlockId.fromIndex(self.current);
@@ -7325,24 +7334,30 @@ const FunctionBuilder = struct {
         };
         try self.ownership_events.append(self.allocator, .{
             .kind = kind,
-            .place = .{ .root_value_id = root_value_id },
-            .drop_glue_symbol_id = if (kind == .explicit_drop) drop_glue_symbol_id else .invalid,
+            .place = .{
+                .root_value_id = root_value_id,
+                .root_type_symbol_id = drop_glue_identity.resource_symbol_id,
+            },
+            .drop_glue_symbol_id = if (kind == .explicit_drop) drop_glue_identity.release_symbol_id else .invalid,
             .block_id = block_id,
             .instruction_index = instruction_index,
             .source = .{ .line = call_span.line, .column = call_span.column, .offset = call_span.offset, .len = call_span.len },
         });
     }
 
-    fn discardArgumentDropGlueSymbol(self: *FunctionBuilder, argument: ast.Expr) ?SymbolId {
+    fn discardArgumentDropGlueIdentity(self: *FunctionBuilder, argument: ast.Expr) ?DiscardDropGlueIdentity {
         const root = directIdentName(argument) orelse return null;
         const ty = self.local_type_exprs.get(root) orelse self.global_type_exprs.get(root) orelse return null;
         const type_name = structTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return null;
-        return self.dropGlueSymbolForTypeName(type_name);
+        return self.dropGlueIdentityForTypeName(type_name);
     }
 
-    fn dropGlueSymbolForTypeName(self: *FunctionBuilder, type_name: []const u8) ?SymbolId {
+    fn dropGlueIdentityForTypeName(self: *FunctionBuilder, type_name: []const u8) ?DiscardDropGlueIdentity {
         for (self.drop_glue_facts) |fact| {
-            if (std.mem.eql(u8, fact.resource_type, type_name)) return fact.typed_release_symbol_id;
+            if (std.mem.eql(u8, fact.resource_type, type_name)) return .{
+                .resource_symbol_id = fact.typed_resource_symbol_id,
+                .release_symbol_id = fact.typed_release_symbol_id,
+            };
         }
         return null;
     }
