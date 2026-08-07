@@ -157,6 +157,11 @@ pub fn resultConstructorFactInfo(kind: CallTargetKind) ?ResultConstructorFactInf
     };
 }
 pub const SourcePoint = mir_model.SourcePoint;
+
+pub fn sourcePointFromSpan(span: ast.Span) SourcePoint {
+    return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
+}
+
 pub const PointerProvenance = mir_model.PointerProvenance;
 pub const PointerProvenanceFact = mir_model.PointerProvenanceFact;
 pub const ConstGetFact = mir_model.ConstGetFact;

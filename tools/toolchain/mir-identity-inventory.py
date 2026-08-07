@@ -244,6 +244,7 @@ def main() -> int:
     for path, needle in (
         ("src/mir.zig", "fn autoDropClosesStorage"),
         ("src/mir.zig", "fn ownershipEventCanReachBlock"),
+        ("src/mir.zig", "pub fn sourcePointFromSpan"),
         ("src/mir.zig", "fn typeOwnershipSymbolForTypeName"),
         ("src/mir.zig", "fn addDropGlueCallOwnershipEvent"),
         ("src/mir_ownership_authority.zig", "event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)"),

@@ -2887,14 +2887,14 @@ pub const CEmitter = struct {
         const local_name = ownership_facts.directMovedLocalName(expr) orelse return;
         const cleanup = self.autoDropCleanupForLocalName(local_name) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!mir_ownership_authority.authorizesMoveOutLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name, sourcePointFromSpan(move_span))) return error.UnsupportedCEmission;
+        if (!mir_ownership_authority.authorizesMoveOutLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(move_span))) return error.UnsupportedCEmission;
         self.cancelAutoDropForLocalName(local_name);
     }
 
     fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) !void {
         const cleanup = self.autoDropPointerCleanup(expr) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!mir_ownership_authority.authorizesExplicitDropLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name, sourcePointFromSpan(expr.span))) return error.UnsupportedCEmission;
+        if (!mir_ownership_authority.authorizesExplicitDropLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(expr.span))) return error.UnsupportedCEmission;
         self.cancelAutoDropForLocalName(cleanup.local_name);
     }
 
@@ -8784,10 +8784,6 @@ pub const CEmitter = struct {
         return self.arrayLenTextForExpr(expr);
     }
 };
-
-fn sourcePointFromSpan(span: ast.Span) mir.SourcePoint {
-    return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
-}
 
 fn isSourceSpan(span: ast.Span) bool {
     return span.line != 0 and span.column != 0;

@@ -2929,14 +2929,14 @@ const LlvmEmitter = struct {
         const local_name = ownership_facts.directMovedLocalName(expr) orelse return;
         const cleanup = self.autoDropCleanupForLocalName(local_name) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!mir_ownership_authority.authorizesMoveOutLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, sourcePointFromSpan(move_span))) return error.UnsupportedLlvmEmission;
+        if (!mir_ownership_authority.authorizesMoveOutLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(move_span))) return error.UnsupportedLlvmEmission;
         self.cancelAutoDropForLocalName(local_name);
     }
 
     fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) !void {
         const cleanup = self.autoDropPointerCleanup(expr) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!mir_ownership_authority.authorizesExplicitDropLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, sourcePointFromSpan(expr.span))) return error.UnsupportedLlvmEmission;
+        if (!mir_ownership_authority.authorizesExplicitDropLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(expr.span))) return error.UnsupportedLlvmEmission;
         self.cancelAutoDropForLocalName(cleanup.local_name);
     }
 
@@ -10613,10 +10613,6 @@ const LlvmEmitter = struct {
 // module; these aliases keep the existing call sites in this file reading unchanged.
 const ResultSwitchPattern = switch_lower.ResultArmPattern;
 const TaggedUnionBinding = switch_lower.TaggedUnionArmBinding;
-
-fn sourcePointFromSpan(span: ast.Span) mir.SourcePoint {
-    return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
-}
 
 fn isSourceSpan(span: ast.Span) bool {
     return span.line != 0 and span.column != 0;
