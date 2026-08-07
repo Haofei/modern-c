@@ -163,6 +163,8 @@ pub const ConstGetFact = mir_model.ConstGetFact;
 pub const AggregateReturnSummaryFact = mir_model.AggregateReturnSummaryFact;
 pub const AggregateReturnPointerFact = mir_model.AggregateReturnPointerFact;
 pub const RepresentationFact = mir_model.RepresentationFact;
+pub const TypeOwnershipKind = mir_model.TypeOwnershipKind;
+pub const TypeOwnershipFact = mir_model.TypeOwnershipFact;
 pub const SymbolIdentity = mir_model.SymbolIdentity;
 pub const SpanIdentity = mir_model.SpanIdentity;
 pub const TypeIdentity = mir_model.TypeIdentity;
@@ -397,6 +399,8 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
 
     const drop_glue_facts = try collectDropGlueFacts(allocator, module, &ast_structs, &aliases, &symbol_ids);
     errdefer allocator.free(drop_glue_facts);
+    const type_ownership_facts = try collectTypeOwnershipFacts(allocator, module, &ast_structs, &aliases, drop_glue_facts, &symbol_ids);
+    errdefer allocator.free(type_ownership_facts);
 
     var functions: std.ArrayList(Function) = .empty;
     errdefer {
@@ -473,6 +477,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
         .symbol_identities = symbol_identities,
         .functions = try functions.toOwnedSlice(allocator),
         .drop_glue_facts = drop_glue_facts,
+        .type_ownership_facts = type_ownership_facts,
         .aggregate_return_summaries = aggregate_return_facts.summaries,
         .aggregate_return_pointer_facts = aggregate_return_facts.pointer_facts,
     };
@@ -519,6 +524,59 @@ fn collectDropGlueFacts(
     }
 
     return facts.toOwnedSlice(allocator);
+}
+
+fn collectTypeOwnershipFacts(
+    allocator: std.mem.Allocator,
+    module: ast.Module,
+    structs: *const std.StringHashMap(ast.StructDecl),
+    aliases: *const std.StringHashMap(ast.TypeExpr),
+    drop_glue_facts: []const DropGlueFact,
+    symbol_ids: *std.StringHashMap(SymbolId),
+) ![]TypeOwnershipFact {
+    var facts: std.ArrayList(TypeOwnershipFact) = .empty;
+    errdefer facts.deinit(allocator);
+
+    for (module.decls) |decl| {
+        const struct_decl = switch (decl.kind) {
+            .struct_decl => |node| node,
+            else => continue,
+        };
+        const type_name = struct_decl.name.text;
+        const type_expr = ast.TypeExpr{ .span = struct_decl.name.span, .kind = .{ .name = struct_decl.name } };
+        const kind: TypeOwnershipKind = if (struct_decl.is_region)
+            .region
+        else if (struct_decl.is_view)
+            .view
+        else if (struct_decl.is_linear or ownership_facts.typeEmbedsLinearByValue(type_expr, structs, aliases, 0))
+            .linear
+        else if (struct_decl.is_move or ownership_facts.typeEmbedsMoveByValue(type_expr, structs, aliases, 0))
+            .affine
+        else
+            .copy;
+        try facts.append(allocator, .{
+            .type_name = type_name,
+            .typed_type_symbol_id = try internSymbolId(symbol_ids, type_name),
+            .kind = kind,
+            .drop_glue_symbol_id = dropGlueSymbolForType(drop_glue_facts, type_name),
+            .thread_move = struct_decl.is_thread_move,
+            .source = .{
+                .line = struct_decl.name.span.line,
+                .column = struct_decl.name.span.column,
+                .offset = struct_decl.name.span.offset,
+                .len = struct_decl.name.span.len,
+            },
+        });
+    }
+
+    return facts.toOwnedSlice(allocator);
+}
+
+fn dropGlueSymbolForType(drop_glue_facts: []const DropGlueFact, type_name: []const u8) SymbolId {
+    for (drop_glue_facts) |fact| {
+        if (std.mem.eql(u8, fact.resource_type, type_name)) return fact.typed_release_symbol_id;
+    }
+    return .invalid;
 }
 
 fn buildSymbolIdentities(allocator: std.mem.Allocator, symbol_ids: *std.StringHashMap(SymbolId)) ![]SymbolIdentity {
@@ -629,6 +687,21 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             allocator,
             "mir drop_glue_fact resource_type={s} resource_symbol={} release_fn={s} release_symbol={} recorded=true line={} column={}\n",
             .{ fact.resource_type, fact.typed_resource_symbol_id.index(), fact.release_fn, fact.typed_release_symbol_id.index(), fact.source.line, fact.source.column },
+        );
+    }
+    for (module_mir.type_ownership_facts) |fact| {
+        try out.print(
+            allocator,
+            "mir type_ownership type={s} symbol={} kind={s} drop_glue_symbol={} thread_move={} line={} column={}\n",
+            .{
+                fact.type_name,
+                fact.typed_type_symbol_id.index(),
+                @tagName(fact.kind),
+                if (fact.drop_glue_symbol_id.isValid()) fact.drop_glue_symbol_id.index() else std.math.maxInt(usize),
+                fact.thread_move,
+                fact.source.line,
+                fact.source.column,
+            },
         );
     }
     for (module_mir.functions) |function| {
@@ -1474,6 +1547,17 @@ pub fn validateDropGlueFactsForLowering(module: Module) error{InvalidMirDropGlue
     }
 }
 
+pub fn validateTypeOwnershipFactsForLowering(module: Module) error{InvalidMirTypeOwnershipFacts}!void {
+    for (module.type_ownership_facts, 0..) |fact, index| {
+        if (fact.type_name.len == 0) return error.InvalidMirTypeOwnershipFacts;
+        if (!typeOwnershipSymbolIdentityValid(module, fact)) return error.InvalidMirTypeOwnershipFacts;
+        if (fact.drop_glue_symbol_id.isValid() and !moduleSymbolIdentityValid(module, fact.drop_glue_symbol_id)) return error.InvalidMirTypeOwnershipFacts;
+        for (module.type_ownership_facts[0..index]) |previous| {
+            if (std.mem.eql(u8, previous.type_name, fact.type_name)) return error.InvalidMirTypeOwnershipFacts;
+        }
+    }
+}
+
 pub fn validateOwnershipEventsForLowering(module: Module) error{InvalidMirOwnershipEvents}!void {
     for (module.functions) |function| {
         for (function.ownership_events) |event| {
@@ -1607,6 +1691,13 @@ fn optionalOwnershipDropGlueSymbolValid(module: Module, symbol_id: SymbolId) boo
     return !symbol_id.isValid() or ownershipDropGlueSymbolValid(module, symbol_id);
 }
 
+fn typeOwnershipSymbolIdentityValid(module: Module, fact: TypeOwnershipFact) bool {
+    if (!fact.typed_type_symbol_id.isValid()) return false;
+    const index = fact.typed_type_symbol_id.index();
+    if (index >= module.symbol_identities.len) return false;
+    return std.mem.eql(u8, module.symbol_identities[index].spelling, fact.type_name);
+}
+
 fn moduleSymbolIdentityValid(module: Module, symbol_id: SymbolId) bool {
     return symbol_id.isValid() and symbol_id.index() < module.symbol_identities.len;
 }
@@ -1639,6 +1730,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirConstGetFacts,
     InvalidMirCallTargetFacts,
     InvalidMirDropGlueFacts,
+    InvalidMirTypeOwnershipFacts,
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     StaleMirTargetTypeFacts,
@@ -1654,6 +1746,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateConstGetFactsForLowering(module);
     try validateCallTargetFactsForLowering(module);
     try validateDropGlueFactsForLowering(module);
+    try validateTypeOwnershipFactsForLowering(module);
     try validateOwnershipEventsForLowering(module);
     try validateTargetTypeFactsForLowering(module);
     try validateKnownFactTypesForLowering(module);

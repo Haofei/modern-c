@@ -369,6 +369,23 @@ pub const DropGlueFact = struct {
     source: SourcePoint,
 };
 
+pub const TypeOwnershipKind = enum {
+    copy,
+    affine,
+    linear,
+    region,
+    view,
+};
+
+pub const TypeOwnershipFact = struct {
+    type_name: []const u8,
+    typed_type_symbol_id: SymbolId = .invalid,
+    kind: TypeOwnershipKind,
+    drop_glue_symbol_id: SymbolId = .invalid,
+    thread_move: bool = false,
+    source: SourcePoint,
+};
+
 pub const TargetTypeKind = enum {
     assert_condition,
     direct_call_result,
@@ -688,6 +705,7 @@ pub const Module = struct {
     symbol_identities: []SymbolIdentity = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
+    type_ownership_facts: []TypeOwnershipFact = &.{},
     aggregate_return_summaries: []AggregateReturnSummaryFact = &.{},
     aggregate_return_pointer_facts: []AggregateReturnPointerFact = &.{},
 
@@ -727,6 +745,7 @@ pub const Module = struct {
         if (self.symbol_identities.len != 0) self.allocator.free(self.symbol_identities);
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);
+        if (self.type_ownership_facts.len != 0) self.allocator.free(self.type_ownership_facts);
         if (self.aggregate_return_summaries.len != 0) self.allocator.free(self.aggregate_return_summaries);
         for (self.aggregate_return_pointer_facts) |fact| self.allocator.free(fact.field_path);
         if (self.aggregate_return_pointer_facts.len != 0) self.allocator.free(self.aggregate_return_pointer_facts);

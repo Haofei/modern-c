@@ -103,6 +103,13 @@ fn countOwnershipEventsByKind(function: mir.Function, kind: mir.OwnershipEventKi
     return count;
 }
 
+fn typeOwnershipByName(module: mir.Module, name: []const u8) ?mir.TypeOwnershipFact {
+    for (module.type_ownership_facts) |fact| {
+        if (std.mem.eql(u8, fact.type_name, name)) return fact;
+    }
+    return null;
+}
+
 fn valueIdentityBySpelling(function: mir.Function, spelling: []const u8) ?mir.ValueIdentity {
     for (function.value_identities) |identity| {
         if (std.mem.eql(u8, identity.spelling, spelling)) return identity;
@@ -4032,6 +4039,96 @@ test "MIR records drop glue facts for auto-drop resources" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "release_fn=close_ticket release_symbol=") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir drop_glue_fact resource_type=Wrapper resource_symbol=") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "release_fn=close_wrapper release_symbol=") != null);
+}
+
+test "MIR records canonical type ownership facts" {
+    const source =
+        \\struct Plain { id: u32 }
+        \\move struct Ticket { id: u32 }
+        \\struct Wrapper { ticket: Ticket }
+        \\linear struct Token { id: u32 }
+        \\region struct Node { id: u32 }
+        \\view struct SliceView { len: usize }
+        \\thread_move move struct WorkerTicket { id: u32 }
+        \\#[drop]
+        \\fn close_ticket(ticket: *mut Ticket) -> void {
+        \\    ticket.id = 0;
+        \\}
+        \\#[drop]
+        \\fn close_wrapper(wrapper: *mut Wrapper) -> void {
+        \\    wrapper.ticket.id = 0;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_type_ownership_facts.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 7), module_mir.type_ownership_facts.len);
+    try std.testing.expectEqual(mir.TypeOwnershipKind.copy, typeOwnershipByName(module_mir, "Plain").?.kind);
+    const ticket = typeOwnershipByName(module_mir, "Ticket").?;
+    try std.testing.expectEqual(mir.TypeOwnershipKind.affine, ticket.kind);
+    try std.testing.expect(ticket.typed_type_symbol_id.isValid());
+    try std.testing.expect(ticket.drop_glue_symbol_id.isValid());
+    try std.testing.expect(!ticket.thread_move);
+    const wrapper = typeOwnershipByName(module_mir, "Wrapper").?;
+    try std.testing.expectEqual(mir.TypeOwnershipKind.affine, wrapper.kind);
+    try std.testing.expect(wrapper.drop_glue_symbol_id.isValid());
+    try std.testing.expectEqual(mir.TypeOwnershipKind.linear, typeOwnershipByName(module_mir, "Token").?.kind);
+    try std.testing.expectEqual(mir.TypeOwnershipKind.region, typeOwnershipByName(module_mir, "Node").?.kind);
+    try std.testing.expectEqual(mir.TypeOwnershipKind.view, typeOwnershipByName(module_mir, "SliceView").?.kind);
+    const worker = typeOwnershipByName(module_mir, "WorkerTicket").?;
+    try std.testing.expectEqual(mir.TypeOwnershipKind.affine, worker.kind);
+    try std.testing.expect(worker.thread_move);
+    try mir.validateLoweringAdmission(module_mir);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir type_ownership type=Ticket symbol=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=affine") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir type_ownership type=Wrapper symbol=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir type_ownership type=Token symbol=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=linear") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir type_ownership type=WorkerTicket symbol=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "thread_move=true") != null);
+}
+
+test "MIR type ownership fact admission rejects symbol and duplicate drift" {
+    const source =
+        \\move struct Ticket { id: u32 }
+        \\#[drop]
+        \\fn close_ticket(ticket: *mut Ticket) -> void {
+        \\    ticket.id = 0;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_type_ownership_fact_admission.mc", source);
+    defer parsed.deinit();
+
+    var symbol_drift = try mir.build(std.testing.allocator, parsed.module);
+    defer symbol_drift.deinit();
+    try std.testing.expectEqual(@as(usize, 1), symbol_drift.type_ownership_facts.len);
+    symbol_drift.type_ownership_facts[0].typed_type_symbol_id = .invalid;
+    try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, mir.validateLoweringAdmission(symbol_drift));
+
+    var drop_drift = try mir.build(std.testing.allocator, parsed.module);
+    defer drop_drift.deinit();
+    try std.testing.expectEqual(@as(usize, 1), drop_drift.type_ownership_facts.len);
+    drop_drift.type_ownership_facts[0].drop_glue_symbol_id = .invalid;
+    try mir.validateLoweringAdmission(drop_drift);
+    drop_drift.type_ownership_facts[0].drop_glue_symbol_id = mir.SymbolId.fromIndex(4096);
+    try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, mir.validateLoweringAdmission(drop_drift));
+
+    var duplicate = try mir.build(std.testing.allocator, parsed.module);
+    defer duplicate.deinit();
+    try std.testing.expectEqual(@as(usize, 1), duplicate.type_ownership_facts.len);
+    const original = duplicate.type_ownership_facts;
+    const forged = try std.testing.allocator.alloc(mir.TypeOwnershipFact, 2);
+    forged[0] = original[0];
+    forged[1] = original[0];
+    duplicate.type_ownership_facts = forged;
+    std.testing.allocator.free(original);
+    try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, mir.validateLoweringAdmission(duplicate));
 }
 
 test "MIR drop glue fact admission rejects unknown and duplicate release facts" {
