@@ -1,10 +1,10 @@
-// StarFive VisionFive 2 production-candidate board profile.
+// StarFive VisionFive 2 board-resource validation fixture.
 //
-// This is the first real RISC-V board target for the appliance-kernel path. It
-// deliberately records board identity and required device classes while leaving
-// concrete MMIO/IRQ resources to the board DTB: the VisionFive 2 has revisioned
-// DTBs, and the existing kernel FDT path is the right source of truth for UART,
-// interrupt controller, storage, and network resources.
+// This records board identity and required device classes for FDT/resource
+// discovery tests. It is not a release profile. Concrete MMIO/IRQ resources
+// remain owned by the board DTB: the VisionFive 2 has revisioned DTBs, and the
+// existing kernel FDT path is the right source of truth for UART, interrupt
+// controller, storage, and network resources.
 
 pub enum RiscvBoardId {
     StarFiveVisionFive2,

@@ -13,13 +13,13 @@ This document defines the evidence required to support a narrow claim:
 > machine-contract scenarios, when it provides stronger compile-time guarantees
 > with a smaller trusted and annotation boundary and no material runtime cost.
 
-It does not define compiler production readiness or appliance-kernel production
-readiness. Those remain owned by:
+It does not define compiler production readiness or a kernel product claim.
+Those remain owned by:
 
 - [`compiler-production-readiness.md`](compiler-production-readiness.md) for the
   qualified `mcc` supported subset;
-- [`production-readiness-plan.md`](production-readiness-plan.md) for the focused
-  agent-kernel product.
+- [`production-readiness-plan.md`](production-readiness-plan.md) for the
+  retained kernel validation workload.
 
 The canonical T/M/P phase status lives only in
 `compiler-production-readiness.md`. This document consumes those closure results;

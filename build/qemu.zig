@@ -59,6 +59,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTestOpts(ctx, "move-pointer-pointee-boundary-inventory-test", "Check move checker pointer-pointee accept/reject boundary stays explicit", &.{ "python3", "tools/toolchain/move-pointer-pointee-boundary-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "move-projection-inventory-test", "Check move checker projection admission map stays explicit", &.{ "python3", "tools/toolchain/move-projection-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "kernel-contract-inventory-test", "Check the bounded kernel region/effect/FFI contract surface stays explicit", &.{ "python3", "tools/toolchain/kernel-contract-inventory.py" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "kernel-scope-inventory-test", "Check kernel docs/code stay scoped as language-validation workload, not product roadmap", &.{ "python3", "tools/toolchain/kernel-scope-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "std-api-docs-test", "Check docs/std-api.md covers exported stdlib declarations", &.{ "python3", "tools/toolchain/std-api-docs.py", "--check" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "vendoring-test", "Check vendored dependency provenance and CVE process docs", &.{ "python3", "tools/toolchain/vendoring-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "tcb-advisory-intake-test", "Check kernel profile-facing TCB advisory-intake manifest coverage and waiver policy", &.{ "python3", "tools/toolchain/tcb-advisory-intake-test.py" }, .{ .install = false });
@@ -191,7 +192,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "blk-persist-test", "Persist-across-reboot: a sentinel written to virtio-blk survives a second QEMU boot (durable storage)", &.{ "bash", "tools/fs/blk-persist-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-blk-persist-test", "Persist-across-reboot (LLVM): virtio-blk write/read survives a real reboot under QEMU", &.{ "bash", "tools/fs/blk-persist-test.sh", "zig-out/bin/mcc", "llvm" });
-
 
     _ = h.addScriptTest(ctx, "blk-smode-test", "Build and run the virtio-blk driver reading a sector under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-blk-smode-test", "Build and run the LLVM-lowered virtio-blk driver under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -1221,7 +1221,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "qjs-mc-host-test", "An MC host (not C) drives QuickJS and evaluates JS, confined under QEMU", &.{ "bash", "tools/lang/qjs-mc-host-test.sh", "zig-out/bin/mcc", "c", "", "6*7 -> 42", "qjs-mc-host" });
 
     _ = h.addScriptTest(ctx, "llvm-qjs-mc-host-test", "An MC host drives QuickJS, confined under QEMU (LLVM)", &.{ "bash", "tools/lang/qjs-mc-host-test.sh", "zig-out/bin/mcc", "llvm", "", "6*7 -> 42", "qjs-mc-host" });
-
 
     _ = h.addScriptTest(ctx, "driver-test", "Run the char-device driver framework (vtable dispatch) under QEMU", &.{ "bash", "tools/arch/driver-test.sh", "zig-out/bin/mcc", "c" });
 

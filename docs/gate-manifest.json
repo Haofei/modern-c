@@ -35,6 +35,7 @@
         "release-metadata-test",
         "package-release-test",
         "profile-manifest-test",
+        "kernel-scope-inventory-test",
         "std-api-docs-test",
         "vendoring-test",
         "tcb-advisory-intake-test",
@@ -335,6 +336,25 @@
       ],
       "blocking_profiles": [
         "compiler-subset",
+        "developer-tools"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "kernel-scope-inventory-test",
+      "owner": "scope-control",
+      "category": "kernel-validation-scope",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "kernel-qemu",
         "developer-tools"
       ],
       "build_tiers": [

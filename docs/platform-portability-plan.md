@@ -2,12 +2,13 @@
 
 Status: **current portability roadmap**.
 
-This file tracks the remaining work to turn the current QEMU-gated multi-architecture
-prototype into a production-shaped platform. The old M1-M9 migration history has been
+This file tracks the remaining work to keep the current QEMU-gated
+multi-architecture prototype useful as a language-validation platform. The old
+M1-M9 migration history has been
 folded into this summary because that milestone chain is delivered. Use
 [`todo.md`](todo.md) for the short repo-wide roadmap and
-[`production-readiness-plan.md`](production-readiness-plan.md) for the appliance release
-bar.
+[`production-readiness-plan.md`](production-readiness-plan.md) for the retained
+kernel validation workload.
 
 ## 1. Scope
 
@@ -180,7 +181,7 @@ This section is the authoritative platform backlog and priority order.
 
 ## 13. Completion criteria
 
-The platform portability plan can be called complete for the first production target when:
+The platform portability plan can be called complete for the retained validation workload when:
 
 - one real board profile is selected and documented;
 - the kernel boots there in the intended privilege mode;

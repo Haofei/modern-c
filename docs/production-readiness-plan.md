@@ -1,10 +1,10 @@
-# Production readiness plan: agent kernel
+# Kernel validation workload plan
 
-Status: **roadmap / readiness document**.
+Status: **language-validation workload document**.
 
-This document turns the kernel roadmap into a production-readiness plan. The target is
-not a general-purpose Linux replacement. The realistic production target is a focused
-edge/appliance kernel for sandboxed agents on a fixed hardware profile.
+This file keeps its historical name for link stability, but it no longer defines a
+kernel product roadmap. The kernel is a validation workload for Modern C language,
+ABI, ownership, async, driver, syscall, and freestanding semantics.
 
 Related documents:
 
@@ -17,31 +17,29 @@ Related documents:
 - `docs/todo.md` — consolidated current roadmap.
 - `docs/test-architecture.md` — test-system direction.
 
-Language-comparison results do not make this appliance production-ready, and
-appliance QEMU gates do not establish that MC is superior to C or Rust. Each
-document retains its own exit criteria.
+Language-comparison results and QEMU gates do not create a kernel product claim.
+Each document retains its own exit criteria.
 
-## 1. Definition of production
+## 1. Validation scope
 
-Production-ready must be scoped. This kernel can become production-ready much sooner for
-one fixed appliance than for broad hardware and workload compatibility.
+The current kernel scope is intentionally narrow: it exists to exercise language
+semantics and backend lowering under realistic low-level constraints.
 
 ### 1.1 In scope
 
-The first production target is:
+The current validation target is:
 
 ```text
-One board family
-+ fixed boot chain
-+ fixed CPU/interrupt/device set
-+ one agent runtime
+QEMU/OpenSBI first
++ selected RISC-V board metadata as an FDT/resource-discovery fixture
++ fixed CPU/interrupt/device classes required by tests
 + narrow syscall ABI
-+ brokered FS/network/tool effects
-+ storage persistence for required demos
-+ watchdog/recovery
++ brokered FS/network/tool effect fixtures
++ storage persistence only where required by retained demos
++ watchdog/recovery smoke coverage
 ```
 
-The first hardware target is now selected as:
+The current real-board metadata fixture is:
 
 ```text
 StarFive VisionFive 2 (JH7110)
@@ -50,20 +48,20 @@ S-mode kernel
 OpenSBI firmware
 Sv39 virtual memory
 QEMU virt first
-then VisionFive 2 hardware validation
+VisionFive 2 hardware validation only when it serves the language workload
 FDT-described UART + timer + interrupt controller + storage + network
 ```
 
-The machine-readable profile lives in `kernel/platform/starfive_visionfive2/profile.mc`.
-When VisionFive 2 hardware is unavailable, `zig build riscv-qemu-validation` is the
-repeatable QEMU/OpenSBI surrogate gate. It validates the RISC-V S-mode platform,
-interrupt, virtio storage/network, confined QuickJS, broker, real TCP-backed
-`host_net_fetch`, and IRQ-backed production `SYS_POLL` paths across both backends,
-but it remains emulator evidence rather than real-board release evidence.
+The machine-readable fixture lives in `kernel/platform/starfive_visionfive2/profile.mc`.
+`zig build riscv-qemu-validation` is the repeatable QEMU/OpenSBI validation gate.
+It validates the RISC-V S-mode platform, interrupt, virtio storage/network,
+confined QuickJS, broker, real TCP-backed `host_net_fetch`, and IRQ-backed
+`SYS_POLL` paths across both backends. It remains language/backend evidence,
+not hardware release evidence.
 
 ### 1.2 Out of scope
 
-The first production target should not try to provide:
+The validation workload should not try to provide:
 
 - Linux/POSIX compatibility.
 - Broad desktop/server workloads.
@@ -73,18 +71,17 @@ The first production target should not try to provide:
 - A general package manager.
 - Untrusted third-party runtimes inside the kernel trust boundary.
 
-## 2. Readiness levels
+## 2. Validation levels
 
-| Level | Estimated timing | Meaning | Required evidence |
-|---|---:|---|---|
-| L0: Development kernel | current | QEMU-gated kernel with real confinement and agent substrate | Existing `m0`/QEMU gates; confined QuickJS; broker ABI; S-mode path |
-| L1: Alpha appliance kernel | 1-3 months | One reference target with production-shaped I/O and agent loop | interrupt-driven virtio, brokered net fetch, stable async agent loop |
-| L2: Field pilot | 3-6 months | Runs on one real board under controlled deployment | board boot, UART/net/storage, watchdog, persistent audit/policy |
-| L3: Fixed-device production | 9-18 months | Safe to ship on one device class with recovery and operations | soak/fault tests, recovery policy, product-profile update story |
-| L4: Multi-board platform | 18-36+ months | Reusable platform across several boards/architectures | board profiles, BSP matrix, cross-arch parity, sustained CI |
+| Level | Meaning | Required evidence |
+|---|---|---|
+| K0: QEMU smoke workload | Kernel fixtures compile and run under the retained QEMU paths | Existing `m0`/QEMU gates; confined QuickJS; broker ABI; S-mode path |
+| K1: Language stress workload | Kernel fixtures exercise ownership, ABI, MMIO, user-copy, async, and syscall boundaries | Deterministic C/LLVM gates and focused QEMU tests |
+| K2: Optional board metadata fixture | A real-board profile documents FDT/resource expectations without creating a release claim | Profile parser/adapters and QEMU surrogate gates |
 
-These estimates assume focused engineering, a narrow product target, and no attempt to
-match Linux hardware breadth.
+No calendar maturity ladder is maintained here. Product pilots, release bars,
+operations, update policy, and hardware qualification belong to a separate
+product profile if one is ever created.
 
 ## 3. Current baseline
 
@@ -202,7 +199,7 @@ Former blocker (now resolved):
   S-mode interrupt path (R1b/R2) is therefore unblocked. See
   `docs/platform-portability-plan.md` §12 "Do now" item 2.
 
-Production target:
+Validation target:
 
 - Virtio-blk and virtio-net interrupts routed through the reusable S-mode PLIC dispatch.
 - Interrupt-driven virtio-blk completion.
@@ -229,7 +226,7 @@ Why this matters:
 - Polling hides race conditions that appear on real hardware.
 - Async agent I/O needs a real completion path.
 
-### 4.2 Agent production surface
+### 4.2 Agent validation surface
 
 Current status:
 
@@ -239,13 +236,13 @@ Current status:
 - Network fetch remains covered by deterministic app-run and interrupt-backed fixtures where it
   validates ABI, polling, and driver behavior. Real TCP-backed product broker claims are out of
   scope for the language-oriented kernel.
-- The remaining production-surface gap is intentionally outside this repository's kernel scope.
+- Product agent/runtime gaps are intentionally outside this repository's kernel scope.
 
-Production target:
+Validation target:
 
-- Cross-arch real-FS broker parity.
-- Native tool catalog for the first appliance workload.
-- Out-of-process tool server transport.
+- Cross-arch broker ABI smoke coverage where it exposes backend or ABI gaps.
+- A small retained tool catalog for language/runtime fixtures.
+- Out-of-process transport only if needed to validate syscall/capability boundaries.
 
 Initial tool catalog:
 
@@ -266,7 +263,7 @@ Acceptance gates:
 - A pure JS agent performs allowed network fetch and denied network fetch.
 - Denials are audited and attributable to the agent.
 - Tool budget exhaustion returns a typed error and produces policy-visible state.
-- Tool server runs as a separate principal, not just an in-process mock.
+- Tool server isolation is covered only by retained syscall/capability fixtures.
 - MCP descriptor output matches the actual capability surface.
 
 ### 4.3 Persistent policy and audit
@@ -274,10 +271,10 @@ Acceptance gates:
 Current status:
 
 - Capability checks, audit rings, and policy decision logic exist.
-- Production virtio-blk journal/reboot integration is still pending.
-- Policy actuation against live running agents is still pending.
+- Product virtio-blk journal/reboot integration is outside the current scope.
+- Product policy actuation against live running agents is outside the current scope.
 
-Production target:
+Validation target:
 
 - Product policy persistence is out of the current language-oriented kernel scope.
 - Audit records are bounded and structured.
@@ -302,28 +299,26 @@ Current acceptance gate:
 - Any future signed image, signed bundle, verified boot, rollback, or recovery-slot mechanism must
   arrive through a concrete product profile with its own threat model and qualification gates.
 
-### 4.5 Real board support
+### 4.5 Real board metadata fixture
 
 Current status:
 
 - QEMU `virt` is the main reference.
-- Real-board selection and BSP profile need to be made concrete.
+- Real-board metadata remains useful only as an FDT/resource-discovery fixture
+  for the language workload.
 
-Production target:
+Validation target:
 
-- One board profile with fixed memory map, interrupt controller, timer, UART, storage, and network.
-- FDT/device discovery where useful, but product image includes only selected drivers.
-- Ethernet first. Wi-Fi/Bluetooth only through a clean, documented vendor interface or a deliberately scoped compatibility layer.
+- One board profile records memory map, interrupt controller, timer, UART,
+  storage, and network expectations.
+- FDT/device discovery remains the tested boundary.
+- Extra devices are added only when they exercise a retained language/runtime path.
 
 Acceptance gates:
 
-- Kernel boots on the board without QEMU-only assumptions.
-- UART console works.
-- Timer and external interrupts work.
-- Storage read/write works.
-- Network fetch works.
-- Watchdog reset works.
-- Power-cycle test passes repeatedly.
+- QEMU surrogate gates stay green.
+- Optional real hardware experiments are recorded as workload evidence, not
+  release qualification.
 
 Board-selection criteria:
 
@@ -335,7 +330,7 @@ Board-selection criteria:
 
 ### 4.6 Reliability and recovery
 
-Production target:
+Validation target:
 
 - Watchdog integration.
 - Panic capture.
@@ -360,9 +355,10 @@ Current status:
 
 - MC already has useful safety work: unsafe boundary, user-pointer type, parser primitives,
   capability opacity, IRQ-context discipline, and move/borrow checks.
-- More security work is still needed before production claims.
+- More security work is still needed before any product profile could make
+  release claims.
 
-Production target:
+Validation target:
 
 - Syscall fuzzing.
 - Broker request fuzzing.
@@ -383,7 +379,7 @@ Acceptance gates:
 
 ### 4.8 Operations and observability
 
-Production target:
+Validation target:
 
 - Boot reason reporting.
 - Kernel version, board profile, policy version, and agent bundle version visible in diagnostics.
@@ -400,24 +396,21 @@ Acceptance gates:
 
 ## 5. Suggested roadmap
 
-### Phase P0: freeze the production target
+### Phase P0: freeze the validation workload
 
-Goal: define what "production" means for the first product.
+Goal: define which kernel paths remain useful for language validation.
 
 Tasks:
 
-- Pick one board family or one QEMU-to-board path.
-- Decide whether Wi-Fi/Bluetooth are in v1 or deferred.
-- Define the first agent workload.
-- Define required tools.
-- Define required network destinations.
-- Define update and recovery expectations.
-- Define release image profile.
+- Pick the QEMU-to-board metadata path to keep.
+- Define the retained agent workload.
+- Define required tools and network fixtures.
+- Define which storage/recovery checks remain language evidence.
 
 Exit criteria:
 
-- A one-page product profile exists.
-- The allowed device list is fixed.
+- A one-page validation profile exists.
+- The retained device fixture list is fixed.
 - The required broker tool list is fixed.
 - Non-goals are explicitly written down.
 
@@ -449,19 +442,16 @@ Exit criteria:
 - Async JS requests complete from device events.
 - Polling remains only as a fallback or diagnostic mode.
 
-### Phase P2: production agent broker
+### Phase P2: retained agent broker fixtures
 
-Goal: make the agent's external-effect model production-shaped.
+Goal: keep only the external-effect fixtures that validate language, ABI, and capability boundaries.
 
 Tasks:
 
-- Keep the promoted TCP-backed network broker transport green through the production
-  JS/tool-catalog surface.
-- Add denied-network audit records.
-- Move tool execution behind real IPC transport.
-- Add MCP JSON-RPC envelope and descriptors.
-- Add the first real tool catalog.
-- Add per-agent quotas for in-flight requests and result buffers.
+- Keep retained FS/network broker fixtures green.
+- Keep denied-network audit records only where they validate capability/error paths.
+- Add transport or descriptor depth only when it exposes a language/runtime boundary.
+- Keep per-agent quotas for in-flight requests and result buffers as resource-accounting fixtures.
 
 Exit criteria:
 
@@ -500,9 +490,9 @@ Exit criteria:
 
 - No product-update claim is made by the language-oriented kernel profile.
 
-### Phase P5: real board pilot
+### Phase P5: optional real-board experiment
 
-Goal: move from QEMU confidence to hardware confidence.
+Goal: collect hardware evidence only when it validates a retained language/runtime path.
 
 Tasks:
 
@@ -553,11 +543,11 @@ remain open — QEMU is the only validated platform today.
 - [ ] Kernel boots on the board in the intended privilege mode.
 - [ ] Timer and external interrupts work on the board. (QEMU: yes — `preempt-test`, CLINT/PLIC gates; board: pending.)
 - [x] Storage works with persistence tests. (QEMU-gated: `blk-persist-test` — a sentinel written to virtio-blk on boot 1 is read back on a fresh boot 2; durable storage survives a real reboot, both backends.)
-- [x] Network works through the production brokered tool surface. (QEMU-gated: `net-realtool`/`agent-net-real` over real TCP.)
+- [x] Network works through the retained brokered tool fixture. (QEMU-gated: `net-realtool`/`agent-net-real` over real TCP.)
 - [x] Agent runs confined with no ambient FS/network authority. (QEMU-gated: the confined-agent family — kernel unmapped, syscall-only entry.)
 - [x] All external effects go through brokers. (FS/net brokers; confined agents have no ambient handles.)
 - [x] Allowed and denied broker decisions are audited. (QEMU-gated: net allow `NET_TAG` / deny `NET_DENY_TAG`, FS deny audit.)
-- [x] Per-agent memory, request, output, and network budgets are enforced across the production paths. (QEMU-gated: `wasm-memcap`, `wamr-fuel`/`wasm-watchdog`, `quota`/`quota-agent`, `NetCap`.)
+- [x] Per-agent memory, request, output, and network budgets are enforced across the retained fixture paths. (QEMU-gated: `wasm-memcap`, `wamr-fuel`/`wasm-watchdog`, `quota`/`quota-agent`, `NetCap`.)
 - [ ] Watchdog and reboot reason work.
 - [x] Watchdog/reboot-reason state records are gated.
 - [ ] Product agent update policy exists outside the language-oriented kernel scope, if a product profile needs it.
@@ -566,22 +556,22 @@ remain open — QEMU is the only validated platform today.
 - [ ] Real-board soak passes.
 - [ ] Security review has no unresolved critical findings.
 
-## 7. Timeline estimate
+## 7. Timeline
 
-The practical estimate:
+There is no kernel product timeline in the current scope. Near-term work is
+driven by compiler/language validation needs:
 
-- **1-3 months:** alpha appliance kernel in QEMU with interrupt-driven I/O and production-shaped agent broker.
-- **3-6 months:** controlled field pilot on one real board.
-- **9-18 months:** production-ready for one fixed device class.
-- **18-36+ months:** reusable multi-board / multi-architecture platform.
+- keep QEMU and retained board-metadata gates green;
+- add runtime cases only when they expose ABI, ownership, async, MMIO, syscall,
+  or backend-lowering gaps;
+- move product operations, update policy, release images, and hardware soak to
+  a separate product profile if one is ever created.
 
-The schedule depends mostly on:
+The validation workload depends mostly on:
 
-- How narrow the first hardware target is.
-- Whether wireless is deferred.
-- Whether the product requires `exec` or only brokered file/network tools.
-- Whether a product profile supplies update/recovery infrastructure outside the language-oriented kernel.
-- How strict the release bar is for certification, audit retention, and physical attack resistance.
+- which hardware-facing paths expose language or backend bugs;
+- which broker/tool fixtures are still useful for ABI and capability checks;
+- whether a future product profile supplies update/recovery infrastructure outside the language-oriented kernel.
 
 ## 8. Strategic guidance
 
