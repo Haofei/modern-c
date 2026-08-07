@@ -13848,12 +13848,15 @@ test "lower-c rejects auto-drop transfer authorization with stale MIR resource t
 
     var module_mir = try mir.build(std.testing.allocator, parsed.module);
     defer module_mir.deinit();
+    const stale_resource_symbol = for (module_mir.functions) |function| {
+        if (std.mem.eql(u8, function.name, "make_guard")) break function.typed_symbol_id;
+    } else return error.TestUnexpectedResult;
     const transfer_function = for (module_mir.functions) |*function| {
         if (std.mem.eql(u8, function.name, "transfer_auto_drop")) break function;
     } else return error.TestUnexpectedResult;
     for (transfer_function.ownership_events) |*event| {
         if (event.kind == .move_out) {
-            event.place.root_type_symbol_id = .invalid;
+            event.place.root_type_symbol_id = stale_resource_symbol;
             break;
         }
     } else return error.TestUnexpectedResult;

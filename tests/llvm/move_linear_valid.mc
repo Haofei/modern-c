@@ -21,7 +21,7 @@ fn consume_token(t: Token) -> u32 {
 }
 
 fn relabel_token(t: Token) -> Token {
-    return t;
+    return move t;
 }
 
 extern fn peek_token(t: *Token) -> u32;
@@ -32,19 +32,20 @@ fn boot_hart(id: u32) -> Boot {
 
 fn accept_consume_once() -> u32 {
     let t: Token = make_token();
-    return consume_token(t);
+    return consume_token(move t);
 }
 
 fn accept_transition_distinct() -> u32 {
     let a: Token = make_token();
-    let b: Token = relabel_token(a);
-    return consume_token(b);
+    let b: Token = relabel_token(move a);
+    return consume_token(move b);
 }
 
 fn accept_borrow_then_consume() -> u32 {
     let t: Token = make_token();
-    let x: u32 = peek_token(&t);
-    return consume_token(t) + x;
+    var x: u32 = 0;
+    unsafe { x = peek_token(&t); }
+    return consume_token(move t) + x;
 }
 
 fn install_trap_vector(h: Boot) -> TrapReady {
@@ -55,7 +56,7 @@ fn install_trap_vector(h: Boot) -> TrapReady {
 
 fn accept_drop_chain(id: u32) -> u32 {
     let b: Boot = boot_hart(id);
-    let t: TrapReady = install_trap_vector(b);
+    let t: TrapReady = install_trap_vector(move b);
     let final_id: u32 = t.hartid;
     unsafe { forget_unchecked(t); }
     return final_id;

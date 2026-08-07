@@ -138,7 +138,7 @@ def main() -> int:
         "fn ownershipRootStateBefore(function: Function, event_index: usize, root: ValueId) OwnershipRootState {",
         "fn simpleOwnershipRootValue(place: OwnershipPlace) ?ValueId {",
         "fn addDiscardOwnershipEvent(self: *FunctionBuilder, target: CallTargetKind, argument: ast.Expr, call_span: ast.Span) !void {",
-        ".root_type_symbol_id = drop_glue_identity.resource_symbol_id,",
+        ".root_type_symbol_id = root_type_symbol_id,",
         "root_type_symbol={}",
         "fn ownershipDropGlueSymbolMatchesPlace(module: Module, event: OwnershipEvent) bool {",
         "fn discardArgumentDropGlueIdentity(self: *FunctionBuilder, argument: ast.Expr) ?DiscardDropGlueIdentity {",
@@ -233,11 +233,14 @@ def main() -> int:
         "try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));",
         'try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=use_guard kind=explicit_drop") != null);',
         "MIR ownership event admission rejects auto-drop without storage-dead",
+        "MIR ownership event admission accepts sibling copy locals with reused names",
+        "MIR records forget events for no-drop move resources",
     ):
         require_contains("src/mir_tests.zig", needle)
 
     for path, needle in (
         ("src/mir.zig", "fn autoDropClosesStorage"),
+        ("src/mir.zig", "fn typeOwnershipSymbolForTypeName"),
         ("src/mir_ownership_authority.zig", "event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)"),
         ("src/lower_c_tests.zig", "lower-c rejects auto-drop transfer authorization with stale MIR resource type"),
         ("src/lower_llvm_tests.zig", "LLVM rejects auto-drop transfer authorization with stale MIR resource type"),
@@ -247,6 +250,9 @@ def main() -> int:
         ("docs/compiler-production-readiness.md", "MIR owns the ownership event envelope"),
         ("docs/compiler-production-readiness.md", "MIR admission requires auto-drop to close storage"),
         ("docs/compiler-production-readiness.md", "C/LLVM transfer auto-drop authorization requires MIR resource identity"),
+        ("docs/compiler-production-readiness.md", "MIR ownership sequence checks only typed resource roots"),
+        ("docs/compiler-production-readiness.md", "MIR local ownership identity covers no-drop resources"),
+        ("docs/compiler-production-readiness.md", "forget_unchecked(identifier)` accepts any non-copy type ownership fact"),
         ("build/qemu.zig", "mir-identity-inventory-test"),
         ("build/tiers.zig", 'm0_step.dependOn(ctx.cmd("mir-identity-inventory-test"))'),
         ("build/tiers.zig", 'fast_step.dependOn(ctx.cmd("mir-identity-inventory-test"))'),

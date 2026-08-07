@@ -4482,6 +4482,59 @@ test "MIR records local reinit ownership events" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=reassign_local kind=reinit") != null);
 }
 
+test "MIR ownership event admission accepts sibling copy locals with reused names" {
+    const source =
+        \\fn sibling_copy_locals() -> u32 {
+        \\    var total: u32 = 0;
+        \\    {
+        \\        let t: u32 = 3;
+        \\        total = total + t;
+        \\    }
+        \\    {
+        \\        let t: u64 = 40;
+        \\        total = total + (t as u32);
+        \\    }
+        \\    return total;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_sibling_copy_locals.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_sibling_copy_locals.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(module_mir, &verifier_reporter);
+    try std.testing.expect(!verifier_reporter.has_errors);
+}
+
+test "MIR records forget events for no-drop move resources" {
+    const source =
+        \\move struct Token { id: u32 }
+        \\fn make_token() -> Token { return .{ .id = 1 }; }
+        \\fn forget_token() -> u32 {
+        \\    var token: Token = make_token();
+        \\    unsafe { forget_unchecked(token); }
+        \\    return 0;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_no_drop_forget.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "forget_token") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
+    try std.testing.expectEqual(mir.OwnershipEventKind.storage_live, function.ownership_events[0].kind);
+    try std.testing.expectEqual(mir.OwnershipEventKind.init, function.ownership_events[1].kind);
+    try std.testing.expectEqual(mir.OwnershipEventKind.forget, function.ownership_events[2].kind);
+    try std.testing.expect(function.ownership_events[2].place.root_type_symbol_id.isValid());
+    try std.testing.expect(!function.ownership_events[2].drop_glue_symbol_id.isValid());
+    try mir.validateLoweringAdmission(module_mir);
+}
+
 test "MIR reinit ownership events require mutable locals" {
     const source =
         \\fn accept_var() -> u32 {

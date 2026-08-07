@@ -413,7 +413,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
             .global_decl => |global| {
                 if (global.ty) |ty| {
                     if (global.init) |initializer| {
-                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, drop_glue_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries);
+                        var builder = try FunctionBuilder.initGlobal(allocator, global.name.text, ty, initializer.span, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries);
                         builder.optimize = options.optimize;
                         errdefer builder.deinit();
                         try builder.buildGlobalInitializer(ty, initializer);
@@ -428,7 +428,7 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
             },
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
-                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, drop_glue_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries);
+                    var builder = try FunctionBuilder.init(allocator, fn_decl, decl.attrs, drop_glue_facts, type_ownership_facts, &summaries, &enums, &structs, &unions, &packed_bits, &aliases, &traits, &const_fns, &const_globals, &globals, &global_type_exprs, &mutable_globals, &pointer_return_summaries);
                     builder.optimize = options.optimize;
                     errdefer builder.deinit();
                     try builder.buildBody(body);
@@ -1636,6 +1636,7 @@ const OwnershipRootState = enum {
 fn ownershipEventSequenceValid(function: Function) bool {
     for (function.ownership_events, 0..) |event, index| {
         const root = simpleOwnershipRootValue(event.place) orelse continue;
+        if (!event.place.root_type_symbol_id.isValid()) continue;
         if (!ownershipRootHasStorageLive(function, root)) continue;
         const state = ownershipRootStateBefore(function, index, root);
         switch (event.kind) {
@@ -1687,6 +1688,7 @@ fn ownershipRootStateBefore(function: Function, event_index: usize, root: ValueI
     var state: OwnershipRootState = .untracked;
     for (function.ownership_events[0..event_index]) |event| {
         const event_root = simpleOwnershipRootValue(event.place) orelse continue;
+        if (!event.place.root_type_symbol_id.isValid()) continue;
         if (!event_root.eql(root)) continue;
         switch (event.kind) {
             .storage_live => state = .storage_live,
@@ -4266,6 +4268,7 @@ const FunctionBuilder = struct {
     irq_context: bool,
     naked: bool = false,
     drop_glue_facts: []const DropGlueFact,
+    type_ownership_facts: []const TypeOwnershipFact,
     summaries: *const std.StringHashMap(FunctionSummary),
     enums: *const std.StringHashMap(EnumSummary),
     structs: *const std.StringHashMap(StructSummary),
@@ -4354,7 +4357,7 @@ const FunctionBuilder = struct {
     next_contract_region_id: usize = 1,
     next_target_fact_group_id: usize = 1,
 
-    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, drop_glue_facts: []const DropGlueFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "entry" });
@@ -4373,6 +4376,7 @@ const FunctionBuilder = struct {
             // `unsafe {}` wrapper), matching sema — so no `.unsafe_check` is emitted.
             .active_unsafe = hasAttr(attrs, "naked"),
             .drop_glue_facts = drop_glue_facts,
+            .type_ownership_facts = type_ownership_facts,
             .summaries = summaries,
             .enums = enums,
             .structs = structs,
@@ -4436,7 +4440,7 @@ const FunctionBuilder = struct {
         return builder;
     }
 
-    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, drop_glue_facts: []const DropGlueFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
+    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "global_init" });
@@ -4451,6 +4455,7 @@ const FunctionBuilder = struct {
             .no_lang_trap = false,
             .irq_context = false,
             .drop_glue_facts = drop_glue_facts,
+            .type_ownership_facts = type_ownership_facts,
             .summaries = summaries,
             .enums = enums,
             .structs = structs,
@@ -7350,9 +7355,17 @@ const FunctionBuilder = struct {
     };
 
     fn addDiscardOwnershipEvent(self: *FunctionBuilder, target: CallTargetKind, argument: ast.Expr, call_span: ast.Span) !void {
-        const drop_glue_identity = self.discardArgumentDropGlueIdentity(argument) orelse return;
         const root = directIdentName(argument) orelse return;
         const root_value_id = try self.internValueId(root);
+        const root_type_symbol_id = switch (target) {
+            .drop => blk: {
+                const drop_glue_identity = self.discardArgumentDropGlueIdentity(argument) orelse return;
+                break :blk drop_glue_identity.resource_symbol_id;
+            },
+            .forget_unchecked => self.localRootTypeSymbol(root),
+            else => return,
+        };
+        if (!root_type_symbol_id.isValid()) return;
         const block_id = BlockId.fromIndex(self.current);
         const instruction_index: ?u32 = if (self.blocks.items[self.current].instructions.items.len == 0)
             null
@@ -7367,9 +7380,9 @@ const FunctionBuilder = struct {
             .kind = kind,
             .place = .{
                 .root_value_id = root_value_id,
-                .root_type_symbol_id = drop_glue_identity.resource_symbol_id,
+                .root_type_symbol_id = root_type_symbol_id,
             },
-            .drop_glue_symbol_id = if (kind == .explicit_drop) drop_glue_identity.release_symbol_id else .invalid,
+            .drop_glue_symbol_id = if (kind == .explicit_drop) self.discardArgumentDropGlueIdentity(argument).?.release_symbol_id else .invalid,
             .block_id = block_id,
             .instruction_index = instruction_index,
             .source = .{ .line = call_span.line, .column = call_span.column, .offset = call_span.offset, .len = call_span.len },
@@ -7396,8 +7409,16 @@ const FunctionBuilder = struct {
     fn localRootTypeSymbol(self: *FunctionBuilder, name: []const u8) SymbolId {
         const ty = self.local_type_exprs.get(name) orelse self.global_type_exprs.get(name) orelse return .invalid;
         const type_name = structTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return .invalid;
-        const identity = self.dropGlueIdentityForTypeName(type_name) orelse return .invalid;
-        return identity.resource_symbol_id;
+        return self.typeOwnershipSymbolForTypeName(type_name);
+    }
+
+    fn typeOwnershipSymbolForTypeName(self: *FunctionBuilder, type_name: []const u8) SymbolId {
+        for (self.type_ownership_facts) |fact| {
+            if (!std.mem.eql(u8, fact.type_name, type_name)) continue;
+            if (fact.kind == .copy) return .invalid;
+            return fact.typed_type_symbol_id;
+        }
+        return .invalid;
     }
 
     fn localDropGlueIdentity(self: *FunctionBuilder, name: []const u8) ?DiscardDropGlueIdentity {
