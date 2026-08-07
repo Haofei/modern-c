@@ -3930,7 +3930,16 @@ test "MIR owns semantic escape call target facts" {
 
 test "MIR owns discard call identities and argument types" {
     const source =
-        \\fn discard_values(value: u32) -> void {
+        \\move struct Guard { id: u32 }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void {
+        \\    g.id = 0;
+        \\}
+        \\fn discard_values(value: Guard) -> void {
+        \\    drop(value);
+        \\    unsafe { forget_unchecked(value); }
+        \\}
+        \\fn discard_plain(value: u32) -> void {
         \\    drop(value);
         \\    unsafe { forget_unchecked(value); }
         \\}
@@ -3947,11 +3956,13 @@ test "MIR owns discard call identities and argument types" {
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "discard_values").?;
+    const plain_function = functionByName(typed_mir, "discard_plain").?;
     try std.testing.expectEqual(@as(usize, 2), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.drop, function.call_target_facts[0].kind);
     try std.testing.expectEqual(mir.CallTargetKind.forget_unchecked, function.call_target_facts[1].kind);
     try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .discard_argument));
     try std.testing.expectEqual(@as(usize, 2), function.ownership_events.len);
+    try std.testing.expectEqual(@as(usize, 0), plain_function.ownership_events.len);
     const value_identity = valueIdentityBySpelling(function, "value") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(mir.OwnershipEventKind.explicit_drop, function.ownership_events[0].kind);
     try std.testing.expect(function.ownership_events[0].place.root_value_id.eql(value_identity.id));
@@ -3960,8 +3971,9 @@ test "MIR owns discard call identities and argument types" {
     for (function.target_type_facts) |fact| {
         if (fact.kind == .expression_result) continue;
         try std.testing.expectEqual(mir.TargetTypeKind.discard_argument, fact.kind);
-        try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
+        try std.testing.expectEqualStrings("Guard", fact.target_ty.kind.name.text);
     }
+    try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(plain_function, .discard_argument));
     try mir.validateLoweringAdmission(typed_mir);
 
     var dump: std.ArrayList(u8) = .empty;
