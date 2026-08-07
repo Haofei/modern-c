@@ -54,6 +54,7 @@ pub fn authorizesExplicitDropLocal(
     function: *const mir.Function,
     local_name: []const u8,
     drop_fn: []const u8,
+    source: mir.SourcePoint,
 ) bool {
     const root_value_id = valueIdForLocal(function, local_name) orelse return false;
     const drop_glue = dropGlueFactForReleaseFunction(module, drop_fn) orelse return false;
@@ -61,6 +62,7 @@ pub fn authorizesExplicitDropLocal(
     for (function.ownership_events) |event| {
         if (event.kind != .explicit_drop) continue;
         if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
+        if (!sourceMatches(event.source, source)) continue;
         if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
         if (!event.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) continue;
         return true;
@@ -73,6 +75,7 @@ pub fn authorizesMoveOutLocal(
     function: *const mir.Function,
     local_name: []const u8,
     drop_fn: []const u8,
+    source: mir.SourcePoint,
 ) bool {
     const root_value_id = valueIdForLocal(function, local_name) orelse return false;
     const drop_glue = dropGlueFactForReleaseFunction(module, drop_fn) orelse return false;
@@ -80,10 +83,17 @@ pub fn authorizesMoveOutLocal(
     for (function.ownership_events) |event| {
         if (event.kind != .move_out) continue;
         if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
+        if (!sourceMatches(event.source, source)) continue;
         if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
         return true;
     }
     return false;
+}
+
+fn sourceMatches(event_source: mir.SourcePoint, expected: mir.SourcePoint) bool {
+    if (event_source.line != expected.line or event_source.column != expected.column) return false;
+    if (event_source.offset == 0 and event_source.len == 0 and expected.offset == 0 and expected.len == 0) return true;
+    return event_source.offset == expected.offset and event_source.len == expected.len;
 }
 
 fn dropGlueFactFor(module: *const mir.Module, type_name: []const u8, drop_fn: []const u8) ?mir.DropGlueFact {

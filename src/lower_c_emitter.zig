@@ -2883,18 +2883,18 @@ pub const CEmitter = struct {
         } });
     }
 
-    fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr) !void {
+    fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr, move_span: ast.Span) !void {
         const local_name = directMovedLocalName(expr) orelse return;
         const cleanup = self.autoDropCleanupForLocalName(local_name) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!mir_ownership_authority.authorizesMoveOutLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name)) return error.UnsupportedCEmission;
+        if (!mir_ownership_authority.authorizesMoveOutLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name, sourcePointFromSpan(move_span))) return error.UnsupportedCEmission;
         self.cancelAutoDropForLocalName(local_name);
     }
 
     fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) !void {
         const cleanup = self.autoDropPointerCleanup(expr) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!mir_ownership_authority.authorizesExplicitDropLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name)) return error.UnsupportedCEmission;
+        if (!mir_ownership_authority.authorizesExplicitDropLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name, sourcePointFromSpan(expr.span))) return error.UnsupportedCEmission;
         self.cancelAutoDropForLocalName(cleanup.local_name);
     }
 
@@ -2930,7 +2930,7 @@ pub const CEmitter = struct {
     fn cancelAutoDropsForMovesInExpr(self: *CEmitter, expr: ast.Expr) !void {
         switch (expr.kind) {
             .move_expr => |inner| {
-                try self.cancelAutoDropForMove(inner.*);
+                try self.cancelAutoDropForMove(inner.*, expr.span);
                 try self.cancelAutoDropsForMovesInExpr(inner.*);
             },
             .grouped, .address_of, .deref, .await_expr => |inner| try self.cancelAutoDropsForMovesInExpr(inner.*),
@@ -4167,7 +4167,7 @@ pub const CEmitter = struct {
             .struct_literal => try self.emitUnsupportedTargetlessAggregateExpr(expr, "struct"),
             .grouped => |inner| try self.emitGroupedExpr(inner.*, locals),
             .move_expr => |inner| {
-                try self.cancelAutoDropForMove(inner.*);
+                try self.cancelAutoDropForMove(inner.*, expr.span);
                 try self.emitExpr(inner.*, locals);
             },
             .unreachable_expr => try self.out.appendSlice(self.allocator, "mc_trap_Unreachable()"),
@@ -4878,7 +4878,7 @@ pub const CEmitter = struct {
             .char_literal => |literal| try self.emitCharLiteralWithTarget(literal, expr.span, semantic_target_ty),
             .grouped => |inner| try self.emitGroupedExprWithTarget(inner.*, locals, semantic_target_ty),
             .move_expr => |inner| {
-                try self.cancelAutoDropForMove(inner.*);
+                try self.cancelAutoDropForMove(inner.*, expr.span);
                 try self.emitExprWithTarget(inner.*, locals, semantic_target_ty);
             },
             .address_of => try self.emitAddressOfExprWithTarget(expr, locals, semantic_target_ty),
@@ -8830,6 +8830,10 @@ fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
         .ident => |ident| ident.text,
         else => null,
     };
+}
+
+fn sourcePointFromSpan(span: ast.Span) mir.SourcePoint {
+    return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
 }
 
 fn isSourceSpan(span: ast.Span) bool {

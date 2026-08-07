@@ -1590,7 +1590,7 @@ const LlvmEmitter = struct {
                 error.UnsupportedLlvmEmission,
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
             .move_expr => |inner| blk: {
-                try self.cancelAutoDropForMove(inner.*);
+                try self.cancelAutoDropForMove(inner.*, expr.span);
                 break :blk try self.emitExpr(inner.*, expected_ty);
             },
             .call => |call| try self.emitCall(call, expected_ty, expr.span),
@@ -2345,7 +2345,7 @@ const LlvmEmitter = struct {
             },
             .grouped => |inner| try self.emitExprStatement(inner.*),
             .move_expr => |inner| {
-                try self.cancelAutoDropForMove(inner.*);
+                try self.cancelAutoDropForMove(inner.*, expr.span);
                 try self.emitExprStatement(inner.*);
             },
             else => {
@@ -2925,18 +2925,18 @@ const LlvmEmitter = struct {
         } });
     }
 
-    fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr) !void {
+    fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr, move_span: ast.Span) !void {
         const local_name = directMovedLocalName(expr) orelse return;
         const cleanup = self.autoDropCleanupForLocalName(local_name) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!mir_ownership_authority.authorizesMoveOutLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name)) return error.UnsupportedLlvmEmission;
+        if (!mir_ownership_authority.authorizesMoveOutLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, sourcePointFromSpan(move_span))) return error.UnsupportedLlvmEmission;
         self.cancelAutoDropForLocalName(local_name);
     }
 
     fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) !void {
         const cleanup = self.autoDropPointerCleanup(expr) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!mir_ownership_authority.authorizesExplicitDropLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name)) return error.UnsupportedLlvmEmission;
+        if (!mir_ownership_authority.authorizesExplicitDropLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, sourcePointFromSpan(expr.span))) return error.UnsupportedLlvmEmission;
         self.cancelAutoDropForLocalName(cleanup.local_name);
     }
 
@@ -10620,6 +10620,10 @@ fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
         .ident => |ident| ident.text,
         else => null,
     };
+}
+
+fn sourcePointFromSpan(span: ast.Span) mir.SourcePoint {
+    return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
 }
 
 fn isSourceSpan(span: ast.Span) bool {

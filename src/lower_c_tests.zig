@@ -13909,6 +13909,38 @@ test "lower-c move auto-drop cancellation requires MIR move-out event" {
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_drop_attr_transfer_requires_move_out.mc", .{}, false, null));
 }
 
+test "lower-c move auto-drop cancellation requires source-matched MIR move-out event" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn transfer_auto_drop() -> Guard {
+        \\    var g: Guard = make_guard();
+        \\    return move g;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("c_drop_attr_transfer_move_out_source.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = for (module_mir.functions) |*candidate| {
+        if (std.mem.eql(u8, candidate.name, "transfer_auto_drop")) break candidate;
+    } else return error.TestUnexpectedResult;
+    for (function.ownership_events) |*event| {
+        if (event.kind == .move_out) {
+            event.source.line += 1;
+            break;
+        }
+    } else return error.TestUnexpectedResult;
+    try mir.validateLoweringAdmission(module_mir);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_drop_attr_transfer_move_out_source.mc", .{}, false, null));
+}
+
 test "lower-c loop bodies restore auto-drop cleanup stack" {
     const source =
         \\move struct Guard { id: u32 }
@@ -13999,6 +14031,40 @@ test "lower-c explicit drop release cancellation requires MIR explicit-drop even
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_drop_attr_release_requires_mir_event.mc", .{}, false, null));
+}
+
+test "lower-c explicit drop release cancellation requires source-matched MIR explicit-drop event" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn explicit_release_keeps_other_auto_drop() -> u32 {
+        \\    var g: Guard = make_guard(1);
+        \\    var h: Guard = make_guard(2);
+        \\    close_guard(&g);
+        \\    return h.id;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("c_drop_attr_release_source_requires_event.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = for (module_mir.functions) |*candidate| {
+        if (std.mem.eql(u8, candidate.name, "explicit_release_keeps_other_auto_drop")) break candidate;
+    } else return error.TestUnexpectedResult;
+    for (function.ownership_events) |*event| {
+        if (event.kind == .explicit_drop) {
+            event.source.line += 1;
+            break;
+        }
+    } else return error.TestUnexpectedResult;
+    try mir.validateLoweringAdmission(module_mir);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_drop_attr_release_source_requires_event.mc", .{}, false, null));
 }
 
 test "lower-c rejects auto-drop ownership holes before lowering" {
