@@ -1905,6 +1905,14 @@ evaluates the return expression first, then runs active cleanups, then returns
 the saved value. Cleanup order is the reverse of lexical registration/declaration
 order. `goto`/`longjmp`-style non-local jumps may not cross live ownership state.
 
+The ownership authority for auto-drop is the typed MIR ownership-event stream:
+`auto_drop` followed by `storage_dead` closes a live local generation; `move_out`,
+`explicit_drop`, and `forget` consume or discharge that generation but are not
+auto-drop cleanup authority. Backend-local cleanup stacks are a transitional
+lowering mechanism only. They may mirror source-matched MIR events while cleanup
+edges migrate into MIR CFG blocks, but they do not define language semantics and
+must fail closed when MIR does not authorize the cleanup they are about to emit.
+
 Ownership is place-sensitive for locals, fields, and constant-index array elements.
 Dynamic array indexes and alias-derived ownership transfers fail closed in v0 rather
 than relying on symbolic index or provenance precision. The current implementation admits at most 16 projections in one

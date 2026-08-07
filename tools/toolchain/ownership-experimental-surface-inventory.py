@@ -14,6 +14,10 @@ ANCHORS: dict[str, list[str]] = {
         "`#[drop]` auto-drop for nameable local places. The following forms are experimental until the",
         "`view struct`, `region struct`, `thread_move`, `borrow(source)` returned views, async ownership,",
         "Dynamic or symbolic indexes such as `arr[i]`, `arr[i + 1]`, and pointer/alias-derived",
+        "The ownership authority for auto-drop is the typed MIR ownership-event stream:",
+        "`auto_drop` followed by `storage_dead` closes a live local generation; `move_out`,",
+        "Backend-local cleanup stacks are a transitional",
+        "must fail closed when MIR does not authorize the cleanup they are about to emit.",
         "`thread_move` is not a safe proof of either property.",
         "`view struct` is experimental.",
         "`region struct` is experimental.",
@@ -53,6 +57,9 @@ FORBIDDEN = {
         "`region struct` is stable",
         "`thread_move` is a safe proof",
         "`borrow(source)` is stable",
+        "Backend-local cleanup stacks define ownership semantics",
+        "`move_out` is auto-drop cleanup authority",
+        "`explicit_drop` is auto-drop cleanup authority",
     ],
 }
 
