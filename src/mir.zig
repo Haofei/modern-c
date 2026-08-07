@@ -1657,6 +1657,16 @@ fn ownershipEventSequenceValid(function: Function) bool {
             .borrow_end, .storage_dead => {},
         }
     }
+    if (!typedOwnershipRootsClosed(function)) return false;
+    return true;
+}
+
+fn typedOwnershipRootsClosed(function: Function) bool {
+    for (function.ownership_events) |event| {
+        if (!event.place.root_type_symbol_id.isValid()) continue;
+        const root = simpleOwnershipRootValue(event.place) orelse continue;
+        if (ownershipRootStateBefore(function, function.ownership_events.len, root) == .live) return false;
+    }
     return true;
 }
 

@@ -134,6 +134,7 @@ def main() -> int:
         "pub fn validateOwnershipEventsForLowering(module: Module) error{InvalidMirOwnershipEvents}!void {",
         "fn ownershipEventValid(module: Module, function: Function, event: OwnershipEvent) bool {",
         "fn ownershipEventSequenceValid(function: Function) bool {",
+        "fn typedOwnershipRootsClosed(function: Function) bool {",
         "fn ownershipRootStateBefore(function: Function, event_index: usize, root: ValueId) OwnershipRootState {",
         "fn simpleOwnershipRootValue(place: OwnershipPlace) ?ValueId {",
         "fn addDiscardOwnershipEvent(self: *FunctionBuilder, target: CallTargetKind, argument: ast.Expr, call_span: ast.Span) !void {",
