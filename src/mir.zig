@@ -1601,8 +1601,8 @@ fn ownershipEventValid(module: Module, function: Function, event: OwnershipEvent
     return switch (event.kind) {
         .borrow_begin => event.loan_kind != null and event.loan_id != std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
         .borrow_end => event.loan_kind == null and event.loan_id != std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
-        .explicit_drop => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and ownershipDropGlueSymbolValid(module, event.drop_glue_symbol_id),
-        .auto_drop => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and ownershipDropGlueSymbolValid(module, event.drop_glue_symbol_id),
+        .explicit_drop => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and ownershipDropGlueSymbolMatchesPlace(module, event),
+        .auto_drop => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and ownershipDropGlueSymbolMatchesPlace(module, event),
         else => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
     };
 }
@@ -1692,6 +1692,20 @@ fn ownershipDropGlueSymbolValid(module: Module, symbol_id: SymbolId) bool {
         if (fact.typed_release_symbol_id.eql(symbol_id)) return true;
     }
     return false;
+}
+
+fn ownershipDropGlueSymbolMatchesPlace(module: Module, event: OwnershipEvent) bool {
+    if (!ownershipDropGlueSymbolValid(module, event.drop_glue_symbol_id)) return false;
+    const fact = dropGlueFactForReleaseSymbol(module, event.drop_glue_symbol_id) orelse return false;
+    if (event.place.root_symbol_id.isValid() and !fact.typed_resource_symbol_id.eql(event.place.root_symbol_id)) return false;
+    return true;
+}
+
+fn dropGlueFactForReleaseSymbol(module: Module, symbol_id: SymbolId) ?DropGlueFact {
+    for (module.drop_glue_facts) |fact| {
+        if (fact.typed_release_symbol_id.eql(symbol_id)) return fact;
+    }
+    return null;
 }
 
 fn dropGlueFactForTypeName(module: Module, type_name: []const u8) ?DropGlueFact {

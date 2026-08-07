@@ -4023,6 +4023,50 @@ test "MIR ownership event admission rejects explicit drop without glue identity"
     try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_OWNERSHIP_EVENT") != null);
 }
 
+test "MIR ownership event admission rejects symbol-root drop glue type drift" {
+    // DIAGNOSTIC_UNIT: E_MIR_OWNERSHIP_EVENT
+    const source =
+        \\move struct Guard { id: u32 }
+        \\move struct Other { id: u32 }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\#[drop]
+        \\fn close_other(o: *mut Other) -> void { o.id = 0; }
+        \\fn use_guard() -> u32 {
+        \\    var g: Guard = .{ .id = 1 };
+        \\    return g.id;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_drop_glue_type_drift.mc", source);
+    defer parsed.deinit();
+
+    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer bad_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 2), bad_mir.drop_glue_facts.len);
+    const guard_fact = bad_mir.drop_glue_facts[0];
+    const other_fact = bad_mir.drop_glue_facts[1];
+    const function = functionByNameMut(&bad_mir, "use_guard") orelse return error.TestUnexpectedResult;
+    const generated_events = function.ownership_events;
+    const events = try std.testing.allocator.alloc(mir.OwnershipEvent, 1);
+    events[0] = .{
+        .kind = .explicit_drop,
+        .place = .{ .root_symbol_id = guard_fact.typed_resource_symbol_id },
+        .drop_glue_symbol_id = other_fact.typed_release_symbol_id,
+        .block_id = BlockId.fromIndex(0),
+        .source = .{ .line = 8, .column = 5 },
+    };
+    function.ownership_events = events;
+    std.testing.allocator.free(generated_events);
+
+    try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));
+
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_drop_glue_type_drift.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(bad_mir, &verifier_reporter);
+    try std.testing.expect(verifier_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_OWNERSHIP_EVENT") != null);
+}
+
 test "MIR records drop glue facts for auto-drop resources" {
     const source =
         \\move struct Ticket { id: u32 }
