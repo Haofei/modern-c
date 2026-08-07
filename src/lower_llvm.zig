@@ -720,7 +720,7 @@ const LlvmEmitter = struct {
         try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .c_abi = c_abi, .is_variadic = fn_decl.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
         if (hasNamedAttr(attrs, "drop")) {
             if (ownership_facts.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
-                if (self.autoDropEligibleTypeName(type_name)) {
+                if (mir_ownership_authority.autoDropEligibleTypeName(&self.mir_module, type_name)) {
                     const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return error.UnsupportedLlvmEmission;
                     if (!std.mem.eql(u8, drop_fn, fn_decl.name.text)) return error.UnsupportedLlvmEmission;
                 }
@@ -734,7 +734,7 @@ const LlvmEmitter = struct {
 
     fn collectDropGlueFactsFromMir(self: *LlvmEmitter) !void {
         for (self.mir_module.drop_glue_facts) |fact| {
-            if (!self.autoDropEligibleTypeNameForDropGlue(fact.resource_type, fact.typed_release_symbol_id)) return error.UnsupportedLlvmEmission;
+            if (!mir_ownership_authority.autoDropEligibleTypeNameForDropGlue(&self.mir_module, fact.resource_type, fact.typed_release_symbol_id)) return error.UnsupportedLlvmEmission;
             const entry = try self.auto_drop_fns_by_type.getOrPut(fact.resource_type);
             if (entry.found_existing) {
                 if (!std.mem.eql(u8, entry.value_ptr.*, fact.release_fn)) return error.UnsupportedLlvmEmission;
@@ -10588,14 +10588,6 @@ const LlvmEmitter = struct {
             .generic => |node| std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2,
             else => false,
         };
-    }
-
-    fn autoDropEligibleTypeName(self: *LlvmEmitter, type_name: []const u8) bool {
-        return mir_ownership_authority.autoDropEligibleTypeName(&self.mir_module, type_name);
-    }
-
-    fn autoDropEligibleTypeNameForDropGlue(self: *LlvmEmitter, type_name: []const u8, release_symbol_id: mir.SymbolId) bool {
-        return mir_ownership_authority.autoDropEligibleTypeNameForDropGlue(&self.mir_module, type_name, release_symbol_id);
     }
 };
 
