@@ -30,10 +30,10 @@ pub fn authorizesAutoDropLocal(
 
     for (function.ownership_events) |event| {
         if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
+        if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
         switch (event.kind) {
             .auto_drop => {
                 if (!event.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) continue;
-                if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
                 return true;
             },
             // Transitional allowance: path-sensitive cleanup edges are not yet

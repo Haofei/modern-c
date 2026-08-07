@@ -1516,6 +1516,38 @@ test "LLVM cancels auto-drop when affine move local is explicitly transferred" {
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, body, "call void @close_guard(ptr %g.addr"));
 }
 
+test "LLVM rejects auto-drop transfer authorization with stale MIR resource type" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn transfer_auto_drop() -> Guard {
+        \\    var g: Guard = make_guard();
+        \\    return move g;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_drop_attr_transfer_stale_resource.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const transfer_function = for (module_mir.functions) |*function| {
+        if (std.mem.eql(u8, function.name, "transfer_auto_drop")) break function;
+    } else return error.TestUnexpectedResult;
+    for (transfer_function.ownership_events) |*event| {
+        if (event.kind == .move_out) {
+            event.place.root_type_symbol_id = .invalid;
+            break;
+        }
+    } else return error.TestUnexpectedResult;
+    try mir.validateLoweringAdmission(module_mir);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_drop_attr_transfer_stale_resource.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM explicit drop release only cancels matching auto-drop local" {
     const source =
         \\move struct Guard { id: u32 }

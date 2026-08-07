@@ -238,11 +238,15 @@ def main() -> int:
 
     for path, needle in (
         ("src/mir.zig", "fn autoDropClosesStorage"),
+        ("src/mir_ownership_authority.zig", "event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)"),
+        ("src/lower_c_tests.zig", "lower-c rejects auto-drop transfer authorization with stale MIR resource type"),
+        ("src/lower_llvm_tests.zig", "LLVM rejects auto-drop transfer authorization with stale MIR resource type"),
         ("docs/refactoring-plan.md", "MIR already has typed seeds for block, function symbol, value, type, and span"),
         ("docs/refactoring-plan.md", "Verifier/admission checks reject result/span/owner drift."),
         ("docs/typed-semantic-facts.md", "The typed MIR identity migration has started with `BlockId`"),
         ("docs/compiler-production-readiness.md", "MIR owns the ownership event envelope"),
         ("docs/compiler-production-readiness.md", "MIR admission requires auto-drop to close storage"),
+        ("docs/compiler-production-readiness.md", "C/LLVM transfer auto-drop authorization requires MIR resource identity"),
         ("build/qemu.zig", "mir-identity-inventory-test"),
         ("build/tiers.zig", 'm0_step.dependOn(ctx.cmd("mir-identity-inventory-test"))'),
         ("build/tiers.zig", 'fast_step.dependOn(ctx.cmd("mir-identity-inventory-test"))'),
