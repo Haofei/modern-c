@@ -4081,6 +4081,10 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     try std.testing.expectEqual(@as(usize, 1), module_mir.drop_glue_facts.len);
     const drop_fact = module_mir.drop_glue_facts[0];
     const use_guard = functionByNameMut(&module_mir, "use_guard") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), use_guard.ownership_events.len);
+    try std.testing.expectEqual(mir.OwnershipEventKind.storage_live, use_guard.ownership_events[0].kind);
+    try std.testing.expectEqual(mir.OwnershipEventKind.init, use_guard.ownership_events[1].kind);
+    const generated_events = use_guard.ownership_events;
     const events = try std.testing.allocator.alloc(mir.OwnershipEvent, 1);
     events[0] = .{
         .kind = .explicit_drop,
@@ -4090,6 +4094,7 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
         .source = .{ .line = 7, .column = 5 },
     };
     use_guard.ownership_events = events;
+    std.testing.allocator.free(generated_events);
 
     try mir.validateLoweringAdmission(module_mir);
 
@@ -4122,6 +4127,7 @@ test "MIR ownership event admission rejects malformed event identity" {
     try std.testing.expectEqual(@as(usize, 1), bad_mir.drop_glue_facts.len);
     const drop_fact = bad_mir.drop_glue_facts[0];
     const use_guard = functionByNameMut(&bad_mir, "use_guard") orelse return error.TestUnexpectedResult;
+    const generated_events = use_guard.ownership_events;
     const events = try std.testing.allocator.alloc(mir.OwnershipEvent, 1);
     events[0] = .{
         .kind = .auto_drop,
@@ -4131,6 +4137,7 @@ test "MIR ownership event admission rejects malformed event identity" {
         .source = .{ .line = 8, .column = 5 },
     };
     use_guard.ownership_events = events;
+    std.testing.allocator.free(generated_events);
 
     try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));
 

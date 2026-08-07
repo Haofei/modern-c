@@ -4641,6 +4641,7 @@ const FunctionBuilder = struct {
                 }
                 for (local.names) |name| {
                     try self.addInstr(.local, name.text, ty, stmt.span);
+                    try self.addLocalOwnershipEvent(.storage_live, name.text, stmt.span);
                     try self.local_types.put(name.text, ty);
                     if (ty_expr) |local_ty| try self.local_type_exprs.put(name.text, local_ty);
                     try self.local_mutability.put(name.text, mutable);
@@ -4681,6 +4682,7 @@ const FunctionBuilder = struct {
                     try self.recordLocalFunctionAliases(local.names, expr);
                     try self.recordLocalAggregatePointerAliases(local.names, expr);
                     try self.recordLocalPointerArrayAliases(local.names, expr);
+                    if (local.names.len == 1) try self.addLocalOwnershipEvent(.init, local.names[0].text, expr.span);
                     self.assignment_target = previous_target;
                     self.assignment_target_ty = previous_target_ty;
                     self.assignment_target_type_expr = previous_target_type_expr;
@@ -7110,6 +7112,22 @@ const FunctionBuilder = struct {
             .block_id = block_id,
             .instruction_index = instruction_index,
             .source = .{ .line = call_span.line, .column = call_span.column, .offset = call_span.offset, .len = call_span.len },
+        });
+    }
+
+    fn addLocalOwnershipEvent(self: *FunctionBuilder, kind: OwnershipEventKind, name: []const u8, span: ast.Span) !void {
+        const root_value_id = try self.internValueId(name);
+        const block_id = BlockId.fromIndex(self.current);
+        const instruction_index: ?u32 = if (self.blocks.items[self.current].instructions.items.len == 0)
+            null
+        else
+            @intCast(self.blocks.items[self.current].instructions.items.len - 1);
+        try self.ownership_events.append(self.allocator, .{
+            .kind = kind,
+            .place = .{ .root_value_id = root_value_id },
+            .block_id = block_id,
+            .instruction_index = instruction_index,
+            .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
         });
     }
 
