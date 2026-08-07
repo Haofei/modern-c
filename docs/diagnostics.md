@@ -157,7 +157,7 @@ Total codes: **282**.
 | `E_LOCAL_REQUIRES_INITIALIZER` | ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage | `src/sema.zig:3498` |
 | `E_MAYBEUNINIT_RESOURCE_PAYLOAD` | MaybeUninit cannot store \`move\`/\`linear\`, \`region\`, or \`view struct\` payloads; use an ownership-aware resource container instead | `src/sema.zig:4795` |
 | `E_MC_VOID_POINTER_FFI` | use c_void for C opaque object pointers, not MC void | `src/sema.zig:4452` |
-| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:11037` |
+| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:11074` |
 | `E_MIR_IDENTITY` | MIR verifier found malformed instruction identity | `src/mir.zig:1383` |
 | `E_MIR_OWNERSHIP_EVENT` | MIR verifier found inconsistent ownership event sequence<br>MIR verifier found malformed ownership event | `src/mir.zig:1583`<br>`src/mir.zig:1590` |
 | `E_MIR_SYMBOL_ID` | MIR verifier found malformed symbol identity table | `src/mir.zig:1371` |

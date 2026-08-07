@@ -4651,6 +4651,32 @@ test "MIR records simple move-out ownership events" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=return_guard kind=move_out") != null);
 }
 
+test "MIR cleanup producer ignores move-out events that cannot reach fallthrough cleanup" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn transfer_in_loop(flag: bool) -> Guard {
+        \\    var g: Guard = make_guard(1);
+        \\    while flag {
+        \\        return move g;
+        \\    }
+        \\    return make_guard(2);
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_path_sensitive_cleanup_after_loop.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "transfer_in_loop") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), countOwnershipEventsByKind(function, .move_out));
+    try std.testing.expectEqual(@as(usize, 1), countOwnershipEventsByKind(function, .auto_drop));
+    try std.testing.expectEqual(@as(usize, 1), countOwnershipEventsByKind(function, .storage_dead));
+    try mir.validateLoweringAdmission(module_mir);
+}
+
 test "MIR ownership event admission rejects duplicate local consumption" {
     // DIAGNOSTIC_UNIT: E_MIR_OWNERSHIP_EVENT
     const source =

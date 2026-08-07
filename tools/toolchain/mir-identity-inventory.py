@@ -237,11 +237,13 @@ def main() -> int:
         "MIR records forget events for no-drop move resources",
         "MIR ownership authority does not let forget authorize auto-drop registration",
         "MIR records explicit drop glue call ownership events",
+        "MIR cleanup producer ignores move-out events that cannot reach fallthrough cleanup",
     ):
         require_contains("src/mir_tests.zig", needle)
 
     for path, needle in (
         ("src/mir.zig", "fn autoDropClosesStorage"),
+        ("src/mir.zig", "fn ownershipEventCanReachBlock"),
         ("src/mir.zig", "fn typeOwnershipSymbolForTypeName"),
         ("src/mir.zig", "fn addDropGlueCallOwnershipEvent"),
         ("src/mir_ownership_authority.zig", "event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)"),

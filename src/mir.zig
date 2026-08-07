@@ -1686,10 +1686,14 @@ fn typedOwnershipRootsClosed(function: Function) bool {
 
 fn ownershipRootStateBefore(function: Function, event_index: usize, root: ValueId) OwnershipRootState {
     var state: OwnershipRootState = .untracked;
+    const target_block: ?BlockId = if (event_index < function.ownership_events.len) function.ownership_events[event_index].block_id else null;
     for (function.ownership_events[0..event_index]) |event| {
         const event_root = simpleOwnershipRootValue(event.place) orelse continue;
         if (!event.place.root_type_symbol_id.isValid()) continue;
         if (!event_root.eql(root)) continue;
+        if (target_block) |block_id| {
+            if (!ownershipEventCanReachBlock(function, event, block_id)) continue;
+        }
         switch (event.kind) {
             .storage_live => state = .storage_live,
             .init, .reinit => state = .live,
@@ -1699,6 +1703,22 @@ fn ownershipRootStateBefore(function: Function, event_index: usize, root: ValueI
         }
     }
     return state;
+}
+
+fn ownershipEventCanReachBlock(function: Function, event: OwnershipEvent, target: BlockId) bool {
+    if (!event.block_id.isValid() or !target.isValid()) return false;
+    if (event.block_id.index() >= function.blocks.len or target.index() >= function.blocks.len) return false;
+    return blockCanReach(function, event.block_id.index(), target.index(), function.blocks.len + 1);
+}
+
+fn blockCanReach(function: Function, from: usize, target: usize, remaining: usize) bool {
+    if (from == target) return true;
+    if (remaining == 0 or from >= function.blocks.len) return false;
+    for (function.blocks[from].successors) |successor| {
+        if (successor >= function.blocks.len) continue;
+        if (blockCanReach(function, successor, target, remaining - 1)) return true;
+    }
+    return false;
 }
 
 fn ownershipRootHasStorageLive(function: Function, root: ValueId) bool {
@@ -4565,6 +4585,7 @@ const FunctionBuilder = struct {
     }
 
     fn finish(self: *FunctionBuilder) !Function {
+        try self.appendSimpleLocalCleanupOwnershipEvents();
         var blocks: std.ArrayList(Block) = .empty;
         errdefer {
             for (blocks.items) |block| {
@@ -4610,7 +4631,6 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(call_target_facts);
         const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(target_type_facts);
-        try self.appendSimpleLocalCleanupOwnershipEvents();
         const ownership_events = try self.ownership_events.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(ownership_events);
         const span_identities = try self.buildSpanIdentities();
@@ -7498,6 +7518,7 @@ const FunctionBuilder = struct {
         for (self.ownership_events.items) |event| {
             const event_root = simpleOwnershipRootValue(event.place) orelse continue;
             if (!event_root.eql(root)) continue;
+            if (!self.ownershipEventCanReachCurrent(event)) continue;
             switch (event.kind) {
                 .storage_live => state = .storage_live,
                 .init, .reinit => state = .live,
@@ -7514,9 +7535,25 @@ const FunctionBuilder = struct {
         for (self.ownership_events.items) |event| {
             const event_root = simpleOwnershipRootValue(event.place) orelse continue;
             if (!event_root.eql(root)) continue;
+            if (!self.ownershipEventCanReachCurrent(event)) continue;
             source = event.source;
         }
         return source;
+    }
+
+    fn ownershipEventCanReachCurrent(self: *FunctionBuilder, event: OwnershipEvent) bool {
+        if (!event.block_id.isValid() or event.block_id.index() >= self.blocks.items.len or self.current >= self.blocks.items.len) return false;
+        return self.mutableBlockCanReach(event.block_id.index(), self.current, self.blocks.items.len + 1);
+    }
+
+    fn mutableBlockCanReach(self: *FunctionBuilder, from: usize, target: usize, remaining: usize) bool {
+        if (from == target) return true;
+        if (remaining == 0 or from >= self.blocks.items.len) return false;
+        for (self.blocks.items[from].successors.items) |successor| {
+            if (successor >= self.blocks.items.len) continue;
+            if (self.mutableBlockCanReach(successor, target, remaining - 1)) return true;
+        }
+        return false;
     }
 
     fn addLocalOwnershipEvent(self: *FunctionBuilder, kind: OwnershipEventKind, name: []const u8, span: ast.Span) !void {
