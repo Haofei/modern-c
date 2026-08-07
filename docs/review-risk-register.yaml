@@ -116,7 +116,7 @@ risks:
     blocks:
       - stable-release
       - production-kernel
-    summary: Vendored BearSSL, QuickJS, WAMR, openlibm, OpenSBI, real-board firmware, and the selected Agent runtime slot now have gated offline advisory-intake metadata, retained-subset/profile-slot policy, review dates, and waiver fields; live advisory ingestion, concrete production firmware/runtime selection, release response SLA, and production waiver review remain open.
+    summary: Profile-facing vendored QuickJS, WAMR, openlibm, OpenSBI, real-board firmware, and the selected Agent runtime slot now have gated offline advisory-intake metadata, retained-subset/profile-slot policy, review dates, and waiver fields; BearSSL is retained only for standalone TLS demos and is no longer a kernel profile TCB component; live advisory ingestion, concrete production firmware/runtime selection, release response SLA, and production waiver review remain open.
 
   - id: TCB-PROFILE-MINIMIZATION
     severity: medium

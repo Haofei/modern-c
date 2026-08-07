@@ -20,40 +20,6 @@
   },
   "components": [
     {
-      "component_id": "bearssl",
-      "owner": "kernel-crypto",
-      "status": "advisory-intake-manifest-gated",
-      "reviewed_on": "2026-08-06",
-      "review_after": "2026-09-01",
-      "queries": [
-        "BearSSL",
-        "BearSSL TLS"
-      ],
-      "advisory_sources": [
-        {
-          "name": "BearSSL upstream repository",
-          "kind": "upstream",
-          "url": "https://www.bearssl.org/git/BearSSL"
-        },
-        {
-          "name": "NVD keyword search for BearSSL",
-          "kind": "cve-database",
-          "url": "https://nvd.nist.gov/vuln/search/results?query=BearSSL&search_type=all"
-        },
-        {
-          "name": "Debian security tracker source-package search",
-          "kind": "distro-tracker",
-          "url": "https://security-tracker.debian.org/tracker/source-package/bearssl"
-        }
-      ],
-      "retained_subset_policy": "Assess only retained BearSSL crypto/TLS sources and the freestanding shim listed in third_party/bearssl/README.vendored.md. Advisories for unvendored tools, examples, or unused protocol features require a documented not-applicable waiver.",
-      "release_blocker_if": [
-        "the advisory affects retained crypto, TLS parsing, hashing, entropy, or constant-time primitives",
-        "the advisory affects local freestanding shim behavior",
-        "the affected upstream range cannot be compared with revision 7bea48e5e850ab4cafbe68d3765cdaba13a86d6f"
-      ]
-    },
-    {
       "component_id": "quickjs",
       "owner": "agent-runtime",
       "status": "advisory-intake-manifest-gated",

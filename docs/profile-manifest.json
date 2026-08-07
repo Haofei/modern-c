@@ -200,7 +200,6 @@
       "tcb_components": [
         "qemu",
         "opensbi",
-        "bearssl",
         "quickjs",
         "wamr",
         "openlibm"
@@ -238,7 +237,6 @@
       "tcb_components": [
         "real-board-firmware",
         "opensbi",
-        "bearssl",
         "kernel-core",
         "selected-agent-runtime"
       ]
