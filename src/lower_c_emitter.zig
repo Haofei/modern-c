@@ -2883,8 +2883,11 @@ pub const CEmitter = struct {
         } });
     }
 
-    fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr) void {
+    fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr) !void {
         const local_name = directMovedLocalName(expr) orelse return;
+        const cleanup = self.autoDropCleanupForLocalName(local_name) orelse return;
+        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        if (!mir_ownership_authority.authorizesMoveOutLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name)) return error.UnsupportedCEmission;
         self.cancelAutoDropForLocalName(local_name);
     }
 
@@ -2910,39 +2913,53 @@ pub const CEmitter = struct {
         }
     }
 
-    fn cancelAutoDropsForMovesInExpr(self: *CEmitter, expr: ast.Expr) void {
+    fn autoDropCleanupForLocalName(self: *CEmitter, local_name: []const u8) ?AutoDropCleanupEntry {
+        var index = self.defer_stack.items.len;
+        while (index > 0) {
+            index -= 1;
+            switch (self.defer_stack.items[index]) {
+                .auto_drop => |cleanup| {
+                    if (std.mem.eql(u8, cleanup.local_name, local_name)) return cleanup;
+                },
+                .expr => continue,
+            }
+        }
+        return null;
+    }
+
+    fn cancelAutoDropsForMovesInExpr(self: *CEmitter, expr: ast.Expr) !void {
         switch (expr.kind) {
             .move_expr => |inner| {
-                self.cancelAutoDropForMove(inner.*);
-                self.cancelAutoDropsForMovesInExpr(inner.*);
+                try self.cancelAutoDropForMove(inner.*);
+                try self.cancelAutoDropsForMovesInExpr(inner.*);
             },
-            .grouped, .address_of, .deref, .await_expr => |inner| self.cancelAutoDropsForMovesInExpr(inner.*),
-            .borrow_expr => |node| self.cancelAutoDropsForMovesInExpr(node.value.*),
-            .array_literal => |items| for (items) |item| self.cancelAutoDropsForMovesInExpr(item),
-            .struct_literal => |fields| for (fields) |field| self.cancelAutoDropsForMovesInExpr(field.value),
-            .unary => |node| self.cancelAutoDropsForMovesInExpr(node.expr.*),
+            .grouped, .address_of, .deref, .await_expr => |inner| try self.cancelAutoDropsForMovesInExpr(inner.*),
+            .borrow_expr => |node| try self.cancelAutoDropsForMovesInExpr(node.value.*),
+            .array_literal => |items| for (items) |item| try self.cancelAutoDropsForMovesInExpr(item),
+            .struct_literal => |fields| for (fields) |field| try self.cancelAutoDropsForMovesInExpr(field.value),
+            .unary => |node| try self.cancelAutoDropsForMovesInExpr(node.expr.*),
             .binary => |node| {
-                self.cancelAutoDropsForMovesInExpr(node.left.*);
-                self.cancelAutoDropsForMovesInExpr(node.right.*);
+                try self.cancelAutoDropsForMovesInExpr(node.left.*);
+                try self.cancelAutoDropsForMovesInExpr(node.right.*);
             },
-            .cast => |node| self.cancelAutoDropsForMovesInExpr(node.value.*),
+            .cast => |node| try self.cancelAutoDropsForMovesInExpr(node.value.*),
             .call => |node| {
-                self.cancelAutoDropsForMovesInExpr(node.callee.*);
-                for (node.args) |arg| self.cancelAutoDropsForMovesInExpr(arg);
+                try self.cancelAutoDropsForMovesInExpr(node.callee.*);
+                for (node.args) |arg| try self.cancelAutoDropsForMovesInExpr(arg);
             },
             .index => |node| {
-                self.cancelAutoDropsForMovesInExpr(node.base.*);
-                self.cancelAutoDropsForMovesInExpr(node.index.*);
+                try self.cancelAutoDropsForMovesInExpr(node.base.*);
+                try self.cancelAutoDropsForMovesInExpr(node.index.*);
             },
             .slice => |node| {
-                self.cancelAutoDropsForMovesInExpr(node.base.*);
-                self.cancelAutoDropsForMovesInExpr(node.start.*);
-                self.cancelAutoDropsForMovesInExpr(node.end.*);
+                try self.cancelAutoDropsForMovesInExpr(node.base.*);
+                try self.cancelAutoDropsForMovesInExpr(node.start.*);
+                try self.cancelAutoDropsForMovesInExpr(node.end.*);
             },
-            .member => |node| self.cancelAutoDropsForMovesInExpr(node.base.*),
+            .member => |node| try self.cancelAutoDropsForMovesInExpr(node.base.*),
             .try_expr => |node| {
-                self.cancelAutoDropsForMovesInExpr(node.operand.*);
-                if (node.mapped) |mapped| self.cancelAutoDropsForMovesInExpr(mapped.*);
+                try self.cancelAutoDropsForMovesInExpr(node.operand.*);
+                if (node.mapped) |mapped| try self.cancelAutoDropsForMovesInExpr(mapped.*);
             },
             else => {},
         }
@@ -3569,7 +3586,7 @@ pub const CEmitter = struct {
             return;
         }
 
-        self.cancelAutoDropsForMovesInExpr(expr);
+        try self.cancelAutoDropsForMovesInExpr(expr);
         try self.writeLineDirective(expr.span);
         const tmp_name = try self.nextTempName();
         try self.writeIndent();
@@ -4150,7 +4167,7 @@ pub const CEmitter = struct {
             .struct_literal => try self.emitUnsupportedTargetlessAggregateExpr(expr, "struct"),
             .grouped => |inner| try self.emitGroupedExpr(inner.*, locals),
             .move_expr => |inner| {
-                self.cancelAutoDropForMove(inner.*);
+                try self.cancelAutoDropForMove(inner.*);
                 try self.emitExpr(inner.*, locals);
             },
             .unreachable_expr => try self.out.appendSlice(self.allocator, "mc_trap_Unreachable()"),
@@ -4861,7 +4878,7 @@ pub const CEmitter = struct {
             .char_literal => |literal| try self.emitCharLiteralWithTarget(literal, expr.span, semantic_target_ty),
             .grouped => |inner| try self.emitGroupedExprWithTarget(inner.*, locals, semantic_target_ty),
             .move_expr => |inner| {
-                self.cancelAutoDropForMove(inner.*);
+                try self.cancelAutoDropForMove(inner.*);
                 try self.emitExprWithTarget(inner.*, locals, semantic_target_ty);
             },
             .address_of => try self.emitAddressOfExprWithTarget(expr, locals, semantic_target_ty),

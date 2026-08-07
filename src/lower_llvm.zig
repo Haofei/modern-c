@@ -1590,7 +1590,7 @@ const LlvmEmitter = struct {
                 error.UnsupportedLlvmEmission,
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
             .move_expr => |inner| blk: {
-                self.cancelAutoDropForMove(inner.*);
+                try self.cancelAutoDropForMove(inner.*);
                 break :blk try self.emitExpr(inner.*, expected_ty);
             },
             .call => |call| try self.emitCall(call, expected_ty, expr.span),
@@ -2345,7 +2345,7 @@ const LlvmEmitter = struct {
             },
             .grouped => |inner| try self.emitExprStatement(inner.*),
             .move_expr => |inner| {
-                self.cancelAutoDropForMove(inner.*);
+                try self.cancelAutoDropForMove(inner.*);
                 try self.emitExprStatement(inner.*);
             },
             else => {
@@ -2925,8 +2925,11 @@ const LlvmEmitter = struct {
         } });
     }
 
-    fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr) void {
+    fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr) !void {
         const local_name = directMovedLocalName(expr) orelse return;
+        const cleanup = self.autoDropCleanupForLocalName(local_name) orelse return;
+        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
+        if (!mir_ownership_authority.authorizesMoveOutLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name)) return error.UnsupportedLlvmEmission;
         self.cancelAutoDropForLocalName(local_name);
     }
 
@@ -2950,6 +2953,20 @@ const LlvmEmitter = struct {
                 .expr => continue,
             }
         }
+    }
+
+    fn autoDropCleanupForLocalName(self: *LlvmEmitter, local_name: []const u8) ?AutoDropCleanupEntry {
+        var index = self.defer_stack.items.len;
+        while (index > 0) {
+            index -= 1;
+            switch (self.defer_stack.items[index]) {
+                .auto_drop => |cleanup| {
+                    if (std.mem.eql(u8, cleanup.local_name, local_name)) return cleanup;
+                },
+                .expr => continue,
+            }
+        }
+        return null;
     }
 
     fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {

@@ -68,6 +68,24 @@ pub fn authorizesExplicitDropLocal(
     return false;
 }
 
+pub fn authorizesMoveOutLocal(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    local_name: []const u8,
+    drop_fn: []const u8,
+) bool {
+    const root_value_id = valueIdForLocal(function, local_name) orelse return false;
+    const drop_glue = dropGlueFactForReleaseFunction(module, drop_fn) orelse return false;
+
+    for (function.ownership_events) |event| {
+        if (event.kind != .move_out) continue;
+        if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
+        if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
+        return true;
+    }
+    return false;
+}
+
 fn dropGlueFactFor(module: *const mir.Module, type_name: []const u8, drop_fn: []const u8) ?mir.DropGlueFact {
     for (module.drop_glue_facts) |fact| {
         if (!std.mem.eql(u8, fact.resource_type, type_name)) continue;
