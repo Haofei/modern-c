@@ -4849,9 +4849,9 @@ const FunctionBuilder = struct {
                 }
                 for (local.names) |name| {
                     try self.addInstr(.local, name.text, ty, stmt.span);
-                    try self.addLocalOwnershipEvent(.storage_live, name.text, stmt.span);
                     try self.local_types.put(name.text, ty);
                     if (ty_expr) |local_ty| try self.local_type_exprs.put(name.text, local_ty);
+                    try self.addLocalOwnershipEvent(.storage_live, name.text, stmt.span);
                     try self.local_mutability.put(name.text, mutable);
                     try self.let_local_names.put(name.text, {});
                     _ = self.local_function_aliases.remove(name.text);
@@ -7362,8 +7362,16 @@ const FunctionBuilder = struct {
         return null;
     }
 
+    fn localRootTypeSymbol(self: *FunctionBuilder, name: []const u8) SymbolId {
+        const ty = self.local_type_exprs.get(name) orelse self.global_type_exprs.get(name) orelse return .invalid;
+        const type_name = structTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return .invalid;
+        const identity = self.dropGlueIdentityForTypeName(type_name) orelse return .invalid;
+        return identity.resource_symbol_id;
+    }
+
     fn addLocalOwnershipEvent(self: *FunctionBuilder, kind: OwnershipEventKind, name: []const u8, span: ast.Span) !void {
         const root_value_id = try self.internValueId(name);
+        const root_type_symbol_id = self.localRootTypeSymbol(name);
         const block_id = BlockId.fromIndex(self.current);
         const instruction_index: ?u32 = if (self.blocks.items[self.current].instructions.items.len == 0)
             null
@@ -7371,7 +7379,10 @@ const FunctionBuilder = struct {
             @intCast(self.blocks.items[self.current].instructions.items.len - 1);
         try self.ownership_events.append(self.allocator, .{
             .kind = kind,
-            .place = .{ .root_value_id = root_value_id },
+            .place = .{
+                .root_value_id = root_value_id,
+                .root_type_symbol_id = root_type_symbol_id,
+            },
             .block_id = block_id,
             .instruction_index = instruction_index,
             .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },

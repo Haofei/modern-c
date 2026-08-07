@@ -4314,7 +4314,9 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     const use_guard = functionByNameMut(&module_mir, "use_guard") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 2), use_guard.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.storage_live, use_guard.ownership_events[0].kind);
+    try std.testing.expect(use_guard.ownership_events[0].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
     try std.testing.expectEqual(mir.OwnershipEventKind.init, use_guard.ownership_events[1].kind);
+    try std.testing.expect(use_guard.ownership_events[1].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
     const generated_events = use_guard.ownership_events;
     const events = try std.testing.allocator.alloc(mir.OwnershipEvent, 1);
     events[0] = .{
