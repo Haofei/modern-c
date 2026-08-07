@@ -3196,7 +3196,7 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const MoveState) 
 
 // Source identifier spelling is a map index only. A typed root slot can retain
 // a different compatibility key after CFG joins, so resolve the exact root
-// place before falling back to key-only metadata such as index facts.
+// place before consulting compatibility storage.
 fn bindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?MoveSlot {
     const expected = state.lookupPlaceForRoot(name);
     var it = state.iterator();
@@ -3215,7 +3215,7 @@ fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx:
     return null;
 }
 
-fn stableIndexPlaceKnown(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) bool {
+fn constantIndexPlaceKnown(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) bool {
     return constIndexValue(self, expr, state, ctx) != null;
 }
 
@@ -3295,7 +3295,7 @@ fn wildcardMoveIndexedPlaceKey(self: *Checker, expr: ast.Expr, state: *const Mov
                 .array => |node| node,
                 else => return null,
             };
-            if (stableIndexPlaceKnown(self, ix.index.*, state, ctx.*)) return null;
+            if (constantIndexPlaceKnown(self, ix.index.*, state, ctx.*)) return null;
             if (!self.typeEmbedsMoveByValue(array.child.*, aliases)) return null;
             const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{base.key}) catch {
                 self.oom = true;
@@ -3325,7 +3325,7 @@ fn nestedWildcardIndexedPlaceKeyAndType(self: *Checker, expr: ast.Expr, state: *
                     .array => |node| node,
                     else => return null,
                 };
-                if (stableIndexPlaceKnown(self, ix.index.*, state, ctx.*)) return null;
+                if (constantIndexPlaceKnown(self, ix.index.*, state, ctx.*)) return null;
                 if (!self.typeEmbedsMoveByValue(direct_array.child.*, aliases)) return null;
                 const key = std.fmt.allocPrint(self.reporter.allocator, "{s}[*]", .{direct_base.key}) catch {
                     self.oom = true;

@@ -17,13 +17,13 @@ ANCHORS: dict[str, list[str]] = {
         "Dynamic-index policy: v0 accepts only constant-index ownership places",
     ],
     "src/sema_move.zig": [
-        "fn stableIndexPlaceKnown",
+        "fn constantIndexPlaceKnown",
         "fn wildcardMoveIndexedPlaceKey",
         "fn nestedWildcardIndexedPlaceKeyAndType",
         ".wildcard_index",
     ],
     "src/sema_tests.zig": [
-        "move dynamic-place policy rejects symbolic identity and keeps wildcard overlap",
+        "move dynamic-place policy keeps dynamic indexes at wildcard overlap",
         "move dynamic-place policy keeps wildcard indexes behind field boundaries",
     ],
     "docs/compiler-production-readiness.md": [
