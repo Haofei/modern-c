@@ -4287,6 +4287,7 @@ const FunctionBuilder = struct {
     value_ids: std.StringHashMap(ValueId),
     target_owner_ids: std.StringHashMap(SymbolId),
     ownership_events: std.ArrayList(OwnershipEvent),
+    ownership_cleanup_locals: std.ArrayList([]const u8),
     // Bindings introduced by a successful nullable-pointer pattern are
     // non-null by construction for that arm. Keep the representation fact for
     // backend admission, but do not invent a runtime trap edge for their use.
@@ -4387,6 +4388,7 @@ const FunctionBuilder = struct {
             .type_ids = std.StringHashMap(TypeId).init(allocator),
             .value_ids = std.StringHashMap(ValueId).init(allocator),
             .target_owner_ids = std.StringHashMap(SymbolId).init(allocator),
+            .ownership_cleanup_locals = .empty,
             .proven_nonnull_bindings = std.StringHashMap(void).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
@@ -4464,6 +4466,7 @@ const FunctionBuilder = struct {
             .type_ids = std.StringHashMap(TypeId).init(allocator),
             .value_ids = std.StringHashMap(ValueId).init(allocator),
             .target_owner_ids = std.StringHashMap(SymbolId).init(allocator),
+            .ownership_cleanup_locals = .empty,
             .proven_nonnull_bindings = std.StringHashMap(void).init(allocator),
             .local_function_aliases = std.StringHashMap([]const u8).init(allocator),
             .local_aggregate_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
@@ -4520,6 +4523,7 @@ const FunctionBuilder = struct {
         self.type_ids.deinit();
         self.value_ids.deinit();
         self.target_owner_ids.deinit();
+        self.ownership_cleanup_locals.deinit(self.allocator);
         self.proven_nonnull_bindings.deinit();
         self.local_function_aliases.deinit();
         self.local_aggregate_pointer_aliases.deinit();
@@ -4578,6 +4582,7 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(call_target_facts);
         const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(target_type_facts);
+        try self.appendSimpleLocalCleanupOwnershipEvents();
         const ownership_events = try self.ownership_events.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(ownership_events);
         const span_identities = try self.buildSpanIdentities();
@@ -4631,6 +4636,8 @@ const FunctionBuilder = struct {
         self.target_owner_ids.deinit();
         self.target_owner_ids = std.StringHashMap(SymbolId).init(self.allocator);
         self.ownership_events = .empty;
+        self.ownership_cleanup_locals.deinit(self.allocator);
+        self.ownership_cleanup_locals = .empty;
         self.proven_nonnull_bindings.deinit();
         self.proven_nonnull_bindings = std.StringHashMap(void).init(self.allocator);
         self.local_function_aliases.deinit();
@@ -4852,6 +4859,7 @@ const FunctionBuilder = struct {
                     try self.local_types.put(name.text, ty);
                     if (ty_expr) |local_ty| try self.local_type_exprs.put(name.text, local_ty);
                     try self.addLocalOwnershipEvent(.storage_live, name.text, stmt.span);
+                    if (self.localRootTypeSymbol(name.text).isValid()) try self.ownership_cleanup_locals.append(self.allocator, name.text);
                     try self.local_mutability.put(name.text, mutable);
                     try self.let_local_names.put(name.text, {});
                     _ = self.local_function_aliases.remove(name.text);
@@ -7367,6 +7375,67 @@ const FunctionBuilder = struct {
         const type_name = structTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return .invalid;
         const identity = self.dropGlueIdentityForTypeName(type_name) orelse return .invalid;
         return identity.resource_symbol_id;
+    }
+
+    fn localDropGlueIdentity(self: *FunctionBuilder, name: []const u8) ?DiscardDropGlueIdentity {
+        const ty = self.local_type_exprs.get(name) orelse self.global_type_exprs.get(name) orelse return null;
+        const type_name = structTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return null;
+        return self.dropGlueIdentityForTypeName(type_name);
+    }
+
+    fn appendSimpleLocalCleanupOwnershipEvents(self: *FunctionBuilder) !void {
+        for (self.ownership_cleanup_locals.items) |name| {
+            const identity = self.localDropGlueIdentity(name) orelse continue;
+            const root_value_id = try self.internValueId(name);
+            if (self.currentOwnershipRootState(root_value_id) != .live) continue;
+            const source = self.latestOwnershipSourceForRoot(root_value_id);
+            const block_id = BlockId.fromIndex(self.current);
+            try self.ownership_events.append(self.allocator, .{
+                .kind = .auto_drop,
+                .place = .{
+                    .root_value_id = root_value_id,
+                    .root_type_symbol_id = identity.resource_symbol_id,
+                },
+                .drop_glue_symbol_id = identity.release_symbol_id,
+                .block_id = block_id,
+                .source = source,
+            });
+            try self.ownership_events.append(self.allocator, .{
+                .kind = .storage_dead,
+                .place = .{
+                    .root_value_id = root_value_id,
+                    .root_type_symbol_id = identity.resource_symbol_id,
+                },
+                .block_id = block_id,
+                .source = source,
+            });
+        }
+    }
+
+    fn currentOwnershipRootState(self: *FunctionBuilder, root: ValueId) OwnershipRootState {
+        var state: OwnershipRootState = .untracked;
+        for (self.ownership_events.items) |event| {
+            const event_root = simpleOwnershipRootValue(event.place) orelse continue;
+            if (!event_root.eql(root)) continue;
+            switch (event.kind) {
+                .storage_live => state = .storage_live,
+                .init, .reinit => state = .live,
+                .move_out, .forget, .explicit_drop, .auto_drop => state = .consumed,
+                .storage_dead => state = .untracked,
+                .borrow_begin, .borrow_end, .set_drop_flag => {},
+            }
+        }
+        return state;
+    }
+
+    fn latestOwnershipSourceForRoot(self: *FunctionBuilder, root: ValueId) SourcePoint {
+        var source = SourcePoint{ .line = 0, .column = 0 };
+        for (self.ownership_events.items) |event| {
+            const event_root = simpleOwnershipRootValue(event.place) orelse continue;
+            if (!event_root.eql(root)) continue;
+            source = event.source;
+        }
+        return source;
     }
 
     fn addLocalOwnershipEvent(self: *FunctionBuilder, kind: OwnershipEventKind, name: []const u8, span: ast.Span) !void {

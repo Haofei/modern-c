@@ -4312,11 +4312,16 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     try std.testing.expectEqual(@as(usize, 1), module_mir.drop_glue_facts.len);
     const drop_fact = module_mir.drop_glue_facts[0];
     const use_guard = functionByNameMut(&module_mir, "use_guard") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 2), use_guard.ownership_events.len);
+    try std.testing.expectEqual(@as(usize, 4), use_guard.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.storage_live, use_guard.ownership_events[0].kind);
     try std.testing.expect(use_guard.ownership_events[0].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
     try std.testing.expectEqual(mir.OwnershipEventKind.init, use_guard.ownership_events[1].kind);
     try std.testing.expect(use_guard.ownership_events[1].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
+    try std.testing.expectEqual(mir.OwnershipEventKind.auto_drop, use_guard.ownership_events[2].kind);
+    try std.testing.expect(use_guard.ownership_events[2].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
+    try std.testing.expect(use_guard.ownership_events[2].drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
+    try std.testing.expectEqual(mir.OwnershipEventKind.storage_dead, use_guard.ownership_events[3].kind);
+    try std.testing.expect(use_guard.ownership_events[3].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
     const generated_events = use_guard.ownership_events;
     const events = try std.testing.allocator.alloc(mir.OwnershipEvent, 1);
     events[0] = .{
