@@ -1450,6 +1450,17 @@ test "LLVM consumes MIR drop glue facts and fails closed when absent or stale" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &stale_ownership_output, "llvm_drop_glue_mir_facts.mc", .{}, false, .riscv64, null));
     module_mir.type_ownership_facts[0].kind = saved_kind;
 
+    const make_guard_symbol = for (module_mir.functions) |function| {
+        if (std.mem.eql(u8, function.name, "make_guard")) break function.typed_symbol_id;
+    } else return error.TestUnexpectedResult;
+
+    const saved_ownership_drop_symbol = module_mir.type_ownership_facts[0].drop_glue_symbol_id;
+    module_mir.type_ownership_facts[0].drop_glue_symbol_id = make_guard_symbol;
+    var stale_ownership_symbol_output: std.ArrayList(u8) = .empty;
+    defer stale_ownership_symbol_output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &stale_ownership_symbol_output, "llvm_drop_glue_mir_facts.mc", .{}, false, .riscv64, null));
+    module_mir.type_ownership_facts[0].drop_glue_symbol_id = saved_ownership_drop_symbol;
+
     const saved_facts = module_mir.drop_glue_facts;
     module_mir.drop_glue_facts = &[_]mir.DropGlueFact{};
     var missing_output: std.ArrayList(u8) = .empty;
@@ -1459,9 +1470,6 @@ test "LLVM consumes MIR drop glue facts and fails closed when absent or stale" {
 
     const saved_fn = module_mir.drop_glue_facts[0].release_fn;
     const saved_symbol = module_mir.drop_glue_facts[0].typed_release_symbol_id;
-    const make_guard_symbol = for (module_mir.functions) |function| {
-        if (std.mem.eql(u8, function.name, "make_guard")) break function.typed_symbol_id;
-    } else return error.TestUnexpectedResult;
     module_mir.drop_glue_facts[0].release_fn = "make_guard";
     module_mir.drop_glue_facts[0].typed_release_symbol_id = make_guard_symbol;
     defer {

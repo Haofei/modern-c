@@ -510,7 +510,7 @@ pub const CEmitter = struct {
 
     pub fn collectDropGlueFactsFromMir(self: *CEmitter) !void {
         for (self.mir_module.drop_glue_facts) |fact| {
-            if (!self.autoDropEligibleTypeName(fact.resource_type)) return error.UnsupportedCEmission;
+            if (!self.autoDropEligibleTypeNameForDropGlue(fact.resource_type, fact.typed_release_symbol_id)) return error.UnsupportedCEmission;
             const entry = try self.auto_drop_fns_by_type.getOrPut(fact.resource_type);
             if (entry.found_existing) {
                 if (!std.mem.eql(u8, entry.value_ptr.*, fact.release_fn)) return error.UnsupportedCEmission;
@@ -8792,6 +8792,14 @@ pub const CEmitter = struct {
         for (self.mir_module.type_ownership_facts) |fact| {
             if (!std.mem.eql(u8, fact.type_name, type_name)) continue;
             return fact.kind == .affine and fact.drop_glue_symbol_id.isValid();
+        }
+        return false;
+    }
+
+    fn autoDropEligibleTypeNameForDropGlue(self: *CEmitter, type_name: []const u8, release_symbol_id: mir.SymbolId) bool {
+        for (self.mir_module.type_ownership_facts) |fact| {
+            if (!std.mem.eql(u8, fact.type_name, type_name)) continue;
+            return fact.kind == .affine and fact.drop_glue_symbol_id.isValid() and fact.drop_glue_symbol_id.eql(release_symbol_id);
         }
         return false;
     }
