@@ -35,6 +35,7 @@
         "release-metadata-test",
         "package-release-test",
         "profile-manifest-test",
+        "ownership-experimental-surface-inventory-test",
         "kernel-scope-inventory-test",
         "std-api-docs-test",
         "vendoring-test",
@@ -355,6 +356,25 @@
       ],
       "blocking_profiles": [
         "kernel-qemu",
+        "developer-tools"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "ownership-experimental-surface-inventory-test",
+      "owner": "ownership",
+      "category": "experimental-surface-boundary",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset",
         "developer-tools"
       ],
       "build_tiers": [

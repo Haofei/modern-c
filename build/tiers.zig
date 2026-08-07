@@ -364,6 +364,7 @@ pub fn register(ctx: *h.Ctx) void {
     // move-pointer-pointee-boundary-inventory-test keeps pointer-pointee move-resource accept/reject policy explicit.
     m0_full_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("move-projection-inventory-test"));
+    m0_full_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("kernel-contract-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("kernel-scope-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("qmp-ordering-test"));
@@ -843,6 +844,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("release-metadata-test"));
     m0_step.dependOn(ctx.cmd("package-release-test"));
     m0_step.dependOn(ctx.cmd("profile-manifest-test"));
+    m0_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
     m0_step.dependOn(ctx.cmd("kernel-scope-inventory-test"));
     m0_step.dependOn(ctx.cmd("std-api-docs-test"));
     m0_step.dependOn(ctx.cmd("vendoring-test"));
@@ -867,6 +869,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("move-dynamic-place-policy-inventory-test"));
     fast_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test"));
     fast_step.dependOn(ctx.cmd("move-projection-inventory-test"));
+    fast_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
     fast_step.dependOn(ctx.cmd("kernel-contract-inventory-test"));
     fast_step.dependOn(ctx.cmd("kernel-scope-inventory-test"));
     fast_step.dependOn(ctx.cmd("qmp-ordering-test"));
@@ -915,6 +918,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("move-dynamic-place-policy-inventory-test")); // stable dynamic indexes stay distinct from unknown wildcards
     c0_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test")); // pointer-pointee move-resource accept/reject policy stays explicit
     c0_step.dependOn(ctx.cmd("move-projection-inventory-test")); // projection admission map stays explicit
+    c0_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test")); // advanced ownership forms stay outside the stable v0 surface
     c0_step.dependOn(ctx.cmd("kernel-contract-inventory-test")); // bounded region/effect/FFI profile stays explicit
     c0_step.dependOn(ctx.cmd("kernel-scope-inventory-test")); // kernel remains a language-validation workload, not a product roadmap
     c0_step.dependOn(ctx.cmd("qmp-ordering-test")); // lifecycle qualification transport preserves asynchronous events
