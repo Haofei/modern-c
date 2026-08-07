@@ -555,30 +555,19 @@ Model broker should enforce:
 - export/network policy
 - accelerator/device access policy
 
-## 12. Storage and update plan
+## 12. Storage plan
 
 Storage should start simple:
 
 1. Kernel-staged script buffers.
 2. virtio-blk-backed object store.
 3. Capability FS for scripts/config/logs.
-4. Signed agent bundles.
-5. OTA update support.
 
-Agent bundle format should eventually contain:
-
-```
-manifest
-agent code
-runtime type: js | wasm
-declared capabilities
-resource budgets
-signature
-version
-rollback policy
-```
-
-The kernel or trusted manager should verify signatures before running an agent bundle.
+Product update, bundle signing, verified boot, OTA, and rollback are outside the current
+language-oriented kernel scope. They should not be implemented or used as readiness evidence
+until a concrete product profile reintroduces them with a separate threat model and gate set.
+For now, the kernel is an integration workload for language, ABI, ownership, async, driver,
+and confinement semantics.
 
 ## 13. Networking plan
 
@@ -779,10 +768,8 @@ Done when:
 
 Done when:
 
-- Signed agent bundles exist.
-- Persistent policy store exists.
+- Persistent fixture policy/config storage exists.
 - Audit log can persist to storage.
-- OTA/update story exists.
 - At least one real board port works.
 
 ## 17. Design constraints to protect the project

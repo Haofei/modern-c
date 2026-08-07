@@ -80,7 +80,7 @@ The first production target should not try to provide:
 | L0: Development kernel | current | QEMU-gated kernel with real confinement and agent substrate | Existing `m0`/QEMU gates; confined QuickJS; broker ABI; S-mode path |
 | L1: Alpha appliance kernel | 1-3 months | One reference target with production-shaped I/O and agent loop | interrupt-driven virtio, brokered net fetch, stable async agent loop |
 | L2: Field pilot | 3-6 months | Runs on one real board under controlled deployment | board boot, UART/net/storage, watchdog, persistent audit/policy |
-| L3: Fixed-device production | 9-18 months | Safe to ship on one device class with recovery and operations | OTA lifecycle, soak/fault tests, recovery |
+| L3: Fixed-device production | 9-18 months | Safe to ship on one device class with recovery and operations | soak/fault tests, recovery policy, product-profile update story |
 | L4: Multi-board platform | 18-36+ months | Reusable platform across several boards/architectures | board profiles, BSP matrix, cross-arch parity, sustained CI |
 
 These estimates assume focused engineering, a narrow product target, and no attempt to
@@ -155,11 +155,12 @@ substantially more implemented + gated than first credited):
   - **P6 hardening**: a **soak** gate (~12k spawn/charge/supervise/reclaim/reap cycles, leak/overflow
     clean; `soak-test`, both backends), and `docs/security-review.md`.
 
-- **Genuinely remaining:** (10) a real **board profile + hardware bring-up** and product-specific
-  OTA/recovery policy. Local dev VM: `tools/run-kernel.sh` boots demos in QEMU.
+- **Genuinely remaining:** (10) a real **board profile + hardware bring-up**. Any
+  product-specific update/recovery policy is external to the current language-oriented kernel
+  scope. Local dev VM: `tools/run-kernel.sh` boots demos in QEMU.
 
 The point of this section is to distinguish qualified mechanisms from end-to-end claims. Metadata
-and rollback fixtures are gated, but they are not a production trust chain.
+fixtures are gated, but they are not a production trust chain.
 
 ## 4. Main production blockers
 
@@ -287,7 +288,7 @@ Acceptance gates:
 - Tests cover audit attribution and ring wraparound.
 - Product policy load, persistence, and live actuation are reintroduced only behind a concrete product profile.
 
-### 4.4 Update and recovery lifecycle
+### 4.4 Product update and recovery lifecycle
 
 Current status:
 
@@ -295,22 +296,11 @@ Current status:
 - Product update policy should be specified outside the language core and reintroduced only when
   a concrete product profile needs it.
 
-Production target:
+Current acceptance gate:
 
-- Signed kernel images or verified boot chain.
-- Signed agent bundles.
-- Versioned policy bundles.
-- OTA update with rollback.
-- Recovery image or fallback slot.
-- Clear compatibility rule between kernel ABI, broker ABI, policy schema, and agent bundle.
-
-Acceptance gates:
-
-- Unsigned or incorrectly signed agent bundle is rejected.
-- Old-but-allowed bundle version can run if policy permits it.
-- Update can be interrupted without bricking the device.
-- Rollback works after a failed boot.
-- Audit records include image and bundle identity.
+- No kernel OTA/live-update gate is treated as language-core readiness evidence.
+- Any future signed image, signed bundle, verified boot, rollback, or recovery-slot mechanism must
+  arrive through a concrete product profile with its own threat model and qualification gates.
 
 ### 4.5 Real board support
 
@@ -570,9 +560,7 @@ remain open — QEMU is the only validated platform today.
 - [x] Per-agent memory, request, output, and network budgets are enforced across the production paths. (QEMU-gated: `wasm-memcap`, `wamr-fuel`/`wasm-watchdog`, `quota`/`quota-agent`, `NetCap`.)
 - [ ] Watchdog and reboot reason work.
 - [x] Watchdog/reboot-reason state records are gated.
-- [ ] Product agent update policy exists.
-- [ ] Update rollback works.
-- [x] Two-slot rollback state transition is gated.
+- [ ] Product agent update policy exists outside the language-oriented kernel scope, if a product profile needs it.
 - [ ] Syscall and broker fuzz tests exist.
 - [ ] Long QEMU soak passes.
 - [ ] Real-board soak passes.
@@ -592,7 +580,7 @@ The schedule depends mostly on:
 - How narrow the first hardware target is.
 - Whether wireless is deferred.
 - Whether the product requires `exec` or only brokered file/network tools.
-- How much OTA/update infrastructure already exists outside the kernel.
+- Whether a product profile supplies update/recovery infrastructure outside the language-oriented kernel.
 - How strict the release bar is for certification, audit retention, and physical attack resistance.
 
 ## 8. Strategic guidance
