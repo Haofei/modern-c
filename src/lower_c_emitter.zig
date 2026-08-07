@@ -246,15 +246,9 @@ pub fn appendModuleMir(
     try emitter.emitModule(declarations);
 }
 
-const AutoDropCleanupEntry = struct {
-    fn_name: []const u8,
-    local_name: []const u8,
-    span: ast.Span,
-};
-
 const DeferredCleanup = union(enum) {
     expr: ast.Expr,
-    auto_drop: AutoDropCleanupEntry,
+    auto_drop: ownership_facts.AutoDropLocalCleanup,
 };
 
 pub const CEmitter = struct {
@@ -2913,7 +2907,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn autoDropCleanupForLocalName(self: *CEmitter, local_name: []const u8) ?AutoDropCleanupEntry {
+    fn autoDropCleanupForLocalName(self: *CEmitter, local_name: []const u8) ?ownership_facts.AutoDropLocalCleanup {
         var index = self.defer_stack.items.len;
         while (index > 0) {
             index -= 1;
@@ -3609,7 +3603,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
-    fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: AutoDropCleanupEntry) !void {
+    fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: ownership_facts.AutoDropLocalCleanup) !void {
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
     }

@@ -8,6 +8,12 @@ pub const AutoDropCleanup = struct {
     local_name: []const u8,
 };
 
+pub const AutoDropLocalCleanup = struct {
+    fn_name: []const u8,
+    local_name: []const u8,
+    span: ast.Span,
+};
+
 /// Extract the canonical resource type name from the narrow `#[drop]` ABI:
 ///
 ///     #[drop] fn release(x: *mut T) -> void

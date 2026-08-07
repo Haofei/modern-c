@@ -165,15 +165,9 @@ const DebugLocal = lower_llvm_model.DebugLocal;
 const DebugLocalKind = lower_llvm_model.DebugLocalKind;
 const LoopLabels = lower_llvm_model.LoopLabels;
 
-const AutoDropCleanupEntry = struct {
-    fn_name: []const u8,
-    local_name: []const u8,
-    span: ast.Span,
-};
-
 const DeferredCleanup = union(enum) {
     expr: ast.Expr,
-    auto_drop: AutoDropCleanupEntry,
+    auto_drop: ownership_facts.AutoDropLocalCleanup,
 };
 const RawManyOffsetInfo = lower_llvm_model.RawManyOffsetInfo;
 const EnumRawCallInfo = lower_llvm_model.EnumRawCallInfo;
@@ -2016,7 +2010,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: AutoDropCleanupEntry) !void {
+    fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: ownership_facts.AutoDropLocalCleanup) !void {
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
     }
@@ -2951,7 +2945,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn autoDropCleanupForLocalName(self: *LlvmEmitter, local_name: []const u8) ?AutoDropCleanupEntry {
+    fn autoDropCleanupForLocalName(self: *LlvmEmitter, local_name: []const u8) ?ownership_facts.AutoDropLocalCleanup {
         var index = self.defer_stack.items.len;
         while (index > 0) {
             index -= 1;
