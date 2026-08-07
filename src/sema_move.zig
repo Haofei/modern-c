@@ -2662,7 +2662,7 @@ fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const Mov
 }
 
 fn storagePlaceMayBeWithinArgument(argument: MovePlace, stored: MovePlace) bool {
-    if (!std.mem.eql(u8, argument.root, stored.root) or argument.projection_count > stored.projection_count) return false;
+    if (!argument.sameRootAs(stored) or argument.projection_count > stored.projection_count) return false;
     for (argument.projections[0..argument.projection_count], stored.projections[0..argument.projection_count]) |arg_projection, stored_projection| {
         if (!moveProjectionsMayOverlap(arg_projection, stored_projection)) return false;
     }

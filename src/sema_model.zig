@@ -80,6 +80,10 @@ pub const MovePlace = struct {
         return result;
     }
 
+    pub fn sameRootAs(self: MovePlace, other: MovePlace) bool {
+        return sameRoot(self, other);
+    }
+
     pub fn eql(self: MovePlace, other: MovePlace) bool {
         if (!sameRoot(self, other) or self.projection_count != other.projection_count) return false;
         for (self.projections[0..self.projection_count], other.projections[0..other.projection_count]) |left, right| {
