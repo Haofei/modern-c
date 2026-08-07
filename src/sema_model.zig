@@ -21,6 +21,43 @@ pub const MovePlaceProjectionRelation = enum {
     disjoint,
 };
 
+pub const PlaceState = enum {
+    uninitialized,
+    live,
+    moved,
+    dropped,
+};
+
+pub const LoanState = struct {
+    scoped_shared: usize = 0,
+    scoped_mut: bool = false,
+    deferred_borrow: bool = false,
+    deferred_borrow_place: ?MovePlace = null,
+    escaped_borrow: ?diagnostics.Span = null,
+
+    pub fn hasScopedBorrow(self: LoanState) bool {
+        return self.scoped_shared != 0 or self.scoped_mut;
+    }
+
+    pub fn hasDeferredBorrow(self: LoanState) bool {
+        return self.deferred_borrow or self.deferred_borrow_place != null;
+    }
+
+    pub fn hasEscapedBorrow(self: LoanState) bool {
+        return self.escaped_borrow != null;
+    }
+};
+
+pub const CleanupObligation = struct {
+    deferred_consume: bool = false,
+    auto_drop: bool = false,
+    cleanup_local: bool = false,
+
+    pub fn active(self: CleanupObligation) bool {
+        return self.deferred_consume or self.auto_drop or self.cleanup_local;
+    }
+};
+
 pub const MovePlace = struct {
     root: []const u8,
     projections: [max_move_place_projections]MovePlaceProjection = undefined,
@@ -276,7 +313,63 @@ pub const MoveSlot = struct {
     // is rejected in moveConsume's `.deref` arm. False for DERIVED aliases (`p = f(&o)`,
     // `p = &o.field`) where `*p` is sub-data, not the move binding - those stay borrows.
     full_deref_alias: bool = false,
+
+    pub fn placeState(self: MoveSlot) PlaceState {
+        if (self.type_only or self.alias_of != null) return .uninitialized;
+        return if (self.live) .live else .moved;
+    }
+
+    pub fn loanState(self: MoveSlot) LoanState {
+        return .{
+            .scoped_shared = self.scoped_shared_borrows,
+            .scoped_mut = self.scoped_mut_borrow,
+            .deferred_borrow = self.deferred_borrow,
+            .deferred_borrow_place = self.deferred_borrow_place,
+            .escaped_borrow = self.escaped_borrow,
+        };
+    }
+
+    pub fn cleanupObligation(self: MoveSlot) CleanupObligation {
+        return .{
+            .deferred_consume = self.deferred,
+            .auto_drop = self.auto_drop,
+            .cleanup_local = self.cleanup_local,
+        };
+    }
 };
+
+test "move slot exposes orthogonal ownership state views" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+    const borrowed: MovePlace = .{ .root = "owner" };
+    const slot = MoveSlot{
+        .live = true,
+        .span = span,
+        .place = borrowed,
+        .deferred = true,
+        .auto_drop = true,
+        .deferred_borrow = true,
+        .deferred_borrow_place = borrowed,
+        .scoped_shared_borrows = 2,
+        .escaped_borrow = span,
+        .cleanup_local = true,
+    };
+
+    try std.testing.expectEqual(PlaceState.live, slot.placeState());
+    const loan = slot.loanState();
+    try std.testing.expectEqual(@as(usize, 2), loan.scoped_shared);
+    try std.testing.expect(loan.hasScopedBorrow());
+    try std.testing.expect(loan.hasDeferredBorrow());
+    try std.testing.expect(loan.hasEscapedBorrow());
+
+    const cleanup = slot.cleanupObligation();
+    try std.testing.expect(cleanup.active());
+    try std.testing.expect(cleanup.deferred_consume);
+    try std.testing.expect(cleanup.auto_drop);
+    try std.testing.expect(cleanup.cleanup_local);
+
+    try std.testing.expectEqual(PlaceState.uninitialized, (MoveSlot{ .live = true, .span = span, .place = borrowed, .type_only = true }).placeState());
+    try std.testing.expectEqual(PlaceState.uninitialized, (MoveSlot{ .live = false, .span = span, .alias_of = "owner" }).placeState());
+}
 
 // Array-index facts are semantic metadata, not ownership state. Ownership v0
 // retains only constant facts so a name such as `i` can stand for a concrete

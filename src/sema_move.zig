@@ -745,7 +745,7 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *MoveState, i
     while (it.next()) |entry| {
         const after = matchingMoveStateSlot(iteration_state, entry.key_ptr.*, entry.value_ptr.*) orelse continue;
         const before = entry.value_ptr.*;
-        if (before.live != after.live or before.deferred != after.deferred or before.auto_drop != after.auto_drop or !sameDeferredBorrowFact(before, after)) {
+        if (before.placeState() != after.placeState() or before.live != after.live or !sameCleanupObligation(before, after) or !sameDeferredBorrowFact(before, after)) {
             self.errorCode(before.span, "E_MOVE_LOOP_RESOURCE", "cannot consume or reserve an outer linear `move` value inside a loop; the loop may run zero or multiple times");
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
@@ -1557,7 +1557,7 @@ fn mergeMoveBranchesImpl(
             continue;
         };
         var slot = entry.value_ptr.*;
-        if (slot.live != other.live or slot.deferred != other.deferred or slot.auto_drop != other.auto_drop or !sameDeferredBorrowFact(slot, other)) {
+        if (slot.placeState() != other.placeState() or slot.live != other.live or !sameCleanupObligation(slot, other) or !sameDeferredBorrowFact(slot, other)) {
             if (report_diagnostics) self.errorCode(slot.span, "E_MOVE_BRANCH_MISMATCH", "linear `move` value has inconsistent ownership across control-flow branches");
             slot.live = false;
             slot.deferred = false;
@@ -3135,7 +3135,7 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *MoveState, rhs_state: *co
     while (it.next()) |entry| {
         const after = matchingMoveStateSlot(rhs_state, entry.key_ptr.*, entry.value_ptr.*) orelse continue;
         const before = entry.value_ptr.*;
-        if (before.live != after.live or before.deferred != after.deferred or before.auto_drop != after.auto_drop or !sameMaybeSpan(before.escaped_borrow, after.escaped_borrow) or !sameDeferredBorrowFact(before, after)) {
+        if (before.placeState() != after.placeState() or before.live != after.live or !sameCleanupObligation(before, after) or !sameMaybeSpan(before.loanState().escaped_borrow, after.loanState().escaped_borrow) or !sameDeferredBorrowFact(before, after)) {
             self.errorCode(span, "E_MOVE_BRANCH_MISMATCH", if (deferred) "cannot consume, reserve, or defer-borrow an outer linear `move` value only on one side of a short-circuit expression" else "cannot consume, reserve, or escape an outer linear `move` value only on one side of a short-circuit expression");
             entry.value_ptr.live = false;
             entry.value_ptr.deferred = false;
@@ -3197,12 +3197,22 @@ fn sameMaybePlace(left: ?MovePlace, right: ?MovePlace) bool {
 // Typed deferred-borrow places are the semantic identity. A legacy key-only
 // reservation cannot prove that two CFG states borrowed the same resource.
 fn sameDeferredBorrowFact(left: MoveSlot, right: MoveSlot) bool {
-    if (left.deferred_borrow_place) |left_place| {
-        if (right.deferred_borrow_place) |right_place| return left_place.eql(right_place);
+    const left_loan = left.loanState();
+    const right_loan = right.loanState();
+    if (left_loan.deferred_borrow_place) |left_place| {
+        if (right_loan.deferred_borrow_place) |right_place| return left_place.eql(right_place);
         return false;
     }
-    if (right.deferred_borrow_place != null) return false;
-    return !left.deferred_borrow and !right.deferred_borrow;
+    if (right_loan.deferred_borrow_place != null) return false;
+    return !left_loan.deferred_borrow and !right_loan.deferred_borrow;
+}
+
+fn sameCleanupObligation(left: MoveSlot, right: MoveSlot) bool {
+    const left_cleanup = left.cleanupObligation();
+    const right_cleanup = right.cleanupObligation();
+    return left_cleanup.deferred_consume == right_cleanup.deferred_consume and
+        left_cleanup.auto_drop == right_cleanup.auto_drop and
+        left_cleanup.cleanup_local == right_cleanup.cleanup_local;
 }
 
 fn moveStatesEqual(left: *const MoveState, right: *const MoveState) bool {
@@ -3233,16 +3243,15 @@ fn scopedBorrowStatesEqual(left: *const MoveState, right: *const MoveState) bool
 }
 
 fn moveSlotStateEqual(left: MoveSlot, right: MoveSlot) bool {
-    return left.live == right.live and
+    return left.placeState() == right.placeState() and
+        left.live == right.live and
         sameMaybePlace(left.place, right.place) and
-        left.deferred == right.deferred and
-        left.auto_drop == right.auto_drop and
+        sameCleanupObligation(left, right) and
         sameDeferredBorrowFact(left, right) and
         std.meta.eql(left.ty, right.ty) and
         left.type_only == right.type_only and
         sameAliasFact(left, right) and
-        sameMaybeSpan(left.escaped_borrow, right.escaped_borrow) and
-        left.cleanup_local == right.cleanup_local;
+        sameMaybeSpan(left.loanState().escaped_borrow, right.loanState().escaped_borrow);
 }
 
 fn deferredAliasBorrowPlace(place: ?MovePlace) ?MovePlace {

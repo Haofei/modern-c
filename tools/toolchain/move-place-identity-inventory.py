@@ -42,7 +42,13 @@ ANCHORS: dict[str, list[str]] = {
         "fn markDeferredBorrowReferent(self: *Checker, borrowed_place: MovePlace",
     ],
     "src/sema_model.zig": [
+        "pub const PlaceState = enum",
+        "pub const LoanState = struct",
+        "pub const CleanupObligation = struct",
         "pub const MoveSlot = struct",
+        "pub fn placeState(self: MoveSlot) PlaceState",
+        "pub fn loanState(self: MoveSlot) LoanState",
+        "pub fn cleanupObligation(self: MoveSlot) CleanupObligation",
         "pub const MoveIndexFact = union(enum)",
         "entry_places: std.ArrayListUnmanaged(MovePlace)",
     ],
@@ -54,6 +60,7 @@ ANCHORS: dict[str, list[str]] = {
         "Move checker deferred aliases use typed referents",
         "move-place-identity-inventory.py",
         "Move checker index facts no longer occupy slots",
+        "Move checker exposes orthogonal ownership state views",
     ],
 }
 
