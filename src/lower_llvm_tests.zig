@@ -1577,6 +1577,48 @@ test "LLVM explicit drop release only cancels matching auto-drop local" {
     try std.testing.expect(h_cleanup < final_return);
 }
 
+test "LLVM explicit drop release cancellation requires MIR explicit-drop event" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn explicit_release_keeps_other_auto_drop() -> u32 {
+        \\    var g: Guard = make_guard(1);
+        \\    var h: Guard = make_guard(2);
+        \\    close_guard(&g);
+        \\    return h.id;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_drop_attr_release_requires_mir_event.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = for (module_mir.functions) |*candidate| {
+        if (std.mem.eql(u8, candidate.name, "explicit_release_keeps_other_auto_drop")) break candidate;
+    } else return error.TestUnexpectedResult;
+    const generated_events = function.ownership_events;
+    var explicit_index: usize = 0;
+    while (explicit_index < generated_events.len and generated_events[explicit_index].kind != .explicit_drop) : (explicit_index += 1) {}
+    if (explicit_index == generated_events.len) return error.TestUnexpectedResult;
+
+    const events = try std.testing.allocator.alloc(mir.OwnershipEvent, generated_events.len + 1);
+    @memcpy(events[0 .. explicit_index + 1], generated_events[0 .. explicit_index + 1]);
+    events[explicit_index].kind = .auto_drop;
+    events[explicit_index + 1] = generated_events[explicit_index];
+    events[explicit_index + 1].kind = .storage_dead;
+    events[explicit_index + 1].drop_glue_symbol_id = .invalid;
+    @memcpy(events[explicit_index + 2 ..], generated_events[explicit_index + 1 ..]);
+    function.ownership_events = events;
+    std.testing.allocator.free(generated_events);
+    try mir.validateLoweringAdmission(module_mir);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_drop_attr_release_requires_mir_event.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM if-let branches restore auto-drop cleanup stack" {
     const source =
         \\move struct Guard { id: u32 }

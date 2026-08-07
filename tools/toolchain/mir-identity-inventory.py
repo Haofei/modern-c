@@ -235,21 +235,27 @@ def main() -> int:
         "MIR ownership event admission rejects auto-drop without storage-dead",
         "MIR ownership event admission accepts sibling copy locals with reused names",
         "MIR records forget events for no-drop move resources",
+        "MIR records explicit drop glue call ownership events",
     ):
         require_contains("src/mir_tests.zig", needle)
 
     for path, needle in (
         ("src/mir.zig", "fn autoDropClosesStorage"),
         ("src/mir.zig", "fn typeOwnershipSymbolForTypeName"),
+        ("src/mir.zig", "fn addDropGlueCallOwnershipEvent"),
         ("src/mir_ownership_authority.zig", "event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)"),
+        ("src/mir_ownership_authority.zig", "pub fn authorizesExplicitDropLocal"),
         ("src/lower_c_tests.zig", "lower-c rejects auto-drop transfer authorization with stale MIR resource type"),
+        ("src/lower_c_tests.zig", "lower-c explicit drop release cancellation requires MIR explicit-drop event"),
         ("src/lower_llvm_tests.zig", "LLVM rejects auto-drop transfer authorization with stale MIR resource type"),
+        ("src/lower_llvm_tests.zig", "LLVM explicit drop release cancellation requires MIR explicit-drop event"),
         ("docs/refactoring-plan.md", "MIR already has typed seeds for block, function symbol, value, type, and span"),
         ("docs/refactoring-plan.md", "Verifier/admission checks reject result/span/owner drift."),
         ("docs/typed-semantic-facts.md", "The typed MIR identity migration has started with `BlockId`"),
         ("docs/compiler-production-readiness.md", "MIR owns the ownership event envelope"),
         ("docs/compiler-production-readiness.md", "MIR admission requires auto-drop to close storage"),
         ("docs/compiler-production-readiness.md", "C/LLVM transfer auto-drop authorization requires MIR resource identity"),
+        ("docs/compiler-production-readiness.md", "C/LLVM explicit release cancellation is MIR-event gated"),
         ("docs/compiler-production-readiness.md", "MIR ownership sequence checks only typed resource roots"),
         ("docs/compiler-production-readiness.md", "MIR local ownership identity covers no-drop resources"),
         ("docs/compiler-production-readiness.md", "forget_unchecked(identifier)` accepts any non-copy type ownership fact"),

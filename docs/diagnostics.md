@@ -40,7 +40,7 @@ Total codes: **282**.
 | `E_ATOMIC_RESOURCE_PAYLOAD` | atomic payloads cannot be \`move\`/\`linear\`, \`region\`, or \`view struct\` resources; store a copyable handle or integer state instead<br>atomic.init cannot materialize \`move\`/\`linear\`, \`region\`, or \`view struct\` resources; store a copyable handle or integer state instead | `src/sema.zig:4722`<br>`src/sema.zig:4769` |
 | `E_AUTO_DROP_UNSUPPORTED` | cannot reinitialize an auto-dropped \`move\` binding after it was moved in ownership v0; bind the replacement to a fresh local or disable auto-drop with an explicit release path<br>cannot use \`forget_unchecked\` on an auto-dropped \`move\` binding in ownership v0; use an explicit release path or a non-auto-drop resource handoff API | `src/sema_move.zig:965`<br>`src/sema_move.zig:3766` |
 | `E_AWAIT_OUTSIDE_ASYNC` | \`await\` is only valid inside an \`async fn\` (in '{s}') | `src/async_lower.zig:261` |
-| `E_BACKEND_UNSUPPORTED` | C backend does not yet support {s}<br>LLVM backend does not yet support {s}<br>{s} backend does not yet support this construct | `src/lower_c_emitter.zig:3658`<br>`src/lower_c_emitter.zig:4194`<br>`src/lower_llvm.zig:1506`<br>`src/lower_llvm.zig:1513`<br>`src/main.zig:1565` |
+| `E_BACKEND_UNSUPPORTED` | C backend does not yet support {s}<br>LLVM backend does not yet support {s}<br>{s} backend does not yet support this construct | `src/lower_c_emitter.zig:3660`<br>`src/lower_c_emitter.zig:4196`<br>`src/lower_llvm.zig:1506`<br>`src/lower_llvm.zig:1513`<br>`src/main.zig:1565` |
 | `E_BITCAST_TYPE` | bitcast pointer-reinterpret may not cross into or out of a \`move\`/\`linear\` resource pointee; use a typed resource API or an explicit unsafe raw handle<br>bitcast pointer-reinterpret may not cross into or out of a \`region struct\` pointee; use a region-aware view or stable ID<br>bitcast pointer-reinterpret may not cross into or out of a \`view struct\` pointee; rebuild the view from its source inside the lexical scope<br>_+4 more_ | `src/mir_verify_util.zig:194`<br>`src/sema.zig:5192`<br>`src/sema.zig:5202`<br>`src/sema.zig:5205`<br>`src/sema.zig:5220`<br>`src/sema.zig:5224`<br>_+2 more_ |
 | `E_BITWISE_ARITH_DOMAIN_OPERAND` | bitwise operations are not defined on this arithmetic domain | `src/mir_verify_util.zig:144`<br>`src/sema.zig:3829`<br>`src/sema.zig:3910` |
 | `E_BITWISE_BOOL_OPERAND` | bitwise operations are not defined on bool operands | `src/mir_verify_util.zig:155`<br>`src/sema.zig:3820`<br>`src/sema.zig:3904` |
@@ -157,7 +157,7 @@ Total codes: **282**.
 | `E_LOCAL_REQUIRES_INITIALIZER` | ordinary local variables must be initialized; use '= uninit' for explicit uninitialized storage | `src/sema.zig:3498` |
 | `E_MAYBEUNINIT_RESOURCE_PAYLOAD` | MaybeUninit cannot store \`move\`/\`linear\`, \`region\`, or \`view struct\` payloads; use an ownership-aware resource container instead | `src/sema.zig:4795` |
 | `E_MC_VOID_POINTER_FFI` | use c_void for C opaque object pointers, not MC void | `src/sema.zig:4452` |
-| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:11000` |
+| `E_MIR_CFG` | MIR verifier found malformed control-flow graph | `src/mir.zig:11037` |
 | `E_MIR_IDENTITY` | MIR verifier found malformed instruction identity | `src/mir.zig:1383` |
 | `E_MIR_OWNERSHIP_EVENT` | MIR verifier found inconsistent ownership event sequence<br>MIR verifier found malformed ownership event | `src/mir.zig:1583`<br>`src/mir.zig:1590` |
 | `E_MIR_SYMBOL_ID` | MIR verifier found malformed symbol identity table | `src/mir.zig:1371` |

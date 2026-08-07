@@ -2888,8 +2888,10 @@ pub const CEmitter = struct {
         self.cancelAutoDropForLocalName(local_name);
     }
 
-    fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) void {
+    fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) !void {
         const cleanup = self.autoDropPointerCleanup(expr) orelse return;
+        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        if (!mir_ownership_authority.authorizesExplicitDropLocal(self.mir_module, function, cleanup.local_name, cleanup.fn_name)) return error.UnsupportedCEmission;
         self.cancelAutoDropForLocalName(cleanup.local_name);
     }
 
@@ -3343,7 +3345,7 @@ pub const CEmitter = struct {
 
     fn emitExpressionStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         if (try self.emitNeverExprStmt(expr, locals)) return;
-        self.cancelAutoDropForReleaseCall(expr);
+        try self.cancelAutoDropForReleaseCall(expr);
         if (try lower_c_memory.emitMaybeUninitWriteStmt(self.memoryContext(), expr, locals)) return;
         if (try lower_c_mmio.emitWriteStmt(self.mmioEmitContext(), expr, locals)) return;
         if (try self.emitRawStoreStmt(expr, locals)) return;
@@ -3508,7 +3510,7 @@ pub const CEmitter = struct {
     }
 
     fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr) !void {
-        self.cancelAutoDropForReleaseCall(expr);
+        try self.cancelAutoDropForReleaseCall(expr);
         self.defer_stack.append(self.allocator, .{ .expr = expr }) catch return error.OutOfMemory;
     }
 

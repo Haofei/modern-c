@@ -6372,6 +6372,7 @@ const FunctionBuilder = struct {
                     ty
                 else if (self.fenceCallTargetKind(node.callee.*)) |_| .void else if (indirect_call_target) |target| target.result_ty else if (self.summaries.get(callee_name)) |summary| summary.return_ty else .unknown;
                 try self.addInstr(instr_kind, callee_name, call_ty, expr.span);
+                if (direct_call) try self.addDropGlueCallOwnershipEvent(callee_name, node, expr.span);
                 if (direct_decl_summary) |summary| {
                     const result_ty = summary.return_type_expr orelse ast_query.simpleNameType("void", node.callee.*.span);
                     try self.appendOwnedTargetTypeFact(.direct_call_result, result_ty, summary.return_ty, node.callee.*.span, callee_name, null);
@@ -7389,6 +7390,32 @@ const FunctionBuilder = struct {
         });
     }
 
+    fn addDropGlueCallOwnershipEvent(self: *FunctionBuilder, callee_name: []const u8, call: anytype, call_span: ast.Span) !void {
+        if (call.type_args.len != 0 or call.args.len != 1) return;
+        const root = ownership_facts.addressOfIdentName(call.args[0]) orelse return;
+        const root_value_id = try self.internValueId(root);
+        const root_type_symbol_id = self.localRootTypeSymbol(root);
+        if (!root_type_symbol_id.isValid()) return;
+        const drop_glue_identity = self.dropGlueIdentityForReleaseFunction(callee_name) orelse return;
+        if (!drop_glue_identity.resource_symbol_id.eql(root_type_symbol_id)) return;
+        const block_id = BlockId.fromIndex(self.current);
+        const instruction_index: ?u32 = if (self.blocks.items[self.current].instructions.items.len == 0)
+            null
+        else
+            @intCast(self.blocks.items[self.current].instructions.items.len - 1);
+        try self.ownership_events.append(self.allocator, .{
+            .kind = .explicit_drop,
+            .place = .{
+                .root_value_id = root_value_id,
+                .root_type_symbol_id = root_type_symbol_id,
+            },
+            .drop_glue_symbol_id = drop_glue_identity.release_symbol_id,
+            .block_id = block_id,
+            .instruction_index = instruction_index,
+            .source = .{ .line = call_span.line, .column = call_span.column, .offset = call_span.offset, .len = call_span.len },
+        });
+    }
+
     fn discardArgumentDropGlueIdentity(self: *FunctionBuilder, argument: ast.Expr) ?DiscardDropGlueIdentity {
         const root = directIdentName(argument) orelse return null;
         const ty = self.local_type_exprs.get(root) orelse self.global_type_exprs.get(root) orelse return null;
@@ -7399,6 +7426,16 @@ const FunctionBuilder = struct {
     fn dropGlueIdentityForTypeName(self: *FunctionBuilder, type_name: []const u8) ?DiscardDropGlueIdentity {
         for (self.drop_glue_facts) |fact| {
             if (std.mem.eql(u8, fact.resource_type, type_name)) return .{
+                .resource_symbol_id = fact.typed_resource_symbol_id,
+                .release_symbol_id = fact.typed_release_symbol_id,
+            };
+        }
+        return null;
+    }
+
+    fn dropGlueIdentityForReleaseFunction(self: *FunctionBuilder, release_fn: []const u8) ?DiscardDropGlueIdentity {
+        for (self.drop_glue_facts) |fact| {
+            if (std.mem.eql(u8, fact.release_fn, release_fn)) return .{
                 .resource_symbol_id = fact.typed_resource_symbol_id,
                 .release_symbol_id = fact.typed_release_symbol_id,
             };

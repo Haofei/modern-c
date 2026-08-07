@@ -49,11 +49,37 @@ pub fn authorizesAutoDropLocal(
     return false;
 }
 
+pub fn authorizesExplicitDropLocal(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    local_name: []const u8,
+    drop_fn: []const u8,
+) bool {
+    const root_value_id = valueIdForLocal(function, local_name) orelse return false;
+    const drop_glue = dropGlueFactForReleaseFunction(module, drop_fn) orelse return false;
+
+    for (function.ownership_events) |event| {
+        if (event.kind != .explicit_drop) continue;
+        if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
+        if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
+        if (!event.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) continue;
+        return true;
+    }
+    return false;
+}
+
 fn dropGlueFactFor(module: *const mir.Module, type_name: []const u8, drop_fn: []const u8) ?mir.DropGlueFact {
     for (module.drop_glue_facts) |fact| {
         if (!std.mem.eql(u8, fact.resource_type, type_name)) continue;
         if (!std.mem.eql(u8, fact.release_fn, drop_fn)) continue;
         return fact;
+    }
+    return null;
+}
+
+fn dropGlueFactForReleaseFunction(module: *const mir.Module, drop_fn: []const u8) ?mir.DropGlueFact {
+    for (module.drop_glue_facts) |fact| {
+        if (std.mem.eql(u8, fact.release_fn, drop_fn)) return fact;
     }
     return null;
 }

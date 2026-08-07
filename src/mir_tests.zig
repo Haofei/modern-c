@@ -4535,6 +4535,37 @@ test "MIR records forget events for no-drop move resources" {
     try mir.validateLoweringAdmission(module_mir);
 }
 
+test "MIR records explicit drop glue call ownership events" {
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn release_one() -> u32 {
+        \\    var g: Guard = make_guard(1);
+        \\    var h: Guard = make_guard(2);
+        \\    close_guard(&g);
+        \\    return h.id;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_explicit_drop_glue_call.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "release_one") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 7), function.ownership_events.len);
+    try std.testing.expectEqual(mir.OwnershipEventKind.storage_live, function.ownership_events[0].kind);
+    try std.testing.expectEqual(mir.OwnershipEventKind.init, function.ownership_events[1].kind);
+    try std.testing.expectEqual(mir.OwnershipEventKind.storage_live, function.ownership_events[2].kind);
+    try std.testing.expectEqual(mir.OwnershipEventKind.init, function.ownership_events[3].kind);
+    try std.testing.expectEqual(mir.OwnershipEventKind.explicit_drop, function.ownership_events[4].kind);
+    try std.testing.expect(function.ownership_events[4].drop_glue_symbol_id.isValid());
+    try std.testing.expectEqual(mir.OwnershipEventKind.auto_drop, function.ownership_events[5].kind);
+    try std.testing.expectEqual(mir.OwnershipEventKind.storage_dead, function.ownership_events[6].kind);
+    try mir.validateLoweringAdmission(module_mir);
+}
+
 test "MIR reinit ownership events require mutable locals" {
     const source =
         \\fn accept_var() -> u32 {

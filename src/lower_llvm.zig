@@ -1882,7 +1882,7 @@ const LlvmEmitter = struct {
             .var_decl => |local| try self.emitLocalDecl(local, true),
             .assignment => |node| try self.emitAssignment(node.target, node.value, stmt.span),
             .@"defer" => |expr| {
-                self.cancelAutoDropForReleaseCall(expr);
+                try self.cancelAutoDropForReleaseCall(expr);
                 try self.defer_stack.append(self.allocator, .{ .expr = expr });
             },
             .loop => |node| {
@@ -2298,7 +2298,7 @@ const LlvmEmitter = struct {
                 // the program; emit the trap/call followed by `unreachable` (no value needed even
                 // in a value-returning function, since this path does not fall through).
                 if (try self.emitNeverExpr(expr)) return;
-                self.cancelAutoDropForReleaseCall(expr);
+                try self.cancelAutoDropForReleaseCall(expr);
                 const call_span = call.callee.*.span;
                 const call_kind = self.mirCallTargetKindAt(call_span);
                 if (call_kind) |kind| {
@@ -2930,8 +2930,10 @@ const LlvmEmitter = struct {
         self.cancelAutoDropForLocalName(local_name);
     }
 
-    fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) void {
+    fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) !void {
         const cleanup = self.autoDropPointerCleanup(expr) orelse return;
+        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
+        if (!mir_ownership_authority.authorizesExplicitDropLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name)) return error.UnsupportedLlvmEmission;
         self.cancelAutoDropForLocalName(cleanup.local_name);
     }
 
