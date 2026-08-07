@@ -760,7 +760,7 @@ pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *MoveState, i
     while (iter_it.next()) |entry| {
         if (moveStateSlotMatches(entry_state, entry.key_ptr.*, entry.value_ptr.*)) continue;
         const root = trackedSubplaceRoot(entry.value_ptr.*, entry.key_ptr.*) orelse continue;
-        if (rootMoveSlotPtrForPlace(.{ .root = root }, entry_state)) |root_slot| {
+        if (rootMoveSlotPtrForPlace(root, entry_state)) |root_slot| {
             self.errorCode(entry.value_ptr.span, "E_MOVE_LOOP_RESOURCE", "cannot move an outer linear `move` place inside a loop; the loop may run zero or multiple times");
             root_slot.live = false;
             root_slot.deferred = false;
@@ -1481,6 +1481,10 @@ fn applyLoopEarlyExitAliasInvalidations(state: *MoveState, frame: *const LoopMov
 
 pub fn cloneMoveState(self: *Checker, state: *const MoveState) MoveState {
     var clone = MoveState.init(self.reporter.allocator);
+    clone.copyRootIdsFrom(state) catch {
+        self.oom = true;
+        return clone;
+    };
     var it = state.iterator();
     while (it.next()) |entry| {
         clone.put(entry.key_ptr.*, entry.value_ptr.*) catch {
@@ -1504,6 +1508,10 @@ pub fn cloneMoveState(self: *Checker, state: *const MoveState) MoveState {
 
 pub fn replaceMoveState(self: *Checker, dest: *MoveState, src: *const MoveState) void {
     dest.clearRetainingCapacity();
+    dest.copyRootIdsFrom(src) catch {
+        self.oom = true;
+        return;
+    };
     var it = src.iterator();
     while (it.next()) |entry| {
         dest.put(entry.key_ptr.*, entry.value_ptr.*) catch {
@@ -2430,7 +2438,7 @@ fn isOwnershipMovePlace(slot: MoveSlot, key: []const u8) bool {
 // structural, non-alias ownership root may establish that the expression owns a
 // linear resource.
 fn ownershipBindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?MoveSlot {
-    const expected: MovePlace = .{ .root = name };
+    const expected = state.lookupPlaceForRoot(name);
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -2444,7 +2452,7 @@ fn ownershipBindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?
 // by CFG joins, so a typed alias consumer must locate the alias's own storage
 // root instead of treating source spelling as a compatibility-map key.
 fn aliasBindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?MoveSlot {
-    const expected: MovePlace = .{ .root = name };
+    const expected = state.lookupPlaceForRoot(name);
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
@@ -2456,7 +2464,7 @@ fn aliasBindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?Move
 }
 
 fn bindingMoveSlotPtrForIdent(name: []const u8, state: *MoveState) ?*MoveSlot {
-    const expected: MovePlace = .{ .root = name };
+    const expected = state.lookupPlaceForRoot(name);
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr;
@@ -2498,25 +2506,27 @@ fn ownershipMoveSlotForPlace(place: MovePlace, state: *const MoveState) ?MoveSlo
 // looking up a string key. A root place is matched structurally so a renamed
 // compatibility entry cannot change move semantics.
 fn rootMoveSlotForPlace(place: MovePlace, state: *const MoveState) ?MoveSlot {
+    const expected: MovePlace = .{ .root = place.root, .root_id = place.root_id };
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;
         if (slot.alias_of != null) continue;
         const tracked = slot.place orelse continue;
         if (tracked.isSubplace()) continue;
-        if (std.mem.eql(u8, tracked.root, place.root)) return slot;
+        if (tracked.eql(expected)) return slot;
     }
     return null;
 }
 
 fn rootMoveSlotPtrForPlace(place: MovePlace, state: *MoveState) ?*MoveSlot {
+    const expected: MovePlace = .{ .root = place.root, .root_id = place.root_id };
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr;
         if (slot.alias_of != null) continue;
         const tracked = slot.place orelse continue;
         if (tracked.isSubplace()) continue;
-        if (std.mem.eql(u8, tracked.root, place.root)) return slot;
+        if (tracked.eql(expected)) return slot;
     }
     return null;
 }
@@ -2541,7 +2551,7 @@ fn borrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *const MoveState
     }
     const place = (placeKeyAndType(self, target, state) orelse return null).place;
     if (rootMoveSlotForPlace(place, state) == null) return null;
-    return .{ .root = place.root };
+    return .{ .root = place.root, .root_id = place.root_id };
 }
 
 // `&t as usize` parses as `&(t as usize)`. Preserve `t`'s structural place
@@ -2557,7 +2567,7 @@ fn integerCastBorrowedMoveRootPlace(self: *Checker, expr: ast.Expr, state: *cons
     if (!spine.isIntegerLike(spine.classifyTypeCtx(cast.ty.*, ctx.*))) return null;
     const place = (placeKeyAndType(self, cast.value.*, state) orelse return null).place;
     if (rootMoveSlotForPlace(place, state) == null) return null;
-    return .{ .root = place.root };
+    return .{ .root = place.root, .root_id = place.root_id };
 }
 
 fn markEscapedBorrowForPlace(place: MovePlace, escape_span: diagnostics.Span, state: *MoveState) void {
@@ -2630,10 +2640,10 @@ fn moveSubplaceRootInOuter(slot: MoveSlot, key: []const u8, outer: *const MoveSt
     return rootMoveSlotForPlace(place, outer) != null;
 }
 
-fn trackedSubplaceRoot(slot: MoveSlot, key: []const u8) ?[]const u8 {
+fn trackedSubplaceRoot(slot: MoveSlot, key: []const u8) ?MovePlace {
     _ = key;
     const place = slot.place orelse return null;
-    return if (place.isSubplace()) place.root else null;
+    return if (place.isSubplace()) .{ .root = place.root, .root_id = place.root_id } else null;
 }
 
 fn checkAggregateAliasArgument(self: *Checker, expr: ast.Expr, state: *const MoveState) void {
@@ -3151,7 +3161,7 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *MoveState, rhs_state: *co
     while (rhs_it.next()) |entry| {
         if (moveStateSlotMatches(state, entry.key_ptr.*, entry.value_ptr.*)) continue;
         const root = trackedSubplaceRoot(entry.value_ptr.*, entry.key_ptr.*) orelse continue;
-        if (rootMoveSlotPtrForPlace(.{ .root = root }, state)) |root_slot| {
+        if (rootMoveSlotPtrForPlace(root, state)) |root_slot| {
             self.errorCode(span, "E_MOVE_BRANCH_MISMATCH", if (deferred) "cannot defer-consume a linear `move` place only on one side of a short-circuit expression" else "cannot move a linear `move` place only on one side of a short-circuit expression");
             root_slot.live = false;
             root_slot.deferred = false;
@@ -3356,7 +3366,7 @@ pub fn placeKeyAndType(self: *Checker, expr: ast.Expr, state: *const MoveState) 
 // a different compatibility key after CFG joins, so resolve the exact root
 // place before falling back to key-only metadata such as index facts.
 fn bindingMoveSlotForIdent(name: []const u8, state: *const MoveState) ?MoveSlot {
-    const expected: MovePlace = .{ .root = name };
+    const expected = state.lookupPlaceForRoot(name);
     var it = state.iterator();
     while (it.next()) |entry| {
         const slot = entry.value_ptr.*;

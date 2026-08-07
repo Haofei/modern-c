@@ -9,6 +9,10 @@ const MmioRegisterAccess = ast_query.MmioRegisterAccess;
 
 pub const max_move_place_projections = 16;
 
+pub const MoveRootId = enum(u32) {
+    _,
+};
+
 pub const MovePlaceProjection = union(enum) {
     field: []const u8,
     constant_index: usize,
@@ -60,6 +64,7 @@ pub const CleanupObligation = struct {
 
 pub const MovePlace = struct {
     root: []const u8,
+    root_id: ?MoveRootId = null,
     projections: [max_move_place_projections]MovePlaceProjection = undefined,
     projection_count: usize = 0,
 
@@ -76,7 +81,7 @@ pub const MovePlace = struct {
     }
 
     pub fn eql(self: MovePlace, other: MovePlace) bool {
-        if (!std.mem.eql(u8, self.root, other.root) or self.projection_count != other.projection_count) return false;
+        if (!sameRoot(self, other) or self.projection_count != other.projection_count) return false;
         for (self.projections[0..self.projection_count], other.projections[0..other.projection_count]) |left, right| {
             if (!projectionEql(left, right)) return false;
         }
@@ -87,7 +92,7 @@ pub const MovePlace = struct {
     // `packet.header.payload`. Whole-place moves deliberately use this relation
     // to reject partial-move aggregate reuse without reparsing display keys.
     pub fn isPrefixOf(self: MovePlace, other: MovePlace) bool {
-        if (!std.mem.eql(u8, self.root, other.root) or self.projection_count >= other.projection_count) return false;
+        if (!sameRoot(self, other) or self.projection_count >= other.projection_count) return false;
         for (self.projections[0..self.projection_count], other.projections[0..self.projection_count]) |left, right| {
             if (!projectionEql(left, right)) return false;
         }
@@ -99,7 +104,7 @@ pub const MovePlace = struct {
     // conservative borrow/alias overlap checks, not as transferable ownership
     // identity.
     pub fn conflicts(self: MovePlace, other: MovePlace) bool {
-        if (!std.mem.eql(u8, self.root, other.root) or self.projection_count != other.projection_count) return false;
+        if (!sameRoot(self, other) or self.projection_count != other.projection_count) return false;
         for (self.projections[0..self.projection_count], other.projections[0..other.projection_count]) |left, right| {
             switch (movePlaceProjectionRelation(left, right)) {
                 .exact, .may_overlap => continue,
@@ -109,6 +114,13 @@ pub const MovePlace = struct {
         return true;
     }
 };
+
+fn sameRoot(left: MovePlace, right: MovePlace) bool {
+    if (left.root_id) |left_id| {
+        if (right.root_id) |right_id| return left_id == right_id;
+    }
+    return std.mem.eql(u8, left.root, right.root);
+}
 
 fn projectionEql(left: MovePlaceProjection, right: MovePlaceProjection) bool {
     return switch (left) {
@@ -507,6 +519,8 @@ test "move index facts retain only equal CFG join facts" {
 // now transports index facts as first-class state.
 pub const MoveState = struct {
     slots: std.StringHashMap(MoveSlot),
+    root_ids: std.StringHashMap(MoveRootId),
+    next_root_id: u32 = 1,
     scoped_borrows: std.StringHashMap(ScopedBorrowSlot),
     index_facts: MoveIndexFacts,
     // Tracks the lexical bindings eligible to carry index facts even when a
@@ -518,6 +532,7 @@ pub const MoveState = struct {
     pub fn init(allocator: std.mem.Allocator) MoveState {
         return .{
             .slots = std.StringHashMap(MoveSlot).init(allocator),
+            .root_ids = std.StringHashMap(MoveRootId).init(allocator),
             .scoped_borrows = std.StringHashMap(ScopedBorrowSlot).init(allocator),
             .index_facts = MoveIndexFacts.init(allocator),
             .index_bindings = std.StringHashMap(void).init(allocator),
@@ -526,6 +541,7 @@ pub const MoveState = struct {
 
     pub fn deinit(self: *MoveState) void {
         self.slots.deinit();
+        self.root_ids.deinit();
         self.scoped_borrows.deinit();
         self.index_facts.deinit();
         self.index_bindings.deinit();
@@ -540,7 +556,17 @@ pub const MoveState = struct {
     }
 
     pub fn put(self: *MoveState, key: []const u8, value: MoveSlot) !void {
-        try self.slots.put(key, value);
+        var normalized = value;
+        if (normalized.place) |place| {
+            normalized.place = try self.withRootId(place);
+        }
+        if (normalized.deferred_borrow_place) |place| {
+            normalized.deferred_borrow_place = try self.withRootId(place);
+        }
+        if (normalized.alias_place) |place| {
+            normalized.alias_place = try self.withRootId(place);
+        }
+        try self.slots.put(key, normalized);
     }
 
     pub fn remove(self: *MoveState, key: []const u8) bool {
@@ -561,9 +587,51 @@ pub const MoveState = struct {
 
     pub fn clearRetainingCapacity(self: *MoveState) void {
         self.slots.clearRetainingCapacity();
+        self.root_ids.clearRetainingCapacity();
+        self.next_root_id = 1;
         self.scoped_borrows.clearRetainingCapacity();
         self.index_facts.facts.clearRetainingCapacity();
         self.index_bindings.clearRetainingCapacity();
+    }
+
+    pub fn placeForRoot(self: *MoveState, root: []const u8) !MovePlace {
+        return .{ .root = root, .root_id = try self.rootIdFor(root) };
+    }
+
+    pub fn lookupPlaceForRoot(self: *const MoveState, root: []const u8) MovePlace {
+        return .{ .root = root, .root_id = self.root_ids.get(root) };
+    }
+
+    pub fn copyRootIdsFrom(self: *MoveState, other: *const MoveState) !void {
+        self.root_ids.clearRetainingCapacity();
+        var max_id: u32 = 0;
+        var it = other.root_ids.iterator();
+        while (it.next()) |entry| {
+            try self.root_ids.put(entry.key_ptr.*, entry.value_ptr.*);
+            const raw: u32 = @intFromEnum(entry.value_ptr.*);
+            if (raw > max_id) max_id = raw;
+        }
+        const next_after_max = if (max_id == std.math.maxInt(u32)) 0 else max_id + 1;
+        self.next_root_id = @max(other.next_root_id, next_after_max);
+    }
+
+    fn withRootId(self: *MoveState, place: MovePlace) !MovePlace {
+        if (place.root_id) |id| {
+            if (self.root_ids.get(place.root) == null) try self.root_ids.put(place.root, id);
+            return place;
+        }
+        var result = place;
+        result.root_id = try self.rootIdFor(place.root);
+        return result;
+    }
+
+    fn rootIdFor(self: *MoveState, root: []const u8) !MoveRootId {
+        if (self.root_ids.get(root)) |id| return id;
+        if (self.next_root_id == 0) return error.OutOfMemory;
+        const id: MoveRootId = @enumFromInt(self.next_root_id);
+        self.next_root_id = if (self.next_root_id == std.math.maxInt(u32)) 0 else self.next_root_id + 1;
+        try self.root_ids.put(root, id);
+        return id;
     }
 };
 
@@ -578,6 +646,36 @@ test "move state getPtr mutates existing slot in place" {
 
     try std.testing.expect(!state.get("owner").?.live);
     try std.testing.expect(state.getPtr("missing") == null);
+}
+
+test "move places prefer canonical root ids over source spelling" {
+    const first: MoveRootId = @enumFromInt(1);
+    const second: MoveRootId = @enumFromInt(2);
+    const left: MovePlace = .{ .root = "owner", .root_id = first };
+    const right: MovePlace = .{ .root = "owner", .root_id = second };
+
+    try std.testing.expect(!left.eql(right));
+    try std.testing.expect(!left.conflicts(right));
+    try std.testing.expect(left.eql(.{ .root = "owner" }));
+}
+
+test "move state assigns and transports canonical root ids" {
+    const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+    var state = MoveState.init(std.testing.allocator);
+    defer state.deinit();
+
+    try state.put("compat:owner", .{ .live = true, .span = span, .place = .{ .root = "owner" } });
+    const root = state.get("compat:owner").?.place.?;
+    try std.testing.expect(root.root_id != null);
+
+    const field = root.project(.{ .field = "resource" }).?;
+    try state.put("compat:owner.resource", .{ .live = false, .span = span, .place = field });
+    try std.testing.expectEqual(root.root_id.?, state.get("compat:owner.resource").?.place.?.root_id.?);
+
+    var clone = MoveState.init(std.testing.allocator);
+    defer clone.deinit();
+    try clone.copyRootIdsFrom(&state);
+    try std.testing.expectEqual(root.root_id.?, clone.lookupPlaceForRoot("owner").root_id.?);
 }
 
 pub const LoopMoveExitKind = enum {

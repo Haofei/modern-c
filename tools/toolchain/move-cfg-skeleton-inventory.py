@@ -200,7 +200,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn preserveOuterScopedMoveState",
         "linearMoveCfg(self, .exit)",
         "linearMoveCfg(self, .branch_join)",
-        "moveLoopCfg(self, l, state, aliases)",
+        "moveLoopCfg(self, l, state, aliases, allow_auto_drop)",
         "moveDeferStmt(self, stmt, block_state, &before, aliases)",
         ".if_let => |n| moveDeferIfLetCfg(self, n, state, aliases)",
         '.@"switch" => |sw| moveDeferSwitchCfg(self, sw, state, aliases)',
