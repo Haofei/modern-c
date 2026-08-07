@@ -95,6 +95,14 @@ fn countTargetTypeFactsByKind(function: mir.Function, kind: mir.TargetTypeKind) 
     return count;
 }
 
+fn countOwnershipEventsByKind(function: mir.Function, kind: mir.OwnershipEventKind) usize {
+    var count: usize = 0;
+    for (function.ownership_events) |event| {
+        if (event.kind == kind) count += 1;
+    }
+    return count;
+}
+
 fn valueIdentityBySpelling(function: mir.Function, spelling: []const u8) ?mir.ValueIdentity {
     for (function.value_identities) |identity| {
         if (std.mem.eql(u8, identity.spelling, spelling)) return identity;
@@ -4135,6 +4143,35 @@ test "MIR records local reinit ownership events" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=reassign_local kind=storage_live") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=reassign_local kind=init") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=reassign_local kind=reinit") != null);
+}
+
+test "MIR reinit ownership events require mutable locals" {
+    const source =
+        \\fn accept_var() -> u32 {
+        \\    var value: u32 = 1;
+        \\    value = 2;
+        \\    return value;
+        \\}
+        \\
+        \\fn reject_let() -> u32 {
+        \\    let value: u32 = 1;
+        \\    value = 2;
+        \\    return value;
+        \\}
+        \\
+        \\fn reject_param(value: u32) -> u32 {
+        \\    value = 2;
+        \\    return value;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_ownership_reinit_mutable.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try std.testing.expectEqual(@as(usize, 1), countOwnershipEventsByKind(functionByName(module_mir, "accept_var").?, .reinit));
+    try std.testing.expectEqual(@as(usize, 0), countOwnershipEventsByKind(functionByName(module_mir, "reject_let").?, .reinit));
+    try std.testing.expectEqual(@as(usize, 0), countOwnershipEventsByKind(functionByName(module_mir, "reject_param").?, .reinit));
 }
 
 test "MIR records simple move-out ownership events" {
