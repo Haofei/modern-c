@@ -4105,6 +4105,38 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "drop_glue_symbol=") != null);
 }
 
+test "MIR records local reinit ownership events" {
+    const source =
+        \\fn reassign_local() -> u32 {
+        \\    var value: u32 = 1;
+        \\    value = 2;
+        \\    return value;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_ownership_reinit.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = functionByName(module_mir, "reassign_local") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
+    const value_identity = valueIdentityBySpelling(function, "value") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(mir.OwnershipEventKind.storage_live, function.ownership_events[0].kind);
+    try std.testing.expect(function.ownership_events[0].place.root_value_id.eql(value_identity.id));
+    try std.testing.expectEqual(mir.OwnershipEventKind.init, function.ownership_events[1].kind);
+    try std.testing.expect(function.ownership_events[1].place.root_value_id.eql(value_identity.id));
+    try std.testing.expectEqual(mir.OwnershipEventKind.reinit, function.ownership_events[2].kind);
+    try std.testing.expect(function.ownership_events[2].place.root_value_id.eql(value_identity.id));
+    try mir.validateLoweringAdmission(module_mir);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, module_mir, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=reassign_local kind=storage_live") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=reassign_local kind=init") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=reassign_local kind=reinit") != null);
+}
+
 test "MIR ownership event admission rejects malformed event identity" {
     // DIAGNOSTIC_UNIT: E_MIR_OWNERSHIP_EVENT
     const source =

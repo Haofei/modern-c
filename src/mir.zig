@@ -4741,6 +4741,11 @@ const FunctionBuilder = struct {
                 try self.recordLocalFunctionAliasAssignment(node.target, node.value);
                 try self.recordLocalAggregatePointerAliasAssignment(node.target, node.value);
                 try self.recordLocalPointerArrayAliasAssignment(node.target, node.value, stmt.span);
+                if (assignmentTargetIdentName(node.target)) |target_name| {
+                    if (self.local_types.contains(target_name)) {
+                        try self.addLocalOwnershipEvent(.reinit, target_name, node.value.span);
+                    }
+                }
                 self.assignment_target = previous_target;
                 self.assignment_target_ty = previous_target_ty;
                 self.assignment_target_type_expr = previous_target_type_expr;
