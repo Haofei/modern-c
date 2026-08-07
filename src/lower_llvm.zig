@@ -2915,6 +2915,7 @@ const LlvmEmitter = struct {
     fn registerAutoDropLocal(self: *LlvmEmitter, name: ast.Ident, ty: ast.TypeExpr) !void {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
+        if (!self.mirAuthorizesAutoDropLocal(name.text, type_name, drop_fn)) return error.UnsupportedLlvmEmission;
         try self.defer_stack.append(self.allocator, .{ .auto_drop = .{
             .fn_name = drop_fn,
             .local_name = name.text,
@@ -5749,6 +5750,41 @@ const LlvmEmitter = struct {
         const function_name = self.current_function orelse return null;
         for (self.mir_module.functions) |*function| {
             if (std.mem.eql(u8, function.name, function_name)) return function;
+        }
+        return null;
+    }
+
+    fn mirAuthorizesAutoDropLocal(self: *LlvmEmitter, local_name: []const u8, type_name: []const u8, drop_fn: []const u8) bool {
+        const function = self.currentMirFunction() orelse return false;
+        const root_value_id = mirValueIdForLocal(function, local_name) orelse return false;
+        const drop_glue = self.mirDropGlueFactFor(type_name, drop_fn) orelse return false;
+
+        for (function.ownership_events) |event| {
+            if (!simpleMirOwnershipRootMatches(event.place, root_value_id)) continue;
+            switch (event.kind) {
+                .auto_drop => {
+                    if (!event.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) continue;
+                    if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
+                    return true;
+                },
+                // Transitional allowance: LLVM still uses the legacy cleanup
+                // stack for path-sensitive cancellation while cleanup edges
+                // migrate into MIR. A matching simple local consumption event
+                // means MIR owns the obligation state and this backend may
+                // register the lexical cleanup for the existing cancellation
+                // path. No MIR auto_drop or consumption event means fail closed.
+                .move_out, .forget, .explicit_drop => return true,
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    fn mirDropGlueFactFor(self: *LlvmEmitter, type_name: []const u8, drop_fn: []const u8) ?mir.DropGlueFact {
+        for (self.mir_module.drop_glue_facts) |fact| {
+            if (!std.mem.eql(u8, fact.resource_type, type_name)) continue;
+            if (!std.mem.eql(u8, fact.release_fn, drop_fn)) continue;
+            return fact;
         }
         return null;
     }
@@ -10606,6 +10642,19 @@ fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
         .ident => |ident| ident.text,
         else => null,
     };
+}
+
+fn mirValueIdForLocal(function: *const mir.Function, local_name: []const u8) ?mir.ValueId {
+    for (function.value_identities) |identity| {
+        if (std.mem.eql(u8, identity.spelling, local_name)) return identity.id;
+    }
+    return null;
+}
+
+fn simpleMirOwnershipRootMatches(place: mir.OwnershipPlace, root_value_id: mir.ValueId) bool {
+    return place.root_value_id.eql(root_value_id) and
+        !place.root_symbol_id.isValid() and
+        place.projection_count == 0;
 }
 
 fn isSourceSpan(span: ast.Span) bool {
