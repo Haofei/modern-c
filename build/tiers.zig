@@ -325,7 +325,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-net-rx-live-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-http-get-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-dns-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-https-get-test"));
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
@@ -522,15 +521,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("net-smode-irq-test"));
     m0_full_step.dependOn(ctx.cmd("net-smode-rx-irq-test"));
     m0_full_step.dependOn(ctx.cmd("net-smode-test"));
-    // bearssl-smode-test revalidates the freestanding BearSSL SHA-256 + virtio-rng
-    // entropy (the TLS crypto stack) under REAL OpenSBI in S-mode. Deterministic (no
-    // network egress), so gated in m0.
-    m0_full_step.dependOn(ctx.cmd("bearssl-smode-test"));
-    // https-smode-test revalidates the in-kernel REAL BearSSL TLS 1.2 handshake +
-    // HTTPS GET under REAL OpenSBI in S-mode. Deterministic — the TLS peer is a
-    // LOCAL python server over slirp loopback (no internet egress) — so gated in m0
-    // (mirrors the M-mode https-get-test, which is also in m0).
-    m0_full_step.dependOn(ctx.cmd("https-smode-test"));
     // udp-net-test transmits a real UDP datagram over virtio-net (pcap-verified).
     m0_full_step.dependOn(ctx.cmd("udp-net-test"));
     // smp-test boots multiple harts synchronizing on a shared atomic under QEMU.
@@ -752,11 +742,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("http-get-test"));
     // dns-test resolves a name via a real DNS A-query then HTTP GETs that host under QEMU.
     m0_full_step.dependOn(ctx.cmd("dns-test"));
-    // https-get-test runs a REAL BearSSL TLS 1.2 handshake over the kernel TCP and
-    // decrypts an HTTPS GET from a local python HTTPS server under QEMU (Phase 2 TLS).
-    m0_full_step.dependOn(ctx.cmd("https-get-test"));
-    // NB: google-https-test (REAL google.com:443) is intentionally NOT in m0 -- it is a
-    // standalone best-effort check (PASS or honest SKIP), to avoid a flaky internet gate.
+    // BearSSL/TLS HTTPS gates are standalone integration demos. Kernel crypto is not part
+    // of the language-core qualification surface.
     // backtrace-test walks the frame-pointer chain + symbolizes under QEMU.
     m0_full_step.dependOn(ctx.cmd("backtrace-test"));
     // paging-test links + runs the Sv39 page-table map/translate (needs clang).
