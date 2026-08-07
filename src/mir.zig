@@ -1601,7 +1601,7 @@ fn ownershipEventValid(module: Module, function: Function, event: OwnershipEvent
     return switch (event.kind) {
         .borrow_begin => event.loan_kind != null and event.loan_id != std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
         .borrow_end => event.loan_kind == null and event.loan_id != std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
-        .explicit_drop => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and optionalOwnershipDropGlueSymbolValid(module, event.drop_glue_symbol_id),
+        .explicit_drop => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and ownershipDropGlueSymbolValid(module, event.drop_glue_symbol_id),
         .auto_drop => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and ownershipDropGlueSymbolValid(module, event.drop_glue_symbol_id),
         else => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
     };
@@ -1692,10 +1692,6 @@ fn ownershipDropGlueSymbolValid(module: Module, symbol_id: SymbolId) bool {
         if (fact.typed_release_symbol_id.eql(symbol_id)) return true;
     }
     return false;
-}
-
-fn optionalOwnershipDropGlueSymbolValid(module: Module, symbol_id: SymbolId) bool {
-    return !symbol_id.isValid() or ownershipDropGlueSymbolValid(module, symbol_id);
 }
 
 fn dropGlueFactForTypeName(module: Module, type_name: []const u8) ?DropGlueFact {
@@ -7300,7 +7296,7 @@ const FunctionBuilder = struct {
     }
 
     fn addDiscardOwnershipEvent(self: *FunctionBuilder, target: CallTargetKind, argument: ast.Expr, call_span: ast.Span) !void {
-        if (!self.discardArgumentHasOwnershipEvent(argument)) return;
+        const drop_glue_symbol_id = self.discardArgumentDropGlueSymbol(argument) orelse return;
         const root = directIdentName(argument) orelse return;
         const root_value_id = try self.internValueId(root);
         const block_id = BlockId.fromIndex(self.current);
@@ -7316,24 +7312,25 @@ const FunctionBuilder = struct {
         try self.ownership_events.append(self.allocator, .{
             .kind = kind,
             .place = .{ .root_value_id = root_value_id },
+            .drop_glue_symbol_id = if (kind == .explicit_drop) drop_glue_symbol_id else .invalid,
             .block_id = block_id,
             .instruction_index = instruction_index,
             .source = .{ .line = call_span.line, .column = call_span.column, .offset = call_span.offset, .len = call_span.len },
         });
     }
 
-    fn discardArgumentHasOwnershipEvent(self: *FunctionBuilder, argument: ast.Expr) bool {
-        const root = directIdentName(argument) orelse return false;
-        const ty = self.local_type_exprs.get(root) orelse self.global_type_exprs.get(root) orelse return false;
-        const type_name = structTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return false;
-        return self.typeNameHasDropGlue(type_name);
+    fn discardArgumentDropGlueSymbol(self: *FunctionBuilder, argument: ast.Expr) ?SymbolId {
+        const root = directIdentName(argument) orelse return null;
+        const ty = self.local_type_exprs.get(root) orelse self.global_type_exprs.get(root) orelse return null;
+        const type_name = structTypeNameAlias(ty, self.aliases) orelse ast_query.typeName(ty) orelse return null;
+        return self.dropGlueSymbolForTypeName(type_name);
     }
 
-    fn typeNameHasDropGlue(self: *FunctionBuilder, type_name: []const u8) bool {
+    fn dropGlueSymbolForTypeName(self: *FunctionBuilder, type_name: []const u8) ?SymbolId {
         for (self.drop_glue_facts) |fact| {
-            if (std.mem.eql(u8, fact.resource_type, type_name)) return true;
+            if (std.mem.eql(u8, fact.resource_type, type_name)) return fact.typed_release_symbol_id;
         }
-        return false;
+        return null;
     }
 
     fn addLocalOwnershipEvent(self: *FunctionBuilder, kind: OwnershipEventKind, name: []const u8, span: ast.Span) !void {

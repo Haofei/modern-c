@@ -3970,11 +3970,15 @@ test "MIR owns discard call identities and argument types" {
     try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .discard_argument));
     try std.testing.expectEqual(@as(usize, 2), function.ownership_events.len);
     try std.testing.expectEqual(@as(usize, 0), plain_function.ownership_events.len);
+    try std.testing.expectEqual(@as(usize, 1), typed_mir.drop_glue_facts.len);
+    const drop_glue_fact = typed_mir.drop_glue_facts[0];
     const value_identity = valueIdentityBySpelling(function, "value") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(mir.OwnershipEventKind.explicit_drop, function.ownership_events[0].kind);
     try std.testing.expect(function.ownership_events[0].place.root_value_id.eql(value_identity.id));
+    try std.testing.expect(function.ownership_events[0].drop_glue_symbol_id.eql(drop_glue_fact.typed_release_symbol_id));
     try std.testing.expectEqual(mir.OwnershipEventKind.forget, function.ownership_events[1].kind);
     try std.testing.expect(function.ownership_events[1].place.root_value_id.eql(value_identity.id));
+    try std.testing.expect(!function.ownership_events[1].drop_glue_symbol_id.isValid());
     for (function.target_type_facts) |fact| {
         if (fact.kind == .expression_result) continue;
         try std.testing.expectEqual(mir.TargetTypeKind.discard_argument, fact.kind);
@@ -3988,6 +3992,35 @@ test "MIR owns discard call identities and argument types" {
     try mir.appendDumpFromMir(std.testing.allocator, typed_mir, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=discard_values kind=explicit_drop") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=discard_values kind=forget") != null);
+}
+
+test "MIR ownership event admission rejects explicit drop without glue identity" {
+    // DIAGNOSTIC_UNIT: E_MIR_OWNERSHIP_EVENT
+    const source =
+        \\move struct Guard { id: u32 }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
+        \\fn discard_values(value: Guard) -> void {
+        \\    drop(value);
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_explicit_drop_requires_glue.mc", source);
+    defer parsed.deinit();
+
+    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer bad_mir.deinit();
+    const function = functionByNameMut(&bad_mir, "discard_values") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), function.ownership_events.len);
+    try std.testing.expectEqual(mir.OwnershipEventKind.explicit_drop, function.ownership_events[0].kind);
+    function.ownership_events[0].drop_glue_symbol_id = .invalid;
+
+    try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));
+
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_explicit_drop_requires_glue.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(bad_mir, &verifier_reporter);
+    try std.testing.expect(verifier_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_OWNERSHIP_EVENT") != null);
 }
 
 test "MIR records drop glue facts for auto-drop resources" {
