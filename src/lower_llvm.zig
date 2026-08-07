@@ -2917,46 +2917,17 @@ const LlvmEmitter = struct {
 
     fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr, move_span: ast.Span) !void {
         const local_name = ownership_facts.directMovedLocalName(expr) orelse return;
-        const cleanup = self.autoDropCleanupForLocalName(local_name) orelse return;
+        const cleanup = ownership_facts.autoDropCleanupForLocalName(DeferredCleanup, self.defer_stack.items, local_name) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         if (!mir_ownership_authority.authorizesMoveOutLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(move_span))) return error.UnsupportedLlvmEmission;
-        self.cancelAutoDropForLocalName(local_name);
+        ownership_facts.removeAutoDropCleanupForLocalName(@TypeOf(self.defer_stack), &self.defer_stack, local_name);
     }
 
     fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) !void {
         const cleanup = ownership_facts.autoDropPointerCleanup(expr, &self.auto_drop_fns_by_type) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         if (!mir_ownership_authority.authorizesExplicitDropLocal(&self.mir_module, function, cleanup.local_name, cleanup.fn_name, mir.sourcePointFromSpan(expr.span))) return error.UnsupportedLlvmEmission;
-        self.cancelAutoDropForLocalName(cleanup.local_name);
-    }
-
-    fn cancelAutoDropForLocalName(self: *LlvmEmitter, local_name: []const u8) void {
-        var index = self.defer_stack.items.len;
-        while (index > 0) {
-            index -= 1;
-            switch (self.defer_stack.items[index]) {
-                .auto_drop => |cleanup| {
-                    if (!std.mem.eql(u8, cleanup.local_name, local_name)) continue;
-                    _ = self.defer_stack.orderedRemove(index);
-                    return;
-                },
-                .expr => continue,
-            }
-        }
-    }
-
-    fn autoDropCleanupForLocalName(self: *LlvmEmitter, local_name: []const u8) ?ownership_facts.AutoDropLocalCleanup {
-        var index = self.defer_stack.items.len;
-        while (index > 0) {
-            index -= 1;
-            switch (self.defer_stack.items[index]) {
-                .auto_drop => |cleanup| {
-                    if (std.mem.eql(u8, cleanup.local_name, local_name)) return cleanup;
-                },
-                .expr => continue,
-            }
-        }
-        return null;
+        ownership_facts.removeAutoDropCleanupForLocalName(@TypeOf(self.defer_stack), &self.defer_stack, cleanup.local_name);
     }
 
     fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {

@@ -14,6 +14,42 @@ pub const AutoDropLocalCleanup = struct {
     span: ast.Span,
 };
 
+/// Find the most recent auto-drop cleanup for a local in a backend cleanup stack.
+/// The concrete cleanup union remains backend-local while cleanup edges migrate to
+/// MIR, but the stack search policy must not drift between C and LLVM.
+pub fn autoDropCleanupForLocalName(comptime Entry: type, items: []const Entry, local_name: []const u8) ?AutoDropLocalCleanup {
+    var index = items.len;
+    while (index > 0) {
+        index -= 1;
+        switch (items[index]) {
+            .auto_drop => |cleanup| {
+                if (std.mem.eql(u8, cleanup.local_name, local_name)) return cleanup;
+            },
+            .expr => continue,
+        }
+    }
+    return null;
+}
+
+/// Remove the most recent auto-drop cleanup for a local from a backend cleanup
+/// stack. This intentionally matches `autoDropCleanupForLocalName`'s reverse
+/// search order so transfer/release cancellation consumes the same obligation
+/// that authorization inspected.
+pub fn removeAutoDropCleanupForLocalName(comptime Stack: type, stack: *Stack, local_name: []const u8) void {
+    var index = stack.items.len;
+    while (index > 0) {
+        index -= 1;
+        switch (stack.items[index]) {
+            .auto_drop => |cleanup| {
+                if (!std.mem.eql(u8, cleanup.local_name, local_name)) continue;
+                _ = stack.orderedRemove(index);
+                return;
+            },
+            .expr => continue,
+        }
+    }
+}
+
 /// Extract the canonical resource type name from the narrow `#[drop]` ABI:
 ///
 ///     #[drop] fn release(x: *mut T) -> void
@@ -256,6 +292,28 @@ test "direct moved local name recognizes only grouped identifiers" {
     try std.testing.expectEqualStrings("guard", directMovedLocalName(grouped_expr).?);
     try std.testing.expect(directMovedLocalName(literal_expr) == null);
     try std.testing.expect(directMovedLocalName(deref_expr) == null);
+}
+
+test "auto-drop cleanup stack helpers use the latest matching local" {
+    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+    const Entry = union(enum) {
+        expr: ast.Expr,
+        auto_drop: AutoDropLocalCleanup,
+    };
+    var stack: std.ArrayList(Entry) = .empty;
+    defer stack.deinit(std.testing.allocator);
+
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_old", .local_name = "g", .span = span } });
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_h", .local_name = "h", .span = span } });
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_new", .local_name = "g", .span = span } });
+
+    const cleanup = autoDropCleanupForLocalName(Entry, stack.items, "g") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("close_new", cleanup.fn_name);
+
+    removeAutoDropCleanupForLocalName(@TypeOf(stack), &stack, "g");
+    try std.testing.expectEqual(@as(usize, 2), stack.items.len);
+    const remaining = autoDropCleanupForLocalName(Entry, stack.items, "g") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("close_old", remaining.fn_name);
 }
 
 test "auto-drop cleanup helpers recognize explicit release call shapes" {
