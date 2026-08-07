@@ -833,8 +833,8 @@ fn reject_switch_preserves_matching_const_index_array_field_element(cond: bool) 
     return consume(move x) + consume(move y);
 }
 
-// Rejected in ownership v0: matching branch arms preserve symbolic index identity, so `j` can
-// reinitialize the same dynamic element previously moved through `i`.
+// Rejected in ownership v0: branch-local symbolic index assignments do not create
+// transferable owner places; dynamic element move/reinit remains fail-closed.
 fn reject_branch_preserves_matching_symbolic_index(cond: bool, i: usize) -> u32 {
     var arr: ResArray = .{ mkres(1), mkres(2) };
     var j: usize = 0;
@@ -850,7 +850,8 @@ fn reject_branch_preserves_matching_symbolic_index(cond: bool, i: usize) -> u32 
     return consume(move x) + consume(move y);
 }
 
-// Rejected in ownership v0: matching switch arms preserve symbolic index identity too.
+// Rejected in ownership v0: matching switch arms likewise do not create
+// transferable symbolic owner places.
 fn reject_switch_preserves_matching_symbolic_index(cond: bool, i: usize) -> u32 {
     var arr: ResArray = .{ mkres(1), mkres(2) };
     var j: usize = 0;
@@ -1353,8 +1354,8 @@ fn reject_duplicate_symbolic_xor_zero_dynamic_multi_array_element_move(i: usize)
     return consume(move x) + consume(move y);
 }
 
-// Rejected in ownership v0: a stable symbolic index into a multi-element array can reinitialize
-// the same dynamic place after moving it out.
+// Rejected in ownership v0: even repeated uses of the same symbolic index into a
+// multi-element array are not transferable owner places.
 fn reject_reinitialize_same_symbolic_dynamic_multi_array_element(i: usize) -> u32 {
     var arr: ResArray = .{ mkres(1), mkres(2) };
     let x: Res = arr[i]; // EXPECT_ERROR: E_MOVE_ARRAY_UNSUPPORTED

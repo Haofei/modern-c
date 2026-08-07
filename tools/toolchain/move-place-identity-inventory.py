@@ -56,7 +56,6 @@ ANCHORS: dict[str, list[str]] = {
         "pub fn placeState(self: MoveSlot) PlaceState",
         "pub fn loanState(self: MoveSlot) LoanState",
         "pub fn cleanupObligation(self: MoveSlot) CleanupObligation",
-        "pub const MoveIndexFact = union(enum)",
         "entry_places: std.ArrayListUnmanaged(MovePlace)",
     ],
     "docs/compiler-production-readiness.md": [
@@ -67,7 +66,7 @@ ANCHORS: dict[str, list[str]] = {
         "Move checker deferred aliases use typed referents",
         "Move checker roots have canonical ids",
         "move-place-identity-inventory.py",
-        "Move checker index facts no longer occupy slots",
+        "Move checker no longer carries index facts",
         "Move checker exposes orthogonal ownership state views",
     ],
 }
@@ -98,9 +97,13 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "block_state.getPtr(": 0,
         "block_state.contains(": 0,
         "outer.contains(aliasReferentRoot(referent))": 0,
-        # M1.2c keeps array-index metadata exclusively in MoveState.index_facts.
+        # M1.2c removes array-index metadata from ownership state entirely.
         "slot.const_index": 0,
         "slot.symbolic_index": 0,
+        "MoveIndexFact": 0,
+        "MoveIndexFacts": 0,
+        "index_facts": 0,
+        "index_bindings": 0,
         "isPureIndexFactSlot": 0,
         "sameIndexFact": 0,
     },
@@ -108,7 +111,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
 
 BLOCK_FORBIDDEN: dict[str, dict[tuple[str, str], list[str]]] = {
     "src/sema_model.zig": {
-        ("pub const MoveSlot = struct", "pub const MoveIndexFact = union(enum)"): [
+        ("pub const MoveSlot = struct", "pub const ScopedBorrowSlot = struct"): [
             "const_index",
             "symbolic_index",
         ],

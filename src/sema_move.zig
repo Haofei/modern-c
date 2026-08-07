@@ -559,10 +559,6 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
             state.put(param.name.text, .{ .live = true, .span = param.name.span, .place = .{ .root = param.name.text }, .ty = param.ty }) catch {
                 self.oom = true;
             };
-        } else if (isUsizeType(param.ty)) {
-            state.index_bindings.put(param.name.text, {}) catch {
-                self.oom = true;
-            };
         } else if (self.move_ctx) |ctx| {
             if (typeCanStoreBorrowAlias(param.ty, ctx.*)) {
                 state.put(param.name.text, .{ .live = false, .span = param.name.span, .place = .{ .root = param.name.text }, .ty = param.ty, .type_only = true }) catch {
@@ -675,19 +671,6 @@ fn preserveOuterScopedMoveState(self: *Checker, state: *MoveState, before: *cons
         };
     }
     copyScopedBorrowSlots(self, &scoped, before);
-    // Index facts have no ownership slot after M1.2a. Preserve only bindings
-    // that existed before this lexical block, so index locals do not escape
-    // while reassigned outer facts retain their current value.
-    var bindings_it = before.index_bindings.keyIterator();
-    while (bindings_it.next()) |binding| {
-        scoped.index_bindings.put(binding.*, {}) catch {
-            self.oom = true;
-        };
-        const current = state.index_facts.get(binding.*) orelse continue;
-        scoped.index_facts.put(binding.*, current) catch {
-            self.oom = true;
-        };
-    }
     replaceMoveState(self, state, &scoped);
 }
 
@@ -735,12 +718,6 @@ pub fn reportMoveLocalsLeavingScope(self: *Checker, inner: *const MoveState, out
 }
 
 pub fn reportLoopOuterResourceChanges(self: *Checker, entry_state: *MoveState, iteration_state: *const MoveState) void {
-    // A loop may execute zero or multiple times. Preserve an independent index
-    // fact only when the iteration state proves exactly the entry value.
-    _ = entry_state.index_facts.intersectInto(&iteration_state.index_facts) catch {
-        self.oom = true;
-        return;
-    };
     var it = entry_state.iterator();
     while (it.next()) |entry| {
         const after = matchingMoveStateSlot(iteration_state, entry.key_ptr.*, entry.value_ptr.*) orelse continue;
@@ -844,23 +821,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     }
                 }
             }
-            var bound_as_index_fact = false;
-            if (!bound_as_move and decl.names.len > 0 and isUsizeType(binding_ty)) {
-                state.index_bindings.put(decl.names[0].text, {}) catch {
-                    self.oom = true;
-                };
-                if (decl.init) |init| {
-                    if (self.move_ctx) |mctx| {
-                        if (constIndexValue(self, init, state, mctx.*)) |index| {
-                            state.index_facts.put(decl.names[0].text, .{ .constant = index }) catch {
-                                self.oom = true;
-                            };
-                            bound_as_index_fact = true;
-                        }
-                    }
-                }
-            }
-            if (!bound_as_move and !bound_as_index_fact and decl.names.len > 0) {
+            if (!bound_as_move and decl.names.len > 0) {
                 if (binding_ty) |ty| {
                     if (retainsAliasPlaceType(ty)) {
                         state.put(decl.names[0].text, .{ .live = false, .span = decl.names[0].span, .place = .{ .root = decl.names[0].text }, .ty = ty, .type_only = true }) catch {
@@ -874,7 +835,7 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
             // use-after-move (see moveBorrow/moveConsume). A pointer alias is a borrow, not
             // a by-value resource, so it is only registered when the binding was not already
             // classed as a move resource above.
-            if (!bound_as_move and !bound_as_index_fact and decl.names.len > 0 and decl.init != null) {
+            if (!bound_as_move and decl.names.len > 0 and decl.init != null) {
                 if (decl.init.?.kind == .borrow_expr) registerBorrowAliasBinding(self, decl.names[0], decl.init.?.kind.borrow_expr, state, aliases);
                 if (aliasReferentForExpr(self, decl.init.?, state, aliases)) |referent| {
                     // Gap #2: `let q = f(&t)` where `f` returns a pointer — `q` may alias a
@@ -949,7 +910,6 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     // only concern linear resources, not aliases (an alias is never `live`
                     // or `deferred`), and re-binding an alias must NOT flip it live.
                     const had_binding = bindingMoveSlotForIdent(id.text, state) != null;
-                    const has_index_binding = state.index_bindings.contains(id.text);
                     const binding_slot = bindingMoveSlotPtrForIdent(id.text, state);
                     const was_alias = if (binding_slot) |slot| slot.alias_of != null else false;
                     const target_can_store_alias = if (self.move_ctx) |mctx|
@@ -970,7 +930,6 @@ pub fn moveStmt(self: *Checker, stmt: ast.Stmt, state: *MoveState, aliases: *con
                     }
                     moveConsume(self, a.value, state, aliases);
                     markBorrowEscapeCapturedCallResult(self, a.value, a.target.span, state, aliases);
-                    if (has_index_binding) updateIndependentIndexFact(self, id.text, a.value, state);
                     if (was_alias or target_can_store_alias or !had_binding) {
                         // Re-derive the alias from the RHS: `p = &t2` keeps `p` a borrow
                         // (live=false) now aliasing `t2`, so it does not leak at exit and
@@ -1120,7 +1079,6 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
         .label = if (loop.loop_label) |label| label.text else null,
         .entry_places = .empty,
         .entry_state = cloneMoveState(self, state),
-        .invalidated_index_facts = std.StringHashMap(void).init(self.reporter.allocator),
         .invalidated_alias_places = .empty,
         .invalidated_untyped_aliases = false,
         .pending_exits = .empty,
@@ -1152,7 +1110,6 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
     }
     if (self.move_loop_stack.pop()) |popped| {
         var loop_frame = popped;
-        applyLoopEarlyExitIndexFactInvalidations(state, &loop_frame);
         applyLoopEarlyExitAliasInvalidations(state, &loop_frame);
         loop_frame.deinit();
     }
@@ -1334,20 +1291,6 @@ pub fn finalizeBranchLocals(self: *Checker, branch: *MoveState, outer: *const Mo
         };
     }
     for (removals.items) |k| _ = branch.remove(k);
-
-    var index_removals: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer index_removals.deinit(self.reporter.allocator);
-    var index_it = branch.index_bindings.keyIterator();
-    while (index_it.next()) |binding| {
-        if (outer.index_bindings.contains(binding.*)) continue;
-        index_removals.append(self.reporter.allocator, binding.*) catch {
-            self.oom = true;
-        };
-    }
-    for (index_removals.items) |binding| {
-        _ = branch.index_bindings.remove(binding);
-        _ = branch.index_facts.remove(binding);
-    }
 }
 
 // At a `break`/`continue`, the current iteration ends. Any loop-body-local `move`
@@ -1409,21 +1352,6 @@ fn moveLoopTargetFrame(self: *Checker, target: ?ast.Ident) ?*LoopMoveFrame {
 }
 
 fn recordLoopEarlyExitInvalidations(self: *Checker, frame: *LoopMoveFrame, state: *const MoveState) void {
-    var index_it = frame.entry_state.index_facts.facts.iterator();
-    while (index_it.next()) |entry| {
-        const after = state.index_facts.get(entry.key_ptr.*) orelse {
-            frame.invalidated_index_facts.put(entry.key_ptr.*, {}) catch {
-                self.oom = true;
-            };
-            continue;
-        };
-        if (!entry.value_ptr.eql(after)) {
-            frame.invalidated_index_facts.put(entry.key_ptr.*, {}) catch {
-                self.oom = true;
-            };
-        }
-    }
-
     var it = frame.entry_state.iterator();
     while (it.next()) |entry| {
         const before = entry.value_ptr.*;
@@ -1450,13 +1378,6 @@ fn recordInvalidatedAliasPlace(self: *Checker, frame: *LoopMoveFrame, place: Mov
     frame.invalidated_alias_places.append(self.reporter.allocator, place) catch {
         self.oom = true;
     };
-}
-
-fn applyLoopEarlyExitIndexFactInvalidations(state: *MoveState, frame: *const LoopMoveFrame) void {
-    var it = frame.invalidated_index_facts.keyIterator();
-    while (it.next()) |name| {
-        _ = state.index_facts.remove(name.*);
-    }
 }
 
 fn applyLoopEarlyExitAliasInvalidations(state: *MoveState, frame: *const LoopMoveFrame) void {
@@ -1492,17 +1413,6 @@ pub fn cloneMoveState(self: *Checker, state: *const MoveState) MoveState {
         };
     }
     copyScopedBorrowSlots(self, &clone, state);
-    clone.index_facts.replaceFrom(&state.index_facts) catch {
-        self.oom = true;
-        return clone;
-    };
-    var bindings_it = state.index_bindings.iterator();
-    while (bindings_it.next()) |entry| {
-        clone.index_bindings.put(entry.key_ptr.*, {}) catch {
-            self.oom = true;
-            return clone;
-        };
-    }
     return clone;
 }
 
@@ -1519,17 +1429,6 @@ pub fn replaceMoveState(self: *Checker, dest: *MoveState, src: *const MoveState)
         };
     }
     copyScopedBorrowSlots(self, dest, src);
-    dest.index_facts.replaceFrom(&src.index_facts) catch {
-        self.oom = true;
-        return;
-    };
-    var bindings_it = src.index_bindings.iterator();
-    while (bindings_it.next()) |entry| {
-        dest.index_bindings.put(entry.key_ptr.*, {}) catch {
-            self.oom = true;
-            return;
-        };
-    }
 }
 
 pub fn mergeMoveBranches(
@@ -1593,23 +1492,6 @@ fn mergeMoveBranchesImpl(
     }
 
     mergeScopedBorrowSlots(self, &merged, left, right);
-    merged.index_facts.replaceFrom(&left.index_facts) catch {
-        self.oom = true;
-        return;
-    };
-    _ = merged.index_facts.intersectInto(&right.index_facts) catch {
-        self.oom = true;
-        return;
-    };
-    var bindings_it = left.index_bindings.iterator();
-    while (bindings_it.next()) |entry| {
-        if (!right.index_bindings.contains(entry.key_ptr.*)) continue;
-        merged.index_bindings.put(entry.key_ptr.*, {}) catch {
-            self.oom = true;
-            return;
-        };
-    }
-
     replaceMoveState(self, dest, &merged);
 }
 
@@ -1747,37 +1629,6 @@ test "move branch joins match subplaces by typed place rather than compatibility
     try std.testing.expectEqual(@as(usize, 0), joined.count());
 }
 
-test "move state transports independent index facts through clone and join" {
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "move-index-state.mc", "");
-    defer reporter.deinit();
-    var checker = Checker.init(&reporter);
-
-    var left = MoveState.init(std.testing.allocator);
-    defer left.deinit();
-    try left.index_bindings.put("index", {});
-    try left.index_facts.put("index", .{ .constant = 1 });
-
-    var cloned = cloneMoveState(&checker, &left);
-    defer cloned.deinit();
-    try std.testing.expect(moveStatesEqual(&left, &cloned));
-
-    var same = MoveState.init(std.testing.allocator);
-    defer same.deinit();
-    try same.index_bindings.put("index", {});
-    try same.index_facts.put("index", .{ .constant = 1 });
-
-    var joined = MoveState.init(std.testing.allocator);
-    defer joined.deinit();
-    mergeMoveBranches(&checker, &joined, &left, &same);
-    try std.testing.expect((joined.index_facts.get("index") orelse unreachable).eql(.{ .constant = 1 }));
-    try std.testing.expect(joined.index_bindings.contains("index"));
-
-    try same.index_facts.put("index", .{ .constant = 2 });
-    mergeMoveBranches(&checker, &joined, &left, &same);
-    try std.testing.expect(joined.index_facts.get("index") == null);
-    try std.testing.expect(joined.index_bindings.contains("index"));
-}
-
 test "move branch joins match roots by typed place rather than compatibility key" {
     var left = MoveState.init(std.testing.allocator);
     defer left.deinit();
@@ -1834,20 +1685,11 @@ test "move CFG boundary state handlers match ownership subplaces by typed place"
     defer after_scope.deinit();
     try before_scope.put("owner", root_slot);
     try before_scope.put("owner.resource:before", moved_slot);
-    try before_scope.index_bindings.put("outer_index", {});
-    try before_scope.index_facts.put("outer_index", .{ .constant = 0 });
     try after_scope.put("owner", root_slot);
     try after_scope.put("owner.resource:after", moved_slot);
-    try after_scope.index_bindings.put("outer_index", {});
-    try after_scope.index_facts.put("outer_index", .{ .constant = 1 });
-    try after_scope.index_bindings.put("inner_index", {});
-    try after_scope.index_facts.put("inner_index", .{ .constant = 0 });
     preserveOuterScopedMoveState(&checker, &after_scope, &before_scope);
     try std.testing.expectEqual(@as(usize, 2), after_scope.count());
     try std.testing.expect(after_scope.contains("owner.resource:before"));
-    try std.testing.expect((after_scope.index_facts.get("outer_index") orelse unreachable).eql(.{ .constant = 1 }));
-    try std.testing.expect(after_scope.index_facts.get("inner_index") == null);
-    try std.testing.expect(!after_scope.index_bindings.contains("inner_index"));
 }
 
 test "loop early-exit local classification uses entry places rather than keys" {
@@ -1865,7 +1707,6 @@ test "loop early-exit local classification uses entry places rather than keys" {
         .allocator = std.testing.allocator,
         .entry_places = .empty,
         .entry_state = entry_state,
-        .invalidated_index_facts = std.StringHashMap(void).init(std.testing.allocator),
     };
     try frame.entry_places.append(std.testing.allocator, owner);
     try checker.move_loop_stack.append(std.testing.allocator, frame);
@@ -1939,7 +1780,6 @@ test "loop early-exit alias invalidation uses typed storage places" {
         .allocator = std.testing.allocator,
         .entry_places = .empty,
         .entry_state = entry_state,
-        .invalidated_index_facts = std.StringHashMap(void).init(std.testing.allocator),
         .invalidated_alias_places = .empty,
         .invalidated_untyped_aliases = false,
         .pending_exits = .empty,
@@ -1982,7 +1822,6 @@ test "loop early-exit alias invalidation uses typed storage places" {
         .allocator = std.testing.allocator,
         .entry_places = .empty,
         .entry_state = legacy_entry,
-        .invalidated_index_facts = std.StringHashMap(void).init(std.testing.allocator),
         .invalidated_alias_places = .empty,
         .invalidated_untyped_aliases = false,
         .pending_exits = .empty,
@@ -3227,12 +3066,6 @@ fn sameCleanupObligation(left: MoveSlot, right: MoveSlot) bool {
 
 fn moveStatesEqual(left: *const MoveState, right: *const MoveState) bool {
     if (!scopedBorrowStatesEqual(left, right)) return false;
-    if (!left.index_facts.eql(&right.index_facts)) return false;
-    if (left.index_bindings.count() != right.index_bindings.count()) return false;
-    var bindings_it = left.index_bindings.keyIterator();
-    while (bindings_it.next()) |binding| {
-        if (!right.index_bindings.contains(binding.*)) return false;
-    }
     if (left.count() != right.count()) return false;
     var it = left.iterator();
     while (it.next()) |entry| {
@@ -3385,26 +3218,6 @@ fn constIndexValue(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx:
 
 fn stableIndexPlaceKnown(self: *Checker, expr: ast.Expr, state: *const MoveState, ctx: Context) bool {
     return constIndexValue(self, expr, state, ctx) != null;
-}
-
-fn updateIndependentIndexFact(self: *Checker, binding: []const u8, value: ast.Expr, state: *MoveState) void {
-    const ctx = self.move_ctx orelse {
-        _ = state.index_facts.remove(binding);
-        return;
-    };
-    if (constIndexValue(self, value, state, ctx.*)) |index| {
-        state.index_facts.put(binding, .{ .constant = index }) catch {
-            self.oom = true;
-        };
-    } else {
-        _ = state.index_facts.remove(binding);
-    }
-}
-
-fn isUsizeType(maybe_ty: ?ast.TypeExpr) bool {
-    const ty = maybe_ty orelse return false;
-    const name = ast_query.typeName(ty) orelse return false;
-    return std.mem.eql(u8, name, "usize");
 }
 
 fn retainsAliasPlaceType(ty: ast.TypeExpr) bool {

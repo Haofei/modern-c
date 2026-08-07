@@ -387,92 +387,6 @@ test "move slot exposes orthogonal ownership state views" {
     try std.testing.expectEqual(PlaceState.uninitialized, (MoveSlot{ .live = false, .span = span, .alias_of = "owner" }).placeState());
 }
 
-// Array-index facts are semantic metadata, not ownership state. Ownership v0
-// retains only constant facts so a name such as `i` can stand for a concrete
-// element place after `let i = 0` or through a CFG join. Runtime/symbolic index
-// facts deliberately have no model here; ownership transfer through them fails
-// closed instead of reintroducing symbolic place precision.
-pub const MoveIndexFact = union(enum) {
-    constant: usize,
-
-    pub fn eql(self: MoveIndexFact, other: MoveIndexFact) bool {
-        return switch (self) {
-            .constant => |left| switch (other) {
-                .constant => |right| left == right,
-            },
-        };
-    }
-};
-
-pub const MoveIndexFacts = struct {
-    facts: std.StringHashMap(MoveIndexFact),
-
-    pub fn init(allocator: std.mem.Allocator) MoveIndexFacts {
-        return .{ .facts = std.StringHashMap(MoveIndexFact).init(allocator) };
-    }
-
-    pub fn deinit(self: *MoveIndexFacts) void {
-        self.facts.deinit();
-    }
-
-    pub fn get(self: *const MoveIndexFacts, binding: []const u8) ?MoveIndexFact {
-        return self.facts.get(binding);
-    }
-
-    pub fn put(self: *MoveIndexFacts, binding: []const u8, fact: MoveIndexFact) !void {
-        try self.facts.put(binding, fact);
-    }
-
-    pub fn remove(self: *MoveIndexFacts, binding: []const u8) bool {
-        return self.facts.remove(binding);
-    }
-
-    pub fn clone(self: *const MoveIndexFacts, allocator: std.mem.Allocator) !MoveIndexFacts {
-        var result = MoveIndexFacts.init(allocator);
-        errdefer result.deinit();
-        try result.replaceFrom(self);
-        return result;
-    }
-
-    pub fn replaceFrom(self: *MoveIndexFacts, incoming: *const MoveIndexFacts) !void {
-        self.facts.clearRetainingCapacity();
-        var it = incoming.facts.iterator();
-        while (it.next()) |entry| try self.put(entry.key_ptr.*, entry.value_ptr.*);
-    }
-
-    // An index fact is usable only when every incoming path proves the exact
-    // same value. Removing a fact is deliberately conservative: callers fall
-    // back to the existing wildcard/rejection boundary instead of selecting an
-    // element place from a path-specific index.
-    pub fn intersectInto(self: *MoveIndexFacts, incoming: *const MoveIndexFacts) !bool {
-        var removals: std.ArrayListUnmanaged([]const u8) = .empty;
-        defer removals.deinit(self.facts.allocator);
-
-        var it = self.facts.iterator();
-        while (it.next()) |entry| {
-            const other = incoming.get(entry.key_ptr.*) orelse {
-                try removals.append(self.facts.allocator, entry.key_ptr.*);
-                continue;
-            };
-            if (!entry.value_ptr.eql(other)) {
-                try removals.append(self.facts.allocator, entry.key_ptr.*);
-            }
-        }
-        for (removals.items) |binding| _ = self.remove(binding);
-        return removals.items.len != 0;
-    }
-
-    pub fn eql(self: *const MoveIndexFacts, other: *const MoveIndexFacts) bool {
-        if (self.facts.count() != other.facts.count()) return false;
-        var it = self.facts.iterator();
-        while (it.next()) |entry| {
-            const other_fact = other.get(entry.key_ptr.*) orelse return false;
-            if (!entry.value_ptr.eql(other_fact)) return false;
-        }
-        return true;
-    }
-};
-
 pub const ScopedBorrowSlot = struct {
     span: diagnostics.Span,
     shared: usize = 0,
@@ -483,63 +397,23 @@ pub const ScopedBorrowSlot = struct {
     }
 };
 
-test "move index facts are independent, clonable metadata" {
-    var facts = MoveIndexFacts.init(std.testing.allocator);
-    defer facts.deinit();
-    try facts.put("constant", .{ .constant = 3 });
-
-    try std.testing.expect((facts.get("constant") orelse unreachable).eql(.{ .constant = 3 }));
-
-    var cloned = try facts.clone(std.testing.allocator);
-    defer cloned.deinit();
-    try std.testing.expect(facts.eql(&cloned));
-
-    try std.testing.expect(cloned.remove("constant"));
-    try std.testing.expect(!facts.eql(&cloned));
-    try std.testing.expect((facts.get("constant") orelse unreachable).eql(.{ .constant = 3 }));
-}
-
-test "move index facts retain only equal CFG join facts" {
-    var left = MoveIndexFacts.init(std.testing.allocator);
-    defer left.deinit();
-    try left.put("same", .{ .constant = 1 });
-    try left.put("different", .{ .constant = 2 });
-    try left.put("left_only", .{ .constant = 4 });
-
-    var right = MoveIndexFacts.init(std.testing.allocator);
-    defer right.deinit();
-    try right.put("same", .{ .constant = 1 });
-    try right.put("different", .{ .constant = 5 });
-    try right.put("right_only", .{ .constant = 3 });
-
-    try std.testing.expect(try left.intersectInto(&right));
-    try std.testing.expectEqual(@as(usize, 1), left.facts.count());
-    try std.testing.expect((left.get("same") orelse unreachable).eql(.{ .constant = 1 }));
-}
-
 // Transitional aggregate state for the move checker. The compatibility-map
 // surface forwards to `slots` so existing ownership consumers can migrate
-// independently, while every clone, CFG edge, loop snapshot, and pending exit
-// now transports index facts as first-class state.
+// independently while every clone, CFG edge, loop snapshot, and pending exit
+// transports only ownership/borrow/alias state. Index names are no longer
+// propagated as ownership metadata in v0; only source-level constant indexes
+// become transferable array-element places.
 pub const MoveState = struct {
     slots: std.StringHashMap(MoveSlot),
     root_ids: std.StringHashMap(MoveRootId),
     next_root_id: u32 = 1,
     scoped_borrows: std.StringHashMap(ScopedBorrowSlot),
-    index_facts: MoveIndexFacts,
-    // Tracks the lexical bindings eligible to carry index facts even when a
-    // particular path currently has no stable fact for them. This separates
-    // scope identity from fact availability, so assignment can re-establish a
-    // fact without allowing block-local metadata to escape.
-    index_bindings: std.StringHashMap(void),
 
     pub fn init(allocator: std.mem.Allocator) MoveState {
         return .{
             .slots = std.StringHashMap(MoveSlot).init(allocator),
             .root_ids = std.StringHashMap(MoveRootId).init(allocator),
             .scoped_borrows = std.StringHashMap(ScopedBorrowSlot).init(allocator),
-            .index_facts = MoveIndexFacts.init(allocator),
-            .index_bindings = std.StringHashMap(void).init(allocator),
         };
     }
 
@@ -547,8 +421,6 @@ pub const MoveState = struct {
         self.slots.deinit();
         self.root_ids.deinit();
         self.scoped_borrows.deinit();
-        self.index_facts.deinit();
-        self.index_bindings.deinit();
     }
 
     pub fn get(self: *const MoveState, key: []const u8) ?MoveSlot {
@@ -594,8 +466,6 @@ pub const MoveState = struct {
         self.root_ids.clearRetainingCapacity();
         self.next_root_id = 1;
         self.scoped_borrows.clearRetainingCapacity();
-        self.index_facts.facts.clearRetainingCapacity();
-        self.index_bindings.clearRetainingCapacity();
     }
 
     pub fn placeForRoot(self: *MoveState, root: []const u8) !MovePlace {
@@ -703,7 +573,6 @@ pub const LoopMoveFrame = struct {
     label: ?[]const u8 = null,
     entry_places: std.ArrayListUnmanaged(MovePlace),
     entry_state: MoveState,
-    invalidated_index_facts: std.StringHashMap(void),
     invalidated_alias_places: std.ArrayListUnmanaged(MovePlace) = .empty,
     // An alias without a typed storage place cannot be matched across an
     // early-exit edge. Keep it conservative rather than using its map key as
@@ -714,7 +583,6 @@ pub const LoopMoveFrame = struct {
     pub fn deinit(self: *LoopMoveFrame) void {
         self.entry_places.deinit(self.allocator);
         self.entry_state.deinit();
-        self.invalidated_index_facts.deinit();
         self.invalidated_alias_places.deinit(self.allocator);
         for (self.pending_exits.items) |*exit_state| exit_state.state.deinit();
         self.pending_exits.deinit(self.allocator);
