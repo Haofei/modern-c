@@ -1540,6 +1540,7 @@ pub fn validateDropGlueFactsForLowering(module: Module) error{InvalidMirDropGlue
         if (!dropGlueResourceSymbolIdentityValid(module, fact)) return error.InvalidMirDropGlueFacts;
         if (!dropGlueReleaseSymbolIdentityValid(module, fact)) return error.InvalidMirDropGlueFacts;
         if (!moduleHasConcreteFunction(module, fact.release_fn)) return error.InvalidMirDropGlueFacts;
+        if (!dropGlueFactHasMatchingTypeOwnershipFact(module, fact)) return error.InvalidMirDropGlueFacts;
         for (module.drop_glue_facts[0..index]) |previous| {
             if (std.mem.eql(u8, previous.resource_type, fact.resource_type)) return error.InvalidMirDropGlueFacts;
             if (std.mem.eql(u8, previous.release_fn, fact.release_fn)) return error.InvalidMirDropGlueFacts;
@@ -1552,6 +1553,12 @@ pub fn validateTypeOwnershipFactsForLowering(module: Module) error{InvalidMirTyp
         if (fact.type_name.len == 0) return error.InvalidMirTypeOwnershipFacts;
         if (!typeOwnershipSymbolIdentityValid(module, fact)) return error.InvalidMirTypeOwnershipFacts;
         if (fact.drop_glue_symbol_id.isValid() and !moduleSymbolIdentityValid(module, fact.drop_glue_symbol_id)) return error.InvalidMirTypeOwnershipFacts;
+        if (fact.drop_glue_symbol_id.isValid()) {
+            if (fact.kind != .affine) return error.InvalidMirTypeOwnershipFacts;
+            if (!typeOwnershipFactHasMatchingDropGlueFact(module, fact)) return error.InvalidMirTypeOwnershipFacts;
+        } else if (dropGlueFactForTypeName(module, fact.type_name) != null) {
+            return error.InvalidMirTypeOwnershipFacts;
+        }
         for (module.type_ownership_facts[0..index]) |previous| {
             if (std.mem.eql(u8, previous.type_name, fact.type_name)) return error.InvalidMirTypeOwnershipFacts;
         }
@@ -1689,6 +1696,26 @@ fn ownershipDropGlueSymbolValid(module: Module, symbol_id: SymbolId) bool {
 
 fn optionalOwnershipDropGlueSymbolValid(module: Module, symbol_id: SymbolId) bool {
     return !symbol_id.isValid() or ownershipDropGlueSymbolValid(module, symbol_id);
+}
+
+fn dropGlueFactForTypeName(module: Module, type_name: []const u8) ?DropGlueFact {
+    for (module.drop_glue_facts) |fact| {
+        if (std.mem.eql(u8, fact.resource_type, type_name)) return fact;
+    }
+    return null;
+}
+
+fn dropGlueFactHasMatchingTypeOwnershipFact(module: Module, fact: DropGlueFact) bool {
+    for (module.type_ownership_facts) |ownership_fact| {
+        if (!std.mem.eql(u8, ownership_fact.type_name, fact.resource_type)) continue;
+        return ownership_fact.kind == .affine and ownership_fact.drop_glue_symbol_id.eql(fact.typed_release_symbol_id);
+    }
+    return false;
+}
+
+fn typeOwnershipFactHasMatchingDropGlueFact(module: Module, fact: TypeOwnershipFact) bool {
+    const drop_glue_fact = dropGlueFactForTypeName(module, fact.type_name) orelse return false;
+    return drop_glue_fact.typed_release_symbol_id.eql(fact.drop_glue_symbol_id);
 }
 
 fn typeOwnershipSymbolIdentityValid(module: Module, fact: TypeOwnershipFact) bool {

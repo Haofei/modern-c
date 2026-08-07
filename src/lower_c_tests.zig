@@ -13756,14 +13756,14 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     module_mir.type_ownership_facts = &[_]mir.TypeOwnershipFact{};
     var missing_ownership_output: std.ArrayList(u8) = .empty;
     defer missing_ownership_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &missing_ownership_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &missing_ownership_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
     module_mir.type_ownership_facts = saved_ownership_facts;
 
     const saved_kind = module_mir.type_ownership_facts[0].kind;
     module_mir.type_ownership_facts[0].kind = .copy;
     var stale_ownership_output: std.ArrayList(u8) = .empty;
     defer stale_ownership_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &stale_ownership_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &stale_ownership_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
     module_mir.type_ownership_facts[0].kind = saved_kind;
 
     const make_guard_symbol = for (module_mir.functions) |function| {
@@ -13774,14 +13774,14 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     module_mir.type_ownership_facts[0].drop_glue_symbol_id = make_guard_symbol;
     var stale_ownership_symbol_output: std.ArrayList(u8) = .empty;
     defer stale_ownership_symbol_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &stale_ownership_symbol_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &stale_ownership_symbol_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
     module_mir.type_ownership_facts[0].drop_glue_symbol_id = saved_ownership_drop_symbol;
 
     const saved_facts = module_mir.drop_glue_facts;
     module_mir.drop_glue_facts = &[_]mir.DropGlueFact{};
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &missing_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &missing_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
     module_mir.drop_glue_facts = saved_facts;
 
     const saved_fn = module_mir.drop_glue_facts[0].release_fn;
@@ -13794,7 +13794,7 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     }
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &stale_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &stale_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
 }
 
 test "lower-c cancels auto-drop when affine move local is explicitly transferred" {

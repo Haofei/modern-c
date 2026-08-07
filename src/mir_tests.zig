@@ -4115,9 +4115,9 @@ test "MIR type ownership fact admission rejects symbol and duplicate drift" {
     defer drop_drift.deinit();
     try std.testing.expectEqual(@as(usize, 1), drop_drift.type_ownership_facts.len);
     drop_drift.type_ownership_facts[0].drop_glue_symbol_id = .invalid;
-    try mir.validateLoweringAdmission(drop_drift);
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(drop_drift));
     drop_drift.type_ownership_facts[0].drop_glue_symbol_id = mir.SymbolId.fromIndex(4096);
-    try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, mir.validateLoweringAdmission(drop_drift));
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(drop_drift));
 
     var duplicate = try mir.build(std.testing.allocator, parsed.module);
     defer duplicate.deinit();
