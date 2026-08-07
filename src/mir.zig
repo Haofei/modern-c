@@ -1502,7 +1502,8 @@ fn ownershipEventValid(module: Module, function: Function, event: OwnershipEvent
     return switch (event.kind) {
         .borrow_begin => event.loan_kind != null and event.loan_id != std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
         .borrow_end => event.loan_kind == null and event.loan_id != std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
-        .explicit_drop, .auto_drop => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and ownershipDropGlueSymbolValid(module, event.drop_glue_symbol_id),
+        .explicit_drop => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and optionalOwnershipDropGlueSymbolValid(module, event.drop_glue_symbol_id),
+        .auto_drop => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and ownershipDropGlueSymbolValid(module, event.drop_glue_symbol_id),
         else => event.loan_kind == null and event.loan_id == std.math.maxInt(u32) and !event.drop_glue_symbol_id.isValid(),
     };
 }
@@ -1529,6 +1530,10 @@ fn ownershipDropGlueSymbolValid(module: Module, symbol_id: SymbolId) bool {
         if (fact.typed_release_symbol_id.eql(symbol_id)) return true;
     }
     return false;
+}
+
+fn optionalOwnershipDropGlueSymbolValid(module: Module, symbol_id: SymbolId) bool {
+    return !symbol_id.isValid() or ownershipDropGlueSymbolValid(module, symbol_id);
 }
 
 fn moduleSymbolIdentityValid(module: Module, symbol_id: SymbolId) bool {
@@ -6301,6 +6306,7 @@ const FunctionBuilder = struct {
                     try self.addCallTargetFact(target, .void, node.callee.*.span);
                     const argument_ty = self.typeExprForExpr(node.args[0]) orelse return error.UnsupportedMirConstruction;
                     try self.appendTargetTypeFact(.discard_argument, argument_ty, valueTypeFromTypeAlias(argument_ty, self.enums, self.structs, self.packed_bits, self.aliases), node.args[0].span);
+                    try self.addDiscardOwnershipEvent(target, node.args[0], expr.span);
                 }
                 if (explicit_trap_target) |target| {
                     try self.addInstr(.call_target, @tagName(target), .never, expr.span);
@@ -7082,6 +7088,28 @@ const FunctionBuilder = struct {
             .kind = kind,
             .result_ty = result_ty,
             .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
+        });
+    }
+
+    fn addDiscardOwnershipEvent(self: *FunctionBuilder, target: CallTargetKind, argument: ast.Expr, call_span: ast.Span) !void {
+        const root = calleeIdentName(argument) orelse return;
+        const root_value_id = try self.internValueId(root);
+        const block_id = BlockId.fromIndex(self.current);
+        const instruction_index: ?u32 = if (self.blocks.items[self.current].instructions.items.len == 0)
+            null
+        else
+            @intCast(self.blocks.items[self.current].instructions.items.len - 1);
+        const kind: OwnershipEventKind = switch (target) {
+            .drop => .explicit_drop,
+            .forget_unchecked => .forget,
+            else => return,
+        };
+        try self.ownership_events.append(self.allocator, .{
+            .kind = kind,
+            .place = .{ .root_value_id = root_value_id },
+            .block_id = block_id,
+            .instruction_index = instruction_index,
+            .source = .{ .line = call_span.line, .column = call_span.column, .offset = call_span.offset, .len = call_span.len },
         });
     }
 

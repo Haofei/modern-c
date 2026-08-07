@@ -3943,13 +3943,24 @@ test "MIR owns discard call identities and argument types" {
     try std.testing.expectEqual(mir.CallTargetKind.drop, function.call_target_facts[0].kind);
     try std.testing.expectEqual(mir.CallTargetKind.forget_unchecked, function.call_target_facts[1].kind);
     try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .discard_argument));
+    try std.testing.expectEqual(@as(usize, 2), function.ownership_events.len);
+    const value_identity = valueIdentityBySpelling(function, "value") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(mir.OwnershipEventKind.explicit_drop, function.ownership_events[0].kind);
+    try std.testing.expect(function.ownership_events[0].place.root_value_id.eql(value_identity.id));
+    try std.testing.expectEqual(mir.OwnershipEventKind.forget, function.ownership_events[1].kind);
+    try std.testing.expect(function.ownership_events[1].place.root_value_id.eql(value_identity.id));
     for (function.target_type_facts) |fact| {
         if (fact.kind == .expression_result) continue;
         try std.testing.expectEqual(mir.TargetTypeKind.discard_argument, fact.kind);
         try std.testing.expectEqualStrings("u32", fact.target_ty.kind.name.text);
     }
-    try mir.validateCallTargetFactsForLowering(typed_mir);
-    try mir.validateTargetTypeFactsForLowering(typed_mir);
+    try mir.validateLoweringAdmission(typed_mir);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, typed_mir, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=discard_values kind=explicit_drop") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=discard_values kind=forget") != null);
 }
 
 test "MIR records drop glue facts for auto-drop resources" {
