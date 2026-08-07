@@ -2,7 +2,7 @@
 // The all-MC replacement for kernel/arch/riscv64/freestanding.c. Every QEMU kernel image links
 // this single object (kernel_boot_compile_rt). It supplies the mem*/str* symbols the freestanding
 // link needs: the backends emit calls to memset/memcpy/memmove for aggregate init/copy, and the
-// BearSSL TLS runtimes additionally reference memcmp/strlen.
+// Some freestanding C shims additionally reference memcmp/strlen.
 //
 // CRITICAL: the harness lowers this via emit-c and compiles it with -fno-builtin, so the compiler
 // will NOT rewrite these explicit loops back into calls to themselves (memset->memset). That

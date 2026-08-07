@@ -1,6 +1,6 @@
 // Shared virtio-rng (virtio device-id 4) entropy driver — the SINGLE freestanding
 // C implementation of the device-id-4 probe + handshake + one-shot random read,
-// used to be copy-pasted into bearssl_smoke_runtime.c and https_get_runtime.c.
+// used to be copy-pasted into per-fixture runtimes.
 //
 // Layout/semantics are byte-for-byte the same as the two former inline copies:
 //   * scan the 8 virtio-mmio slots at 0x1000_1000 (stride 0x1000) for device-id 4,

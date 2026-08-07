@@ -5,21 +5,6 @@ This manifest summarizes the top-level vendored dependencies under
 in each dependency's local license file; provenance and retained-subset details
 remain in each `README.vendored.md`.
 
-Generated trust-anchor material under `third_party/trust-anchors/` is not an
-upstream source tree and has no top-level license file.
-
-## BearSSL
-
-- Component: BearSSL.
-- Upstream and provenance: <https://www.bearssl.org/git/BearSSL>, commit
-  `7bea48e5e850ab4cafbe68d3765cdaba13a86d6f`; see
-  `third_party/bearssl/README.vendored.md`.
-- License summary: MIT-style permissive license.
-- Local license file: `third_party/bearssl/LICENSE.txt`.
-- Redistribution note: retain the BearSSL copyright notice, permission notice,
-  and warranty disclaimer in source or binary redistributions that include this
-  dependency or substantial portions of it.
-
 ## QuickJS-NG
 
 - Component: QuickJS-NG.

@@ -23,7 +23,7 @@ entirely in the MC language, whose intended and only workload is **AI agents** �
 semi-trusted, long-running, communication-heavy principals. It is *not* a
 general-purpose OS. It does **not** target POSIX compatibility or general-purpose hardware
 breadth; those mechanisms (a POSIX-shaped syscall demo, drivers, filesystems, ELF loading,
-TCP/IP, TLS) exist **only where they serve agent confinement, communication, storage, or
+TCP/IP) exist **only where they serve agent confinement, communication, storage, or
 bootstrapping** — never for their own sake.
 
 What distinguishes it from a production C kernel is that a large class of kernel bugs are
@@ -111,7 +111,6 @@ For "many bugs become compile errors" to hold, the following must be trusted. Th
   functions, freestanding libc subset);
 - the **arch trap/context-switch/paging** code;
 - **QEMU / OpenSBI** assumptions for the demo/boot envelope;
-- vendored **BearSSL** (TLS — opaque C);
 - any **C-ABI struct mirrors** and the generated `_Static_assert` layout checks that guard
   them.
 
@@ -192,7 +191,7 @@ which hands a physical region to `kmain(region_base, region_len)`. Ordered bring
 Legacy M-mode QEMU demos (`-bios none`, kernel at `0x8000_0000`) and S-mode/OpenSBI demos now
 **coexist**: the M-mode path remains for the bare-metal bring-up demos, while a full set of
 S-mode gates runs under REAL OpenSBI — `sbi-boot-test`, `smode-user-test`, `smode-timer-test`,
-`blk-smode-test`, `net-smode-test`, `bearssl-smode-test`, `https-smode-test`, and the
+`blk-smode-test`, `net-smode-test`, and the
 `qjs-smode-{confined,agent,async-agent}-test` agents. Until paging is explicitly enabled, kernel
 and tasks execute in physical address space. **Status: GATED** (`kmain-test` / `llvm-kmain-test`
 for M-mode; the `*-smode-*` steps above for S-mode) · riscv64 only.
@@ -556,14 +555,14 @@ Storage gates: `diskfs-test`, `bcache-test`, `blockfs-test`, `fs-server-test`.
 
 ## 19. Network Stack — GATED
 
-`kernel/net/`. A **substantial QEMU-tested TCP/IP stack supporting real DNS, TCP, HTTP, and
-TLS demos over slirp** (gateway `10.0.2.2`); TLS via vendored **BearSSL**.
+`kernel/net/`. A **substantial QEMU-tested TCP/IP stack supporting real DNS, TCP, and
+HTTP demos over slirp** (gateway `10.0.2.2`).
 
 > **Scope honesty:** "substantial," not "complete." The TCP connection logic implements the
 > RFC 793 state machine, modular send/recv windowing, out-of-order reassembly (8 segments),
-> and an RTO retransmit timer — enough for real single-connection DNS/HTTP/TLS demos. It is
+> and an RTO retransmit timer — enough for real single-connection DNS/HTTP demos. It is
 > **not** a claim of congestion control, PMTU discovery, IPv4 fragmentation/reassembly, full
-> TCP options, multi-connection stress hardening, or production resolver/TLS-verification
+> TCP options, multi-connection stress hardening, or production resolver/security
 > completeness. Treat per-protocol coverage as "demo-exercised," not "RFC-complete."
 
 - **Link/IP:** `ethernet`, `arp` + `arp_cache` (8-entry), `ipv4` (RFC 1071 checksum),
@@ -572,9 +571,7 @@ TLS demos over slirp** (gateway `10.0.2.2`); TLS via vendored **BearSSL**.
 - **TCP:** `tcp`, `tcp_conn` (RFC 793 state machine), `tcp_window`, `tcp_reasm`, `tcp_rtx`,
   `tcp_socket` (integration + segment-hold), `tcp_tx`.
 
-Gates: `dns-test`, `net-test`, `http-get-test`, `https-get-test`, `google-https-test`,
-`tcp_*` demos (each C and LLVM). See the network/TLS notes for which are hard gates vs
-best-effort.
+Gates: `dns-test`, `net-test`, `http-get-test`, and `tcp_*` demos (each C and LLVM).
 
 ---
 
@@ -665,7 +662,7 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | Supervisor + manifests | **GATED** · demo-scale (`SVC_MAX=8`) |
 | Syscall table mechanism | **GATED**; registered surface **DEMO-SCOPE** (5 POSIX calls) |
 | Filesystems / storage | **GATED**; flat stores + **hierarchical `treefs`** (mkdir/`..`/getdents) |
-| Network stack (real DNS/TCP/HTTP/TLS demos) + BearSSL | **GATED** (demo-exercised, not RFC-complete) |
+| Network stack (real DNS/TCP/HTTP demos) | **GATED** (demo-exercised, not RFC-complete) |
 | Drivers: virtio net/blk, plic, clint | **GATED**; pci **IMPLEMENTED**; e1000 **MOCK** |
 | ELF load | **GATED**; dynlink **DEMO-SCOPE** |
 
@@ -684,7 +681,7 @@ scope. Gate names are verified against `build.zig`.
 | Rights/capabilities attenuate only (child = parent ∩ keep) | `capability.mc`, `std/rights.mc` | `cap-test`, `llvm-cap-test` | compile-time + QEMU |
 | Grant revoke invalidates outstanding refs; cascade revokes subtree | `kernel/lib/granttab.mc` | `grant-test`, `granttab-test` | riscv64 QEMU |
 | `UserPtr<T>` cannot be dereferenced in the kernel | `uaccess.mc` + compiler diagnostic `E_USER_PTR_DEREF` | compile-time spec fixtures | compile-time |
-| Real DNS + TCP + HTTPS over slirp (no mocks on the wire) | `kernel/net/*`, `third_party/bearssl` | `dns-test`, `https-get-test`, `google-https-test` | QEMU + live internet |
+| Real DNS + TCP + HTTP over slirp (no mocks on the wire) | `kernel/net/*` | `dns-test`, `http-get-test` | QEMU |
 | `page_free` is real O(1) reclaim (not a no-op) | `page_alloc.mc` | `page-test`, `llvm-page-test` | riscv64 QEMU |
 
 ---
@@ -700,7 +697,7 @@ The safety keystone (governance) has landed. The open frontier, per the vision d
   demo-scope tool ops needed to exercise the userspace ABI and async runtime.
 - **Agent code execution** — *delivered*: QuickJS runs as a confined userspace ELF on all three
   arches (riscv64 M+S-mode, x86_64 ring-3, AArch64 EL0), evaluating pure-JS agents under kernel
-  confinement (BearSSL was the C-linking precedent). The remaining roadmap is broader: wider
+  confinement. The remaining roadmap is broader: wider
   capability-tool coverage, exposing the real network broker as a production JS/tool-catalog
   operation, cross-arch real-broker parity (x86/AArch64 still need confined-agent runtimes that
   reuse the shared broker), and optionally a second runtime (e.g. WASM).

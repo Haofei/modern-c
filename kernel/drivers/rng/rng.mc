@@ -2,7 +2,7 @@
 // device-id 4) driver plus a clean `rng_fill(buf, len)` API, built on the shared
 // transport (std/virtio: scan / handshake), the split virtqueue (std/virtqueue:
 // submit / kick / wait / complete) and DMA ownership (std/dma) — the same layering
-// virtio_net / virtio_blk use. This is where in-kernel callers (TLS today; tokens /
+// virtio_net / virtio_blk use. This is where in-kernel callers (tokens /
 // nonces later) get real device entropy, instead of every caller re-walking the mmio
 // window and hand-rolling the queue cycle.
 //
@@ -11,7 +11,7 @@
 // board fact, pulled from kernel/platform/active/ rather than hardcoded here, so std/
 // never has to import a platform backend (which would invert the layering).
 //
-// The C runtimes (bearssl_smoke_runtime.c, https_get_runtime.c) share the *same*
+// C runtimes share the *same*
 // probe via kernel/drivers/virtio/virtio_rng.c; this module is the MC-world twin
 // of that driver, so the two languages keep one device contract, not two.
 

@@ -372,8 +372,7 @@
         "python3"
       ],
       "blocking_profiles": [
-        "kernel-qemu",
-        "production-kernel"
+        "kernel-qemu"
       ],
       "build_tiers": [
         "m0",

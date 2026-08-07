@@ -394,7 +394,7 @@ def require_threat_model_metadata() -> None:
         "differential C/LLVM gates",
         "## 6. Supply-chain sub-model",
         "Supply-chain compromise of vendored engines",
-        "WAMR, QuickJS, BearSSL",
+        "WAMR, QuickJS, openlibm",
         "vendoring review",
         "CVE/advisory triage",
         "pinned Zig/LLVM/Docker versions and digests",

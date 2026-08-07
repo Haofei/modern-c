@@ -3,15 +3,10 @@
 This repository vendors a small number of third-party components under
 `third_party/`:
 
-- `bearssl` for freestanding TLS/crypto support.
 - `quickjs` for confined JavaScript agents.
 - `wamr` for confined WebAssembly agents.
 - `openlibm` for freestanding libm support used by C apps, QuickJS, and WAMR
   hosts.
-
-Generated trust-anchor material under `third_party/trust-anchors/` is documented
-separately in that directory and is refreshed from certificates rather than from
-an upstream source tree.
 
 ## Required metadata
 
@@ -38,15 +33,12 @@ license, local provenance file, local license file, advisory status, review
 date, local modifications, and the profiles that include the component. Profile
 manifests may reference only component IDs present in that file.
 
-Kernel profile-facing vendored, firmware, and profile-slot TCB components must
-also have a row in [`tcb-advisory-intake.json`](tcb-advisory-intake.json). That
-row records the offline advisory-intake sources to check, retained-subset
-policy, review dates, and waiver fields required before a security advisory can
-be declared not applicable. `open-before-production` rows are allowed for
-unselected real-board firmware or runtime slots, but only as explicit blockers
-with concrete replacement criteria. This is a deterministic local gate; it does
-not perform live network CVE ingestion and does not close production-kernel
-supply-chain risk by itself.
+Kernel-QEMU profile-facing vendored and firmware TCB components must also have a
+row in [`tcb-advisory-intake.json`](tcb-advisory-intake.json). That row records
+the offline advisory-intake sources to check, retained-subset policy, review
+dates, and waiver fields required before a security advisory can be declared not
+applicable. This is a deterministic local gate; it does not perform live network
+CVE ingestion and does not create a deployable kernel release claim.
 
 Run the static check before sending a vendoring change:
 
@@ -77,8 +69,7 @@ zig build profile-manifest-test
    deliberately and update the local-modifications section.
 6. Re-run the component gates:
    `tools/user/build-qjs.sh` consumers for QuickJS, WAMR confined-agent gates
-   for WAMR, `tools/user/build-openlibm.sh` consumers for openlibm, and
-   `tools/tls/bearssl-smoke-test.sh` or related TLS gates for BearSSL.
+   for WAMR, and `tools/user/build-openlibm.sh` consumers for openlibm.
 7. Run the static gates:
    `python3 tools/toolchain/vendoring-test.py`, `zig build vendoring-test`,
    `zig build fast` when practical, and the relevant QEMU gates for the changed
@@ -93,8 +84,6 @@ zig build profile-manifest-test
 
 For every dependency update and release-readiness pass, check these upstreams:
 
-- BearSSL: upstream BearSSL site/repository, project announcements, CVE search
-  for `BearSSL`, and distro security trackers.
 - QuickJS-NG: GitHub releases/issues/security advisories for
   `quickjs-ng/quickjs`, CVE search for `QuickJS` and `QuickJS-NG`, and relevant
   distro security trackers.

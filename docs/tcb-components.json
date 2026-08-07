@@ -124,42 +124,13 @@
       "id": "opensbi",
       "category": "firmware",
       "owner": "kernel",
-      "summary": "OpenSBI firmware boundary used by S-mode QEMU and real-board profiles.",
+      "summary": "OpenSBI firmware boundary used by S-mode QEMU integration workloads.",
       "upstream": "https://github.com/riscv-software-src/opensbi",
       "revision": "environment-provided",
       "license": "BSD-2-Clause",
       "advisory_status": "tracked-by-platform-image",
       "review_after": "2026-10-01",
-      "profiles": ["kernel-qemu", "production-kernel"]
-    },
-    {
-      "id": "real-board-firmware",
-      "category": "firmware",
-      "owner": "kernel",
-      "summary": "Selected production board firmware, DTB, boot ROM, and platform configuration.",
-      "revision": "release-profile-specific",
-      "license": "profile-specific",
-      "advisory_status": "open-before-production",
-      "review_after": "2026-09-01",
-      "profiles": ["production-kernel"]
-    },
-    {
-      "id": "kernel-core",
-      "category": "internal",
-      "owner": "kernel",
-      "summary": "modern-c kernel core, scheduler, memory, syscall, policy, audit, and loader code.",
-      "advisory_status": "internal-component",
-      "review_after": "2026-10-01",
-      "profiles": ["production-kernel"]
-    },
-    {
-      "id": "selected-agent-runtime",
-      "category": "profile-slot",
-      "owner": "kernel",
-      "summary": "The production profile's selected confined Agent runtime; must resolve to a concrete component before production.",
-      "advisory_status": "open-before-production",
-      "review_after": "2026-09-01",
-      "profiles": ["production-kernel"]
+      "profiles": ["kernel-qemu"]
     },
     {
       "id": "quickjs",

@@ -19,8 +19,7 @@
         ],
         "experimental_or_excluded": [
           "selfhost/",
-          "production-kernel claims",
-          "production boot-chain policy",
+          "kernel production claims",
           "advanced incremental LSP",
           "QuickJS/WAMR runtime profiles"
         ]
@@ -166,7 +165,7 @@
       "id": "kernel-qemu",
       "status": "qemu-surrogate",
       "production_claim": false,
-      "summary": "Kernel and Agent runtime evidence is QEMU/OpenSBI surrogate evidence. It is useful for regression, not a real-board production claim.",
+      "summary": "Kernel and Agent runtime evidence is QEMU/OpenSBI surrogate evidence. It is useful for language/runtime regression, not a deployable hardware claim.",
       "scope": {
         "blocking": [
           "kernel/",
@@ -203,42 +202,6 @@
         "quickjs",
         "wamr",
         "openlibm"
-      ]
-    },
-    {
-      "id": "production-kernel",
-      "status": "blocked",
-      "production_claim": false,
-      "summary": "Production kernel support is blocked until privileged capability mint isolation, minimal TCB, real hardware, soak, external security evidence, and any selected product-specific update/policy path are complete.",
-      "scope": {
-        "blocking": [
-          "kernel/",
-          "platform profile",
-          "product-specific update/policy path",
-          "real-board validation"
-        ],
-        "experimental_or_excluded": [
-          "QEMU-only qualification",
-          "metadata-only boot-chain demos",
-          "unreviewed third-party kernel components"
-        ]
-      },
-      "blocking_risks": [
-        "KERNEL-CAPABILITY-MINT",
-        "SUPPLY-TCB-CVE-INTAKE",
-        "TCB-PROFILE-MINIMIZATION",
-        "HARDWARE-PRODUCTION-QUALIFICATION"
-      ],
-      "blocking_gates": [
-        "visionfive2-readiness-test",
-        "tcb-advisory-intake-test",
-        "agentos-test"
-      ],
-      "tcb_components": [
-        "real-board-firmware",
-        "opensbi",
-        "kernel-core",
-        "selected-agent-runtime"
       ]
     }
   ]

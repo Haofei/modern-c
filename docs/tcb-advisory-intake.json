@@ -16,7 +16,7 @@
       "approval",
       "expires_on"
     ],
-    "non_goal": "This manifest is a deterministic local gate. It does not perform live network CVE ingestion and does not close production-kernel supply-chain risk by itself."
+    "non_goal": "This manifest is a deterministic local gate. It does not perform live network CVE ingestion and does not support a deployable kernel release claim by itself."
   },
   "components": [
     {
@@ -152,81 +152,11 @@
           "url": "https://nvd.nist.gov/vuln/search/results?query=OpenSBI&search_type=all"
         }
       ],
-      "retained_subset_policy": "Assess the OpenSBI firmware image selected by the kernel-qemu or production-kernel platform profile. Environment-provided firmware is not production-admitted until the exact platform image, version, build source, and advisory review are recorded by that profile.",
+      "retained_subset_policy": "Assess the OpenSBI firmware image used by the kernel-qemu integration profile. Environment-provided firmware is not production-admitted by this repository.",
       "release_blocker_if": [
         "the advisory affects SBI calls, privilege transitions, trap delegation, firmware memory protection, or boot handoff used by the kernel profile",
         "the selected platform image cannot be mapped to a reviewed OpenSBI release, tag, commit, or vendor firmware bulletin",
         "the firmware image differs from the reviewed platform image"
-      ]
-    },
-    {
-      "component_id": "real-board-firmware",
-      "owner": "kernel",
-      "status": "open-before-production",
-      "reviewed_on": "2026-08-06",
-      "review_after": "2026-09-01",
-      "queries": [
-        "selected production board firmware",
-        "selected production board boot ROM",
-        "selected production board DTB"
-      ],
-      "advisory_sources": [
-        {
-          "name": "RISC-V OpenSBI advisories for firmware stacks using OpenSBI",
-          "kind": "security-advisory",
-          "url": "https://github.com/riscv-software-src/opensbi/security/advisories"
-        },
-        {
-          "name": "NVD keyword search for RISC-V firmware",
-          "kind": "cve-database",
-          "url": "https://nvd.nist.gov/vuln/search/results?query=RISC-V%20firmware&search_type=all"
-        },
-        {
-          "name": "Production kernel profile manifest placeholder",
-          "kind": "upstream",
-          "url": "https://github.com/Haofei/modern-c/blob/master/docs/profile-manifest.json"
-        }
-      ],
-      "retained_subset_policy": "No real production board firmware is admitted yet. Before production, the selected board firmware, DTB, boot ROM assumptions, vendor advisory feed, image digest, and update policy must replace this placeholder with concrete platform metadata.",
-      "release_blocker_if": [
-        "a production-kernel profile selects board firmware without exact image identity, vendor/source provenance, and advisory feed",
-        "the board firmware advisory feed reports an unwaived issue affecting boot, SBI, memory protection, device tree, storage, network, DMA, or interrupt behavior",
-        "the selected board image cannot be reproduced or matched to the reviewed profile metadata"
-      ]
-    },
-    {
-      "component_id": "selected-agent-runtime",
-      "owner": "kernel",
-      "status": "open-before-production",
-      "reviewed_on": "2026-08-06",
-      "review_after": "2026-09-01",
-      "queries": [
-        "selected confined agent runtime",
-        "QuickJS confined agent runtime",
-        "WAMR confined agent runtime"
-      ],
-      "advisory_sources": [
-        {
-          "name": "QuickJS-NG GitHub security advisories",
-          "kind": "security-advisory",
-          "url": "https://github.com/quickjs-ng/quickjs/security/advisories"
-        },
-        {
-          "name": "WAMR GitHub security advisories",
-          "kind": "security-advisory",
-          "url": "https://github.com/bytecodealliance/wasm-micro-runtime/security/advisories"
-        },
-        {
-          "name": "NVD keyword search for confined runtime candidates",
-          "kind": "cve-database",
-          "url": "https://nvd.nist.gov/vuln/search/results?query=QuickJS%20WAMR&search_type=all"
-        }
-      ],
-      "retained_subset_policy": "No single production Agent runtime is admitted yet. Before production, this profile slot must resolve to a concrete runtime component with exact revision, retained subset, sandbox boundary, advisory intake row, and release waiver policy.",
-      "release_blocker_if": [
-        "production-kernel selects a runtime without exact component identity, retained-subset policy, and advisory source coverage",
-        "the selected runtime has an unwaived advisory affecting parsing, execution isolation, host calls, allocator behavior, or sandbox memory access",
-        "the runtime profile depends on vendored code not listed in docs/tcb-components.json"
       ]
     }
   ]

@@ -11,8 +11,8 @@ claims, not to remove safety checks.
 ## Current imbalance
 
 The repository now contains a language/compiler, C and LLVM backends, selfhost
-experiments, kernel/Agent runtime work, LSP/editor tooling, QEMU suites, secure
-boot components, release provenance, and multiple vendored TCBs.
+experiments, kernel/Agent runtime work, LSP/editor tooling, QEMU suites, release
+provenance, and multiple vendored TCBs.
 
 Those pieces are useful, but they should not all be treated as one production
 profile while the following core items remain open:
@@ -34,11 +34,10 @@ summary.
 
 | Profile | Blocking scope | Non-blocking / experimental scope |
 |---|---|---|
-| `compiler-subset` | Parser/sema/MIR verifier, C backend reference path, diagnostics, source loading, C/LLVM differential for covered fixtures | Selfhost, kernel production claims, production boot-chain policy, advanced LSP, runtime TCB profiles |
+| `compiler-subset` | Parser/sema/MIR verifier, C backend reference path, diagnostics, source loading, C/LLVM differential for covered fixtures | Selfhost, deployable-kernel claims, advanced LSP, runtime TCB profiles |
 | `llvm-experimental` | LLVM verifier/object/differential smoke for supported fixtures | Full language-surface parity until typed MIR/fact boundaries are complete |
 | `selfhost-experimental` | Explicit bootstrap subset tests and fixpoint evidence | Any claim that selfhost is the production compiler or language authority |
 | `kernel-qemu` | QEMU boot/runtime workloads, kernel API model tests | Real hardware production support, power-loss/durable security claims |
-| `production-kernel` | Real hardware soak, external audit, minimal TCB, product-specific update/policy only if selected | QEMU-only evidence, metadata-only boot-chain demos |
 | `developer-tools` | Basic diagnostics, formatting, navigation smoke, LSP resource limits | Low-latency incremental service claims until a query DB / persistent compiler service exists |
 
 ## Immediate simplification rules

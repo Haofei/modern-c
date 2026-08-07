@@ -12,18 +12,6 @@ ROOT = Path(__file__).resolve().parents[2]
 TCB_COMPONENTS = ROOT / "docs" / "tcb-components.json"
 
 DEPENDENCIES = {
-    "bearssl": {
-        "license": "LICENSE.txt",
-        "needles": [
-            "Upstream",
-            "Commit",
-            "License",
-            "What is kept",
-            "dropped",
-            "added by us",
-            "How it is built",
-        ],
-    },
     "quickjs": {
         "license": "LICENSE",
         "needles": [
@@ -102,7 +90,6 @@ DEPENDENCIES = {
 }
 
 DOC_NEEDLES = [
-    "bearssl",
     "quickjs",
     "wamr",
     "openlibm",

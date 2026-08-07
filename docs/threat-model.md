@@ -29,14 +29,14 @@ failure modes we accept. It is the frame for the security-hardening work in §4.
 - The microkernel: loader, page-table/uaccess paths, syscall dispatch, the brokers
   (FS/net), the scheduler, the capability registries.
 - The vendored engines linked into the kernel/host TCB where used: WAMR (agent wasm),
-  QuickJS, BearSSL. A bug in these is a TCB bug; release and vendoring controls
+  QuickJS, and openlibm. A bug in these is a TCB bug; release and vendoring controls
   reduce exposure but runtime containment does not make these bugs harmless (§6).
 - The boot firmware (OpenSBI on RISC-V) and the platform (QEMU virt / a real board).
 
 **Untrusted, attacker-controlled:**
 - The agent payload itself: arbitrary wasm (WAMR) or JS (QuickJS-on-wasm), and the
   arguments/pointers/lengths it passes across the syscall ABI.
-- All network input (DNS/TCP/TLS records, raw frames) — fully hostile.
+- All network input (DNS/TCP records, raw frames) — fully hostile.
 - Agent-supplied filesystem contents within its sandbox.
 
 **Out of scope (explicitly NOT defended here):**
@@ -95,7 +95,7 @@ kernel image, leak source during diagnostics, or corrupt release artifacts.
 
 Supply-chain compromise of vendored engines, the compiler toolchain, CI actions,
 or release artifacts is in scope for production readiness. The kernel still treats
-WAMR, QuickJS, BearSSL, Zig, LLVM, QEMU, and pinned CI actions as trusted inputs at
+WAMR, QuickJS, openlibm, Zig, LLVM, QEMU, and pinned CI actions as trusted inputs at
 runtime/build time; a malicious or vulnerable component can invalidate the kernel
 TCB. The control is therefore provenance, pinning, review, update discipline, and
 public vulnerability intake, not a claim that runtime containment absorbs the bug.
@@ -129,7 +129,7 @@ public vulnerability intake, not a claim that runtime containment absorbs the bu
   uniform per-agent memory/CPU budgets land. Timer-driven process preemption has landed,
   but a misbehaving agent may
   currently degrade throughput (it cannot escape isolation or forge authority).
-- **A TCB bug (WAMR/QuickJS/BearSSL/compiler/toolchain) can break any guarantee** —
+- **A TCB bug (WAMR/QuickJS/openlibm/compiler/toolchain) can break any guarantee** —
   these are trusted inputs. Defense is vendoring/CVE discipline, pinned tools/actions,
   release checksums/SBOM/attestations, SECURITY.md intake, and compiler/codegen gates,
   not runtime containment.

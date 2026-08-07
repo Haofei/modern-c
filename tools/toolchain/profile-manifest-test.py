@@ -22,7 +22,6 @@ REQUIRED_PROFILES = {
     "selfhost-experimental",
     "developer-tools",
     "kernel-qemu",
-    "production-kernel",
 }
 
 
@@ -180,18 +179,6 @@ def main() -> None:
     for experimental_id in ("llvm-experimental", "selfhost-experimental", "developer-tools", "kernel-qemu"):
         if profile_by_id[experimental_id]["production_claim"]:
             fail(f"{experimental_id} must not claim production support")
-
-    production_kernel = profile_by_id["production-kernel"]
-    if production_kernel["production_claim"]:
-        fail("production-kernel must remain non-production until blockers close")
-    for required_risk in (
-        "KERNEL-CAPABILITY-MINT",
-        "SUPPLY-TCB-CVE-INTAKE",
-        "TCB-PROFILE-MINIMIZATION",
-        "HARDWARE-PRODUCTION-QUALIFICATION",
-    ):
-        if required_risk not in production_kernel["blocking_risks"]:
-            fail(f"production-kernel must block on {required_risk}")
 
     if "BACKEND-LLVM-PROFILE" not in profile_by_id["llvm-experimental"]["blocking_risks"]:
         fail("llvm-experimental must reference BACKEND-LLVM-PROFILE")

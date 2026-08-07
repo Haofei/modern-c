@@ -57,7 +57,7 @@ export fn mc_udelay(us: u32) -> void {
 // buffers; `free` is a no-op (the pool is one-shot for these smoke tests).
 // Exhaustion traps rather than overruns. 64 KiB covers the net RX ring + TX frames;
 // the blk path uses only a few hundred bytes.
-// 8 MiB: blk/bearssl smoke need only a few KB, but the S-mode TLS/HTTPS path drives many unfreed
+// 8 MiB: blk smoke needs only a few KB, but S-mode network paths drive many unfreed
 // RX refills + TX segments (matching the M-mode mmode_dma_time pool).
 const DMA_POOL_LEN: usize = 8 * 1024 * 1024;
 global g_dma_pool: [8388608]u8;

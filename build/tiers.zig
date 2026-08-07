@@ -742,8 +742,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("http-get-test"));
     // dns-test resolves a name via a real DNS A-query then HTTP GETs that host under QEMU.
     m0_full_step.dependOn(ctx.cmd("dns-test"));
-    // BearSSL/TLS HTTPS gates are standalone integration demos. Kernel crypto is not part
-    // of the language-core qualification surface.
     // backtrace-test walks the frame-pointer chain + symbolizes under QEMU.
     m0_full_step.dependOn(ctx.cmd("backtrace-test"));
     // paging-test links + runs the Sv39 page-table map/translate (needs clang).

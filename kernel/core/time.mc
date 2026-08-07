@@ -16,14 +16,14 @@
 // FALLBACK: if the device is absent or reads back zero (a machine without the
 // goldfish-rtc), the caller is expected to fall back to the documented build epoch
 // (`mc_build_epoch`). The RTC is the PRIMARY source; the build epoch is only a
-// safety net so TLS still has a plausible clock on RTC-less hardware.
+// safety net so time-sensitive fixtures still have a plausible clock on RTC-less hardware.
 //
 // The fixed RTC register block address and the latching-read sequence live in the board
 // backend (kernel/platform/<board>/rtc_hw.mc), reached here through the
 // `kernel/platform/active/` seam — so this file carries no MMIO address and never needs
 // editing to retarget a board. The backend imports nothing but the `phys`/`raw.load`
 // builtins, preserving this module's standalone-object property: it still links into the
-// TLS HTTPS-GET bridge without dragging in std/addr's symbols.
+// network fixtures without dragging in std/addr's symbols.
 import "kernel/platform/active/rtc_hw.mc";
 
 const NS_PER_SEC: u64 = 1_000_000_000;

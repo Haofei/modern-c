@@ -281,7 +281,6 @@ def main() -> None:
         ["vendoring-test", "third-party-licenses-test"],
         ["git diff --check"],
     )
-    assert_gates(module, ["third_party/bearssl/LICENSE.txt"], ["vendoring-test", "third-party-licenses-test"])
     assert_gates(module, ["tools/toolchain/abi-test.sh"], ["abi-test"])
     assert_gates(module, ["tests/toolchain/abi_layout.mc"], ["abi-test"])
     assert_gates(module, ["tools/toolchain/asm-targets-test.sh"], ["asm-targets-test"])

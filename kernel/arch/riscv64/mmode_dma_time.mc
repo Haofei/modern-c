@@ -46,7 +46,7 @@ export fn mc_udelay(us: u32) -> void {
 // ----- std/dma platform primitives: a 16-byte-aligned bump pool -----
 //
 // The blk request chain holds three buffers (header/data/status) outstanding at once;
-// the bare net path holds an RX ring + TX frames; and the TCP/HTTP/TLS family drives
+// the bare net path holds an RX ring + TX frames; and the TCP/HTTP family drives
 // many RX refills + TX segments with nothing freed (bump pool). The pool matches the
 // 8 MiB the C TCP runtimes carried so it serves every M-mode virtio gate. A bump
 // allocator never aliases live buffers; `free` is a no-op (the pool is one-shot for

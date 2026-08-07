@@ -7,7 +7,7 @@
 // Same boot-seam shape as net/http_get; the per-invocation config the C runtime took via
 // -D (DNS server IP, HTTP port, hostname, optional HTTP request override) is threaded in
 // as a generated MC unit (mc_dns_server_ip/mc_http_port/mc_dns_hostname/mc_http_request),
-// the same way the BearSSL epoch is — MC has no -D. Platform = the shared mmode_dma_time.mc.
+// the same way other QEMU runtime constants are passed — MC has no -D. Platform = the shared mmode_dma_time.mc.
 
 import "tests/qemu/lib/test_report.mc";
 import "kernel/arch/riscv64/sbi_virtio_probe.mc";

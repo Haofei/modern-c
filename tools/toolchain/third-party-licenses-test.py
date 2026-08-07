@@ -13,21 +13,6 @@ MANIFEST = ROOT / "THIRD-PARTY-LICENSES.md"
 LICENSE_FILENAMES = ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")
 
 DEPENDENCIES = {
-    "bearssl": {
-        "heading": "BearSSL",
-        "license": "third_party/bearssl/LICENSE.txt",
-        "readme": "third_party/bearssl/README.vendored.md",
-        "needles": (
-            "Component: BearSSL",
-            "https://www.bearssl.org/git/BearSSL",
-            "7bea48e5e850ab4cafbe68d3765cdaba13a86d6f",
-            "MIT",
-            "Redistribution note:",
-            "copyright notice",
-            "permission notice",
-            "warranty disclaimer",
-        ),
-    },
     "quickjs": {
         "heading": "QuickJS-NG",
         "license": "third_party/quickjs/LICENSE",

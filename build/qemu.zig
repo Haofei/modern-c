@@ -686,30 +686,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "http-get-test", "Active-open a real TCP connection and HTTP GET a live server over virtio-net under QEMU", &.{ "bash", "tools/net/http-get-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-http-get-test", "Active-open a real LLVM-lowered TCP connection and HTTP GET a live server over virtio-net under QEMU", &.{ "bash", "tools/net/http-get-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "bearssl-smoke-test", "Compute a SHA-256 vector via freestanding BearSSL and pull live virtio-rng entropy in a bare-metal riscv64 kernel under QEMU (Phase 1 TLS de-risking)", &.{ "bash", "tools/tls/bearssl-smoke-test.sh", "zig-out/bin/mcc", "c" });
-
-    // bearssl-smode-test revalidates the SAME freestanding BearSSL SHA-256 vector +
-    // live virtio-rng entropy under REAL OpenSBI in S-mode (boot seam only: SBI
-    // console/shutdown, sbi.ld, rdtime CSR; no `-bios none`). Deterministic — no
-    // network egress — so it is gated in m0.
-    _ = h.addScriptTest(ctx, "bearssl-smode-test", "Revalidate the freestanding BearSSL SHA-256 vector + live virtio-rng entropy under REAL OpenSBI in S-mode (TLS crypto stack on the OpenSBI boot seam)", &.{ "bash", "tools/arch/bearssl-smode-test.sh", "zig-out/bin/mcc", "c" });
-
-    // https-smode-test revalidates the SAME deterministic in-kernel REAL BearSSL
-    // TLS 1.2 handshake + HTTPS GET (against the LOCAL self-signed python server
-    // over slirp loopback — no internet egress) under REAL OpenSBI in S-mode.
-    _ = h.addScriptTest(ctx, "https-smode-test", "Revalidate the in-kernel REAL BearSSL TLS 1.2 handshake + HTTPS GET (local server over slirp) under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/https-smode-test.sh", "zig-out/bin/mcc", "c" });
-
-    // https-get-test: a REAL BearSSL TLS 1.2 handshake over the kernel's TCP, validating
-    // a self-signed trust anchor and decrypting an HTTPS GET from a local python HTTPS
-    // server under QEMU (Phase 2 of in-kernel TLS; deterministic CI gate).
-    _ = h.addScriptTest(ctx, "https-get-test", "Run a REAL BearSSL TLS 1.2 handshake over the kernel TCP and decrypt an HTTPS GET from a local python HTTPS server under QEMU", &.{ "bash", "tools/tls/https-get-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-https-get-test", "Run a REAL LLVM-lowered BearSSL TLS 1.2 handshake over the kernel TCP and decrypt an HTTPS GET from a local python HTTPS server under QEMU", &.{ "bash", "tools/tls/https-get-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // google-https-test: best-effort REAL google.com:443 fetch validating Google's actual
-    // cert chain against the embedded GTS Root R1. Standalone (PASS or honest SKIP);
-    // deliberately NOT added to the m0 gate (no flaky CI dependency on internet egress).
-    _ = h.addScriptTest(ctx, "google-https-test", "Best-effort REAL google.com:443 HTTPS fetch validating Google's actual cert chain against the embedded GTS Root R1 under QEMU (standalone; PASS or honest SKIP)", &.{ "bash", "tools/tls/google-https-test.sh", "zig-out/bin/mcc", "c" });
-
     _ = h.addScriptTest(ctx, "dns-test", "Resolve a name via a real DNS A-query then HTTP GET that host over virtio-net under QEMU", &.{ "bash", "tools/net/dns-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-dns-test", "Resolve a name via a real LLVM-lowered DNS A-query then HTTP GET that host over virtio-net under QEMU", &.{ "bash", "tools/net/dns-test.sh", "zig-out/bin/mcc", "llvm" });
 

@@ -11,7 +11,7 @@
 // The kernel/core/time interface (rtc_time_low / rtc_time_ns / time_now_epoch) is
 // board-agnostic and reaches this through the `kernel/platform/active/` seam. Like core
 // time, this backend deliberately imports nothing (only the `phys`/`raw.load` builtins),
-// so it flattens cleanly into the standalone time object linked into the TLS bridge
+// so it flattens cleanly into the standalone time object linked into network fixtures
 // without dragging in any std symbols.
 
 const PLAT_RTC_BASE: usize = 0x10_1000; // goldfish-rtc MMIO base (riscv64 virt)

@@ -1,6 +1,6 @@
 // Shared virtio-rng entropy driver — in PURE MC (replaces kernel/drivers/virtio/virtio_rng.c).
 // The single source of truth for the device-id-4 probe + handshake + single device-writable queue
-// + used-ring poll. Linked by the BearSSL/HTTPS riscv runtimes, which declare vrng_find/vrng_init/
+// + used-ring poll. Linked by riscv runtimes, which declare vrng_find/vrng_init/
 // vrng_fill `extern fn` and provide mc_read_ticks. riscv-only (virtio-mmio on QEMU virt).
 
 const VIRTIO_MMIO_BASE: usize = 0x10001000;

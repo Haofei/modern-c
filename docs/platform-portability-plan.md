@@ -34,7 +34,6 @@ These are implemented and represented by build steps in the current tree:
 | Architecture selection seam | `arch-emit-test` emits portable core modules under `--arch=riscv64`, `--arch=x86_64`, and `--arch=aarch64`. |
 | Structured async tool ABI | `qjs-realtool-test` / `llvm-qjs-realtool-test` drive FS ops from pure JS over `SYS_SUBMIT` / `SYS_POLL`; `qjs-nettool-test` / `llvm-qjs-nettool-test` exercise deterministic network-fetch ABI behavior; `qjs-smode-net-irq-tool-test` / `llvm-qjs-smode-net-irq-tool-test` prove a JS `host_net_fetch` completion through `SYS_POLL` from a real S-mode virtio-net PLIC interrupt; `qjs-smode-blk-irq-tool-test` / `llvm-qjs-smode-blk-irq-tool-test` prove a JS `host_fs_read` completion through `SYS_POLL` from a real S-mode virtio-blk PLIC interrupt. |
 | RISC-V S-mode interrupts | `smode-timer-test`, `smode-plic-test`, and `smode-plic-multishot-test` pass on both C and LLVM backends. |
-| S-mode TLS/network stack reuse | `bearssl-smode-test` and `https-smode-test` run under OpenSBI. |
 | UART driver | `uart-driver-test` / `llvm-uart-driver-test` use the FDT-discovered NS16550 driver. |
 | x86_64 user/VM/device seeds | x86 user/QuickJS gates exist; `x86-timer-test` and `x86-pci-test` cover LAPIC timer and PCI/virtio discovery. |
 | AArch64 user/VM/agent seeds | AArch64 EL0 user and C-backend QuickJS sync/async gates are in `m0`. |
@@ -43,7 +42,7 @@ These are implemented and represented by build steps in the current tree:
 
 | Architecture | Current support | Main remaining gap |
 |---|---|---|
-| `riscv64` | Primary path. M-mode legacy demos and S-mode/OpenSBI demos coexist. S-mode boot, user path, QuickJS, virtio-blk/net, TLS, timer, context-aware PLIC delivery, reusable S-mode PLIC dispatch, promoted S-mode async virtio-blk / virtio-net TX/RX IRQ completion gates draining through `async_poll_many`, production JS `SYS_POLL` completion gates from real S-mode virtio-net and virtio-blk PLIC interrupts, UART, real brokered network demos, and a StarFive VisionFive 2 profile are gated or compile-checked. | VisionFive 2 boot validation, SBI HSM/IPI, and shared S-mode trap-vector work. |
+| `riscv64` | Primary path. M-mode legacy demos and S-mode/OpenSBI demos coexist. S-mode boot, user path, QuickJS, virtio-blk/net, timer, context-aware PLIC delivery, reusable S-mode PLIC dispatch, promoted S-mode async virtio-blk / virtio-net TX/RX IRQ completion gates draining through `async_poll_many`, production JS `SYS_POLL` completion gates from real S-mode virtio-net and virtio-blk PLIC interrupts, UART, retained network demos, and a StarFive VisionFive 2 profile are gated or compile-checked. | VisionFive 2 boot validation, SBI HSM/IPI, and shared S-mode trap-vector work. |
 | `x86_64` | Multiboot to long mode, paging, ring-3 user path, C/LLVM-backed QuickJS sync/async gates, LAPIC timer, PCI discovery, and virtio-pci handshake are gated. | Full virtio-pci data path and production broker/runtime parity. |
 | `aarch64` | QEMU virt EL1/EL0 paging/user path and C/LLVM-backed QuickJS sync/async gates are gated. | GIC/timer/device depth and production broker/runtime parity. |
 

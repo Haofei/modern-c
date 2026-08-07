@@ -20,7 +20,7 @@ ALLOWED_STATUSES = {
     "tracked-by-platform-image",
 }
 INTAKE_REQUIRED_CATEGORIES = {"vendored", "firmware", "profile-slot"}
-INTAKE_REQUIRED_PROFILES = {"kernel-qemu", "production-kernel"}
+INTAKE_REQUIRED_PROFILES = {"kernel-qemu"}
 ALLOWED_SOURCE_KINDS = {
     "upstream",
     "security-advisory",

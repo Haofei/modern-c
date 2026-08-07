@@ -109,8 +109,8 @@ agent-sandbox pieces:
 - A partial core/arch/platform split.
 - FDT parsing primitives.
 - QEMU-oriented PLIC, CLINT, PCI, virtio-blk, virtio-net, and virtio-rng pieces.
-- A real `kernel/net/` stack with Ethernet, ARP, IPv4, UDP, TCP, DNS, and TLS-oriented
-  demos through BearSSL.
+- A real `kernel/net/` stack with Ethernet, ARP, IPv4, UDP, TCP, DNS, and HTTP-oriented
+  QEMU demos.
 - x86_64 (multiboot boot, 4-level paging, ring-3 user via `int 0x80`, LAPIC timer + PCI IRQ,
   confined QuickJS) and AArch64 (EL1 boot, stage-1 4 KB paging, EL0 user via `svc #0`, confined
   QuickJS) — boot/paging/user and QuickJS sync/async are gated on **both** backends. This is
@@ -334,7 +334,7 @@ backends; see `docs/platform-portability-plan.md` and the `*-smode-*` build step
 6. ✓ ELF loader + isolated user address spaces (`qjs-smode-confined-test`).
 7. ✓ Confined QuickJS agent under S-mode, sync + async (`qjs-smode-{confined,agent,async-agent}-test`).
 8. ✓ virtio-mmio / virtio-blk / virtio-net revalidated under S-mode (`blk-smode-test`, `net-smode-test`).
-9. ✓ `kernel/net/` over the S-mode network path (`net-smode-test`; TLS via `bearssl-smode`/`https-smode`).
+9. ✓ `kernel/net/` over the S-mode network path (`net-smode-test`).
 10. *Next:* a full brokered net-fetch tool (virtio-blk script/log storage already exercised; cross-arch
     real-FS broker parity is the remaining gap — the RISC-V broker has real FS ops, x86/AArch64 use a mock).
 
@@ -591,16 +591,13 @@ agent JS fetch/tool call
   -> SYS_SUBMIT(NetFetchReq)
   -> net broker
   -> NetCap policy
-  -> DNS/connect/TLS/HTTP backend
+  -> DNS/connect/HTTP backend
   -> audit
   -> SYS_POLL(NetFetchEvent)
 ```
 
-The first implementation can be simple HTTP/TCP in QEMU. Long term, decide whether TLS is:
-
-- implemented inside the trusted broker,
-- delegated to a small user-mode network service,
-- or handled by a verified/minimal TLS library.
+The first implementation can be simple HTTP/TCP in QEMU. Cryptographic transport
+is outside the current language-oriented kernel scope.
 
 Policy should support:
 

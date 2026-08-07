@@ -98,7 +98,7 @@ The kernel is already beyond a toy prototype:
 - Virtio-blk and virtio-net have QEMU gates.
 - The broker ABI supports structured submit/poll.
 - The RISC-V reference path can run real FS broker operations from pure JS.
-- TLS, DNS, TCP/HTTP, virtio-rng, FDT, UART, and multiple architecture paths exist in test form.
+- DNS, TCP/HTTP, virtio-rng, FDT, UART, and multiple architecture paths exist in test form.
 - x86_64 and AArch64 have user/VM/agent-level parity, with some device-level gaps.
 
 The remaining work is not "invent an OS from nothing." It is turning a strong gated
@@ -119,7 +119,7 @@ hardening"; a few are genuinely thin. Current state, with evidence:
 | 4. Isolation boundary | **Most mature** | Confined U-mode Sv39 (kernel unmapped) + WAMR sandbox + deterministic fuel, S-mode + cross-arch. Gap: **per-agent crash cleanup/reap**. (Review overstates this as missing.) |
 | 5. Resource accounting | Mostly done | Per-dimension budgets are enforced AND gated: CPU (`wamr-fuel-test`, `wasm-watchdog-test`), memory (`wasm-memcap-test`), tool/output quota (`quota-probe-test`, `qjs/wasm-quota-agent-test`) — multiple backends. **Landed (2026-06-30):** typed `NoMem` on the DMA path — `dma.try_alloc -> Result<_, DmaError>` + `mc_dma_alloc_base_try` across all providers (fail-closed with a typed error instead of trapping on exhaustion); gated `dma-try-test`. Gap: a **single unified accounting/quota model** for the remaining language-runtime fixtures. |
 | 6. Broker hardening | Removed from scope | Product agent/network brokers have been deleted from the language-oriented kernel. Remaining tool paths are fixtures for ABI, async, and lowering tests. |
-| 7. Networking | Mostly exists | **DNS exists** (`kernel/net/dns.mc`), TLS (BearSSL), TCP RX hardened (checksums + chunked drain). Gap: retransmit robustness, conn pooling, timeout control, hostile-packet corpus. (Review overstates DNS/TLS as needed.) |
+| 7. Networking | Mostly exists | **DNS exists** (`kernel/net/dns.mc`), and TCP RX is hardened for the retained HTTP/DNS fixtures (checksums + chunked drain). Gap: retransmit robustness, conn pooling, timeout control, hostile-packet corpus. Encrypted transport is outside the current language-oriented kernel scope. |
 | 8. Observability | Partial | Audit/trace exists (`ipc_trace.mc`, `cap_audit`, provenance). Product metrics, replay, checkpoint, and migration are out of the current language-oriented kernel scope. |
 | 9. Update/packaging | External product scope | Reproducible build/package gates remain in the toolchain. Kernel OTA/live-update fixtures have been removed from the current language-oriented kernel scope. |
 | 10. Platform contract | Partly documented | `platform-portability-plan.md`, `qemu-validation-checklist.md`; per-arch compiler-flag rules now explicit (aarch64 strict-align). Gap: **one frozen board profile**. |

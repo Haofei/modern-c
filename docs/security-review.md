@@ -1,8 +1,8 @@
 # Security review: MC capability microkernel
 
 Status: first written 2026-06-30 (production-readiness-plan.md §4.7 hardening polish, P6).
-Scope: the production kernel that runs untrusted edge-AI agents — RISC-V S/U-mode the
-reference target, aarch64/x86_64 secondary. This is a *structured, code-grounded* review
+Scope: the QEMU-oriented capability kernel used to validate MC language/runtime contracts —
+RISC-V S/U-mode the reference target, aarch64/x86_64 secondary. This is a *structured, code-grounded* review
 of the actual enforcers, meant to be read alongside [`docs/threat-model.md`](threat-model.md)
 (assets, trust boundaries, guarantees G1–G5). It is deliberately honest about gaps; where a
 mitigation is partial or a primitive is a stand-in, that is called out as a residual risk
@@ -29,12 +29,12 @@ Minimizing and pinning this set is the core of the security posture.
 | Tool/FS fixtures | `kernel/fs/treefs.mc`, app-run test fixtures | Bounded FS/tool calls used to validate syscall and async ABI behavior. Product brokers are out of scope. |
 | Resource accounting | `kernel/core/ledger.mc`, `kernel/lib/resacct.mc` | Overflow-safe charge/release; fail-closed over-limit. |
 | Audit trail | `kernel/core/ipc_trace.mc`, `cap_audit` in `process.mc` | Kernel-side allow/deny + capability-use record, out of agent reach. |
-| Vendored engines in the TCB | WAMR (agent wasm), QuickJS (JS-on-wasm), BearSSL (TLS/crypto) | A bug here is a TCB bug; defense is vendoring discipline + gates, not runtime containment. |
+| Vendored engines in the TCB | WAMR (agent wasm), QuickJS (JS-on-wasm), openlibm runtime support | A bug here is a TCB bug; defense is vendoring discipline + gates, not runtime containment. |
 | Firmware / platform | OpenSBI (RISC-V), QEMU virt / real board | Below the kernel; assumed correct. |
 
 **Untrusted (attacker-controlled):** the agent payload (arbitrary wasm/JS) and every
 argument/pointer/length it passes across the syscall ABI; all network input
-(DNS/TCP/TLS/raw frames); and agent-supplied filesystem contents. Product OTA
+(DNS/TCP/raw frames); and agent-supplied filesystem contents. Product OTA
 bundles are outside the current kernel scope. See threat-model §2.
 
 ---
@@ -110,8 +110,7 @@ and the RX path are fuzzed over >1M malformed/truncated buffers (`parser-fuzz-te
 `net-fuzz-test`); the ELF loader rejects out-of-range/overflowing segments with `BadSegment`
 (`elf_loader.mc`). This is guarantee **G3** (fail-closed).
 
-Residual: parser coverage is empirical (fuzz), not proven-total. TLS record handling rides
-BearSSL (TCB).
+Residual: parser coverage is empirical (fuzz), not proven-total.
 
 ### 2.7 Audit truth
 
@@ -138,17 +137,17 @@ mint TCB.
 ### 2.9 Product update path
 
 The previous prototype bundle metadata / OTA / rollback fixture has been removed from the current
-kernel scope. Product update authentication, reboot recovery, and boot-chain policy are deliberately
-not language features and should be reintroduced only behind a concrete product profile.
+kernel scope. Product update authentication and reboot recovery are deliberately not language
+features and should be reintroduced only behind a concrete product profile.
 
 ---
 
 ## 3. Residual risks and assumptions (summary)
 
-1. **TCB bugs are undefended at runtime.** A defect in the compiler, WAMR, QuickJS, or BearSSL
+1. **TCB bugs are undefended at runtime.** A defect in the compiler, WAMR, QuickJS, or openlibm
    can break any guarantee. Defense is vendoring discipline + the differential/fuzz gates.
-2. **Production boot-chain policy is out of current language scope** — the metadata/rollback gates
-   remain prototype kernel fixtures, not a production trust chain (§2.9).
+2. **Product update policy is out of current language scope** — metadata/rollback gates
+   have been removed from the kernel validation surface (§2.9).
 3. **Availability is best-effort** — agent preemption has landed (§2.5), so the remaining risk is
    finer-grained / uniform per-agent CPU/memory budget enforcement, not preemption itself.
 4. **Product policy persistence + revocation** are out of the current language-oriented kernel scope (§2.3, §2.7).
@@ -179,7 +178,7 @@ allow+deny audit gates, `parser-fuzz-test`/`net-fuzz-test`, ELF/syscall hostile-
 
 ## 5. External-audit checklist
 
-An independent audit of the production kernel should cover, at minimum:
+An independent audit of any future deployable kernel should cover, at minimum:
 
 - [ ] **Codegen / TCB:** review the emitted bounds + checked-arithmetic + typestate checks in
       `src/lower_c*.zig` / `src/lower_llvm*.zig`; confirm the differential (C vs LLVM) and
@@ -192,12 +191,12 @@ An independent audit of the production kernel should cover, at minimum:
       switching; confirm no agent-reachable window maps kernel/peer memory.
 - [ ] **Fixtures:** audit `treefs.mc` and app-run tool fixtures for
       bypass; confirm every external effect is gated and audited.
-- [ ] **Parsers:** re-fuzz DNS/TCP/IP/TLS/ELF with a larger hostile corpus + a coverage-guided
+- [ ] **Parsers:** re-fuzz DNS/TCP/IP/ELF with a larger hostile corpus + a coverage-guided
       fuzzer; look for over-reads the current `br_try_*` routing missed.
 - [ ] **Resource accounting:** confirm every allocation/broker/device path charges the ledger and
       that no path can leak or double-release; drive the soak gate longer.
 - [ ] **Audit trail:** review for suppress/forge resistance on the in-boot audit path.
 - [ ] **DoS:** timer-driven process preemption is gated by `agent-preempt-test`; re-evaluate once
       uniform budgets land and confirm no agent can starve the kernel.
-- [ ] **Vendored engines:** track upstream CVEs for WAMR/QuickJS/BearSSL and the vendoring
+- [ ] **Vendored engines:** track upstream CVEs for WAMR/QuickJS/openlibm and the vendoring
       process.

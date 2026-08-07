@@ -13,9 +13,8 @@ risks:
     admitted_subset_status: current-worktree-continues-development
     blocks:
       - unrestricted-production-compiler
-      - production-kernel
       - stable-release
-    summary: Product surface spans compiler, dual backends, selfhost, kernel, Agent runtime, LSP, release provenance, and multiple runtime TCBs before the core semantic boundary is stable.
+    summary: Product surface spans compiler, dual backends, selfhost, kernel/QEMU workloads, Agent runtime demos, LSP, release provenance, and multiple runtime TCBs before the core semantic boundary is stable; the deployable kernel product profile has been retired.
 
   - id: ARCH-COMPILATION-SESSION
     severity: high
@@ -105,8 +104,7 @@ risks:
     admitted_subset_status: authority-token-gated-prototype
     blocks:
       - third-party-kernel-components
-      - production-kernel
-    summary: Privileged capability/right mint APIs now require explicit opaque root tokens and the source audit gates root creation; production boot authority provenance and delegation policy remain open.
+    summary: Privileged capability/right mint APIs now require explicit opaque root tokens and the source audit gates root creation; this remains relevant to kernel/QEMU validation but no longer backs a deployable kernel release profile.
 
   - id: SUPPLY-TCB-CVE-INTAKE
     severity: high
@@ -115,8 +113,7 @@ risks:
     admitted_subset_status: advisory-intake-manifest-gated
     blocks:
       - stable-release
-      - production-kernel
-    summary: Profile-facing vendored QuickJS, WAMR, openlibm, OpenSBI, real-board firmware, and the selected Agent runtime slot now have gated offline advisory-intake metadata, retained-subset/profile-slot policy, review dates, and waiver fields; BearSSL is retained only for standalone TLS demos and is no longer a kernel profile TCB component; live advisory ingestion, concrete production firmware/runtime selection, release response SLA, and production waiver review remain open.
+    summary: Kernel-QEMU profile-facing QuickJS, WAMR, openlibm, and OpenSBI now have gated offline advisory-intake metadata, retained-subset policy, review dates, and waiver fields. Hardware firmware/runtime slots and encrypted-transport demos are outside kernel profile TCB scope. Live advisory ingestion, release response SLA, and production waiver review remain open for any future release profile.
 
   - id: TCB-PROFILE-MINIMIZATION
     severity: medium
@@ -125,7 +122,7 @@ risks:
     admitted_subset_status: profile-and-tcb-component-manifests-gated
     blocks:
       - production-profile-minimal-tcb-claim
-    summary: Product profiles now name their TCB components in profile-manifest.json, and vendored/firmware/profile-slot advisory-intake manifests are gated; minimal production TCB claims still require concrete profile-specific firmware/runtime closure.
+    summary: Active product profiles now name their TCB components in profile-manifest.json, and kernel-QEMU vendored/firmware advisory-intake manifests are gated. Minimal production TCB claims remain out of scope until a future product profile is explicitly added.
 
   - id: HARDWARE-PRODUCTION-QUALIFICATION
     severity: high
@@ -133,6 +130,5 @@ risks:
     status: open
     admitted_subset_status: qemu-surrogate-qualified
     blocks:
-      - production-kernel
       - real-device-support-claim
-    summary: Real board boot, soak, power-loss, storage, network, DMA/cache, and interrupt qualification remain required.
+    summary: Real board boot, soak, power-loss, storage, network, DMA/cache, and interrupt qualification remain outside the active kernel-QEMU validation profile.
