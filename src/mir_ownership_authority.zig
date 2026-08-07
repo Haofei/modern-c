@@ -44,6 +44,7 @@ pub fn autoDropLocalRegistrationDecision(
     const root_value_id = valueIdForLocal(function, local_name) orelse return .reject;
     const drop_glue = dropGlueFactFor(module, type_name, drop_fn) orelse return .reject;
 
+    var saw_legacy_cancellable_cleanup = false;
     for (function.ownership_events) |event| {
         if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
         if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
@@ -59,11 +60,11 @@ pub fn autoDropLocalRegistrationDecision(
             // transfer/release path, but this is not true auto-drop cleanup
             // authority and is removed once C/LLVM consume MIR cleanup edges
             // directly.
-            .move_out, .explicit_drop => return .legacy_cancellable_cleanup,
+            .move_out, .explicit_drop => saw_legacy_cancellable_cleanup = true,
             else => {},
         }
     }
-    return .reject;
+    return if (saw_legacy_cancellable_cleanup) .legacy_cancellable_cleanup else .reject;
 }
 
 pub fn authorizesExplicitDropLocal(
