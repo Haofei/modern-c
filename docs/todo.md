@@ -38,7 +38,7 @@ Current baseline:
 
 Completed campaign notes and experiment drafts live in git history, not as live
 documentation. Their current takeaways are folded into this roadmap, the
-platform plan, `future-kernel-plan.md`, and `production-readiness-plan.md`.
+platform plan, and `future-kernel-plan.md`.
 
 ## Kernel validation boundary
 

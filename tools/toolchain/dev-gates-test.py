@@ -117,9 +117,9 @@ def main() -> None:
         ["tests/qemu/proc/app_run_demo.mc", "tests/qemu/lang/qjs_confined_runtime.mc", "tests/qemu/arch/qjs_smode_demo.mc"],
         ["app-run-test", "qjs-confined-test", "qjs-smode-confined-test"],
     )
-    assert_checks(module, ["docs/compiler-production-readiness.md"], ["git diff --check"])
+    assert_checks(module, ["docs/README.md"], ["git diff --check"])
     docs_only = subprocess.run(
-        [sys.executable, str(DEV_GATES), "docs/compiler-production-readiness.md"],
+        [sys.executable, str(DEV_GATES), "docs/README.md"],
         cwd=ROOT,
         text=True,
         capture_output=True,

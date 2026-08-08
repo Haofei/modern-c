@@ -217,26 +217,6 @@ ANCHORS: dict[str, list[str]] = {
         "reject_defer_block_loop_condition_consume",
         "reject_defer_block_loop_condition_borrow",
     ],
-    "docs/compiler-production-readiness.md": [
-        "Move checker CFG skeleton is explicit",
-        "Move checker linear CFG construction is centralized",
-        "Move checker exit CFG construction is centralized",
-        "Move checker bypass CFG construction is centralized",
-        "Move checker two-arm branch CFG construction is centralized",
-        "Move checker multi-arm branch CFG construction is centralized",
-        "Move checker CFG construction inventory is exact",
-        "Move checker return and try exits use CFG worklist state",
-        "Move checker loop early exits first gained CFG worklist transport",
-        "Move checker routes loop early exits through target CFG worklists",
-        "Move checker function fallthrough exits use CFG worklist state",
-        "Move checker loop statement orchestration is centralized",
-        "Move checker scoped blocks use CFG worklist state",
-        "Move checker deferred cleanup blocks use CFG worklist state",
-        "Move checker deferred if-let cleanup uses CFG worklist state",
-        "Move checker deferred switch cleanup uses CFG worklist state",
-        "Move checker deferred loop cleanup uses CFG worklist state",
-        "move-cfg-skeleton-inventory.py",
-    ],
 }
 
 

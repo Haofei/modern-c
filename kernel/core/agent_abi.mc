@@ -4,7 +4,7 @@
 // a single versioned contract for submit/poll requests and typed completion status. This module
 // keeps those wire-visible numbers in one place and validates requests before a broker sees them.
 //
-// VERSIONING POLICY (production-readiness-plan §4.2 / §3.1 item 2):
+// VERSIONING POLICY:
 //   * AGENT_ABI_VERSION is the wire-contract version carried in every request/event `version`
 //     field. The kernel rejects a request whose `version` != AGENT_ABI_VERSION with `badver`
 //     (gated by agent_abi_demo.mc) — fail-closed, never silently reinterpret a foreign envelope.

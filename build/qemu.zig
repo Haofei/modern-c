@@ -66,7 +66,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTestOpts(ctx, "tcb-advisory-intake-test", "Check kernel profile-facing TCB advisory-intake manifest coverage and waiver policy", &.{ "python3", "tools/toolchain/tcb-advisory-intake-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "third-party-licenses-test", "Check the aggregated third-party license manifest", &.{ "python3", "tools/toolchain/third-party-licenses-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "no-committed-private-keys-test", "Reject committed PEM private keys", &.{ "python3", "tools/toolchain/no-committed-private-keys.py" }, .{ .install = false });
-    _ = h.addScriptTestOpts(ctx, "readiness-ledger-test", "Check the production-readiness ledger count and umbrella contract", &.{ "python3", "tools/toolchain/readiness-ledger-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "profile-manifest-test", "Check product profiles reference known risks and registered gates", &.{ "python3", "tools/toolchain/profile-manifest-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "gate-manifest-test", "Check the gate manifest matches registered build tiers", &.{ "python3", "tools/toolchain/gate-manifest-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "qmp-ordering-test", "Verify QMP command responses and asynchronous events are never discarded under legal reorderings", &.{ "python3", "tools/virtio-rng-experiment/test_qmp_hotplug.py" }, .{ .install = false });

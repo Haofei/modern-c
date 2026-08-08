@@ -275,9 +275,6 @@ T3_DISPOSITION_AUDIT: dict[str, list[str]] = {
         "| `llvm-pointer-provenance-consumption` | `conservative-fallback` |",
         "| `llvm-expression-type-inference` | `conservative-or-diagnosed` |",
     ],
-    "docs/compiler-production-readiness.md": [
-        "T3 final backend-inference dispositions are inventory-gated",
-    ],
 }
 
 # T4 file-surface audit. This is intentionally an exact inventory of production
@@ -353,9 +350,6 @@ T4_AUTHORITY_AUDIT: dict[str, list[str]] = {
         "| MIR/fact consumer |",
         "| Mechanics-only |",
     ],
-    "docs/compiler-production-readiness.md": [
-        "T4 backend source surface is exact and classified",
-    ],
 }
 
 P4_PROVENANCE_POLICY_PARITY_AUDIT: dict[str, list[str]] = {
@@ -366,9 +360,6 @@ P4_PROVENANCE_POLICY_PARITY_AUDIT: dict[str, list[str]] = {
         "| Higher-order/exported return |",
         "| Aggregate return outside bounded CFG |",
         "| Unsupported scalar/aggregate leaf |",
-    ],
-    "docs/compiler-production-readiness.md": [
-        "P4.2 C/LLVM provenance policy parity is closed",
     ],
     "src/lower_c_tests.zig": [
         "lower-c escaped pointer provenance lowers conservatively",
@@ -507,11 +498,6 @@ AGGREGATE_RETURN_CFG_DECISION_AUDIT: dict[str, list[str]] = {
 }
 
 EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT: dict[str, list[str]] = {
-    "docs/compiler-production-readiness.md": [
-        "| Explicit C ABI aggregate hazards fail closed |",
-        "| `c-abi-aggregate-lowering` | Accepted fail-closed external ABI boundary:",
-        "Explicit C ABI boundaries fail closed for unclassified values",
-    ],
     "docs/typed-semantic-facts.md": [
         "| `c-abi-aggregate-lowering` |",
         "Explicit `extern \"C\"` declarations and unmarked exports reject every currently unclassified by-value family",
@@ -535,10 +521,6 @@ EXTERN_AGGREGATE_ABI_BOUNDARY_AUDIT: dict[str, list[str]] = {
 }
 
 C_AGGREGATE_GLOBAL_REPRESENTATION_POLICY_AUDIT: dict[str, list[str]] = {
-    "docs/compiler-production-readiness.md": [
-        "| C aggregate-global representation is an explicit target policy |",
-        "`AggregateGlobalCShape`",
-    ],
     "docs/typed-semantic-facts.md": [
         "C aggregate-global representation is an accepted internal target policy",
     ],
@@ -553,9 +535,6 @@ C_AGGREGATE_GLOBAL_REPRESENTATION_POLICY_AUDIT: dict[str, list[str]] = {
 }
 
 STRUCT_LITERAL_CONSTRUCTION_FACT_AUDIT: dict[str, list[str]] = {
-    "docs/compiler-production-readiness.md": [
-        "Source struct-literal construction class is MIR-owned",
-    ],
     "docs/typed-semantic-facts.md": [
         "source struct literals carry a MIR-owned construction class",
     ],
@@ -596,12 +575,6 @@ BOUNDS_RANGE_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
         "| `c-bounds-range-consumption` |",
         "| `llvm-bounds-range-consumption` |",
     ],
-    "docs/compiler-production-readiness.md": [
-        "| Bounds checks require typed MIR facts |",
-        "| MIR bounds facts have a stable dump artifact |",
-        "| Typed semantic facts inventory pins bounds-fact consumers |",
-        "Bounds/range fact family is gated",
-    ],
     "src/mir_model.zig": [
         "pub const RangeFact = struct",
         "pub const BoundsFact = struct",
@@ -639,9 +612,6 @@ INTEGER_DEFAULT_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
         "| MIR integer literal facts |",
         "target-typed integer literal conversion",
         "validateLoweringAdmission",
-    ],
-    "docs/compiler-production-readiness.md": [
-        "Integer/default fact family is gated",
     ],
     "src/mir_model.zig": [
         "integer_literal_conversion",
@@ -689,9 +659,6 @@ REPRESENTATION_FACT_HARDENING_AUDIT: dict[str, list[str]] = {
         "| Owned fact model |",
         "| Backend admission gate |",
         "| Extra stale-fact rejection |",
-    ],
-    "docs/compiler-production-readiness.md": [
-        "Representation-fact hardening is gated",
     ],
     "src/mir_model.zig": [
         "pub const RepresentationFact = struct",

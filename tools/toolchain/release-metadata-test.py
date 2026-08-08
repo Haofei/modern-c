@@ -669,16 +669,6 @@ def main() -> None:
         if needle not in lsp_docs:
             fail(f"docs/lsp.md does not document LSP hardening requirement {needle!r}")
 
-    readiness = read("docs/compiler-production-readiness.md")
-    for stale in (
-        "with no debounce",
-        "current public GitHub issue intake",
-        "A private advisory channel remains future process maturity",
-    ):
-        if stale in readiness:
-            fail(f"docs/compiler-production-readiness.md retains stale current claim {stale!r}")
-    require_contains("docs/compiler-production-readiness.md", "## Historical Audit Snapshot")
-
     print("PASS: release-metadata-test - version, Docker/Zig/LLVM/action pins, nightly fuzz/bench, release artifacts, attestations, and process docs are in sync")
 
 

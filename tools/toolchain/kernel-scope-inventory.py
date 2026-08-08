@@ -11,9 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCAN_ROOTS = [ROOT / "docs", ROOT / "kernel"]
 INCLUDED_SUFFIXES = {".md", ".mc"}
-EXCLUDED_DOCS = {
-    ROOT / "docs" / "compiler-production-readiness.md",
-}
+EXCLUDED_DOCS: set[Path] = set()
 
 FORBIDDEN = [
     ("kernel product target", re.compile(r"\bproduction target\b", re.IGNORECASE)),

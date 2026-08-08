@@ -58,17 +58,6 @@ ANCHORS: dict[str, list[str]] = {
         "pub fn cleanupObligation(self: MoveSlot) CleanupObligation",
         "entry_places: std.ArrayListUnmanaged(MovePlace)",
     ],
-    "docs/compiler-production-readiness.md": [
-        "Move checker alias assignment updates use typed storage places",
-        "Move checker alias key formatter has no external callers",
-        "Move checker alias key formatter is retired",
-        "Move checker laundered referents are typed",
-        "Move checker deferred aliases use typed referents",
-        "Move checker roots have canonical ids",
-        "move-place-identity-inventory.py",
-        "Move checker no longer carries index facts",
-        "Move checker exposes orthogonal ownership state views",
-    ],
 }
 
 EXACT_COUNTS: dict[str, dict[str, int]] = {

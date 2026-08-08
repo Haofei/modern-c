@@ -39,10 +39,6 @@ ANCHORS: dict[str, list[str]] = {
         "reject_dynamic_pointer_to_move_matrix_element_assignment",
         "reject_defer_dynamic_pointer_to_move_matrix_element",
     ],
-    "docs/compiler-production-readiness.md": [
-        "Move checker pointer-pointee boundary is explicit",
-        "move-pointer-pointee-boundary-inventory.py",
-    ],
 }
 
 

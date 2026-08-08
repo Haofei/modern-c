@@ -23,12 +23,8 @@ ANCHORS: dict[str, list[str]] = {
         ".wildcard_index",
     ],
     "src/sema_tests.zig": [
-        "move dynamic-place policy keeps dynamic indexes at wildcard overlap",
-        "move dynamic-place policy keeps wildcard indexes behind field boundaries",
-    ],
-    "docs/compiler-production-readiness.md": [
-        "Move checker dynamic-place policy is explicit",
-        "move-dynamic-place-policy-inventory.py",
+        "move dynamic-place policy keeps dynamic indexes as overlap-only facts",
+        "move dynamic-place policy keeps dynamic overlap behind field boundaries",
     ],
 }
 

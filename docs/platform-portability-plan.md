@@ -6,9 +6,7 @@ This file tracks the remaining work to keep the current QEMU-gated
 multi-architecture prototype useful as a language-validation platform. The old
 M1-M9 migration history has been
 folded into this summary because that milestone chain is delivered. Use
-[`todo.md`](todo.md) for the short repo-wide roadmap and
-[`production-readiness-plan.md`](production-readiness-plan.md) for the retained
-kernel validation workload.
+[`todo.md`](todo.md) for the short repo-wide roadmap.
 
 ## 1. Scope
 

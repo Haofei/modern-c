@@ -1,11 +1,8 @@
 # Typed semantic facts / typed MIR design
 
-This is the design slice for the compiler-production-readiness Phase 4 bucket
-"Typed fact table: sema resolves once, backends consume". It turns the current
-architecture note into implementable phases with invariants and evidence gates.
-"Phase 4" names the completed narrow foundation, not the broader remaining
-typed-fact migration umbrella. The current closure matrix for that umbrella lives
-in [`compiler-production-readiness.md`](compiler-production-readiness.md).
+This is the design slice for the typed fact table work: sema resolves once,
+backends consume. It turns the current architecture note into implementable
+phases with invariants and evidence gates.
 
 ## Current state
 
@@ -1628,7 +1625,7 @@ Gate:
 - the Phase 1 inventory checker anchors oversized integer-literal syntax
   overflow handling before defaulting, including initializer, targetless, and
   binary-operand semantic gates plus exact reject-fixture counts;
-- the production readiness bucket links to the migration commits and parity
+- the typed-fact migration notes link to the migration commits and parity
   tests for each bounded cleanup slice;
 - follow-up families are listed with owners/order: bounds/range facts, integer
   type/default facts, nullability/niche facts, representation-check facts.

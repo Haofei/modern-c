@@ -2399,7 +2399,7 @@ test "move CFG skeleton carries early-exit state to exit block" {
     try std.testing.expectEqual(exit, worklist.pop().?);
 }
 
-test "move dynamic-place policy keeps dynamic indexes at wildcard overlap" {
+test "move dynamic-place policy keeps dynamic indexes as overlap-only facts" {
     const root: sema_model.MovePlace = .{ .root = "arr" };
     const constant_zero = root.project(.{ .constant_index = 0 }).?;
     const constant_one = root.project(.{ .constant_index = 1 }).?;
@@ -2410,7 +2410,7 @@ test "move dynamic-place policy keeps dynamic indexes at wildcard overlap" {
     try std.testing.expect(wildcard.conflicts(constant_one));
 }
 
-test "move dynamic-place policy keeps wildcard indexes behind field boundaries" {
+test "move dynamic-place policy keeps dynamic overlap behind field boundaries" {
     const root: sema_model.MovePlace = .{ .root = "arr" };
     const field = root.project(.{ .field = "items" }).?;
     const wildcard = root.project(.wildcard_index).?;

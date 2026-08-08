@@ -16,29 +16,24 @@ ROWS: dict[str, dict[str, list[str]]] = {
     "root and field projections": {
         "src/sema_move.zig": ["pub fn placeKeyAndType", "pub fn moveFieldPlaceKey"],
         "tests/spec/move_place.mc": ["reject_nested_field_move", "reject_duplicate_field_move"],
-        "docs/compiler-production-readiness.md": ["Root and field"],
     },
     "constant element projections": {
         "src/sema_model.zig": ["constant_index: usize"],
         "src/sema_move.zig": ["constIndexValue", ".constant_index = k"],
         "tests/spec/move_place.mc": ["accept_move_array_alias_elements"],
-        "docs/compiler-production-readiness.md": ["Constant array element"],
     },
-    "dynamic wildcard ownership boundary": {
+    "dynamic owner-index fail-closed boundary": {
         "src/sema_model.zig": ["wildcard_index", "movePlaceProjectionRelation"],
         "src/sema_move.zig": ["wildcardMoveIndexedPlaceKey", "nestedWildcardIndexedPlaceKeyAndType"],
         "tests/spec/move_place.mc": ["reject_constant_after_dynamic_multi_array_element_move"],
-        "docs/compiler-production-readiness.md": ["Unknown dynamic element"],
     },
     "full alias and dereference boundary": {
         "src/sema_move.zig": ["fullDerefMoveSubplace", "immediateFullDerefMoveReferent"],
         "tests/spec/move_place.mc": ["reject_move_array_element_through_full_alias", "reject_move_field_through_immediate_full_deref"],
-        "docs/compiler-production-readiness.md": ["Full alias / dereference"],
     },
     "arbitrary pointee and non-nameable boundaries": {
         "src/sema_move.zig": ["arrayIndexEmbedsMove", "cannot move a linear `move` array element through an untracked dynamic index"],
         "tests/spec/move_place.mc": ["reject_dynamic_pointer_to_move_array_element", "reject_dynamic_returned_move_array_element", "reject_dynamic_array_literal_move_element"],
-        "docs/compiler-production-readiness.md": ["Arbitrary pointee or non-nameable dynamic element"],
     },
 }
 
@@ -51,7 +46,7 @@ FIXTURE_EXPECTATIONS: dict[str, dict[str, str | None]] = {
         "accept_move_array_alias_elements": None,
         "reject_duplicate_array_element_move": "E_USE_AFTER_MOVE",
     },
-    "dynamic wildcard ownership boundary": {
+    "dynamic owner-index fail-closed boundary": {
         "reject_dynamic_multi_array_element_move": "E_MOVE_ARRAY_UNSUPPORTED",
         "reject_constant_after_dynamic_multi_array_element_move": "E_MOVE_ARRAY_UNSUPPORTED",
     },

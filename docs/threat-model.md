@@ -1,6 +1,6 @@
 # Threat model: confined edge-AI agent kernel
 
-Status: first written 2026-06-30 (production-readiness-plan.md §4.7 / §3.1 item 11).
+Status: first written 2026-06-30.
 Scope: the MC capability microkernel running untrusted edge-AI agents under QEMU
 (RISC-V S-mode the reference; aarch64/x86_64 secondary). This document states what
 is trusted, what is attacker-controlled, the guarantees we intend to hold, and the
@@ -94,7 +94,7 @@ kernel image, leak source during diagnostics, or corrupt release artifacts.
 ## 6. Supply-chain sub-model
 
 Supply-chain compromise of vendored engines, the compiler toolchain, CI actions,
-or release artifacts is in scope for production readiness. The kernel still treats
+or release artifacts is in scope for release hardening. The kernel still treats
 WAMR, QuickJS, openlibm, Zig, LLVM, QEMU, and pinned CI actions as trusted inputs at
 runtime/build time; a malicious or vulnerable component can invalidate the kernel
 TCB. The control is therefore provenance, pinning, review, update discipline, and

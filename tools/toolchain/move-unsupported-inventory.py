@@ -138,10 +138,6 @@ ANCHORS: dict[str, list[str]] = {
         "reject_defer_dynamic_nested_array_literal_move_element",
         "reject_defer_dynamic_inner_nested_array_literal_move_element",
     ],
-    "docs/compiler-production-readiness.md": [
-        "Move checker unsupported-channel inventory is explicit",
-        "move-unsupported-inventory.py",
-    ],
 }
 
 EXACT_COUNTS: dict[str, dict[str, int]] = {
@@ -159,19 +155,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
 }
 
-FORBIDDEN_ANCHORS: dict[str, list[str]] = {
-    "docs/compiler-production-readiness.md": [
-        "aliasWildcardPlaceKey",
-        "aliasPlaceForKey",
-        "fullDerefMoveSubplaceAlias",
-        "legacySubplaceReferentMoved",
-        "memberPlaceKey",
-        "movedReferentPlaceFromState",
-        "formatted subplace and wildcard keys",
-        "legacy formatted-subplace fallback",
-        "all-concrete typed scans",
-    ],
-}
+FORBIDDEN_ANCHORS: dict[str, list[str]] = {}
 
 
 def main() -> int:

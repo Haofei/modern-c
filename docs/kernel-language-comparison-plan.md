@@ -13,17 +13,10 @@ This document defines the evidence required to support a narrow claim:
 > machine-contract scenarios, when it provides stronger compile-time guarantees
 > with a smaller trusted and annotation boundary and no material runtime cost.
 
-It does not define compiler production readiness or a kernel product claim.
-Those remain owned by:
-
-- [`compiler-production-readiness.md`](compiler-production-readiness.md) for the
-  qualified `mcc` supported subset;
-- [`production-readiness-plan.md`](production-readiness-plan.md) for the
-  retained kernel validation workload.
-
-The canonical T/M/P phase status lives only in
-`compiler-production-readiness.md`. This document consumes those closure results;
-it must not maintain a competing completion count.
+It does not define a kernel product claim. Compiler/language status lives in
+[`todo.md`](todo.md), [`refactoring-plan.md`](refactoring-plan.md), and the
+normative specs; this document consumes that evidence and must not maintain a
+competing completion count.
 
 The current bounded developer measurements and their negative K2 conclusion are
 recorded in this document; older experiment notes live only in git history.
@@ -98,7 +91,7 @@ backend rediscovery -> forbidden unless registered as mechanics-only policy
 
 Comparison work may begin on already closed fact families. A broad MC-contract
 claim requires the typed-fact T2 dispositions and the T3/T4 semantic-authority
-audit to satisfy the exit rule in `compiler-production-readiness.md`.
+audit to be backed by the typed-facts inventory and backend differential gates.
 
 The current product surfaces are:
 

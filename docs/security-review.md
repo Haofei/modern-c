@@ -1,6 +1,6 @@
 # Security review: MC capability microkernel
 
-Status: first written 2026-06-30 (production-readiness-plan.md §4.7 hardening polish, P6).
+Status: first written 2026-06-30.
 Scope: the QEMU-oriented capability kernel used to validate MC language/runtime contracts —
 RISC-V S/U-mode the reference target, aarch64/x86_64 secondary. This is a *structured, code-grounded* review
 of the actual enforcers, meant to be read alongside [`docs/threat-model.md`](threat-model.md)
@@ -84,7 +84,7 @@ The remaining FS/tool paths validate bounded external-effect plumbing (`kernel/f
 `app-run-test`, `qjs-realtool-test`). They are not a production agent runtime.
 
 Residual: uniform per-agent memory/CPU budget enforcement on *every* broker/device path is
-incomplete (threat-model §5, production-readiness-plan §4.7 / P6). Some exhaustion paths still
+incomplete (threat-model §5). Some exhaustion paths still
 `unreachable` rather than returning a typed `NoMem` — those are tracked.
 
 ### 2.5 Availability / DoS

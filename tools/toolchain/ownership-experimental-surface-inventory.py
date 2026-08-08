@@ -46,9 +46,6 @@ ANCHORS: dict[str, list[str]] = {
         "#[experimental_ownership]\nthread_move move struct SendTicket",
         "fn reject_thread_move_transfer() -> void",
     ],
-    "docs/compiler-production-readiness.md": [
-        "Thread transfer no longer treats `thread_move` as a safe Send/Sync proof",
-    ],
 }
 
 FORBIDDEN = {

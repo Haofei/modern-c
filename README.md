@@ -12,9 +12,9 @@ two differentially qualified backend paths for the documented, implemented subse
 - textual LLVM IR emission and object generation.
 
 The useful claim is deliberately narrow: within the tested subset, MC either
-emits the documented lowering or rejects the unsupported construct. The current
-production assessment and its remaining architecture work are tracked in
-[`docs/compiler-production-readiness.md`](docs/compiler-production-readiness.md).
+emits the documented lowering or rejects the unsupported construct. Current
+language and compiler work is tracked in [`docs/todo.md`](docs/todo.md) and
+[`docs/refactoring-plan.md`](docs/refactoring-plan.md).
 
 ## Why MC Exists
 
@@ -339,9 +339,7 @@ Other deliberate or current limitations include:
 - incomplete hardware qualification and production kernel hardening;
 - no stable public release yet.
 
-Exit criteria, phases, evidence, and design risks are maintained in
-[`docs/compiler-production-readiness.md`](docs/compiler-production-readiness.md).
-The shorter repository-wide backlog is [`docs/todo.md`](docs/todo.md).
+The repository-wide backlog is [`docs/todo.md`](docs/todo.md).
 
 ## Repository Map
 
