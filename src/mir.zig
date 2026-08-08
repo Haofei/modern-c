@@ -162,20 +162,47 @@ pub fn sourcePointFromSpan(span: ast.Span) SourcePoint {
     return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
 }
 
-pub fn hasDeferCleanupAtSource(function: Function, source: SourcePoint) bool {
-    for (function.blocks) |block| {
-        for (block.instructions) |instruction| {
-            if (instruction.kind != .defer_cleanup) continue;
-            if (instruction.line != source.line or instruction.column != source.column) continue;
-            if (instruction.source_offset == 0 and instruction.source_len == 0 and source.offset == 0 and source.len == 0) return true;
-            if (instruction.source_offset == source.offset and instruction.source_len == source.len) return true;
-        }
-    }
-    return false;
+pub const DeferCleanupRef = struct {
+    block_id: BlockId,
+    instruction_index: usize,
+    source: SourcePoint,
+};
+
+fn sourcePointMatchesInstruction(source: SourcePoint, instruction: Instruction) bool {
+    if (instruction.line != source.line or instruction.column != source.column) return false;
+    if (instruction.source_offset == 0 and instruction.source_len == 0 and source.offset == 0 and source.len == 0) return true;
+    return instruction.source_offset == source.offset and instruction.source_len == source.len;
 }
 
-pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, callee_source: SourcePoint, fn_name: []const u8, args: []const ast.Expr) bool {
-    if (!hasDeferCleanupAtSource(function, defer_source)) return false;
+pub fn deferCleanupRefAtSource(function: Function, source: SourcePoint) ?DeferCleanupRef {
+    for (function.blocks, 0..) |block, block_index| {
+        for (block.instructions, 0..) |instruction, instruction_index| {
+            if (instruction.kind != .defer_cleanup) continue;
+            if (!sourcePointMatchesInstruction(source, instruction)) continue;
+            return .{
+                .block_id = BlockId.fromIndex(block_index),
+                .instruction_index = instruction_index,
+                .source = source,
+            };
+        }
+    }
+    return null;
+}
+
+pub fn deferCleanupRefValid(function: Function, ref: DeferCleanupRef) bool {
+    if (!ref.block_id.isValid() or ref.block_id.index() >= function.blocks.len) return false;
+    const block = function.blocks[ref.block_id.index()];
+    if (ref.instruction_index >= block.instructions.len) return false;
+    const instruction = block.instructions[ref.instruction_index];
+    return instruction.kind == .defer_cleanup and sourcePointMatchesInstruction(ref.source, instruction);
+}
+
+pub fn hasDeferCleanupAtSource(function: Function, source: SourcePoint) bool {
+    return deferCleanupRefAtSource(function, source) != null;
+}
+
+pub fn directDeferCallCleanupForRef(function: Function, defer_ref: DeferCleanupRef, call_source: SourcePoint, callee_source: SourcePoint, fn_name: []const u8, args: []const ast.Expr) bool {
+    if (!deferCleanupRefValid(function, defer_ref)) return false;
     if (!directCallInstructionAtSource(function, call_source, fn_name)) return false;
     if (!directCallResultFactAtSource(function, fn_name, callee_source)) return false;
     for (args, 0..) |arg, index| {
@@ -184,8 +211,13 @@ pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePo
     return true;
 }
 
-pub fn callTargetDeferCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, callee_source: SourcePoint, kind: CallTargetKind) bool {
-    if (!hasDeferCleanupAtSource(function, defer_source)) return false;
+pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, callee_source: SourcePoint, fn_name: []const u8, args: []const ast.Expr) bool {
+    const defer_ref = deferCleanupRefAtSource(function, defer_source) orelse return false;
+    return directDeferCallCleanupForRef(function, defer_ref, call_source, callee_source, fn_name, args);
+}
+
+pub fn callTargetDeferCleanupForRef(function: Function, defer_ref: DeferCleanupRef, call_source: SourcePoint, callee_source: SourcePoint, kind: CallTargetKind) bool {
+    if (!deferCleanupRefValid(function, defer_ref)) return false;
     for (function.call_target_facts) |fact| {
         if (fact.kind != kind) continue;
         if (fact.source.line != callee_source.line or fact.source.column != callee_source.column) continue;
@@ -209,6 +241,11 @@ pub fn callTargetDeferCleanupAtSource(function: Function, defer_source: SourcePo
         };
     }
     return false;
+}
+
+pub fn callTargetDeferCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, callee_source: SourcePoint, kind: CallTargetKind) bool {
+    const defer_ref = deferCleanupRefAtSource(function, defer_source) orelse return false;
+    return callTargetDeferCleanupForRef(function, defer_ref, call_source, callee_source, kind);
 }
 
 fn directCallInstructionAtSource(function: Function, call_source: SourcePoint, fn_name: []const u8) bool {

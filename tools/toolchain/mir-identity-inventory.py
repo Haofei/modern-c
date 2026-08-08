@@ -269,9 +269,11 @@ def main() -> int:
         ("src/mir.zig", "pub fn appendOwnershipCleanupPlan"),
         ("src/mir.zig", "pub fn appendOwnershipCleanupCancellationPlan"),
         ("src/mir.zig", "pub fn buildOwnershipCleanupPlan"),
-        ("src/mir.zig", "pub fn hasDeferCleanupAtSource"),
-        ("src/mir.zig", "pub fn directDeferCallCleanupAtSource"),
-        ("src/mir.zig", "pub fn callTargetDeferCleanupAtSource"),
+        ("src/mir.zig", "pub const DeferCleanupRef"),
+        ("src/mir.zig", "pub fn deferCleanupRefAtSource"),
+        ("src/mir.zig", "pub fn deferCleanupRefValid"),
+        ("src/mir.zig", "pub fn directDeferCallCleanupForRef"),
+        ("src/mir.zig", "pub fn callTargetDeferCleanupForRef"),
         ("src/mir.zig", "fn directCallArgumentFactAtSource"),
         ("src/mir.zig", "pub fn ownershipLocalHasAutoDropResourceEvent"),
         ("src/mir.zig", "pub fn ownershipLocalHasConsumingResourceEvent"),
@@ -317,6 +319,7 @@ def main() -> int:
         ("src/backend_cleanup.zig", "pub const OrdinaryDeferCallCleanup"),
         ("src/backend_cleanup.zig", "pub const CallTargetDeferCleanup"),
         ("src/backend_cleanup.zig", "pub const DeferBlockCleanup"),
+        ("src/backend_cleanup.zig", "defer_ref: mir.DeferCleanupRef"),
         ("src/backend_cleanup.zig", "callee: ast.Expr"),
         ("src/backend_cleanup.zig", "callee_span: ast.Span"),
         ("src/backend_cleanup.zig", "type_args: []const ast.TypeExpr"),
@@ -361,6 +364,7 @@ def main() -> int:
     require_not_contains("src/mir_ownership_authority.zig", "legacy_cancellable_cleanup")
     require_not_contains("src/mir_ownership_authority.zig", "pub const DeferredCleanup")
     require_not_contains("src/backend_cleanup.zig", "trivial_expr: ast.Expr")
+    require_not_contains("src/backend_cleanup.zig", "defer_span")
     require_not_contains("src/backend_cleanup.zig", "ordinaryDeferTrivialExprSupported")
     require_not_contains("src/mir_ownership_authority.zig", "removeAutoDropCleanupForLocalName")
     require_not_contains("src/mir_ownership_authority.zig", "pub const AutoDropCleanupKey")

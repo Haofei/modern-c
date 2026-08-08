@@ -14,6 +14,7 @@ const mir_ownership_authority = @import("mir_ownership_authority.zig");
 /// Auto-drop payloads remain produced by MIR ownership authority; this module
 /// only owns the temporary stack mechanics shared by C and LLVM.
 pub const OrdinaryDeferCallCleanup = struct {
+    defer_ref: mir.DeferCleanupRef,
     fn_name: []const u8,
     span: ast.Span,
     callee_span: ast.Span,
@@ -21,8 +22,8 @@ pub const OrdinaryDeferCallCleanup = struct {
 };
 
 pub const CallTargetDeferCleanup = struct {
+    defer_ref: mir.DeferCleanupRef,
     kind: mir.CallTargetKind,
-    defer_span: ast.Span,
     span: ast.Span,
     callee: ast.Expr,
     callee_span: ast.Span,
@@ -31,7 +32,7 @@ pub const CallTargetDeferCleanup = struct {
 };
 
 pub const DeferBlockCleanup = struct {
-    defer_span: ast.Span,
+    defer_ref: mir.DeferCleanupRef,
     block: ast.Block,
 };
 
