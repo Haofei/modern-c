@@ -2010,6 +2010,9 @@ const LlvmEmitter = struct {
             .mmio_write => {
                 if (call.type_args.len != 0 or call.args.len != 2) return null;
             },
+            .dma_cache_clean, .dma_cache_invalidate => {
+                if (call.type_args.len != 0 or call.args.len != 1) return null;
+            },
             else => return null,
         }
         if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedLlvmEmission;
@@ -2025,6 +2028,7 @@ const LlvmEmitter = struct {
             .fence_acquire => try self.out.print(self.allocator, "  fence acquire{s}\n", .{try self.debugCallSuffix()}),
             .raw_store => try self.emitRawStorePayload(cleanup.callee_span, cleanup.type_args, cleanup.args),
             .mmio_write => try self.emitMmioWritePayload(cleanup.callee, cleanup.args),
+            .dma_cache_clean, .dma_cache_invalidate => try self.emitDmaCachePayload(cleanup.callee, cleanup.args, cleanup.kind),
             else => return error.UnsupportedLlvmEmission,
         }
     }
@@ -3229,14 +3233,7 @@ const LlvmEmitter = struct {
         if (call_kind) |kind| {
             if (self.dmaCacheCallInfo(call, kind)) |info| {
                 if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-                _ = try self.emitExpr(call.args[0], info.dma_ty);
-                if (std.mem.eql(u8, info.op, "clean")) {
-                    try self.out.print(self.allocator, "  fence release{s}\n", .{try self.debugCallSuffix()});
-                } else if (std.mem.eql(u8, info.op, "invalidate")) {
-                    try self.out.print(self.allocator, "  fence acquire{s}\n", .{try self.debugCallSuffix()});
-                } else {
-                    return error.UnsupportedLlvmEmission;
-                }
+                try self.emitDmaCacheInfo(info, call.args);
                 return true;
             }
         }
@@ -3332,6 +3329,27 @@ const LlvmEmitter = struct {
         try self.emitMmioFence(ordering, .before_store);
         const ptr = try self.emitMmioRegisterAddress(info);
         try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(info.storage_ty), value, ptr, try self.debugCallSuffix() });
+    }
+
+    fn emitDmaCachePayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr, kind: mir.CallTargetKind) !void {
+        if (args.len != 1) return error.UnsupportedLlvmEmission;
+        var callee_storage = callee;
+        const empty_type_args: []const ast.TypeExpr = &.{};
+        const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
+        const info = self.dmaCacheCallInfo(call, kind) orelse return error.UnsupportedLlvmEmission;
+        try self.emitDmaCacheInfo(info, args);
+    }
+
+    fn emitDmaCacheInfo(self: *LlvmEmitter, info: DmaCacheCallInfo, args: []const ast.Expr) !void {
+        if (args.len != 1) return error.UnsupportedLlvmEmission;
+        _ = try self.emitExpr(args[0], info.dma_ty);
+        if (std.mem.eql(u8, info.op, "clean")) {
+            try self.out.print(self.allocator, "  fence release{s}\n", .{try self.debugCallSuffix()});
+        } else if (std.mem.eql(u8, info.op, "invalidate")) {
+            try self.out.print(self.allocator, "  fence acquire{s}\n", .{try self.debugCallSuffix()});
+        } else {
+            return error.UnsupportedLlvmEmission;
+        }
     }
 
     fn emitMemberAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {

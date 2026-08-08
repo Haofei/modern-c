@@ -2582,7 +2582,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn dmaCacheCallInfo(self: *LlvmEmitter, call: anytype)": 0,
         "fn dmaCacheCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind)": 1,
         "self.dmaCacheCallInfo(call)": 0,
-        "self.dmaCacheCallInfo(call, kind)": 2,
+        "self.dmaCacheCallInfo(call, kind)": 3,
         "fn dmaBufCallInfo(self: *LlvmEmitter, call: anytype)": 0,
         "fn dmaBufCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind)": 1,
         "self.dmaBufCallInfo(call)": 0,

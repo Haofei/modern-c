@@ -198,6 +198,9 @@ pub fn callTargetDeferCleanupAtSource(function: Function, defer_source: SourcePo
                 targetTypeFactAtSource(function, .mmio_storage, call_source) and
                 targetTypeFactAtSource(function, .mmio_value, call_source) and
                 targetTypeFactAtSource(function, .mmio_result, call_source),
+            .dma_cache_clean, .dma_cache_invalidate => targetTypeFactAtSource(function, .dma_buffer, call_source) and
+                targetTypeFactAtSource(function, .dma_payload, call_source) and
+                targetTypeFactAtSource(function, .dma_result, call_source),
             else => true,
         };
     }

@@ -3592,6 +3592,9 @@ pub const CEmitter = struct {
             .mmio_write => {
                 if (call.type_args.len != 0 or call.args.len != 2) return null;
             },
+            .dma_cache_clean, .dma_cache_invalidate => {
+                if (call.type_args.len != 0 or call.args.len != 1) return null;
+            },
             else => return null,
         }
         if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedCEmission;
@@ -3606,6 +3609,15 @@ pub const CEmitter = struct {
         }
         if (cleanup.kind == .mmio_write) {
             if (!try lower_c_mmio.emitWriteCall(self.mmioEmitContext(), cleanup.callee, cleanup.args, locals)) return error.UnsupportedCEmission;
+            return;
+        }
+        if (cleanup.kind == .dma_cache_clean or cleanup.kind == .dma_cache_invalidate) {
+            var callee_storage = cleanup.callee;
+            const empty_type_args: []const ast.TypeExpr = &.{};
+            const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = cleanup.args };
+            try self.writeIndent();
+            if (!try lower_c_memory.emitDmaCall(self.memoryContext(), call, locals)) return error.UnsupportedCEmission;
+            try self.out.appendSlice(self.allocator, ";\n");
             return;
         }
         const statement = switch (cleanup.kind) {
