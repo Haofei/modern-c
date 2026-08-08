@@ -2878,7 +2878,7 @@ const LlvmEmitter = struct {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         if (!mir_ownership_authority.autoDropEligibleTypeName(&self.mir_module, type_name)) return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        const cleanup = switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&self.mir_module, function, name.text, type_name, name.span)) {
+        const cleanup = switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(self.allocator, &self.mir_module, function, name.text, type_name, name.span)) {
             .emit_auto_drop_cleanup => |entry| entry,
             .skip_cleanup_registration => return,
             .reject => return error.UnsupportedLlvmEmission,

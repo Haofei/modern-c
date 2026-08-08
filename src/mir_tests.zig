@@ -4337,7 +4337,7 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     try std.testing.expect(cleanup_plan.items[0].drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
     const g_identity = valueIdentityBySpelling(use_guard.*, "g") orelse return error.TestUnexpectedResult;
     const local_span = ast.Span{ .offset = 1, .len = 1, .line = 1, .column = 2 };
-    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, use_guard, "g", "Guard", local_span)) {
+    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, use_guard, "g", "Guard", local_span)) {
         .emit_auto_drop_cleanup => |cleanup| {
             try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
             try std.testing.expectEqualStrings("g", cleanup.local_name);
@@ -4582,7 +4582,7 @@ test "MIR ownership authority does not let forget authorize auto-drop registrati
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.forget, function.ownership_events[2].kind);
     try mir.validateLoweringAdmission(module_mir);
-    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
+    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, &function, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
         .reject => {},
         else => return error.TestUnexpectedResult,
     }
@@ -4711,7 +4711,7 @@ test "MIR ownership authority skips cleanup registration for move-out" {
     const function = functionByName(module_mir, "return_guard") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.move_out, function.ownership_events[2].kind);
-    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
+    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, &function, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
         .skip_cleanup_registration => {},
         else => return error.TestUnexpectedResult,
     }

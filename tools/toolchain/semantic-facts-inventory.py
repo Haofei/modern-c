@@ -1254,6 +1254,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub const DeferredCleanup": 0,
         "emit_auto_drop_cleanup: AutoDropLocalCleanup": 1,
         "emit_auto_drop_cleanup: []const u8": 0,
+        "mir.appendAutoDropCleanupPlan": 1,
+        "fn localHasConsumingOwnershipEvent": 1,
         "pub fn removeAutoDropCleanupForLocalName": 0,
         "remove_auto_drop_local": 0,
         "pub const AutoDropCleanupKey": 1,

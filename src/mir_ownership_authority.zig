@@ -70,38 +70,39 @@ pub const AutoDropCancellationDecision = union(enum) {
 };
 
 pub fn autoDropLocalRegistrationDecision(
+    allocator: std.mem.Allocator,
     module: *const mir.Module,
     function: *const mir.Function,
     local_name: []const u8,
     type_name: []const u8,
     local_span: ast.Span,
-) AutoDropLocalRegistrationDecision {
+) error{OutOfMemory}!AutoDropLocalRegistrationDecision {
     const root_value_id = valueIdForLocal(function, local_name) orelse return .reject;
     const ownership = typeOwnershipFactFor(module, type_name) orelse return .reject;
     if (ownership.kind != .affine or !ownership.drop_glue_symbol_id.isValid()) return .reject;
     const drop_glue = dropGlueFactForSymbols(module, ownership.typed_type_symbol_id, ownership.drop_glue_symbol_id) orelse return .reject;
 
-    var saw_consuming_event = false;
-    for (function.ownership_events) |event| {
-        if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
-        if (!event.place.root_type_symbol_id.eql(ownership.typed_type_symbol_id)) continue;
-        switch (event.kind) {
-            .auto_drop => {
-                if (!event.drop_glue_symbol_id.eql(ownership.drop_glue_symbol_id)) continue;
-                return .{ .emit_auto_drop_cleanup = .{
-                    .fn_name = drop_glue.release_fn,
-                    .local_name = local_name,
-                    .span = local_span,
-                    .root_value_id = root_value_id,
-                    .resource_type_symbol_id = ownership.typed_type_symbol_id,
-                    .drop_glue_symbol_id = ownership.drop_glue_symbol_id,
-                } };
-            },
-            .move_out, .explicit_drop => saw_consuming_event = true,
-            else => {},
-        }
+    var cleanup_plan: std.ArrayList(mir.AutoDropCleanupPlanEntry) = .empty;
+    defer cleanup_plan.deinit(allocator);
+    mir.appendAutoDropCleanupPlan(allocator, module.*, function.*, &cleanup_plan) catch |err| switch (err) {
+        error.InvalidMirOwnershipEvents => return .reject,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+
+    for (cleanup_plan.items) |entry| {
+        if (!simpleOwnershipRootMatches(entry.place, root_value_id)) continue;
+        if (!entry.place.root_type_symbol_id.eql(ownership.typed_type_symbol_id)) continue;
+        if (!entry.drop_glue_symbol_id.eql(ownership.drop_glue_symbol_id)) continue;
+        return .{ .emit_auto_drop_cleanup = .{
+            .fn_name = drop_glue.release_fn,
+            .local_name = local_name,
+            .span = local_span,
+            .root_value_id = root_value_id,
+            .resource_type_symbol_id = ownership.typed_type_symbol_id,
+            .drop_glue_symbol_id = ownership.drop_glue_symbol_id,
+        } };
     }
-    if (saw_consuming_event) return .skip_cleanup_registration;
+    if (localHasConsumingOwnershipEvent(function, root_value_id, ownership.typed_type_symbol_id)) return .skip_cleanup_registration;
     return .reject;
 }
 
@@ -182,6 +183,16 @@ fn localHasAutoDropOwnershipEvent(
     for (function.ownership_events) |event| {
         if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
         if (!autoDropTypeSymbolHasGlue(module, event.place.root_type_symbol_id)) continue;
+        return true;
+    }
+    return false;
+}
+
+fn localHasConsumingOwnershipEvent(function: *const mir.Function, root_value_id: mir.ValueId, root_type_symbol_id: mir.SymbolId) bool {
+    for (function.ownership_events) |event| {
+        if (event.kind != .move_out and event.kind != .explicit_drop) continue;
+        if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
+        if (!event.place.root_type_symbol_id.eql(root_type_symbol_id)) continue;
         return true;
     }
     return false;
