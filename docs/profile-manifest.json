@@ -2,7 +2,7 @@
   "schema_version": 1,
   "source_of_truth": "docs/profile-manifest.json",
   "risk_register": "docs/review-risk-register.yaml",
-  "tcb_component_manifest": "docs/tcb-components.json",
+  "component_manifest": "docs/component-manifest.json",
   "profiles": [
     {
       "id": "compiler-subset",
@@ -48,7 +48,7 @@
         "path-remap-test",
         "mcmap-test"
       ],
-      "tcb_components": [
+      "components": [
         "zig-compiler",
         "clang-for-c-artifact-checks",
         "llvm-for-differential-checks"
@@ -85,7 +85,7 @@
         "llvm-cc-test",
         "diff-backend"
       ],
-      "tcb_components": [
+      "components": [
         "llvm-as",
         "llc",
         "clang"
@@ -121,7 +121,7 @@
         "full-selfhost-diff",
         "full-selfhost-stage"
       ],
-      "tcb_components": [
+      "components": [
         "stage0-mcc",
         "selfhost-c-emitter",
         "clang-for-stage-link"
@@ -155,7 +155,7 @@
         "mcc-cli-test",
         "dev-gates-test"
       ],
-      "tcb_components": [
+      "components": [
         "python3",
         "workspace-local-mcc",
         "vscode-extension-runtime"
@@ -184,7 +184,6 @@
       },
       "blocking_risks": [
         "KERNEL-CAPABILITY-MINT",
-        "SUPPLY-TCB-CVE-INTAKE",
         "HARDWARE-PRODUCTION-QUALIFICATION"
       ],
       "blocking_gates": [
@@ -192,11 +191,10 @@
         "qemu-test",
         "kmain-test",
         "agentos-test",
-        "tcb-advisory-intake-test",
         "app-run-test",
         "qjs-confined-test"
       ],
-      "tcb_components": [
+      "components": [
         "qemu",
         "opensbi",
         "quickjs",

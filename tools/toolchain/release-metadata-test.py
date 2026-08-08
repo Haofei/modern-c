@@ -395,15 +395,14 @@ def require_threat_model_metadata() -> None:
         "## 6. Supply-chain sub-model",
         "Supply-chain compromise of vendored engines",
         "WAMR, QuickJS, openlibm",
-        "vendoring review",
-        "CVE/advisory triage",
+        "vendoring provenance",
         "pinned Zig/LLVM/Docker versions and digests",
         "GitHub Actions pinned to commit SHAs",
         "SHA256SUMS",
         "CycloneDX SBOM",
         "artifact attestations",
         "SECURITY.md",
-        "not runtime containment",
+        "not a kernel product TCB claim",
     ):
         if needle not in docs:
             fail(f"{path} does not document threat-model requirement {needle!r}")

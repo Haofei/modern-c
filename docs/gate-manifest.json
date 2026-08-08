@@ -39,7 +39,6 @@
         "kernel-scope-inventory-test",
         "std-api-docs-test",
         "vendoring-test",
-        "tcb-advisory-intake-test",
         "third-party-licenses-test",
         "no-committed-private-keys-test"
       ]
@@ -395,24 +394,6 @@
       "blocking_profiles": [
         "compiler-subset",
         "developer-tools"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
-      "id": "tcb-advisory-intake-test",
-      "owner": "supply-chain",
-      "category": "tcb-advisory-intake",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
-      ],
-      "blocking_profiles": [
-        "kernel-qemu"
       ],
       "build_tiers": [
         "m0",

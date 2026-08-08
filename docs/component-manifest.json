@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_of_truth": "docs/tcb-components.json",
+  "source_of_truth": "docs/component-manifest.json",
   "risk_register": "docs/review-risk-register.yaml",
   "components": [
     {
@@ -8,8 +8,6 @@
       "category": "toolchain",
       "owner": "compiler",
       "summary": "Zig compiler used to build and test the stage0 implementation.",
-      "advisory_status": "tracked-by-toolchain-version",
-      "review_after": "2026-10-01",
       "profiles": ["compiler-subset"]
     },
     {
@@ -17,8 +15,6 @@
       "category": "toolchain",
       "owner": "compiler",
       "summary": "Clang used to compile generated C artifacts in compiler-subset gates.",
-      "advisory_status": "tracked-by-toolchain-version",
-      "review_after": "2026-10-01",
       "profiles": ["compiler-subset"]
     },
     {
@@ -26,8 +22,6 @@
       "category": "toolchain",
       "owner": "compiler",
       "summary": "LLVM tools used by C/LLVM differential checks for the admitted compiler subset.",
-      "advisory_status": "tracked-by-toolchain-version",
-      "review_after": "2026-10-01",
       "profiles": ["compiler-subset"]
     },
     {
@@ -35,8 +29,6 @@
       "category": "toolchain",
       "owner": "backend",
       "summary": "LLVM assembler used by the experimental LLVM backend profile.",
-      "advisory_status": "tracked-by-toolchain-version",
-      "review_after": "2026-10-01",
       "profiles": ["llvm-experimental"]
     },
     {
@@ -44,8 +36,6 @@
       "category": "toolchain",
       "owner": "backend",
       "summary": "LLVM static compiler used by LLVM object and optimizer gates.",
-      "advisory_status": "tracked-by-toolchain-version",
-      "review_after": "2026-10-01",
       "profiles": ["llvm-experimental"]
     },
     {
@@ -53,8 +43,6 @@
       "category": "toolchain",
       "owner": "backend",
       "summary": "Clang used by LLVM profile host and object checks.",
-      "advisory_status": "tracked-by-toolchain-version",
-      "review_after": "2026-10-01",
       "profiles": ["llvm-experimental"]
     },
     {
@@ -62,8 +50,6 @@
       "category": "internal",
       "owner": "selfhost",
       "summary": "Stage0 modern-c compiler used to build the selfhost experiment.",
-      "advisory_status": "internal-component",
-      "review_after": "2026-10-01",
       "profiles": ["selfhost-experimental"]
     },
     {
@@ -71,8 +57,6 @@
       "category": "internal",
       "owner": "selfhost",
       "summary": "Experimental selfhost C emitter; not a production semantic authority.",
-      "advisory_status": "internal-component",
-      "review_after": "2026-10-01",
       "profiles": ["selfhost-experimental"]
     },
     {
@@ -80,8 +64,6 @@
       "category": "toolchain",
       "owner": "selfhost",
       "summary": "Clang used to link selfhost stage artifacts.",
-      "advisory_status": "tracked-by-toolchain-version",
-      "review_after": "2026-10-01",
       "profiles": ["selfhost-experimental"]
     },
     {
@@ -89,8 +71,6 @@
       "category": "toolchain",
       "owner": "developer-tools",
       "summary": "Python runtime used by LSP, CI scripts, and local verification helpers.",
-      "advisory_status": "tracked-by-host-runtime",
-      "review_after": "2026-10-01",
       "profiles": ["developer-tools"]
     },
     {
@@ -98,8 +78,6 @@
       "category": "internal",
       "owner": "developer-tools",
       "summary": "Workspace-built mcc binary invoked by LSP and editor tooling.",
-      "advisory_status": "internal-component",
-      "review_after": "2026-10-01",
       "profiles": ["developer-tools"]
     },
     {
@@ -107,8 +85,6 @@
       "category": "toolchain",
       "owner": "developer-tools",
       "summary": "VS Code extension host runtime for the editor adapter.",
-      "advisory_status": "tracked-by-extension-platform",
-      "review_after": "2026-10-01",
       "profiles": ["developer-tools"]
     },
     {
@@ -116,8 +92,6 @@
       "category": "emulator",
       "owner": "kernel",
       "summary": "QEMU surrogate execution environment for kernel and Agent gates.",
-      "advisory_status": "tracked-by-toolchain-version",
-      "review_after": "2026-10-01",
       "profiles": ["kernel-qemu"]
     },
     {
@@ -128,8 +102,6 @@
       "upstream": "https://github.com/riscv-software-src/opensbi",
       "revision": "environment-provided",
       "license": "BSD-2-Clause",
-      "advisory_status": "tracked-by-platform-image",
-      "review_after": "2026-10-01",
       "profiles": ["kernel-qemu"]
     },
     {
@@ -145,8 +117,6 @@
       "license_file": "third_party/quickjs/LICENSE",
       "provenance_file": "third_party/quickjs/README.vendored.md",
       "local_modifications": ["third_party/quickjs/quickjs.h"],
-      "advisory_status": "advisory-intake-manifest-gated",
-      "review_after": "2026-09-01",
       "profiles": ["kernel-qemu"]
     },
     {
@@ -162,8 +132,6 @@
       "license_file": "third_party/wamr/LICENSE",
       "provenance_file": "third_party/wamr/README.vendored.md",
       "local_modifications": ["third_party/wamr/core/shared/platform/mc"],
-      "advisory_status": "advisory-intake-manifest-gated",
-      "review_after": "2026-09-01",
       "profiles": ["kernel-qemu"]
     },
     {
@@ -178,8 +146,6 @@
       "license_file": "third_party/openlibm/LICENSE.md",
       "provenance_file": "third_party/openlibm/README.vendored.md",
       "local_modifications": ["tools/user/build-openlibm.sh integration only"],
-      "advisory_status": "advisory-intake-manifest-gated",
-      "review_after": "2026-09-01",
       "profiles": ["kernel-qemu"]
     }
   ]

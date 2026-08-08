@@ -106,23 +106,14 @@ risks:
       - third-party-kernel-components
     summary: Privileged capability/right mint APIs now require explicit opaque root tokens and the source audit gates root creation; this remains relevant to kernel/QEMU validation but no longer backs a deployable kernel release profile.
 
-  - id: SUPPLY-TCB-CVE-INTAKE
-    severity: high
-    scope: supply-chain
-    status: open
-    admitted_subset_status: advisory-intake-manifest-gated
-    blocks:
-      - stable-release
-    summary: Kernel-QEMU profile-facing QuickJS, WAMR, openlibm, and OpenSBI now have gated offline advisory-intake metadata, retained-subset policy, review dates, and waiver fields. Hardware firmware/runtime slots and encrypted-transport demos are outside kernel profile TCB scope. Live advisory ingestion, release response SLA, and production waiver review remain open for any future release profile.
-
   - id: TCB-PROFILE-MINIMIZATION
     severity: medium
     scope: supply-chain
     status: open
-    admitted_subset_status: profile-and-tcb-component-manifests-gated
+    admitted_subset_status: profile-component-manifest-retained
     blocks:
       - production-profile-minimal-tcb-claim
-    summary: Active product profiles now name their TCB components in profile-manifest.json, and kernel-QEMU vendored/firmware advisory-intake manifests are gated. Minimal production TCB claims remain out of scope until a future product profile is explicitly added.
+    summary: Profile component manifests are retained only as dependency/provenance bookkeeping. Kernel-QEMU is a language-validation workload and no longer carries a gated security-advisory workflow or minimal-production-TCB claim.
 
   - id: HARDWARE-PRODUCTION-QUALIFICATION
     severity: high

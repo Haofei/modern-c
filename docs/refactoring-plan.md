@@ -152,7 +152,7 @@ Authoritative inputs:
 
 - `docs/review-risk-register.yaml`;
 - `docs/profile-manifest.json`;
-- `docs/tcb-components.json`;
+- `docs/component-manifest.json`;
 - `docs/gate-manifest.json`.
 
 Work items:

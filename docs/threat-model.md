@@ -94,15 +94,15 @@ kernel image, leak source during diagnostics, or corrupt release artifacts.
 ## 6. Supply-chain sub-model
 
 Supply-chain compromise of vendored engines, the compiler toolchain, CI actions,
-or release artifacts is in scope for release hardening. The kernel still treats
-WAMR, QuickJS, openlibm, Zig, LLVM, QEMU, and pinned CI actions as trusted inputs at
-runtime/build time; a malicious or vulnerable component can invalidate the kernel
-TCB. The control is therefore provenance, pinning, review, update discipline, and
-public vulnerability intake, not a claim that runtime containment absorbs the bug.
+or release artifacts is in scope for toolchain hygiene. The kernel validation
+workloads treat WAMR, QuickJS, openlibm, Zig, LLVM, QEMU, and pinned CI actions as
+trusted inputs at runtime/build time; a malicious or broken component can
+invalidate validation evidence. The control is therefore provenance, pinning,
+and update discipline, not a kernel product TCB claim.
 
 | Threat | Mitigation / gate | Residual / gap |
 | --- | --- | --- |
-| Vendored engine compromise or known CVE ships in the TCB | vendoring review, THIRD-PARTY-LICENSES inventory, CVE/advisory triage, version bumps with security gates, SECURITY.md intake | engine bugs remain TCB bugs until patched or isolated |
+| Vendored engine compromise changes validation behavior | vendoring provenance, THIRD-PARTY-LICENSES inventory, version bumps with relevant gates | engine bugs weaken validation evidence until patched or isolated |
 | Toolchain compromise changes codegen or release output | pinned Zig/LLVM/Docker versions and digests; compiler qualification on fixed runners; differential C/LLVM gates | upstream compromise before pinning remains a release-blocking incident |
 | CI action compromise mutates artifacts or metadata | GitHub Actions pinned to commit SHAs; no floating `ubuntu-latest` for qualification/release; release workflow permissions scoped | hosted-runner trust remains an operational dependency |
 | Release artifact substitution or ambiguity | SHA256SUMS, release inventory, CycloneDX SBOM, artifact attestations, checksum subject verification, and `gh attestation verify` documented in release process | users must verify downloaded artifacts |
