@@ -3567,17 +3567,30 @@ pub const CEmitter = struct {
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
         if (info.is_variadic or call.args.len != info.params.len) return error.UnsupportedCEmission;
-        if (info.return_type) |ret| {
-            const ret_name = typeName(ret) orelse return null;
-            if (!std.mem.eql(u8, ret_name, "void")) return null;
-        }
-        if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), fn_name, call.args)) return error.UnsupportedCEmission;
-        return .{ .fn_name = fn_name, .span = expr.span, .call = expr };
+        if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), fn_name, call.args)) return error.UnsupportedCEmission;
+        return .{ .fn_name = fn_name, .span = expr.span, .callee_span = call.callee.*.span, .args = call.args };
     }
 
     fn emitOrdinaryDeferDirectCallCleanup(self: *CEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !void {
-        _ = cleanup.fn_name;
-        try self.emitDeferredExpressionCleanup(cleanup.call, locals, return_ty);
+        _ = return_ty;
+        const info = self.functions.get(cleanup.fn_name) orelse return error.UnsupportedCEmission;
+        if (info.is_variadic or cleanup.args.len != info.params.len) return error.UnsupportedCEmission;
+        if (cleanup.args.len == 0) {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "{s}();\n", .{try self.cIdent(cleanup.fn_name)});
+            self.applyMirPointerProvenanceInvalidationsAtCall(cleanup.span, locals);
+            return;
+        }
+        var temps: std.ArrayList(SequencedArgTemp) = .empty;
+        defer temps.deinit(self.scratch.allocator());
+        for (cleanup.args, info.params) |arg, param| {
+            try temps.append(self.scratch.allocator(), try self.emitSequencedCallArgTemp(arg, locals, param.ty));
+        }
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s}", .{try self.cIdent(cleanup.fn_name)});
+        try lower_c_call.emitSequencedArgList(self.allocator, self.out, temps.items);
+        try self.out.appendSlice(self.allocator, ";\n");
+        self.applyMirPointerProvenanceInvalidationsAtCall(cleanup.span, locals);
     }
 
     fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {

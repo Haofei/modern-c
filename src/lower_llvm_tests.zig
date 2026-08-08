@@ -1818,6 +1818,67 @@ test "LLVM ordinary direct defer with arguments requires MIR argument facts" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_ordinary_defer_arg_requires_fact.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM ordinary direct defer with discarded result requires MIR result fact" {
+    const source =
+        \\extern fn record(value: u32) -> u32;
+        \\fn ordinary_defer_result_fact(x: u32) -> void {
+        \\    defer record(x);
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_ordinary_defer_result_requires_fact.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = for (module_mir.functions) |*candidate| {
+        if (std.mem.eql(u8, candidate.name, "ordinary_defer_result_fact")) break candidate;
+    } else return error.TestUnexpectedResult;
+    _ = function;
+    try mir.validateLoweringAdmission(module_mir);
+    var drifted_callee_span = false;
+    for (parsed.module.decls) |*decl| switch (decl.kind) {
+        .fn_decl => |*fn_decl| {
+            if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_result_fact")) continue;
+            const body = fn_decl.body orelse return error.TestUnexpectedResult;
+            for (body.items) |*stmt| switch (stmt.kind) {
+                .@"defer" => |*defer_expr| switch (defer_expr.kind) {
+                    .call => |*call| {
+                        call.callee.*.span.line += 1;
+                        drifted_callee_span = true;
+                    },
+                    else => return error.TestUnexpectedResult,
+                },
+                else => {},
+            };
+        },
+        else => {},
+    };
+    if (!drifted_callee_span) return error.TestUnexpectedResult;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_ordinary_defer_result_requires_fact.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM ordinary direct defer may discard call result" {
+    const source =
+        \\extern fn record(value: u32) -> u32;
+        \\fn ordinary_defer_discard_result(x: u32) -> void {
+        \\    defer record(x);
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_ordinary_defer_discard_result.mc", source);
+    defer parsed.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmChecked(std.testing.allocator, parsed.module, &output, "llvm_ordinary_defer_discard_result.mc", .{}, false, .riscv64);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "call i32 @record") != null);
+}
+
 test "LLVM explicit drop release cancellation requires MIR explicit-drop event" {
     const source =
         \\move struct Guard { id: u32 }

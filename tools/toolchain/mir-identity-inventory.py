@@ -306,6 +306,8 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "try explicitDropPlanEntryForLocal"),
         ("src/backend_cleanup.zig", "pub const DeferredCleanup"),
         ("src/backend_cleanup.zig", "pub const OrdinaryDeferCallCleanup"),
+        ("src/backend_cleanup.zig", "callee_span: ast.Span"),
+        ("src/backend_cleanup.zig", "args: []const ast.Expr"),
         ("src/backend_cleanup.zig", "raw_expr: ast.Expr"),
         ("src/backend_cleanup.zig", "block: ast.Block"),
         ("src/backend_cleanup.zig", "direct_call: OrdinaryDeferCallCleanup"),

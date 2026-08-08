@@ -1988,15 +1988,31 @@ const LlvmEmitter = struct {
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const sig = self.fn_sigs.get(fn_name) orelse return null;
         if (sig.is_variadic or call.args.len != sig.params.len) return error.UnsupportedLlvmEmission;
-        if (!typeNameEql(sig.ret, "void")) return null;
-        if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), fn_name, call.args)) return error.UnsupportedLlvmEmission;
-        return .{ .fn_name = fn_name, .span = expr.span, .call = expr };
+        if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), fn_name, call.args)) return error.UnsupportedLlvmEmission;
+        return .{ .fn_name = fn_name, .span = expr.span, .callee_span = call.callee.*.span, .args = call.args };
     }
 
     fn emitOrdinaryDeferDirectCallCleanup(self: *LlvmEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup) !void {
-        _ = cleanup.fn_name;
-        const call = ast_query.callExpr(cleanup.call) orelse return error.UnsupportedLlvmEmission;
-        try self.emitVoidStatementCall(call, cleanup.span);
+        defer self.applyMirPointerProvenanceInvalidationsAtCall(cleanup.span);
+        defer self.local_slice_global_pointer_arrays.clearRetainingCapacity();
+        defer self.local_slice_pointer_array_ranges.clearRetainingCapacity();
+        defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
+        defer self.local_pointer_array_aliases.clearRetainingCapacity();
+        const sig = self.fn_sigs.get(cleanup.fn_name) orelse return error.UnsupportedLlvmEmission;
+        if (sig.is_variadic or cleanup.args.len != sig.params.len) return error.UnsupportedLlvmEmission;
+        if (typeNameEql(sig.ret, "void") or typeNameEql(sig.ret, "never")) {
+            try self.emitVoidDirectCall(cleanup.fn_name, cleanup.args, cleanup.callee_span);
+            return;
+        }
+        var callee_expr: ast.Expr = .{
+            .span = cleanup.callee_span,
+            .kind = .{ .ident = .{ .text = cleanup.fn_name, .span = cleanup.callee_span } },
+        };
+        const call = struct {
+            callee: *ast.Expr,
+            args: []const ast.Expr,
+        }{ .callee = &callee_expr, .args = cleanup.args };
+        _ = try self.emitDirectCall(cleanup.fn_name, call, sig.ret);
     }
 
     fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
@@ -7827,15 +7843,19 @@ const LlvmEmitter = struct {
     }
 
     fn emitVoidCall(self: *LlvmEmitter, callee: []const u8, call: anytype) !void {
+        try self.emitVoidDirectCall(callee, call.args, call.callee.*.span);
+    }
+
+    fn emitVoidDirectCall(self: *LlvmEmitter, callee: []const u8, args_source: []const ast.Expr, callee_span: ast.Span) !void {
         const sig = self.fn_sigs.get(callee) orelse return error.UnsupportedLlvmEmission;
         // A `-> never` function lowers to a `void` LLVM declaration, so its call statement is a
         // plain `call void @fn(args)` (no result name) — handled here alongside `-> void`.
         if (!typeNameEql(sig.ret, "void") and !typeNameEql(sig.ret, "never")) return error.UnsupportedLlvmEmission;
-        const fact_ret_ty = (self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, callee, null) orelse return error.UnsupportedLlvmEmission).target_ty;
+        const fact_ret_ty = (self.mirTargetTypeFactAtOwned(.direct_call_result, callee_span, callee, null) orelse return error.UnsupportedLlvmEmission).target_ty;
         if (!directCallFactMatchesDeclared(fact_ret_ty, sig.ret)) return error.UnsupportedLlvmEmission;
         var args: std.ArrayList(ArgValue) = .empty;
         defer args.deinit(self.allocator);
-        for (call.args, 0..) |arg, i| {
+        for (args_source, 0..) |arg, i| {
             const fact_ty = (self.mirTargetTypeFactAtOwned(.direct_call_argument, arg.span, callee, i) orelse return error.UnsupportedLlvmEmission).target_ty;
             const arg_ty = if (i < sig.params.len) blk: {
                 if (!std.meta.eql(fact_ty, sig.params[i].ty)) return error.UnsupportedLlvmEmission;

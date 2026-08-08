@@ -174,9 +174,10 @@ pub fn hasDeferCleanupAtSource(function: Function, source: SourcePoint) bool {
     return false;
 }
 
-pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, fn_name: []const u8, args: []const ast.Expr) bool {
+pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, callee_source: SourcePoint, fn_name: []const u8, args: []const ast.Expr) bool {
     if (!hasDeferCleanupAtSource(function, defer_source)) return false;
     if (!directCallInstructionAtSource(function, call_source, fn_name)) return false;
+    if (!directCallResultFactAtSource(function, fn_name, callee_source)) return false;
     for (args, 0..) |arg, index| {
         if (!directCallArgumentFactAtSource(function, fn_name, index, sourcePointFromSpan(arg.span))) return false;
     }
@@ -188,10 +189,21 @@ fn directCallInstructionAtSource(function: Function, call_source: SourcePoint, f
         for (block.instructions) |instruction| {
             if (instruction.kind != .call) continue;
             if (!std.mem.eql(u8, instruction.detail, fn_name)) continue;
-            if (instruction.result_ty != .void) continue;
             if (instruction.line != call_source.line or instruction.column != call_source.column) continue;
             if (sourcePointOffsetsMatch(instruction.source_offset, instruction.source_len, call_source)) return true;
         }
+    }
+    return false;
+}
+
+fn directCallResultFactAtSource(function: Function, fn_name: []const u8, callee_source: SourcePoint) bool {
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .direct_call_result) continue;
+        if (fact.target_index != null) continue;
+        if (!optionalTextEql(fact.target_owner, fn_name)) continue;
+        if (fact.source.line != callee_source.line or fact.source.column != callee_source.column) continue;
+        if (fact.source.offset != callee_source.offset or fact.source.len != callee_source.len) continue;
+        return true;
     }
     return false;
 }
