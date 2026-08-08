@@ -460,7 +460,7 @@ export fn proc_preempt_point(t: *mut ProcTable) -> void {
     }
 }
 
-// ----- supervision: heartbeat liveness (production-readiness §3.1 #12) -----
+// ----- supervision: heartbeat liveness language fixture -----
 // The lifecycle primitives (spawn/exit/kill/reap) exist; supervision is the missing layer that
 // DETECTS a stuck/dead long-running agent so a supervisor can restart or kill it. This adds the
 // detection mechanism: a per-slot heartbeat deadline + last-beat timestamp (in timer ticks). An
@@ -633,7 +633,7 @@ fn proc_sup_rearm(t: *mut ProcTable, slot: usize, now: u64) -> void {
     }
 }
 
-// ----- supervision: restart / crash-loop policy (production-readiness §3.1 #12) -----
+// ----- supervision: restart / crash-loop policy language fixture -----
 // Once liveness detection (above) flags a dead/stuck slot, the supervisor decides whether to RESTART
 // it — but blindly restarting a slot that keeps dying is a crash loop (CPU-burning thrash). This
 // adds the crash-loop guard: a per-process restart counter (t.procs[slot].restart_count, cleared on
@@ -695,7 +695,7 @@ export fn proc_supervise_step(t: *mut ProcTable, slot: usize, now: u64, max_rest
     return .GiveUp;
 }
 
-// ----- supervision: the running supervisor SCAN (production-readiness §3.1 #12 remainder) -----
+// ----- supervision: the running supervisor SCAN language fixture -----
 // proc_supervise_step is the per-slot VERDICT; this is the running supervisor LOOP a periodic
 // context (e.g. a timer-adjacent supervisor service) calls each scan to ACTUATE that verdict over
 // EVERY in-use, supervised slot. For each such slot it folds proc_supervise_step and acts:

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Persist-across-reboot gate (production-readiness §3.1 #3): prove virtio-blk storage survives a real
+# Persist-across-reboot language fixture: prove virtio-blk storage survives a real
 # reboot. Build the persistence fixture (tests/qemu/arch/blk_persist_demo.mc, which writes a sentinel
 # to the disk on the first boot and verifies it on the second), then boot QEMU TWICE against the SAME
 # -drive file. The kernel + RAM are fresh each boot; only the disk image persists. PASS requires the

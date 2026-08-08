@@ -44,7 +44,7 @@ implementations.
 
 ### 1.2 Claims explicitly out of scope today
 
-Until the compiler readiness ledger closes or explicitly scopes the relevant
+Until the language validation matrix closes or explicitly scopes the relevant
 design risks, do not claim that MC has:
 
 - stronger general memory or lifetime safety than Rust;
@@ -80,7 +80,7 @@ source
   -> C and LLVM encoding mechanics
 ```
 
-The required rule is already normative in the compiler readiness ledger:
+The required rule is already normative in the language validation matrix:
 
 ```text
 complete fact      -> both backends consume it

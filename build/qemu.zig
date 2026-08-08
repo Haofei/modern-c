@@ -412,8 +412,8 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-fdt-devices-test", "LLVM-lowered boot under OpenSBI + discover UART/PLIC/virtio-mmio via FDT", &.{ "bash", "tools/arch/fdt-devices-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "bootinfo-test", "Boot under OpenSBI + normalize FDT into the arch-neutral BootInfo (§3.1)", &.{ "bash", "tools/arch/bootinfo-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-bootinfo-test", "LLVM-lowered boot under OpenSBI + normalize FDT into the arch-neutral BootInfo", &.{ "bash", "tools/arch/bootinfo-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "visionfive2-readiness-test", "Boot under OpenSBI + validate the VisionFive 2 FDT-resource readiness adapter against QEMU", &.{ "bash", "tools/arch/visionfive2-readiness-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-visionfive2-readiness-test", "LLVM-lowered VisionFive 2 FDT-resource readiness adapter against QEMU", &.{ "bash", "tools/arch/visionfive2-readiness-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "visionfive2-resource-test", "Boot under OpenSBI + validate the VisionFive 2 FDT-resource fixture against QEMU", &.{ "bash", "tools/arch/visionfive2-resource-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-visionfive2-resource-test", "LLVM-lowered VisionFive 2 FDT-resource fixture against QEMU", &.{ "bash", "tools/arch/visionfive2-resource-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "uart-driver-test", "Boot under OpenSBI + discover UART base from FDT + drive first-class LSR-polled NS16550 driver", &.{ "bash", "tools/arch/uart-driver-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-uart-driver-test", "LLVM-lowered boot under OpenSBI + FDT-discovered first-class NS16550 driver", &.{ "bash", "tools/arch/uart-driver-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "smode-user-test", "S-mode U-mode hello under OpenSBI (SYS_WRITE + bad-ptr -EFAULT)", &.{ "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "c" });

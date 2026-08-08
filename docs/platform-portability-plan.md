@@ -113,8 +113,8 @@ This section is the authoritative platform backlog and priority order.
    StarFive VisionFive 2 remains recorded in
    `kernel/platform/starfive_visionfive2/profile.mc` only as an FDT/resource-discovery
    fixture. The QEMU `virt` path is the repeatable language/backend validation path.
-   `visionfive2-readiness-test` / `llvm-visionfive2-readiness-test` validate the profile's
-   FDT-resource adapter against QEMU; real hardware should be used only when it exposes
+   `visionfive2-resource-test` / `llvm-visionfive2-resource-test` validate the profile's
+   FDT-resource fixture against QEMU; real hardware should be used only when it exposes
    language, ABI, driver, async, MMIO, syscall, freestanding, or backend-lowering gaps.
 
 2. **Complete S-mode interrupt and device wiring.**

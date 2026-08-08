@@ -142,7 +142,7 @@ export fn blk_read_sector(dev: *BlkDevice, sector: u64) -> Result<u32, BlkError>
 
 // Read a full 512-byte sector into `dst` (a kernel PAddr with room for SECTOR_SIZE bytes). Like
 // blk_read_sector but copies the WHOLE sector out (not just the first word) — the read half of a
-// BlockDevice over virtio-blk (durable storage, production-readiness §3.1 #3).
+// BlockDevice over virtio-blk (durable-storage language fixture).
 #[mc_abi]
 export fn blk_read_into(dev: *BlkDevice, sector: u64, dst: PAddr) -> Result<bool, BlkError> {
     let regs: MmioPtr<VirtioMmio> = blk_regs(dev);

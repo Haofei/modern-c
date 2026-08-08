@@ -1,19 +1,19 @@
-// VisionFive 2 readiness surrogate — PURE MC, booted by OpenSBI in S-mode.
+// VisionFive 2 resource fixture — PURE MC, booted by OpenSBI in S-mode.
 //
 // QEMU `virt` is not VisionFive 2 hardware. This fixture validates the current
 // board profile's FDT-driven boot contract against the deterministic QEMU DTB so
 // changes to BootInfo/device discovery cannot silently break the real-board
-// adapter while hardware is unavailable.
+// fixture while hardware is unavailable.
 
 import "kernel/arch/riscv64/sbi.mc";
 import "kernel/arch/riscv64/sbi_console.mc";
-import "kernel/platform/starfive_visionfive2/readiness.mc";
+import "kernel/platform/starfive_visionfive2/board_fixture.mc";
 import "std/addr.mc";
 
 export fn s_entry(hartid: u64, dtb: u64) -> void {
-    sbi_puts("kernel up in S-mode under OpenSBI (VisionFive 2 readiness surrogate)\n");
+    sbi_puts("kernel up in S-mode under OpenSBI (VisionFive 2 resource fixture)\n");
 
-    let r: VisionFive2Readiness = visionfive2_qemu_surrogate_readiness(pa(dtb as usize), hartid);
+    let r: VisionFive2ResourceCheck = visionfive2_qemu_surrogate_resources(pa(dtb as usize), hartid);
     sbi_puts("vf2_boot_cpu=");
     put_dec(r.boot_cpu_id);
     sbi_putchar(10);
@@ -30,7 +30,7 @@ export fn s_entry(hartid: u64, dtb: u64) -> void {
     put_dec(r.virtio_mmio_count as u64);
     sbi_putchar(10);
 
-    if r.ready {
+    if r.available {
         sbi_puts("VF2-QEMU-SURROGATE-OK\n");
     } else {
         sbi_puts("VF2-QEMU-SURROGATE-BAD\n");

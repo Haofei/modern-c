@@ -1,5 +1,4 @@
-// A RUNNING supervisor loop over a ProcTable, end-to-end under QEMU (production-readiness
-// §3.1 #12 remainder). scheduler_demo.mc unit-tests the supervision PRIMITIVES in isolation
+// A RUNNING supervisor loop over a ProcTable, end-to-end under QEMU. scheduler_demo.mc unit-tests the supervision PRIMITIVES in isolation
 // (proc_supervise / proc_heartbeat / proc_liveness_expired / proc_restart_* /
 // proc_supervise_step); this drives the running LOOP — proc_supervisor_scan — across several
 // ticks over THREE real spawned processes, proving the fold-the-verdict-and-actuate path:

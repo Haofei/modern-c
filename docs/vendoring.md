@@ -82,7 +82,7 @@ zig build profile-manifest-test
 
 ## CVE and advisory watch
 
-For every dependency update and release-readiness pass, check these upstreams:
+For every dependency update and release validation pass, check these upstreams:
 
 - QuickJS-NG: GitHub releases/issues/security advisories for
   `quickjs-ng/quickjs`, CVE search for `QuickJS` and `QuickJS-NG`, and relevant

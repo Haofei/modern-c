@@ -34,8 +34,8 @@ pub fn register(ctx: *h.Ctx) void {
         "llvm-qjs-smode-net-irq-tool-test",
         "qjs-smode-blk-irq-tool-test",
         "llvm-qjs-smode-blk-irq-tool-test",
-        "visionfive2-readiness-test",
-        "llvm-visionfive2-readiness-test",
+        "visionfive2-resource-test",
+        "llvm-visionfive2-resource-test",
     };
 
     // Positive CI anti-vacuity assertions for m0 are declared in

@@ -1,6 +1,6 @@
 // async/await roadmap Phase C: IRQ-BACKED completion. A real M-mode TIMER interrupt — not a
 // cooperative task — completes an in-flight async request and wakes the parked waiter. This is
-// the production-readiness shape: a task awaits, sleeps in `wfi`, and a device/timer interrupt
+// the language/runtime validation shape: a task awaits, sleeps in `wfi`, and a device/timer interrupt
 // resumes it; no steady-state polling.
 //
 // The waiter submits a request, arms a single timer interrupt, and `async_await_irq` PARKS it

@@ -1,6 +1,6 @@
-// SOAK — a representative production workload run for MANY iterations in a SINGLE boot,
+// SOAK — a representative kernel validation workload run for MANY iterations in a SINGLE boot,
 // asserting the kernel's core lifecycle + accounting invariants return to baseline with no
-// leak and no counter-overflow trap (production-readiness §4.7 hardening polish, P6).
+// leak and no counter-overflow trap.
 //
 // Where the unit gates (proc-supervisor-test, ledger-test) each prove one primitive once, a soak
 // proves that thousands of repetitions of the FULL churn leave no residue: every spawned process

@@ -97,7 +97,7 @@ with *external* linkage, so two objects that each inline a shared non-export hel
 linkage for non-`export` functions (the analogue of the C backend's `static`) — MC inlines imports
 per-object, so per-object copies are correct. This also fixed the pre-existing `llvm-ipc-test`.
 
-## Phase C — IRQ-backed completion (DONE — production-readiness milestone)
+## Phase C — IRQ-backed completion (DONE — language/runtime validation milestone)
 
 A real interrupt completes the in-flight op and wakes the awaiting task — no steady-state polling.
 Both requirements that were absent in Phase B are now in place:

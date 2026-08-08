@@ -1,4 +1,4 @@
-// Persist-across-reboot proof (production-readiness §3.1 #3): write a sentinel to a virtio-blk
+// Persist-across-reboot language fixture: write a sentinel to a virtio-blk
 // disk on the FIRST boot, then a SECOND boot (fresh kernel + cleared RAM, SAME disk image) reads it
 // back — proving durable storage survives a real reboot, not just an in-RAM roundtrip.
 //

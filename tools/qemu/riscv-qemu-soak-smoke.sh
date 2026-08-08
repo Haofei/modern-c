@@ -15,7 +15,7 @@ for i in $(seq 1 "$ITERS"); do
         net-smode-rx-irq-test \
         qjs-smode-net-irq-tool-test \
         qjs-smode-blk-irq-tool-test \
-        visionfive2-readiness-test
+        visionfive2-resource-test
 done
 
 echo "PASS: riscv-qemu-soak-smoke — $ITERS repeated RISC-V QEMU/OpenSBI surrogate iterations completed"

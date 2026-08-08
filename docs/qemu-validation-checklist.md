@@ -22,7 +22,7 @@ Use this when VisionFive 2 hardware is unavailable.
 
 - The command exits 0.
 - CI/local logs do not contain `SKIP:` for the QEMU surrogate.
-- `visionfive2-readiness-test` and `llvm-visionfive2-readiness-test` pass when
+- `visionfive2-resource-test` and `llvm-visionfive2-resource-test` pass when
   board-profile or FDT/BootInfo code changes.
 
 QEMU evidence is a surrogate. It keeps the OpenSBI, FDT, interrupt, storage,

@@ -16,13 +16,13 @@ Current baseline:
   paths, resource governance, and many cross-architecture kernel gates are in
   place.
 - The project is still a prototype. Kernel work is kept as language/runtime
-  validation evidence, not as a product-readiness track.
+  validation evidence, not as a product track.
 
 ## Active priorities
 
 | Priority | Area | Current state | Next work |
 |---|---|---|---|
-| P0 | Kernel validation workload | StarFive VisionFive 2 metadata remains as a board-resource fixture (`kernel/platform/starfive_visionfive2/profile.mc`): OpenSBI S-mode plus FDT-described UART/interrupt/storage/network expectations. `visionfive2-readiness-test` / `llvm-visionfive2-readiness-test` validate the profile's FDT-resource adapter against QEMU, but this is language/backend evidence, not hardware release evidence. | Keep the QEMU surrogate green. Use real hardware only when it exposes language, ABI, driver, async, MMIO, syscall, or backend-lowering gaps. |
+| P0 | Kernel validation workload | StarFive VisionFive 2 metadata remains as a board-resource fixture (`kernel/platform/starfive_visionfive2/profile.mc`): OpenSBI S-mode plus FDT-described UART/interrupt/storage/network expectations. `visionfive2-resource-test` / `llvm-visionfive2-resource-test` validate the profile's FDT-resource fixture against QEMU, but this is language/backend evidence, not hardware release evidence. | Keep the QEMU surrogate green. Use real hardware only when it exposes language, ABI, driver, async, MMIO, syscall, or backend-lowering gaps. |
 | P0 | Interrupt-driven I/O | S-mode timer, single-shot PLIC delivery, re-armed PLIC multishot, context-aware PLIC helper reuse, reusable S-mode PLIC dispatch, registered S-mode async virtio-blk / virtio-net TX/RX IRQ completion gates, JS `host_net_fetch` completion from a S-mode virtio-net PLIC interrupt through `SYS_POLL`, and JS `host_fs_read` completion from a S-mode virtio-blk PLIC interrupt through `SYS_POLL` all pass on both backends. | Keep the promoted IRQ gates green as language/backend evidence. Add hardware runs only when they expose language, ABI, driver, async, MMIO, syscall, or backend-lowering gaps. |
 | P1 | Tool/agent ABI fixtures | Confined QuickJS fixtures, structured submit/poll, real FS broker ops, brokered network demos, JS `host_net_fetch`, quota/backpressure/cancel handling, e2e showcases, TCP-backed JS `host_net_fetch` over virtio-net, IRQ-backed S-mode JS storage/network completion through `SYS_POLL`, and a versioned `SYS_SUBMIT` / `SYS_POLL` ABI contract are gated. | Keep the ABI fixtures useful for compiler/runtime validation. Product runtime roadmap work is outside current scope. |
 | P1 | Cross-architecture backend gaps | C-backed x86/aarch64 paths are substantially gated. LLVM now has target-aware `va_list`/`va_arg` lowering, emits target triples/data layouts for non-RISC-V QuickJS/user-libc objects, and the non-RISC-V LLVM QuickJS sync/async gates are in `m0`. | Keep the promoted gates green; add cross-architecture depth only when it validates compiler, ABI, runtime, or backend behavior. |
@@ -42,7 +42,7 @@ platform plan, and `future-kernel-plan.md`.
 
 ## Kernel validation boundary
 
-There is no kernel production checklist in the current repository scope. Kernel
+There is no kernel product checklist in the current repository scope. Kernel
 work remains useful when it validates language, MIR, ownership, backend, ABI,
 unsafe-boundary, freestanding, or driver behavior. Product operations, release
 images, hardware soak, fleet observability, update policy, and broad hardware

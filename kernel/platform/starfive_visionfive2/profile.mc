@@ -79,6 +79,6 @@ pub fn selected_riscv_profile() -> RiscvBoardProfile {
     };
 }
 
-pub fn selected_riscv_profile_ready_for_static_resources() -> bool {
+pub fn selected_riscv_profile_has_static_resources() -> bool {
     return false;
 }
