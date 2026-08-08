@@ -248,7 +248,9 @@ def main() -> int:
         require_contains("src/mir_tests.zig", needle)
 
     for path, needle in (
-        ("src/mir.zig", "fn autoDropClosesStorage"),
+        ("src/mir_model.zig", "pub const AutoDropCleanupPlanEntry"),
+        ("src/mir.zig", "pub fn appendAutoDropCleanupPlan"),
+        ("src/mir.zig", "fn autoDropClosingStorageDeadIndex"),
         ("src/mir.zig", "fn ownershipEventCanReachBlock"),
         ("src/mir.zig", "pub fn sourcePointFromSpan"),
         ("src/mir.zig", "fn typeOwnershipSymbolForTypeName"),

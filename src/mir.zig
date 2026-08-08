@@ -179,6 +179,7 @@ pub const OwnershipLoanKind = mir_model.OwnershipLoanKind;
 pub const OwnershipPlaceProjection = mir_model.OwnershipPlaceProjection;
 pub const OwnershipPlace = mir_model.OwnershipPlace;
 pub const OwnershipEvent = mir_model.OwnershipEvent;
+pub const AutoDropCleanupPlanEntry = mir_model.AutoDropCleanupPlanEntry;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
@@ -1580,6 +1581,33 @@ pub fn validateOwnershipEventsForLowering(module: Module) error{InvalidMirOwners
     }
 }
 
+pub fn appendAutoDropCleanupPlan(
+    allocator: std.mem.Allocator,
+    module: Module,
+    function: Function,
+    out: *std.ArrayList(AutoDropCleanupPlanEntry),
+) error{ InvalidMirOwnershipEvents, OutOfMemory }!void {
+    for (function.ownership_events) |event| {
+        if (!ownershipEventValid(module, function, event)) return error.InvalidMirOwnershipEvents;
+    }
+    if (!ownershipEventSequenceValid(function)) return error.InvalidMirOwnershipEvents;
+
+    for (function.ownership_events, 0..) |event, index| {
+        if (event.kind != .auto_drop) continue;
+        const root = simpleOwnershipRootValue(event.place) orelse return error.InvalidMirOwnershipEvents;
+        const storage_dead_index = autoDropClosingStorageDeadIndex(function, index, root) orelse return error.InvalidMirOwnershipEvents;
+        try out.append(allocator, .{
+            .auto_drop_event_index = index,
+            .storage_dead_event_index = storage_dead_index,
+            .place = event.place,
+            .generation = event.generation,
+            .drop_glue_symbol_id = event.drop_glue_symbol_id,
+            .block_id = event.block_id,
+            .source = event.source,
+        });
+    }
+}
+
 fn verifyFunctionOwnershipEvents(module: Module, function: Function, reporter: *diagnostics.Reporter) void {
     for (function.ownership_events) |event| {
         if (ownershipEventValid(module, function, event)) continue;
@@ -1656,7 +1684,7 @@ fn ownershipEventSequenceValid(function: Function) bool {
             },
             .move_out, .forget, .explicit_drop, .auto_drop => {
                 if (state != .live) return false;
-                if (event.kind == .auto_drop and !autoDropClosesStorage(function, index, root)) return false;
+                if (event.kind == .auto_drop and autoDropClosingStorageDeadIndex(function, index, root) == null) return false;
             },
             .borrow_begin, .set_drop_flag => {
                 if (state != .live) return false;
@@ -1671,13 +1699,14 @@ fn ownershipEventSequenceValid(function: Function) bool {
     return true;
 }
 
-fn autoDropClosesStorage(function: Function, event_index: usize, root: ValueId) bool {
-    for (function.ownership_events[event_index + 1 ..]) |event| {
+fn autoDropClosingStorageDeadIndex(function: Function, event_index: usize, root: ValueId) ?usize {
+    for (function.ownership_events[event_index + 1 ..], event_index + 1..) |event, index| {
         const event_root = simpleOwnershipRootValue(event.place) orelse continue;
         if (!event_root.eql(root)) continue;
-        return event.kind == .storage_dead;
+        if (event.kind != .storage_dead) return null;
+        return index;
     }
-    return false;
+    return null;
 }
 
 fn typedOwnershipRootsClosed(function: Function) bool {
