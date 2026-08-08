@@ -18,9 +18,9 @@ pub fn autoDropEligibleTypeNameForDropGlue(module: *const mir.Module, type_name:
     return false;
 }
 
-pub const AutoDropLocalRegistrationDecision = enum {
+pub const AutoDropLocalRegistrationDecision = union(enum) {
     reject,
-    emit_auto_drop_cleanup,
+    emit_auto_drop_cleanup: []const u8,
     skip_cleanup_registration,
 };
 
@@ -29,19 +29,20 @@ pub fn autoDropLocalRegistrationDecision(
     function: *const mir.Function,
     local_name: []const u8,
     type_name: []const u8,
-    drop_fn: []const u8,
 ) AutoDropLocalRegistrationDecision {
     const root_value_id = valueIdForLocal(function, local_name) orelse return .reject;
-    const drop_glue = dropGlueFactFor(module, type_name, drop_fn) orelse return .reject;
+    const ownership = typeOwnershipFactFor(module, type_name) orelse return .reject;
+    if (ownership.kind != .affine or !ownership.drop_glue_symbol_id.isValid()) return .reject;
+    const drop_glue = dropGlueFactForSymbols(module, ownership.typed_type_symbol_id, ownership.drop_glue_symbol_id) orelse return .reject;
 
     var saw_consuming_event = false;
     for (function.ownership_events) |event| {
         if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
-        if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
+        if (!event.place.root_type_symbol_id.eql(ownership.typed_type_symbol_id)) continue;
         switch (event.kind) {
             .auto_drop => {
-                if (!event.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) continue;
-                return .emit_auto_drop_cleanup;
+                if (!event.drop_glue_symbol_id.eql(ownership.drop_glue_symbol_id)) continue;
+                return .{ .emit_auto_drop_cleanup = drop_glue.release_fn };
             },
             .move_out, .explicit_drop => saw_consuming_event = true,
             else => {},
@@ -114,6 +115,22 @@ fn dropGlueFactFor(module: *const mir.Module, type_name: []const u8, drop_fn: []
     for (module.drop_glue_facts) |fact| {
         if (!std.mem.eql(u8, fact.resource_type, type_name)) continue;
         if (!std.mem.eql(u8, fact.release_fn, drop_fn)) continue;
+        return fact;
+    }
+    return null;
+}
+
+fn typeOwnershipFactFor(module: *const mir.Module, type_name: []const u8) ?mir.TypeOwnershipFact {
+    for (module.type_ownership_facts) |fact| {
+        if (std.mem.eql(u8, fact.type_name, type_name)) return fact;
+    }
+    return null;
+}
+
+fn dropGlueFactForSymbols(module: *const mir.Module, resource_symbol_id: mir.SymbolId, release_symbol_id: mir.SymbolId) ?mir.DropGlueFact {
+    for (module.drop_glue_facts) |fact| {
+        if (!fact.typed_resource_symbol_id.eql(resource_symbol_id)) continue;
+        if (!fact.typed_release_symbol_id.eql(release_symbol_id)) continue;
         return fact;
     }
     return null;

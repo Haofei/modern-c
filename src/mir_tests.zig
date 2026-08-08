@@ -4326,6 +4326,10 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     try std.testing.expect(use_guard.ownership_events[2].drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
     try std.testing.expectEqual(mir.OwnershipEventKind.storage_dead, use_guard.ownership_events[3].kind);
     try std.testing.expect(use_guard.ownership_events[3].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
+    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, use_guard, "g", "Guard")) {
+        .emit_auto_drop_cleanup => |release_fn| try std.testing.expectEqualStrings("close_guard", release_fn),
+        else => return error.TestUnexpectedResult,
+    }
     const generated_events = use_guard.ownership_events;
     const events = try std.testing.allocator.alloc(mir.OwnershipEvent, 1);
     events[0] = .{
@@ -4557,10 +4561,10 @@ test "MIR ownership authority does not let forget authorize auto-drop registrati
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.forget, function.ownership_events[2].kind);
     try mir.validateLoweringAdmission(module_mir);
-    try std.testing.expectEqual(
-        mir_ownership_authority.AutoDropLocalRegistrationDecision.reject,
-        mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard", "close_guard"),
-    );
+    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard")) {
+        .reject => {},
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "MIR records explicit drop glue call ownership events" {
@@ -4673,10 +4677,10 @@ test "MIR ownership authority skips cleanup registration for move-out" {
     const function = functionByName(module_mir, "return_guard") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.move_out, function.ownership_events[2].kind);
-    try std.testing.expectEqual(
-        mir_ownership_authority.AutoDropLocalRegistrationDecision.skip_cleanup_registration,
-        mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard", "close_guard"),
-    );
+    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard")) {
+        .skip_cleanup_registration => {},
+        else => return error.TestUnexpectedResult,
+    }
 }
 
 test "MIR cleanup producer ignores move-out events that cannot reach fallthrough cleanup" {

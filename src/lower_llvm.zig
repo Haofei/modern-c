@@ -2902,13 +2902,13 @@ const LlvmEmitter = struct {
 
     fn registerAutoDropLocal(self: *LlvmEmitter, name: ast.Ident, ty: ast.TypeExpr) !void {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
-        const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
+        if (!mir_ownership_authority.autoDropEligibleTypeName(&self.mir_module, type_name)) return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&self.mir_module, function, name.text, type_name, drop_fn)) {
-            .emit_auto_drop_cleanup => {},
+        const drop_fn = switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&self.mir_module, function, name.text, type_name)) {
+            .emit_auto_drop_cleanup => |release_fn| release_fn,
             .skip_cleanup_registration => return,
             .reject => return error.UnsupportedLlvmEmission,
-        }
+        };
         try self.defer_stack.append(self.allocator, .{ .auto_drop = .{
             .fn_name = drop_fn,
             .local_name = name.text,
