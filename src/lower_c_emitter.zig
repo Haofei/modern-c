@@ -3427,6 +3427,10 @@ pub const CEmitter = struct {
             .reject => return error.UnsupportedCEmission,
         }
         if (!mir.hasDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span))) return error.UnsupportedCEmission;
+        if (try self.ordinaryDeferDirectCallCleanup(function, expr, stmt_span)) |cleanup| {
+            try self.defer_stack.append(self.allocator, .{ .direct_call = cleanup });
+            return;
+        }
         self.defer_stack.append(self.allocator, .{ .expr = expr }) catch return error.OutOfMemory;
     }
 
@@ -3520,6 +3524,10 @@ pub const CEmitter = struct {
                     else => try self.emitDeferredExpressionCleanup(expr, locals, return_ty),
                 }
             },
+            .direct_call => |entry| {
+                try self.writeLineDirective(entry.span);
+                try self.emitOrdinaryDeferDirectCallCleanup(entry);
+            },
             .auto_drop => |entry| {
                 try self.writeLineDirective(entry.span);
                 try self.emitAutoDropPointerCleanup(entry);
@@ -3547,6 +3555,25 @@ pub const CEmitter = struct {
         try self.writeIndent();
         try self.emitExpr(expr, locals);
         try self.out.appendSlice(self.allocator, ";\n");
+    }
+
+    fn ordinaryDeferDirectCallCleanup(self: *CEmitter, function: *const mir.Function, expr: ast.Expr, stmt_span: ast.Span) error{UnsupportedCEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
+        const call = callExpr(expr) orelse return null;
+        if (call.type_args.len != 0 or call.args.len != 0) return null;
+        const fn_name = calleeIdentName(call.callee.*) orelse return null;
+        const info = self.functions.get(fn_name) orelse return null;
+        if (info.params.len != 0 or info.is_variadic) return null;
+        if (info.return_type) |ret| {
+            const ret_name = typeName(ret) orelse return null;
+            if (!std.mem.eql(u8, ret_name, "void")) return null;
+        }
+        if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), fn_name)) return error.UnsupportedCEmission;
+        return .{ .fn_name = fn_name, .span = expr.span };
+    }
+
+    fn emitOrdinaryDeferDirectCallCleanup(self: *CEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup) !void {
+        try self.writeIndent();
+        try self.out.print(self.allocator, "{s}();\n", .{cleanup.fn_name});
     }
 
     fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {

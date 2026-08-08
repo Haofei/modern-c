@@ -1839,6 +1839,10 @@ const LlvmEmitter = struct {
                 switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(self.allocator, &self.mir_module, function, expr)) {
                     .ignore => {
                         if (!mir.hasDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt.span))) return error.UnsupportedLlvmEmission;
+                        if (try self.ordinaryDeferDirectCallCleanup(function, expr, stmt.span)) |cleanup| {
+                            try self.defer_stack.append(self.allocator, .{ .direct_call = cleanup });
+                            return false;
+                        }
                         try self.defer_stack.append(self.allocator, .{ .expr = expr });
                     },
                     .emit_explicit_drop_cleanup => |cleanup| try self.defer_stack.append(self.allocator, .{ .explicit_drop = cleanup }),
@@ -1971,9 +1975,25 @@ const LlvmEmitter = struct {
                     try self.emitExprStatement(expr);
                 },
             },
+            .direct_call => |entry| try self.emitOrdinaryDeferDirectCallCleanup(entry),
             .auto_drop => |entry| try self.emitAutoDropPointerCleanup(entry),
             .explicit_drop => |entry| try self.emitExplicitDropPointerCleanup(entry),
         }
+    }
+
+    fn ordinaryDeferDirectCallCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast.Expr, stmt_span: ast.Span) error{UnsupportedLlvmEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
+        const call = ast_query.callExpr(expr) orelse return null;
+        if (call.type_args.len != 0 or call.args.len != 0) return null;
+        const fn_name = calleeIdentName(call.callee.*) orelse return null;
+        const sig = self.fn_sigs.get(fn_name) orelse return null;
+        if (sig.params.len != 0 or sig.is_variadic) return null;
+        if (!typeNameEql(sig.ret, "void")) return null;
+        if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), fn_name)) return error.UnsupportedLlvmEmission;
+        return .{ .fn_name = fn_name, .span = expr.span };
+    }
+
+    fn emitOrdinaryDeferDirectCallCleanup(self: *LlvmEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup) !void {
+        try self.out.print(self.allocator, "  call void @{s}(){s}\n", .{ cleanup.fn_name, try self.debugCallSuffix() });
     }
 
     fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {

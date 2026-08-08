@@ -174,6 +174,21 @@ pub fn hasDeferCleanupAtSource(function: Function, source: SourcePoint) bool {
     return false;
 }
 
+pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, fn_name: []const u8) bool {
+    if (!hasDeferCleanupAtSource(function, defer_source)) return false;
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .call) continue;
+            if (!std.mem.eql(u8, instruction.detail, fn_name)) continue;
+            if (instruction.result_ty != .void) continue;
+            if (instruction.line != call_source.line or instruction.column != call_source.column) continue;
+            if (instruction.source_offset == 0 and instruction.source_len == 0 and call_source.offset == 0 and call_source.len == 0) return true;
+            if (instruction.source_offset == call_source.offset and instruction.source_len == call_source.len) return true;
+        }
+    }
+    return false;
+}
+
 pub const PointerProvenance = mir_model.PointerProvenance;
 pub const PointerProvenanceFact = mir_model.PointerProvenanceFact;
 pub const ConstGetFact = mir_model.ConstGetFact;
