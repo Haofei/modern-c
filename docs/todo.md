@@ -37,8 +37,8 @@ Current baseline:
 ## Historical work folded into this roadmap
 
 Completed campaign notes and experiment drafts live in git history, not as live
-documentation. Their current takeaways are folded into this roadmap, the
-platform plan, and `future-kernel-plan.md`.
+documentation. Their current takeaways are folded into this roadmap and the
+platform plan.
 
 ## Kernel validation boundary
 
