@@ -8,8 +8,9 @@ const mir_ownership_authority = @import("mir_ownership_authority.zig");
 ///
 /// Ordinary `defer` expressions are still emitted from backend-local lexical
 /// stacks while cleanup edges migrate into MIR. Direct-call cleanup shapes carry
-/// a typed MIR-admitted payload, and deferred blocks are separated from raw
-/// expression fallbacks so the remaining untyped surface stays explicit.
+/// a typed MIR-admitted payload, and deferred blocks are kept structured. Other
+/// expression cleanups must be admitted as typed direct-call/call-target payloads
+/// before either backend will lower them.
 /// Auto-drop payloads remain produced by MIR ownership authority; this module
 /// only owns the temporary stack mechanics shared by C and LLVM.
 pub const OrdinaryDeferCallCleanup = struct {
@@ -30,7 +31,7 @@ pub const CallTargetDeferCleanup = struct {
 };
 
 pub const DeferredCleanup = union(enum) {
-    raw_expr: ast.Expr,
+    call_free_expr: ast.Expr,
     block: ast.Block,
     direct_call: OrdinaryDeferCallCleanup,
     call_target: CallTargetDeferCleanup,
@@ -50,10 +51,46 @@ pub fn removeAutoDropCleanup(stack: *std.ArrayList(DeferredCleanup), key: mir_ow
                 _ = stack.orderedRemove(index);
                 return;
             },
-            .raw_expr, .block, .direct_call, .call_target => continue,
+            .call_free_expr, .block, .direct_call, .call_target => continue,
             .explicit_drop => continue,
         }
     }
+}
+
+pub fn ordinaryDeferCallFreeExprSupported(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .ident,
+        .int_literal,
+        .float_literal,
+        .bool_literal,
+        .char_literal,
+        .string_literal,
+        .void_literal,
+        .null_literal,
+        .uninit_literal,
+        .enum_literal,
+        => true,
+        .grouped, .address_of, .deref, .move_expr => |inner| ordinaryDeferCallFreeExprSupported(inner.*),
+        .borrow_expr => |node| ordinaryDeferCallFreeExprSupported(node.value.*),
+        .unary => |node| ordinaryDeferCallFreeExprSupported(node.expr.*),
+        .binary => |node| ordinaryDeferCallFreeExprSupported(node.left.*) and ordinaryDeferCallFreeExprSupported(node.right.*),
+        .cast => |node| ordinaryDeferCallFreeExprSupported(node.value.*),
+        .member => |node| ordinaryDeferCallFreeExprSupported(node.base.*),
+        .index => |node| ordinaryDeferCallFreeExprSupported(node.base.*) and ordinaryDeferCallFreeExprSupported(node.index.*),
+        .slice => |node| ordinaryDeferCallFreeExprSupported(node.base.*) and ordinaryDeferCallFreeExprSupported(node.start.*) and ordinaryDeferCallFreeExprSupported(node.end.*),
+        .array_literal => |items| for (items) |item| {
+            if (!ordinaryDeferCallFreeExprSupported(item)) break false;
+        } else true,
+        .struct_literal => |fields| for (fields) |field| {
+            if (!ordinaryDeferCallFreeExprSupported(field.value)) break false;
+        } else true,
+        .call,
+        .block,
+        .try_expr,
+        .await_expr,
+        .unreachable_expr,
+        => false,
+    };
 }
 
 fn autoDropCleanupMatchesKey(
@@ -84,6 +121,6 @@ test "auto-drop cleanup stack removal uses typed local identity" {
     try std.testing.expectEqual(@as(usize, 1), stack.items.len);
     switch (stack.items[0]) {
         .auto_drop => |cleanup| try std.testing.expectEqualStrings("close_shadow", cleanup.fn_name),
-        .raw_expr, .block, .direct_call, .call_target, .explicit_drop => return error.TestUnexpectedResult,
+        .call_free_expr, .block, .direct_call, .call_target, .explicit_drop => return error.TestUnexpectedResult,
     }
 }

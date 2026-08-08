@@ -3437,7 +3437,10 @@ pub const CEmitter = struct {
         }
         switch (expr.kind) {
             .block => |block| try self.defer_stack.append(self.allocator, .{ .block = block }),
-            else => try self.defer_stack.append(self.allocator, .{ .raw_expr = expr }),
+            else => {
+                if (!backend_cleanup.ordinaryDeferCallFreeExprSupported(expr)) return error.UnsupportedCEmission;
+                try self.defer_stack.append(self.allocator, .{ .call_free_expr = expr });
+            },
         }
     }
 
@@ -3524,9 +3527,11 @@ pub const CEmitter = struct {
 
     fn emitDeferredCleanup(self: *CEmitter, cleanup: DeferredCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         switch (cleanup) {
-            .raw_expr => |expr| {
+            .call_free_expr => |expr| {
                 try self.writeLineDirective(expr.span);
-                try self.emitDeferredExpressionCleanup(expr, locals, return_ty);
+                try self.writeIndent();
+                try self.emitExpr(expr, locals);
+                try self.out.appendSlice(self.allocator, ";\n");
             },
             .block => |block| {
                 try self.writeLineDirective(block.span);
@@ -3549,24 +3554,6 @@ pub const CEmitter = struct {
                 try self.emitExplicitDropPointerCleanup(entry);
             },
         }
-    }
-
-    fn emitDeferredExpressionCleanup(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        if (try self.emitNeverExprStmt(expr, locals)) return;
-        if (try lower_c_mmio.emitWriteStmt(self.mmioEmitContext(), expr, locals)) return;
-        if (try self.emitRawStoreStmt(expr, locals)) return;
-        if (try self.emitCpuPauseStmt(expr)) return;
-        if (try self.emitFenceStmt(expr)) return;
-        if (try lower_c_try.emitResultTryExprStmt(self.tryStmtEmitContext(), expr, locals, return_ty)) return;
-        if (try lower_c_try.emitNullableTryExprStmt(self.tryStmtEmitContext(), expr, locals)) return;
-        if (try lower_c_mmio.emitReadExprStmt(self.mmioCallEmitContext(), expr, locals)) return;
-        if (try lower_c_call.emitSequencedCallExprStmt(self.sequencedArgContext(), &self.functions, expr, locals)) {
-            self.applyMirPointerProvenanceInvalidationsAtCall(expr.span, locals);
-            return;
-        }
-        try self.writeIndent();
-        try self.emitExpr(expr, locals);
-        try self.out.appendSlice(self.allocator, ";\n");
     }
 
     fn ordinaryDeferDirectCallCleanup(self: *CEmitter, function: *const mir.Function, expr: ast.Expr, stmt_span: ast.Span) error{UnsupportedCEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {

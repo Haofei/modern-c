@@ -1716,6 +1716,26 @@ test "LLVM ordinary defer requires source-matched MIR cleanup marker" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_ordinary_defer_requires_marker.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM ordinary defer rejects unsupported expression fallback" {
+    const source =
+        \\fn id(value: u32) -> u32 { return value; }
+        \\fn ordinary_defer_expression_fallback(x: u32) -> void {
+        \\    defer x + id(x);
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_ordinary_defer_expression_fallback.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_ordinary_defer_expression_fallback.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM ordinary direct defer requires MIR call marker" {
     const source =
         \\extern fn close_a() -> void;
