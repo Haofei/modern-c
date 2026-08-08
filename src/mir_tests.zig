@@ -4335,6 +4335,13 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     try std.testing.expect(cleanup_plan.items[0].place.root_value_id.eql(use_guard.ownership_events[2].place.root_value_id));
     try std.testing.expect(cleanup_plan.items[0].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
     try std.testing.expect(cleanup_plan.items[0].drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
+    var unified_cleanup_plan: std.ArrayList(mir.CleanupActionPlanEntry) = .empty;
+    defer unified_cleanup_plan.deinit(std.testing.allocator);
+    try mir.appendOwnershipCleanupPlan(std.testing.allocator, module_mir, use_guard.*, &unified_cleanup_plan);
+    try std.testing.expectEqual(@as(usize, 1), unified_cleanup_plan.items.len);
+    try std.testing.expectEqual(mir.CleanupActionKind.auto_drop, unified_cleanup_plan.items[0].kind);
+    try std.testing.expectEqual(cleanup_plan.items[0].auto_drop_event_index, unified_cleanup_plan.items[0].primary_event_index);
+    try std.testing.expectEqual(cleanup_plan.items[0].storage_dead_event_index, unified_cleanup_plan.items[0].storage_dead_event_index);
     const g_identity = valueIdentityBySpelling(use_guard.*, "g") orelse return error.TestUnexpectedResult;
     const local_span = ast.Span{ .offset = 1, .len = 1, .line = 1, .column = 2 };
     switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, use_guard, "g", "Guard", local_span)) {
@@ -4629,6 +4636,15 @@ test "MIR records explicit drop glue call ownership events" {
     try std.testing.expectEqual(@as(usize, 4), explicit_drop_plan.items[0].explicit_drop_event_index);
     try std.testing.expect(explicit_drop_plan.items[0].place.root_type_symbol_id.eql(function.ownership_events[4].place.root_type_symbol_id));
     try std.testing.expect(explicit_drop_plan.items[0].drop_glue_symbol_id.eql(function.ownership_events[4].drop_glue_symbol_id));
+    var unified_cleanup_plan: std.ArrayList(mir.CleanupActionPlanEntry) = .empty;
+    defer unified_cleanup_plan.deinit(std.testing.allocator);
+    try mir.appendOwnershipCleanupPlan(std.testing.allocator, module_mir, function, &unified_cleanup_plan);
+    try std.testing.expectEqual(@as(usize, 2), unified_cleanup_plan.items.len);
+    try std.testing.expectEqual(mir.CleanupActionKind.explicit_drop, unified_cleanup_plan.items[0].kind);
+    try std.testing.expectEqual(@as(usize, 4), unified_cleanup_plan.items[0].primary_event_index);
+    try std.testing.expectEqual(mir.CleanupActionKind.auto_drop, unified_cleanup_plan.items[1].kind);
+    try std.testing.expectEqual(@as(usize, 5), unified_cleanup_plan.items[1].primary_event_index);
+    try std.testing.expectEqual(@as(usize, 6), unified_cleanup_plan.items[1].storage_dead_event_index);
     const release_decl = for (parsed.module.decls) |decl| {
         if (decl.kind != .fn_decl) continue;
         if (!std.mem.eql(u8, decl.kind.fn_decl.name.text, "release_one")) continue;

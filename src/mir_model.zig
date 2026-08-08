@@ -579,6 +579,22 @@ pub const ExplicitDropCleanupPlanEntry = struct {
     source: SourcePoint,
 };
 
+pub const CleanupActionKind = enum {
+    auto_drop,
+    explicit_drop,
+};
+
+pub const CleanupActionPlanEntry = struct {
+    kind: CleanupActionKind,
+    primary_event_index: usize,
+    storage_dead_event_index: usize = std.math.maxInt(usize),
+    place: OwnershipPlace,
+    generation: u32 = 0,
+    drop_glue_symbol_id: SymbolId,
+    block_id: BlockId,
+    source: SourcePoint,
+};
+
 pub const PointerProvenance = enum {
     global_storage,
     local_storage,
