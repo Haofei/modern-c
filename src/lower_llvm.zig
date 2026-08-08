@@ -1982,11 +1982,11 @@ const LlvmEmitter = struct {
 
     fn emitDeferredCleanupsFrom(self: *LlvmEmitter, start: usize, ret_ty: ast.TypeExpr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!backend_cleanup.deferCleanupEmissionRangeValid(function.*, self.defer_stack.items, start)) return error.UnsupportedLlvmEmission;
-        var index = self.defer_stack.items.len;
-        while (index > start) {
-            index -= 1;
-            try self.emitDeferredCleanup(self.defer_stack.items[index], ret_ty);
+        const count = backend_cleanup.deferCleanupEmissionCount(self.defer_stack.items, start) orelse return error.UnsupportedLlvmEmission;
+        var emission_index: usize = 0;
+        while (emission_index < count) : (emission_index += 1) {
+            const cleanup = backend_cleanup.deferCleanupAtEmissionIndex(function.*, self.defer_stack.items, start, emission_index) orelse return error.UnsupportedLlvmEmission;
+            try self.emitDeferredCleanup(cleanup, ret_ty);
         }
     }
 

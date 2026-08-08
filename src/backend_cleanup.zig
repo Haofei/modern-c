@@ -77,6 +77,23 @@ pub fn deferCleanupEmissionRangeValid(function: mir.Function, stack: []const Def
     return true;
 }
 
+pub fn deferCleanupEmissionCount(stack: []const DeferredCleanup, start: usize) ?usize {
+    if (start > stack.len) return null;
+    return stack.len - start;
+}
+
+pub fn deferCleanupAtEmissionIndex(
+    function: mir.Function,
+    stack: []const DeferredCleanup,
+    start: usize,
+    emission_index: usize,
+) ?DeferredCleanup {
+    const count = deferCleanupEmissionCount(stack, start) orelse return null;
+    if (emission_index >= count) return null;
+    if (!deferCleanupEmissionRangeValid(function, stack, start)) return null;
+    return stack[stack.len - 1 - emission_index];
+}
+
 fn sameDeferCleanupRef(a: mir.DeferCleanupRef, b: mir.DeferCleanupRef) bool {
     return a.block_id.eql(b.block_id) and a.instruction_index == b.instruction_index;
 }
@@ -197,4 +214,15 @@ test "defer cleanup stack refs must be valid ordered and unique" {
         .{ .block = .{ .defer_ref = first, .block = block } },
         .{ .block = .{ .defer_ref = first, .block = block } },
     }));
+
+    const stack = [_]DeferredCleanup{
+        .{ .block = .{ .defer_ref = first, .block = block } },
+        .{ .block = .{ .defer_ref = second, .block = block } },
+    };
+    try std.testing.expectEqual(@as(?usize, 2), deferCleanupEmissionCount(stack[0..], 0));
+    const first_emit = deferCleanupAtEmissionIndex(function, stack[0..], 0, 0) orelse return error.TestUnexpectedResult;
+    const second_emit = deferCleanupAtEmissionIndex(function, stack[0..], 0, 1) orelse return error.TestUnexpectedResult;
+    try std.testing.expect((deferCleanupRef(first_emit) orelse return error.TestUnexpectedResult).instruction_index == 1);
+    try std.testing.expect((deferCleanupRef(second_emit) orelse return error.TestUnexpectedResult).instruction_index == 0);
+    try std.testing.expect(deferCleanupAtEmissionIndex(function, stack[0..], 0, 2) == null);
 }

@@ -3530,11 +3530,11 @@ pub const CEmitter = struct {
     // the active defers intact.
     fn emitDeferredCleanupsFrom(self: *CEmitter, start: usize, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!backend_cleanup.deferCleanupEmissionRangeValid(function.*, self.defer_stack.items, start)) return error.UnsupportedCEmission;
-        var index = self.defer_stack.items.len;
-        while (index > start) {
-            index -= 1;
-            try self.emitDeferredCleanup(self.defer_stack.items[index], locals, return_ty);
+        const count = backend_cleanup.deferCleanupEmissionCount(self.defer_stack.items, start) orelse return error.UnsupportedCEmission;
+        var emission_index: usize = 0;
+        while (emission_index < count) : (emission_index += 1) {
+            const cleanup = backend_cleanup.deferCleanupAtEmissionIndex(function.*, self.defer_stack.items, start, emission_index) orelse return error.UnsupportedCEmission;
+            try self.emitDeferredCleanup(cleanup, locals, return_ty);
         }
     }
 

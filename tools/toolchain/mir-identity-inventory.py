@@ -322,6 +322,8 @@ def main() -> int:
         ("src/backend_cleanup.zig", "defer_ref: mir.DeferCleanupRef"),
         ("src/backend_cleanup.zig", "pub fn deferCleanupStackRefsValid"),
         ("src/backend_cleanup.zig", "pub fn deferCleanupEmissionRangeValid"),
+        ("src/backend_cleanup.zig", "pub fn deferCleanupEmissionCount"),
+        ("src/backend_cleanup.zig", "pub fn deferCleanupAtEmissionIndex"),
         ("src/backend_cleanup.zig", "fn deferCleanupRefAfter"),
         ("src/backend_cleanup.zig", "callee: ast.Expr"),
         ("src/backend_cleanup.zig", "callee_span: ast.Span"),
