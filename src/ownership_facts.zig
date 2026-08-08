@@ -3,11 +3,6 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 
-pub const AutoDropCleanup = struct {
-    fn_name: []const u8,
-    local_name: []const u8,
-};
-
 pub const AutoDropLocalCleanup = struct {
     fn_name: []const u8,
     local_name: []const u8,
@@ -19,27 +14,8 @@ pub const DeferredCleanup = union(enum) {
     auto_drop: AutoDropLocalCleanup,
 };
 
-/// Find the most recent auto-drop cleanup for a local in a transitional backend
-/// cleanup stack. Cleanup edges still need to migrate to MIR, but the stack
-/// search policy must not drift between C and LLVM while that migration is open.
-pub fn autoDropCleanupForLocalName(items: []const DeferredCleanup, local_name: []const u8) ?AutoDropLocalCleanup {
-    var index = items.len;
-    while (index > 0) {
-        index -= 1;
-        switch (items[index]) {
-            .auto_drop => |cleanup| {
-                if (std.mem.eql(u8, cleanup.local_name, local_name)) return cleanup;
-            },
-            .expr => continue,
-        }
-    }
-    return null;
-}
-
 /// Remove the most recent auto-drop cleanup for a local from a backend cleanup
-/// stack. This intentionally matches `autoDropCleanupForLocalName`'s reverse
-/// search order so transfer/release cancellation consumes the same obligation
-/// that authorization inspected.
+/// stack.
 pub fn removeAutoDropCleanupForLocalName(stack: *std.ArrayList(DeferredCleanup), local_name: []const u8) void {
     var index = stack.items.len;
     while (index > 0) {
@@ -110,7 +86,7 @@ pub fn dropGlueDeclMatches(
     return autoDropEligibleTypeName(declared_resource, structs, aliases);
 }
 
-pub fn autoDropPointerCleanup(expr: ast.Expr, auto_drop_fns_by_type: *const std.StringHashMap([]const u8)) ?AutoDropCleanup {
+pub fn autoDropPointerCleanup(expr: ast.Expr, auto_drop_fns_by_type: *const std.StringHashMap([]const u8)) ?AutoDropLocalCleanup {
     const call = switch (expr.kind) {
         .call => |node| node,
         else => return null,
@@ -119,7 +95,7 @@ pub fn autoDropPointerCleanup(expr: ast.Expr, auto_drop_fns_by_type: *const std.
     if (!autoDropReleaseFunctionName(fn_name, auto_drop_fns_by_type)) return null;
     if (call.args.len != 1) return null;
     const local_name = addressOfIdentName(call.args[0]) orelse return null;
-    return .{ .fn_name = fn_name, .local_name = local_name };
+    return .{ .fn_name = fn_name, .local_name = local_name, .span = expr.span };
 }
 
 /// Transitional backend cleanup cancellation accepts only direct local moves.
@@ -299,7 +275,7 @@ test "direct moved local name recognizes only grouped identifiers" {
     try std.testing.expect(directMovedLocalName(deref_expr) == null);
 }
 
-test "auto-drop cleanup stack helpers use the latest matching local" {
+test "auto-drop cleanup stack removal uses the latest matching local" {
     const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
     var stack: std.ArrayList(DeferredCleanup) = .empty;
     defer stack.deinit(std.testing.allocator);
@@ -308,13 +284,12 @@ test "auto-drop cleanup stack helpers use the latest matching local" {
     try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_h", .local_name = "h", .span = span } });
     try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_new", .local_name = "g", .span = span } });
 
-    const cleanup = autoDropCleanupForLocalName(stack.items, "g") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("close_new", cleanup.fn_name);
-
     removeAutoDropCleanupForLocalName(&stack, "g");
     try std.testing.expectEqual(@as(usize, 2), stack.items.len);
-    const remaining = autoDropCleanupForLocalName(stack.items, "g") orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("close_old", remaining.fn_name);
+    switch (stack.items[0]) {
+        .auto_drop => |cleanup| try std.testing.expectEqualStrings("close_old", cleanup.fn_name),
+        .expr => return error.TestUnexpectedResult,
+    }
 }
 
 test "auto-drop cleanup helpers recognize explicit release call shapes" {
