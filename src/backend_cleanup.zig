@@ -148,6 +148,34 @@ pub fn registerDeferredExplicitDropCleanup(
     return .applied;
 }
 
+pub fn registerOrdinaryDirectDeferCleanup(
+    allocator: std.mem.Allocator,
+    function: *const mir.Function,
+    stack: *std.ArrayList(DeferredCleanup),
+    cleanup: OrdinaryDeferCallCleanup,
+) error{OutOfMemory}!AutoDropStackDecision {
+    return appendValidatedCleanup(allocator, function, stack, .{ .direct_call = cleanup });
+}
+
+pub fn registerOrdinaryCallTargetDeferCleanup(
+    allocator: std.mem.Allocator,
+    function: *const mir.Function,
+    stack: *std.ArrayList(DeferredCleanup),
+    cleanup: CallTargetDeferCleanup,
+) error{OutOfMemory}!AutoDropStackDecision {
+    return appendValidatedCleanup(allocator, function, stack, .{ .call_target = cleanup });
+}
+
+pub fn registerOrdinaryBlockDeferCleanup(
+    allocator: std.mem.Allocator,
+    function: *const mir.Function,
+    stack: *std.ArrayList(DeferredCleanup),
+    defer_ref: mir.DeferCleanupRef,
+    block: ast.Block,
+) error{OutOfMemory}!AutoDropStackDecision {
+    return appendValidatedCleanup(allocator, function, stack, .{ .block = .{ .defer_ref = defer_ref, .block = block } });
+}
+
 fn cancelAutoDropWithDecision(
     stack: *std.ArrayList(DeferredCleanup),
     decision: mir_ownership_authority.AutoDropCancellationDecision,
@@ -157,6 +185,19 @@ fn cancelAutoDropWithDecision(
         .remove_auto_drop => |ref| if (removeAutoDropCleanup(stack, ref)) .applied else .rejected,
         .reject => .rejected,
     };
+}
+
+fn appendValidatedCleanup(
+    allocator: std.mem.Allocator,
+    function: *const mir.Function,
+    stack: *std.ArrayList(DeferredCleanup),
+    cleanup: DeferredCleanup,
+) error{OutOfMemory}!AutoDropStackDecision {
+    const old_len = stack.items.len;
+    try stack.append(allocator, cleanup);
+    if (deferCleanupStackRefsValid(function.*, stack.items)) return .applied;
+    restoreDeferCleanupStackLength(stack, old_len);
+    return .rejected;
 }
 
 pub fn deferCleanupStackRefsValid(function: mir.Function, stack: []const DeferredCleanup) bool {

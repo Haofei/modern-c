@@ -1848,19 +1848,25 @@ const LlvmEmitter = struct {
                     .ignored => {
                         const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt.span)) orelse return error.UnsupportedLlvmEmission;
                         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-                            try self.defer_stack.append(self.allocator, .{ .direct_call = cleanup });
-                            try self.validateDeferCleanupStack();
+                            switch (try backend_cleanup.registerOrdinaryDirectDeferCleanup(self.allocator, function, &self.defer_stack, cleanup)) {
+                                .applied => {},
+                                .ignored, .rejected => return error.UnsupportedLlvmEmission,
+                            }
                             return false;
                         }
                         if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-                            try self.defer_stack.append(self.allocator, .{ .call_target = cleanup });
-                            try self.validateDeferCleanupStack();
+                            switch (try backend_cleanup.registerOrdinaryCallTargetDeferCleanup(self.allocator, function, &self.defer_stack, cleanup)) {
+                                .applied => {},
+                                .ignored, .rejected => return error.UnsupportedLlvmEmission,
+                            }
                             return false;
                         }
                         switch (expr.kind) {
                             .block => |block| {
-                                try self.defer_stack.append(self.allocator, .{ .block = .{ .defer_ref = defer_ref, .block = block } });
-                                try self.validateDeferCleanupStack();
+                                switch (try backend_cleanup.registerOrdinaryBlockDeferCleanup(self.allocator, function, &self.defer_stack, defer_ref, block)) {
+                                    .applied => {},
+                                    .ignored, .rejected => return error.UnsupportedLlvmEmission,
+                                }
                             },
                             else => return error.UnsupportedLlvmEmission,
                         }
