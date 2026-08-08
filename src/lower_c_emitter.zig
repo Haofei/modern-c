@@ -2861,7 +2861,7 @@ pub const CEmitter = struct {
     }
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr, move_span: ast.Span) !void {
-        const local_name = ownership_facts.directMovedLocalName(expr) orelse return;
+        const local_name = mir_ownership_authority.directMovedLocalName(expr) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         const source = mir.sourcePointFromSpan(move_span);
         if (mir_ownership_authority.authorizesMoveOutLocalAutoDrop(self.mir_module, function, local_name, source)) {
