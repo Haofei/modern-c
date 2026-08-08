@@ -1,4 +1,4 @@
-// S-mode virtio-blk IRQ-backed provider for the production JS `host_fs_read` surface.
+// S-mode virtio-blk IRQ-backed provider for the JS `host_fs_read` validation surface.
 //
 // app_run_demo owns SYS_SUBMIT/SYS_POLL and all user-copy rules. This module registers an
 // async FS override for `/ws/disk`: SYS_SUBMIT allocates a normal app_run_demo completion slot,

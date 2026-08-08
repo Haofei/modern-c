@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # async/await roadmap Phase C: IRQ-BACKED completion. A real M-mode TIMER interrupt completes an
-# in-flight async request and wakes a task parked in async_await_irq — the production shape (a
+# in-flight async request and wakes a task parked in async_await_irq — the validation shape (a
 # task sleeps in wfi until a device/timer interrupt resumes it; no steady-state polling).
 #
 # Lowers the async-irq demo + the timer/trap runtime through the selected backend, links with the

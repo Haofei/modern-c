@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # async/await roadmap: DEVICE-BACKED completion over the NETWORK CARD. A REAL virtio-net TX used-ring
 # device interrupt — not a timer, not the disk — completes an in-flight async frame send and resumes
-# a task parked in drive_irq. The production shape for NIC async: submit a frame, sleep in wfi, the
+# a task parked in drive_irq. The validation shape for NIC async: submit a frame, sleep in wfi, the
 # device's TX used-ring IRQ (PLIC-routed) reaps the completion and async_completes the broker id, the
 # parked await resumes with NET_TX_DONE.
 #

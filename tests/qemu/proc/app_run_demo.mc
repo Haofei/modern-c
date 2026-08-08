@@ -202,7 +202,7 @@ global g_fs_async_override_ready: bool;
 global g_fs_budget: u32;
 
 // ----- Simple network tool world -----
-// The production JS host exposes `host_net_fetch(endpoint, token)` through the same
+// The JS host fixture exposes `host_net_fetch(endpoint, token)` through the same
 // SYS_SUBMIT/SYS_POLL path as FS. Keep the default as a tiny deterministic fixture: endpoint 1
 // returns token+100, every other endpoint is denied, and the budget is two calls.
 const EP_WEB: u32 = 1;
@@ -716,7 +716,7 @@ fn sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
     }
 
     // Brokered network op: shared egress allowlist + budget + audit control plane, surfaced through
-    // the production JS SYS_SUBMIT/SYS_POLL tool ABI.
+    // the JS SYS_SUBMIT/SYS_POLL tool ABI fixture.
     if is_net_op(req.op) {
         return net_submit(&req);
     }

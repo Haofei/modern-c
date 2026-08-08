@@ -4,7 +4,7 @@
 # Lowers the MC RX routing demo through the selected backend, links it into a
 # bare-metal riscv64 image with the platform runtime, runs it under
 # qemu-system-riscv64 -machine virt with an attached `virtio-net-device`, and
-# checks that a real RX frame is routed through the production demux.
+# checks that a real RX frame is routed through the gated receive demux.
 #
 # Usage: tools/net/net-rx-live-test.sh <path-to-mcc> [c|llvm]
 # Skips (exit 0) when the riscv toolchain or QEMU is unavailable.

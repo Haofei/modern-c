@@ -9,8 +9,17 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCAN_ROOTS = [ROOT / "docs", ROOT / "kernel"]
-INCLUDED_SUFFIXES = {".md", ".mc"}
+SCAN_ROOTS = [
+    ROOT / "docs",
+    ROOT / "kernel",
+    ROOT / "tests" / "qemu",
+    ROOT / "tools" / "arch",
+    ROOT / "tools" / "net",
+    ROOT / "tools" / "proc",
+    ROOT / "tools" / "lang",
+    ROOT / "build" / "qemu.zig",
+]
+INCLUDED_SUFFIXES = {".md", ".mc", ".sh", ".zig"}
 EXCLUDED_DOCS: set[Path] = set()
 
 FORBIDDEN = [
@@ -21,6 +30,14 @@ FORBIDDEN = [
     ("production-candidate board profile", re.compile(r"\bproduction-candidate\b", re.IGNORECASE)),
     ("production-shaped kernel path", re.compile(r"\bproduction-shaped\b", re.IGNORECASE)),
     ("production JS fixture claim", re.compile(r"\bproduction JS\b", re.IGNORECASE)),
+    ("production-shaped async/kernel fixture", re.compile(r"\bproduction shape\b", re.IGNORECASE)),
+    ("production syscall fixture claim", re.compile(r"\bproduction SYS_POLL\b", re.IGNORECASE)),
+    ("production demux fixture claim", re.compile(r"\bproduction demux\b", re.IGNORECASE)),
+    ("production broker/device fixture claim", re.compile(r"\bproduction broker\b", re.IGNORECASE)),
+    ("production default fixture claim", re.compile(r"\bproduction default\b", re.IGNORECASE)),
+    ("production counterpart fixture claim", re.compile(r"\bproduction counterpart\b", re.IGNORECASE)),
+    ("production-grade fixture claim", re.compile(r"\bproduction-grade\b", re.IGNORECASE)),
+    ("production decision in validation script", re.compile(r"\bproduction decision\b", re.IGNORECASE)),
     ("agent production surface roadmap", re.compile(r"\bAgent production surface\b", re.IGNORECASE)),
     ("kernel production checklist", re.compile(r"\bMinimum production checklist\b", re.IGNORECASE)),
     ("product runtime roadmap", re.compile(r"\bproduct runtime roadmap\b", re.IGNORECASE)),
@@ -47,6 +64,10 @@ def fail(message: str) -> int:
 def iter_files() -> list[Path]:
     files: list[Path] = []
     for root in SCAN_ROOTS:
+        if root.is_file():
+            if root.suffix in INCLUDED_SUFFIXES and root not in EXCLUDED_DOCS:
+                files.append(root)
+            continue
         for path in root.rglob("*"):
             if not path.is_file() or path.suffix not in INCLUDED_SUFFIXES:
                 continue

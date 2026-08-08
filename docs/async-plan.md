@@ -126,7 +126,7 @@ request, arms a **single-shot M-mode CLINT timer**, and `async_await_irq` PARKS 
 timer fires; the M-mode trap vector (a `#[naked]` full-frame handler, 4-byte aligned by the
 `#[align]`/naked default — the fix that unblocked this whole interrupt path) disarms the timer and
 calls `async_complete` from interrupt context, waking the task. Trace `W I R` (await / completion
-in ISR / resume) + `ASYNC-IRQ-OK` (result 42). This is the production shape: a task sleeps until a
+in ISR / resume) + `ASYNC-IRQ-OK` (result 42). This is the validation shape: a task sleeps until a
 device/timer interrupt resumes it.
 
 The same wiring generalizes to a virtio-blk/net completion interrupt — the ISR calls

@@ -5612,7 +5612,7 @@ preemption, SMP boot/sync, SMP ticket-lock mutual exclusion, inter-processor
 interrupts, a user-mode TCP passive-open server handshake, virtio-net device
 bring-up, pcap-verified UDP transmit, virtio-blk sector reads, ARP/ICMP
 gateway round trips over virtio-net, driver-library synthetic NIC transmit,
-e1000 PCI probing, live virtio-net RX routing through the production demux,
+e1000 PCI probing, live virtio-net RX routing through the gated receive demux,
 OpenSBI firmware boot, aarch64 QEMU boot, and x86-64 native/QEMU scheduler
 boot, plus a syscall-driven user-mode shell session covering command input,
 process-table `top`, and U-mode exit traps.

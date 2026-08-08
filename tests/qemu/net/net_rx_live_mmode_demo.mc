@@ -1,7 +1,7 @@
 // Bare-metal riscv64 M-mode (`-bios none`) live-RX runtime — in PURE MC.
 // The all-MC replacement for kernel/drivers/virtio/net_rx_live_runtime.c. ARPs the
 // gateway, copies the real reply frame off the RX queue, and pushes it through the
-// production demux (rx_route) — driving the EXISTING MC path in net_rx_live_demo.mc.
+// gated receive demux (rx_route) — driving the EXISTING MC path in net_rx_live_demo.mc.
 //
 // Same boot-seam shape as net_mmode_demo.mc: shared MMIO probe, two split virtqueues
 // over zeroed globals, bare-16550 console, std/dma+std/time from mmode_dma_time.mc.
@@ -62,7 +62,7 @@ export fn test_main() -> void {
         uputs("RX-NONE\n");
         halt();
     }
-    let r: u32 = rx_route(buf, n);   // through the production demux
+    let r: u32 = rx_route(buf, n);   // through the gated receive demux
     uputs("RX-FRAME len=");
     uputhex(n as u64);
     if (r & 0x8000_0000) != 0 { uputs(" UDP-DELIVERED"); } else { uputs(" routed"); }

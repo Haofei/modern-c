@@ -108,7 +108,7 @@ if printf '%s' "$OUT" | grep -qi "OpenSBI" \
    && printf '%s' "$OUT" | grep -q "CONFINED: kernel not user-accessible in agent space" \
    && printf '%s' "$OUT" | grep -q "$EXPECT" \
    && printf '%s' "$OUT" | grep -q "USER-EXIT from U"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend pure-JS host_fs_read resolved through production SYS_POLL from a real S-mode virtio-blk PLIC interrupt."
+    echo "PASS: $TEST_NAME — $BACKEND backend pure-JS host_fs_read resolved through the gated SYS_POLL fixture from a real S-mode virtio-blk PLIC interrupt."
     exit 0
 fi
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # WASM-agent Phase 6 (docs/wasm-migration-plan.md §5): a confined WASM guest's brokered net_fetch is
-# serviced through a REAL S-mode virtio-net PLIC interrupt and delivered via production SYS_POLL — the
+# serviced through a REAL S-mode virtio-net PLIC interrupt and delivered via the gated SYS_POLL fixture — the
 # WASM peer of qjs-smode-net-irq-tool-test.sh. Same confined WASM agent ELF (WAMR + the comprehensive wamr_full_host +
 # all-MC libc + wamr_full_host running a stock wasm32-wasi guest) as the other S-mode peers, but the kernel
 # wires the virtio-net device + PLIC IRQ + DMA platform so a NET_FETCH completion arrives by interrupt.
@@ -172,7 +172,7 @@ if printf '%s' "$OUT" | grep -qi "OpenSBI" \
    && printf '%s' "$OUT" | grep -q "CONFINED: kernel not user-accessible in agent space" \
    && printf '%s' "$OUT" | grep -q "$EXPECT" \
    && printf '%s' "$OUT" | grep -q "USER-EXIT from U"; then
-    echo "PASS: $TEST_NAME — $BACKEND backend: a confined WASM guest's brokered net_fetch completed through production SYS_POLL from a real S-mode virtio-net PLIC interrupt, under REAL OpenSBI."
+    echo "PASS: $TEST_NAME — $BACKEND backend: a confined WASM guest's brokered net_fetch completed through the gated SYS_POLL fixture from a real S-mode virtio-net PLIC interrupt, under REAL OpenSBI."
     exit 0
 fi
 echo "FAIL: $TEST_NAME — expected OpenSBI banner + 'CONFINED...' + '$EXPECT' + 'USER-EXIT from U'"

@@ -2,7 +2,7 @@
 // a ProcTable and report cycles-per-round-trip via rdcycle. Each iteration exercises exactly the
 // hot IPC funnel the two optimizations touch:
 //   - ipc_send_try -> ipc_send_try_id_prov: ledger charge + mailbox_post (O(1) tail append) +
-//     the provenance gate (branchless flag load; emit skipped when disabled — the production default).
+//     the provenance gate (branchless flag load; emit skipped when disabled — the validation default).
 //   - ipc_receive: mailbox_take (O(1) head pop) + ledger release.
 // No context switch is involved: we flip `current` between two spawned slots so the round-trip
 // measures the message machinery, not the scheduler. Sender A -> receiver B, drained every iter,

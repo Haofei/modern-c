@@ -562,7 +562,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     // async-irq-test (async/await Phase C): a real M-mode TIMER interrupt completes an in-flight
     // request and wakes a task parked in async_await_irq (irq-off wait-prepare closes the
-    // lost-wake window). The production shape: a task sleeps in wfi until an interrupt resumes it.
+    // lost-wake window). The validation shape: a task sleeps in wfi until an interrupt resumes it.
     _ = h.addScriptTest(ctx, "async-irq-test", "async Phase C: a real timer interrupt completes an async request and wakes the parked task (IRQ-backed completion)", &.{ "bash", "tools/proc/async-irq-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-async-irq-test", "LLVM-lowered IRQ-backed async completion under QEMU", &.{ "bash", "tools/proc/async-irq-test.sh", "zig-out/bin/mcc", "llvm" });
 
@@ -1057,7 +1057,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-wasm-smode-async-agent-test", "WASM-agent Phase 6 (LLVM): overlapping async tool ops + back-pressure CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_async.c", "async: ok", "wasm-smode-async-agent" });
 
     // WASM-agent Phase 6 S-mode device-IRQ peers: a confined WASM guest's brokered tool completes
-    // through a REAL S-mode virtio PLIC interrupt + production SYS_POLL. Mirror qjs-smode-{net,blk}-irq.
+    // through a REAL S-mode virtio PLIC interrupt + the gated SYS_POLL fixture. Mirror qjs-smode-{net,blk}-irq.
     _ = h.addScriptTest(ctx, "wasm-smode-net-irq-tool-test", "WASM-agent Phase 6: a confined WASM guest's net_fetch completes via a real S-mode virtio-net PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-wasm-smode-net-irq-tool-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest's net_fetch completes via a real S-mode virtio-net PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
 
@@ -1141,13 +1141,13 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-qjs-nettool-test", "M5b.3 (LLVM): a pure-JS agent drives the deterministic network fetch fixture over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_net_tool.js", "net: ok", "qjs-nettool" });
 
-    _ = h.addScriptTest(ctx, "qjs-smode-net-irq-tool-test", "M5b.5: a pure-JS host_net_fetch completes through production SYS_POLL from a real S-mode virtio-net PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "qjs-smode-net-irq-tool-test", "M5b.5: a pure-JS host_net_fetch completes through the gated SYS_POLL fixture from a real S-mode virtio-net PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-smode-net-irq-tool-test", "M5b.5 (LLVM): a pure-JS host_net_fetch completes through production SYS_POLL from a real S-mode virtio-net PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "llvm-qjs-smode-net-irq-tool-test", "M5b.5 (LLVM): a pure-JS host_net_fetch completes through the gated SYS_POLL fixture from a real S-mode virtio-net PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "qjs-smode-blk-irq-tool-test", "M5b.6: a pure-JS host_fs_read completes through production SYS_POLL from a real S-mode virtio-blk PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "qjs-smode-blk-irq-tool-test", "M5b.6: a pure-JS host_fs_read completes through the gated SYS_POLL fixture from a real S-mode virtio-blk PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-smode-blk-irq-tool-test", "M5b.6 (LLVM): a pure-JS host_fs_read completes through production SYS_POLL from a real S-mode virtio-blk PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "llvm-qjs-smode-blk-irq-tool-test", "M5b.6 (LLVM): a pure-JS host_fs_read completes through the gated SYS_POLL fixture from a real S-mode virtio-blk PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // QuickJS-agent Phase 7: the EVENT LOOP. The confined agent evaluates a Promise chain and
     // drains the job queue (JS_ExecutePendingJob) — the microtask concurrency real agents need

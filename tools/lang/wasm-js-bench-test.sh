@@ -78,5 +78,5 @@ echo "  qemu_ms wasm/native = ${MS_RATIO}%   elf_bytes wasm/native = ${ELF_RATIO
 # Generous absolute sanity cap (a hung/broken path; the 120s sub-script timeout would already FAIL it).
 if [ "$WAS_MS" -gt 600000 ]; then fail "wasm QEMU wall time ${WAS_MS}ms exceeds the 600s sanity cap"; fi
 
-echo "PASS: $TEST_NAME — $BACKEND backend: native QuickJS and QuickJS-on-WASM evaluated the same JS workload to the SAME result ($NAT_RES) confined under QEMU; benchmark report emitted (timings indicative; production decision uses the target-board profile)"
+echo "PASS: $TEST_NAME — $BACKEND backend: native QuickJS and QuickJS-on-WASM evaluated the same JS workload to the SAME result ($NAT_RES) confined under QEMU; benchmark report emitted (timings indicative; target-board decisions use a separate product profile)"
 exit 0

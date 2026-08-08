@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # async/await roadmap: DEVICE-BACKED completion. A REAL virtio-blk device interrupt — not a timer —
-# completes an in-flight async request and resumes a task parked in drive_irq. The production shape
+# completes an in-flight async request and resumes a task parked in drive_irq. The validation shape
 # for device async: submit a read, sleep in wfi, the device's used-ring IRQ (PLIC-routed) reaps the
 # completion and async_completes the broker id, the parked await resumes with the sector result.
 #

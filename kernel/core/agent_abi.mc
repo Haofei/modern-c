@@ -1,6 +1,6 @@
 // kernel/core/agent_abi — stable agent/tool syscall envelope.
 //
-// The syscall handlers and JS bindings can evolve internally, but the production surface needs
+// The syscall handlers and JS bindings can evolve internally, but the validation surface needs
 // a single versioned contract for submit/poll requests and typed completion status. This module
 // keeps those wire-visible numbers in one place and validates requests before a broker sees them.
 //

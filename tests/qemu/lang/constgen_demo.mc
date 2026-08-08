@@ -1,6 +1,6 @@
 // Const-generic struct parameters: one Ring<T, N> definition, instantiated at two
 // caller-chosen capacities (2 and 8). Proves `[N]T` and `% N` specialize per instance —
-// the production-grade generics the kernel's hand-rolled fixed rings wanted.
+// the generic constants the kernel's hand-rolled fixed rings wanted.
 
 struct CRing<T, N> {
     slots: [N]T,

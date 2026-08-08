@@ -89,7 +89,7 @@ export fn mc_dma_alloc_base(len: usize) -> usize {
     if base == 0 {
         // Fail closed and DIAGNOSABLY: trap (reports the fault site) rather than spin forever in a
         // silent `while true {}` that is indistinguishable from a hang. The fallible `try` variant
-        // above is the typed-NoMem path for production broker/device callers.
+        // above is the typed-NoMem path for broker/device fixture callers.
         unreachable; // DMA pool exhausted or single buffer already in use
     }
     return base;

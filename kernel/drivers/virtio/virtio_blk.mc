@@ -253,7 +253,7 @@ export fn blk_write(dev: *BlkDevice, sector: u64, src: PAddr) -> Result<bool, Bl
 
 // ---- BlockDevice adapter -------------------------------------------------------------------
 // Adapt the driver to the generic BlockDevice trait (kernel/fs/blockdev.mc). This is the
-// production counterpart to the RAM-disk `impl BlockDevice for Disk` used in the host/proc
+// virtio counterpart to the RAM-disk `impl BlockDevice for Disk` used in the host/proc
 // tests: it routes the trait's read/write through the real virtio-blk full-sector paths
 // (blk_read_into / blk_write, both 512 B), so block-backed services — e.g. durable
 // block-backed checkpointing fixtures — run unchanged over a
