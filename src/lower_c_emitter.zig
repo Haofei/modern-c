@@ -2861,24 +2861,21 @@ pub const CEmitter = struct {
     }
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr, move_span: ast.Span) !void {
-        const local_name = mir_ownership_authority.directMovedLocalName(expr) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        const source = mir.sourcePointFromSpan(move_span);
-        if (mir_ownership_authority.authorizesMoveOutLocalAutoDrop(self.mir_module, function, local_name, source)) {
-            mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name);
-            return;
+        switch (mir_ownership_authority.moveAutoDropCancellationDecision(self.mir_module, function, expr, move_span)) {
+            .ignore => {},
+            .remove_auto_drop_local => |local_name| mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
+            .reject => return error.UnsupportedCEmission,
         }
-        if (mir_ownership_authority.localHasAutoDropOwnershipEvent(self.mir_module, function, local_name)) return error.UnsupportedCEmission;
     }
 
     fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) !void {
-        const release = mir_ownership_authority.explicitDropLocalCleanup(self.mir_module, expr) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!mir_ownership_authority.authorizesExplicitDropLocal(self.mir_module, function, release.local_name, release.fn_name, mir.sourcePointFromSpan(expr.span))) {
-            if (mir_ownership_authority.localHasAutoDropOwnershipEvent(self.mir_module, function, release.local_name)) return error.UnsupportedCEmission;
-            return;
+        switch (mir_ownership_authority.explicitDropCancellationDecision(self.mir_module, function, expr)) {
+            .ignore => {},
+            .remove_auto_drop_local => |local_name| mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
+            .reject => return error.UnsupportedCEmission,
         }
-        mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, release.local_name);
     }
 
     fn localDeclInfo(self: *CEmitter, local: ast.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo)) !LocalInfo {

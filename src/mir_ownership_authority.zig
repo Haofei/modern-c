@@ -60,6 +60,12 @@ pub const AutoDropLocalRegistrationDecision = union(enum) {
     skip_cleanup_registration,
 };
 
+pub const AutoDropCancellationDecision = union(enum) {
+    ignore,
+    remove_auto_drop_local: []const u8,
+    reject,
+};
+
 pub fn autoDropLocalRegistrationDecision(
     module: *const mir.Module,
     function: *const mir.Function,
@@ -88,7 +94,7 @@ pub fn autoDropLocalRegistrationDecision(
     return .reject;
 }
 
-pub fn authorizesExplicitDropLocal(
+fn authorizesExplicitDropLocal(
     module: *const mir.Module,
     function: *const mir.Function,
     local_name: []const u8,
@@ -121,19 +127,31 @@ pub fn explicitDropLocalCleanup(module: *const mir.Module, expr: ast.Expr) ?Auto
     return .{ .fn_name = fn_name, .local_name = local_name, .span = expr.span };
 }
 
-/// Transitional backend cleanup cancellation accepts only direct local moves.
-/// MIR remains the authority for whether that syntax is allowed to cancel a
-/// drop obligation; this helper only keeps the source-shape boundary shared
-/// while C/LLVM still maintain legacy cleanup stacks.
-pub fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| directMovedLocalName(inner.*),
-        .ident => |ident| ident.text,
-        else => null,
-    };
+pub fn moveAutoDropCancellationDecision(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    expr: ast.Expr,
+    move_span: ast.Span,
+) AutoDropCancellationDecision {
+    const local_name = directMovedLocalName(expr) orelse return .ignore;
+    const source = mir.sourcePointFromSpan(move_span);
+    if (authorizesMoveOutLocalAutoDrop(module, function, local_name, source)) return .{ .remove_auto_drop_local = local_name };
+    if (localHasAutoDropOwnershipEvent(module, function, local_name)) return .reject;
+    return .ignore;
 }
 
-pub fn localHasAutoDropOwnershipEvent(
+pub fn explicitDropCancellationDecision(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    expr: ast.Expr,
+) AutoDropCancellationDecision {
+    const release = explicitDropLocalCleanup(module, expr) orelse return .ignore;
+    if (authorizesExplicitDropLocal(module, function, release.local_name, release.fn_name, mir.sourcePointFromSpan(expr.span))) return .{ .remove_auto_drop_local = release.local_name };
+    if (localHasAutoDropOwnershipEvent(module, function, release.local_name)) return .reject;
+    return .ignore;
+}
+
+fn localHasAutoDropOwnershipEvent(
     module: *const mir.Module,
     function: *const mir.Function,
     local_name: []const u8,
@@ -147,7 +165,7 @@ pub fn localHasAutoDropOwnershipEvent(
     return false;
 }
 
-pub fn authorizesMoveOutLocalAutoDrop(
+fn authorizesMoveOutLocalAutoDrop(
     module: *const mir.Module,
     function: *const mir.Function,
     local_name: []const u8,
@@ -224,6 +242,18 @@ fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
             .ident => |ident| ident.text,
             else => null,
         },
+        else => null,
+    };
+}
+
+/// Transitional backend cleanup cancellation accepts only direct local moves.
+/// MIR remains the authority for whether that syntax is allowed to cancel a
+/// drop obligation; this helper only keeps the source-shape boundary shared
+/// while C/LLVM still maintain legacy cleanup stacks.
+fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| directMovedLocalName(inner.*),
+        .ident => |ident| ident.text,
         else => null,
     };
 }
