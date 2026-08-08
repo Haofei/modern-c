@@ -510,6 +510,7 @@ const LlvmEmitter = struct {
     current_debug_span: ?ast.Span = null,
     current_return_ty: ?ast.TypeExpr = null,
     current_function: ?[]const u8 = null,
+    current_ownership_cleanup_plan: ?mir.OwnershipCleanupPlan = null,
     current_params: ?[]const ast.Param = null,
     current_mir_range_target: ?[]const u8 = null,
     source_path: []const u8,
@@ -1274,6 +1275,13 @@ const LlvmEmitter = struct {
             self.current_function = old_function;
             self.current_params = old_params;
         }
+        const ownership_cleanup_plan = if (self.currentMirFunction()) |function|
+            try mir.buildOwnershipCleanupPlan(self.allocator, self.mir_module, function.*)
+        else
+            null;
+        defer if (ownership_cleanup_plan) |plan| plan.deinit(self.allocator);
+        self.current_ownership_cleanup_plan = ownership_cleanup_plan;
+        defer self.current_ownership_cleanup_plan = null;
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
         // epilogue. The body is a single inline-asm statement that performs the
         // ABI-correct jump/return itself; we terminate the entry block with
@@ -1836,7 +1844,7 @@ const LlvmEmitter = struct {
             .@"defer" => |expr| {
                 try self.cancelAutoDropForReleaseCall(expr);
                 const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-                switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(self.allocator, &self.mir_module, function, expr)) {
+                switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
                     .ignore => {
                         if (!mir.hasDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt.span))) return error.UnsupportedLlvmEmission;
                         if (try self.ordinaryDeferDirectCallCleanup(function, expr, stmt.span)) |cleanup| {
@@ -2074,14 +2082,14 @@ const LlvmEmitter = struct {
 
     fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!try mir_ownership_authority.autoDropCleanupEmissionAllowed(self.allocator, &self.mir_module, function, cleanup)) return error.UnsupportedLlvmEmission;
+        if (!try mir_ownership_authority.autoDropCleanupEmissionAllowed(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), cleanup)) return error.UnsupportedLlvmEmission;
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
     }
 
     fn emitExplicitDropPointerCleanup(self: *LlvmEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(self.allocator, &self.mir_module, function, cleanup)) return error.UnsupportedLlvmEmission;
+        if (!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), cleanup)) return error.UnsupportedLlvmEmission;
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
     }
@@ -2971,7 +2979,7 @@ const LlvmEmitter = struct {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         if (!mir_ownership_authority.autoDropEligibleTypeName(&self.mir_module, type_name)) return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        const cleanup = switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(self.allocator, &self.mir_module, function, name.text, type_name, name.span)) {
+        const cleanup = switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), name.text, type_name, name.span)) {
             .emit_auto_drop_cleanup => |entry| entry,
             .skip_cleanup_registration => return,
             .reject => return error.UnsupportedLlvmEmission,
@@ -2981,10 +2989,10 @@ const LlvmEmitter = struct {
 
     fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr, move_span: ast.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (try mir_ownership_authority.moveAutoDropCancellationDecision(self.allocator, &self.mir_module, function, expr, move_span)) {
+        switch (try mir_ownership_authority.moveAutoDropCancellationDecision(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), expr, move_span)) {
             .ignore => {},
             .remove_auto_drop => |key| if (!backend_cleanup.removeAutoDropCleanup(&self.defer_stack, key)) {
-                if (!try mir_ownership_authority.missingAutoDropCancellationIsAllowed(self.allocator, &self.mir_module, function, key)) return error.UnsupportedLlvmEmission;
+                if (!try mir_ownership_authority.missingAutoDropCancellationIsAllowed(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), key)) return error.UnsupportedLlvmEmission;
             },
             .reject => return error.UnsupportedLlvmEmission,
         }
@@ -2992,10 +3000,10 @@ const LlvmEmitter = struct {
 
     fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (try mir_ownership_authority.explicitDropCancellationDecision(self.allocator, &self.mir_module, function, expr)) {
+        switch (try mir_ownership_authority.explicitDropCancellationDecision(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
             .ignore => {},
             .remove_auto_drop => |key| if (!backend_cleanup.removeAutoDropCleanup(&self.defer_stack, key)) {
-                if (!try mir_ownership_authority.missingAutoDropCancellationIsAllowed(self.allocator, &self.mir_module, function, key)) return error.UnsupportedLlvmEmission;
+                if (!try mir_ownership_authority.missingAutoDropCancellationIsAllowed(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), key)) return error.UnsupportedLlvmEmission;
             },
             .reject => return error.UnsupportedLlvmEmission,
         }
@@ -5906,6 +5914,11 @@ const LlvmEmitter = struct {
         for (self.mir_module.functions) |*function| {
             if (std.mem.eql(u8, function.name, function_name)) return function;
         }
+        return null;
+    }
+
+    fn currentOwnershipCleanupPlan(self: *const LlvmEmitter) ?*const mir.OwnershipCleanupPlan {
+        if (self.current_ownership_cleanup_plan) |*plan| return plan;
         return null;
     }
 

@@ -316,6 +316,7 @@ pub const CEmitter = struct {
     // hook is not spliced into a context where the result must remain assignable.
     suppress_load_hook: bool = false,
     current_function: ?[]const u8 = null,
+    current_ownership_cleanup_plan: ?mir.OwnershipCleanupPlan = null,
     // Proven storage class per pointer-typed local, sourced from live MIR
     // pointer-provenance facts: .global_storage routes derefs through the
     // mc_race helpers; .local_storage is the positive locality proof that keeps
@@ -1165,6 +1166,13 @@ pub const CEmitter = struct {
         const previous_function = self.current_function;
         self.current_function = fn_decl.name.text;
         defer self.current_function = previous_function;
+        const ownership_cleanup_plan = if (self.currentMirFunction()) |function|
+            try mir.buildOwnershipCleanupPlan(self.allocator, self.mir_module.*, function.*)
+        else
+            null;
+        defer if (ownership_cleanup_plan) |plan| plan.deinit(self.allocator);
+        self.current_ownership_cleanup_plan = ownership_cleanup_plan;
+        defer self.current_ownership_cleanup_plan = null;
         self.mir_pointer_local_provenance.clearRetainingCapacity();
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_pointer_array_elements);
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_aggregate_pointer_fields);
@@ -2828,7 +2836,7 @@ pub const CEmitter = struct {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         if (!mir_ownership_authority.autoDropEligibleTypeName(self.mir_module, type_name)) return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        const cleanup = switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(self.allocator, self.mir_module, function, name.text, type_name, name.span)) {
+        const cleanup = switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), name.text, type_name, name.span)) {
             .emit_auto_drop_cleanup => |entry| entry,
             .skip_cleanup_registration => return,
             .reject => return error.UnsupportedCEmission,
@@ -2838,10 +2846,10 @@ pub const CEmitter = struct {
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr, move_span: ast.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (try mir_ownership_authority.moveAutoDropCancellationDecision(self.allocator, self.mir_module, function, expr, move_span)) {
+        switch (try mir_ownership_authority.moveAutoDropCancellationDecision(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), expr, move_span)) {
             .ignore => {},
             .remove_auto_drop => |key| if (!backend_cleanup.removeAutoDropCleanup(&self.defer_stack, key)) {
-                if (!try mir_ownership_authority.missingAutoDropCancellationIsAllowed(self.allocator, self.mir_module, function, key)) return error.UnsupportedCEmission;
+                if (!try mir_ownership_authority.missingAutoDropCancellationIsAllowed(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), key)) return error.UnsupportedCEmission;
             },
             .reject => return error.UnsupportedCEmission,
         }
@@ -2849,10 +2857,10 @@ pub const CEmitter = struct {
 
     fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (try mir_ownership_authority.explicitDropCancellationDecision(self.allocator, self.mir_module, function, expr)) {
+        switch (try mir_ownership_authority.explicitDropCancellationDecision(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
             .ignore => {},
             .remove_auto_drop => |key| if (!backend_cleanup.removeAutoDropCleanup(&self.defer_stack, key)) {
-                if (!try mir_ownership_authority.missingAutoDropCancellationIsAllowed(self.allocator, self.mir_module, function, key)) return error.UnsupportedCEmission;
+                if (!try mir_ownership_authority.missingAutoDropCancellationIsAllowed(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), key)) return error.UnsupportedCEmission;
             },
             .reject => return error.UnsupportedCEmission,
         }
@@ -3422,7 +3430,7 @@ pub const CEmitter = struct {
     fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr, stmt_span: ast.Span) !void {
         try self.cancelAutoDropForReleaseCall(expr);
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(self.allocator, self.mir_module, function, expr)) {
+        switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
             .ignore => {},
             .emit_explicit_drop_cleanup => |cleanup| {
                 try self.defer_stack.append(self.allocator, .{ .explicit_drop = cleanup });
@@ -3678,14 +3686,14 @@ pub const CEmitter = struct {
 
     fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!try mir_ownership_authority.autoDropCleanupEmissionAllowed(self.allocator, self.mir_module, function, cleanup)) return error.UnsupportedCEmission;
+        if (!try mir_ownership_authority.autoDropCleanupEmissionAllowed(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), cleanup)) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
     }
 
     fn emitExplicitDropPointerCleanup(self: *CEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(self.allocator, self.mir_module, function, cleanup)) return error.UnsupportedCEmission;
+        if (!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), cleanup)) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
     }
@@ -6168,6 +6176,11 @@ pub const CEmitter = struct {
     fn currentMirFunction(self: *CEmitter) ?*const mir.Function {
         const function_name = self.current_function orelse return null;
         return self.mirFunctionNamed(function_name);
+    }
+
+    fn currentOwnershipCleanupPlan(self: *const CEmitter) ?*const mir.OwnershipCleanupPlan {
+        if (self.current_ownership_cleanup_plan) |*plan| return plan;
+        return null;
     }
 
     fn mirFunctionNamed(self: *CEmitter, function_name: []const u8) ?*const mir.Function {

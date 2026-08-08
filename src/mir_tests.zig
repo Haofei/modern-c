@@ -4339,7 +4339,7 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     const g_identity = valueIdentityBySpelling(use_guard.*, "g") orelse return error.TestUnexpectedResult;
     try std.testing.expect(mir.ownershipLocalHasAutoDropResourceEvent(module_mir, use_guard.*, g_identity.id));
     const local_span = ast.Span{ .offset = 1, .len = 1, .line = 1, .column = 2 };
-    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, use_guard, "g", "Guard", local_span)) {
+    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, use_guard, null, "g", "Guard", local_span)) {
         .emit_auto_drop_cleanup => |cleanup| {
             try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
             try std.testing.expectEqualStrings("g", cleanup.local_name);
@@ -4349,10 +4349,10 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
             try std.testing.expect(cleanup.drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
             try std.testing.expectEqual(unified_cleanup_plan.items[0].primary_event_index, cleanup.auto_drop_event_index);
             try std.testing.expectEqual(unified_cleanup_plan.items[0].storage_dead_event_index, cleanup.storage_dead_event_index);
-            try std.testing.expect(try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, cleanup));
+            try std.testing.expect(try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, null, cleanup));
             var stale_cleanup = cleanup;
             stale_cleanup.storage_dead_event_index = cleanup.auto_drop_event_index;
-            try std.testing.expect(!try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, stale_cleanup));
+            try std.testing.expect(!try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, null, stale_cleanup));
         },
         else => return error.TestUnexpectedResult,
     }
@@ -4590,7 +4590,7 @@ test "MIR ownership authority does not let forget authorize auto-drop registrati
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.forget, function.ownership_events[2].kind);
     try mir.validateLoweringAdmission(module_mir);
-    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, &function, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
+    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, &function, null, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
         .reject => {},
         else => return error.TestUnexpectedResult,
     }
@@ -4659,20 +4659,24 @@ test "MIR records explicit drop glue call ownership events" {
     } else return error.TestUnexpectedResult;
     const release_expr = release_decl.body.?.items[2].kind.expr;
     const g_identity = valueIdentityBySpelling(function, "g") orelse return error.TestUnexpectedResult;
-    const cleanup = (try mir_ownership_authority.explicitDropLocalCleanup(std.testing.allocator, &module_mir, &function, release_expr)) orelse return error.TestUnexpectedResult;
+    const cleanup = (try mir_ownership_authority.explicitDropLocalCleanup(std.testing.allocator, &module_mir, &function, null, release_expr)) orelse return error.TestUnexpectedResult;
+    const cached_cleanup = (try mir_ownership_authority.explicitDropLocalCleanup(std.testing.allocator, &module_mir, &function, &built_cleanup_plan, release_expr)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
     try std.testing.expectEqualStrings("g", cleanup.local_name);
     try std.testing.expect(cleanup.root_value_id.eql(g_identity.id));
     try std.testing.expect(cleanup.resource_type_symbol_id.eql(function.ownership_events[4].place.root_type_symbol_id));
     try std.testing.expect(cleanup.drop_glue_symbol_id.eql(function.ownership_events[4].drop_glue_symbol_id));
     try std.testing.expectEqual(@as(usize, 4), cleanup.explicit_drop_event_index);
-    try std.testing.expect(try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, cleanup));
+    try std.testing.expectEqual(cleanup.explicit_drop_event_index, cached_cleanup.explicit_drop_event_index);
+    try std.testing.expect(cached_cleanup.root_value_id.eql(cleanup.root_value_id));
+    try std.testing.expect(try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, null, cleanup));
+    try std.testing.expect(try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, &built_cleanup_plan, cleanup));
     var stale_cleanup = cleanup;
     stale_cleanup.explicit_drop_event_index = 5;
-    try std.testing.expect(!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, stale_cleanup));
+    try std.testing.expect(!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, null, stale_cleanup));
     stale_cleanup = cleanup;
     stale_cleanup.span.line += 1;
-    try std.testing.expect(!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, stale_cleanup));
+    try std.testing.expect(!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, null, stale_cleanup));
     try mir.validateLoweringAdmission(module_mir);
 }
 
@@ -4767,7 +4771,7 @@ test "MIR ownership authority skips cleanup registration for move-out" {
     try std.testing.expectEqual(mir.OwnershipEventKind.move_out, function.ownership_events[2].kind);
     const g_identity = valueIdentityBySpelling(function, "g") orelse return error.TestUnexpectedResult;
     try std.testing.expect(mir.ownershipLocalHasConsumingResourceEvent(function, g_identity.id, function.ownership_events[2].place.root_type_symbol_id));
-    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, &function, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
+    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, &function, null, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
         .skip_cleanup_registration => {},
         else => return error.TestUnexpectedResult,
     }
