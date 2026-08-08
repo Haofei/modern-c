@@ -1195,7 +1195,7 @@ Introduce the table without migrating every fact. The first family should be
 small enough to verify end-to-end.
 
 Recommended first migration: pointer/global race provenance, because LLVM has a
-large duplicated inference class today and the production ledger has many recent
+large duplicated inference class today and the validation ledger has many recent
 race-provenance fixes. Start with a narrow subset:
 
 - direct global address provenance for pointer-like locals initialized from
@@ -1694,7 +1694,7 @@ Backend gates:
 These backend gates were the Phase 3/4 migration work and are complete for the
 narrow fact families described above. Current production backends still use
 legacy inference only for the explicitly listed unsupported fallback families;
-the readiness closure matrix owns their migration or fail-closed disposition.
+the migration closure matrix owns their migration or fail-closed disposition.
 
 ## Aggregate Returns (Partial Implementation)
 
@@ -1959,5 +1959,5 @@ The narrow Phase 4 foundation is complete because all of these are true:
   rather than hidden inside the original vague architecture item.
 
 These criteria do not close the broader typed semantic fact migration umbrella.
-That umbrella closes only when its finite readiness matrix is complete or its
+That umbrella closes only when its finite migration matrix is complete or its
 remaining rows are explicitly accepted as limitations.

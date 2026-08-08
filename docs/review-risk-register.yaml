@@ -1,6 +1,6 @@
 # Machine-readable review risk register.
 #
-# Markdown readiness/remediation documents should summarize this file rather than
+# Markdown validation/remediation documents should summarize this file rather than
 # carrying independent "open/closed" counters. `admitted_subset_status` records
 # whether the currently qualified compiler subset has evidence; `status` records
 # the broader platform/production work item.

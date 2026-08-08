@@ -140,7 +140,7 @@ not by itself prove temporal validity, non-aliasing, or object lifetime.
 
 ### 2.4 Temporal-safety boundary
 
-The compiler readiness design-risk track remains authoritative. Before a broad
+The language validation design-risk track remains authoritative. Before a broad
 Rust comparison, MC must implement or explicitly scope high-value escape cases:
 
 - stack, slice, view, closure, async, and arena lifetimes;
@@ -366,7 +366,7 @@ ready for unrestricted Linux driver development.
 
 ### P0: preserve claim integrity — complete for the supported subset
 
-1. Keep the compiler readiness T/M/P matrices canonical and closed for every
+1. Keep the language validation T/M/P matrices canonical and closed for every
    feature used by an experiment.
 2. Complete T2 dispositions, T3 classification, and T4 semantic-authority audit
    required by the selected MC-contract features.

@@ -3,7 +3,7 @@
 Status: **qualified bounded kernel profile; not a general borrow checker or a
 general separation-logic FFI verifier**.
 
-This document fixes the production-profile boundary used by the kernel-language
+This document fixes the bounded-kernel validation boundary used by the kernel-language
 comparison. MC represents the high-value lifetimes below with lexical escape
 checks or linear capability tokens. Unsupported general lifetime inference is
 not silently treated as proven.

@@ -49,7 +49,7 @@ summary.
 3. Treat LLVM backend as differential/experimental where coverage is incomplete.
 4. Treat selfhost as an experiment until the main compiler semantic boundary is
    stable.
-5. Do not duplicate readiness state across markdown files; summarize
+5. Do not duplicate validation state across markdown files; summarize
    `docs/review-risk-register.yaml`.
 6. Keep safety-critical mechanisms such as atomic output, OOM visibility,
    hostile-input budgets, capability roots, and exact-byte verification. These

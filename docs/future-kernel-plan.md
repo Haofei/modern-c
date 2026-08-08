@@ -562,7 +562,7 @@ Storage should start simple:
 3. Capability FS for scripts/config/logs.
 
 Product update, bundle signing, verified boot, OTA, and rollback are outside the current
-language-oriented kernel scope. They should not be implemented or used as readiness evidence
+language-oriented kernel scope. They should not be implemented or used as validation evidence
 until a concrete product profile reintroduces them with a separate threat model and gate set.
 For now, the kernel is an integration workload for language, ABI, ownership, async, driver,
 and confinement semantics.
