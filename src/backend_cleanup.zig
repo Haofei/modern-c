@@ -13,6 +13,7 @@ const mir_ownership_authority = @import("mir_ownership_authority.zig");
 pub const DeferredCleanup = union(enum) {
     expr: ast.Expr,
     auto_drop: mir_ownership_authority.AutoDropLocalCleanup,
+    explicit_drop: mir_ownership_authority.AutoDropLocalCleanup,
 };
 
 /// Remove the most recent auto-drop cleanup for a MIR ownership key from a
@@ -28,6 +29,7 @@ pub fn removeAutoDropCleanup(stack: *std.ArrayList(DeferredCleanup), key: mir_ow
                 return;
             },
             .expr => continue,
+            .explicit_drop => continue,
         }
     }
 }
@@ -60,6 +62,6 @@ test "auto-drop cleanup stack removal uses typed local identity" {
     try std.testing.expectEqual(@as(usize, 1), stack.items.len);
     switch (stack.items[0]) {
         .auto_drop => |cleanup| try std.testing.expectEqualStrings("close_shadow", cleanup.fn_name),
-        .expr => return error.TestUnexpectedResult,
+        .expr, .explicit_drop => return error.TestUnexpectedResult,
     }
 }

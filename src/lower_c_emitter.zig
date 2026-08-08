@@ -3429,6 +3429,15 @@ pub const CEmitter = struct {
 
     fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr) !void {
         try self.cancelAutoDropForReleaseCall(expr);
+        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        switch (mir_ownership_authority.deferredExplicitDropCleanupDecision(self.mir_module, function, expr)) {
+            .ignore => {},
+            .emit_explicit_drop_cleanup => |cleanup| {
+                try self.defer_stack.append(self.allocator, .{ .explicit_drop = cleanup });
+                return;
+            },
+            .reject => return error.UnsupportedCEmission,
+        }
         self.defer_stack.append(self.allocator, .{ .expr = expr }) catch return error.OutOfMemory;
     }
 
@@ -3526,11 +3535,14 @@ pub const CEmitter = struct {
                 try self.writeLineDirective(entry.span);
                 try self.emitAutoDropPointerCleanup(entry);
             },
+            .explicit_drop => |entry| {
+                try self.writeLineDirective(entry.span);
+                try self.emitExplicitDropPointerCleanup(entry);
+            },
         }
     }
 
     fn emitDeferredExpressionCleanup(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        if (try self.emitDeferredDropPointerRelease(expr)) return;
         if (try self.emitNeverExprStmt(expr, locals)) return;
         if (try lower_c_mmio.emitWriteStmt(self.mmioEmitContext(), expr, locals)) return;
         if (try self.emitRawStoreStmt(expr, locals)) return;
@@ -3555,13 +3567,11 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
     }
 
-    fn emitDeferredDropPointerRelease(self: *CEmitter, expr: ast.Expr) !bool {
+    fn emitExplicitDropPointerCleanup(self: *CEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        const cleanup = mir_ownership_authority.explicitDropLocalCleanup(self.mir_module, function, expr) orelse return false;
-        if (!mir_ownership_authority.explicitDropCleanupEmissionAllowed(self.mir_module, function, cleanup, mir.sourcePointFromSpan(expr.span))) return error.UnsupportedCEmission;
+        if (!mir_ownership_authority.explicitDropCleanupEmissionAllowed(self.mir_module, function, cleanup)) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
-        return true;
     }
 
     fn writeIndent(self: *CEmitter) !void {

@@ -13677,6 +13677,39 @@ test "lower-c emits deferred drop-attribute pointer release before return" {
     try std.testing.expect(final_cleanup < final_return);
 }
 
+test "lower-c deferred drop release requires source-matched MIR explicit-drop event" {
+    const source =
+        \\move struct Ticket { id: u32 }
+        \\fn issue_ticket() -> Ticket { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_ticket(t: *mut Ticket) -> void { t.id = 0; }
+        \\fn accept_deferred_resource_release() -> void {
+        \\    var t: Ticket = issue_ticket();
+        \\    defer close_ticket(&t);
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("emit_c_drop_attr_defer_source_requires_event.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = for (module_mir.functions) |*candidate| {
+        if (std.mem.eql(u8, candidate.name, "accept_deferred_resource_release")) break candidate;
+    } else return error.TestUnexpectedResult;
+    for (function.ownership_events) |*event| {
+        if (event.kind == .explicit_drop) {
+            event.source.line += 1;
+            break;
+        }
+    } else return error.TestUnexpectedResult;
+    try mir.validateLoweringAdmission(module_mir);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "emit_c_drop_attr_defer_source_requires_event.mc", .{}, false, null));
+}
+
 test "lower-c emits auto-drop release for affine move locals" {
     const source =
         \\move struct Guard { id: u32 }

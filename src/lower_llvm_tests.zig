@@ -1651,6 +1651,39 @@ test "LLVM explicit drop release only cancels matching auto-drop local" {
     try std.testing.expect(h_cleanup < final_return);
 }
 
+test "LLVM deferred drop release requires source-matched MIR explicit-drop event" {
+    const source =
+        \\move struct Ticket { id: u32 }
+        \\fn issue_ticket() -> Ticket { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_ticket(t: *mut Ticket) -> void { t.id = 0; }
+        \\fn accept_deferred_resource_release() -> void {
+        \\    var t: Ticket = issue_ticket();
+        \\    defer close_ticket(&t);
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_drop_attr_defer_source_requires_event.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = for (module_mir.functions) |*candidate| {
+        if (std.mem.eql(u8, candidate.name, "accept_deferred_resource_release")) break candidate;
+    } else return error.TestUnexpectedResult;
+    for (function.ownership_events) |*event| {
+        if (event.kind == .explicit_drop) {
+            event.source.line += 1;
+            break;
+        }
+    } else return error.TestUnexpectedResult;
+    try mir.validateLoweringAdmission(module_mir);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_drop_attr_defer_source_requires_event.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM explicit drop release cancellation requires MIR explicit-drop event" {
     const source =
         \\move struct Guard { id: u32 }
