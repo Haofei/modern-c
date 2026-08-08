@@ -273,6 +273,8 @@ def main() -> int:
         ("src/mir.zig", "pub fn sourcePointFromSpan"),
         ("src/mir.zig", "fn typeOwnershipSymbolForTypeName"),
         ("src/mir.zig", "fn addDropGlueCallOwnershipEvent"),
+        ("src/mir_ownership_authority.zig", "pub const FunctionDeclArtifact"),
+        ("src/mir_ownership_authority.zig", "pub fn dropGlueFactsMatchDeclArtifacts"),
         ("src/mir_ownership_authority.zig", "pub const AutoDropLocalRegistrationDecision"),
         ("src/mir_ownership_authority.zig", "root_value_id: mir.ValueId = .invalid"),
         ("src/mir_ownership_authority.zig", "resource_type_symbol_id: mir.SymbolId = .invalid"),

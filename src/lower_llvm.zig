@@ -104,11 +104,7 @@ const MirSubjectType = struct {
 };
 const hasNamedAttr = sema_decl.hasNamedAttr;
 
-const LlvmFunctionDeclArtifact = struct {
-    fn_decl: ast.FnDecl,
-    attrs: []const ast.Attr,
-    is_extern: bool,
-};
+const LlvmFunctionDeclArtifact = mir_ownership_authority.FunctionDeclArtifact;
 
 // LLVM backend AST/call-shape queries and small pure lowering helpers.
 const lower_llvm_query = @import("lower_llvm_query.zig");
@@ -745,15 +741,7 @@ const LlvmEmitter = struct {
     }
 
     fn validateDropGlueFactsAgainstDecls(self: *LlvmEmitter) !void {
-        for (self.mir_module.drop_glue_facts) |fact| {
-            var matched = false;
-            for (self.function_decl_artifacts.items) |artifact| {
-                if (!mir_ownership_authority.dropGlueDeclArtifactMatches(&self.mir_module, fact, artifact.fn_decl, artifact.attrs, artifact.is_extern)) continue;
-                matched = true;
-                break;
-            }
-            if (!matched) return error.UnsupportedLlvmEmission;
-        }
+        if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(&self.mir_module, self.function_decl_artifacts.items)) return error.UnsupportedLlvmEmission;
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {

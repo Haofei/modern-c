@@ -147,11 +147,7 @@ const isStringLiteralTarget = ast_query.isStringLiteralTarget;
 const isMmioStructAbi = ast_query.isMmioStructAbi;
 const dynCalleeMethodName = ast_query.dynCalleeMethodName;
 
-const FunctionDeclArtifact = struct {
-    fn_decl: ast.FnDecl,
-    attrs: []const ast.Attr,
-    is_extern: bool,
-};
+const FunctionDeclArtifact = mir_ownership_authority.FunctionDeclArtifact;
 
 const AggregateDeclArtifact = union(enum) {
     struct_decl: ast.StructDecl,
@@ -555,15 +551,7 @@ pub const CEmitter = struct {
     }
 
     pub fn validateDropGlueFactsAgainstDecls(self: *CEmitter) !void {
-        for (self.mir_module.drop_glue_facts) |fact| {
-            var matched = false;
-            for (self.function_decl_artifacts.items) |artifact| {
-                if (!mir_ownership_authority.dropGlueDeclArtifactMatches(self.mir_module, fact, artifact.fn_decl, artifact.attrs, artifact.is_extern)) continue;
-                matched = true;
-                break;
-            }
-            if (!matched) return error.UnsupportedCEmission;
-        }
+        if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(self.mir_module, self.function_decl_artifacts.items)) return error.UnsupportedCEmission;
     }
 
     fn collectImplTraitArtifact(self: *CEmitter, impl_trait: ast.ImplTrait) !void {

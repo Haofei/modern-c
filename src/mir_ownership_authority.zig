@@ -4,6 +4,12 @@ const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const mir = @import("mir.zig");
 
+pub const FunctionDeclArtifact = struct {
+    fn_decl: ast.FnDecl,
+    attrs: []const ast.Attr,
+    is_extern: bool,
+};
+
 pub const AutoDropLocalCleanup = struct {
     fn_name: []const u8,
     local_name: []const u8,
@@ -45,17 +51,31 @@ pub fn dropGlueDeclMatches(module: *const mir.Module, type_name: []const u8, rel
     return autoDropEligibleTypeNameForDropGlue(module, type_name, drop_glue.typed_release_symbol_id);
 }
 
-pub fn dropGlueDeclArtifactMatches(
+pub fn dropGlueFactsMatchDeclArtifacts(
+    module: *const mir.Module,
+    artifacts: []const FunctionDeclArtifact,
+) bool {
+    for (module.drop_glue_facts) |fact| {
+        var matched = false;
+        for (artifacts) |artifact| {
+            if (!dropGlueDeclArtifactMatches(module, fact, artifact)) continue;
+            matched = true;
+            break;
+        }
+        if (!matched) return false;
+    }
+    return true;
+}
+
+fn dropGlueDeclArtifactMatches(
     module: *const mir.Module,
     fact: mir.DropGlueFact,
-    fn_decl: ast.FnDecl,
-    attrs: []const ast.Attr,
-    is_extern: bool,
+    artifact: FunctionDeclArtifact,
 ) bool {
-    if (is_extern) return false;
-    if (!std.mem.eql(u8, fn_decl.name.text, fact.release_fn)) return false;
-    if (!hasNamedAttr(attrs, "drop")) return false;
-    const declared_resource = ast_query.dropPointerReleaseParamTypeName(fn_decl) orelse return false;
+    if (artifact.is_extern) return false;
+    if (!std.mem.eql(u8, artifact.fn_decl.name.text, fact.release_fn)) return false;
+    if (!hasNamedAttr(artifact.attrs, "drop")) return false;
+    const declared_resource = ast_query.dropPointerReleaseParamTypeName(artifact.fn_decl) orelse return false;
     if (!std.mem.eql(u8, declared_resource, fact.resource_type)) return false;
     return dropGlueDeclMatches(module, declared_resource, fact.release_fn);
 }
