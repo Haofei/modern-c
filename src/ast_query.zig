@@ -95,16 +95,6 @@ pub fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
     };
 }
 
-/// The local name in the narrow move-source shape `move local`, after the
-/// parser has stripped the `move` wrapper and preserving grouping only.
-pub fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| directMovedLocalName(inner.*),
-        .ident => |ident| ident.text,
-        else => null,
-    };
-}
-
 /// True when an expression tree contains a `?` result/nullable propagation expression.
 pub fn exprHandlesAnyResult(expr: ast.Expr) bool {
     return switch (expr.kind) {
@@ -941,19 +931,6 @@ test "address-of local shape recognizes grouped identifiers only" {
 
     try std.testing.expectEqualStrings("g", addressOfIdentName(address).?);
     try std.testing.expect(addressOfIdentName(ident) == null);
-}
-
-test "direct moved local name recognizes only grouped identifiers" {
-    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
-    var ident_expr = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "guard", .span = span } } };
-    const grouped_expr = ast.Expr{ .span = span, .kind = .{ .grouped = &ident_expr } };
-    const literal_expr = ast.Expr{ .span = span, .kind = .{ .int_literal = "1" } };
-    const deref_expr = ast.Expr{ .span = span, .kind = .{ .deref = &ident_expr } };
-
-    try std.testing.expectEqualStrings("guard", directMovedLocalName(ident_expr).?);
-    try std.testing.expectEqualStrings("guard", directMovedLocalName(grouped_expr).?);
-    try std.testing.expect(directMovedLocalName(literal_expr) == null);
-    try std.testing.expect(directMovedLocalName(deref_expr) == null);
 }
 
 test "drop pointer release call recognizes direct address locals only" {

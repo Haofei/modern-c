@@ -237,6 +237,30 @@ fn cleanupCancellationPlanEntryForLocal(
     return null;
 }
 
+fn cleanupCancellationPlanEntryForSource(
+    allocator: std.mem.Allocator,
+    module: *const mir.Module,
+    function: *const mir.Function,
+    kind: mir.CleanupCancellationKind,
+    source: mir.SourcePoint,
+) error{OutOfMemory}!?mir.CleanupCancellationPlanEntry {
+    var cancellation_plan: std.ArrayList(mir.CleanupCancellationPlanEntry) = .empty;
+    defer cancellation_plan.deinit(allocator);
+    mir.appendOwnershipCleanupCancellationPlan(allocator, module.*, function.*, &cancellation_plan) catch |err| switch (err) {
+        error.InvalidMirOwnershipEvents => return null,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+
+    var matched: ?mir.CleanupCancellationPlanEntry = null;
+    for (cancellation_plan.items) |entry| {
+        if (entry.kind != kind) continue;
+        if (!sourceMatches(entry.source, source)) continue;
+        if (matched != null) return null;
+        matched = entry;
+    }
+    return matched;
+}
+
 pub fn explicitDropLocalCleanup(
     allocator: std.mem.Allocator,
     module: *const mir.Module,
@@ -313,15 +337,18 @@ pub fn moveAutoDropCancellationDecision(
     expr: ast.Expr,
     move_span: ast.Span,
 ) error{OutOfMemory}!AutoDropCancellationDecision {
-    const local_name = ast_query.directMovedLocalName(expr) orelse return .ignore;
     const source = mir.sourcePointFromSpan(move_span);
-    const entry = (try cleanupCancellationPlanEntryForLocal(allocator, module, function, .move_out, local_name, source, null)) orelse {
-        if (valueIdForLocal(function, local_name)) |root_value_id| {
-            if (mir.ownershipLocalHasAutoDropResourceEvent(module.*, function.*, root_value_id)) return .reject;
+    const entry = (try cleanupCancellationPlanEntryForSource(allocator, module, function, .move_out, source)) orelse {
+        if (directLocalMoveRootName(expr)) |local_name| {
+            if (valueIdForLocal(function, local_name)) |root_value_id| {
+                if (mir.ownershipLocalHasAutoDropResourceEvent(module.*, function.*, root_value_id)) return .reject;
+            }
         }
         return .ignore;
     };
-    const root_value_id = valueIdForLocal(function, local_name) orelse return .reject;
+    if (entry.place.root_symbol_id.isValid() or entry.place.projection_count != 0) return .reject;
+    const root_value_id = entry.place.root_value_id;
+    const local_name = localNameForValueId(function, root_value_id) orelse return .reject;
     return .{ .remove_auto_drop = .{
         .local_name = local_name,
         .root_value_id = root_value_id,
@@ -384,6 +411,21 @@ fn dropGlueFactForReleaseFunction(module: *const mir.Module, drop_fn: []const u8
 fn valueIdForLocal(function: *const mir.Function, local_name: []const u8) ?mir.ValueId {
     for (function.value_identities) |identity| {
         if (std.mem.eql(u8, identity.spelling, local_name)) return identity.id;
+    }
+    return null;
+}
+
+fn directLocalMoveRootName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| directLocalMoveRootName(inner.*),
+        .ident => |ident| ident.text,
+        else => null,
+    };
+}
+
+fn localNameForValueId(function: *const mir.Function, value_id: mir.ValueId) ?[]const u8 {
+    for (function.value_identities) |identity| {
+        if (identity.id.eql(value_id)) return identity.spelling;
     }
     return null;
 }
