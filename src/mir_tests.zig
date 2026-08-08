@@ -4347,10 +4347,14 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
             try std.testing.expect(cleanup.root_value_id.eql(g_identity.id));
             try std.testing.expect(cleanup.resource_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
             try std.testing.expect(cleanup.drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
+            try std.testing.expectEqual(@as(usize, 0), cleanup.cleanup_action_index);
             try std.testing.expectEqual(unified_cleanup_plan.items[0].primary_event_index, cleanup.auto_drop_event_index);
             try std.testing.expectEqual(unified_cleanup_plan.items[0].storage_dead_event_index, cleanup.storage_dead_event_index);
             try std.testing.expect(try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, null, cleanup));
             var stale_cleanup = cleanup;
+            stale_cleanup.cleanup_action_index = 99;
+            try std.testing.expect(!try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, null, stale_cleanup));
+            stale_cleanup = cleanup;
             stale_cleanup.storage_dead_event_index = cleanup.auto_drop_event_index;
             try std.testing.expect(!try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, null, stale_cleanup));
         },
@@ -4666,12 +4670,17 @@ test "MIR records explicit drop glue call ownership events" {
     try std.testing.expect(cleanup.root_value_id.eql(g_identity.id));
     try std.testing.expect(cleanup.resource_type_symbol_id.eql(function.ownership_events[4].place.root_type_symbol_id));
     try std.testing.expect(cleanup.drop_glue_symbol_id.eql(function.ownership_events[4].drop_glue_symbol_id));
+    try std.testing.expectEqual(@as(usize, 0), cleanup.cleanup_action_index);
     try std.testing.expectEqual(@as(usize, 4), cleanup.explicit_drop_event_index);
     try std.testing.expectEqual(cleanup.explicit_drop_event_index, cached_cleanup.explicit_drop_event_index);
+    try std.testing.expectEqual(cleanup.cleanup_action_index, cached_cleanup.cleanup_action_index);
     try std.testing.expect(cached_cleanup.root_value_id.eql(cleanup.root_value_id));
     try std.testing.expect(try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, null, cleanup));
     try std.testing.expect(try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, &built_cleanup_plan, cleanup));
     var stale_cleanup = cleanup;
+    stale_cleanup.cleanup_action_index = 99;
+    try std.testing.expect(!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, null, stale_cleanup));
+    stale_cleanup = cleanup;
     stale_cleanup.explicit_drop_event_index = 5;
     try std.testing.expect(!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, null, stale_cleanup));
     stale_cleanup = cleanup;
