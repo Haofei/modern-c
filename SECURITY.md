@@ -49,9 +49,9 @@ Useful report fields:
 
 Security-sensitive compiler issues include crashes or hangs on user input, silent
 miscompiles, fail-open diagnostics, unsupported features accepted silently, and
-incorrect emitted runtime checks. Kernel/appliance issues include violations of the
-agent isolation, broker capability, resource accounting, audit, and hostile-input
-boundaries described in `docs/threat-model.md` and `docs/security-review.md`.
+incorrect emitted runtime checks. Kernel validation-workload issues include
+violations of the agent isolation, capability, resource accounting, and
+hostile-input boundaries described in `docs/threat-model.md`.
 
 Vendored third-party engines are part of the trusted computing base where linked.
 Track upstream advisories for those projects until this repository has a formal CVE
