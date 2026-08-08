@@ -1983,17 +1983,19 @@ const LlvmEmitter = struct {
 
     fn ordinaryDeferDirectCallCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast.Expr, stmt_span: ast.Span) error{UnsupportedLlvmEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
         const call = ast_query.callExpr(expr) orelse return null;
-        if (call.type_args.len != 0 or call.args.len != 0) return null;
+        if (call.type_args.len != 0) return null;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const sig = self.fn_sigs.get(fn_name) orelse return null;
-        if (sig.params.len != 0 or sig.is_variadic) return null;
+        if (sig.is_variadic or call.args.len != sig.params.len) return error.UnsupportedLlvmEmission;
         if (!typeNameEql(sig.ret, "void")) return null;
         if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), fn_name)) return error.UnsupportedLlvmEmission;
-        return .{ .fn_name = fn_name, .span = expr.span };
+        return .{ .fn_name = fn_name, .span = expr.span, .call = expr };
     }
 
     fn emitOrdinaryDeferDirectCallCleanup(self: *LlvmEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup) !void {
-        try self.out.print(self.allocator, "  call void @{s}(){s}\n", .{ cleanup.fn_name, try self.debugCallSuffix() });
+        _ = cleanup.fn_name;
+        const call = ast_query.callExpr(cleanup.call) orelse return error.UnsupportedLlvmEmission;
+        try self.emitVoidStatementCall(call, cleanup.span);
     }
 
     fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {

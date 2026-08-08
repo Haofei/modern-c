@@ -3526,7 +3526,7 @@ pub const CEmitter = struct {
             },
             .direct_call => |entry| {
                 try self.writeLineDirective(entry.span);
-                try self.emitOrdinaryDeferDirectCallCleanup(entry);
+                try self.emitOrdinaryDeferDirectCallCleanup(entry, locals, return_ty);
             },
             .auto_drop => |entry| {
                 try self.writeLineDirective(entry.span);
@@ -3559,21 +3559,21 @@ pub const CEmitter = struct {
 
     fn ordinaryDeferDirectCallCleanup(self: *CEmitter, function: *const mir.Function, expr: ast.Expr, stmt_span: ast.Span) error{UnsupportedCEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
         const call = callExpr(expr) orelse return null;
-        if (call.type_args.len != 0 or call.args.len != 0) return null;
+        if (call.type_args.len != 0) return null;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
-        if (info.params.len != 0 or info.is_variadic) return null;
+        if (info.is_variadic or call.args.len != info.params.len) return error.UnsupportedCEmission;
         if (info.return_type) |ret| {
             const ret_name = typeName(ret) orelse return null;
             if (!std.mem.eql(u8, ret_name, "void")) return null;
         }
         if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), fn_name)) return error.UnsupportedCEmission;
-        return .{ .fn_name = fn_name, .span = expr.span };
+        return .{ .fn_name = fn_name, .span = expr.span, .call = expr };
     }
 
-    fn emitOrdinaryDeferDirectCallCleanup(self: *CEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup) !void {
-        try self.writeIndent();
-        try self.out.print(self.allocator, "{s}();\n", .{cleanup.fn_name});
+    fn emitOrdinaryDeferDirectCallCleanup(self: *CEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !void {
+        _ = cleanup.fn_name;
+        try self.emitDeferredExpressionCleanup(cleanup.call, locals, return_ty);
     }
 
     fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {

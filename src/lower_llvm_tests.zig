@@ -1748,6 +1748,38 @@ test "LLVM ordinary direct defer requires MIR call marker" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_ordinary_defer_requires_call_marker.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM ordinary direct defer with arguments requires MIR call marker" {
+    const source =
+        \\extern fn takes_u32(value: u32) -> void;
+        \\fn ordinary_defer_arg_call_marker(x: u32) -> void {
+        \\    defer takes_u32(x);
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_ordinary_defer_arg_requires_call_marker.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    const function = for (module_mir.functions) |*candidate| {
+        if (std.mem.eql(u8, candidate.name, "ordinary_defer_arg_call_marker")) break candidate;
+    } else return error.TestUnexpectedResult;
+    for (function.blocks) |*block| {
+        for (block.instructions) |*instruction| {
+            if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, "takes_u32")) {
+                instruction.detail = "other_takes_u32";
+                break;
+            }
+        } else continue;
+        break;
+    } else return error.TestUnexpectedResult;
+    try mir.validateLoweringAdmission(module_mir);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_ordinary_defer_arg_requires_call_marker.mc", .{}, false, .riscv64, null));
+}
+
 test "LLVM explicit drop release cancellation requires MIR explicit-drop event" {
     const source =
         \\move struct Guard { id: u32 }

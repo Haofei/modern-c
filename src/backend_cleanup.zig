@@ -15,6 +15,7 @@ const mir_ownership_authority = @import("mir_ownership_authority.zig");
 pub const OrdinaryDeferCallCleanup = struct {
     fn_name: []const u8,
     span: ast.Span,
+    call: ast.Expr,
 };
 
 pub const DeferredCleanup = union(enum) {
