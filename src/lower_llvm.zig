@@ -368,7 +368,6 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .tagged_unions = std.StringHashMap(ast.UnionDecl).init(allocator),
         .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
-        .auto_drop_fns_by_type = std.StringHashMap([]const u8).init(allocator),
         .trait_decls = std.StringHashMap(ast.TraitDecl).init(allocator),
         .impl_methods = std.StringHashMap([]const ast.ImplTraitMethod).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
@@ -413,7 +412,6 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
     });
     try ctx.collectNonStructTypeArtifacts();
     try ctx.collectStructArtifacts();
-    try ctx.collectDropGlueFactsFromMir();
     try ctx.collectCallableAndValueDeclArtifacts();
     try ctx.validateDropGlueFactsAgainstDecls();
     try ctx.collectMirAggregateReturnPointerFieldFacts();
@@ -458,7 +456,6 @@ const LlvmEmitter = struct {
     tagged_unions: std.StringHashMap(ast.UnionDecl) = undefined,
     struct_types: std.StringHashMap(ast.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
-    auto_drop_fns_by_type: std.StringHashMap([]const u8) = undefined,
     // Tier 2 trait objects (traits-design §8): every `trait` by name (vtable layout +
     // dispatch slot resolution) and each `impl Trait for Type`'s mangled methods (the
     // rodata vtable's function-pointer list).
@@ -568,7 +565,6 @@ const LlvmEmitter = struct {
         self.impl_methods.deinit();
         self.bind_thunks.deinit();
         self.backend_names.deinit();
-        self.auto_drop_fns_by_type.deinit();
         self.decl_artifacts.deinit(self.allocator);
         self.struct_decl_artifacts.deinit(self.allocator);
         self.function_decl_artifacts.deinit(self.allocator);
@@ -717,28 +713,13 @@ const LlvmEmitter = struct {
         try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .c_abi = c_abi, .is_variadic = fn_decl.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
         if (hasNamedAttr(attrs, "drop")) {
             if (ownership_facts.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
-                if (mir_ownership_authority.autoDropEligibleTypeName(&self.mir_module, type_name)) {
-                    const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return error.UnsupportedLlvmEmission;
-                    if (!std.mem.eql(u8, drop_fn, fn_decl.name.text)) return error.UnsupportedLlvmEmission;
-                }
+                if (!mir_ownership_authority.dropGlueDeclMatches(&self.mir_module, type_name, fn_decl.name.text)) return error.UnsupportedLlvmEmission;
             }
         }
         for (attrs) |attr| switch (attr.kind) {
             .backend_name => |name| try self.backend_names.put(fn_decl.name.text, name),
             else => {},
         };
-    }
-
-    fn collectDropGlueFactsFromMir(self: *LlvmEmitter) !void {
-        for (self.mir_module.drop_glue_facts) |fact| {
-            if (!mir_ownership_authority.autoDropEligibleTypeNameForDropGlue(&self.mir_module, fact.resource_type, fact.typed_release_symbol_id)) return error.UnsupportedLlvmEmission;
-            const entry = try self.auto_drop_fns_by_type.getOrPut(fact.resource_type);
-            if (entry.found_existing) {
-                if (!std.mem.eql(u8, entry.value_ptr.*, fact.release_fn)) return error.UnsupportedLlvmEmission;
-                continue;
-            }
-            entry.value_ptr.* = fact.release_fn;
-        }
     }
 
     fn collectCallableAndValueDeclArtifacts(self: *LlvmEmitter) !void {

@@ -21,6 +21,12 @@ pub fn autoDropEligibleTypeNameForDropGlue(module: *const mir.Module, type_name:
     return false;
 }
 
+pub fn dropGlueDeclMatches(module: *const mir.Module, type_name: []const u8, release_fn: []const u8) bool {
+    const drop_glue = dropGlueFactForReleaseFunction(module, release_fn) orelse return false;
+    if (!std.mem.eql(u8, drop_glue.resource_type, type_name)) return false;
+    return autoDropEligibleTypeNameForDropGlue(module, type_name, drop_glue.typed_release_symbol_id);
+}
+
 pub const AutoDropLocalRegistrationDecision = union(enum) {
     reject,
     emit_auto_drop_cleanup: []const u8,

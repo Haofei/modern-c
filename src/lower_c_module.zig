@@ -13,7 +13,6 @@ pub fn collect(emitter: anytype, declarations: backend.CEarlyDeclarationMetadata
     const decls = declarations.declsForEarlyDeclarationScan();
     emitter.setComptimeDecls(decls);
     try emitter.collectEarlyDeclarationMetadataFromDecls(decls);
-    try emitter.collectDropGlueFactsFromMir();
     try emitter.collectConstGlobals();
     try emitter.collectDeclArtifactsFromDecls(decls);
     try emitter.validateDropGlueFactsAgainstDecls();

@@ -257,7 +257,6 @@ pub const CEmitter = struct {
     static_initializers: std.StringHashMap(ast.Expr),
     type_aliases: std.StringHashMap(ast.TypeExpr),
     functions: std.StringHashMap(FnInfo),
-    auto_drop_fns_by_type: std.StringHashMap([]const u8),
     function_decl_artifacts: std.ArrayList(FunctionDeclArtifact) = .empty,
     // Source function name -> overridden object/backend symbol (`#[backend_name("Y")]`).
     // Emitted as a C `__asm__("Y")` label so the object symbol is renamed without touching
@@ -358,7 +357,6 @@ pub const CEmitter = struct {
             .static_initializers = std.StringHashMap(ast.Expr).init(allocator),
             .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
             .functions = std.StringHashMap(FnInfo).init(allocator),
-            .auto_drop_fns_by_type = std.StringHashMap([]const u8).init(allocator),
             .backend_names = std.StringHashMap([]const u8).init(allocator),
             .const_fns = std.StringHashMap(ast.FnDecl).init(allocator),
             .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
@@ -413,7 +411,6 @@ pub const CEmitter = struct {
         }
         self.impl_methods.deinit();
         self.functions.deinit();
-        self.auto_drop_fns_by_type.deinit();
         self.backend_names.deinit();
     }
 
@@ -500,18 +497,6 @@ pub const CEmitter = struct {
         });
     }
 
-    pub fn collectDropGlueFactsFromMir(self: *CEmitter) !void {
-        for (self.mir_module.drop_glue_facts) |fact| {
-            if (!mir_ownership_authority.autoDropEligibleTypeNameForDropGlue(self.mir_module, fact.resource_type, fact.typed_release_symbol_id)) return error.UnsupportedCEmission;
-            const entry = try self.auto_drop_fns_by_type.getOrPut(fact.resource_type);
-            if (entry.found_existing) {
-                if (!std.mem.eql(u8, entry.value_ptr.*, fact.release_fn)) return error.UnsupportedCEmission;
-                continue;
-            }
-            entry.value_ptr.* = fact.release_fn;
-        }
-    }
-
     pub fn collectDeclArtifactsFromDecls(self: *CEmitter, decls: []const ast.Decl) anyerror!void {
         for (decls) |decl| {
             try self.collectDeclArtifact(decl);
@@ -560,10 +545,7 @@ pub const CEmitter = struct {
         try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = is_extern, .is_variadic = fn_decl.is_variadic, .error_from = error_from.hasAttr(attrs) });
         if (!is_extern and hasNamedAttr(attrs, "drop")) {
             if (ownership_facts.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
-                if (mir_ownership_authority.autoDropEligibleTypeName(self.mir_module, type_name)) {
-                    const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return error.UnsupportedCEmission;
-                    if (!std.mem.eql(u8, drop_fn, fn_decl.name.text)) return error.UnsupportedCEmission;
-                }
+                if (!mir_ownership_authority.dropGlueDeclMatches(self.mir_module, type_name, fn_decl.name.text)) return error.UnsupportedCEmission;
             }
         }
         try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = fn_decl, .attrs = attrs, .is_extern = is_extern });
