@@ -2841,7 +2841,7 @@ pub const CEmitter = struct {
             .skip_cleanup_registration => return,
             .reject => return error.UnsupportedCEmission,
         };
-        try self.defer_stack.append(self.allocator, .{ .auto_drop = cleanup });
+        try self.defer_stack.append(self.allocator, .{ .auto_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
     }
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr, move_span: ast.Span) !void {
@@ -3433,7 +3433,7 @@ pub const CEmitter = struct {
         switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
             .ignore => {},
             .emit_explicit_drop_cleanup => |cleanup| {
-                try self.defer_stack.append(self.allocator, .{ .explicit_drop = cleanup });
+                try self.defer_stack.append(self.allocator, .{ .explicit_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
                 return;
             },
             .reject => return error.UnsupportedCEmission,
@@ -3684,15 +3684,19 @@ pub const CEmitter = struct {
         self.applyMirPointerProvenanceInvalidationsAtCall(cleanup.span, locals);
     }
 
-    fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
+    fn emitAutoDropPointerCleanup(self: *CEmitter, ref: mir_ownership_authority.OwnershipCleanupActionRef) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        const plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedCEmission;
+        const cleanup = mir_ownership_authority.autoDropLocalCleanupFromActionRef(self.mir_module, function, plan, ref) orelse return error.UnsupportedCEmission;
         if (!try mir_ownership_authority.autoDropCleanupEmissionAllowed(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), cleanup)) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
     }
 
-    fn emitExplicitDropPointerCleanup(self: *CEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
+    fn emitExplicitDropPointerCleanup(self: *CEmitter, ref: mir_ownership_authority.OwnershipCleanupActionRef) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        const plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedCEmission;
+        const cleanup = mir_ownership_authority.explicitDropLocalCleanupFromActionRef(self.mir_module, function, plan, ref) orelse return error.UnsupportedCEmission;
         if (!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), cleanup)) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });

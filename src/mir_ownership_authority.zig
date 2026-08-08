@@ -23,6 +23,26 @@ pub const AutoDropLocalCleanup = struct {
     storage_dead_event_index: usize = std.math.maxInt(usize),
 };
 
+pub const OwnershipCleanupActionRef = struct {
+    local_name: []const u8,
+    span: ast.Span,
+    cleanup_action_index: usize,
+    root_value_id: mir.ValueId,
+    resource_type_symbol_id: mir.SymbolId,
+    drop_glue_symbol_id: mir.SymbolId,
+};
+
+pub fn ownershipCleanupActionRef(cleanup: AutoDropLocalCleanup) OwnershipCleanupActionRef {
+    return .{
+        .local_name = cleanup.local_name,
+        .span = cleanup.span,
+        .cleanup_action_index = cleanup.cleanup_action_index,
+        .root_value_id = cleanup.root_value_id,
+        .resource_type_symbol_id = cleanup.resource_type_symbol_id,
+        .drop_glue_symbol_id = cleanup.drop_glue_symbol_id,
+    };
+}
+
 pub const AutoDropCleanupKey = struct {
     local_name: []const u8,
     root_value_id: mir.ValueId,
@@ -180,6 +200,41 @@ pub fn autoDropCleanupEmissionAllowed(
     return true;
 }
 
+pub fn autoDropLocalCleanupFromActionRef(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    cleanup_plan: *const mir.OwnershipCleanupPlan,
+    ref: OwnershipCleanupActionRef,
+) ?AutoDropLocalCleanup {
+    if (!ref.root_value_id.isValid() or
+        !ref.resource_type_symbol_id.isValid() or
+        !ref.drop_glue_symbol_id.isValid() or
+        ref.cleanup_action_index == std.math.maxInt(usize) or
+        ref.cleanup_action_index >= cleanup_plan.actions.len)
+    {
+        return null;
+    }
+    const local_value_id = valueIdForLocal(function, ref.local_name) orelse return null;
+    if (!local_value_id.eql(ref.root_value_id)) return null;
+    const drop_glue = dropGlueFactForSymbols(module, ref.resource_type_symbol_id, ref.drop_glue_symbol_id) orelse return null;
+    const entry = cleanup_plan.actions[ref.cleanup_action_index];
+    if (entry.kind != .auto_drop) return null;
+    if (!simpleOwnershipRootMatches(entry.place, ref.root_value_id)) return null;
+    if (!entry.place.root_type_symbol_id.eql(ref.resource_type_symbol_id)) return null;
+    if (!entry.drop_glue_symbol_id.eql(ref.drop_glue_symbol_id)) return null;
+    return .{
+        .fn_name = drop_glue.release_fn,
+        .local_name = ref.local_name,
+        .span = ref.span,
+        .cleanup_action_index = ref.cleanup_action_index,
+        .root_value_id = ref.root_value_id,
+        .resource_type_symbol_id = ref.resource_type_symbol_id,
+        .drop_glue_symbol_id = ref.drop_glue_symbol_id,
+        .auto_drop_event_index = entry.primary_event_index,
+        .storage_dead_event_index = entry.storage_dead_event_index,
+    };
+}
+
 pub fn autoDropCleanupObligationExists(
     allocator: std.mem.Allocator,
     module: *const mir.Module,
@@ -332,6 +387,41 @@ pub fn explicitDropCleanupEmissionAllowed(
     if (!entry.place.root_type_symbol_id.eql(cleanup.resource_type_symbol_id)) return false;
     if (!entry.drop_glue_symbol_id.eql(cleanup.drop_glue_symbol_id)) return false;
     return true;
+}
+
+pub fn explicitDropLocalCleanupFromActionRef(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    cleanup_plan: *const mir.OwnershipCleanupPlan,
+    ref: OwnershipCleanupActionRef,
+) ?AutoDropLocalCleanup {
+    if (!ref.root_value_id.isValid() or
+        !ref.resource_type_symbol_id.isValid() or
+        !ref.drop_glue_symbol_id.isValid() or
+        ref.cleanup_action_index == std.math.maxInt(usize) or
+        ref.cleanup_action_index >= cleanup_plan.actions.len)
+    {
+        return null;
+    }
+    const local_value_id = valueIdForLocal(function, ref.local_name) orelse return null;
+    if (!local_value_id.eql(ref.root_value_id)) return null;
+    const drop_glue = dropGlueFactForSymbols(module, ref.resource_type_symbol_id, ref.drop_glue_symbol_id) orelse return null;
+    const entry = cleanup_plan.actions[ref.cleanup_action_index];
+    if (entry.kind != .explicit_drop) return null;
+    if (!simpleOwnershipRootMatches(entry.place, ref.root_value_id)) return null;
+    if (!sourceMatches(entry.source, mir.sourcePointFromSpan(ref.span))) return null;
+    if (!entry.place.root_type_symbol_id.eql(ref.resource_type_symbol_id)) return null;
+    if (!entry.drop_glue_symbol_id.eql(ref.drop_glue_symbol_id)) return null;
+    return .{
+        .fn_name = drop_glue.release_fn,
+        .local_name = ref.local_name,
+        .span = ref.span,
+        .cleanup_action_index = ref.cleanup_action_index,
+        .root_value_id = ref.root_value_id,
+        .resource_type_symbol_id = ref.resource_type_symbol_id,
+        .drop_glue_symbol_id = ref.drop_glue_symbol_id,
+        .explicit_drop_event_index = entry.primary_event_index,
+    };
 }
 
 pub fn deferredExplicitDropCleanupDecision(
