@@ -69,9 +69,9 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
     },
     "moveIfLetCfg": {
         "required": [
-            "} else if (block == branch.then_exit) {",
+            "} else if (block == then_exit) {",
             "finalizeBranchLocals(self, block_state, state, true);",
-            "} else if (block == branch.else_exit) {",
+            "} else if (block == else_exit) {",
         ],
         "forbidden": [
             "finalizeBranchLocals(self, block_state, state, !then_div);",
@@ -80,7 +80,7 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
     },
     "moveDeferIfLetCfg": {
         "required": [
-            "} else if (block == branch.then_exit or block == branch.else_exit) {",
+            "} else if (block == then_exit or block == else_exit) {",
             "worklist.propagateSuccessors(self, block, block_state);",
         ],
         "forbidden": [],
@@ -164,8 +164,6 @@ ANCHORS: dict[str, list[str]] = {
         "fn propagateSuccessorsExcept",
         "const LinearMoveCfg = struct",
         "fn linearMoveCfg",
-        "const TwoArmMoveCfg = struct",
-        "fn twoArmMoveCfg",
         "multiArmMoveCfg(self, 2)",
         "const MultiArmMoveCfg = struct",
         "fn multiArmMoveCfg",
@@ -305,7 +303,7 @@ def main() -> int:
                     )
 
     sema_move = (REPO_ROOT / "src/sema_move.zig").read_text(encoding="utf-8")
-    for retired in ("const ExitMoveCfg = struct", "fn exitMoveCfg", "const ShortCircuitMoveCfg = struct", "fn shortCircuitMoveCfg"):
+    for retired in ("const ExitMoveCfg = struct", "fn exitMoveCfg", "const ShortCircuitMoveCfg = struct", "fn shortCircuitMoveCfg", "const TwoArmMoveCfg = struct", "fn twoArmMoveCfg"):
         checked += 1
         if retired in sema_move:
             missing.append(f"src/sema_move.zig: retired exit-only CFG skeleton {retired!r} is still present")

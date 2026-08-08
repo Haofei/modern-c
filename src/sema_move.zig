@@ -301,29 +301,6 @@ fn loopBodyMoveCfg(self: *Checker) ?LoopBodyMoveCfg {
     };
 }
 
-const TwoArmMoveCfg = struct {
-    base: MultiArmMoveCfg,
-    then_block: sema_model.MoveCfgBlockId,
-    else_block: sema_model.MoveCfgBlockId,
-    then_exit: sema_model.MoveCfgBlockId,
-    else_exit: sema_model.MoveCfgBlockId,
-
-    fn deinit(self: *TwoArmMoveCfg) void {
-        self.base.deinit();
-    }
-};
-
-fn twoArmMoveCfg(self: *Checker) ?TwoArmMoveCfg {
-    const base = multiArmMoveCfg(self, 2) orelse return null;
-    return .{
-        .then_block = base.arms[0],
-        .else_block = base.arms[1],
-        .then_exit = base.arm_exits[0],
-        .else_exit = base.arm_exits[1],
-        .base = base,
-    };
-}
-
 const MultiArmMoveCfg = struct {
     allocator: std.mem.Allocator,
     cfg: sema_model.MoveCfg,
@@ -982,10 +959,14 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
 // non-diverging arms reach the join.  This is deliberately the first production
 // CFG slice; switch and loop still use their existing specialized transfer rules.
 fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
-    var branch = twoArmMoveCfg(self) orelse return false;
+    var branch = multiArmMoveCfg(self, 2) orelse return false;
     defer branch.deinit();
+    const then_cfg_block = branch.arms[0];
+    const else_cfg_block = branch.arms[1];
+    const then_exit = branch.arm_exits[0];
+    const else_exit = branch.arm_exits[1];
 
-    var worklist = MoveStateCfgWorklist.init(self, &branch.base.cfg, branch.base.entry, state) orelse return false;
+    var worklist = MoveStateCfgWorklist.init(self, &branch.cfg, branch.entry, state) orelse return false;
     defer worklist.deinit();
     var then_div = false;
     var else_div = false;
@@ -994,18 +975,18 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *co
 
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == branch.base.entry) {
+        if (block == branch.entry) {
             // The condition/scrutinee is evaluated before either branch.
             moveConsume(self, node.value, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.then_block) {
+        } else if (block == then_cfg_block) {
             then_bound_name = addIfLetMoveBinding(self, node.pattern, node.value, block_state, aliases);
             then_div = moveBlock(self, node.then_block, block_state, aliases);
             if (!then_div) worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.else_block) {
+        } else if (block == else_cfg_block) {
             if (node.else_block) |else_body| else_div = moveBlock(self, else_body, block_state, aliases);
             if (!else_div) worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.then_exit) {
+        } else if (block == then_exit) {
             if (then_bound_name) |name| {
                 if (bindingMoveSlotPtrForIdent(name, block_state)) |slot| {
                     if (slotRequiresExplicitConsume(self, slot.*, aliases)) {
@@ -1016,10 +997,10 @@ fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *co
             }
             finalizeBranchLocals(self, block_state, state, true);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.else_exit) {
+        } else if (block == else_exit) {
             finalizeBranchLocals(self, block_state, state, true);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.base.join) {
+        } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
             joined = true;
         }
@@ -2729,24 +2710,28 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
 // The worklist owns transport between those blocks; loop widening remains the
 // existing dedicated rule so condition-only moves retain E_MOVE_LOOP_RESOURCE.
 fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var branch = twoArmMoveCfg(self) orelse return;
+    var branch = multiArmMoveCfg(self, 2) orelse return;
     defer branch.deinit();
+    const zero_iteration_block = branch.arms[0];
+    const condition_block = branch.arms[1];
+    const zero_iteration_exit = branch.arm_exits[0];
+    const condition_exit = branch.arm_exits[1];
 
-    var worklist = MoveStateCfgWorklist.init(self, &branch.base.cfg, branch.base.entry, state) orelse return;
+    var worklist = MoveStateCfgWorklist.init(self, &branch.cfg, branch.entry, state) orelse return;
     defer worklist.deinit();
     worklist.useLoopConditionJoinPolicy();
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == branch.base.entry) {
+        if (block == branch.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.then_block or block == branch.then_exit) {
+        } else if (block == zero_iteration_block or block == zero_iteration_exit) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.else_block) {
+        } else if (block == condition_block) {
             moveConsume(self, condition, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.else_exit) {
+        } else if (block == condition_exit) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.base.join) {
+        } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
         }
     }
@@ -2821,24 +2806,28 @@ fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, ali
 }
 
 fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var branch = twoArmMoveCfg(self) orelse return;
+    var branch = multiArmMoveCfg(self, 2) orelse return;
     defer branch.deinit();
+    const bypass_block = branch.arms[0];
+    const rhs_block = branch.arms[1];
+    const bypass_exit = branch.arm_exits[0];
+    const rhs_exit = branch.arm_exits[1];
 
-    var worklist = MoveStateCfgWorklist.init(self, &branch.base.cfg, branch.base.entry, state) orelse return;
+    var worklist = MoveStateCfgWorklist.init(self, &branch.cfg, branch.entry, state) orelse return;
     defer worklist.deinit();
     worklist.useShortCircuitJoinPolicy(rhs.span, false);
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == branch.base.entry) {
+        if (block == branch.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.then_block or block == branch.then_exit) {
+        } else if (block == bypass_block or block == bypass_exit) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.else_block) {
+        } else if (block == rhs_block) {
             moveConsume(self, rhs, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.else_exit) {
+        } else if (block == rhs_exit) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.base.join) {
+        } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
         }
     }
@@ -2875,24 +2864,28 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *MoveState, rhs_state: *co
 }
 
 fn moveDeferShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var branch = twoArmMoveCfg(self) orelse return;
+    var branch = multiArmMoveCfg(self, 2) orelse return;
     defer branch.deinit();
+    const bypass_block = branch.arms[0];
+    const rhs_block = branch.arms[1];
+    const bypass_exit = branch.arm_exits[0];
+    const rhs_exit = branch.arm_exits[1];
 
-    var worklist = MoveStateCfgWorklist.init(self, &branch.base.cfg, branch.base.entry, state) orelse return;
+    var worklist = MoveStateCfgWorklist.init(self, &branch.cfg, branch.entry, state) orelse return;
     defer worklist.deinit();
     worklist.useShortCircuitJoinPolicy(rhs.span, true);
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == branch.base.entry) {
+        if (block == branch.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.then_block or block == branch.then_exit) {
+        } else if (block == bypass_block or block == bypass_exit) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.else_block) {
+        } else if (block == rhs_block) {
             moveDefer(self, rhs, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.else_exit) {
+        } else if (block == rhs_exit) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.base.join) {
+        } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
         }
     }
@@ -4855,25 +4848,29 @@ fn moveDeferSwitchCfg(self: *Checker, node: ast.Switch, state: *MoveState, alias
 }
 
 fn moveDeferIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var branch = twoArmMoveCfg(self) orelse return;
+    var branch = multiArmMoveCfg(self, 2) orelse return;
     defer branch.deinit();
+    const then_cfg_block = branch.arms[0];
+    const else_cfg_block = branch.arms[1];
+    const then_exit = branch.arm_exits[0];
+    const else_exit = branch.arm_exits[1];
 
-    var worklist = MoveStateCfgWorklist.init(self, &branch.base.cfg, branch.base.entry, state) orelse return;
+    var worklist = MoveStateCfgWorklist.init(self, &branch.cfg, branch.entry, state) orelse return;
     defer worklist.deinit();
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == branch.base.entry) {
+        if (block == branch.entry) {
             moveDefer(self, node.value, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.then_block) {
+        } else if (block == then_cfg_block) {
             moveDeferBlock(self, node.then_block, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.else_block) {
+        } else if (block == else_cfg_block) {
             if (node.else_block) |else_block| moveDeferBlock(self, else_block, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.then_exit or block == branch.else_exit) {
+        } else if (block == then_exit or block == else_exit) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == branch.base.join) {
+        } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
         }
     }
