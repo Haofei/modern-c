@@ -1849,18 +1849,26 @@ const LlvmEmitter = struct {
                         const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt.span)) orelse return error.UnsupportedLlvmEmission;
                         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
                             try self.defer_stack.append(self.allocator, .{ .direct_call = cleanup });
+                            try self.validateDeferCleanupStack();
                             return false;
                         }
                         if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
                             try self.defer_stack.append(self.allocator, .{ .call_target = cleanup });
+                            try self.validateDeferCleanupStack();
                             return false;
                         }
                         switch (expr.kind) {
-                            .block => |block| try self.defer_stack.append(self.allocator, .{ .block = .{ .defer_ref = defer_ref, .block = block } }),
+                            .block => |block| {
+                                try self.defer_stack.append(self.allocator, .{ .block = .{ .defer_ref = defer_ref, .block = block } });
+                                try self.validateDeferCleanupStack();
+                            },
                             else => return error.UnsupportedLlvmEmission,
                         }
                     },
-                    .emit_explicit_drop_cleanup => |cleanup| try self.defer_stack.append(self.allocator, .{ .explicit_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) }),
+                    .emit_explicit_drop_cleanup => |cleanup| {
+                        try self.defer_stack.append(self.allocator, .{ .explicit_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
+                        try self.validateDeferCleanupStack();
+                    },
                     .reject => return error.UnsupportedLlvmEmission,
                 }
             },
@@ -1973,11 +1981,18 @@ const LlvmEmitter = struct {
     }
 
     fn emitDeferredCleanupsFrom(self: *LlvmEmitter, start: usize, ret_ty: ast.TypeExpr) !void {
+        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
+        if (!backend_cleanup.deferCleanupEmissionRangeValid(function.*, self.defer_stack.items, start)) return error.UnsupportedLlvmEmission;
         var index = self.defer_stack.items.len;
         while (index > start) {
             index -= 1;
             try self.emitDeferredCleanup(self.defer_stack.items[index], ret_ty);
         }
+    }
+
+    fn validateDeferCleanupStack(self: *LlvmEmitter) !void {
+        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
+        if (!backend_cleanup.deferCleanupStackRefsValid(function.*, self.defer_stack.items)) return error.UnsupportedLlvmEmission;
     }
 
     fn emitDeferredCleanup(self: *LlvmEmitter, cleanup: DeferredCleanup, ret_ty: ast.TypeExpr) !void {

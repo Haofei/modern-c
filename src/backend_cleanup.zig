@@ -44,6 +44,56 @@ pub const DeferredCleanup = union(enum) {
     explicit_drop: mir_ownership_authority.OwnershipCleanupActionRef,
 };
 
+pub fn deferCleanupRef(cleanup: DeferredCleanup) ?mir.DeferCleanupRef {
+    return switch (cleanup) {
+        .block => |entry| entry.defer_ref,
+        .direct_call => |entry| entry.defer_ref,
+        .call_target => |entry| entry.defer_ref,
+        .auto_drop, .explicit_drop => null,
+    };
+}
+
+pub fn deferCleanupStackRefsValid(function: mir.Function, stack: []const DeferredCleanup) bool {
+    for (stack, 0..) |cleanup, index| {
+        const ref = deferCleanupRef(cleanup) orelse continue;
+        if (!mir.deferCleanupRefValid(function, ref)) return false;
+        var previous_index: usize = 0;
+        while (previous_index < index) : (previous_index += 1) {
+            const previous = deferCleanupRef(stack[previous_index]) orelse continue;
+            if (sameDeferCleanupRef(previous, ref)) return false;
+            if (deferCleanupRefAfter(function, previous, ref)) return false;
+        }
+    }
+    return true;
+}
+
+pub fn deferCleanupEmissionRangeValid(function: mir.Function, stack: []const DeferredCleanup, start: usize) bool {
+    if (start > stack.len) return false;
+    if (!deferCleanupStackRefsValid(function, stack)) return false;
+    for (stack[start..]) |cleanup| {
+        const ref = deferCleanupRef(cleanup) orelse continue;
+        if (!mir.deferCleanupRefValid(function, ref)) return false;
+    }
+    return true;
+}
+
+fn sameDeferCleanupRef(a: mir.DeferCleanupRef, b: mir.DeferCleanupRef) bool {
+    return a.block_id.eql(b.block_id) and a.instruction_index == b.instruction_index;
+}
+
+fn deferCleanupRefAfter(function: mir.Function, a: mir.DeferCleanupRef, b: mir.DeferCleanupRef) bool {
+    const a_offset = deferCleanupSourceOrder(function, a) orelse return true;
+    const b_offset = deferCleanupSourceOrder(function, b) orelse return true;
+    return a_offset > b_offset;
+}
+
+fn deferCleanupSourceOrder(function: mir.Function, ref: mir.DeferCleanupRef) ?usize {
+    if (!mir.deferCleanupRefValid(function, ref)) return null;
+    const instruction = function.blocks[ref.block_id.index()].instructions[ref.instruction_index];
+    if (instruction.source_offset != 0) return instruction.source_offset;
+    return instruction.line * 1_000_000 + instruction.column;
+}
+
 /// Remove the most recent auto-drop cleanup for a MIR ownership action from a
 /// transitional backend cleanup stack. Returning `false` is a backend invariant
 /// failure: MIR identified a live cleanup obligation, but the backend-local stack
@@ -99,4 +149,52 @@ test "auto-drop cleanup stack removal uses typed local identity" {
     }
     try std.testing.expect(!removeAutoDropCleanup(&stack, .{ .local_name = "g", .cleanup_action_index = 0, .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
     try std.testing.expect(!removeAutoDropCleanup(&stack, .{ .local_name = "g", .cleanup_action_index = 0, .root_value_id = root_shadow, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
+}
+
+test "defer cleanup stack refs must be valid ordered and unique" {
+    const span = ast.Span{ .offset = 10, .len = 1, .line = 1, .column = 10 };
+    const later_span = ast.Span{ .offset = 20, .len = 1, .line = 1, .column = 20 };
+    var instructions = [_]mir.Instruction{
+        .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = span.line, .column = span.column, .source_offset = span.offset, .source_len = span.len },
+        .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = later_span.line, .column = later_span.column, .source_offset = later_span.offset, .source_len = later_span.len },
+    };
+    var blocks = [_]mir.Block{
+        .{
+            .id = 0,
+            .typed_id = mir.BlockId.fromIndex(0),
+            .kind = "entry",
+            .instructions = instructions[0..],
+            .successors = &.{},
+            .terminator = .fallthrough,
+        },
+    };
+    const function: mir.Function = .{
+        .name = "f",
+        .return_ty = .void,
+        .no_lang_trap = false,
+        .irq_context = false,
+        .blocks = blocks[0..],
+        .trap_edges = &.{},
+        .contract_regions = &.{},
+        .range_facts = &.{},
+        .pointer_provenance_facts = &.{},
+        .representation_facts = &.{},
+        .elided_bounds = &.{},
+    };
+    const first: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 0, .source = mir.sourcePointFromSpan(span) };
+    const second: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 1, .source = mir.sourcePointFromSpan(later_span) };
+    const block: ast.Block = .{ .span = span, .items = &.{} };
+
+    try std.testing.expect(deferCleanupStackRefsValid(function, &.{
+        .{ .block = .{ .defer_ref = first, .block = block } },
+        .{ .block = .{ .defer_ref = second, .block = block } },
+    }));
+    try std.testing.expect(!deferCleanupStackRefsValid(function, &.{
+        .{ .block = .{ .defer_ref = second, .block = block } },
+        .{ .block = .{ .defer_ref = first, .block = block } },
+    }));
+    try std.testing.expect(!deferCleanupStackRefsValid(function, &.{
+        .{ .block = .{ .defer_ref = first, .block = block } },
+        .{ .block = .{ .defer_ref = first, .block = block } },
+    }));
 }

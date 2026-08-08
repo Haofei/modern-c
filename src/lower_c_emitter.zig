@@ -3430,6 +3430,7 @@ pub const CEmitter = struct {
             .ignore => {},
             .emit_explicit_drop_cleanup => |cleanup| {
                 try self.defer_stack.append(self.allocator, .{ .explicit_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
+                try self.validateDeferCleanupStack();
                 return;
             },
             .reject => return error.UnsupportedCEmission,
@@ -3437,14 +3438,19 @@ pub const CEmitter = struct {
         const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt_span)) orelse return error.UnsupportedCEmission;
         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
             try self.defer_stack.append(self.allocator, .{ .direct_call = cleanup });
+            try self.validateDeferCleanupStack();
             return;
         }
         if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
             try self.defer_stack.append(self.allocator, .{ .call_target = cleanup });
+            try self.validateDeferCleanupStack();
             return;
         }
         switch (expr.kind) {
-            .block => |block| try self.defer_stack.append(self.allocator, .{ .block = .{ .defer_ref = defer_ref, .block = block } }),
+            .block => |block| {
+                try self.defer_stack.append(self.allocator, .{ .block = .{ .defer_ref = defer_ref, .block = block } });
+                try self.validateDeferCleanupStack();
+            },
             else => return error.UnsupportedCEmission,
         }
     }
@@ -3523,11 +3529,18 @@ pub const CEmitter = struct {
     // an exit edge such as `?` that does not pop the scope (the ok path continues) leaves
     // the active defers intact.
     fn emitDeferredCleanupsFrom(self: *CEmitter, start: usize, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        if (!backend_cleanup.deferCleanupEmissionRangeValid(function.*, self.defer_stack.items, start)) return error.UnsupportedCEmission;
         var index = self.defer_stack.items.len;
         while (index > start) {
             index -= 1;
             try self.emitDeferredCleanup(self.defer_stack.items[index], locals, return_ty);
         }
+    }
+
+    fn validateDeferCleanupStack(self: *CEmitter) !void {
+        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        if (!backend_cleanup.deferCleanupStackRefsValid(function.*, self.defer_stack.items)) return error.UnsupportedCEmission;
     }
 
     fn emitDeferredCleanup(self: *CEmitter, cleanup: DeferredCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
