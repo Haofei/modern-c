@@ -176,6 +176,39 @@ pub fn autoDropCleanupEmissionAllowed(
     return false;
 }
 
+pub fn autoDropCleanupObligationExists(
+    allocator: std.mem.Allocator,
+    module: *const mir.Module,
+    function: *const mir.Function,
+    key: AutoDropCleanupKey,
+) error{OutOfMemory}!bool {
+    if (!key.root_value_id.isValid() or !key.resource_type_symbol_id.isValid() or !key.drop_glue_symbol_id.isValid()) return false;
+    var cleanup_plan: std.ArrayList(mir.CleanupActionPlanEntry) = .empty;
+    defer cleanup_plan.deinit(allocator);
+    mir.appendOwnershipCleanupPlan(allocator, module.*, function.*, &cleanup_plan) catch |err| switch (err) {
+        error.InvalidMirOwnershipEvents => return false,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+
+    for (cleanup_plan.items) |entry| {
+        if (entry.kind != .auto_drop) continue;
+        if (!simpleOwnershipRootMatches(entry.place, key.root_value_id)) continue;
+        if (!entry.place.root_type_symbol_id.eql(key.resource_type_symbol_id)) continue;
+        if (!entry.drop_glue_symbol_id.eql(key.drop_glue_symbol_id)) continue;
+        return true;
+    }
+    return false;
+}
+
+pub fn missingAutoDropCancellationIsAllowed(
+    allocator: std.mem.Allocator,
+    module: *const mir.Module,
+    function: *const mir.Function,
+    key: AutoDropCleanupKey,
+) error{OutOfMemory}!bool {
+    return !try autoDropCleanupObligationExists(allocator, module, function, key);
+}
+
 fn explicitDropPlanEntryForSource(
     allocator: std.mem.Allocator,
     module: *const mir.Module,
