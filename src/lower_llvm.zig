@@ -1844,8 +1844,8 @@ const LlvmEmitter = struct {
             .@"defer" => |expr| {
                 try self.cancelAutoDropForReleaseCall(expr);
                 const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-                switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
-                    .ignore => {
+                switch (try backend_cleanup.registerDeferredExplicitDropCleanup(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.defer_stack, expr)) {
+                    .ignored => {
                         const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt.span)) orelse return error.UnsupportedLlvmEmission;
                         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
                             try self.defer_stack.append(self.allocator, .{ .direct_call = cleanup });
@@ -1865,11 +1865,10 @@ const LlvmEmitter = struct {
                             else => return error.UnsupportedLlvmEmission,
                         }
                     },
-                    .emit_explicit_drop_cleanup => |cleanup| {
-                        try self.defer_stack.append(self.allocator, .{ .explicit_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
+                    .applied => {
                         try self.validateDeferCleanupStack();
                     },
-                    .reject => return error.UnsupportedLlvmEmission,
+                    .rejected => return error.UnsupportedLlvmEmission,
                 }
             },
             .loop => |node| {

@@ -3421,14 +3421,13 @@ pub const CEmitter = struct {
     fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr, stmt_span: ast.Span) !void {
         try self.cancelAutoDropForReleaseCall(expr);
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
-            .ignore => {},
-            .emit_explicit_drop_cleanup => |cleanup| {
-                try self.defer_stack.append(self.allocator, .{ .explicit_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
+        switch (try backend_cleanup.registerDeferredExplicitDropCleanup(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.defer_stack, expr)) {
+            .ignored => {},
+            .applied => {
                 try self.validateDeferCleanupStack();
                 return;
             },
-            .reject => return error.UnsupportedCEmission,
+            .rejected => return error.UnsupportedCEmission,
         }
         const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt_span)) orelse return error.UnsupportedCEmission;
         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {

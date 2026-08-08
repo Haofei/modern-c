@@ -332,6 +332,7 @@ def main() -> int:
         ("src/backend_cleanup.zig", "pub fn registerAutoDropLocalCleanup"),
         ("src/backend_cleanup.zig", "pub fn cancelAutoDropForMove("),
         ("src/backend_cleanup.zig", "pub fn cancelAutoDropForExplicitDrop"),
+        ("src/backend_cleanup.zig", "pub fn registerDeferredExplicitDropCleanup"),
         ("src/backend_cleanup.zig", "fn deferCleanupRefAfter"),
         ("src/backend_cleanup.zig", "callee: ast.Expr"),
         ("src/backend_cleanup.zig", "callee_span: ast.Span"),

@@ -131,6 +131,23 @@ pub fn cancelAutoDropForExplicitDrop(
     return cancelAutoDropWithDecision(stack, try mir_ownership_authority.explicitDropCancellationDecision(allocator, module, function, cleanup_plan, expr));
 }
 
+pub fn registerDeferredExplicitDropCleanup(
+    allocator: std.mem.Allocator,
+    module: *const mir.Module,
+    function: *const mir.Function,
+    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    stack: *std.ArrayList(DeferredCleanup),
+    expr: ast.Expr,
+) error{OutOfMemory}!AutoDropStackDecision {
+    const cleanup = switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(allocator, module, function, cleanup_plan, expr)) {
+        .ignore => return .ignored,
+        .emit_explicit_drop_cleanup => |entry| entry,
+        .reject => return .rejected,
+    };
+    try stack.append(allocator, .{ .explicit_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
+    return .applied;
+}
+
 fn cancelAutoDropWithDecision(
     stack: *std.ArrayList(DeferredCleanup),
     decision: mir_ownership_authority.AutoDropCancellationDecision,
