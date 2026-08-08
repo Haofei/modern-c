@@ -3437,10 +3437,7 @@ pub const CEmitter = struct {
         }
         switch (expr.kind) {
             .block => |block| try self.defer_stack.append(self.allocator, .{ .block = block }),
-            else => {
-                if (!backend_cleanup.ordinaryDeferTrivialExprSupported(expr)) return error.UnsupportedCEmission;
-                try self.defer_stack.append(self.allocator, .{ .trivial_expr = expr });
-            },
+            else => return error.UnsupportedCEmission,
         }
     }
 
@@ -3527,12 +3524,6 @@ pub const CEmitter = struct {
 
     fn emitDeferredCleanup(self: *CEmitter, cleanup: DeferredCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         switch (cleanup) {
-            .trivial_expr => |expr| {
-                try self.writeLineDirective(expr.span);
-                try self.writeIndent();
-                try self.emitExpr(expr, locals);
-                try self.out.appendSlice(self.allocator, ";\n");
-            },
             .block => |block| {
                 try self.writeLineDirective(block.span);
                 try self.emitBracedBlockBody(block, locals, return_ty);

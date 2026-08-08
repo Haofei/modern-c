@@ -312,8 +312,6 @@ def main() -> int:
         ("src/backend_cleanup.zig", "callee_span: ast.Span"),
         ("src/backend_cleanup.zig", "type_args: []const ast.TypeExpr"),
         ("src/backend_cleanup.zig", "args: []const ast.Expr"),
-        ("src/backend_cleanup.zig", "trivial_expr: ast.Expr"),
-        ("src/backend_cleanup.zig", "pub fn ordinaryDeferTrivialExprSupported"),
         ("src/backend_cleanup.zig", "block: ast.Block"),
         ("src/backend_cleanup.zig", "direct_call: OrdinaryDeferCallCleanup"),
         ("src/backend_cleanup.zig", "call_target: CallTargetDeferCleanup"),
@@ -352,6 +350,8 @@ def main() -> int:
     require_not_contains("src/mir_ownership_authority.zig", "fn autoDropGlueSymbolForType")
     require_not_contains("src/mir_ownership_authority.zig", "legacy_cancellable_cleanup")
     require_not_contains("src/mir_ownership_authority.zig", "pub const DeferredCleanup")
+    require_not_contains("src/backend_cleanup.zig", "trivial_expr: ast.Expr")
+    require_not_contains("src/backend_cleanup.zig", "ordinaryDeferTrivialExprSupported")
     require_not_contains("src/mir_ownership_authority.zig", "removeAutoDropCleanupForLocalName")
     require_not_contains("src/backend_cleanup.zig", "removeAutoDropCleanupForLocalName")
     require_not_contains("src/ownership_facts.zig", "AutoDropCleanupRegistration")

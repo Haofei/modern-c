@@ -3423,7 +3423,7 @@ fn aggregateReturnDirectLiteralPrefixStatementsAreSupported(statements: []const 
                 if (aggregateReturnPrefixExprHasExit(expr)) return false;
             },
             .@"defer" => |expr| {
-                if (aggregateReturnPrefixExprHasExit(expr)) return false;
+                if (!aggregateReturnDeferIsTransparent(expr)) return false;
             },
             .block => |block| {
                 if (!aggregateReturnDirectLiteralPrefixStatementsAreSupported(block.items)) return false;
@@ -3720,7 +3720,7 @@ fn aggregateReturnComptimeBlockIsTransparent(block: ast.Block) bool {
 }
 
 fn aggregateReturnDeferIsTransparent(expr: ast.Expr) bool {
-    return !aggregateReturnPrefixExprHasCallOrExit(expr);
+    return aggregateReturnDirectZeroArgCallNoExit(expr);
 }
 
 fn aggregateReturnTrackedLocalDeferIsTransparent(expr: ast.Expr) bool {
@@ -3745,7 +3745,7 @@ fn aggregateReturnDirectZeroArgCallNoExit(expr: ast.Expr) bool {
 }
 
 fn aggregateReturnContractDeferIsTransparent(expr: ast.Expr) bool {
-    return !aggregateReturnContractPrefixExprHasCallOrExit(expr);
+    return aggregateReturnDirectZeroArgCallNoExit(expr);
 }
 
 fn processAggregateReturnLiteralLocalStatements(

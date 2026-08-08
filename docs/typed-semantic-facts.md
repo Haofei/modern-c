@@ -1826,11 +1826,10 @@ same rule when the matched value and reachable bodies contain no calls/exits,
 control flow, or aggregate mutation. Non-transparent nested control flow remains
 an explicit fail-closed boundary: MIR emits no summary for that callee, and
 C/LLVM keep the returned field conservative. `defer` prefixes before direct
-struct-literal returns are transparent when their deferred expression is a
-trivial local/literal expression or a MIR-admitted direct cleanup call; the
-literal itself supplies the returned pointer-field provenance even when the
-deferred cleanup is effectful. Tracked-local aggregate returns also allow direct
-zero-argument deferred cleanup calls. Deferred calls
+struct-literal returns are transparent only when their deferred expression is a
+MIR-admitted direct cleanup call; the literal itself supplies the returned
+pointer-field provenance even when the deferred cleanup is effectful.
+Tracked-local aggregate returns also allow direct zero-argument deferred cleanup calls. Deferred calls
 that mention the returned local, member calls, indirect calls, and other
 argument-bearing cleanup shapes remain outside the producer. `while`/`for` loop prefixes, including nested loops inside
 otherwise transparent aggregate-return switch arms, are transparent when their
@@ -1906,7 +1905,7 @@ MIR-populated cache; the AST collector is gone.
    returns after ordinary call prefixes without exits, direct-literal
    effectful defer prefixes without exits, tracked-local direct zero-argument
    call/assert prefix statements, tracked-local direct zero-argument deferred
-   cleanup calls, trivial expression/assert/defer prefixes, transparent
+   cleanup calls, expression/assert prefixes without calls or exits, transparent
    `while`/`for` prefixes with local `break`/`continue`, and tracked-local
    aggregate returns with scalar-mutating loop locals, scalar aggregate-field
    loop mutations, or stable same-address pointer-field loop mutations are

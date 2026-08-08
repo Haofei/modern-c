@@ -7216,7 +7216,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "defer_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "local_defer_prefix_holder"));
     try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "local_defer_arg_prefix_holder"));
-    try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "defer_expr_prefix_holder"));
+    try std.testing.expect(!hasAggregateReturnSummaryFact(typed_mir, "defer_expr_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "for_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "mutating_for_prefix_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "scalar_mutating_for_local_holder"));
@@ -7258,7 +7258,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "contract_block_updated_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "defer_prefix_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "local_defer_prefix_holder", "ptr", .global_storage));
-    try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "defer_expr_prefix_holder", "ptr", .global_storage));
+    try std.testing.expect(!hasAggregateReturnPointerFact(typed_mir, "defer_expr_prefix_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "loop_prefix_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "sequential_switch_holder", "ptr", .global_storage));
     try std.testing.expect(hasAggregateReturnPointerFact(typed_mir, "triple_switch_holder", "ptr", .global_storage));

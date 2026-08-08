@@ -5872,7 +5872,7 @@ test "lower-c consumes MIR aggregate-return effectful direct-literal defer prefi
     try expectContains(missing_local_body, "mc_race_load_u32");
 }
 
-test "lower-c consumes MIR aggregate-return trivial defer prefix facts" {
+test "lower-c rejects ordinary defer expression cleanup fallback" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptr: *mut u32, tag: u32 }
@@ -5891,15 +5891,7 @@ test "lower-c consumes MIR aggregate-return trivial defer prefix facts" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_trivial_defer_prefix_aggregate_return_mir_fact.mc", source, &output);
-    try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
-    try expectContains(output.items, "mc_race_load_u32");
-
-    var missing_output: std.ArrayList(u8) = .empty;
-    defer missing_output.deinit(std.testing.allocator);
-    try appendCheckedCTestWithoutAggregateReturnPointerFact("c_trivial_defer_prefix_aggregate_return_mir_fact.mc", source, "returned_holder", "ptr", &missing_output);
-    try expectNotContains(missing_output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr");
-    try expectContains(missing_output.items, "mc_race_load_u32");
+    try expectUnsupportedCEmission("c_ordinary_defer_expression_cleanup_fallback.mc", source, &output);
 }
 
 test "lower-c consumes MIR aggregate-return transparent for-prefix facts" {

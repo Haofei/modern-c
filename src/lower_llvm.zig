@@ -1849,10 +1849,7 @@ const LlvmEmitter = struct {
                         }
                         switch (expr.kind) {
                             .block => |block| try self.defer_stack.append(self.allocator, .{ .block = block }),
-                            else => {
-                                if (!backend_cleanup.ordinaryDeferTrivialExprSupported(expr)) return error.UnsupportedLlvmEmission;
-                                try self.defer_stack.append(self.allocator, .{ .trivial_expr = expr });
-                            },
+                            else => return error.UnsupportedLlvmEmission,
                         }
                     },
                     .emit_explicit_drop_cleanup => |cleanup| try self.defer_stack.append(self.allocator, .{ .explicit_drop = cleanup }),
@@ -1977,9 +1974,6 @@ const LlvmEmitter = struct {
 
     fn emitDeferredCleanup(self: *LlvmEmitter, cleanup: DeferredCleanup, ret_ty: ast.TypeExpr) !void {
         switch (cleanup) {
-            .trivial_expr => |expr| {
-                try self.emitExprStatement(expr);
-            },
             .block => |block| {
                 if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission;
             },
