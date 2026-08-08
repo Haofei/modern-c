@@ -44,6 +44,12 @@ pub const DeferredCleanup = union(enum) {
     explicit_drop: mir_ownership_authority.OwnershipCleanupActionRef,
 };
 
+pub const AutoDropStackDecision = enum {
+    applied,
+    ignored,
+    rejected,
+};
+
 pub const DeferCleanupStackSnapshot = struct {
     items: []DeferredCleanup,
 
@@ -79,6 +85,60 @@ pub fn deferCleanupRef(cleanup: DeferredCleanup) ?mir.DeferCleanupRef {
         .direct_call => |entry| entry.defer_ref,
         .call_target => |entry| entry.defer_ref,
         .auto_drop, .explicit_drop => null,
+    };
+}
+
+pub fn registerAutoDropLocalCleanup(
+    allocator: std.mem.Allocator,
+    module: *const mir.Module,
+    function: *const mir.Function,
+    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    stack: *std.ArrayList(DeferredCleanup),
+    local_name: []const u8,
+    type_name: []const u8,
+    local_span: ast.Span,
+) error{OutOfMemory}!AutoDropStackDecision {
+    if (!mir_ownership_authority.autoDropEligibleTypeName(module, type_name)) return .ignored;
+    const cleanup = switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(allocator, module, function, cleanup_plan, local_name, type_name, local_span)) {
+        .emit_auto_drop_cleanup => |entry| entry,
+        .skip_cleanup_registration => return .ignored,
+        .reject => return .rejected,
+    };
+    try stack.append(allocator, .{ .auto_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
+    return .applied;
+}
+
+pub fn cancelAutoDropForMove(
+    allocator: std.mem.Allocator,
+    module: *const mir.Module,
+    function: *const mir.Function,
+    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    stack: *std.ArrayList(DeferredCleanup),
+    expr: ast.Expr,
+    move_span: ast.Span,
+) error{OutOfMemory}!AutoDropStackDecision {
+    return cancelAutoDropWithDecision(stack, try mir_ownership_authority.moveAutoDropCancellationDecision(allocator, module, function, cleanup_plan, expr, move_span));
+}
+
+pub fn cancelAutoDropForExplicitDrop(
+    allocator: std.mem.Allocator,
+    module: *const mir.Module,
+    function: *const mir.Function,
+    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    stack: *std.ArrayList(DeferredCleanup),
+    expr: ast.Expr,
+) error{OutOfMemory}!AutoDropStackDecision {
+    return cancelAutoDropWithDecision(stack, try mir_ownership_authority.explicitDropCancellationDecision(allocator, module, function, cleanup_plan, expr));
+}
+
+fn cancelAutoDropWithDecision(
+    stack: *std.ArrayList(DeferredCleanup),
+    decision: mir_ownership_authority.AutoDropCancellationDecision,
+) AutoDropStackDecision {
+    return switch (decision) {
+        .ignore => .ignored,
+        .remove_auto_drop => |ref| if (removeAutoDropCleanup(stack, ref)) .applied else .rejected,
+        .reject => .rejected,
     };
 }
 

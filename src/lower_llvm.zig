@@ -2996,31 +2996,26 @@ const LlvmEmitter = struct {
 
     fn registerAutoDropLocal(self: *LlvmEmitter, name: ast.Ident, ty: ast.TypeExpr) !void {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
-        if (!mir_ownership_authority.autoDropEligibleTypeName(&self.mir_module, type_name)) return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        const cleanup = switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), name.text, type_name, name.span)) {
-            .emit_auto_drop_cleanup => |entry| entry,
-            .skip_cleanup_registration => return,
-            .reject => return error.UnsupportedLlvmEmission,
-        };
-        try self.defer_stack.append(self.allocator, .{ .auto_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
+        switch (try backend_cleanup.registerAutoDropLocalCleanup(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.defer_stack, name.text, type_name, name.span)) {
+            .applied, .ignored => {},
+            .rejected => return error.UnsupportedLlvmEmission,
+        }
     }
 
     fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr, move_span: ast.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (try mir_ownership_authority.moveAutoDropCancellationDecision(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), expr, move_span)) {
-            .ignore => {},
-            .remove_auto_drop => |ref| if (!backend_cleanup.removeAutoDropCleanup(&self.defer_stack, ref)) return error.UnsupportedLlvmEmission,
-            .reject => return error.UnsupportedLlvmEmission,
+        switch (try backend_cleanup.cancelAutoDropForMove(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.defer_stack, expr, move_span)) {
+            .applied, .ignored => {},
+            .rejected => return error.UnsupportedLlvmEmission,
         }
     }
 
     fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (try mir_ownership_authority.explicitDropCancellationDecision(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
-            .ignore => {},
-            .remove_auto_drop => |ref| if (!backend_cleanup.removeAutoDropCleanup(&self.defer_stack, ref)) return error.UnsupportedLlvmEmission,
-            .reject => return error.UnsupportedLlvmEmission,
+        switch (try backend_cleanup.cancelAutoDropForExplicitDrop(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.defer_stack, expr)) {
+            .applied, .ignored => {},
+            .rejected => return error.UnsupportedLlvmEmission,
         }
     }
 
