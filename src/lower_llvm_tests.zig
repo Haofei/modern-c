@@ -1718,9 +1718,8 @@ test "LLVM ordinary defer requires source-matched MIR cleanup marker" {
 
 test "LLVM ordinary defer rejects unsupported expression fallback" {
     const source =
-        \\fn id(value: u32) -> u32 { return value; }
         \\fn ordinary_defer_expression_fallback(x: u32) -> void {
-        \\    defer x + id(x);
+        \\    defer x + 1;
         \\    return;
         \\}
     ;
@@ -7240,7 +7239,7 @@ test "LLVM consumes MIR aggregate-return effectful direct-literal defer prefix f
     try expectNotContains(missing_local_body, "load i32, ptr %");
 }
 
-test "LLVM consumes MIR aggregate-return call-free defer prefix facts" {
+test "LLVM consumes MIR aggregate-return trivial defer prefix facts" {
     const source =
         \\global shared_counter: u32 = 0;
         \\struct Holder { ptr: *mut u32, tag: u32 }
@@ -7259,7 +7258,7 @@ test "LLVM consumes MIR aggregate-return call-free defer prefix facts" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_call_free_defer_prefix_aggregate_return_mir_fact.mc", source, &output);
+    try appendLlvmTest("llvm_trivial_defer_prefix_aggregate_return_mir_fact.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @use_returned_holder");
     try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
     try expectContains(body, "load atomic i32, ptr %");
