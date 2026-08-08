@@ -202,6 +202,7 @@ pub fn callTargetDeferCleanupAtSource(function: Function, defer_source: SourcePo
                 targetTypeFactAtSource(function, .dma_payload, call_source) and
                 targetTypeFactAtSource(function, .dma_result, call_source),
             .maybe_uninit_write => targetTypeFactAtSource(function, .maybe_uninit_payload, call_source),
+            .atomic_store => targetTypeFactAtSource(function, .atomic_payload, call_source),
             else => true,
         };
     }

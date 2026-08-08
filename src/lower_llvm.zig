@@ -2016,6 +2016,9 @@ const LlvmEmitter = struct {
             .maybe_uninit_write => {
                 if (call.type_args.len != 0 or call.args.len != 1) return null;
             },
+            .atomic_store => {
+                if (call.type_args.len != 0 or call.args.len != 2) return null;
+            },
             else => return null,
         }
         if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedLlvmEmission;
@@ -2033,6 +2036,7 @@ const LlvmEmitter = struct {
             .mmio_write => try self.emitMmioWritePayload(cleanup.callee, cleanup.args),
             .dma_cache_clean, .dma_cache_invalidate => try self.emitDmaCachePayload(cleanup.callee, cleanup.args, cleanup.kind),
             .maybe_uninit_write => try self.emitMaybeUninitWritePayload(cleanup.callee, cleanup.args),
+            .atomic_store => try self.emitAtomicStorePayload(cleanup.callee, cleanup.args),
             else => return error.UnsupportedLlvmEmission,
         }
     }
@@ -3261,11 +3265,7 @@ const LlvmEmitter = struct {
             if (self.atomicCallInfo(call, kind)) |info| {
                 if (!std.mem.eql(u8, info.op, "store")) return false;
                 if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
-                const ordering = atomicOrderingArg(call.args, 1) orelse return error.UnsupportedLlvmEmission;
-                const llvm_order = atomicLlvmOrdering(ordering, .store) orelse return error.UnsupportedLlvmEmission;
-                const ptr = try self.atomicAddress(info);
-                const value = try self.emitAtomicValueForStorage(call.args[0], info.payload_ty);
-                try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} {s}, align {d}{s}\n", .{ try self.atomicStorageLlvmType(info.payload_ty), value, ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
+                try self.emitAtomicStoreInfo(info, call.args);
                 return true;
             }
         }
@@ -3369,6 +3369,25 @@ const LlvmEmitter = struct {
         const ptr = try self.storageBaseAddress(info.base);
         const value = try self.emitExpr(args[0], info.payload_ty);
         try self.emitConcreteObjectStore(ptr, info.payload_ty, value);
+    }
+
+    fn emitAtomicStorePayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr) !void {
+        if (args.len != 2) return error.UnsupportedLlvmEmission;
+        var callee_storage = callee;
+        const empty_type_args: []const ast.TypeExpr = &.{};
+        const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
+        const info = self.atomicCallInfo(call, .atomic_store) orelse return error.UnsupportedLlvmEmission;
+        if (!std.mem.eql(u8, info.op, "store")) return error.UnsupportedLlvmEmission;
+        try self.emitAtomicStoreInfo(info, args);
+    }
+
+    fn emitAtomicStoreInfo(self: *LlvmEmitter, info: AtomicCallInfo, args: []const ast.Expr) !void {
+        if (args.len != 2) return error.UnsupportedLlvmEmission;
+        const ordering = atomicOrderingArg(args, 1) orelse return error.UnsupportedLlvmEmission;
+        const llvm_order = atomicLlvmOrdering(ordering, .store) orelse return error.UnsupportedLlvmEmission;
+        const ptr = try self.atomicAddress(info);
+        const value = try self.emitAtomicValueForStorage(args[0], info.payload_ty);
+        try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} {s}, align {d}{s}\n", .{ try self.atomicStorageLlvmType(info.payload_ty), value, ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
     }
 
     fn emitMemberAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {

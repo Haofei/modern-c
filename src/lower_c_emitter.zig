@@ -3598,6 +3598,9 @@ pub const CEmitter = struct {
             .maybe_uninit_write => {
                 if (call.type_args.len != 0 or call.args.len != 1) return null;
             },
+            .atomic_store => {
+                if (call.type_args.len != 0 or call.args.len != 2) return null;
+            },
             else => return null,
         }
         if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedCEmission;
@@ -3625,6 +3628,15 @@ pub const CEmitter = struct {
         }
         if (cleanup.kind == .maybe_uninit_write) {
             if (!try lower_c_memory.emitMaybeUninitWriteCall(self.memoryContext(), cleanup.callee, cleanup.args, locals)) return error.UnsupportedCEmission;
+            return;
+        }
+        if (cleanup.kind == .atomic_store) {
+            var callee_storage = cleanup.callee;
+            const empty_type_args: []const ast.TypeExpr = &.{};
+            const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = cleanup.args };
+            try self.writeIndent();
+            if (!try lower_c_atomic.emitAtomicCall(self.atomicEmitContext(), call, locals)) return error.UnsupportedCEmission;
+            try self.out.appendSlice(self.allocator, ";\n");
             return;
         }
         const statement = switch (cleanup.kind) {
