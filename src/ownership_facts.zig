@@ -86,18 +86,6 @@ pub fn dropGlueDeclMatches(
     return autoDropEligibleTypeName(declared_resource, structs, aliases);
 }
 
-pub fn autoDropPointerCleanup(expr: ast.Expr, auto_drop_fns_by_type: *const std.StringHashMap([]const u8)) ?AutoDropLocalCleanup {
-    const call = switch (expr.kind) {
-        .call => |node| node,
-        else => return null,
-    };
-    const fn_name = ast_query.calleeIdentName(call.callee.*) orelse return null;
-    if (!autoDropReleaseFunctionName(fn_name, auto_drop_fns_by_type)) return null;
-    if (call.args.len != 1) return null;
-    const local_name = addressOfIdentName(call.args[0]) orelse return null;
-    return .{ .fn_name = fn_name, .local_name = local_name, .span = expr.span };
-}
-
 /// Transitional backend cleanup cancellation accepts only direct local moves.
 /// MIR remains the authority for whether that syntax is allowed to cancel a
 /// drop obligation; this helper only keeps the source-shape boundary shared
@@ -181,14 +169,6 @@ fn leadingTypeName(ty: ast.TypeExpr) ?[]const u8 {
         .generic => |g| g.base.text,
         else => ast_query.typeName(ty),
     };
-}
-
-fn autoDropReleaseFunctionName(name: []const u8, auto_drop_fns_by_type: *const std.StringHashMap([]const u8)) bool {
-    var it = auto_drop_fns_by_type.iterator();
-    while (it.next()) |entry| {
-        if (std.mem.eql(u8, entry.value_ptr.*, name)) return true;
-    }
-    return false;
 }
 
 fn hasNamedAttr(attrs: []const ast.Attr, name: []const u8) bool {
@@ -292,83 +272,14 @@ test "auto-drop cleanup stack removal uses the latest matching local" {
     }
 }
 
-test "auto-drop cleanup helpers recognize explicit release call shapes" {
+test "address-of local shape recognizes grouped identifiers only" {
     const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
-    var map = std.StringHashMap([]const u8).init(std.testing.allocator);
-    defer map.deinit();
-    try map.put("Guard", "close_guard");
 
     const local = ast.Ident{ .text = "g", .span = span };
     const ident = ast.Expr{ .span = span, .kind = .{ .ident = local } };
     const address = ast.Expr{ .span = span, .kind = .{ .address_of = try ast.makePtr(std.testing.allocator, ident) } };
-    const args = try std.testing.allocator.dupe(ast.Expr, &[_]ast.Expr{address});
-    const call = ast.Expr{
-        .span = span,
-        .kind = .{ .call = .{
-            .callee = try ast.makePtr(std.testing.allocator, ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "close_guard", .span = span } } }),
-            .type_args = &.{},
-            .args = args,
-        } },
-    };
-    defer {
-        const node = call.kind.call;
-        std.testing.allocator.destroy(node.callee);
-        std.testing.allocator.destroy(node.args[0].kind.address_of);
-        std.testing.allocator.free(node.args);
-    }
+    defer std.testing.allocator.destroy(address.kind.address_of);
 
-    const cleanup = autoDropPointerCleanup(call, &map).?;
-    try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
-    try std.testing.expectEqualStrings("g", cleanup.local_name);
-}
-
-test "auto-drop release shape is independent of cleanup stack lookup" {
-    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
-    var map = std.StringHashMap([]const u8).init(std.testing.allocator);
-    defer map.deinit();
-    try map.put("Guard", "close_guard");
-    try map.put("Other", "close_other");
-
-    const local_g = ast.Ident{ .text = "g", .span = span };
-    const ident_g = ast.Expr{ .span = span, .kind = .{ .ident = local_g } };
-    const address_g = ast.Expr{ .span = span, .kind = .{ .address_of = try ast.makePtr(std.testing.allocator, ident_g) } };
-    const args_g = try std.testing.allocator.dupe(ast.Expr, &[_]ast.Expr{address_g});
-    const call_g = ast.Expr{
-        .span = span,
-        .kind = .{ .call = .{
-            .callee = try ast.makePtr(std.testing.allocator, ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "close_guard", .span = span } } }),
-            .type_args = &.{},
-            .args = args_g,
-        } },
-    };
-    defer {
-        const node = call_g.kind.call;
-        std.testing.allocator.destroy(node.callee);
-        std.testing.allocator.destroy(node.args[0].kind.address_of);
-        std.testing.allocator.free(node.args);
-    }
-
-    const cleanup = autoDropPointerCleanup(call_g, &map) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
-    try std.testing.expectEqualStrings("g", cleanup.local_name);
-
-    const local_h = ast.Ident{ .text = "h", .span = span };
-    const ident_h = ast.Expr{ .span = span, .kind = .{ .ident = local_h } };
-    const address_h = ast.Expr{ .span = span, .kind = .{ .address_of = try ast.makePtr(std.testing.allocator, ident_h) } };
-    const args_h = try std.testing.allocator.dupe(ast.Expr, &[_]ast.Expr{address_h});
-    const mismatched_call = ast.Expr{
-        .span = span,
-        .kind = .{ .call = .{
-            .callee = try ast.makePtr(std.testing.allocator, ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "not_drop_glue", .span = span } } }),
-            .type_args = &.{},
-            .args = args_h,
-        } },
-    };
-    defer {
-        const node = mismatched_call.kind.call;
-        std.testing.allocator.destroy(node.callee);
-        std.testing.allocator.destroy(node.args[0].kind.address_of);
-        std.testing.allocator.free(node.args);
-    }
-    try std.testing.expect(autoDropPointerCleanup(mismatched_call, &map) == null);
+    try std.testing.expectEqualStrings("g", addressOfIdentName(address).?);
+    try std.testing.expect(addressOfIdentName(ident) == null);
 }

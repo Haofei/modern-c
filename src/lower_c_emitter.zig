@@ -2890,7 +2890,7 @@ pub const CEmitter = struct {
     }
 
     fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) !void {
-        const release = ownership_facts.autoDropPointerCleanup(expr, &self.auto_drop_fns_by_type) orelse return;
+        const release = mir_ownership_authority.explicitDropLocalCleanup(self.mir_module, expr) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         if (!mir_ownership_authority.authorizesExplicitDropLocal(self.mir_module, function, release.local_name, release.fn_name, mir.sourcePointFromSpan(expr.span))) {
             if (mir_ownership_authority.localHasAutoDropOwnershipEvent(self.mir_module, function, release.local_name)) return error.UnsupportedCEmission;
@@ -3587,7 +3587,7 @@ pub const CEmitter = struct {
     }
 
     fn emitDeferredDropPointerRelease(self: *CEmitter, expr: ast.Expr) !bool {
-        const cleanup = ownership_facts.autoDropPointerCleanup(expr, &self.auto_drop_fns_by_type) orelse return false;
+        const cleanup = mir_ownership_authority.explicitDropLocalCleanup(self.mir_module, expr) orelse return false;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
         return true;

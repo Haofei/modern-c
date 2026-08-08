@@ -260,6 +260,7 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "fn sourceMatches"),
         ("src/mir_ownership_authority.zig", "pub fn authorizesMoveOutLocalAutoDrop"),
         ("src/mir_ownership_authority.zig", "pub fn localHasAutoDropOwnershipEvent"),
+        ("src/mir_ownership_authority.zig", "pub fn explicitDropLocalCleanup"),
         ("src/mir_ownership_authority.zig", "fn autoDropTypeSymbolHasGlue"),
         ("src/mir_ownership_authority.zig", "pub fn authorizesExplicitDropLocal"),
         ("src/lower_c_tests.zig", "lower-c rejects auto-drop transfer authorization with stale MIR resource type"),

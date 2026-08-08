@@ -1,6 +1,9 @@
 const std = @import("std");
 
+const ast = @import("ast.zig");
+const ast_query = @import("ast_query.zig");
 const mir = @import("mir.zig");
+const ownership_facts = @import("ownership_facts.zig");
 
 pub fn autoDropEligibleTypeName(module: *const mir.Module, type_name: []const u8) bool {
     for (module.type_ownership_facts) |fact| {
@@ -73,6 +76,18 @@ pub fn authorizesExplicitDropLocal(
     return false;
 }
 
+pub fn explicitDropLocalCleanup(module: *const mir.Module, expr: ast.Expr) ?ownership_facts.AutoDropLocalCleanup {
+    const call = switch (expr.kind) {
+        .call => |node| node,
+        else => return null,
+    };
+    const fn_name = ast_query.calleeIdentName(call.callee.*) orelse return null;
+    _ = dropGlueFactForReleaseFunction(module, fn_name) orelse return null;
+    if (call.args.len != 1) return null;
+    const local_name = ownership_facts.addressOfIdentName(call.args[0]) orelse return null;
+    return .{ .fn_name = fn_name, .local_name = local_name, .span = expr.span };
+}
+
 pub fn localHasAutoDropOwnershipEvent(
     module: *const mir.Module,
     function: *const mir.Function,
@@ -109,15 +124,6 @@ fn sourceMatches(event_source: mir.SourcePoint, expected: mir.SourcePoint) bool 
     if (event_source.line != expected.line or event_source.column != expected.column) return false;
     if (event_source.offset == 0 and event_source.len == 0 and expected.offset == 0 and expected.len == 0) return true;
     return event_source.offset == expected.offset and event_source.len == expected.len;
-}
-
-fn dropGlueFactFor(module: *const mir.Module, type_name: []const u8, drop_fn: []const u8) ?mir.DropGlueFact {
-    for (module.drop_glue_facts) |fact| {
-        if (!std.mem.eql(u8, fact.resource_type, type_name)) continue;
-        if (!std.mem.eql(u8, fact.release_fn, drop_fn)) continue;
-        return fact;
-    }
-    return null;
 }
 
 fn typeOwnershipFactFor(module: *const mir.Module, type_name: []const u8) ?mir.TypeOwnershipFact {
