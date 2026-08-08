@@ -195,16 +195,6 @@ fn linearMoveCfg(self: *Checker, exit_kind: sema_model.MoveCfgBlockKind) ?Linear
     return .{ .cfg = cfg, .entry = entry, .body = body, .exit = exit };
 }
 
-const ExitMoveCfg = struct {
-    cfg: sema_model.MoveCfg,
-    entry: sema_model.MoveCfgBlockId,
-    exit: sema_model.MoveCfgBlockId,
-
-    fn deinit(self: *ExitMoveCfg) void {
-        self.cfg.deinit();
-    }
-};
-
 const LoopBodyMoveCfg = struct {
     cfg: sema_model.MoveCfg,
     entry: sema_model.MoveCfgBlockId,
@@ -309,26 +299,6 @@ fn loopBodyMoveCfg(self: *Checker) ?LoopBodyMoveCfg {
         .continue_source = continue_source,
         .continue_exit = continue_exit,
     };
-}
-
-fn exitMoveCfg(self: *Checker) ?ExitMoveCfg {
-    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
-    const entry = cfg.addBlock(.entry) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    const exit = cfg.addBlock(.exit) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    cfg.addEdge(entry, exit, .normal) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    return .{ .cfg = cfg, .entry = entry, .exit = exit };
 }
 
 const ShortCircuitMoveCfg = struct {
@@ -687,14 +657,14 @@ pub fn checkMoveExitEdge(self: *Checker, state: *const MoveState, message: []con
 }
 
 fn moveExitEdgeCfg(self: *Checker, state: *const MoveState, message: []const u8) void {
-    var exit_cfg = exitMoveCfg(self) orelse return;
+    var exit_cfg = linearMoveCfg(self, .exit) orelse return;
     defer exit_cfg.deinit();
 
     var worklist = MoveStateCfgWorklist.init(self, &exit_cfg.cfg, exit_cfg.entry, state) orelse return;
     defer worklist.deinit();
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == exit_cfg.entry) {
+        if (block == exit_cfg.entry or block == exit_cfg.body) {
             worklist.propagateSuccessors(self, block, block_state);
         } else if (block == exit_cfg.exit) {
             checkMoveExitEdge(self, block_state, message);

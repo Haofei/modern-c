@@ -14,10 +14,6 @@ CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
         "cfg.addBlock(": 3,
         "cfg.addEdge(": 2,
     },
-    "exitMoveCfg": {
-        "cfg.addBlock(": 2,
-        "cfg.addEdge(": 1,
-    },
     "shortCircuitMoveCfg": {
         "cfg.addBlock(": 3,
         "cfg.addEdge(": 3,
@@ -176,8 +172,6 @@ ANCHORS: dict[str, list[str]] = {
         "fn propagateSuccessorsExcept",
         "const LinearMoveCfg = struct",
         "fn linearMoveCfg",
-        "const ExitMoveCfg = struct",
-        "fn exitMoveCfg",
         "const ShortCircuitMoveCfg = struct",
         "fn shortCircuitMoveCfg",
         "const TwoArmMoveCfg = struct",
@@ -318,6 +312,12 @@ def main() -> int:
                     missing.append(
                         f"src/sema_move.zig: expected {expected} M2/M4 occurrences of {needle!r}, found {actual}"
                     )
+
+    sema_move = (REPO_ROOT / "src/sema_move.zig").read_text(encoding="utf-8")
+    for retired in ("const ExitMoveCfg = struct", "fn exitMoveCfg"):
+        checked += 1
+        if retired in sema_move:
+            missing.append(f"src/sema_move.zig: retired exit-only CFG skeleton {retired!r} is still present")
 
     if missing:
         print("FAIL: move CFG skeleton inventory drift", file=sys.stderr)
