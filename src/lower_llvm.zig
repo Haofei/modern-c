@@ -165,7 +165,7 @@ const DebugLocal = lower_llvm_model.DebugLocal;
 const DebugLocalKind = lower_llvm_model.DebugLocalKind;
 const LoopLabels = lower_llvm_model.LoopLabels;
 
-const DeferredCleanup = ownership_facts.DeferredCleanup;
+const DeferredCleanup = mir_ownership_authority.DeferredCleanup;
 const RawManyOffsetInfo = lower_llvm_model.RawManyOffsetInfo;
 const EnumRawCallInfo = lower_llvm_model.EnumRawCallInfo;
 const ReduceTypes = struct {
@@ -1988,7 +1988,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: ownership_facts.AutoDropLocalCleanup) !void {
+    fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
     }
@@ -2902,7 +2902,7 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         const source = mir.sourcePointFromSpan(move_span);
         if (mir_ownership_authority.authorizesMoveOutLocalAutoDrop(&self.mir_module, function, local_name, source)) {
-            ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name);
+            mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name);
             return;
         }
         if (mir_ownership_authority.localHasAutoDropOwnershipEvent(&self.mir_module, function, local_name)) return error.UnsupportedLlvmEmission;
@@ -2915,7 +2915,7 @@ const LlvmEmitter = struct {
             if (mir_ownership_authority.localHasAutoDropOwnershipEvent(&self.mir_module, function, release.local_name)) return error.UnsupportedLlvmEmission;
             return;
         }
-        ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, release.local_name);
+        mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, release.local_name);
     }
 
     fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {

@@ -3,7 +3,34 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const mir = @import("mir.zig");
-const ownership_facts = @import("ownership_facts.zig");
+
+pub const AutoDropLocalCleanup = struct {
+    fn_name: []const u8,
+    local_name: []const u8,
+    span: ast.Span,
+};
+
+pub const DeferredCleanup = union(enum) {
+    expr: ast.Expr,
+    auto_drop: AutoDropLocalCleanup,
+};
+
+/// Remove the most recent auto-drop cleanup for a local from a transitional
+/// backend cleanup stack.
+pub fn removeAutoDropCleanupForLocalName(stack: *std.ArrayList(DeferredCleanup), local_name: []const u8) void {
+    var index = stack.items.len;
+    while (index > 0) {
+        index -= 1;
+        switch (stack.items[index]) {
+            .auto_drop => |cleanup| {
+                if (!std.mem.eql(u8, cleanup.local_name, local_name)) continue;
+                _ = stack.orderedRemove(index);
+                return;
+            },
+            .expr => continue,
+        }
+    }
+}
 
 pub fn autoDropEligibleTypeName(module: *const mir.Module, type_name: []const u8) bool {
     for (module.type_ownership_facts) |fact| {
@@ -82,7 +109,7 @@ pub fn authorizesExplicitDropLocal(
     return false;
 }
 
-pub fn explicitDropLocalCleanup(module: *const mir.Module, expr: ast.Expr) ?ownership_facts.AutoDropLocalCleanup {
+pub fn explicitDropLocalCleanup(module: *const mir.Module, expr: ast.Expr) ?AutoDropLocalCleanup {
     const call = switch (expr.kind) {
         .call => |node| node,
         else => return null,
@@ -90,7 +117,7 @@ pub fn explicitDropLocalCleanup(module: *const mir.Module, expr: ast.Expr) ?owne
     const fn_name = ast_query.calleeIdentName(call.callee.*) orelse return null;
     _ = dropGlueFactForReleaseFunction(module, fn_name) orelse return null;
     if (call.args.len != 1) return null;
-    const local_name = ownership_facts.addressOfIdentName(call.args[0]) orelse return null;
+    const local_name = addressOfIdentName(call.args[0]) orelse return null;
     return .{ .fn_name = fn_name, .local_name = local_name, .span = expr.span };
 }
 
@@ -175,4 +202,45 @@ fn simpleOwnershipRootMatches(place: mir.OwnershipPlace, root_value_id: mir.Valu
     return place.root_value_id.eql(root_value_id) and
         !place.root_symbol_id.isValid() and
         place.projection_count == 0;
+}
+
+fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| addressOfIdentName(inner.*),
+        .address_of => |inner| switch (inner.kind) {
+            .grouped => addressOfIdentName(inner.*),
+            .ident => |ident| ident.text,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+test "auto-drop cleanup stack removal uses the latest matching local" {
+    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+    var stack: std.ArrayList(DeferredCleanup) = .empty;
+    defer stack.deinit(std.testing.allocator);
+
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_old", .local_name = "g", .span = span } });
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_h", .local_name = "h", .span = span } });
+    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .fn_name = "close_new", .local_name = "g", .span = span } });
+
+    removeAutoDropCleanupForLocalName(&stack, "g");
+    try std.testing.expectEqual(@as(usize, 2), stack.items.len);
+    switch (stack.items[0]) {
+        .auto_drop => |cleanup| try std.testing.expectEqualStrings("close_old", cleanup.fn_name),
+        .expr => return error.TestUnexpectedResult,
+    }
+}
+
+test "address-of local shape recognizes grouped identifiers only" {
+    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+
+    const local = ast.Ident{ .text = "g", .span = span };
+    const ident = ast.Expr{ .span = span, .kind = .{ .ident = local } };
+    const address = ast.Expr{ .span = span, .kind = .{ .address_of = try ast.makePtr(std.testing.allocator, ident) } };
+    defer std.testing.allocator.destroy(address.kind.address_of);
+
+    try std.testing.expectEqualStrings("g", addressOfIdentName(address).?);
+    try std.testing.expect(addressOfIdentName(ident) == null);
 }

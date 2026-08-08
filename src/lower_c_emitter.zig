@@ -246,7 +246,7 @@ pub fn appendModuleMir(
     try emitter.emitModule(declarations);
 }
 
-const DeferredCleanup = ownership_facts.DeferredCleanup;
+const DeferredCleanup = mir_ownership_authority.DeferredCleanup;
 
 pub const CEmitter = struct {
     allocator: std.mem.Allocator,
@@ -2865,7 +2865,7 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         const source = mir.sourcePointFromSpan(move_span);
         if (mir_ownership_authority.authorizesMoveOutLocalAutoDrop(self.mir_module, function, local_name, source)) {
-            ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name);
+            mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name);
             return;
         }
         if (mir_ownership_authority.localHasAutoDropOwnershipEvent(self.mir_module, function, local_name)) return error.UnsupportedCEmission;
@@ -2878,7 +2878,7 @@ pub const CEmitter = struct {
             if (mir_ownership_authority.localHasAutoDropOwnershipEvent(self.mir_module, function, release.local_name)) return error.UnsupportedCEmission;
             return;
         }
-        ownership_facts.removeAutoDropCleanupForLocalName(&self.defer_stack, release.local_name);
+        mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, release.local_name);
     }
 
     fn localDeclInfo(self: *CEmitter, local: ast.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo)) !LocalInfo {
@@ -3563,7 +3563,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
-    fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: ownership_facts.AutoDropLocalCleanup) !void {
+    fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
     }
