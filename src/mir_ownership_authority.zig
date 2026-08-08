@@ -176,17 +176,12 @@ pub fn autoDropCleanupEmissionAllowed(
     return false;
 }
 
-fn explicitDropPlanEntryForLocal(
+fn explicitDropPlanEntryForSource(
     allocator: std.mem.Allocator,
     module: *const mir.Module,
     function: *const mir.Function,
-    local_name: []const u8,
-    drop_fn: []const u8,
     source: mir.SourcePoint,
 ) error{OutOfMemory}!?mir.CleanupActionPlanEntry {
-    const root_value_id = valueIdForLocal(function, local_name) orelse return null;
-    const drop_glue = dropGlueFactForReleaseFunction(module, drop_fn) orelse return null;
-
     var cleanup_plan: std.ArrayList(mir.CleanupActionPlanEntry) = .empty;
     defer cleanup_plan.deinit(allocator);
     mir.appendOwnershipCleanupPlan(allocator, module.*, function.*, &cleanup_plan) catch |err| switch (err) {
@@ -194,47 +189,14 @@ fn explicitDropPlanEntryForLocal(
         error.OutOfMemory => return error.OutOfMemory,
     };
 
+    var matched: ?mir.CleanupActionPlanEntry = null;
     for (cleanup_plan.items) |entry| {
         if (entry.kind != .explicit_drop) continue;
-        if (!simpleOwnershipRootMatches(entry.place, root_value_id)) continue;
         if (!sourceMatches(entry.source, source)) continue;
-        if (!entry.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
-        if (!entry.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) continue;
-        return entry;
+        if (matched != null) return null;
+        matched = entry;
     }
-    return null;
-}
-
-fn cleanupCancellationPlanEntryForLocal(
-    allocator: std.mem.Allocator,
-    module: *const mir.Module,
-    function: *const mir.Function,
-    kind: mir.CleanupCancellationKind,
-    local_name: []const u8,
-    source: mir.SourcePoint,
-    release_fn: ?[]const u8,
-) error{OutOfMemory}!?mir.CleanupCancellationPlanEntry {
-    const root_value_id = valueIdForLocal(function, local_name) orelse return null;
-    const drop_glue = if (release_fn) |name| dropGlueFactForReleaseFunction(module, name) else null;
-
-    var cancellation_plan: std.ArrayList(mir.CleanupCancellationPlanEntry) = .empty;
-    defer cancellation_plan.deinit(allocator);
-    mir.appendOwnershipCleanupCancellationPlan(allocator, module.*, function.*, &cancellation_plan) catch |err| switch (err) {
-        error.InvalidMirOwnershipEvents => return null,
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-
-    for (cancellation_plan.items) |entry| {
-        if (entry.kind != kind) continue;
-        if (!simpleOwnershipRootMatches(entry.place, root_value_id)) continue;
-        if (!sourceMatches(entry.source, source)) continue;
-        if (drop_glue) |glue| {
-            if (!entry.place.root_type_symbol_id.eql(glue.typed_resource_symbol_id)) continue;
-            if (!entry.drop_glue_symbol_id.eql(glue.typed_release_symbol_id)) continue;
-        }
-        return entry;
-    }
-    return null;
+    return matched;
 }
 
 fn cleanupCancellationPlanEntryForSource(
@@ -269,11 +231,16 @@ pub fn explicitDropLocalCleanup(
 ) error{OutOfMemory}!?AutoDropLocalCleanup {
     const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return null;
     const drop_glue = dropGlueFactForReleaseFunction(module, release.fn_name) orelse return null;
-    const root_value_id = valueIdForLocal(function, release.local_name) orelse return null;
-    const entry = (try explicitDropPlanEntryForLocal(allocator, module, function, release.local_name, release.fn_name, mir.sourcePointFromSpan(expr.span))) orelse return null;
+    const entry = (try explicitDropPlanEntryForSource(allocator, module, function, mir.sourcePointFromSpan(expr.span))) orelse return null;
+    if (entry.place.root_symbol_id.isValid() or entry.place.projection_count != 0) return null;
+    if (!entry.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) return null;
+    if (!entry.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) return null;
+    const root_value_id = entry.place.root_value_id;
+    const local_name = localNameForValueId(function, root_value_id) orelse return null;
+    if (!std.mem.eql(u8, local_name, release.local_name)) return null;
     return .{
         .fn_name = release.fn_name,
-        .local_name = release.local_name,
+        .local_name = local_name,
         .span = release.span,
         .root_value_id = root_value_id,
         .resource_type_symbol_id = drop_glue.typed_resource_symbol_id,
@@ -364,15 +331,21 @@ pub fn explicitDropCancellationDecision(
     expr: ast.Expr,
 ) error{OutOfMemory}!AutoDropCancellationDecision {
     const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return .ignore;
-    const entry = (try cleanupCancellationPlanEntryForLocal(allocator, module, function, .explicit_drop, release.local_name, mir.sourcePointFromSpan(expr.span), release.fn_name)) orelse {
+    const drop_glue = dropGlueFactForReleaseFunction(module, release.fn_name) orelse return .ignore;
+    const entry = (try cleanupCancellationPlanEntryForSource(allocator, module, function, .explicit_drop, mir.sourcePointFromSpan(expr.span))) orelse {
         if (valueIdForLocal(function, release.local_name)) |root_value_id| {
             if (mir.ownershipLocalHasAutoDropResourceEvent(module.*, function.*, root_value_id)) return .reject;
         }
         return .ignore;
     };
-    const root_value_id = valueIdForLocal(function, release.local_name) orelse return .reject;
+    if (entry.place.root_symbol_id.isValid() or entry.place.projection_count != 0) return .reject;
+    if (!entry.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) return .reject;
+    if (!entry.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) return .reject;
+    const root_value_id = entry.place.root_value_id;
+    const local_name = localNameForValueId(function, root_value_id) orelse return .reject;
+    if (!std.mem.eql(u8, local_name, release.local_name)) return .reject;
     return .{ .remove_auto_drop = .{
-        .local_name = release.local_name,
+        .local_name = local_name,
         .root_value_id = root_value_id,
         .resource_type_symbol_id = entry.place.root_type_symbol_id,
         .drop_glue_symbol_id = entry.drop_glue_symbol_id,
