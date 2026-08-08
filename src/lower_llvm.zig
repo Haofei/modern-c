@@ -1816,7 +1816,7 @@ const LlvmEmitter = struct {
 
     fn emitBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) anyerror!bool {
         const defer_start = self.defer_stack.items.len;
-        errdefer self.defer_stack.items.len = defer_start;
+        errdefer backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, defer_start);
         for (block.items) |stmt| {
             const old_debug_span = self.current_debug_span;
             if (isSourceSpan(stmt.span)) self.current_debug_span = stmt.span;
@@ -1832,7 +1832,7 @@ const LlvmEmitter = struct {
             if (terminated) return true;
         }
         try self.emitDeferredCleanupsFrom(defer_start, ret_ty);
-        self.defer_stack.items.len = defer_start;
+        backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, defer_start);
         return false;
     }
 
@@ -1939,14 +1939,14 @@ const LlvmEmitter = struct {
             .@"break" => |target| {
                 const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
                 try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
-                self.defer_stack.items.len = labels.cleanup_start;
+                backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, labels.cleanup_start);
                 try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.break_label, try self.debugCallSuffix() });
                 return true;
             },
             .@"continue" => |target| {
                 const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
                 try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
-                self.defer_stack.items.len = labels.cleanup_start;
+                backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, labels.cleanup_start);
                 try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.continue_label, try self.debugCallSuffix() });
                 return true;
             },

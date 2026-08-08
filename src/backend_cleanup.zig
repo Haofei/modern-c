@@ -68,6 +68,11 @@ pub fn restoreDeferCleanupStack(
     @memcpy(stack.items[0..snapshot.items.len], snapshot.items);
 }
 
+pub fn restoreDeferCleanupStackLength(stack: *std.ArrayList(DeferredCleanup), len: usize) void {
+    std.debug.assert(len <= stack.capacity);
+    stack.items.len = len;
+}
+
 pub fn deferCleanupRef(cleanup: DeferredCleanup) ?mir.DeferCleanupRef {
     return switch (cleanup) {
         .block => |entry| entry.defer_ref,
@@ -271,4 +276,7 @@ test "defer cleanup stack snapshot restores full contents" {
 
     try std.testing.expectEqual(@as(usize, 1), stack.items.len);
     try std.testing.expect((deferCleanupRef(stack.items[0]) orelse return error.TestUnexpectedResult).instruction_index == 0);
+
+    restoreDeferCleanupStackLength(&stack, 0);
+    try std.testing.expectEqual(@as(usize, 0), stack.items.len);
 }

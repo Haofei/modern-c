@@ -3382,7 +3382,7 @@ pub const CEmitter = struct {
         }
 
         try self.emitDeferredCleanupsFrom(block_start, locals, return_ty);
-        self.defer_stack.items.len = block_start;
+        backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
     }
 
     fn emitBlockItemsWithDeferStackSnapshot(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
@@ -3478,7 +3478,7 @@ pub const CEmitter = struct {
         if (stmt.kind == .@"return") {
             if (self.defer_stack.items.len == cleanup_start) {
                 try self.emitStmt(stmt, locals, return_ty);
-                self.defer_stack.items.len = block_start;
+                backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
                 return;
             }
             try self.emitReturnExitItem(stmt.kind.@"return", stmt.span, locals, return_ty, block_start, cleanup_start);
@@ -3486,7 +3486,7 @@ pub const CEmitter = struct {
         }
         try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
         try self.emitStmt(stmt, locals, return_ty);
-        self.defer_stack.items.len = block_start;
+        backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
     }
 
     fn emitReturnExitItem(self: *CEmitter, maybe_expr: ?ast.Expr, stmt_span: ast.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: usize, cleanup_start: usize) anyerror!void {
@@ -3494,19 +3494,19 @@ pub const CEmitter = struct {
             try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
             try self.writeLineDirective(stmt_span);
             try self.emitVoidReturnStmt();
-            self.defer_stack.items.len = block_start;
+            backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
             return;
         };
         const target_ty = return_ty orelse {
             try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
             try self.emitReturnStmt(maybe_expr, locals, return_ty);
-            self.defer_stack.items.len = block_start;
+            backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
             return;
         };
         if (isVoidType(target_ty) and isVoidLiteralExpr(expr)) {
             try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
             try self.emitVoidReturnStmt();
-            self.defer_stack.items.len = block_start;
+            backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
             return;
         }
 
@@ -3521,7 +3521,7 @@ pub const CEmitter = struct {
         try self.writeLineDirective(stmt_span);
         try self.writeIndent();
         try self.out.print(self.allocator, "return {s};\n", .{tmp_name});
-        self.defer_stack.items.len = block_start;
+        backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
     }
 
     // Emit the active defers from index `start` to the top of the stack, in reverse
