@@ -184,13 +184,18 @@ pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePo
     return true;
 }
 
-pub fn callTargetDeferCleanupAtSource(function: Function, defer_source: SourcePoint, callee_source: SourcePoint, kind: CallTargetKind) bool {
+pub fn callTargetDeferCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, callee_source: SourcePoint, kind: CallTargetKind) bool {
     if (!hasDeferCleanupAtSource(function, defer_source)) return false;
     for (function.call_target_facts) |fact| {
         if (fact.kind != kind) continue;
         if (fact.source.line != callee_source.line or fact.source.column != callee_source.column) continue;
         if (fact.source.offset != callee_source.offset or fact.source.len != callee_source.len) continue;
-        return true;
+        return switch (kind) {
+            .raw_store => targetTypeFactAtSource(function, .raw_address, call_source) and
+                targetTypeFactAtSource(function, .raw_payload, call_source) and
+                targetTypeFactAtSource(function, .raw_result, call_source),
+            else => true,
+        };
     }
     return false;
 }
@@ -226,6 +231,16 @@ fn directCallArgumentFactAtSource(function: Function, fn_name: []const u8, arg_i
         if (!optionalTextEql(fact.target_owner, fn_name)) continue;
         if (fact.source.line != arg_source.line or fact.source.column != arg_source.column) continue;
         if (fact.source.offset != arg_source.offset or fact.source.len != arg_source.len) continue;
+        return true;
+    }
+    return false;
+}
+
+fn targetTypeFactAtSource(function: Function, kind: TargetTypeKind, source: SourcePoint) bool {
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != kind) continue;
+        if (fact.source.line != source.line or fact.source.column != source.column) continue;
+        if (fact.source.offset != source.offset or fact.source.len != source.len) continue;
         return true;
     }
     return false;

@@ -13960,6 +13960,67 @@ test "lower-c ordinary call-target defer emits typed cleanup" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();") != null);
 }
 
+test "lower-c ordinary raw-store defer requires MIR target facts" {
+    const source =
+        \\fn ordinary_defer_raw_store_fact(addr: PAddr, value: u32) -> void {
+        \\    unsafe {
+        \\        defer raw.store<u32>(addr, value);
+        \\    }
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_raw_store_requires_fact.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+    var drifted_call_span = false;
+    for (parsed.module.decls) |*decl| switch (decl.kind) {
+        .fn_decl => |*fn_decl| {
+            if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_raw_store_fact")) continue;
+            const body = fn_decl.body orelse return error.TestUnexpectedResult;
+            for (body.items) |*stmt| switch (stmt.kind) {
+                .unsafe_block => |*unsafe_block| {
+                    for (unsafe_block.items) |*unsafe_stmt| switch (unsafe_stmt.kind) {
+                        .@"defer" => |*defer_expr| {
+                            defer_expr.span.line += 1;
+                            drifted_call_span = true;
+                        },
+                        else => {},
+                    };
+                },
+                else => {},
+            };
+        },
+        else => {},
+    };
+    if (!drifted_call_span) return error.TestUnexpectedResult;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "emit_c_ordinary_defer_raw_store_requires_fact.mc", .{}, false, null));
+}
+
+test "lower-c ordinary raw-store defer emits typed cleanup" {
+    const source =
+        \\fn ordinary_defer_raw_store_cleanup(addr: PAddr, value: u32) -> void {
+        \\    unsafe {
+        \\        defer raw.store<u32>(addr, value);
+        \\    }
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_raw_store_cleanup.mc", source);
+    defer parsed.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithSourcePath(std.testing.allocator, parsed.module, &output, .kernel, "emit_c_ordinary_defer_raw_store_cleanup.mc", .{}, false);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_raw_store_u32") != null);
+}
+
 test "lower-c emits auto-drop release for affine move locals" {
     const source =
         \\move struct Guard { id: u32 }

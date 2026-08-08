@@ -309,6 +309,7 @@ def main() -> int:
         ("src/backend_cleanup.zig", "pub const OrdinaryDeferCallCleanup"),
         ("src/backend_cleanup.zig", "pub const CallTargetDeferCleanup"),
         ("src/backend_cleanup.zig", "callee_span: ast.Span"),
+        ("src/backend_cleanup.zig", "type_args: []const ast.TypeExpr"),
         ("src/backend_cleanup.zig", "args: []const ast.Expr"),
         ("src/backend_cleanup.zig", "raw_expr: ast.Expr"),
         ("src/backend_cleanup.zig", "block: ast.Block"),

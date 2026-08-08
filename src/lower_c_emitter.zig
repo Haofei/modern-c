@@ -3538,7 +3538,7 @@ pub const CEmitter = struct {
             },
             .call_target => |entry| {
                 try self.writeLineDirective(entry.span);
-                try self.emitCallTargetDeferCleanup(entry);
+                try self.emitCallTargetDeferCleanup(entry, locals);
             },
             .auto_drop => |entry| {
                 try self.writeLineDirective(entry.span);
@@ -3581,18 +3581,26 @@ pub const CEmitter = struct {
 
     fn ordinaryDeferCallTargetCleanup(self: *CEmitter, function: *const mir.Function, expr: ast.Expr, stmt_span: ast.Span) error{UnsupportedCEmission}!?backend_cleanup.CallTargetDeferCleanup {
         const call = callExpr(expr) orelse return null;
-        if (call.type_args.len != 0 or call.args.len != 0) return null;
         const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         switch (kind) {
-            .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+            .cpu_pause, .fence_full, .fence_release, .fence_acquire => {
+                if (call.type_args.len != 0 or call.args.len != 0) return null;
+            },
+            .raw_store => {
+                if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
+            },
             else => return null,
         }
-        if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedCEmission;
-        return .{ .kind = kind, .defer_span = stmt_span, .span = expr.span, .callee_span = call.callee.*.span };
+        if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedCEmission;
+        return .{ .kind = kind, .defer_span = stmt_span, .span = expr.span, .callee_span = call.callee.*.span, .type_args = call.type_args, .args = call.args };
     }
 
-    fn emitCallTargetDeferCleanup(self: *CEmitter, cleanup: backend_cleanup.CallTargetDeferCleanup) !void {
-        if (!mir.callTargetDeferCleanupAtSource((self.currentMirFunction() orelse return error.UnsupportedCEmission).*, mir.sourcePointFromSpan(cleanup.defer_span), mir.sourcePointFromSpan(cleanup.callee_span), cleanup.kind)) return error.UnsupportedCEmission;
+    fn emitCallTargetDeferCleanup(self: *CEmitter, cleanup: backend_cleanup.CallTargetDeferCleanup, locals: *std.StringHashMap(LocalInfo)) !void {
+        if (!mir.callTargetDeferCleanupAtSource((self.currentMirFunction() orelse return error.UnsupportedCEmission).*, mir.sourcePointFromSpan(cleanup.defer_span), mir.sourcePointFromSpan(cleanup.span), mir.sourcePointFromSpan(cleanup.callee_span), cleanup.kind)) return error.UnsupportedCEmission;
+        if (cleanup.kind == .raw_store) {
+            try self.emitRawStorePayload(cleanup.callee_span, cleanup.type_args, cleanup.args, locals);
+            return;
+        }
         const statement = switch (cleanup.kind) {
             .cpu_pause => "mc_cpu_pause",
             .fence_full => "mc_barrier_full",
@@ -4019,23 +4027,27 @@ pub const CEmitter = struct {
         const call_kind = self.mirCallTargetKindAt(call_span);
         if (call_kind != .raw_store) return false;
         if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedCEmission;
+        try self.emitRawStorePayload(call_span, call.type_args, call.args, locals);
+        return true;
+    }
 
+    fn emitRawStorePayload(self: *CEmitter, call_span: ast.Span, type_args: []const ast.TypeExpr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+        if (type_args.len != 1 or args.len != 2) return error.UnsupportedCEmission;
         const address_ty = (self.mirTargetTypeFactAt(.raw_address, call_span) orelse return error.UnsupportedCEmission).target_ty;
         const payload_ty = (self.mirTargetTypeFactAt(.raw_payload, call_span) orelse return error.UnsupportedCEmission).target_ty;
         _ = self.mirTargetTypeFactAt(.raw_result, call_span) orelse return error.UnsupportedCEmission;
-        const addr_temp = try self.emitSequencedCallArgTemp(call.args[0], locals, address_ty);
-        const value_temp = try self.emitSequencedCallArgTemp(call.args[1], locals, payload_ty);
+        const addr_temp = try self.emitSequencedCallArgTemp(args[0], locals, address_ty);
+        const value_temp = try self.emitSequencedCallArgTemp(args[1], locals, payload_ty);
         try self.writeIndent();
         if (typeName(payload_ty)) |type_name| {
             if (rawScalarSuffix(type_name)) |suffix| {
                 try self.out.print(self.allocator, "mc_raw_store_{s}({s}, {s});\n", .{ suffix, addr_temp.name, value_temp.name });
-                return true;
+                return;
             }
         }
         // Aggregate (non-scalar) T: whole-object typed store, mirroring how
         // `raw.ptr<T>(addr)` + deref already lowers a struct assignment.
         try self.out.print(self.allocator, "*({s} *){s} = {s};\n", .{ try self.cTypeFor(payload_ty, .typedef_name), addr_temp.name, value_temp.name });
-        return true;
     }
 
     fn emitCpuPauseStmt(self: *CEmitter, expr: ast.Expr) !bool {

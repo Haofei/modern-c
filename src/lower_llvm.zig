@@ -1999,23 +1999,28 @@ const LlvmEmitter = struct {
 
     fn ordinaryDeferCallTargetCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast.Expr, stmt_span: ast.Span) error{UnsupportedLlvmEmission}!?backend_cleanup.CallTargetDeferCleanup {
         const call = ast_query.callExpr(expr) orelse return null;
-        if (call.type_args.len != 0 or call.args.len != 0) return null;
         const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         switch (kind) {
-            .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+            .cpu_pause, .fence_full, .fence_release, .fence_acquire => {
+                if (call.type_args.len != 0 or call.args.len != 0) return null;
+            },
+            .raw_store => {
+                if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
+            },
             else => return null,
         }
-        if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedLlvmEmission;
-        return .{ .kind = kind, .defer_span = stmt_span, .span = expr.span, .callee_span = call.callee.*.span };
+        if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedLlvmEmission;
+        return .{ .kind = kind, .defer_span = stmt_span, .span = expr.span, .callee_span = call.callee.*.span, .type_args = call.type_args, .args = call.args };
     }
 
     fn emitCallTargetDeferCleanup(self: *LlvmEmitter, cleanup: backend_cleanup.CallTargetDeferCleanup) !void {
-        if (!mir.callTargetDeferCleanupAtSource((self.currentMirFunction() orelse return error.UnsupportedLlvmEmission).*, mir.sourcePointFromSpan(cleanup.defer_span), mir.sourcePointFromSpan(cleanup.callee_span), cleanup.kind)) return error.UnsupportedLlvmEmission;
+        if (!mir.callTargetDeferCleanupAtSource((self.currentMirFunction() orelse return error.UnsupportedLlvmEmission).*, mir.sourcePointFromSpan(cleanup.defer_span), mir.sourcePointFromSpan(cleanup.span), mir.sourcePointFromSpan(cleanup.callee_span), cleanup.kind)) return error.UnsupportedLlvmEmission;
         switch (cleanup.kind) {
             .cpu_pause => try self.out.print(self.allocator, "  call void asm sideeffect \"pause\", \"~{{memory}}\"(){s}\n", .{try self.debugCallSuffix()}),
             .fence_full => try self.out.print(self.allocator, "  fence seq_cst{s}\n", .{try self.debugCallSuffix()}),
             .fence_release => try self.out.print(self.allocator, "  fence release{s}\n", .{try self.debugCallSuffix()}),
             .fence_acquire => try self.out.print(self.allocator, "  fence acquire{s}\n", .{try self.debugCallSuffix()}),
+            .raw_store => try self.emitRawStorePayload(cleanup.callee_span, cleanup.type_args, cleanup.args),
             else => return error.UnsupportedLlvmEmission,
         }
     }
@@ -3205,35 +3210,8 @@ const LlvmEmitter = struct {
             }
         }
         if (call_kind == .raw_store) {
-            const info = self.rawCallInfo(call, .raw_store) orelse return error.UnsupportedLlvmEmission;
-            const addr = try self.emitExpr(call.args[0], info.address_ty);
-            const value = try self.emitExpr(call.args[1], info.payload_ty);
-            const ptr = try self.nextTemp();
-            const llvm_ty = try self.llvmType(info.payload_ty);
-            if (rawScalarTypeName(info.payload_ty) == null) {
-                // Aggregate (non-scalar) T: whole-object typed store, mirroring how
-                // `raw.ptr<T>(addr)` + deref already lowers a struct assignment. The
-                // sanitizer hooks below key off scalar-sized accesses, so aggregate
-                // stores lower to a plain (uninstrumented) typed store, matching the C
-                // backend where aggregate stores bypass the mc_raw_store_* helpers.
-                try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
-                try self.emitConcreteObjectStore(ptr, info.payload_ty, value);
-                return true;
-            }
-            // KASAN (D2.1): consult the shadow before the store — a poisoned (freed/
-            // redzone) target traps in mc_ksan_check. Scalar size == llvmAlignOf here.
-            // KMSAN (D2.2): call mc_ksan_store before the write. The hook must not reject
-            // UNINIT bytes because first writes initialize them, but it does reject POISON.
-            if (self.msan) {
-                try self.out.print(self.allocator, "  call void @mc_ksan_store(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(info.payload_ty) });
-            } else if (self.ksan) {
-                try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(info.payload_ty) });
-            }
-            // KCSAN (D2.3): bracket the unsynchronized store with a write watchpoint hook so a
-            // concurrent access lands inside the watch window. Mirrors the C backend's csan path.
-            if (self.csan) try self.out.print(self.allocator, "  call void @mc_csan_write(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(info.payload_ty) });
-            try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
-            try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+            _ = self.rawCallInfo(call, .raw_store) orelse return error.UnsupportedLlvmEmission;
+            try self.emitRawStorePayload(call.callee.*.span, call.type_args, call.args);
             return true;
         }
         if (call_kind) |kind| {
@@ -3297,6 +3275,44 @@ const LlvmEmitter = struct {
             }
         }
         return false;
+    }
+
+    fn emitRawStorePayload(self: *LlvmEmitter, callee_span: ast.Span, type_args: []const ast.TypeExpr, args: []const ast.Expr) !void {
+        if (type_args.len != 1 or args.len != 2) return error.UnsupportedLlvmEmission;
+        const info = RawCallInfo{
+            .kind = .raw_store,
+            .address_ty = (self.mirTargetTypeFactAt(.raw_address, callee_span) orelse return error.UnsupportedLlvmEmission).target_ty,
+            .payload_ty = (self.mirTargetTypeFactAt(.raw_payload, callee_span) orelse return error.UnsupportedLlvmEmission).target_ty,
+            .result_ty = (self.mirTargetTypeFactAt(.raw_result, callee_span) orelse return error.UnsupportedLlvmEmission).target_ty,
+        };
+        const addr = try self.emitExpr(args[0], info.address_ty);
+        const value = try self.emitExpr(args[1], info.payload_ty);
+        const ptr = try self.nextTemp();
+        const llvm_ty = try self.llvmType(info.payload_ty);
+        if (rawScalarTypeName(info.payload_ty) == null) {
+            // Aggregate (non-scalar) T: whole-object typed store, mirroring how
+            // `raw.ptr<T>(addr)` + deref already lowers a struct assignment. The
+            // sanitizer hooks below key off scalar-sized accesses, so aggregate
+            // stores lower to a plain (uninstrumented) typed store, matching the C
+            // backend where aggregate stores bypass the mc_raw_store_* helpers.
+            try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
+            try self.emitConcreteObjectStore(ptr, info.payload_ty, value);
+            return;
+        }
+        // KASAN (D2.1): consult the shadow before the store — a poisoned (freed/
+        // redzone) target traps in mc_ksan_check. Scalar size == llvmAlignOf here.
+        // KMSAN (D2.2): call mc_ksan_store before the write. The hook must not reject
+        // UNINIT bytes because first writes initialize them, but it does reject POISON.
+        if (self.msan) {
+            try self.out.print(self.allocator, "  call void @mc_ksan_store(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(info.payload_ty) });
+        } else if (self.ksan) {
+            try self.out.print(self.allocator, "  call void @mc_ksan_check(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(info.payload_ty) });
+        }
+        // KCSAN (D2.3): bracket the unsynchronized store with a write watchpoint hook so a
+        // concurrent access lands inside the watch window. Mirrors the C backend's csan path.
+        if (self.csan) try self.out.print(self.allocator, "  call void @mc_csan_write(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(info.payload_ty) });
+        try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
+        try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
     }
 
     fn emitMemberAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {

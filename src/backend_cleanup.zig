@@ -24,6 +24,8 @@ pub const CallTargetDeferCleanup = struct {
     defer_span: ast.Span,
     span: ast.Span,
     callee_span: ast.Span,
+    type_args: []const ast.TypeExpr,
+    args: []const ast.Expr,
 };
 
 pub const DeferredCleanup = union(enum) {
