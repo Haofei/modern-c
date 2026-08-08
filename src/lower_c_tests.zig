@@ -14307,6 +14307,60 @@ test "lower-c ordinary atomic store defer emits typed cleanup" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_store_n(&counter, value, __ATOMIC_RELEASE);") != null);
 }
 
+test "lower-c ordinary va.end defer requires MIR call-target facts" {
+    const source =
+        \\export fn ordinary_defer_va_end_fact(count: i32, ...) -> i32 {
+        \\    var ap: va_list = va.start();
+        \\    defer va.end(&ap);
+        \\    return count;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_va_end_requires_fact.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+    var drifted_defer_span = false;
+    for (parsed.module.decls) |*decl| switch (decl.kind) {
+        .fn_decl => |*fn_decl| {
+            if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_va_end_fact")) continue;
+            const body = fn_decl.body orelse return error.TestUnexpectedResult;
+            for (body.items) |*stmt| switch (stmt.kind) {
+                .@"defer" => {
+                    stmt.span.line += 1;
+                    drifted_defer_span = true;
+                },
+                else => {},
+            };
+        },
+        else => {},
+    };
+    if (!drifted_defer_span) return error.TestUnexpectedResult;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "emit_c_ordinary_defer_va_end_requires_fact.mc", .{}, false, null));
+}
+
+test "lower-c ordinary va.end defer emits typed cleanup" {
+    const source =
+        \\export fn ordinary_defer_va_end_cleanup(count: i32, ...) -> i32 {
+        \\    var ap: va_list = va.start();
+        \\    defer va.end(&ap);
+        \\    return count;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_va_end_cleanup.mc", source);
+    defer parsed.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithSourcePath(std.testing.allocator, parsed.module, &output, .kernel, "emit_c_ordinary_defer_va_end_cleanup.mc", .{}, false);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "__builtin_va_end") != null);
+}
+
 test "lower-c emits auto-drop release for affine move locals" {
     const source =
         \\move struct Guard { id: u32 }

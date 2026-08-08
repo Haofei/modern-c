@@ -2282,6 +2282,60 @@ test "LLVM ordinary atomic store defer emits typed cleanup" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "release, align") != null);
 }
 
+test "LLVM ordinary va.end defer requires MIR call-target facts" {
+    const source =
+        \\export fn ordinary_defer_va_end_fact(count: i32, ...) -> i32 {
+        \\    var ap: va_list = va.start();
+        \\    defer va.end(&ap);
+        \\    return count;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_ordinary_defer_va_end_requires_fact.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+    var drifted_defer_span = false;
+    for (parsed.module.decls) |*decl| switch (decl.kind) {
+        .fn_decl => |*fn_decl| {
+            if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_va_end_fact")) continue;
+            const body = fn_decl.body orelse return error.TestUnexpectedResult;
+            for (body.items) |*stmt| switch (stmt.kind) {
+                .@"defer" => {
+                    stmt.span.line += 1;
+                    drifted_defer_span = true;
+                },
+                else => {},
+            };
+        },
+        else => {},
+    };
+    if (!drifted_defer_span) return error.TestUnexpectedResult;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_ordinary_defer_va_end_requires_fact.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM ordinary va.end defer emits typed cleanup" {
+    const source =
+        \\export fn ordinary_defer_va_end_cleanup(count: i32, ...) -> i32 {
+        \\    var ap: va_list = va.start();
+        \\    defer va.end(&ap);
+        \\    return count;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_ordinary_defer_va_end_cleanup.mc", source);
+    defer parsed.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmChecked(std.testing.allocator, parsed.module, &output, "llvm_ordinary_defer_va_end_cleanup.mc", .{}, false, .riscv64);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "@llvm.va_end") != null);
+}
+
 test "LLVM explicit drop release cancellation requires MIR explicit-drop event" {
     const source =
         \\move struct Guard { id: u32 }

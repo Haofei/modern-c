@@ -3604,6 +3604,9 @@ pub const CEmitter = struct {
             .atomic_store => {
                 if (call.type_args.len != 0 or call.args.len != 2) return null;
             },
+            .va_end => {
+                if (call.type_args.len != 0 or call.args.len != 1) return null;
+            },
             else => return null,
         }
         if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedCEmission;
@@ -3643,6 +3646,15 @@ pub const CEmitter = struct {
             const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = cleanup.args };
             try self.writeIndent();
             if (!try lower_c_atomic.emitAtomicCall(self.atomicEmitContext(), call, locals)) return error.UnsupportedCEmission;
+            try self.out.appendSlice(self.allocator, ";\n");
+            return;
+        }
+        if (cleanup.kind == .va_end) {
+            var callee_storage = cleanup.callee;
+            const empty_type_args: []const ast.TypeExpr = &.{};
+            const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = cleanup.args };
+            try self.writeIndent();
+            if (!try lower_c_call.emitVaCall(self.callContext(), call, locals)) return error.UnsupportedCEmission;
             try self.out.appendSlice(self.allocator, ";\n");
             return;
         }

@@ -2022,6 +2022,9 @@ const LlvmEmitter = struct {
             .atomic_store => {
                 if (call.type_args.len != 0 or call.args.len != 2) return null;
             },
+            .va_end => {
+                if (call.type_args.len != 0 or call.args.len != 1) return null;
+            },
             else => return null,
         }
         if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedLlvmEmission;
@@ -2041,6 +2044,7 @@ const LlvmEmitter = struct {
             .dma_cache_clean, .dma_cache_invalidate => try self.emitDmaCachePayload(cleanup.callee, cleanup.args, cleanup.kind),
             .maybe_uninit_write => try self.emitMaybeUninitWritePayload(cleanup.callee, cleanup.args),
             .atomic_store => try self.emitAtomicStorePayload(cleanup.callee, cleanup.args),
+            .va_end => try self.emitVaEndPayload(cleanup.callee, cleanup.args),
             else => return error.UnsupportedLlvmEmission,
         }
     }
@@ -3413,6 +3417,17 @@ const LlvmEmitter = struct {
         const ptr = try self.atomicAddress(info);
         const value = try self.emitAtomicValueForStorage(args[0], info.payload_ty);
         try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} {s}, align {d}{s}\n", .{ try self.atomicStorageLlvmType(info.payload_ty), value, ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
+    }
+
+    fn emitVaEndPayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr) !void {
+        if (args.len != 1) return error.UnsupportedLlvmEmission;
+        var callee_storage = callee;
+        const empty_type_args: []const ast.TypeExpr = &.{};
+        const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
+        const info = self.vaCallInfo(call, .va_end) orelse return error.UnsupportedLlvmEmission;
+        const cursor_ty = info.cursor_ty orelse return error.UnsupportedLlvmEmission;
+        const ap_ptr = try self.emitVaListCursorArg(args[0], cursor_ty);
+        try self.out.print(self.allocator, "  call void @llvm.va_end(ptr {s})\n", .{ap_ptr});
     }
 
     fn emitMemberAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {
