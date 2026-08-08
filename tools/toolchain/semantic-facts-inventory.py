@@ -1269,7 +1269,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn explicitDropLocalCleanup": 1,
         "pub fn explicitDropCleanupEmissionAllowed": 1,
         "pub fn deferredExplicitDropCleanupDecision": 1,
-        "valueIdForLocal(function, release.local_name)": 1,
+        "valueIdForLocal(function, release.local_name)": 2,
         "pub fn dropGlueDeclArtifactMatches": 1,
         "pub fn directMovedLocalName": 0,
         "pub fn moveAutoDropCancellationDecision": 1,

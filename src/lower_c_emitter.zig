@@ -2859,7 +2859,7 @@ pub const CEmitter = struct {
 
     fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (mir_ownership_authority.explicitDropCancellationDecision(self.mir_module, function, expr)) {
+        switch (try mir_ownership_authority.explicitDropCancellationDecision(self.allocator, self.mir_module, function, expr)) {
             .ignore => {},
             .remove_auto_drop => |key| backend_cleanup.removeAutoDropCleanup(&self.defer_stack, key),
             .reject => return error.UnsupportedCEmission,

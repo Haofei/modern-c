@@ -156,32 +156,6 @@ pub fn autoDropCleanupEmissionAllowed(
     return false;
 }
 
-fn authorizesExplicitDropLocal(
-    module: *const mir.Module,
-    function: *const mir.Function,
-    local_name: []const u8,
-    drop_fn: []const u8,
-    source: mir.SourcePoint,
-) ?AutoDropCleanupKey {
-    const root_value_id = valueIdForLocal(function, local_name) orelse return null;
-    const drop_glue = dropGlueFactForReleaseFunction(module, drop_fn) orelse return null;
-
-    for (function.ownership_events) |event| {
-        if (event.kind != .explicit_drop) continue;
-        if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
-        if (!sourceMatches(event.source, source)) continue;
-        if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
-        if (!event.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) continue;
-        return .{
-            .local_name = local_name,
-            .root_value_id = root_value_id,
-            .resource_type_symbol_id = event.place.root_type_symbol_id,
-            .drop_glue_symbol_id = event.drop_glue_symbol_id,
-        };
-    }
-    return null;
-}
-
 fn explicitDropPlanEntryForLocal(
     allocator: std.mem.Allocator,
     module: *const mir.Module,
@@ -294,14 +268,23 @@ pub fn moveAutoDropCancellationDecision(
 }
 
 pub fn explicitDropCancellationDecision(
+    allocator: std.mem.Allocator,
     module: *const mir.Module,
     function: *const mir.Function,
     expr: ast.Expr,
-) AutoDropCancellationDecision {
+) error{OutOfMemory}!AutoDropCancellationDecision {
     const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return .ignore;
-    if (authorizesExplicitDropLocal(module, function, release.local_name, release.fn_name, mir.sourcePointFromSpan(expr.span))) |key| return .{ .remove_auto_drop = key };
-    if (localHasAutoDropOwnershipEvent(module, function, release.local_name)) return .reject;
-    return .ignore;
+    const entry = (try explicitDropPlanEntryForLocal(allocator, module, function, release.local_name, release.fn_name, mir.sourcePointFromSpan(expr.span))) orelse {
+        if (localHasAutoDropOwnershipEvent(module, function, release.local_name)) return .reject;
+        return .ignore;
+    };
+    const root_value_id = valueIdForLocal(function, release.local_name) orelse return .reject;
+    return .{ .remove_auto_drop = .{
+        .local_name = release.local_name,
+        .root_value_id = root_value_id,
+        .resource_type_symbol_id = entry.place.root_type_symbol_id,
+        .drop_glue_symbol_id = entry.drop_glue_symbol_id,
+    } };
 }
 
 fn localHasAutoDropOwnershipEvent(

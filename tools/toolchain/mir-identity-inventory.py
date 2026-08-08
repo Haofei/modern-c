@@ -289,7 +289,7 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "pub fn deferredExplicitDropCleanupDecision"),
         ("src/mir_ownership_authority.zig", "valueIdForLocal(function, release.local_name)"),
         ("src/mir_ownership_authority.zig", "fn autoDropTypeSymbolHasGlue"),
-        ("src/mir_ownership_authority.zig", "fn authorizesExplicitDropLocal"),
+        ("src/mir_ownership_authority.zig", "try explicitDropPlanEntryForLocal"),
         ("src/backend_cleanup.zig", "pub const DeferredCleanup"),
         ("src/backend_cleanup.zig", "auto_drop: mir_ownership_authority.AutoDropLocalCleanup"),
         ("src/backend_cleanup.zig", "explicit_drop: mir_ownership_authority.AutoDropLocalCleanup"),
@@ -337,6 +337,7 @@ def main() -> int:
     require_not_contains("src/mir_model.zig", "ExplicitDropCleanupPlanEntry")
     require_not_contains("src/mir.zig", "appendAutoDropCleanupPlan")
     require_not_contains("src/mir.zig", "appendExplicitDropCleanupPlan")
+    require_not_contains("src/mir_ownership_authority.zig", "fn authorizesExplicitDropLocal")
     require_not_contains("src/lower_c_emitter.zig", "authorizesAutoDropLocal(")
     require_not_contains("src/lower_llvm.zig", "authorizesAutoDropLocal(")
 
