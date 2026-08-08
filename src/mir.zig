@@ -7417,7 +7417,7 @@ const FunctionBuilder = struct {
 
     fn addDropGlueCallOwnershipEvent(self: *FunctionBuilder, callee_name: []const u8, call: anytype, call_span: ast.Span) !void {
         if (call.type_args.len != 0 or call.args.len != 1) return;
-        const root = ownership_facts.addressOfIdentName(call.args[0]) orelse return;
+        const root = ast_query.addressOfIdentName(call.args[0]) orelse return;
         const root_value_id = try self.internValueId(root);
         const root_type_symbol_id = self.localRootTypeSymbol(root);
         if (!root_type_symbol_id.isValid()) return;

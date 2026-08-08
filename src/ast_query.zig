@@ -81,6 +81,20 @@ pub fn isUninitLiteral(expr: ast.Expr) bool {
     };
 }
 
+/// The local name in the narrow address-of-local shape `&local`, through grouping,
+/// or null for every other expression shape.
+pub fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| addressOfIdentName(inner.*),
+        .address_of => |inner| switch (inner.kind) {
+            .grouped => addressOfIdentName(inner.*),
+            .ident => |ident| ident.text,
+            else => null,
+        },
+        else => null,
+    };
+}
+
 /// True when an expression tree contains a `?` result/nullable propagation expression.
 pub fn exprHandlesAnyResult(expr: ast.Expr) bool {
     return switch (expr.kind) {
@@ -859,4 +873,16 @@ pub fn constGetCallTarget(call: anytype) ?ConstGetCallTarget {
     if (!std.mem.eql(u8, member.name.text, "const_get")) return null;
     const index = array_len.constGetIndexArg(call.type_args[0]) orelse return null;
     return .{ .base = member.base, .index = index };
+}
+
+test "address-of local shape recognizes grouped identifiers only" {
+    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+
+    const local = ast.Ident{ .text = "g", .span = span };
+    const ident = ast.Expr{ .span = span, .kind = .{ .ident = local } };
+    const address = ast.Expr{ .span = span, .kind = .{ .address_of = try ast.makePtr(std.testing.allocator, ident) } };
+    defer std.testing.allocator.destroy(address.kind.address_of);
+
+    try std.testing.expectEqualStrings("g", addressOfIdentName(address).?);
+    try std.testing.expect(addressOfIdentName(ident) == null);
 }

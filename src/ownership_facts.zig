@@ -58,18 +58,6 @@ pub fn dropGlueDeclMatches(
     return autoDropEligibleTypeName(declared_resource, structs, aliases);
 }
 
-pub fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| addressOfIdentName(inner.*),
-        .address_of => |inner| switch (inner.kind) {
-            .grouped => addressOfIdentName(inner.*),
-            .ident => |ident| ident.text,
-            else => null,
-        },
-        else => null,
-    };
-}
-
 pub fn typeEmbedsMoveByValue(
     ty: ast.TypeExpr,
     structs: *const std.StringHashMap(ast.StructDecl),
@@ -200,16 +188,4 @@ test "drop glue declaration matching centralizes attr ABI and eligibility checks
     try std.testing.expect(!dropGlueDeclMatches("Other", "close_guard", fn_decl, attrs[0..], false, &structs, &aliases));
     try std.testing.expect(!dropGlueDeclMatches("Guard", "close_guard", fn_decl, &.{}, false, &structs, &aliases));
     try std.testing.expect(!dropGlueDeclMatches("Guard", "close_guard", fn_decl, attrs[0..], true, &structs, &aliases));
-}
-
-test "address-of local shape recognizes grouped identifiers only" {
-    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
-
-    const local = ast.Ident{ .text = "g", .span = span };
-    const ident = ast.Expr{ .span = span, .kind = .{ .ident = local } };
-    const address = ast.Expr{ .span = span, .kind = .{ .address_of = try ast.makePtr(std.testing.allocator, ident) } };
-    defer std.testing.allocator.destroy(address.kind.address_of);
-
-    try std.testing.expectEqualStrings("g", addressOfIdentName(address).?);
-    try std.testing.expect(addressOfIdentName(ident) == null);
 }

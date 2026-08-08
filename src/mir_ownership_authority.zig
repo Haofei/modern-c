@@ -128,7 +128,7 @@ pub fn explicitDropLocalCleanup(module: *const mir.Module, expr: ast.Expr) ?Auto
     const fn_name = ast_query.calleeIdentName(call.callee.*) orelse return null;
     _ = dropGlueFactForReleaseFunction(module, fn_name) orelse return null;
     if (call.args.len != 1) return null;
-    const local_name = addressOfIdentName(call.args[0]) orelse return null;
+    const local_name = ast_query.addressOfIdentName(call.args[0]) orelse return null;
     return .{ .fn_name = fn_name, .local_name = local_name, .span = expr.span };
 }
 
@@ -239,18 +239,6 @@ fn simpleOwnershipRootMatches(place: mir.OwnershipPlace, root_value_id: mir.Valu
         place.projection_count == 0;
 }
 
-fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| addressOfIdentName(inner.*),
-        .address_of => |inner| switch (inner.kind) {
-            .grouped => addressOfIdentName(inner.*),
-            .ident => |ident| ident.text,
-            else => null,
-        },
-        else => null,
-    };
-}
-
 /// Transitional backend cleanup cancellation accepts only direct local moves.
 /// MIR remains the authority for whether that syntax is allowed to cancel a
 /// drop obligation; this helper only keeps the source-shape boundary shared
@@ -278,18 +266,6 @@ test "auto-drop cleanup stack removal uses the latest matching local" {
         .auto_drop => |cleanup| try std.testing.expectEqualStrings("close_old", cleanup.fn_name),
         .expr => return error.TestUnexpectedResult,
     }
-}
-
-test "address-of local shape recognizes grouped identifiers only" {
-    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
-
-    const local = ast.Ident{ .text = "g", .span = span };
-    const ident = ast.Expr{ .span = span, .kind = .{ .ident = local } };
-    const address = ast.Expr{ .span = span, .kind = .{ .address_of = try ast.makePtr(std.testing.allocator, ident) } };
-    defer std.testing.allocator.destroy(address.kind.address_of);
-
-    try std.testing.expectEqualStrings("g", addressOfIdentName(address).?);
-    try std.testing.expect(addressOfIdentName(ident) == null);
 }
 
 test "direct moved local name recognizes only grouped identifiers" {

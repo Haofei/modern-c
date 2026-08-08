@@ -1211,6 +1211,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "source_spelling.definesFunctionSpelling(module_mir, hook)": 1,
         "pub fn appendHeaderAndSanitizerHooks(": 1,
     },
+    "src/ast_query.zig": {
+        "pub fn addressOfIdentName": 1,
+        "test \"address-of local shape recognizes grouped identifiers only\"": 1,
+    },
     "src/ownership_facts.zig": {
         "pub fn makeDropPointerCall": 0,
         "pub fn movedLocalName": 0,
@@ -1231,7 +1235,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "test \"auto-drop release cancellation combines release shape with stack lookup\"": 0,
         "test \"auto-drop release shape is independent of cleanup stack lookup\"": 0,
         "test \"auto-drop cleanup helpers recognize explicit release call shapes\"": 0,
-        "test \"address-of local shape recognizes grouped identifiers only\"": 1,
+        "pub fn addressOfIdentName": 0,
+        "test \"address-of local shape recognizes grouped identifiers only\"": 0,
     },
     "src/mir_ownership_authority.zig": {
         "pub const AutoDropLocalCleanup": 1,
@@ -1245,7 +1250,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn explicitDropCancellationDecision": 1,
         "fn directMovedLocalName": 1,
         "test \"auto-drop cleanup stack removal uses the latest matching local\"": 1,
-        "test \"address-of local shape recognizes grouped identifiers only\"": 1,
+        "fn addressOfIdentName": 0,
+        "test \"address-of local shape recognizes grouped identifiers only\"": 0,
         "test \"direct moved local name recognizes only grouped identifiers\"": 1,
     },
     "src/sema.zig": {
