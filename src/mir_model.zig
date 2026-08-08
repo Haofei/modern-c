@@ -560,25 +560,6 @@ pub const OwnershipEvent = struct {
     source: SourcePoint,
 };
 
-pub const AutoDropCleanupPlanEntry = struct {
-    auto_drop_event_index: usize,
-    storage_dead_event_index: usize,
-    place: OwnershipPlace,
-    generation: u32 = 0,
-    drop_glue_symbol_id: SymbolId,
-    block_id: BlockId,
-    source: SourcePoint,
-};
-
-pub const ExplicitDropCleanupPlanEntry = struct {
-    explicit_drop_event_index: usize,
-    place: OwnershipPlace,
-    generation: u32 = 0,
-    drop_glue_symbol_id: SymbolId,
-    block_id: BlockId,
-    source: SourcePoint,
-};
-
 pub const CleanupActionKind = enum {
     auto_drop,
     explicit_drop,

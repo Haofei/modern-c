@@ -255,12 +255,8 @@ def main() -> int:
         require_contains("src/mir_tests.zig", needle)
 
     for path, needle in (
-        ("src/mir_model.zig", "pub const AutoDropCleanupPlanEntry"),
-        ("src/mir_model.zig", "pub const ExplicitDropCleanupPlanEntry"),
         ("src/mir_model.zig", "pub const CleanupActionKind"),
         ("src/mir_model.zig", "pub const CleanupActionPlanEntry"),
-        ("src/mir.zig", "pub fn appendAutoDropCleanupPlan"),
-        ("src/mir.zig", "pub fn appendExplicitDropCleanupPlan"),
         ("src/mir.zig", "pub fn appendOwnershipCleanupPlan"),
         ("src/mir.zig", "fn autoDropClosingStorageDeadIndex"),
         ("src/mir.zig", "fn ownershipEventCanReachBlock"),
@@ -337,6 +333,10 @@ def main() -> int:
     require_not_contains("src/mir_ownership_authority.zig", "removeAutoDropCleanupForLocalName")
     require_not_contains("src/backend_cleanup.zig", "removeAutoDropCleanupForLocalName")
     require_not_contains("src/ownership_facts.zig", "AutoDropCleanupRegistration")
+    require_not_contains("src/mir_model.zig", "AutoDropCleanupPlanEntry")
+    require_not_contains("src/mir_model.zig", "ExplicitDropCleanupPlanEntry")
+    require_not_contains("src/mir.zig", "appendAutoDropCleanupPlan")
+    require_not_contains("src/mir.zig", "appendExplicitDropCleanupPlan")
     require_not_contains("src/lower_c_emitter.zig", "authorizesAutoDropLocal(")
     require_not_contains("src/lower_llvm.zig", "authorizesAutoDropLocal(")
 

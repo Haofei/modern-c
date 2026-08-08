@@ -179,8 +179,6 @@ pub const OwnershipLoanKind = mir_model.OwnershipLoanKind;
 pub const OwnershipPlaceProjection = mir_model.OwnershipPlaceProjection;
 pub const OwnershipPlace = mir_model.OwnershipPlace;
 pub const OwnershipEvent = mir_model.OwnershipEvent;
-pub const AutoDropCleanupPlanEntry = mir_model.AutoDropCleanupPlanEntry;
-pub const ExplicitDropCleanupPlanEntry = mir_model.ExplicitDropCleanupPlanEntry;
 pub const CleanupActionKind = mir_model.CleanupActionKind;
 pub const CleanupActionPlanEntry = mir_model.CleanupActionPlanEntry;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
@@ -1581,51 +1579,6 @@ pub fn validateOwnershipEventsForLowering(module: Module) error{InvalidMirOwners
             if (!ownershipEventValid(module, function, event)) return error.InvalidMirOwnershipEvents;
         }
         if (!ownershipEventSequenceValid(function)) return error.InvalidMirOwnershipEvents;
-    }
-}
-
-pub fn appendAutoDropCleanupPlan(
-    allocator: std.mem.Allocator,
-    module: Module,
-    function: Function,
-    out: *std.ArrayList(AutoDropCleanupPlanEntry),
-) error{ InvalidMirOwnershipEvents, OutOfMemory }!void {
-    var cleanup_plan: std.ArrayList(CleanupActionPlanEntry) = .empty;
-    defer cleanup_plan.deinit(allocator);
-    try appendOwnershipCleanupPlan(allocator, module, function, &cleanup_plan);
-    for (cleanup_plan.items) |entry| {
-        if (entry.kind != .auto_drop) continue;
-        try out.append(allocator, .{
-            .auto_drop_event_index = entry.primary_event_index,
-            .storage_dead_event_index = entry.storage_dead_event_index,
-            .place = entry.place,
-            .generation = entry.generation,
-            .drop_glue_symbol_id = entry.drop_glue_symbol_id,
-            .block_id = entry.block_id,
-            .source = entry.source,
-        });
-    }
-}
-
-pub fn appendExplicitDropCleanupPlan(
-    allocator: std.mem.Allocator,
-    module: Module,
-    function: Function,
-    out: *std.ArrayList(ExplicitDropCleanupPlanEntry),
-) error{ InvalidMirOwnershipEvents, OutOfMemory }!void {
-    var cleanup_plan: std.ArrayList(CleanupActionPlanEntry) = .empty;
-    defer cleanup_plan.deinit(allocator);
-    try appendOwnershipCleanupPlan(allocator, module, function, &cleanup_plan);
-    for (cleanup_plan.items) |entry| {
-        if (entry.kind != .explicit_drop) continue;
-        try out.append(allocator, .{
-            .explicit_drop_event_index = entry.primary_event_index,
-            .place = entry.place,
-            .generation = entry.generation,
-            .drop_glue_symbol_id = entry.drop_glue_symbol_id,
-            .block_id = entry.block_id,
-            .source = entry.source,
-        });
     }
 }
 
