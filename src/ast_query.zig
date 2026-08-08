@@ -95,6 +95,16 @@ pub fn addressOfIdentName(expr: ast.Expr) ?[]const u8 {
     };
 }
 
+/// The local name in the narrow move-source shape `move local`, after the
+/// parser has stripped the `move` wrapper and preserving grouping only.
+pub fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| directMovedLocalName(inner.*),
+        .ident => |ident| ident.text,
+        else => null,
+    };
+}
+
 /// True when an expression tree contains a `?` result/nullable propagation expression.
 pub fn exprHandlesAnyResult(expr: ast.Expr) bool {
     return switch (expr.kind) {
@@ -548,6 +558,23 @@ pub fn callExpr(expr: ast.Expr) ?CallExpr {
     };
 }
 
+pub const DropPointerLocalReleaseCall = struct {
+    fn_name: []const u8,
+    local_name: []const u8,
+    span: ast.Span,
+};
+
+/// Classify the narrow explicit release source shape `drop_fn(&local)`.
+/// This is syntax only: semantic authority for whether `drop_fn` is the
+/// resource's MIR-owned drop glue remains with MIR facts.
+pub fn dropPointerLocalReleaseCall(expr: ast.Expr) ?DropPointerLocalReleaseCall {
+    const call = callExpr(expr) orelse return null;
+    const fn_name = calleeIdentName(call.callee.*) orelse return null;
+    if (call.type_args.len != 0 or call.args.len != 1) return null;
+    const local_name = addressOfIdentName(call.args[0]) orelse return null;
+    return .{ .fn_name = fn_name, .local_name = local_name, .span = expr.span };
+}
+
 /// A member expression (`base.name`), through grouping.
 pub const MemberExpr = struct { base: *ast.Expr, name: ast.Ident };
 
@@ -914,6 +941,39 @@ test "address-of local shape recognizes grouped identifiers only" {
 
     try std.testing.expectEqualStrings("g", addressOfIdentName(address).?);
     try std.testing.expect(addressOfIdentName(ident) == null);
+}
+
+test "direct moved local name recognizes only grouped identifiers" {
+    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+    var ident_expr = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "guard", .span = span } } };
+    const grouped_expr = ast.Expr{ .span = span, .kind = .{ .grouped = &ident_expr } };
+    const literal_expr = ast.Expr{ .span = span, .kind = .{ .int_literal = "1" } };
+    const deref_expr = ast.Expr{ .span = span, .kind = .{ .deref = &ident_expr } };
+
+    try std.testing.expectEqualStrings("guard", directMovedLocalName(ident_expr).?);
+    try std.testing.expectEqualStrings("guard", directMovedLocalName(grouped_expr).?);
+    try std.testing.expect(directMovedLocalName(literal_expr) == null);
+    try std.testing.expect(directMovedLocalName(deref_expr) == null);
+}
+
+test "drop pointer release call recognizes direct address locals only" {
+    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+
+    var callee = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "close_guard", .span = span } } };
+    const local = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "guard", .span = span } } };
+    const address = ast.Expr{ .span = span, .kind = .{ .address_of = try ast.makePtr(std.testing.allocator, local) } };
+    defer std.testing.allocator.destroy(address.kind.address_of);
+    var args = [_]ast.Expr{address};
+    const call = ast.Expr{ .span = span, .kind = .{ .call = .{
+        .callee = &callee,
+        .type_args = &.{},
+        .args = args[0..],
+    } } };
+
+    const release = dropPointerLocalReleaseCall(call).?;
+    try std.testing.expectEqualStrings("close_guard", release.fn_name);
+    try std.testing.expectEqualStrings("guard", release.local_name);
+    try std.testing.expect(dropPointerLocalReleaseCall(local) == null);
 }
 
 test "drop pointer release parameter accepts named and generic mut pointers only" {

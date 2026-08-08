@@ -114,15 +114,9 @@ fn authorizesExplicitDropLocal(
 }
 
 pub fn explicitDropLocalCleanup(module: *const mir.Module, expr: ast.Expr) ?AutoDropLocalCleanup {
-    const call = switch (expr.kind) {
-        .call => |node| node,
-        else => return null,
-    };
-    const fn_name = ast_query.calleeIdentName(call.callee.*) orelse return null;
-    _ = dropGlueFactForReleaseFunction(module, fn_name) orelse return null;
-    if (call.args.len != 1) return null;
-    const local_name = ast_query.addressOfIdentName(call.args[0]) orelse return null;
-    return .{ .fn_name = fn_name, .local_name = local_name, .span = expr.span };
+    const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return null;
+    _ = dropGlueFactForReleaseFunction(module, release.fn_name) orelse return null;
+    return .{ .fn_name = release.fn_name, .local_name = release.local_name, .span = release.span };
 }
 
 pub fn moveAutoDropCancellationDecision(
@@ -131,7 +125,7 @@ pub fn moveAutoDropCancellationDecision(
     expr: ast.Expr,
     move_span: ast.Span,
 ) AutoDropCancellationDecision {
-    const local_name = directMovedLocalName(expr) orelse return .ignore;
+    const local_name = ast_query.directMovedLocalName(expr) orelse return .ignore;
     const source = mir.sourcePointFromSpan(move_span);
     if (authorizesMoveOutLocalAutoDrop(module, function, local_name, source)) return .{ .remove_auto_drop_local = local_name };
     if (localHasAutoDropOwnershipEvent(module, function, local_name)) return .reject;
@@ -238,29 +232,4 @@ fn hasNamedAttr(attrs: []const ast.Attr, name: []const u8) bool {
         else => {},
     };
     return false;
-}
-
-/// Transitional backend cleanup cancellation accepts only direct local moves.
-/// MIR remains the authority for whether that syntax is allowed to cancel a
-/// drop obligation; this helper only keeps the source-shape boundary shared
-/// while C/LLVM still maintain legacy cleanup stacks.
-fn directMovedLocalName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| directMovedLocalName(inner.*),
-        .ident => |ident| ident.text,
-        else => null,
-    };
-}
-
-test "direct moved local name recognizes only grouped identifiers" {
-    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
-    var ident_expr = ast.Expr{ .span = span, .kind = .{ .ident = .{ .text = "guard", .span = span } } };
-    const grouped_expr = ast.Expr{ .span = span, .kind = .{ .grouped = &ident_expr } };
-    const literal_expr = ast.Expr{ .span = span, .kind = .{ .int_literal = "1" } };
-    const deref_expr = ast.Expr{ .span = span, .kind = .{ .deref = &ident_expr } };
-
-    try std.testing.expectEqualStrings("guard", directMovedLocalName(ident_expr).?);
-    try std.testing.expectEqualStrings("guard", directMovedLocalName(grouped_expr).?);
-    try std.testing.expect(directMovedLocalName(literal_expr) == null);
-    try std.testing.expect(directMovedLocalName(deref_expr) == null);
 }
