@@ -3688,7 +3688,6 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         const plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedCEmission;
         const cleanup = mir_ownership_authority.autoDropLocalCleanupFromActionRef(self.mir_module, function, plan, ref) orelse return error.UnsupportedCEmission;
-        if (!try mir_ownership_authority.autoDropCleanupEmissionAllowed(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), cleanup)) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
     }
@@ -3697,7 +3696,6 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         const plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedCEmission;
         const cleanup = mir_ownership_authority.explicitDropLocalCleanupFromActionRef(self.mir_module, function, plan, ref) orelse return error.UnsupportedCEmission;
-        if (!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), cleanup)) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
     }

@@ -2084,7 +2084,6 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         const plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedLlvmEmission;
         const cleanup = mir_ownership_authority.autoDropLocalCleanupFromActionRef(&self.mir_module, function, plan, ref) orelse return error.UnsupportedLlvmEmission;
-        if (!try mir_ownership_authority.autoDropCleanupEmissionAllowed(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), cleanup)) return error.UnsupportedLlvmEmission;
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
     }
@@ -2093,7 +2092,6 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         const plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedLlvmEmission;
         const cleanup = mir_ownership_authority.explicitDropLocalCleanupFromActionRef(&self.mir_module, function, plan, ref) orelse return error.UnsupportedLlvmEmission;
-        if (!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), cleanup)) return error.UnsupportedLlvmEmission;
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
     }
