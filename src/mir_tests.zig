@@ -4326,12 +4326,16 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     try std.testing.expect(use_guard.ownership_events[2].drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
     try std.testing.expectEqual(mir.OwnershipEventKind.storage_dead, use_guard.ownership_events[3].kind);
     try std.testing.expect(use_guard.ownership_events[3].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
+    const g_identity = valueIdentityBySpelling(use_guard.*, "g") orelse return error.TestUnexpectedResult;
     const local_span = ast.Span{ .offset = 1, .len = 1, .line = 1, .column = 2 };
     switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, use_guard, "g", "Guard", local_span)) {
         .emit_auto_drop_cleanup => |cleanup| {
             try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
             try std.testing.expectEqualStrings("g", cleanup.local_name);
             try std.testing.expectEqual(local_span, cleanup.span);
+            try std.testing.expect(cleanup.root_value_id.eql(g_identity.id));
+            try std.testing.expect(cleanup.resource_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
+            try std.testing.expect(cleanup.drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
         },
         else => return error.TestUnexpectedResult,
     }

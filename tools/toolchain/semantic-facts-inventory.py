@@ -1248,6 +1248,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/mir_ownership_authority.zig": {
         "pub const AutoDropLocalCleanup": 1,
+        "root_value_id: mir.ValueId = .invalid": 1,
+        "resource_type_symbol_id: mir.SymbolId = .invalid": 1,
+        "drop_glue_symbol_id: mir.SymbolId = .invalid": 1,
         "pub const DeferredCleanup": 0,
         "emit_auto_drop_cleanup: AutoDropLocalCleanup": 1,
         "emit_auto_drop_cleanup: []const u8": 0,

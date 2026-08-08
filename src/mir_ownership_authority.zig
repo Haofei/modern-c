@@ -8,6 +8,9 @@ pub const AutoDropLocalCleanup = struct {
     fn_name: []const u8,
     local_name: []const u8,
     span: ast.Span,
+    root_value_id: mir.ValueId = .invalid,
+    resource_type_symbol_id: mir.SymbolId = .invalid,
+    drop_glue_symbol_id: mir.SymbolId = .invalid,
 };
 
 pub fn autoDropEligibleTypeName(module: *const mir.Module, type_name: []const u8) bool {
@@ -82,6 +85,9 @@ pub fn autoDropLocalRegistrationDecision(
                     .fn_name = drop_glue.release_fn,
                     .local_name = local_name,
                     .span = local_span,
+                    .root_value_id = root_value_id,
+                    .resource_type_symbol_id = ownership.typed_type_symbol_id,
+                    .drop_glue_symbol_id = ownership.drop_glue_symbol_id,
                 } };
             },
             .move_out, .explicit_drop => saw_consuming_event = true,
@@ -115,8 +121,14 @@ fn authorizesExplicitDropLocal(
 
 pub fn explicitDropLocalCleanup(module: *const mir.Module, expr: ast.Expr) ?AutoDropLocalCleanup {
     const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return null;
-    _ = dropGlueFactForReleaseFunction(module, release.fn_name) orelse return null;
-    return .{ .fn_name = release.fn_name, .local_name = release.local_name, .span = release.span };
+    const drop_glue = dropGlueFactForReleaseFunction(module, release.fn_name) orelse return null;
+    return .{
+        .fn_name = release.fn_name,
+        .local_name = release.local_name,
+        .span = release.span,
+        .resource_type_symbol_id = drop_glue.typed_resource_symbol_id,
+        .drop_glue_symbol_id = drop_glue.typed_release_symbol_id,
+    };
 }
 
 pub fn moveAutoDropCancellationDecision(
