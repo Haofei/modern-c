@@ -52,7 +52,7 @@ pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Exp
 pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitReadSequencedBinaryValueTempFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp;
 pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
-pub const MmioAccessFn = *const fn (ctx: *anyopaque, callee: ast.Expr, args: []ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess;
+pub const MmioAccessFn = *const fn (ctx: *anyopaque, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess;
 pub const ValueCTypeFn = *const fn (ctx: *anyopaque, value_type: []const u8) []const u8;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
@@ -222,7 +222,7 @@ pub fn emitReadExprWithReplacements(
     }
 }
 
-pub fn classifyAccess(ctx: AccessContext, callee: ast.Expr, args: []ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
+pub fn classifyAccess(ctx: AccessContext, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
     _ = locals;
     const member = memberExpr(callee) orelse return null;
     const kind = accessKind(member.name.text) orelse return null;
@@ -333,13 +333,17 @@ pub fn emitInlineReadCall(ctx: EmitContext, call: anytype, locals_opt: ?*std.Str
 
 pub fn emitWriteStmt(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = ast_query.callExpr(expr) orelse return false;
-    const access = ctx.mmio_access(ctx.emit_ctx, call.callee.*, call.args, locals) orelse return false;
+    return emitWriteCall(ctx, call.callee.*, call.args, locals);
+}
+
+pub fn emitWriteCall(ctx: EmitContext, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    const access = ctx.mmio_access(ctx.emit_ctx, callee, args, locals) orelse return false;
     if (!std.mem.eql(u8, access.kind, "write")) return false;
     if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
-    if (call.args.len == 0) return error.UnsupportedCEmission;
+    if (args.len == 0) return error.UnsupportedCEmission;
 
-    const value_ty = ast_query.simpleNameType(access.value_type, call.args[0].span);
-    const value_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, call.args[0], locals, value_ty);
+    const value_ty = ast_query.simpleNameType(access.value_type, args[0].span);
+    const value_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, args[0], locals, value_ty);
     if (std.mem.eql(u8, access.ordering, "release")) {
         try writeIndent(ctx.context);
         try ctx.context.out.appendSlice(ctx.context.allocator, "mc_barrier_release_before();\n");

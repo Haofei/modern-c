@@ -1292,6 +1292,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/backend_cleanup.zig": {
         "pub const OrdinaryDeferCallCleanup": 1,
         "pub const CallTargetDeferCleanup": 1,
+        "callee: ast.Expr": 1,
         "callee_span: ast.Span": 2,
         "args: []const ast.Expr": 2,
         "call: ast.Expr": 0,

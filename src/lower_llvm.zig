@@ -2007,10 +2007,13 @@ const LlvmEmitter = struct {
             .raw_store => {
                 if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
             },
+            .mmio_write => {
+                if (call.type_args.len != 0 or call.args.len != 2) return null;
+            },
             else => return null,
         }
         if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedLlvmEmission;
-        return .{ .kind = kind, .defer_span = stmt_span, .span = expr.span, .callee_span = call.callee.*.span, .type_args = call.type_args, .args = call.args };
+        return .{ .kind = kind, .defer_span = stmt_span, .span = expr.span, .callee = call.callee.*, .callee_span = call.callee.*.span, .type_args = call.type_args, .args = call.args };
     }
 
     fn emitCallTargetDeferCleanup(self: *LlvmEmitter, cleanup: backend_cleanup.CallTargetDeferCleanup) !void {
@@ -2021,6 +2024,7 @@ const LlvmEmitter = struct {
             .fence_release => try self.out.print(self.allocator, "  fence release{s}\n", .{try self.debugCallSuffix()}),
             .fence_acquire => try self.out.print(self.allocator, "  fence acquire{s}\n", .{try self.debugCallSuffix()}),
             .raw_store => try self.emitRawStorePayload(cleanup.callee_span, cleanup.type_args, cleanup.args),
+            .mmio_write => try self.emitMmioWritePayload(cleanup.callee, cleanup.args),
             else => return error.UnsupportedLlvmEmission,
         }
     }
@@ -3218,15 +3222,7 @@ const LlvmEmitter = struct {
             if (self.mmioAccessInfo(call, kind)) |info| {
                 if (!std.mem.eql(u8, info.op, "write")) return false;
                 if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
-                const ordering = orderingArg(call.args[1]) orelse return error.UnsupportedLlvmEmission;
-                const raw_value = try self.emitExpr(call.args[0], info.value_ty);
-                const value = if (std.mem.eql(u8, try self.llvmType(info.value_ty), try self.llvmType(info.storage_ty)))
-                    raw_value
-                else
-                    try self.castValue(raw_value, info.value_ty, info.storage_ty);
-                try self.emitMmioFence(ordering, .before_store);
-                const ptr = try self.emitMmioRegisterAddress(info);
-                try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(info.storage_ty), value, ptr, try self.debugCallSuffix() });
+                try self.emitMmioWriteInfo(info, call.args);
                 return true;
             }
         }
@@ -3313,6 +3309,29 @@ const LlvmEmitter = struct {
         if (self.csan) try self.out.print(self.allocator, "  call void @mc_csan_write(i64 {s}, i64 {d})\n", .{ addr, self.llvmAlignOf(info.payload_ty) });
         try self.out.print(self.allocator, "  {s} = inttoptr i64 {s} to ptr\n", .{ ptr, addr });
         try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
+    }
+
+    fn emitMmioWritePayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr) !void {
+        if (args.len != 2) return error.UnsupportedLlvmEmission;
+        var callee_storage = callee;
+        const empty_type_args: []const ast.TypeExpr = &.{};
+        const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
+        const info = self.mmioAccessInfo(call, .mmio_write) orelse return error.UnsupportedLlvmEmission;
+        if (!std.mem.eql(u8, info.op, "write")) return error.UnsupportedLlvmEmission;
+        try self.emitMmioWriteInfo(info, args);
+    }
+
+    fn emitMmioWriteInfo(self: *LlvmEmitter, info: MmioAccessInfo, args: []const ast.Expr) !void {
+        if (args.len != 2) return error.UnsupportedLlvmEmission;
+        const ordering = orderingArg(args[1]) orelse return error.UnsupportedLlvmEmission;
+        const raw_value = try self.emitExpr(args[0], info.value_ty);
+        const value = if (std.mem.eql(u8, try self.llvmType(info.value_ty), try self.llvmType(info.storage_ty)))
+            raw_value
+        else
+            try self.castValue(raw_value, info.value_ty, info.storage_ty);
+        try self.emitMmioFence(ordering, .before_store);
+        const ptr = try self.emitMmioRegisterAddress(info);
+        try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(info.storage_ty), value, ptr, try self.debugCallSuffix() });
     }
 
     fn emitMemberAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {

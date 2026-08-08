@@ -23,6 +23,7 @@ pub const CallTargetDeferCleanup = struct {
     kind: mir.CallTargetKind,
     defer_span: ast.Span,
     span: ast.Span,
+    callee: ast.Expr,
     callee_span: ast.Span,
     type_args: []const ast.TypeExpr,
     args: []const ast.Expr,

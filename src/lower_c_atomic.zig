@@ -33,7 +33,7 @@ pub const EmitContext = struct {
     mir_target_type: MirTargetTypeFn,
 };
 
-pub fn orderingArg(args: []ast.Expr) []const u8 {
+pub fn orderingArg(args: []const ast.Expr) []const u8 {
     for (args) |arg| {
         if (arg.kind == .enum_literal) return arg.kind.enum_literal.text;
     }

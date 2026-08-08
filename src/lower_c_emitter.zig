@@ -2345,7 +2345,7 @@ pub const CEmitter = struct {
         try self.emitExprWithTarget(expr, locals, target_ty);
     }
 
-    fn mmioAccessForMmio(ctx: *anyopaque, callee: ast.Expr, args: []ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
+    fn mmioAccessForMmio(ctx: *anyopaque, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.mmioAccess(callee, args, locals);
     }
@@ -3589,16 +3589,23 @@ pub const CEmitter = struct {
             .raw_store => {
                 if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
             },
+            .mmio_write => {
+                if (call.type_args.len != 0 or call.args.len != 2) return null;
+            },
             else => return null,
         }
         if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedCEmission;
-        return .{ .kind = kind, .defer_span = stmt_span, .span = expr.span, .callee_span = call.callee.*.span, .type_args = call.type_args, .args = call.args };
+        return .{ .kind = kind, .defer_span = stmt_span, .span = expr.span, .callee = call.callee.*, .callee_span = call.callee.*.span, .type_args = call.type_args, .args = call.args };
     }
 
     fn emitCallTargetDeferCleanup(self: *CEmitter, cleanup: backend_cleanup.CallTargetDeferCleanup, locals: *std.StringHashMap(LocalInfo)) !void {
         if (!mir.callTargetDeferCleanupAtSource((self.currentMirFunction() orelse return error.UnsupportedCEmission).*, mir.sourcePointFromSpan(cleanup.defer_span), mir.sourcePointFromSpan(cleanup.span), mir.sourcePointFromSpan(cleanup.callee_span), cleanup.kind)) return error.UnsupportedCEmission;
         if (cleanup.kind == .raw_store) {
             try self.emitRawStorePayload(cleanup.callee_span, cleanup.type_args, cleanup.args, locals);
+            return;
+        }
+        if (cleanup.kind == .mmio_write) {
+            if (!try lower_c_mmio.emitWriteCall(self.mmioEmitContext(), cleanup.callee, cleanup.args, locals)) return error.UnsupportedCEmission;
             return;
         }
         const statement = switch (cleanup.kind) {
@@ -8752,7 +8759,7 @@ pub const CEmitter = struct {
     // more reads in one operand would be combined by non-sequencing C operators (function-call
     // arguments, arithmetic, comparison) whose evaluation order is unspecified — which would
     // silently reorder device reads.
-    fn mmioAccess(self: *CEmitter, callee: ast.Expr, args: []ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
+    fn mmioAccess(self: *CEmitter, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
         return lower_c_mmio.classifyAccess(self.mmioAccessContext(), callee, args, locals);
     }
 

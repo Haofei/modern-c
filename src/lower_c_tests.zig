@@ -14021,6 +14021,65 @@ test "lower-c ordinary raw-store defer emits typed cleanup" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_raw_store_u32") != null);
 }
 
+test "lower-c ordinary MMIO write defer requires MIR call-target facts" {
+    const source =
+        \\extern mmio struct Device {
+        \\    raw: Reg<u32, .read_write>,
+        \\}
+        \\fn ordinary_defer_mmio_write_fact(dev: MmioPtr<Device>, value: u32) -> void {
+        \\    defer dev.raw.write(value, .release);
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_mmio_write_requires_fact.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+    var drifted_defer_span = false;
+    for (parsed.module.decls) |*decl| switch (decl.kind) {
+        .fn_decl => |*fn_decl| {
+            if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_mmio_write_fact")) continue;
+            const body = fn_decl.body orelse return error.TestUnexpectedResult;
+            for (body.items) |*stmt| switch (stmt.kind) {
+                .@"defer" => {
+                    stmt.span.line += 1;
+                    drifted_defer_span = true;
+                },
+                else => {},
+            };
+        },
+        else => {},
+    };
+    if (!drifted_defer_span) return error.TestUnexpectedResult;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "emit_c_ordinary_defer_mmio_write_requires_fact.mc", .{}, false, null));
+}
+
+test "lower-c ordinary MMIO write defer emits typed cleanup" {
+    const source =
+        \\extern mmio struct Device {
+        \\    raw: Reg<u32, .read_write>,
+        \\}
+        \\fn ordinary_defer_mmio_write_cleanup(dev: MmioPtr<Device>, value: u32) -> void {
+        \\    defer dev.raw.write(value, .release);
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_mmio_write_cleanup.mc", source);
+    defer parsed.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithSourcePath(std.testing.allocator, parsed.module, &output, .kernel, "emit_c_ordinary_defer_mmio_write_cleanup.mc", .{}, false);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u32(&dev->raw") != null);
+}
+
 test "lower-c emits auto-drop release for affine move locals" {
     const source =
         \\move struct Guard { id: u32 }
