@@ -2889,7 +2889,7 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         switch (mir_ownership_authority.moveAutoDropCancellationDecision(&self.mir_module, function, expr, move_span)) {
             .ignore => {},
-            .remove_auto_drop_local => |local_name| backend_cleanup.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
+            .remove_auto_drop => |key| backend_cleanup.removeAutoDropCleanup(&self.defer_stack, key),
             .reject => return error.UnsupportedLlvmEmission,
         }
     }
@@ -2898,7 +2898,7 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         switch (mir_ownership_authority.explicitDropCancellationDecision(&self.mir_module, function, expr)) {
             .ignore => {},
-            .remove_auto_drop_local => |local_name| backend_cleanup.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
+            .remove_auto_drop => |key| backend_cleanup.removeAutoDropCleanup(&self.defer_stack, key),
             .reject => return error.UnsupportedLlvmEmission,
         }
     }

@@ -13,6 +13,13 @@ pub const AutoDropLocalCleanup = struct {
     drop_glue_symbol_id: mir.SymbolId = .invalid,
 };
 
+pub const AutoDropCleanupKey = struct {
+    local_name: []const u8,
+    root_value_id: mir.ValueId,
+    resource_type_symbol_id: mir.SymbolId = .invalid,
+    drop_glue_symbol_id: mir.SymbolId = .invalid,
+};
+
 pub fn autoDropEligibleTypeName(module: *const mir.Module, type_name: []const u8) bool {
     for (module.type_ownership_facts) |fact| {
         if (!std.mem.eql(u8, fact.type_name, type_name)) continue;
@@ -58,7 +65,7 @@ pub const AutoDropLocalRegistrationDecision = union(enum) {
 
 pub const AutoDropCancellationDecision = union(enum) {
     ignore,
-    remove_auto_drop_local: []const u8,
+    remove_auto_drop: AutoDropCleanupKey,
     reject,
 };
 
@@ -104,9 +111,9 @@ fn authorizesExplicitDropLocal(
     local_name: []const u8,
     drop_fn: []const u8,
     source: mir.SourcePoint,
-) bool {
-    const root_value_id = valueIdForLocal(function, local_name) orelse return false;
-    const drop_glue = dropGlueFactForReleaseFunction(module, drop_fn) orelse return false;
+) ?AutoDropCleanupKey {
+    const root_value_id = valueIdForLocal(function, local_name) orelse return null;
+    const drop_glue = dropGlueFactForReleaseFunction(module, drop_fn) orelse return null;
 
     for (function.ownership_events) |event| {
         if (event.kind != .explicit_drop) continue;
@@ -114,9 +121,14 @@ fn authorizesExplicitDropLocal(
         if (!sourceMatches(event.source, source)) continue;
         if (!event.place.root_type_symbol_id.eql(drop_glue.typed_resource_symbol_id)) continue;
         if (!event.drop_glue_symbol_id.eql(drop_glue.typed_release_symbol_id)) continue;
-        return true;
+        return .{
+            .local_name = local_name,
+            .root_value_id = root_value_id,
+            .resource_type_symbol_id = event.place.root_type_symbol_id,
+            .drop_glue_symbol_id = event.drop_glue_symbol_id,
+        };
     }
-    return false;
+    return null;
 }
 
 pub fn explicitDropLocalCleanup(module: *const mir.Module, expr: ast.Expr) ?AutoDropLocalCleanup {
@@ -139,7 +151,7 @@ pub fn moveAutoDropCancellationDecision(
 ) AutoDropCancellationDecision {
     const local_name = ast_query.directMovedLocalName(expr) orelse return .ignore;
     const source = mir.sourcePointFromSpan(move_span);
-    if (authorizesMoveOutLocalAutoDrop(module, function, local_name, source)) return .{ .remove_auto_drop_local = local_name };
+    if (authorizesMoveOutLocalAutoDrop(module, function, local_name, source)) |key| return .{ .remove_auto_drop = key };
     if (localHasAutoDropOwnershipEvent(module, function, local_name)) return .reject;
     return .ignore;
 }
@@ -150,7 +162,7 @@ pub fn explicitDropCancellationDecision(
     expr: ast.Expr,
 ) AutoDropCancellationDecision {
     const release = explicitDropLocalCleanup(module, expr) orelse return .ignore;
-    if (authorizesExplicitDropLocal(module, function, release.local_name, release.fn_name, mir.sourcePointFromSpan(expr.span))) return .{ .remove_auto_drop_local = release.local_name };
+    if (authorizesExplicitDropLocal(module, function, release.local_name, release.fn_name, mir.sourcePointFromSpan(expr.span))) |key| return .{ .remove_auto_drop = key };
     if (localHasAutoDropOwnershipEvent(module, function, release.local_name)) return .reject;
     return .ignore;
 }
@@ -174,17 +186,22 @@ fn authorizesMoveOutLocalAutoDrop(
     function: *const mir.Function,
     local_name: []const u8,
     source: mir.SourcePoint,
-) bool {
-    const root_value_id = valueIdForLocal(function, local_name) orelse return false;
+) ?AutoDropCleanupKey {
+    const root_value_id = valueIdForLocal(function, local_name) orelse return null;
 
     for (function.ownership_events) |event| {
         if (event.kind != .move_out) continue;
         if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
         if (!sourceMatches(event.source, source)) continue;
-        if (!autoDropTypeSymbolHasGlue(module, event.place.root_type_symbol_id)) continue;
-        return true;
+        const drop_glue_symbol_id = autoDropGlueSymbolForType(module, event.place.root_type_symbol_id) orelse continue;
+        return .{
+            .local_name = local_name,
+            .root_value_id = root_value_id,
+            .resource_type_symbol_id = event.place.root_type_symbol_id,
+            .drop_glue_symbol_id = drop_glue_symbol_id,
+        };
     }
-    return false;
+    return null;
 }
 
 fn sourceMatches(event_source: mir.SourcePoint, expected: mir.SourcePoint) bool {
@@ -217,12 +234,17 @@ fn dropGlueFactForReleaseFunction(module: *const mir.Module, drop_fn: []const u8
 }
 
 fn autoDropTypeSymbolHasGlue(module: *const mir.Module, type_symbol_id: mir.SymbolId) bool {
-    if (!type_symbol_id.isValid()) return false;
+    return autoDropGlueSymbolForType(module, type_symbol_id) != null;
+}
+
+fn autoDropGlueSymbolForType(module: *const mir.Module, type_symbol_id: mir.SymbolId) ?mir.SymbolId {
+    if (!type_symbol_id.isValid()) return null;
     for (module.type_ownership_facts) |fact| {
         if (!fact.typed_type_symbol_id.eql(type_symbol_id)) continue;
-        return fact.kind == .affine and fact.drop_glue_symbol_id.isValid();
+        if (fact.kind != .affine or !fact.drop_glue_symbol_id.isValid()) return null;
+        return fact.drop_glue_symbol_id;
     }
-    return false;
+    return null;
 }
 
 fn valueIdForLocal(function: *const mir.Function, local_name: []const u8) ?mir.ValueId {

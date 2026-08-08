@@ -262,6 +262,8 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "fn dropGlueFactForSymbols"),
         ("src/mir_ownership_authority.zig", "fn sourceMatches"),
         ("src/mir_ownership_authority.zig", "pub const AutoDropCancellationDecision"),
+        ("src/mir_ownership_authority.zig", "pub const AutoDropCleanupKey"),
+        ("src/mir_ownership_authority.zig", "remove_auto_drop: AutoDropCleanupKey"),
         ("src/mir_ownership_authority.zig", "pub fn moveAutoDropCancellationDecision"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropCancellationDecision"),
         ("src/mir_ownership_authority.zig", "fn authorizesMoveOutLocalAutoDrop"),
@@ -271,7 +273,8 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "fn authorizesExplicitDropLocal"),
         ("src/backend_cleanup.zig", "pub const DeferredCleanup"),
         ("src/backend_cleanup.zig", "auto_drop: mir_ownership_authority.AutoDropLocalCleanup"),
-        ("src/backend_cleanup.zig", "pub fn removeAutoDropCleanupForLocalName"),
+        ("src/backend_cleanup.zig", "pub fn removeAutoDropCleanup("),
+        ("src/backend_cleanup.zig", "fn autoDropCleanupMatchesKey"),
         ("src/lower_c_tests.zig", "lower-c rejects auto-drop transfer authorization with stale MIR resource type"),
         ("src/lower_c_tests.zig", "lower-c move auto-drop cancellation requires MIR move-out event"),
         ("src/lower_c_tests.zig", "lower-c move auto-drop cancellation requires source-matched MIR move-out event"),
@@ -308,6 +311,7 @@ def main() -> int:
     require_not_contains("src/mir_ownership_authority.zig", "legacy_cancellable_cleanup")
     require_not_contains("src/mir_ownership_authority.zig", "pub const DeferredCleanup")
     require_not_contains("src/mir_ownership_authority.zig", "removeAutoDropCleanupForLocalName")
+    require_not_contains("src/backend_cleanup.zig", "removeAutoDropCleanupForLocalName")
     require_not_contains("src/ownership_facts.zig", "AutoDropCleanupRegistration")
     require_not_contains("src/lower_c_emitter.zig", "authorizesAutoDropLocal(")
     require_not_contains("src/lower_llvm.zig", "authorizesAutoDropLocal(")
