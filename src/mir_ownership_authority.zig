@@ -110,6 +110,43 @@ pub fn autoDropLocalRegistrationDecision(
     return .reject;
 }
 
+pub fn autoDropCleanupEmissionAllowed(
+    allocator: std.mem.Allocator,
+    module: *const mir.Module,
+    function: *const mir.Function,
+    cleanup: AutoDropLocalCleanup,
+) error{OutOfMemory}!bool {
+    if (!cleanup.root_value_id.isValid() or
+        !cleanup.resource_type_symbol_id.isValid() or
+        !cleanup.drop_glue_symbol_id.isValid() or
+        cleanup.auto_drop_event_index == std.math.maxInt(usize) or
+        cleanup.storage_dead_event_index == std.math.maxInt(usize))
+    {
+        return false;
+    }
+    const local_value_id = valueIdForLocal(function, cleanup.local_name) orelse return false;
+    if (!local_value_id.eql(cleanup.root_value_id)) return false;
+    const drop_glue = dropGlueFactForSymbols(module, cleanup.resource_type_symbol_id, cleanup.drop_glue_symbol_id) orelse return false;
+    if (!std.mem.eql(u8, drop_glue.release_fn, cleanup.fn_name)) return false;
+
+    var cleanup_plan: std.ArrayList(mir.AutoDropCleanupPlanEntry) = .empty;
+    defer cleanup_plan.deinit(allocator);
+    mir.appendAutoDropCleanupPlan(allocator, module.*, function.*, &cleanup_plan) catch |err| switch (err) {
+        error.InvalidMirOwnershipEvents => return false,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+
+    for (cleanup_plan.items) |entry| {
+        if (entry.auto_drop_event_index != cleanup.auto_drop_event_index) continue;
+        if (entry.storage_dead_event_index != cleanup.storage_dead_event_index) continue;
+        if (!simpleOwnershipRootMatches(entry.place, cleanup.root_value_id)) continue;
+        if (!entry.place.root_type_symbol_id.eql(cleanup.resource_type_symbol_id)) continue;
+        if (!entry.drop_glue_symbol_id.eql(cleanup.drop_glue_symbol_id)) continue;
+        return true;
+    }
+    return false;
+}
+
 fn authorizesExplicitDropLocal(
     module: *const mir.Module,
     function: *const mir.Function,

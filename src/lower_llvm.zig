@@ -1981,6 +1981,8 @@ const LlvmEmitter = struct {
     }
 
     fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
+        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
+        if (!try mir_ownership_authority.autoDropCleanupEmissionAllowed(self.allocator, &self.mir_module, function, cleanup)) return error.UnsupportedLlvmEmission;
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
     }

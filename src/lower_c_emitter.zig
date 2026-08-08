@@ -3549,6 +3549,8 @@ pub const CEmitter = struct {
     }
 
     fn emitAutoDropPointerCleanup(self: *CEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
+        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        if (!try mir_ownership_authority.autoDropCleanupEmissionAllowed(self.allocator, self.mir_module, function, cleanup)) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
     }
