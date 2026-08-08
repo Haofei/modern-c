@@ -290,7 +290,7 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "explicit_drop_event_index: usize = std.math.maxInt(usize)"),
         ("src/mir_ownership_authority.zig", "storage_dead_event_index: usize = std.math.maxInt(usize)"),
         ("src/mir_ownership_authority.zig", "pub fn autoDropLocalRegistrationDecision"),
-        ("src/mir_ownership_authority.zig", "mir.appendOwnershipCleanupPlan"),
+        ("src/mir_ownership_authority.zig", "mir.buildOwnershipCleanupPlan"),
         ("src/mir_ownership_authority.zig", "pub fn autoDropCleanupEmissionAllowed"),
         ("src/mir_ownership_authority.zig", "mir.ownershipLocalHasConsumingResourceEvent"),
         ("src/mir_ownership_authority.zig", "entry.place.root_type_symbol_id.eql(ownership.typed_type_symbol_id)"),

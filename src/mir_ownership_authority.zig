@@ -111,14 +111,13 @@ pub fn autoDropLocalRegistrationDecision(
     if (ownership.kind != .affine or !ownership.drop_glue_symbol_id.isValid()) return .reject;
     const drop_glue = dropGlueFactForSymbols(module, ownership.typed_type_symbol_id, ownership.drop_glue_symbol_id) orelse return .reject;
 
-    var cleanup_plan: std.ArrayList(mir.CleanupActionPlanEntry) = .empty;
-    defer cleanup_plan.deinit(allocator);
-    mir.appendOwnershipCleanupPlan(allocator, module.*, function.*, &cleanup_plan) catch |err| switch (err) {
+    const cleanup_plan = buildCleanupPlanOrReject(allocator, module, function) catch |err| switch (err) {
         error.InvalidMirOwnershipEvents => return .reject,
         error.OutOfMemory => return error.OutOfMemory,
     };
+    defer cleanup_plan.deinit(allocator);
 
-    for (cleanup_plan.items) |entry| {
+    for (cleanup_plan.actions) |entry| {
         if (entry.kind != .auto_drop) continue;
         if (!simpleOwnershipRootMatches(entry.place, root_value_id)) continue;
         if (!entry.place.root_type_symbol_id.eql(ownership.typed_type_symbol_id)) continue;
@@ -157,14 +156,13 @@ pub fn autoDropCleanupEmissionAllowed(
     const drop_glue = dropGlueFactForSymbols(module, cleanup.resource_type_symbol_id, cleanup.drop_glue_symbol_id) orelse return false;
     if (!std.mem.eql(u8, drop_glue.release_fn, cleanup.fn_name)) return false;
 
-    var cleanup_plan: std.ArrayList(mir.CleanupActionPlanEntry) = .empty;
-    defer cleanup_plan.deinit(allocator);
-    mir.appendOwnershipCleanupPlan(allocator, module.*, function.*, &cleanup_plan) catch |err| switch (err) {
+    const cleanup_plan = buildCleanupPlanOrReject(allocator, module, function) catch |err| switch (err) {
         error.InvalidMirOwnershipEvents => return false,
         error.OutOfMemory => return error.OutOfMemory,
     };
+    defer cleanup_plan.deinit(allocator);
 
-    for (cleanup_plan.items) |entry| {
+    for (cleanup_plan.actions) |entry| {
         if (entry.kind != .auto_drop) continue;
         if (entry.primary_event_index != cleanup.auto_drop_event_index) continue;
         if (entry.storage_dead_event_index != cleanup.storage_dead_event_index) continue;
@@ -183,14 +181,13 @@ pub fn autoDropCleanupObligationExists(
     key: AutoDropCleanupKey,
 ) error{OutOfMemory}!bool {
     if (!key.root_value_id.isValid() or !key.resource_type_symbol_id.isValid() or !key.drop_glue_symbol_id.isValid()) return false;
-    var cleanup_plan: std.ArrayList(mir.CleanupActionPlanEntry) = .empty;
-    defer cleanup_plan.deinit(allocator);
-    mir.appendOwnershipCleanupPlan(allocator, module.*, function.*, &cleanup_plan) catch |err| switch (err) {
+    const cleanup_plan = buildCleanupPlanOrReject(allocator, module, function) catch |err| switch (err) {
         error.InvalidMirOwnershipEvents => return false,
         error.OutOfMemory => return error.OutOfMemory,
     };
+    defer cleanup_plan.deinit(allocator);
 
-    for (cleanup_plan.items) |entry| {
+    for (cleanup_plan.actions) |entry| {
         if (entry.kind != .auto_drop) continue;
         if (!simpleOwnershipRootMatches(entry.place, key.root_value_id)) continue;
         if (!entry.place.root_type_symbol_id.eql(key.resource_type_symbol_id)) continue;
@@ -215,15 +212,14 @@ fn explicitDropPlanEntryForSource(
     function: *const mir.Function,
     source: mir.SourcePoint,
 ) error{OutOfMemory}!?mir.CleanupActionPlanEntry {
-    var cleanup_plan: std.ArrayList(mir.CleanupActionPlanEntry) = .empty;
-    defer cleanup_plan.deinit(allocator);
-    mir.appendOwnershipCleanupPlan(allocator, module.*, function.*, &cleanup_plan) catch |err| switch (err) {
+    const cleanup_plan = buildCleanupPlanOrReject(allocator, module, function) catch |err| switch (err) {
         error.InvalidMirOwnershipEvents => return null,
         error.OutOfMemory => return error.OutOfMemory,
     };
+    defer cleanup_plan.deinit(allocator);
 
     var matched: ?mir.CleanupActionPlanEntry = null;
-    for (cleanup_plan.items) |entry| {
+    for (cleanup_plan.actions) |entry| {
         if (entry.kind != .explicit_drop) continue;
         if (!sourceMatches(entry.source, source)) continue;
         if (matched != null) return null;
@@ -239,15 +235,14 @@ fn cleanupCancellationPlanEntryForSource(
     kind: mir.CleanupCancellationKind,
     source: mir.SourcePoint,
 ) error{OutOfMemory}!?mir.CleanupCancellationPlanEntry {
-    var cancellation_plan: std.ArrayList(mir.CleanupCancellationPlanEntry) = .empty;
-    defer cancellation_plan.deinit(allocator);
-    mir.appendOwnershipCleanupCancellationPlan(allocator, module.*, function.*, &cancellation_plan) catch |err| switch (err) {
+    const cleanup_plan = buildCleanupPlanOrReject(allocator, module, function) catch |err| switch (err) {
         error.InvalidMirOwnershipEvents => return null,
         error.OutOfMemory => return error.OutOfMemory,
     };
+    defer cleanup_plan.deinit(allocator);
 
     var matched: ?mir.CleanupCancellationPlanEntry = null;
-    for (cancellation_plan.items) |entry| {
+    for (cleanup_plan.cancellations) |entry| {
         if (entry.kind != kind) continue;
         if (!sourceMatches(entry.source, source)) continue;
         if (matched != null) return null;
@@ -299,13 +294,12 @@ pub fn explicitDropCleanupEmissionAllowed(
     if (!std.mem.eql(u8, drop_glue.release_fn, cleanup.fn_name)) return false;
     const local_value_id = valueIdForLocal(function, cleanup.local_name) orelse return false;
     if (!local_value_id.eql(cleanup.root_value_id)) return false;
-    var cleanup_plan: std.ArrayList(mir.CleanupActionPlanEntry) = .empty;
-    defer cleanup_plan.deinit(allocator);
-    mir.appendOwnershipCleanupPlan(allocator, module.*, function.*, &cleanup_plan) catch |err| switch (err) {
+    const cleanup_plan = buildCleanupPlanOrReject(allocator, module, function) catch |err| switch (err) {
         error.InvalidMirOwnershipEvents => return false,
         error.OutOfMemory => return error.OutOfMemory,
     };
-    for (cleanup_plan.items) |entry| {
+    defer cleanup_plan.deinit(allocator);
+    for (cleanup_plan.actions) |entry| {
         if (entry.kind != .explicit_drop) continue;
         if (entry.primary_event_index != cleanup.explicit_drop_event_index) continue;
         if (!simpleOwnershipRootMatches(entry.place, cleanup.root_value_id)) continue;
@@ -389,6 +383,14 @@ fn sourceMatches(event_source: mir.SourcePoint, expected: mir.SourcePoint) bool 
     if (event_source.line != expected.line or event_source.column != expected.column) return false;
     if (event_source.offset == 0 and event_source.len == 0 and expected.offset == 0 and expected.len == 0) return true;
     return event_source.offset == expected.offset and event_source.len == expected.len;
+}
+
+fn buildCleanupPlanOrReject(
+    allocator: std.mem.Allocator,
+    module: *const mir.Module,
+    function: *const mir.Function,
+) error{ InvalidMirOwnershipEvents, OutOfMemory }!mir.OwnershipCleanupPlan {
+    return mir.buildOwnershipCleanupPlan(allocator, module.*, function.*);
 }
 
 fn typeOwnershipFactFor(module: *const mir.Module, type_name: []const u8) ?mir.TypeOwnershipFact {
