@@ -14,10 +14,6 @@ CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
         "cfg.addBlock(": 3,
         "cfg.addEdge(": 2,
     },
-    "shortCircuitMoveCfg": {
-        "cfg.addBlock(": 3,
-        "cfg.addEdge(": 3,
-    },
     "twoArmMoveCfg": {
         "cfg.addBlock(": 6,
         "cfg.addEdge(": 6,
@@ -172,8 +168,6 @@ ANCHORS: dict[str, list[str]] = {
         "fn propagateSuccessorsExcept",
         "const LinearMoveCfg = struct",
         "fn linearMoveCfg",
-        "const ShortCircuitMoveCfg = struct",
-        "fn shortCircuitMoveCfg",
         "const TwoArmMoveCfg = struct",
         "fn twoArmMoveCfg",
         "const MultiArmMoveCfg = struct",
@@ -314,7 +308,7 @@ def main() -> int:
                     )
 
     sema_move = (REPO_ROOT / "src/sema_move.zig").read_text(encoding="utf-8")
-    for retired in ("const ExitMoveCfg = struct", "fn exitMoveCfg"):
+    for retired in ("const ExitMoveCfg = struct", "fn exitMoveCfg", "const ShortCircuitMoveCfg = struct", "fn shortCircuitMoveCfg"):
         checked += 1
         if retired in sema_move:
             missing.append(f"src/sema_move.zig: retired exit-only CFG skeleton {retired!r} is still present")

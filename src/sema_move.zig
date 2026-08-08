@@ -301,54 +301,6 @@ fn loopBodyMoveCfg(self: *Checker) ?LoopBodyMoveCfg {
     };
 }
 
-const ShortCircuitMoveCfg = struct {
-    cfg: sema_model.MoveCfg,
-    entry: sema_model.MoveCfgBlockId,
-    rhs: sema_model.MoveCfgBlockId,
-    join: sema_model.MoveCfgBlockId,
-
-    fn deinit(self: *ShortCircuitMoveCfg) void {
-        self.cfg.deinit();
-    }
-};
-
-fn shortCircuitMoveCfg(self: *Checker) ?ShortCircuitMoveCfg {
-    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
-    const entry = cfg.addBlock(.entry) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    const rhs = cfg.addBlock(.statement) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    const join = cfg.addBlock(.branch_join) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    // The bypass edge is inserted first so the join state represents the path
-    // where the RHS was not evaluated before the RHS path is merged into it.
-    cfg.addEdge(entry, join, .branch) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    cfg.addEdge(entry, rhs, .branch) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    cfg.addEdge(rhs, join, .normal) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    return .{ .cfg = cfg, .entry = entry, .rhs = rhs, .join = join };
-}
-
 const TwoArmMoveCfg = struct {
     cfg: sema_model.MoveCfg,
     entry: sema_model.MoveCfgBlockId,
@@ -2841,20 +2793,24 @@ fn consumeTrackedMoveBinding(self: *Checker, name: []const u8, span: diagnostics
 // The worklist owns transport between those blocks; loop widening remains the
 // existing dedicated rule so condition-only moves retain E_MOVE_LOOP_RESOURCE.
 fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var short = shortCircuitMoveCfg(self) orelse return;
-    defer short.deinit();
+    var branch = twoArmMoveCfg(self) orelse return;
+    defer branch.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &short.cfg, short.entry, state) orelse return;
+    var worklist = MoveStateCfgWorklist.init(self, &branch.cfg, branch.entry, state) orelse return;
     defer worklist.deinit();
     worklist.useLoopConditionJoinPolicy();
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == short.entry) {
+        if (block == branch.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == short.rhs) {
+        } else if (block == branch.then_block or block == branch.then_exit) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.else_block) {
             moveConsume(self, condition, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == short.join) {
+        } else if (block == branch.else_exit) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
         }
     }
@@ -2929,20 +2885,24 @@ fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, ali
 }
 
 fn moveConsumeShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var short = shortCircuitMoveCfg(self) orelse return;
-    defer short.deinit();
+    var branch = twoArmMoveCfg(self) orelse return;
+    defer branch.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &short.cfg, short.entry, state) orelse return;
+    var worklist = MoveStateCfgWorklist.init(self, &branch.cfg, branch.entry, state) orelse return;
     defer worklist.deinit();
     worklist.useShortCircuitJoinPolicy(rhs.span, false);
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == short.entry) {
+        if (block == branch.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == short.rhs) {
+        } else if (block == branch.then_block or block == branch.then_exit) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.else_block) {
             moveConsume(self, rhs, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == short.join) {
+        } else if (block == branch.else_exit) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
         }
     }
@@ -2979,20 +2939,24 @@ fn mergeShortCircuitMoveStates(self: *Checker, state: *MoveState, rhs_state: *co
 }
 
 fn moveDeferShortCircuitRhs(self: *Checker, rhs: ast.Expr, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-    var short = shortCircuitMoveCfg(self) orelse return;
-    defer short.deinit();
+    var branch = twoArmMoveCfg(self) orelse return;
+    defer branch.deinit();
 
-    var worklist = MoveStateCfgWorklist.init(self, &short.cfg, short.entry, state) orelse return;
+    var worklist = MoveStateCfgWorklist.init(self, &branch.cfg, branch.entry, state) orelse return;
     defer worklist.deinit();
     worklist.useShortCircuitJoinPolicy(rhs.span, true);
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == short.entry) {
+        if (block == branch.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == short.rhs) {
+        } else if (block == branch.then_block or block == branch.then_exit) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.else_block) {
             moveDefer(self, rhs, block_state, aliases);
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == short.join) {
+        } else if (block == branch.else_exit) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == branch.join) {
             replaceMoveState(self, state, block_state);
         }
     }
