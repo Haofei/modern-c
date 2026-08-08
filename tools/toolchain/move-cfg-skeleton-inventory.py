@@ -10,10 +10,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
-    "linearMoveCfg": {
-        "cfg.addBlock(": 3,
-        "cfg.addEdge(": 2,
-    },
     "multiArmMoveCfg": {
         "cfg.addBlock(": 4,
         "cfg.addEdge(": 3,
@@ -57,13 +53,13 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
     },
     "moveScopedBlock": {
         "required": [
-            "} else if (block_id == linear.exit) {\n            reportMoveLocalsLeavingScope",
+            "} else if (block_id == body_exit) {\n            reportMoveLocalsLeavingScope",
         ],
         "forbidden": [],
     },
     "moveDeferBlock": {
         "required": [
-            "} else if (block_id == linear.exit) {\n            reportMoveLocalsLeavingScope",
+            "} else if (block_id == body_exit) {\n            reportMoveLocalsLeavingScope",
         ],
         "forbidden": [],
     },
@@ -162,8 +158,7 @@ ANCHORS: dict[str, list[str]] = {
         "fn useLoopBackedgeJoinPolicy",
         "fn joinStateAt",
         "fn propagateSuccessorsExcept",
-        "const LinearMoveCfg = struct",
-        "fn linearMoveCfg",
+        "multiArmMoveCfg(self, 1)",
         "multiArmMoveCfg(self, 2)",
         "const MultiArmMoveCfg = struct",
         "fn multiArmMoveCfg",
@@ -181,8 +176,6 @@ ANCHORS: dict[str, list[str]] = {
         "fn moveDeferLoopCfg",
         "fn loopFrameHasEntryPlace",
         "fn preserveOuterScopedMoveState",
-        "linearMoveCfg(self, .exit)",
-        "linearMoveCfg(self, .branch_join)",
         "moveLoopCfg(self, l, state, aliases)",
         "moveDeferStmt(self, stmt, block_state, &before, aliases)",
         ".if_let => |n| moveDeferIfLetCfg(self, n, state, aliases)",
@@ -303,7 +296,7 @@ def main() -> int:
                     )
 
     sema_move = (REPO_ROOT / "src/sema_move.zig").read_text(encoding="utf-8")
-    for retired in ("const ExitMoveCfg = struct", "fn exitMoveCfg", "const ShortCircuitMoveCfg = struct", "fn shortCircuitMoveCfg", "const TwoArmMoveCfg = struct", "fn twoArmMoveCfg"):
+    for retired in ("const ExitMoveCfg = struct", "fn exitMoveCfg", "const ShortCircuitMoveCfg = struct", "fn shortCircuitMoveCfg", "const TwoArmMoveCfg = struct", "fn twoArmMoveCfg", "const LinearMoveCfg = struct", "fn linearMoveCfg"):
         checked += 1
         if retired in sema_move:
             missing.append(f"src/sema_move.zig: retired exit-only CFG skeleton {retired!r} is still present")

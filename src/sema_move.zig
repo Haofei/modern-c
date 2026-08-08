@@ -154,47 +154,6 @@ const MoveStateCfgWorklist = struct {
     }
 };
 
-const LinearMoveCfg = struct {
-    cfg: sema_model.MoveCfg,
-    entry: sema_model.MoveCfgBlockId,
-    body: sema_model.MoveCfgBlockId,
-    exit: sema_model.MoveCfgBlockId,
-
-    fn deinit(self: *LinearMoveCfg) void {
-        self.cfg.deinit();
-    }
-};
-
-fn linearMoveCfg(self: *Checker, exit_kind: sema_model.MoveCfgBlockKind) ?LinearMoveCfg {
-    var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
-    const entry = cfg.addBlock(.entry) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    const body = cfg.addBlock(.statement) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    const exit = cfg.addBlock(exit_kind) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    cfg.addEdge(entry, body, .normal) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    cfg.addEdge(body, exit, .normal) catch {
-        self.oom = true;
-        cfg.deinit();
-        return null;
-    };
-    return .{ .cfg = cfg, .entry = entry, .body = body, .exit = exit };
-}
-
 const LoopBodyMoveCfg = struct {
     cfg: sema_model.MoveCfg,
     entry: sema_model.MoveCfgBlockId,
@@ -413,8 +372,10 @@ pub fn checkMoveLinearity(self: *Checker, fn_decl: ast.FnDecl, aliases: *const s
 }
 
 fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
-    var linear = linearMoveCfg(self, .exit) orelse return false;
+    var linear = multiArmMoveCfg(self, 1) orelse return false;
     defer linear.deinit();
+    const body_block = linear.arms[0];
+    const body_exit = linear.arm_exits[0];
 
     var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, state) orelse return false;
     defer worklist.deinit();
@@ -423,13 +384,15 @@ fn moveFunctionBodyCfg(self: *Checker, body: ast.Block, state: *MoveState, alias
         const block_state = worklist.statePtr(block) orelse continue;
         if (block == linear.entry) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == linear.body) {
+        } else if (block == body_block) {
             const diverges = moveBlock(self, body, block_state, aliases);
             if (!diverges) {
                 fell_through = true;
                 worklist.propagateSuccessors(self, block, block_state);
             }
-        } else if (block == linear.exit) {
+        } else if (block == body_exit) {
+            worklist.propagateSuccessors(self, block, block_state);
+        } else if (block == linear.join) {
             replaceMoveState(self, state, block_state);
         }
     }
@@ -454,8 +417,10 @@ pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *MoveState, alia
     var before = cloneMoveState(self, state);
     defer before.deinit();
 
-    var linear = linearMoveCfg(self, .branch_join) orelse return false;
+    var linear = multiArmMoveCfg(self, 1) orelse return false;
     defer linear.deinit();
+    const body_block = linear.arms[0];
+    const body_exit = linear.arm_exits[0];
 
     var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, state) orelse return false;
     defer worklist.deinit();
@@ -464,15 +429,17 @@ pub fn moveScopedBlock(self: *Checker, block: ast.Block, state: *MoveState, alia
         const block_state = worklist.statePtr(block_id) orelse continue;
         if (block_id == linear.entry) {
             worklist.propagateSuccessors(self, block_id, block_state);
-        } else if (block_id == linear.body) {
+        } else if (block_id == body_block) {
             diverges = moveBlock(self, block, block_state, aliases);
             if (!diverges) {
                 worklist.propagateSuccessors(self, block_id, block_state);
             } else {
                 replaceMoveState(self, state, block_state);
             }
-        } else if (block_id == linear.exit) {
+        } else if (block_id == body_exit) {
             reportMoveLocalsLeavingScope(self, block_state, &before, "linear `move` value declared in this block is never consumed (must be moved, returned, or freed before the block ends)");
+            worklist.propagateSuccessors(self, block_id, block_state);
+        } else if (block_id == linear.join) {
             replaceMoveState(self, state, block_state);
         }
     }
@@ -522,16 +489,18 @@ pub fn checkMoveExitEdge(self: *Checker, state: *const MoveState, message: []con
 }
 
 fn moveExitEdgeCfg(self: *Checker, state: *const MoveState, message: []const u8) void {
-    var exit_cfg = linearMoveCfg(self, .exit) orelse return;
+    var exit_cfg = multiArmMoveCfg(self, 1) orelse return;
     defer exit_cfg.deinit();
+    const edge_block = exit_cfg.arms[0];
+    const edge_exit = exit_cfg.arm_exits[0];
 
     var worklist = MoveStateCfgWorklist.init(self, &exit_cfg.cfg, exit_cfg.entry, state) orelse return;
     defer worklist.deinit();
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
-        if (block == exit_cfg.entry or block == exit_cfg.body) {
+        if (block == exit_cfg.entry or block == edge_block or block == edge_exit) {
             worklist.propagateSuccessors(self, block, block_state);
-        } else if (block == exit_cfg.exit) {
+        } else if (block == exit_cfg.join) {
             checkMoveExitEdge(self, block_state, message);
         }
     }
@@ -4669,8 +4638,10 @@ fn moveDeferBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: 
     var before = cloneMoveState(self, state);
     defer before.deinit();
 
-    var linear = linearMoveCfg(self, .branch_join) orelse return;
+    var linear = multiArmMoveCfg(self, 1) orelse return;
     defer linear.deinit();
+    const body_block = linear.arms[0];
+    const body_exit = linear.arm_exits[0];
 
     var worklist = MoveStateCfgWorklist.init(self, &linear.cfg, linear.entry, state) orelse return;
     defer worklist.deinit();
@@ -4678,11 +4649,13 @@ fn moveDeferBlock(self: *Checker, block: ast.Block, state: *MoveState, aliases: 
         const block_state = worklist.statePtr(block_id) orelse continue;
         if (block_id == linear.entry) {
             worklist.propagateSuccessors(self, block_id, block_state);
-        } else if (block_id == linear.body) {
+        } else if (block_id == body_block) {
             for (block.items) |stmt| moveDeferStmt(self, stmt, block_state, &before, aliases);
             worklist.propagateSuccessors(self, block_id, block_state);
-        } else if (block_id == linear.exit) {
+        } else if (block_id == body_exit) {
             reportMoveLocalsLeavingScope(self, block_state, &before, "linear `move` value declared in this deferred cleanup block is never consumed before cleanup ends");
+            worklist.propagateSuccessors(self, block_id, block_state);
+        } else if (block_id == linear.join) {
             replaceMoveState(self, state, block_state);
         }
     }
