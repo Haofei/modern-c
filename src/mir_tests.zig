@@ -4337,6 +4337,7 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     try std.testing.expect(unified_cleanup_plan.items[0].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
     try std.testing.expect(unified_cleanup_plan.items[0].drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
     const g_identity = valueIdentityBySpelling(use_guard.*, "g") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(mir.ownershipLocalHasAutoDropResourceEvent(module_mir, use_guard.*, g_identity.id));
     const local_span = ast.Span{ .offset = 1, .len = 1, .line = 1, .column = 2 };
     switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, use_guard, "g", "Guard", local_span)) {
         .emit_auto_drop_cleanup => |cleanup| {

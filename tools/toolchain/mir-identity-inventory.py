@@ -254,6 +254,7 @@ def main() -> int:
         "mir.CleanupActionKind.explicit_drop",
         "mir.CleanupCancellationKind.move_out",
         "mir.CleanupCancellationKind.explicit_drop",
+        "mir.ownershipLocalHasAutoDropResourceEvent",
     ):
         require_contains("src/mir_tests.zig", needle)
 
@@ -264,6 +265,7 @@ def main() -> int:
         ("src/mir_model.zig", "pub const CleanupCancellationPlanEntry"),
         ("src/mir.zig", "pub fn appendOwnershipCleanupPlan"),
         ("src/mir.zig", "pub fn appendOwnershipCleanupCancellationPlan"),
+        ("src/mir.zig", "pub fn ownershipLocalHasAutoDropResourceEvent"),
         ("src/mir.zig", "fn autoDropClosingStorageDeadIndex"),
         ("src/mir.zig", "fn ownershipEventCanReachBlock"),
         ("src/mir.zig", "pub fn sourcePointFromSpan"),
@@ -294,7 +296,7 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "pub fn explicitDropCleanupEmissionAllowed"),
         ("src/mir_ownership_authority.zig", "pub fn deferredExplicitDropCleanupDecision"),
         ("src/mir_ownership_authority.zig", "valueIdForLocal(function, release.local_name)"),
-        ("src/mir_ownership_authority.zig", "fn autoDropTypeSymbolHasGlue"),
+        ("src/mir_ownership_authority.zig", "mir.ownershipLocalHasAutoDropResourceEvent"),
         ("src/mir_ownership_authority.zig", "try explicitDropPlanEntryForLocal"),
         ("src/backend_cleanup.zig", "pub const DeferredCleanup"),
         ("src/backend_cleanup.zig", "auto_drop: mir_ownership_authority.AutoDropLocalCleanup"),
@@ -335,6 +337,8 @@ def main() -> int:
     require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesAutoDropLocal")
     require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesMoveOutLocal(")
     require_not_contains("src/mir_ownership_authority.zig", "fn authorizesMoveOutLocalAutoDrop")
+    require_not_contains("src/mir_ownership_authority.zig", "fn autoDropTypeSymbolHasGlue")
+    require_not_contains("src/mir_ownership_authority.zig", "fn autoDropGlueSymbolForType")
     require_not_contains("src/mir_ownership_authority.zig", "legacy_cancellable_cleanup")
     require_not_contains("src/mir_ownership_authority.zig", "pub const DeferredCleanup")
     require_not_contains("src/mir_ownership_authority.zig", "removeAutoDropCleanupForLocalName")

@@ -1671,6 +1671,17 @@ pub fn appendOwnershipCleanupCancellationPlan(
     }
 }
 
+pub fn ownershipLocalHasAutoDropResourceEvent(module: Module, function: Function, root_value_id: ValueId) bool {
+    if (!root_value_id.isValid()) return false;
+    for (function.ownership_events) |event| {
+        const event_root = simpleOwnershipRootValue(event.place) orelse continue;
+        if (!event_root.eql(root_value_id)) continue;
+        if (autoDropGlueSymbolForResourceSymbol(module, event.place.root_type_symbol_id) == null) continue;
+        return true;
+    }
+    return false;
+}
+
 fn verifyFunctionOwnershipEvents(module: Module, function: Function, reporter: *diagnostics.Reporter) void {
     for (function.ownership_events) |event| {
         if (ownershipEventValid(module, function, event)) continue;

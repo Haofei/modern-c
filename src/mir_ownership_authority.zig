@@ -334,12 +334,7 @@ fn localHasAutoDropOwnershipEvent(
     local_name: []const u8,
 ) bool {
     const root_value_id = valueIdForLocal(function, local_name) orelse return false;
-    for (function.ownership_events) |event| {
-        if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
-        if (!autoDropTypeSymbolHasGlue(module, event.place.root_type_symbol_id)) continue;
-        return true;
-    }
-    return false;
+    return mir.ownershipLocalHasAutoDropResourceEvent(module.*, function.*, root_value_id);
 }
 
 fn localHasConsumingOwnershipEvent(function: *const mir.Function, root_value_id: mir.ValueId, root_type_symbol_id: mir.SymbolId) bool {
@@ -377,20 +372,6 @@ fn dropGlueFactForSymbols(module: *const mir.Module, resource_symbol_id: mir.Sym
 fn dropGlueFactForReleaseFunction(module: *const mir.Module, drop_fn: []const u8) ?mir.DropGlueFact {
     for (module.drop_glue_facts) |fact| {
         if (std.mem.eql(u8, fact.release_fn, drop_fn)) return fact;
-    }
-    return null;
-}
-
-fn autoDropTypeSymbolHasGlue(module: *const mir.Module, type_symbol_id: mir.SymbolId) bool {
-    return autoDropGlueSymbolForType(module, type_symbol_id) != null;
-}
-
-fn autoDropGlueSymbolForType(module: *const mir.Module, type_symbol_id: mir.SymbolId) ?mir.SymbolId {
-    if (!type_symbol_id.isValid()) return null;
-    for (module.type_ownership_facts) |fact| {
-        if (!fact.typed_type_symbol_id.eql(type_symbol_id)) continue;
-        if (fact.kind != .affine or !fact.drop_glue_symbol_id.isValid()) return null;
-        return fact.drop_glue_symbol_id;
     }
     return null;
 }
