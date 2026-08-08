@@ -7,11 +7,11 @@ const mir_ownership_authority = @import("mir_ownership_authority.zig");
 /// Transitional backend cleanup stack entry.
 ///
 /// Ordinary `defer` expressions are still emitted from backend-local lexical
-/// stacks while cleanup edges migrate into MIR. The simplest direct-call cleanup
-/// shape carries a typed MIR-admitted payload; more complex ordinary expressions
-/// remain as raw expression fallbacks. Auto-drop payloads remain produced by MIR
-/// ownership authority; this module only owns the temporary stack mechanics
-/// shared by C and LLVM.
+/// stacks while cleanup edges migrate into MIR. Direct-call cleanup shapes carry
+/// a typed MIR-admitted payload, and deferred blocks are separated from raw
+/// expression fallbacks so the remaining untyped surface stays explicit.
+/// Auto-drop payloads remain produced by MIR ownership authority; this module
+/// only owns the temporary stack mechanics shared by C and LLVM.
 pub const OrdinaryDeferCallCleanup = struct {
     fn_name: []const u8,
     span: ast.Span,
@@ -19,7 +19,8 @@ pub const OrdinaryDeferCallCleanup = struct {
 };
 
 pub const DeferredCleanup = union(enum) {
-    expr: ast.Expr,
+    raw_expr: ast.Expr,
+    block: ast.Block,
     direct_call: OrdinaryDeferCallCleanup,
     auto_drop: mir_ownership_authority.AutoDropLocalCleanup,
     explicit_drop: mir_ownership_authority.AutoDropLocalCleanup,
@@ -37,7 +38,7 @@ pub fn removeAutoDropCleanup(stack: *std.ArrayList(DeferredCleanup), key: mir_ow
                 _ = stack.orderedRemove(index);
                 return;
             },
-            .expr, .direct_call => continue,
+            .raw_expr, .block, .direct_call => continue,
             .explicit_drop => continue,
         }
     }
@@ -71,6 +72,6 @@ test "auto-drop cleanup stack removal uses typed local identity" {
     try std.testing.expectEqual(@as(usize, 1), stack.items.len);
     switch (stack.items[0]) {
         .auto_drop => |cleanup| try std.testing.expectEqualStrings("close_shadow", cleanup.fn_name),
-        .expr, .direct_call, .explicit_drop => return error.TestUnexpectedResult,
+        .raw_expr, .block, .direct_call, .explicit_drop => return error.TestUnexpectedResult,
     }
 }

@@ -1843,7 +1843,10 @@ const LlvmEmitter = struct {
                             try self.defer_stack.append(self.allocator, .{ .direct_call = cleanup });
                             return false;
                         }
-                        try self.defer_stack.append(self.allocator, .{ .expr = expr });
+                        switch (expr.kind) {
+                            .block => |block| try self.defer_stack.append(self.allocator, .{ .block = block }),
+                            else => try self.defer_stack.append(self.allocator, .{ .raw_expr = expr }),
+                        }
                     },
                     .emit_explicit_drop_cleanup => |cleanup| try self.defer_stack.append(self.allocator, .{ .explicit_drop = cleanup }),
                     .reject => return error.UnsupportedLlvmEmission,
@@ -1967,13 +1970,11 @@ const LlvmEmitter = struct {
 
     fn emitDeferredCleanup(self: *LlvmEmitter, cleanup: DeferredCleanup, ret_ty: ast.TypeExpr) !void {
         switch (cleanup) {
-            .expr => |expr| switch (expr.kind) {
-                .block => |block| {
-                    if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission;
-                },
-                else => {
-                    try self.emitExprStatement(expr);
-                },
+            .raw_expr => |expr| {
+                try self.emitExprStatement(expr);
+            },
+            .block => |block| {
+                if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission;
             },
             .direct_call => |entry| try self.emitOrdinaryDeferDirectCallCleanup(entry),
             .auto_drop => |entry| try self.emitAutoDropPointerCleanup(entry),
@@ -1988,7 +1989,7 @@ const LlvmEmitter = struct {
         const sig = self.fn_sigs.get(fn_name) orelse return null;
         if (sig.is_variadic or call.args.len != sig.params.len) return error.UnsupportedLlvmEmission;
         if (!typeNameEql(sig.ret, "void")) return null;
-        if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), fn_name)) return error.UnsupportedLlvmEmission;
+        if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), fn_name, call.args)) return error.UnsupportedLlvmEmission;
         return .{ .fn_name = fn_name, .span = expr.span, .call = expr };
     }
 

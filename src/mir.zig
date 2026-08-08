@@ -174,19 +174,43 @@ pub fn hasDeferCleanupAtSource(function: Function, source: SourcePoint) bool {
     return false;
 }
 
-pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, fn_name: []const u8) bool {
+pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePoint, call_source: SourcePoint, fn_name: []const u8, args: []const ast.Expr) bool {
     if (!hasDeferCleanupAtSource(function, defer_source)) return false;
+    if (!directCallInstructionAtSource(function, call_source, fn_name)) return false;
+    for (args, 0..) |arg, index| {
+        if (!directCallArgumentFactAtSource(function, fn_name, index, sourcePointFromSpan(arg.span))) return false;
+    }
+    return true;
+}
+
+fn directCallInstructionAtSource(function: Function, call_source: SourcePoint, fn_name: []const u8) bool {
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {
             if (instruction.kind != .call) continue;
             if (!std.mem.eql(u8, instruction.detail, fn_name)) continue;
             if (instruction.result_ty != .void) continue;
             if (instruction.line != call_source.line or instruction.column != call_source.column) continue;
-            if (instruction.source_offset == 0 and instruction.source_len == 0 and call_source.offset == 0 and call_source.len == 0) return true;
-            if (instruction.source_offset == call_source.offset and instruction.source_len == call_source.len) return true;
+            if (sourcePointOffsetsMatch(instruction.source_offset, instruction.source_len, call_source)) return true;
         }
     }
     return false;
+}
+
+fn directCallArgumentFactAtSource(function: Function, fn_name: []const u8, arg_index: usize, arg_source: SourcePoint) bool {
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .direct_call_argument) continue;
+        if (fact.target_index != arg_index) continue;
+        if (!optionalTextEql(fact.target_owner, fn_name)) continue;
+        if (fact.source.line != arg_source.line or fact.source.column != arg_source.column) continue;
+        if (fact.source.offset != arg_source.offset or fact.source.len != arg_source.len) continue;
+        return true;
+    }
+    return false;
+}
+
+fn sourcePointOffsetsMatch(instruction_offset: usize, instruction_len: usize, source: SourcePoint) bool {
+    if (instruction_offset == 0 and instruction_len == 0 and source.offset == 0 and source.len == 0) return true;
+    return instruction_offset == source.offset and instruction_len == source.len;
 }
 
 pub const PointerProvenance = mir_model.PointerProvenance;

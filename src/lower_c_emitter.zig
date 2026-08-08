@@ -3431,7 +3431,10 @@ pub const CEmitter = struct {
             try self.defer_stack.append(self.allocator, .{ .direct_call = cleanup });
             return;
         }
-        self.defer_stack.append(self.allocator, .{ .expr = expr }) catch return error.OutOfMemory;
+        switch (expr.kind) {
+            .block => |block| try self.defer_stack.append(self.allocator, .{ .block = block }),
+            else => try self.defer_stack.append(self.allocator, .{ .raw_expr = expr }),
+        }
     }
 
     // The defer-stack mark from which a `break`/`continue` must run cleanups. A LABELED jump
@@ -3517,12 +3520,13 @@ pub const CEmitter = struct {
 
     fn emitDeferredCleanup(self: *CEmitter, cleanup: DeferredCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         switch (cleanup) {
-            .expr => |expr| {
+            .raw_expr => |expr| {
                 try self.writeLineDirective(expr.span);
-                switch (expr.kind) {
-                    .block => |block| try self.emitBracedBlockBody(block, locals, return_ty),
-                    else => try self.emitDeferredExpressionCleanup(expr, locals, return_ty),
-                }
+                try self.emitDeferredExpressionCleanup(expr, locals, return_ty);
+            },
+            .block => |block| {
+                try self.writeLineDirective(block.span);
+                try self.emitBracedBlockBody(block, locals, return_ty);
             },
             .direct_call => |entry| {
                 try self.writeLineDirective(entry.span);
@@ -3567,7 +3571,7 @@ pub const CEmitter = struct {
             const ret_name = typeName(ret) orelse return null;
             if (!std.mem.eql(u8, ret_name, "void")) return null;
         }
-        if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), fn_name)) return error.UnsupportedCEmission;
+        if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), fn_name, call.args)) return error.UnsupportedCEmission;
         return .{ .fn_name = fn_name, .span = expr.span, .call = expr };
     }
 
