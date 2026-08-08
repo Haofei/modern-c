@@ -1251,6 +1251,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "root_value_id: mir.ValueId = .invalid": 1,
         "resource_type_symbol_id: mir.SymbolId = .invalid": 2,
         "drop_glue_symbol_id: mir.SymbolId = .invalid": 2,
+        "auto_drop_event_index: usize = std.math.maxInt(usize)": 1,
+        "storage_dead_event_index: usize = std.math.maxInt(usize)": 1,
         "pub const DeferredCleanup": 0,
         "emit_auto_drop_cleanup: AutoDropLocalCleanup": 1,
         "emit_auto_drop_cleanup: []const u8": 0,

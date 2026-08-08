@@ -4345,6 +4345,8 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
             try std.testing.expect(cleanup.root_value_id.eql(g_identity.id));
             try std.testing.expect(cleanup.resource_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
             try std.testing.expect(cleanup.drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
+            try std.testing.expectEqual(cleanup_plan.items[0].auto_drop_event_index, cleanup.auto_drop_event_index);
+            try std.testing.expectEqual(cleanup_plan.items[0].storage_dead_event_index, cleanup.storage_dead_event_index);
         },
         else => return error.TestUnexpectedResult,
     }

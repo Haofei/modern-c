@@ -259,6 +259,8 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "root_value_id: mir.ValueId = .invalid"),
         ("src/mir_ownership_authority.zig", "resource_type_symbol_id: mir.SymbolId = .invalid"),
         ("src/mir_ownership_authority.zig", "drop_glue_symbol_id: mir.SymbolId = .invalid"),
+        ("src/mir_ownership_authority.zig", "auto_drop_event_index: usize = std.math.maxInt(usize)"),
+        ("src/mir_ownership_authority.zig", "storage_dead_event_index: usize = std.math.maxInt(usize)"),
         ("src/mir_ownership_authority.zig", "pub fn autoDropLocalRegistrationDecision"),
         ("src/mir_ownership_authority.zig", "mir.appendAutoDropCleanupPlan"),
         ("src/mir_ownership_authority.zig", "fn localHasConsumingOwnershipEvent"),

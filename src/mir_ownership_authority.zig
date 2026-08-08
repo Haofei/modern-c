@@ -11,6 +11,8 @@ pub const AutoDropLocalCleanup = struct {
     root_value_id: mir.ValueId = .invalid,
     resource_type_symbol_id: mir.SymbolId = .invalid,
     drop_glue_symbol_id: mir.SymbolId = .invalid,
+    auto_drop_event_index: usize = std.math.maxInt(usize),
+    storage_dead_event_index: usize = std.math.maxInt(usize),
 };
 
 pub const AutoDropCleanupKey = struct {
@@ -100,6 +102,8 @@ pub fn autoDropLocalRegistrationDecision(
             .root_value_id = root_value_id,
             .resource_type_symbol_id = ownership.typed_type_symbol_id,
             .drop_glue_symbol_id = ownership.drop_glue_symbol_id,
+            .auto_drop_event_index = entry.auto_drop_event_index,
+            .storage_dead_event_index = entry.storage_dead_event_index,
         } };
     }
     if (localHasConsumingOwnershipEvent(function, root_value_id, ownership.typed_type_symbol_id)) return .skip_cleanup_registration;
