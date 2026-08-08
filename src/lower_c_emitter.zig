@@ -3592,6 +3592,9 @@ pub const CEmitter = struct {
             .mmio_write => {
                 if (call.type_args.len != 0 or call.args.len != 2) return null;
             },
+            .mmio_read => {
+                if (call.type_args.len != 0 or call.args.len != 1) return null;
+            },
             .dma_cache_clean, .dma_cache_invalidate => {
                 if (call.type_args.len != 0 or call.args.len != 1) return null;
             },
@@ -3615,6 +3618,10 @@ pub const CEmitter = struct {
         }
         if (cleanup.kind == .mmio_write) {
             if (!try lower_c_mmio.emitWriteCall(self.mmioEmitContext(), cleanup.callee, cleanup.args, locals)) return error.UnsupportedCEmission;
+            return;
+        }
+        if (cleanup.kind == .mmio_read) {
+            if (!try lower_c_mmio.emitReadCallStmt(self.mmioEmitContext(), cleanup.callee, cleanup.args, locals)) return error.UnsupportedCEmission;
             return;
         }
         if (cleanup.kind == .dma_cache_clean or cleanup.kind == .dma_cache_invalidate) {

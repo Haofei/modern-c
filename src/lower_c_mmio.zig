@@ -353,6 +353,19 @@ pub fn emitWriteCall(ctx: EmitContext, callee: ast.Expr, args: []const ast.Expr,
     return true;
 }
 
+pub fn emitReadCallStmt(ctx: EmitContext, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    const access = ctx.mmio_access(ctx.emit_ctx, callee, args, locals) orelse return false;
+    if (!std.mem.eql(u8, access.kind, "read")) return false;
+    if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
+    if (args.len != 1) return error.UnsupportedCEmission;
+
+    try writeIndent(ctx.context);
+    try appendReadExpr(ctx.context, ctx.value_c_type(ctx.emit_ctx, access.value_type), access);
+    try ctx.context.out.appendSlice(ctx.context.allocator, ";\n");
+    try emitAcquireBarrierIfNeeded(ctx.context, access);
+    return true;
+}
+
 pub fn emitDirectReadReturn(ctx: EmitContext, call: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
     const read = (try directReadAccess(ctx, call, locals)) orelse return false;
 

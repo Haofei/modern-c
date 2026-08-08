@@ -2010,6 +2010,9 @@ const LlvmEmitter = struct {
             .mmio_write => {
                 if (call.type_args.len != 0 or call.args.len != 2) return null;
             },
+            .mmio_read => {
+                if (call.type_args.len != 0 or call.args.len != 1) return null;
+            },
             .dma_cache_clean, .dma_cache_invalidate => {
                 if (call.type_args.len != 0 or call.args.len != 1) return null;
             },
@@ -2034,6 +2037,7 @@ const LlvmEmitter = struct {
             .fence_acquire => try self.out.print(self.allocator, "  fence acquire{s}\n", .{try self.debugCallSuffix()}),
             .raw_store => try self.emitRawStorePayload(cleanup.callee_span, cleanup.type_args, cleanup.args),
             .mmio_write => try self.emitMmioWritePayload(cleanup.callee, cleanup.args),
+            .mmio_read => _ = try self.emitMmioReadPayload(cleanup.callee, cleanup.args),
             .dma_cache_clean, .dma_cache_invalidate => try self.emitDmaCachePayload(cleanup.callee, cleanup.args, cleanup.kind),
             .maybe_uninit_write => try self.emitMaybeUninitWritePayload(cleanup.callee, cleanup.args),
             .atomic_store => try self.emitAtomicStorePayload(cleanup.callee, cleanup.args),
@@ -3331,6 +3335,27 @@ const LlvmEmitter = struct {
         try self.emitMmioFence(ordering, .before_store);
         const ptr = try self.emitMmioRegisterAddress(info);
         try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(info.storage_ty), value, ptr, try self.debugCallSuffix() });
+    }
+
+    fn emitMmioReadPayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr) ![]const u8 {
+        if (args.len != 1) return error.UnsupportedLlvmEmission;
+        var callee_storage = callee;
+        const empty_type_args: []const ast.TypeExpr = &.{};
+        const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
+        const info = self.mmioAccessInfo(call, .mmio_read) orelse return error.UnsupportedLlvmEmission;
+        if (!std.mem.eql(u8, info.op, "read")) return error.UnsupportedLlvmEmission;
+        return try self.emitMmioReadInfo(info, args);
+    }
+
+    fn emitMmioReadInfo(self: *LlvmEmitter, info: MmioAccessInfo, args: []const ast.Expr) ![]const u8 {
+        if (args.len != 1) return error.UnsupportedLlvmEmission;
+        const ordering = orderingArg(args[0]) orelse return error.UnsupportedLlvmEmission;
+        const ptr = try self.emitMmioRegisterAddress(info);
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}{s}\n", .{ result, try self.llvmType(info.storage_ty), ptr, try self.debugCallSuffix() });
+        try self.emitMmioFence(ordering, .after_load);
+        if (std.mem.eql(u8, try self.llvmType(info.storage_ty), try self.llvmType(info.value_ty))) return result;
+        return try self.castValue(result, info.storage_ty, info.value_ty);
     }
 
     fn emitDmaCachePayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr, kind: mir.CallTargetKind) !void {
@@ -7776,13 +7801,7 @@ const LlvmEmitter = struct {
             if (self.mmioAccessInfo(call, kind)) |info| {
                 if (!std.mem.eql(u8, info.op, "read")) return null;
                 if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-                const ordering = orderingArg(call.args[0]) orelse return error.UnsupportedLlvmEmission;
-                const ptr = try self.emitMmioRegisterAddress(info);
-                const result = try self.nextTemp();
-                try self.out.print(self.allocator, "  {s} = load volatile {s}, ptr {s}{s}\n", .{ result, try self.llvmType(info.storage_ty), ptr, try self.debugCallSuffix() });
-                try self.emitMmioFence(ordering, .after_load);
-                if (std.mem.eql(u8, try self.llvmType(info.storage_ty), try self.llvmType(info.value_ty))) return result;
-                return try self.castValue(result, info.storage_ty, info.value_ty);
+                return try self.emitMmioReadInfo(info, call.args);
             }
         }
         if (call_kind) |kind| {

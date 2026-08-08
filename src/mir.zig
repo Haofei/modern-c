@@ -194,7 +194,7 @@ pub fn callTargetDeferCleanupAtSource(function: Function, defer_source: SourcePo
             .raw_store => targetTypeFactAtSource(function, .raw_address, call_source) and
                 targetTypeFactAtSource(function, .raw_payload, call_source) and
                 targetTypeFactAtSource(function, .raw_result, call_source),
-            .mmio_write => targetTypeFactAtSource(function, .mmio_struct, call_source) and
+            .mmio_read, .mmio_write => targetTypeFactAtSource(function, .mmio_struct, call_source) and
                 targetTypeFactAtSource(function, .mmio_storage, call_source) and
                 targetTypeFactAtSource(function, .mmio_value, call_source) and
                 targetTypeFactAtSource(function, .mmio_result, call_source),
