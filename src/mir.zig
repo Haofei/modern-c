@@ -512,7 +512,7 @@ fn collectDropGlueFacts(
             .fn_decl => |node| node,
             else => continue,
         };
-        const resource_type = ownership_facts.dropPointerReleaseParamTypeName(fn_decl) orelse continue;
+        const resource_type = ast_query.dropPointerReleaseParamTypeName(fn_decl) orelse continue;
         if (!ownership_facts.autoDropEligibleTypeName(resource_type, structs, aliases)) continue;
         try facts.append(allocator, .{
             .resource_type = resource_type,

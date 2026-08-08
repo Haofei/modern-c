@@ -8,7 +8,6 @@ const error_from = @import("error_from.zig");
 const numeric = @import("numeric.zig");
 const eval = @import("eval.zig");
 const loader = @import("loader.zig");
-const ownership_facts = @import("ownership_facts.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const sema_move = @import("sema_move.zig");
 
@@ -1005,7 +1004,7 @@ pub const Checker = struct {
                 self.errorCode(fn_decl.params[0].name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function parameter must be runtime storage, not `comptime`");
                 continue;
             }
-            const resource_name = ownership_facts.dropPointerReleaseParamTypeName(fn_decl) orelse {
+            const resource_name = ast_query.dropPointerReleaseParamTypeName(fn_decl) orelse {
                 self.errorCode(fn_decl.name.span, "E_DROP_ATTR_SHAPE", "#[drop] release function must take exactly one `*mut` checked resource parameter");
                 continue;
             };

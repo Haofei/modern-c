@@ -54,6 +54,21 @@ pub fn dropGlueDeclMatches(module: *const mir.Module, type_name: []const u8, rel
     return autoDropEligibleTypeNameForDropGlue(module, type_name, drop_glue.typed_release_symbol_id);
 }
 
+pub fn dropGlueDeclArtifactMatches(
+    module: *const mir.Module,
+    fact: mir.DropGlueFact,
+    fn_decl: ast.FnDecl,
+    attrs: []const ast.Attr,
+    is_extern: bool,
+) bool {
+    if (is_extern) return false;
+    if (!std.mem.eql(u8, fn_decl.name.text, fact.release_fn)) return false;
+    if (!hasNamedAttr(attrs, "drop")) return false;
+    const declared_resource = ast_query.dropPointerReleaseParamTypeName(fn_decl) orelse return false;
+    if (!std.mem.eql(u8, declared_resource, fact.resource_type)) return false;
+    return dropGlueDeclMatches(module, declared_resource, fact.release_fn);
+}
+
 pub const AutoDropLocalRegistrationDecision = union(enum) {
     reject,
     emit_auto_drop_cleanup: AutoDropLocalCleanup,
@@ -237,6 +252,14 @@ fn simpleOwnershipRootMatches(place: mir.OwnershipPlace, root_value_id: mir.Valu
     return place.root_value_id.eql(root_value_id) and
         !place.root_symbol_id.isValid() and
         place.projection_count == 0;
+}
+
+fn hasNamedAttr(attrs: []const ast.Attr, name: []const u8) bool {
+    for (attrs) |attr| switch (attr.kind) {
+        .named => |id| if (std.mem.eql(u8, id.text, name)) return true,
+        else => {},
+    };
+    return false;
 }
 
 /// Transitional backend cleanup cancellation accepts only direct local moves.

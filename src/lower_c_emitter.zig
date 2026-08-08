@@ -15,7 +15,6 @@ const switch_lower = @import("switch_lower.zig");
 
 const lower_c_type = @import("lower_c_type.zig");
 const numeric = @import("numeric.zig");
-const ownership_facts = @import("ownership_facts.zig");
 const rawScalarSuffix = lower_c_type.rawScalarSuffix;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
 const intTypeRange = lower_c_type.intTypeRange;
@@ -544,7 +543,7 @@ pub const CEmitter = struct {
     fn collectFnDeclArtifact(self: *CEmitter, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) !void {
         try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = is_extern, .is_variadic = fn_decl.is_variadic, .error_from = error_from.hasAttr(attrs) });
         if (!is_extern and hasNamedAttr(attrs, "drop")) {
-            if (ownership_facts.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
+            if (ast_query.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
                 if (!mir_ownership_authority.dropGlueDeclMatches(self.mir_module, type_name, fn_decl.name.text)) return error.UnsupportedCEmission;
             }
         }
@@ -558,15 +557,7 @@ pub const CEmitter = struct {
         for (self.mir_module.drop_glue_facts) |fact| {
             var matched = false;
             for (self.function_decl_artifacts.items) |artifact| {
-                if (!ownership_facts.dropGlueDeclMatches(
-                    fact.resource_type,
-                    fact.release_fn,
-                    artifact.fn_decl,
-                    artifact.attrs,
-                    artifact.is_extern,
-                    &self.structs,
-                    &self.type_aliases,
-                )) continue;
+                if (!mir_ownership_authority.dropGlueDeclArtifactMatches(self.mir_module, fact, artifact.fn_decl, artifact.attrs, artifact.is_extern)) continue;
                 matched = true;
                 break;
             }

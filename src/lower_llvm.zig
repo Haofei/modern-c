@@ -10,7 +10,6 @@ const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const semantic_db = @import("semantic_db.zig");
 const numeric = @import("numeric.zig");
-const ownership_facts = @import("ownership_facts.zig");
 const sema_type = @import("sema_type.zig");
 const sema_decl = @import("sema_decl.zig");
 
@@ -712,7 +711,7 @@ const LlvmEmitter = struct {
         const c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi"));
         try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .c_abi = c_abi, .is_variadic = fn_decl.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
         if (hasNamedAttr(attrs, "drop")) {
-            if (ownership_facts.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
+            if (ast_query.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
                 if (!mir_ownership_authority.dropGlueDeclMatches(&self.mir_module, type_name, fn_decl.name.text)) return error.UnsupportedLlvmEmission;
             }
         }
@@ -748,15 +747,7 @@ const LlvmEmitter = struct {
         for (self.mir_module.drop_glue_facts) |fact| {
             var matched = false;
             for (self.function_decl_artifacts.items) |artifact| {
-                if (!ownership_facts.dropGlueDeclMatches(
-                    fact.resource_type,
-                    fact.release_fn,
-                    artifact.fn_decl,
-                    artifact.attrs,
-                    artifact.is_extern,
-                    &self.struct_types,
-                    &self.type_aliases,
-                )) continue;
+                if (!mir_ownership_authority.dropGlueDeclArtifactMatches(&self.mir_module, fact, artifact.fn_decl, artifact.attrs, artifact.is_extern)) continue;
                 matched = true;
                 break;
             }

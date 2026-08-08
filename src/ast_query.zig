@@ -255,6 +255,35 @@ pub fn typeName(ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
+/// The leading nominal type name for a type expression. Generic wrappers use
+/// their base name; qualified types look through the qualifier.
+pub fn leadingTypeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .generic => |generic| generic.base.text,
+        .qualified => |node| leadingTypeName(node.child.*),
+        else => typeName(ty),
+    };
+}
+
+/// Extract the canonical resource type name from the narrow `#[drop]` ABI shape:
+///
+///     #[drop] fn release(x: *mut T) -> void
+///
+/// Full ABI validation belongs to sema/MIR authority; this is only the shared
+/// AST shape query for the first `*mut T` parameter.
+pub fn dropPointerReleaseParamTypeName(fn_decl: ast.FnDecl) ?[]const u8 {
+    if (fn_decl.params.len == 0) return null;
+    const first = fn_decl.params[0].ty;
+    const child = switch (first.kind) {
+        .pointer => |pointer| blk: {
+            if (pointer.mutability != .mut) return null;
+            break :blk pointer.child.*;
+        },
+        else => return null,
+    };
+    return leadingTypeName(child);
+}
+
 /// True for a raw many-pointer type `[*]T` (through a qualifier).
 pub fn isRawManyPointerType(ty: ast.TypeExpr) bool {
     return switch (ty.kind) {
@@ -885,4 +914,29 @@ test "address-of local shape recognizes grouped identifiers only" {
 
     try std.testing.expectEqualStrings("g", addressOfIdentName(address).?);
     try std.testing.expect(addressOfIdentName(ident) == null);
+}
+
+test "drop pointer release parameter accepts named and generic mut pointers only" {
+    const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+    const name_t = ast.Ident{ .text = "Wrapper", .span = span };
+    var arg_t = ast.TypeExpr{ .span = span, .kind = .{ .generic = .{
+        .base = name_t,
+        .args = &.{},
+    } } };
+    const ptr_t = ast.TypeExpr{ .span = span, .kind = .{ .pointer = .{
+        .mutability = .mut,
+        .child = &arg_t,
+    } } };
+    const param = ast.Param{ .name = .{ .text = "x", .span = span }, .ty = ptr_t };
+    var params = [_]ast.Param{param};
+    const fn_decl = ast.FnDecl{
+        .name = .{ .text = "release", .span = span },
+        .abi = null,
+        .params = params[0..],
+        .return_type = null,
+        .body = null,
+        .is_const = false,
+    };
+
+    try std.testing.expectEqualStrings("Wrapper", dropPointerReleaseParamTypeName(fn_decl).?);
 }
