@@ -191,6 +191,25 @@ pub fn explicitDropLocalCleanup(
     };
 }
 
+pub fn explicitDropCleanupEmissionAllowed(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    cleanup: AutoDropLocalCleanup,
+    source: mir.SourcePoint,
+) bool {
+    if (!cleanup.root_value_id.isValid() or
+        !cleanup.resource_type_symbol_id.isValid() or
+        !cleanup.drop_glue_symbol_id.isValid())
+    {
+        return false;
+    }
+    const key = authorizesExplicitDropLocal(module, function, cleanup.local_name, cleanup.fn_name, source) orelse return false;
+    if (!key.root_value_id.eql(cleanup.root_value_id)) return false;
+    if (!key.resource_type_symbol_id.eql(cleanup.resource_type_symbol_id)) return false;
+    if (!key.drop_glue_symbol_id.eql(cleanup.drop_glue_symbol_id)) return false;
+    return true;
+}
+
 pub fn moveAutoDropCancellationDecision(
     module: *const mir.Module,
     function: *const mir.Function,

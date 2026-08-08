@@ -4635,6 +4635,10 @@ test "MIR records explicit drop glue call ownership events" {
     try std.testing.expect(cleanup.root_value_id.eql(g_identity.id));
     try std.testing.expect(cleanup.resource_type_symbol_id.eql(function.ownership_events[4].place.root_type_symbol_id));
     try std.testing.expect(cleanup.drop_glue_symbol_id.eql(function.ownership_events[4].drop_glue_symbol_id));
+    try std.testing.expect(mir_ownership_authority.explicitDropCleanupEmissionAllowed(&module_mir, &function, cleanup, mir.sourcePointFromSpan(release_expr.span)));
+    var stale_source = mir.sourcePointFromSpan(release_expr.span);
+    stale_source.line += 1;
+    try std.testing.expect(!mir_ownership_authority.explicitDropCleanupEmissionAllowed(&module_mir, &function, cleanup, stale_source));
     try mir.validateLoweringAdmission(module_mir);
 }
 

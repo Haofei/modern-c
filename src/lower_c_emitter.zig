@@ -3558,6 +3558,7 @@ pub const CEmitter = struct {
     fn emitDeferredDropPointerRelease(self: *CEmitter, expr: ast.Expr) !bool {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         const cleanup = mir_ownership_authority.explicitDropLocalCleanup(self.mir_module, function, expr) orelse return false;
+        if (!mir_ownership_authority.explicitDropCleanupEmissionAllowed(self.mir_module, function, cleanup, mir.sourcePointFromSpan(expr.span))) return error.UnsupportedCEmission;
         try self.writeIndent();
         try self.out.print(self.allocator, "{s}(&{s});\n", .{ cleanup.fn_name, cleanup.local_name });
         return true;
