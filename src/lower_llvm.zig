@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const backend_cleanup = @import("backend_cleanup.zig");
 const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
@@ -164,7 +165,7 @@ const DebugLocal = lower_llvm_model.DebugLocal;
 const DebugLocalKind = lower_llvm_model.DebugLocalKind;
 const LoopLabels = lower_llvm_model.LoopLabels;
 
-const DeferredCleanup = mir_ownership_authority.DeferredCleanup;
+const DeferredCleanup = backend_cleanup.DeferredCleanup;
 const RawManyOffsetInfo = lower_llvm_model.RawManyOffsetInfo;
 const EnumRawCallInfo = lower_llvm_model.EnumRawCallInfo;
 const ReduceTypes = struct {
@@ -2888,7 +2889,7 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         switch (mir_ownership_authority.moveAutoDropCancellationDecision(&self.mir_module, function, expr, move_span)) {
             .ignore => {},
-            .remove_auto_drop_local => |local_name| mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
+            .remove_auto_drop_local => |local_name| backend_cleanup.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
             .reject => return error.UnsupportedLlvmEmission,
         }
     }
@@ -2897,7 +2898,7 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         switch (mir_ownership_authority.explicitDropCancellationDecision(&self.mir_module, function, expr)) {
             .ignore => {},
-            .remove_auto_drop_local => |local_name| mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
+            .remove_auto_drop_local => |local_name| backend_cleanup.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
             .reject => return error.UnsupportedLlvmEmission,
         }
     }

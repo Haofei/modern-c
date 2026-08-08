@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const backend_cleanup = @import("backend_cleanup.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
@@ -245,7 +246,7 @@ pub fn appendModuleMir(
     try emitter.emitModule(declarations);
 }
 
-const DeferredCleanup = mir_ownership_authority.DeferredCleanup;
+const DeferredCleanup = backend_cleanup.DeferredCleanup;
 
 pub const CEmitter = struct {
     allocator: std.mem.Allocator,
@@ -2851,7 +2852,7 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         switch (mir_ownership_authority.moveAutoDropCancellationDecision(self.mir_module, function, expr, move_span)) {
             .ignore => {},
-            .remove_auto_drop_local => |local_name| mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
+            .remove_auto_drop_local => |local_name| backend_cleanup.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
             .reject => return error.UnsupportedCEmission,
         }
     }
@@ -2860,7 +2861,7 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         switch (mir_ownership_authority.explicitDropCancellationDecision(self.mir_module, function, expr)) {
             .ignore => {},
-            .remove_auto_drop_local => |local_name| mir_ownership_authority.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
+            .remove_auto_drop_local => |local_name| backend_cleanup.removeAutoDropCleanupForLocalName(&self.defer_stack, local_name),
             .reject => return error.UnsupportedCEmission,
         }
     }
