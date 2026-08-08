@@ -3595,6 +3595,9 @@ pub const CEmitter = struct {
             .dma_cache_clean, .dma_cache_invalidate => {
                 if (call.type_args.len != 0 or call.args.len != 1) return null;
             },
+            .maybe_uninit_write => {
+                if (call.type_args.len != 0 or call.args.len != 1) return null;
+            },
             else => return null,
         }
         if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedCEmission;
@@ -3618,6 +3621,10 @@ pub const CEmitter = struct {
             try self.writeIndent();
             if (!try lower_c_memory.emitDmaCall(self.memoryContext(), call, locals)) return error.UnsupportedCEmission;
             try self.out.appendSlice(self.allocator, ";\n");
+            return;
+        }
+        if (cleanup.kind == .maybe_uninit_write) {
+            if (!try lower_c_memory.emitMaybeUninitWriteCall(self.memoryContext(), cleanup.callee, cleanup.args, locals)) return error.UnsupportedCEmission;
             return;
         }
         const statement = switch (cleanup.kind) {

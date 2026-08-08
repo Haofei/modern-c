@@ -14138,6 +14138,62 @@ test "lower-c ordinary DMA cache defer emits typed cleanup" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after") != null);
 }
 
+test "lower-c ordinary MaybeUninit write defer requires MIR call-target facts" {
+    const source =
+        \\extern struct Node { value: u32 }
+        \\fn ordinary_defer_maybe_uninit_write_fact(value: Node) -> void {
+        \\    var slot: MaybeUninit<Node> = uninit;
+        \\    defer slot.write(value);
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_maybe_uninit_write_requires_fact.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+    var drifted_defer_span = false;
+    for (parsed.module.decls) |*decl| switch (decl.kind) {
+        .fn_decl => |*fn_decl| {
+            if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_maybe_uninit_write_fact")) continue;
+            const body = fn_decl.body orelse return error.TestUnexpectedResult;
+            for (body.items) |*stmt| switch (stmt.kind) {
+                .@"defer" => {
+                    stmt.span.line += 1;
+                    drifted_defer_span = true;
+                },
+                else => {},
+            };
+        },
+        else => {},
+    };
+    if (!drifted_defer_span) return error.TestUnexpectedResult;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "emit_c_ordinary_defer_maybe_uninit_write_requires_fact.mc", .{}, false, null));
+}
+
+test "lower-c ordinary MaybeUninit write defer emits typed cleanup" {
+    const source =
+        \\extern struct Node { value: u32 }
+        \\fn ordinary_defer_maybe_uninit_write_cleanup(value: Node) -> void {
+        \\    var slot: MaybeUninit<Node> = uninit;
+        \\    defer slot.write(value);
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_maybe_uninit_write_cleanup.mc", source);
+    defer parsed.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithSourcePath(std.testing.allocator, parsed.module, &output, .kernel, "emit_c_ordinary_defer_maybe_uninit_write_cleanup.mc", .{}, false);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "slot = value;") != null);
+}
+
 test "lower-c emits auto-drop release for affine move locals" {
     const source =
         \\move struct Guard { id: u32 }

@@ -119,14 +119,19 @@ pub fn emitMaybeUninitWriteStmt(ctx: Context, expr: ast.Expr, locals: *std.Strin
         .call => |call| call,
         else => return false,
     };
-    if (call.type_args.len != 0 or call.args.len != 1) return false;
-    const member = memberCallee(call.callee.*) orelse return false;
-    if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != .maybe_uninit_write) return false;
-    const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .maybe_uninit_payload, call.callee.*.span) orelse return error.UnsupportedCEmission;
+    if (call.type_args.len != 0) return false;
+    return emitMaybeUninitWriteCall(ctx, call.callee.*, call.args, locals);
+}
+
+pub fn emitMaybeUninitWriteCall(ctx: Context, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    if (args.len != 1) return false;
+    const member = memberCallee(callee) orelse return false;
+    if (ctx.mir_call_target_kind(ctx.emit_ctx, callee.span) != .maybe_uninit_write) return false;
+    const payload_ty = ctx.mir_target_type(ctx.emit_ctx, .maybe_uninit_payload, callee.span) orelse return error.UnsupportedCEmission;
     try writeIndent(ctx);
     try ctx.emit_expr(ctx.emit_ctx, member.base.*, locals);
     try ctx.out.appendSlice(ctx.allocator, " = ");
-    try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, payload_ty);
+    try ctx.emit_expr_with_target(ctx.emit_ctx, args[0], locals, payload_ty);
     try ctx.out.appendSlice(ctx.allocator, ";\n");
     return true;
 }

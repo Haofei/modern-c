@@ -2013,6 +2013,9 @@ const LlvmEmitter = struct {
             .dma_cache_clean, .dma_cache_invalidate => {
                 if (call.type_args.len != 0 or call.args.len != 1) return null;
             },
+            .maybe_uninit_write => {
+                if (call.type_args.len != 0 or call.args.len != 1) return null;
+            },
             else => return null,
         }
         if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedLlvmEmission;
@@ -2029,6 +2032,7 @@ const LlvmEmitter = struct {
             .raw_store => try self.emitRawStorePayload(cleanup.callee_span, cleanup.type_args, cleanup.args),
             .mmio_write => try self.emitMmioWritePayload(cleanup.callee, cleanup.args),
             .dma_cache_clean, .dma_cache_invalidate => try self.emitDmaCachePayload(cleanup.callee, cleanup.args, cleanup.kind),
+            .maybe_uninit_write => try self.emitMaybeUninitWritePayload(cleanup.callee, cleanup.args),
             else => return error.UnsupportedLlvmEmission,
         }
     }
@@ -3211,9 +3215,7 @@ const LlvmEmitter = struct {
             if (self.maybeUninitCallInfo(call, kind)) |info| {
                 if (!std.mem.eql(u8, info.op, "write")) return false;
                 if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-                const ptr = try self.storageBaseAddress(info.base);
-                const value = try self.emitExpr(call.args[0], info.payload_ty);
-                try self.emitConcreteObjectStore(ptr, info.payload_ty, value);
+                try self.emitMaybeUninitWriteInfo(info, call.args);
                 return true;
             }
         }
@@ -3350,6 +3352,23 @@ const LlvmEmitter = struct {
         } else {
             return error.UnsupportedLlvmEmission;
         }
+    }
+
+    fn emitMaybeUninitWritePayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr) !void {
+        if (args.len != 1) return error.UnsupportedLlvmEmission;
+        var callee_storage = callee;
+        const empty_type_args: []const ast.TypeExpr = &.{};
+        const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
+        const info = self.maybeUninitCallInfo(call, .maybe_uninit_write) orelse return error.UnsupportedLlvmEmission;
+        if (!std.mem.eql(u8, info.op, "write")) return error.UnsupportedLlvmEmission;
+        try self.emitMaybeUninitWriteInfo(info, args);
+    }
+
+    fn emitMaybeUninitWriteInfo(self: *LlvmEmitter, info: MaybeUninitCallInfo, args: []const ast.Expr) !void {
+        if (args.len != 1) return error.UnsupportedLlvmEmission;
+        const ptr = try self.storageBaseAddress(info.base);
+        const value = try self.emitExpr(args[0], info.payload_ty);
+        try self.emitConcreteObjectStore(ptr, info.payload_ty, value);
     }
 
     fn emitMemberAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {
