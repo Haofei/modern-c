@@ -819,6 +819,13 @@ pub fn register(ctx: *h.Ctx) void {
     // sanitizer sweeps to m0-full/nightly/release profiles. For process-level
     // parallelism without nested-worker oversubscription, use
     // `tools/fast-parallel.sh`.
+    const core_dev_step = b.step("core-dev", "Fast compiler-core development loop: cleanup/MIR authority, C sweep, LLVM smoke, and inventories");
+    core_dev_step.dependOn(ctx.cmd("cleanup-fast"));
+    core_dev_step.dependOn(ctx.cmd("c-test"));
+    core_dev_step.dependOn(ctx.cmd("llvm-test"));
+    core_dev_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
+    core_dev_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
+
     const m0_step = b.step("m0", "Run core M0 compiler qualification gates");
     // Keep the default M0 tier focused on deterministic compiler-core confidence.
     // The former exhaustive matrix remains available as `m0-full` for release/nightly qualification.

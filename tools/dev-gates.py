@@ -825,6 +825,7 @@ def main() -> int:
 
     if gates:
         print("\nConfidence gates:")
+        print("  zig build core-dev            # fast compiler-core development loop")
         print("  zig build fast")
         print("  tools/fast-parallel.sh <jobs>  # fast gates in parallel")
         print("  tools/m0-parallel.sh <jobs>    # broad local milestone check when the slice is large")
