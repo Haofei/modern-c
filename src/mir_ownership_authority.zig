@@ -296,7 +296,9 @@ pub fn moveAutoDropCancellationDecision(
     const local_name = ast_query.directMovedLocalName(expr) orelse return .ignore;
     const source = mir.sourcePointFromSpan(move_span);
     const entry = (try cleanupCancellationPlanEntryForLocal(allocator, module, function, .move_out, local_name, source, null)) orelse {
-        if (localHasAutoDropOwnershipEvent(module, function, local_name)) return .reject;
+        if (valueIdForLocal(function, local_name)) |root_value_id| {
+            if (mir.ownershipLocalHasAutoDropResourceEvent(module.*, function.*, root_value_id)) return .reject;
+        }
         return .ignore;
     };
     const root_value_id = valueIdForLocal(function, local_name) orelse return .reject;
@@ -316,7 +318,9 @@ pub fn explicitDropCancellationDecision(
 ) error{OutOfMemory}!AutoDropCancellationDecision {
     const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return .ignore;
     const entry = (try cleanupCancellationPlanEntryForLocal(allocator, module, function, .explicit_drop, release.local_name, mir.sourcePointFromSpan(expr.span), release.fn_name)) orelse {
-        if (localHasAutoDropOwnershipEvent(module, function, release.local_name)) return .reject;
+        if (valueIdForLocal(function, release.local_name)) |root_value_id| {
+            if (mir.ownershipLocalHasAutoDropResourceEvent(module.*, function.*, root_value_id)) return .reject;
+        }
         return .ignore;
     };
     const root_value_id = valueIdForLocal(function, release.local_name) orelse return .reject;
@@ -326,15 +330,6 @@ pub fn explicitDropCancellationDecision(
         .resource_type_symbol_id = entry.place.root_type_symbol_id,
         .drop_glue_symbol_id = entry.drop_glue_symbol_id,
     } };
-}
-
-fn localHasAutoDropOwnershipEvent(
-    module: *const mir.Module,
-    function: *const mir.Function,
-    local_name: []const u8,
-) bool {
-    const root_value_id = valueIdForLocal(function, local_name) orelse return false;
-    return mir.ownershipLocalHasAutoDropResourceEvent(module.*, function.*, root_value_id);
 }
 
 fn sourceMatches(event_source: mir.SourcePoint, expected: mir.SourcePoint) bool {

@@ -293,7 +293,6 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "pub fn moveAutoDropCancellationDecision"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropCancellationDecision"),
         ("src/mir_ownership_authority.zig", "try cleanupCancellationPlanEntryForLocal"),
-        ("src/mir_ownership_authority.zig", "fn localHasAutoDropOwnershipEvent"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropLocalCleanup"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropCleanupEmissionAllowed"),
         ("src/mir_ownership_authority.zig", "pub fn deferredExplicitDropCleanupDecision"),
@@ -340,6 +339,7 @@ def main() -> int:
     require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesMoveOutLocal(")
     require_not_contains("src/mir_ownership_authority.zig", "fn authorizesMoveOutLocalAutoDrop")
     require_not_contains("src/mir_ownership_authority.zig", "fn localHasConsumingOwnershipEvent")
+    require_not_contains("src/mir_ownership_authority.zig", "fn localHasAutoDropOwnershipEvent")
     require_not_contains("src/mir_ownership_authority.zig", "fn autoDropTypeSymbolHasGlue")
     require_not_contains("src/mir_ownership_authority.zig", "fn autoDropGlueSymbolForType")
     require_not_contains("src/mir_ownership_authority.zig", "legacy_cancellable_cleanup")
