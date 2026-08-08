@@ -56,7 +56,7 @@ pub fn dropGlueDeclMatches(module: *const mir.Module, type_name: []const u8, rel
 
 pub const AutoDropLocalRegistrationDecision = union(enum) {
     reject,
-    emit_auto_drop_cleanup: []const u8,
+    emit_auto_drop_cleanup: AutoDropLocalCleanup,
     skip_cleanup_registration,
 };
 
@@ -71,6 +71,7 @@ pub fn autoDropLocalRegistrationDecision(
     function: *const mir.Function,
     local_name: []const u8,
     type_name: []const u8,
+    local_span: ast.Span,
 ) AutoDropLocalRegistrationDecision {
     const root_value_id = valueIdForLocal(function, local_name) orelse return .reject;
     const ownership = typeOwnershipFactFor(module, type_name) orelse return .reject;
@@ -84,7 +85,11 @@ pub fn autoDropLocalRegistrationDecision(
         switch (event.kind) {
             .auto_drop => {
                 if (!event.drop_glue_symbol_id.eql(ownership.drop_glue_symbol_id)) continue;
-                return .{ .emit_auto_drop_cleanup = drop_glue.release_fn };
+                return .{ .emit_auto_drop_cleanup = .{
+                    .fn_name = drop_glue.release_fn,
+                    .local_name = local_name,
+                    .span = local_span,
+                } };
             },
             .move_out, .explicit_drop => saw_consuming_event = true,
             else => {},

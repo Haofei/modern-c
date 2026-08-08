@@ -2848,16 +2848,12 @@ pub const CEmitter = struct {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         if (!mir_ownership_authority.autoDropEligibleTypeName(self.mir_module, type_name)) return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        const drop_fn = switch (mir_ownership_authority.autoDropLocalRegistrationDecision(self.mir_module, function, name.text, type_name)) {
-            .emit_auto_drop_cleanup => |release_fn| release_fn,
+        const cleanup = switch (mir_ownership_authority.autoDropLocalRegistrationDecision(self.mir_module, function, name.text, type_name, name.span)) {
+            .emit_auto_drop_cleanup => |entry| entry,
             .skip_cleanup_registration => return,
             .reject => return error.UnsupportedCEmission,
         };
-        try self.defer_stack.append(self.allocator, .{ .auto_drop = .{
-            .fn_name = drop_fn,
-            .local_name = name.text,
-            .span = name.span,
-        } });
+        try self.defer_stack.append(self.allocator, .{ .auto_drop = cleanup });
     }
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr, move_span: ast.Span) !void {

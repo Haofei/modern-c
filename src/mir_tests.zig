@@ -4326,8 +4326,13 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     try std.testing.expect(use_guard.ownership_events[2].drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
     try std.testing.expectEqual(mir.OwnershipEventKind.storage_dead, use_guard.ownership_events[3].kind);
     try std.testing.expect(use_guard.ownership_events[3].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
-    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, use_guard, "g", "Guard")) {
-        .emit_auto_drop_cleanup => |release_fn| try std.testing.expectEqualStrings("close_guard", release_fn),
+    const local_span = ast.Span{ .offset = 1, .len = 1, .line = 1, .column = 2 };
+    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, use_guard, "g", "Guard", local_span)) {
+        .emit_auto_drop_cleanup => |cleanup| {
+            try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
+            try std.testing.expectEqualStrings("g", cleanup.local_name);
+            try std.testing.expectEqual(local_span, cleanup.span);
+        },
         else => return error.TestUnexpectedResult,
     }
     const generated_events = use_guard.ownership_events;
@@ -4561,7 +4566,7 @@ test "MIR ownership authority does not let forget authorize auto-drop registrati
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.forget, function.ownership_events[2].kind);
     try mir.validateLoweringAdmission(module_mir);
-    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard")) {
+    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
         .reject => {},
         else => return error.TestUnexpectedResult,
     }
@@ -4677,7 +4682,7 @@ test "MIR ownership authority skips cleanup registration for move-out" {
     const function = functionByName(module_mir, "return_guard") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.move_out, function.ownership_events[2].kind);
-    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard")) {
+    switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
         .skip_cleanup_registration => {},
         else => return error.TestUnexpectedResult,
     }
