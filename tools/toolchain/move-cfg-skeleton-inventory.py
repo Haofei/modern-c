@@ -14,7 +14,7 @@ CFG_CONSTRUCTION_HELPERS: dict[str, dict[str, int]] = {
         "cfg.addBlock(": 4,
         "cfg.addEdge(": 3,
     },
-    "loopBodyMoveCfg": {
+    "loopMoveCfgSkeleton": {
         "cfg.addBlock(": 8,
         "cfg.addEdge(": 7,
     },
@@ -126,14 +126,31 @@ WORKLIST_ROUTING: dict[str, dict[str, list[str]]] = {
     },
 }
 
-# M2/M4 retirement counts. The remaining occurrences outside the common
-# worklist are helper definitions and embedded unit-test calls. Any new direct
-# statement-family merge changes the count and must be routed/audited.
+# M2/M4 retirement counts. `multiArmMoveCfg` is intentionally retained as the
+# generic branch/scope/exit helper; the retired targets are the statement-family
+# mini-CFG wrappers that duplicated ownership transfer semantics. The remaining
+# merge occurrences outside the common worklist are helper definitions and
+# embedded unit-test calls. Any new direct statement-family merge changes the
+# count and must be routed/audited.
 SPECIALIZED_TRANSFER_EXACT_COUNTS: dict[str, int] = {
     "mergeMoveBranches(": 4,
     "mergeShortCircuitMoveStates(": 5,
     "reportLoopOuterResourceChanges(": 6,
 }
+
+# Ownership v0 deliberately rejects dynamic-index ownership transfer and keeps
+# wildcard projections only as conservative overlap facts. Do not reintroduce a
+# symbolic index algebra solver into the move checker.
+FORBIDDEN_SYMBOLIC_INDEX_SOLVER: tuple[str, ...] = (
+    "MoveIndexFacts",
+    "SymbolicLinearIndex",
+    "symbolicIndexAdd",
+    "symbolicIndexSubtract",
+    "symbolicIndexScale",
+    "symbolicIndexDivideExact",
+    "symbolicIndexShift",
+    "symbolicIndexModuloIsZero",
+)
 
 ANCHORS: dict[str, list[str]] = {
     "src/sema_model.zig": [
@@ -162,7 +179,7 @@ ANCHORS: dict[str, list[str]] = {
         "multiArmMoveCfg(self, 2)",
         "const MultiArmMoveCfg = struct",
         "fn multiArmMoveCfg",
-        "fn loopBodyMoveCfg",
+        "fn loopMoveCfgSkeleton",
         "fn moveFunctionBodyCfg",
         "fn moveExitEdgeCfg",
         "fn moveLoopExitEdgeCfg",
@@ -300,6 +317,11 @@ def main() -> int:
         checked += 1
         if retired in sema_move:
             missing.append(f"src/sema_move.zig: retired exit-only CFG skeleton {retired!r} is still present")
+
+    for forbidden in FORBIDDEN_SYMBOLIC_INDEX_SOLVER:
+        checked += 1
+        if forbidden in sema_move:
+            missing.append(f"src/sema_move.zig: symbolic index ownership solver {forbidden!r} must stay retired")
 
     if missing:
         print("FAIL: move CFG skeleton inventory drift", file=sys.stderr)

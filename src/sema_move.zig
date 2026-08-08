@@ -154,7 +154,12 @@ const MoveStateCfgWorklist = struct {
     }
 };
 
-const LoopBodyMoveCfg = struct {
+// Shared loop CFG skeleton for ordinary loop bodies and defer-cleanup loops.
+// This remains loop-specific by design: the generic branch helper does not model
+// loop-head backedge widening, pending break/continue exits, or continue-to-head
+// routing. Retire this only after those edges are represented by the canonical
+// whole-function ownership CFG.
+const LoopMoveCfgSkeleton = struct {
     cfg: sema_model.MoveCfg,
     entry: sema_model.MoveCfgBlockId,
     loop_head: sema_model.MoveCfgBlockId,
@@ -165,12 +170,12 @@ const LoopBodyMoveCfg = struct {
     continue_source: sema_model.MoveCfgBlockId,
     continue_exit: sema_model.MoveCfgBlockId,
 
-    fn deinit(self: *LoopBodyMoveCfg) void {
+    fn deinit(self: *LoopMoveCfgSkeleton) void {
         self.cfg.deinit();
     }
 };
 
-fn loopBodyMoveCfg(self: *Checker) ?LoopBodyMoveCfg {
+fn loopMoveCfgSkeleton(self: *Checker) ?LoopMoveCfgSkeleton {
     var cfg = sema_model.MoveCfg.init(self.reporter.allocator);
     const entry = cfg.addBlock(.entry) catch {
         self.oom = true;
@@ -1372,7 +1377,7 @@ test "ordinary loop backedge widening is owned by the targeted CFG join" {
     defer reporter.deinit();
     var checker = Checker.init(&reporter);
 
-    var loop_cfg = loopBodyMoveCfg(&checker) orelse return error.TestUnexpectedResult;
+    var loop_cfg = loopMoveCfgSkeleton(&checker) orelse return error.TestUnexpectedResult;
     defer loop_cfg.deinit();
 
     const span: diagnostics.Span = .{ .offset = 0, .len = 0, .line = 1, .column = 1 };
@@ -2710,7 +2715,7 @@ fn moveWhileConditionCfg(self: *Checker, condition: ast.Expr, state: *MoveState,
 // evaluated once for diagnostics, then its outgoing state travels over the
 // backedge and joins the zero-iteration path at the head. The existing loop
 // widening below remains the authority for rejecting outer-resource changes.
-fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, body: ast.Block, aliases: *const std.StringHashMap(ast.TypeExpr), body_diverges: *bool, body_visited: *bool) void {
+fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopMoveCfgSkeleton, worklist: *MoveStateCfgWorklist, body: ast.Block, aliases: *const std.StringHashMap(ast.TypeExpr), body_diverges: *bool, body_visited: *bool) void {
     while (worklist.pop()) |block| {
         const block_state = worklist.statePtr(block) orelse continue;
         if (block == loop_cfg.entry) {
@@ -2732,7 +2737,7 @@ fn runLoopBodyCfgWorklist(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, work
     }
 }
 
-fn enqueuePendingLoopExitStates(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist) void {
+fn enqueuePendingLoopExitStates(self: *Checker, loop_cfg: *const LoopMoveCfgSkeleton, worklist: *MoveStateCfgWorklist) void {
     const frame = moveLoopTargetFrame(self, null) orelse return;
     while (frame.pending_exits.items.len > 0) {
         var pending = frame.pending_exits.pop().?;
@@ -2745,7 +2750,7 @@ fn enqueuePendingLoopExitStates(self: *Checker, loop_cfg: *const LoopBodyMoveCfg
     }
 }
 
-fn finalizeLoopBodyCfgExit(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, worklist: *MoveStateCfgWorklist, outer_state: *MoveState, body_diverges: bool) void {
+fn finalizeLoopBodyCfgExit(self: *Checker, loop_cfg: *const LoopMoveCfgSkeleton, worklist: *MoveStateCfgWorklist, outer_state: *MoveState, body_diverges: bool) void {
     if (body_diverges) return;
     const exit_state = worklist.statePtr(loop_cfg.exit) orelse {
         self.oom = true;
@@ -2756,7 +2761,7 @@ fn finalizeLoopBodyCfgExit(self: *Checker, loop_cfg: *const LoopBodyMoveCfg, wor
 }
 
 fn moveLoopBodyCfg(self: *Checker, body: ast.Block, outer_state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
-    var loop_cfg = loopBodyMoveCfg(self) orelse return false;
+    var loop_cfg = loopMoveCfgSkeleton(self) orelse return false;
     defer loop_cfg.deinit();
 
     var worklist = MoveStateCfgWorklist.init(self, &loop_cfg.cfg, loop_cfg.entry, outer_state) orelse return false;
@@ -4739,7 +4744,7 @@ fn moveDeferLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: 
     // by ordinary loops merge the zero-iteration and backedge states. `break` and
     // `continue` in a defer remain a semantic E_DEFER_CONTROL_FLOW boundary, so
     // this CFG deliberately models only supported cleanup-loop fallthrough.
-    var loop_cfg = loopBodyMoveCfg(self) orelse return;
+    var loop_cfg = loopMoveCfgSkeleton(self) orelse return;
     defer loop_cfg.deinit();
 
     var worklist = MoveStateCfgWorklist.init(self, &loop_cfg.cfg, loop_cfg.entry, state) orelse return;
