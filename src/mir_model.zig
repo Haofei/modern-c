@@ -591,6 +591,16 @@ pub const CleanupCancellationPlanEntry = struct {
     source: SourcePoint,
 };
 
+pub const OwnershipCleanupPlan = struct {
+    actions: []CleanupActionPlanEntry = &.{},
+    cancellations: []CleanupCancellationPlanEntry = &.{},
+
+    pub fn deinit(self: OwnershipCleanupPlan, allocator: std.mem.Allocator) void {
+        allocator.free(self.actions);
+        allocator.free(self.cancellations);
+    }
+};
+
 pub const PointerProvenance = enum {
     global_storage,
     local_storage,

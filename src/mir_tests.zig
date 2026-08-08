@@ -4643,6 +4643,15 @@ test "MIR records explicit drop glue call ownership events" {
     try std.testing.expectEqual(@as(usize, 4), cancellation_plan.items[0].event_index);
     try std.testing.expect(cancellation_plan.items[0].place.root_type_symbol_id.eql(function.ownership_events[4].place.root_type_symbol_id));
     try std.testing.expect(cancellation_plan.items[0].drop_glue_symbol_id.eql(function.ownership_events[4].drop_glue_symbol_id));
+
+    const built_cleanup_plan = try mir.buildOwnershipCleanupPlan(std.testing.allocator, module_mir, function);
+    defer built_cleanup_plan.deinit(std.testing.allocator);
+    try std.testing.expectEqual(unified_cleanup_plan.items.len, built_cleanup_plan.actions.len);
+    try std.testing.expectEqual(cancellation_plan.items.len, built_cleanup_plan.cancellations.len);
+    try std.testing.expectEqual(mir.CleanupActionKind.explicit_drop, built_cleanup_plan.actions[0].kind);
+    try std.testing.expectEqual(mir.CleanupActionKind.auto_drop, built_cleanup_plan.actions[1].kind);
+    try std.testing.expectEqual(mir.CleanupCancellationKind.explicit_drop, built_cleanup_plan.cancellations[0].kind);
+
     const release_decl = for (parsed.module.decls) |decl| {
         if (decl.kind != .fn_decl) continue;
         if (!std.mem.eql(u8, decl.kind.fn_decl.name.text, "release_one")) continue;

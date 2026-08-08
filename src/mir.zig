@@ -283,6 +283,7 @@ pub const CleanupActionKind = mir_model.CleanupActionKind;
 pub const CleanupActionPlanEntry = mir_model.CleanupActionPlanEntry;
 pub const CleanupCancellationKind = mir_model.CleanupCancellationKind;
 pub const CleanupCancellationPlanEntry = mir_model.CleanupCancellationPlanEntry;
+pub const OwnershipCleanupPlan = mir_model.OwnershipCleanupPlan;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
@@ -1769,6 +1770,25 @@ pub fn appendOwnershipCleanupCancellationPlan(
             else => {},
         }
     }
+}
+
+pub fn buildOwnershipCleanupPlan(
+    allocator: std.mem.Allocator,
+    module: Module,
+    function: Function,
+) error{ InvalidMirOwnershipEvents, OutOfMemory }!OwnershipCleanupPlan {
+    var actions: std.ArrayList(CleanupActionPlanEntry) = .empty;
+    errdefer actions.deinit(allocator);
+    var cancellations: std.ArrayList(CleanupCancellationPlanEntry) = .empty;
+    errdefer cancellations.deinit(allocator);
+
+    try appendOwnershipCleanupPlan(allocator, module, function, &actions);
+    try appendOwnershipCleanupCancellationPlan(allocator, module, function, &cancellations);
+
+    return .{
+        .actions = try actions.toOwnedSlice(allocator),
+        .cancellations = try cancellations.toOwnedSlice(allocator),
+    };
 }
 
 pub fn ownershipLocalHasAutoDropResourceEvent(module: Module, function: Function, root_value_id: ValueId) bool {

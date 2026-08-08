@@ -35,4 +35,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-opt-sweep", "Run LLVM verifier, O2 optimizer, and optimized object checks over broad emitted IR", &.{ "python3", "tools/toolchain/llvm-opt-sweep.py", "zig-out/bin/mcc", "tests/spec", "tests/c_emit/*.mc" });
 
     _ = h.addScriptTest(ctx, "llvm-c-obj-sweep", "Compile every checked C-emission fixture to an LLVM object with llc", &.{ "python3", "tools/toolchain/llvm-c-obj-sweep.py", "zig-out/bin/mcc", "tests/c_emit/*.mc", "zig-out/llvm-c-obj-sweep" });
+
+    _ = h.addScriptTestOpts(ctx, "cleanup-fast", "Fast cleanup authority regression gate for defer and auto-drop lowering", &.{ "bash", "tools/toolchain/cleanup-fast-test.sh" }, .{ .install = false });
 }
