@@ -3440,7 +3440,7 @@ pub const CEmitter = struct {
             return;
         }
         switch (expr.kind) {
-            .block => |block| try self.defer_stack.append(self.allocator, .{ .block = block }),
+            .block => |block| try self.defer_stack.append(self.allocator, .{ .block = .{ .defer_span = stmt_span, .block = block } }),
             else => return error.UnsupportedCEmission,
         }
     }
@@ -3528,7 +3528,10 @@ pub const CEmitter = struct {
 
     fn emitDeferredCleanup(self: *CEmitter, cleanup: DeferredCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         switch (cleanup) {
-            .block => |block| {
+            .block => |entry| {
+                const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+                if (!mir.hasDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(entry.defer_span))) return error.UnsupportedCEmission;
+                const block = entry.block;
                 try self.writeLineDirective(block.span);
                 try self.emitBracedBlockBody(block, locals, return_ty);
             },

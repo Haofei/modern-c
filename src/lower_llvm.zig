@@ -1848,7 +1848,7 @@ const LlvmEmitter = struct {
                             return false;
                         }
                         switch (expr.kind) {
-                            .block => |block| try self.defer_stack.append(self.allocator, .{ .block = block }),
+                            .block => |block| try self.defer_stack.append(self.allocator, .{ .block = .{ .defer_span = stmt.span, .block = block } }),
                             else => return error.UnsupportedLlvmEmission,
                         }
                     },
@@ -1974,7 +1974,10 @@ const LlvmEmitter = struct {
 
     fn emitDeferredCleanup(self: *LlvmEmitter, cleanup: DeferredCleanup, ret_ty: ast.TypeExpr) !void {
         switch (cleanup) {
-            .block => |block| {
+            .block => |entry| {
+                const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
+                if (!mir.hasDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(entry.defer_span))) return error.UnsupportedLlvmEmission;
+                const block = entry.block;
                 if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission;
             },
             .direct_call => |entry| try self.emitOrdinaryDeferDirectCallCleanup(entry),

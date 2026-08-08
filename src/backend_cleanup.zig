@@ -30,8 +30,13 @@ pub const CallTargetDeferCleanup = struct {
     args: []const ast.Expr,
 };
 
-pub const DeferredCleanup = union(enum) {
+pub const DeferBlockCleanup = struct {
+    defer_span: ast.Span,
     block: ast.Block,
+};
+
+pub const DeferredCleanup = union(enum) {
+    block: DeferBlockCleanup,
     direct_call: OrdinaryDeferCallCleanup,
     call_target: CallTargetDeferCleanup,
     auto_drop: mir_ownership_authority.AutoDropLocalCleanup,
