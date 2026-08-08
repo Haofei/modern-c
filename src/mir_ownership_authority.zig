@@ -185,6 +185,38 @@ fn explicitDropPlanEntryForLocal(
     return null;
 }
 
+fn cleanupCancellationPlanEntryForLocal(
+    allocator: std.mem.Allocator,
+    module: *const mir.Module,
+    function: *const mir.Function,
+    kind: mir.CleanupCancellationKind,
+    local_name: []const u8,
+    source: mir.SourcePoint,
+    release_fn: ?[]const u8,
+) error{OutOfMemory}!?mir.CleanupCancellationPlanEntry {
+    const root_value_id = valueIdForLocal(function, local_name) orelse return null;
+    const drop_glue = if (release_fn) |name| dropGlueFactForReleaseFunction(module, name) else null;
+
+    var cancellation_plan: std.ArrayList(mir.CleanupCancellationPlanEntry) = .empty;
+    defer cancellation_plan.deinit(allocator);
+    mir.appendOwnershipCleanupCancellationPlan(allocator, module.*, function.*, &cancellation_plan) catch |err| switch (err) {
+        error.InvalidMirOwnershipEvents => return null,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+
+    for (cancellation_plan.items) |entry| {
+        if (entry.kind != kind) continue;
+        if (!simpleOwnershipRootMatches(entry.place, root_value_id)) continue;
+        if (!sourceMatches(entry.source, source)) continue;
+        if (drop_glue) |glue| {
+            if (!entry.place.root_type_symbol_id.eql(glue.typed_resource_symbol_id)) continue;
+            if (!entry.drop_glue_symbol_id.eql(glue.typed_release_symbol_id)) continue;
+        }
+        return entry;
+    }
+    return null;
+}
+
 pub fn explicitDropLocalCleanup(
     allocator: std.mem.Allocator,
     module: *const mir.Module,
@@ -255,16 +287,25 @@ pub fn deferredExplicitDropCleanupDecision(
 }
 
 pub fn moveAutoDropCancellationDecision(
+    allocator: std.mem.Allocator,
     module: *const mir.Module,
     function: *const mir.Function,
     expr: ast.Expr,
     move_span: ast.Span,
-) AutoDropCancellationDecision {
+) error{OutOfMemory}!AutoDropCancellationDecision {
     const local_name = ast_query.directMovedLocalName(expr) orelse return .ignore;
     const source = mir.sourcePointFromSpan(move_span);
-    if (authorizesMoveOutLocalAutoDrop(module, function, local_name, source)) |key| return .{ .remove_auto_drop = key };
-    if (localHasAutoDropOwnershipEvent(module, function, local_name)) return .reject;
-    return .ignore;
+    const entry = (try cleanupCancellationPlanEntryForLocal(allocator, module, function, .move_out, local_name, source, null)) orelse {
+        if (localHasAutoDropOwnershipEvent(module, function, local_name)) return .reject;
+        return .ignore;
+    };
+    const root_value_id = valueIdForLocal(function, local_name) orelse return .reject;
+    return .{ .remove_auto_drop = .{
+        .local_name = local_name,
+        .root_value_id = root_value_id,
+        .resource_type_symbol_id = entry.place.root_type_symbol_id,
+        .drop_glue_symbol_id = entry.drop_glue_symbol_id,
+    } };
 }
 
 pub fn explicitDropCancellationDecision(
@@ -274,7 +315,7 @@ pub fn explicitDropCancellationDecision(
     expr: ast.Expr,
 ) error{OutOfMemory}!AutoDropCancellationDecision {
     const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return .ignore;
-    const entry = (try explicitDropPlanEntryForLocal(allocator, module, function, release.local_name, release.fn_name, mir.sourcePointFromSpan(expr.span))) orelse {
+    const entry = (try cleanupCancellationPlanEntryForLocal(allocator, module, function, .explicit_drop, release.local_name, mir.sourcePointFromSpan(expr.span), release.fn_name)) orelse {
         if (localHasAutoDropOwnershipEvent(module, function, release.local_name)) return .reject;
         return .ignore;
     };
@@ -309,29 +350,6 @@ fn localHasConsumingOwnershipEvent(function: *const mir.Function, root_value_id:
         return true;
     }
     return false;
-}
-
-fn authorizesMoveOutLocalAutoDrop(
-    module: *const mir.Module,
-    function: *const mir.Function,
-    local_name: []const u8,
-    source: mir.SourcePoint,
-) ?AutoDropCleanupKey {
-    const root_value_id = valueIdForLocal(function, local_name) orelse return null;
-
-    for (function.ownership_events) |event| {
-        if (event.kind != .move_out) continue;
-        if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
-        if (!sourceMatches(event.source, source)) continue;
-        const drop_glue_symbol_id = autoDropGlueSymbolForType(module, event.place.root_type_symbol_id) orelse continue;
-        return .{
-            .local_name = local_name,
-            .root_value_id = root_value_id,
-            .resource_type_symbol_id = event.place.root_type_symbol_id,
-            .drop_glue_symbol_id = drop_glue_symbol_id,
-        };
-    }
-    return null;
 }
 
 fn sourceMatches(event_source: mir.SourcePoint, expected: mir.SourcePoint) bool {

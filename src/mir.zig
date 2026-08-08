@@ -181,6 +181,8 @@ pub const OwnershipPlace = mir_model.OwnershipPlace;
 pub const OwnershipEvent = mir_model.OwnershipEvent;
 pub const CleanupActionKind = mir_model.CleanupActionKind;
 pub const CleanupActionPlanEntry = mir_model.CleanupActionPlanEntry;
+pub const CleanupCancellationKind = mir_model.CleanupCancellationKind;
+pub const CleanupCancellationPlanEntry = mir_model.CleanupCancellationPlanEntry;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
@@ -1626,6 +1628,49 @@ pub fn appendOwnershipCleanupPlan(
     }
 }
 
+pub fn appendOwnershipCleanupCancellationPlan(
+    allocator: std.mem.Allocator,
+    module: Module,
+    function: Function,
+    out: *std.ArrayList(CleanupCancellationPlanEntry),
+) error{ InvalidMirOwnershipEvents, OutOfMemory }!void {
+    for (function.ownership_events) |event| {
+        if (!ownershipEventValid(module, function, event)) return error.InvalidMirOwnershipEvents;
+    }
+    if (!ownershipEventSequenceValid(function)) return error.InvalidMirOwnershipEvents;
+
+    for (function.ownership_events, 0..) |event, index| {
+        switch (event.kind) {
+            .move_out => {
+                _ = simpleOwnershipRootValue(event.place) orelse return error.InvalidMirOwnershipEvents;
+                const drop_glue_symbol_id = autoDropGlueSymbolForResourceSymbol(module, event.place.root_type_symbol_id) orelse continue;
+                try out.append(allocator, .{
+                    .kind = .move_out,
+                    .event_index = index,
+                    .place = event.place,
+                    .generation = event.generation,
+                    .drop_glue_symbol_id = drop_glue_symbol_id,
+                    .block_id = event.block_id,
+                    .source = event.source,
+                });
+            },
+            .explicit_drop => {
+                _ = simpleOwnershipRootValue(event.place) orelse return error.InvalidMirOwnershipEvents;
+                try out.append(allocator, .{
+                    .kind = .explicit_drop,
+                    .event_index = index,
+                    .place = event.place,
+                    .generation = event.generation,
+                    .drop_glue_symbol_id = event.drop_glue_symbol_id,
+                    .block_id = event.block_id,
+                    .source = event.source,
+                });
+            },
+            else => {},
+        }
+    }
+}
+
 fn verifyFunctionOwnershipEvents(module: Module, function: Function, reporter: *diagnostics.Reporter) void {
     for (function.ownership_events) |event| {
         if (ownershipEventValid(module, function, event)) continue;
@@ -1833,6 +1878,16 @@ fn ownershipDropGlueSymbolMatchesPlace(module: Module, event: OwnershipEvent) bo
 fn dropGlueFactForReleaseSymbol(module: Module, symbol_id: SymbolId) ?DropGlueFact {
     for (module.drop_glue_facts) |fact| {
         if (fact.typed_release_symbol_id.eql(symbol_id)) return fact;
+    }
+    return null;
+}
+
+fn autoDropGlueSymbolForResourceSymbol(module: Module, resource_symbol_id: SymbolId) ?SymbolId {
+    for (module.type_ownership_facts) |fact| {
+        if (!fact.typed_type_symbol_id.eql(resource_symbol_id)) continue;
+        if (fact.kind != .affine or !fact.drop_glue_symbol_id.isValid()) return null;
+        if (dropGlueFactForReleaseSymbol(module, fact.drop_glue_symbol_id) == null) return null;
+        return fact.drop_glue_symbol_id;
     }
     return null;
 }

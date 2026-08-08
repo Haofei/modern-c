@@ -576,6 +576,21 @@ pub const CleanupActionPlanEntry = struct {
     source: SourcePoint,
 };
 
+pub const CleanupCancellationKind = enum {
+    move_out,
+    explicit_drop,
+};
+
+pub const CleanupCancellationPlanEntry = struct {
+    kind: CleanupCancellationKind,
+    event_index: usize,
+    place: OwnershipPlace,
+    generation: u32 = 0,
+    drop_glue_symbol_id: SymbolId,
+    block_id: BlockId,
+    source: SourcePoint,
+};
+
 pub const PointerProvenance = enum {
     global_storage,
     local_storage,

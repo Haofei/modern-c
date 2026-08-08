@@ -249,15 +249,21 @@ def main() -> int:
         "MIR cleanup producer ignores move-out events that cannot reach fallthrough cleanup",
         "MIR ownership event admission enforces local generations",
         "mir.appendOwnershipCleanupPlan",
+        "mir.appendOwnershipCleanupCancellationPlan",
         "mir.CleanupActionKind.auto_drop",
         "mir.CleanupActionKind.explicit_drop",
+        "mir.CleanupCancellationKind.move_out",
+        "mir.CleanupCancellationKind.explicit_drop",
     ):
         require_contains("src/mir_tests.zig", needle)
 
     for path, needle in (
         ("src/mir_model.zig", "pub const CleanupActionKind"),
         ("src/mir_model.zig", "pub const CleanupActionPlanEntry"),
+        ("src/mir_model.zig", "pub const CleanupCancellationKind"),
+        ("src/mir_model.zig", "pub const CleanupCancellationPlanEntry"),
         ("src/mir.zig", "pub fn appendOwnershipCleanupPlan"),
+        ("src/mir.zig", "pub fn appendOwnershipCleanupCancellationPlan"),
         ("src/mir.zig", "fn autoDropClosingStorageDeadIndex"),
         ("src/mir.zig", "fn ownershipEventCanReachBlock"),
         ("src/mir.zig", "pub fn sourcePointFromSpan"),
@@ -282,7 +288,7 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "remove_auto_drop: AutoDropCleanupKey"),
         ("src/mir_ownership_authority.zig", "pub fn moveAutoDropCancellationDecision"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropCancellationDecision"),
-        ("src/mir_ownership_authority.zig", "fn authorizesMoveOutLocalAutoDrop"),
+        ("src/mir_ownership_authority.zig", "try cleanupCancellationPlanEntryForLocal"),
         ("src/mir_ownership_authority.zig", "fn localHasAutoDropOwnershipEvent"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropLocalCleanup"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropCleanupEmissionAllowed"),
@@ -328,6 +334,7 @@ def main() -> int:
 
     require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesAutoDropLocal")
     require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesMoveOutLocal(")
+    require_not_contains("src/mir_ownership_authority.zig", "fn authorizesMoveOutLocalAutoDrop")
     require_not_contains("src/mir_ownership_authority.zig", "legacy_cancellable_cleanup")
     require_not_contains("src/mir_ownership_authority.zig", "pub const DeferredCleanup")
     require_not_contains("src/mir_ownership_authority.zig", "removeAutoDropCleanupForLocalName")

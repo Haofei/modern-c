@@ -4634,6 +4634,14 @@ test "MIR records explicit drop glue call ownership events" {
     try std.testing.expectEqual(mir.CleanupActionKind.auto_drop, unified_cleanup_plan.items[1].kind);
     try std.testing.expectEqual(@as(usize, 5), unified_cleanup_plan.items[1].primary_event_index);
     try std.testing.expectEqual(@as(usize, 6), unified_cleanup_plan.items[1].storage_dead_event_index);
+    var cancellation_plan: std.ArrayList(mir.CleanupCancellationPlanEntry) = .empty;
+    defer cancellation_plan.deinit(std.testing.allocator);
+    try mir.appendOwnershipCleanupCancellationPlan(std.testing.allocator, module_mir, function, &cancellation_plan);
+    try std.testing.expectEqual(@as(usize, 1), cancellation_plan.items.len);
+    try std.testing.expectEqual(mir.CleanupCancellationKind.explicit_drop, cancellation_plan.items[0].kind);
+    try std.testing.expectEqual(@as(usize, 4), cancellation_plan.items[0].event_index);
+    try std.testing.expect(cancellation_plan.items[0].place.root_type_symbol_id.eql(function.ownership_events[4].place.root_type_symbol_id));
+    try std.testing.expect(cancellation_plan.items[0].drop_glue_symbol_id.eql(function.ownership_events[4].drop_glue_symbol_id));
     const release_decl = for (parsed.module.decls) |decl| {
         if (decl.kind != .fn_decl) continue;
         if (!std.mem.eql(u8, decl.kind.fn_decl.name.text, "release_one")) continue;
@@ -4691,6 +4699,8 @@ test "MIR records simple move-out ownership events" {
     const source =
         \\move struct Guard { id: u32 }
         \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\#[drop]
+        \\fn close_guard(g: *mut Guard) -> void { g.id = 0; }
         \\fn return_guard() -> Guard {
         \\    var g = make_guard();
         \\    return move g;
@@ -4710,6 +4720,14 @@ test "MIR records simple move-out ownership events" {
     try std.testing.expect(function.ownership_events[1].place.root_value_id.eql(g_identity.id));
     try std.testing.expectEqual(mir.OwnershipEventKind.move_out, function.ownership_events[2].kind);
     try std.testing.expect(function.ownership_events[2].place.root_value_id.eql(g_identity.id));
+    var cancellation_plan: std.ArrayList(mir.CleanupCancellationPlanEntry) = .empty;
+    defer cancellation_plan.deinit(std.testing.allocator);
+    try mir.appendOwnershipCleanupCancellationPlan(std.testing.allocator, module_mir, function, &cancellation_plan);
+    try std.testing.expectEqual(@as(usize, 1), cancellation_plan.items.len);
+    try std.testing.expectEqual(mir.CleanupCancellationKind.move_out, cancellation_plan.items[0].kind);
+    try std.testing.expectEqual(@as(usize, 2), cancellation_plan.items[0].event_index);
+    try std.testing.expect(cancellation_plan.items[0].place.root_value_id.eql(g_identity.id));
+    try std.testing.expect(cancellation_plan.items[0].drop_glue_symbol_id.isValid());
     try mir.validateLoweringAdmission(module_mir);
 
     var dump: std.ArrayList(u8) = .empty;
