@@ -43,18 +43,18 @@ pub const DeferredCleanup = union(enum) {
     explicit_drop: mir_ownership_authority.OwnershipCleanupActionRef,
 };
 
-/// Remove the most recent auto-drop cleanup for a MIR ownership key from a
+/// Remove the most recent auto-drop cleanup for a MIR ownership action from a
 /// transitional backend cleanup stack. Returning `false` is a backend invariant
 /// failure: MIR identified a live cleanup obligation, but the backend-local stack
 /// no longer contains it. Callers must fail closed instead of continuing with a
 /// silently divergent cleanup model.
-pub fn removeAutoDropCleanup(stack: *std.ArrayList(DeferredCleanup), key: mir_ownership_authority.AutoDropCleanupKey) bool {
+pub fn removeAutoDropCleanup(stack: *std.ArrayList(DeferredCleanup), ref: mir_ownership_authority.OwnershipCleanupRemovalRef) bool {
     var index = stack.items.len;
     while (index > 0) {
         index -= 1;
         switch (stack.items[index]) {
             .auto_drop => |cleanup| {
-                if (!autoDropCleanupMatchesKey(cleanup, key)) continue;
+                if (!autoDropCleanupMatchesRef(cleanup, ref)) continue;
                 _ = stack.orderedRemove(index);
                 return true;
             },
@@ -65,14 +65,15 @@ pub fn removeAutoDropCleanup(stack: *std.ArrayList(DeferredCleanup), key: mir_ow
     return false;
 }
 
-fn autoDropCleanupMatchesKey(
+fn autoDropCleanupMatchesRef(
     cleanup: mir_ownership_authority.OwnershipCleanupActionRef,
-    key: mir_ownership_authority.AutoDropCleanupKey,
+    ref: mir_ownership_authority.OwnershipCleanupRemovalRef,
 ) bool {
-    if (!cleanup.root_value_id.isValid() or !key.root_value_id.isValid()) return false;
-    if (!cleanup.root_value_id.eql(key.root_value_id)) return false;
-    if (key.resource_type_symbol_id.isValid() and !cleanup.resource_type_symbol_id.eql(key.resource_type_symbol_id)) return false;
-    if (key.drop_glue_symbol_id.isValid() and !cleanup.drop_glue_symbol_id.eql(key.drop_glue_symbol_id)) return false;
+    if (cleanup.cleanup_action_index != ref.cleanup_action_index) return false;
+    if (!cleanup.root_value_id.isValid() or !ref.root_value_id.isValid()) return false;
+    if (!cleanup.root_value_id.eql(ref.root_value_id)) return false;
+    if (!cleanup.resource_type_symbol_id.eql(ref.resource_type_symbol_id)) return false;
+    if (!cleanup.drop_glue_symbol_id.eql(ref.drop_glue_symbol_id)) return false;
     return true;
 }
 
@@ -89,11 +90,12 @@ test "auto-drop cleanup stack removal uses typed local identity" {
     try stack.append(std.testing.allocator, .{ .auto_drop = .{ .local_name = "g", .span = span, .cleanup_action_index = 0, .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue } });
     try stack.append(std.testing.allocator, .{ .auto_drop = .{ .local_name = "g", .span = span, .cleanup_action_index = 1, .root_value_id = root_shadow, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue } });
 
-    try std.testing.expect(removeAutoDropCleanup(&stack, .{ .local_name = "g", .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
+    try std.testing.expect(removeAutoDropCleanup(&stack, .{ .local_name = "g", .cleanup_action_index = 0, .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
     try std.testing.expectEqual(@as(usize, 1), stack.items.len);
     switch (stack.items[0]) {
         .auto_drop => |cleanup| try std.testing.expect(cleanup.root_value_id.eql(root_shadow)),
         .block, .direct_call, .call_target, .explicit_drop => return error.TestUnexpectedResult,
     }
-    try std.testing.expect(!removeAutoDropCleanup(&stack, .{ .local_name = "g", .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
+    try std.testing.expect(!removeAutoDropCleanup(&stack, .{ .local_name = "g", .cleanup_action_index = 0, .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
+    try std.testing.expect(!removeAutoDropCleanup(&stack, .{ .local_name = "g", .cleanup_action_index = 0, .root_value_id = root_shadow, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
 }

@@ -2848,9 +2848,7 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         switch (try mir_ownership_authority.moveAutoDropCancellationDecision(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), expr, move_span)) {
             .ignore => {},
-            .remove_auto_drop => |key| if (!backend_cleanup.removeAutoDropCleanup(&self.defer_stack, key)) {
-                if (!try mir_ownership_authority.missingAutoDropCancellationIsAllowed(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), key)) return error.UnsupportedCEmission;
-            },
+            .remove_auto_drop => |ref| if (!backend_cleanup.removeAutoDropCleanup(&self.defer_stack, ref)) return error.UnsupportedCEmission,
             .reject => return error.UnsupportedCEmission,
         }
     }
@@ -2859,9 +2857,7 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         switch (try mir_ownership_authority.explicitDropCancellationDecision(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
             .ignore => {},
-            .remove_auto_drop => |key| if (!backend_cleanup.removeAutoDropCleanup(&self.defer_stack, key)) {
-                if (!try mir_ownership_authority.missingAutoDropCancellationIsAllowed(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), key)) return error.UnsupportedCEmission;
-            },
+            .remove_auto_drop => |ref| if (!backend_cleanup.removeAutoDropCleanup(&self.defer_stack, ref)) return error.UnsupportedCEmission,
             .reject => return error.UnsupportedCEmission,
         }
     }

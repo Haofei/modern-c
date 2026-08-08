@@ -297,15 +297,16 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "fn dropGlueFactForSymbols"),
         ("src/mir_ownership_authority.zig", "fn sourceMatches"),
         ("src/mir_ownership_authority.zig", "pub const AutoDropCancellationDecision"),
-        ("src/mir_ownership_authority.zig", "pub const AutoDropCleanupKey"),
         ("src/mir_ownership_authority.zig", "pub const OwnershipCleanupActionRef"),
+        ("src/mir_ownership_authority.zig", "pub const OwnershipCleanupRemovalRef"),
         ("src/mir_ownership_authority.zig", "pub fn ownershipCleanupActionRef"),
         ("src/mir_ownership_authority.zig", "pub fn autoDropLocalCleanupFromActionRef"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropLocalCleanupFromActionRef"),
-        ("src/mir_ownership_authority.zig", "remove_auto_drop: AutoDropCleanupKey"),
+        ("src/mir_ownership_authority.zig", "remove_auto_drop: OwnershipCleanupRemovalRef"),
         ("src/mir_ownership_authority.zig", "pub fn moveAutoDropCancellationDecision"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropCancellationDecision"),
         ("src/mir_ownership_authority.zig", "try cleanupCancellationPlanEntryForSource"),
+        ("src/mir_ownership_authority.zig", "fn removalRefForCancellationEntry"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropLocalCleanup"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropCleanupEmissionAllowed"),
         ("src/mir_ownership_authority.zig", "pub fn deferredExplicitDropCleanupDecision"),
@@ -326,7 +327,8 @@ def main() -> int:
         ("src/backend_cleanup.zig", "auto_drop: mir_ownership_authority.OwnershipCleanupActionRef"),
         ("src/backend_cleanup.zig", "explicit_drop: mir_ownership_authority.OwnershipCleanupActionRef"),
         ("src/backend_cleanup.zig", "pub fn removeAutoDropCleanup("),
-        ("src/backend_cleanup.zig", "fn autoDropCleanupMatchesKey"),
+        ("src/backend_cleanup.zig", "fn autoDropCleanupMatchesRef"),
+        ("src/backend_cleanup.zig", "cleanup.cleanup_action_index != ref.cleanup_action_index"),
         ("src/lower_c_tests.zig", "lower-c rejects auto-drop transfer authorization with stale MIR resource type"),
         ("src/lower_c_tests.zig", "lower-c move auto-drop cancellation requires MIR move-out event"),
         ("src/lower_c_tests.zig", "lower-c move auto-drop cancellation requires source-matched MIR move-out event"),
@@ -361,7 +363,10 @@ def main() -> int:
     require_not_contains("src/backend_cleanup.zig", "trivial_expr: ast.Expr")
     require_not_contains("src/backend_cleanup.zig", "ordinaryDeferTrivialExprSupported")
     require_not_contains("src/mir_ownership_authority.zig", "removeAutoDropCleanupForLocalName")
+    require_not_contains("src/mir_ownership_authority.zig", "pub const AutoDropCleanupKey")
+    require_not_contains("src/mir_ownership_authority.zig", "missingAutoDropCancellationIsAllowed")
     require_not_contains("src/backend_cleanup.zig", "removeAutoDropCleanupForLocalName")
+    require_not_contains("src/backend_cleanup.zig", "mir_ownership_authority.AutoDropCleanupKey")
     require_not_contains("src/ownership_facts.zig", "AutoDropCleanupRegistration")
     require_not_contains("src/mir_model.zig", "AutoDropCleanupPlanEntry")
     require_not_contains("src/mir_model.zig", "ExplicitDropCleanupPlanEntry")
