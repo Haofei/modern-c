@@ -162,6 +162,18 @@ pub fn sourcePointFromSpan(span: ast.Span) SourcePoint {
     return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
 }
 
+pub fn hasDeferCleanupAtSource(function: Function, source: SourcePoint) bool {
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .defer_cleanup) continue;
+            if (instruction.line != source.line or instruction.column != source.column) continue;
+            if (instruction.source_offset == 0 and instruction.source_len == 0 and source.offset == 0 and source.len == 0) return true;
+            if (instruction.source_offset == source.offset and instruction.source_len == source.len) return true;
+        }
+    }
+    return false;
+}
+
 pub const PointerProvenance = mir_model.PointerProvenance;
 pub const PointerProvenanceFact = mir_model.PointerProvenanceFact;
 pub const ConstGetFact = mir_model.ConstGetFact;

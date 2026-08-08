@@ -266,6 +266,7 @@ def main() -> int:
         ("src/mir_model.zig", "pub const CleanupCancellationPlanEntry"),
         ("src/mir.zig", "pub fn appendOwnershipCleanupPlan"),
         ("src/mir.zig", "pub fn appendOwnershipCleanupCancellationPlan"),
+        ("src/mir.zig", "pub fn hasDeferCleanupAtSource"),
         ("src/mir.zig", "pub fn ownershipLocalHasAutoDropResourceEvent"),
         ("src/mir.zig", "pub fn ownershipLocalHasConsumingResourceEvent"),
         ("src/mir.zig", "fn autoDropClosingStorageDeadIndex"),

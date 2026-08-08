@@ -1837,7 +1837,10 @@ const LlvmEmitter = struct {
                 try self.cancelAutoDropForReleaseCall(expr);
                 const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
                 switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(self.allocator, &self.mir_module, function, expr)) {
-                    .ignore => try self.defer_stack.append(self.allocator, .{ .expr = expr }),
+                    .ignore => {
+                        if (!mir.hasDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt.span))) return error.UnsupportedLlvmEmission;
+                        try self.defer_stack.append(self.allocator, .{ .expr = expr });
+                    },
                     .emit_explicit_drop_cleanup => |cleanup| try self.defer_stack.append(self.allocator, .{ .explicit_drop = cleanup }),
                     .reject => return error.UnsupportedLlvmEmission,
                 }

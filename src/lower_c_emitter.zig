@@ -3394,7 +3394,7 @@ pub const CEmitter = struct {
     fn emitBlockControlItem(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: usize) anyerror!BlockItemAction {
         switch (stmt.kind) {
             .@"defer" => |expr| {
-                try self.emitBlockDeferItem(expr);
+                try self.emitBlockDeferItem(expr, stmt.span);
                 return .skip_stmt;
             },
             .@"return" => {
@@ -3415,7 +3415,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr) !void {
+    fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr, stmt_span: ast.Span) !void {
         try self.cancelAutoDropForReleaseCall(expr);
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(self.allocator, self.mir_module, function, expr)) {
@@ -3426,6 +3426,7 @@ pub const CEmitter = struct {
             },
             .reject => return error.UnsupportedCEmission,
         }
+        if (!mir.hasDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span))) return error.UnsupportedCEmission;
         self.defer_stack.append(self.allocator, .{ .expr = expr }) catch return error.OutOfMemory;
     }
 
