@@ -4756,6 +4756,8 @@ test "MIR ownership authority skips cleanup registration for move-out" {
     const function = functionByName(module_mir, "return_guard") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.move_out, function.ownership_events[2].kind);
+    const g_identity = valueIdentityBySpelling(function, "g") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(mir.ownershipLocalHasConsumingResourceEvent(function, g_identity.id, function.ownership_events[2].place.root_type_symbol_id));
     switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, &function, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
         .skip_cleanup_registration => {},
         else => return error.TestUnexpectedResult,

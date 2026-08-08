@@ -255,6 +255,7 @@ def main() -> int:
         "mir.CleanupCancellationKind.move_out",
         "mir.CleanupCancellationKind.explicit_drop",
         "mir.ownershipLocalHasAutoDropResourceEvent",
+        "mir.ownershipLocalHasConsumingResourceEvent",
     ):
         require_contains("src/mir_tests.zig", needle)
 
@@ -266,6 +267,7 @@ def main() -> int:
         ("src/mir.zig", "pub fn appendOwnershipCleanupPlan"),
         ("src/mir.zig", "pub fn appendOwnershipCleanupCancellationPlan"),
         ("src/mir.zig", "pub fn ownershipLocalHasAutoDropResourceEvent"),
+        ("src/mir.zig", "pub fn ownershipLocalHasConsumingResourceEvent"),
         ("src/mir.zig", "fn autoDropClosingStorageDeadIndex"),
         ("src/mir.zig", "fn ownershipEventCanReachBlock"),
         ("src/mir.zig", "pub fn sourcePointFromSpan"),
@@ -281,7 +283,7 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "pub fn autoDropLocalRegistrationDecision"),
         ("src/mir_ownership_authority.zig", "mir.appendOwnershipCleanupPlan"),
         ("src/mir_ownership_authority.zig", "pub fn autoDropCleanupEmissionAllowed"),
-        ("src/mir_ownership_authority.zig", "fn localHasConsumingOwnershipEvent"),
+        ("src/mir_ownership_authority.zig", "mir.ownershipLocalHasConsumingResourceEvent"),
         ("src/mir_ownership_authority.zig", "entry.place.root_type_symbol_id.eql(ownership.typed_type_symbol_id)"),
         ("src/mir_ownership_authority.zig", "fn dropGlueFactForSymbols"),
         ("src/mir_ownership_authority.zig", "fn sourceMatches"),
@@ -337,6 +339,7 @@ def main() -> int:
     require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesAutoDropLocal")
     require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesMoveOutLocal(")
     require_not_contains("src/mir_ownership_authority.zig", "fn authorizesMoveOutLocalAutoDrop")
+    require_not_contains("src/mir_ownership_authority.zig", "fn localHasConsumingOwnershipEvent")
     require_not_contains("src/mir_ownership_authority.zig", "fn autoDropTypeSymbolHasGlue")
     require_not_contains("src/mir_ownership_authority.zig", "fn autoDropGlueSymbolForType")
     require_not_contains("src/mir_ownership_authority.zig", "legacy_cancellable_cleanup")

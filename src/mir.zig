@@ -1682,6 +1682,18 @@ pub fn ownershipLocalHasAutoDropResourceEvent(module: Module, function: Function
     return false;
 }
 
+pub fn ownershipLocalHasConsumingResourceEvent(function: Function, root_value_id: ValueId, root_type_symbol_id: SymbolId) bool {
+    if (!root_value_id.isValid() or !root_type_symbol_id.isValid()) return false;
+    for (function.ownership_events) |event| {
+        if (event.kind != .move_out and event.kind != .explicit_drop) continue;
+        const event_root = simpleOwnershipRootValue(event.place) orelse continue;
+        if (!event_root.eql(root_value_id)) continue;
+        if (!event.place.root_type_symbol_id.eql(root_type_symbol_id)) continue;
+        return true;
+    }
+    return false;
+}
+
 fn verifyFunctionOwnershipEvents(module: Module, function: Function, reporter: *diagnostics.Reporter) void {
     for (function.ownership_events) |event| {
         if (ownershipEventValid(module, function, event)) continue;

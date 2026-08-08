@@ -114,7 +114,7 @@ pub fn autoDropLocalRegistrationDecision(
             .storage_dead_event_index = entry.storage_dead_event_index,
         } };
     }
-    if (localHasConsumingOwnershipEvent(function, root_value_id, ownership.typed_type_symbol_id)) return .skip_cleanup_registration;
+    if (mir.ownershipLocalHasConsumingResourceEvent(function.*, root_value_id, ownership.typed_type_symbol_id)) return .skip_cleanup_registration;
     return .reject;
 }
 
@@ -335,16 +335,6 @@ fn localHasAutoDropOwnershipEvent(
 ) bool {
     const root_value_id = valueIdForLocal(function, local_name) orelse return false;
     return mir.ownershipLocalHasAutoDropResourceEvent(module.*, function.*, root_value_id);
-}
-
-fn localHasConsumingOwnershipEvent(function: *const mir.Function, root_value_id: mir.ValueId, root_type_symbol_id: mir.SymbolId) bool {
-    for (function.ownership_events) |event| {
-        if (event.kind != .move_out and event.kind != .explicit_drop) continue;
-        if (!simpleOwnershipRootMatches(event.place, root_value_id)) continue;
-        if (!event.place.root_type_symbol_id.eql(root_type_symbol_id)) continue;
-        return true;
-    }
-    return false;
 }
 
 fn sourceMatches(event_source: mir.SourcePoint, expected: mir.SourcePoint) bool {
