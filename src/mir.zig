@@ -184,6 +184,17 @@ pub fn directDeferCallCleanupAtSource(function: Function, defer_source: SourcePo
     return true;
 }
 
+pub fn callTargetDeferCleanupAtSource(function: Function, defer_source: SourcePoint, callee_source: SourcePoint, kind: CallTargetKind) bool {
+    if (!hasDeferCleanupAtSource(function, defer_source)) return false;
+    for (function.call_target_facts) |fact| {
+        if (fact.kind != kind) continue;
+        if (fact.source.line != callee_source.line or fact.source.column != callee_source.column) continue;
+        if (fact.source.offset != callee_source.offset or fact.source.len != callee_source.len) continue;
+        return true;
+    }
+    return false;
+}
+
 fn directCallInstructionAtSource(function: Function, call_source: SourcePoint, fn_name: []const u8) bool {
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {

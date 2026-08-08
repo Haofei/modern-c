@@ -19,10 +19,18 @@ pub const OrdinaryDeferCallCleanup = struct {
     args: []const ast.Expr,
 };
 
+pub const CallTargetDeferCleanup = struct {
+    kind: mir.CallTargetKind,
+    defer_span: ast.Span,
+    span: ast.Span,
+    callee_span: ast.Span,
+};
+
 pub const DeferredCleanup = union(enum) {
     raw_expr: ast.Expr,
     block: ast.Block,
     direct_call: OrdinaryDeferCallCleanup,
+    call_target: CallTargetDeferCleanup,
     auto_drop: mir_ownership_authority.AutoDropLocalCleanup,
     explicit_drop: mir_ownership_authority.AutoDropLocalCleanup,
 };
@@ -39,7 +47,7 @@ pub fn removeAutoDropCleanup(stack: *std.ArrayList(DeferredCleanup), key: mir_ow
                 _ = stack.orderedRemove(index);
                 return;
             },
-            .raw_expr, .block, .direct_call => continue,
+            .raw_expr, .block, .direct_call, .call_target => continue,
             .explicit_drop => continue,
         }
     }
@@ -73,6 +81,6 @@ test "auto-drop cleanup stack removal uses typed local identity" {
     try std.testing.expectEqual(@as(usize, 1), stack.items.len);
     switch (stack.items[0]) {
         .auto_drop => |cleanup| try std.testing.expectEqualStrings("close_shadow", cleanup.fn_name),
-        .raw_expr, .block, .direct_call, .explicit_drop => return error.TestUnexpectedResult,
+        .raw_expr, .block, .direct_call, .call_target, .explicit_drop => return error.TestUnexpectedResult,
     }
 }

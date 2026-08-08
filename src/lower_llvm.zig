@@ -1843,6 +1843,10 @@ const LlvmEmitter = struct {
                             try self.defer_stack.append(self.allocator, .{ .direct_call = cleanup });
                             return false;
                         }
+                        if (try self.ordinaryDeferCallTargetCleanup(function, expr, stmt.span)) |cleanup| {
+                            try self.defer_stack.append(self.allocator, .{ .call_target = cleanup });
+                            return false;
+                        }
                         switch (expr.kind) {
                             .block => |block| try self.defer_stack.append(self.allocator, .{ .block = block }),
                             else => try self.defer_stack.append(self.allocator, .{ .raw_expr = expr }),
@@ -1977,6 +1981,7 @@ const LlvmEmitter = struct {
                 if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission;
             },
             .direct_call => |entry| try self.emitOrdinaryDeferDirectCallCleanup(entry),
+            .call_target => |entry| try self.emitCallTargetDeferCleanup(entry),
             .auto_drop => |entry| try self.emitAutoDropPointerCleanup(entry),
             .explicit_drop => |entry| try self.emitExplicitDropPointerCleanup(entry),
         }
@@ -1990,6 +1995,29 @@ const LlvmEmitter = struct {
         if (sig.is_variadic or call.args.len != sig.params.len) return error.UnsupportedLlvmEmission;
         if (!mir.directDeferCallCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), fn_name, call.args)) return error.UnsupportedLlvmEmission;
         return .{ .fn_name = fn_name, .span = expr.span, .callee_span = call.callee.*.span, .args = call.args };
+    }
+
+    fn ordinaryDeferCallTargetCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast.Expr, stmt_span: ast.Span) error{UnsupportedLlvmEmission}!?backend_cleanup.CallTargetDeferCleanup {
+        const call = ast_query.callExpr(expr) orelse return null;
+        if (call.type_args.len != 0 or call.args.len != 0) return null;
+        const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
+        switch (kind) {
+            .cpu_pause, .fence_full, .fence_release, .fence_acquire => {},
+            else => return null,
+        }
+        if (!mir.callTargetDeferCleanupAtSource(function.*, mir.sourcePointFromSpan(stmt_span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedLlvmEmission;
+        return .{ .kind = kind, .defer_span = stmt_span, .span = expr.span, .callee_span = call.callee.*.span };
+    }
+
+    fn emitCallTargetDeferCleanup(self: *LlvmEmitter, cleanup: backend_cleanup.CallTargetDeferCleanup) !void {
+        if (!mir.callTargetDeferCleanupAtSource((self.currentMirFunction() orelse return error.UnsupportedLlvmEmission).*, mir.sourcePointFromSpan(cleanup.defer_span), mir.sourcePointFromSpan(cleanup.callee_span), cleanup.kind)) return error.UnsupportedLlvmEmission;
+        switch (cleanup.kind) {
+            .cpu_pause => try self.out.print(self.allocator, "  call void asm sideeffect \"pause\", \"~{{memory}}\"(){s}\n", .{try self.debugCallSuffix()}),
+            .fence_full => try self.out.print(self.allocator, "  fence seq_cst{s}\n", .{try self.debugCallSuffix()}),
+            .fence_release => try self.out.print(self.allocator, "  fence release{s}\n", .{try self.debugCallSuffix()}),
+            .fence_acquire => try self.out.print(self.allocator, "  fence acquire{s}\n", .{try self.debugCallSuffix()}),
+            else => return error.UnsupportedLlvmEmission,
+        }
     }
 
     fn emitOrdinaryDeferDirectCallCleanup(self: *LlvmEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup) !void {

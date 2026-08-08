@@ -1879,6 +1879,61 @@ test "LLVM ordinary direct defer may discard call result" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "call i32 @record") != null);
 }
 
+test "LLVM ordinary call-target defer requires MIR call-target fact" {
+    const source =
+        \\fn ordinary_defer_call_target_fact() -> void {
+        \\    defer fence.release();
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_ordinary_defer_call_target_requires_fact.mc", source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer module_mir.deinit();
+    try mir.validateLoweringAdmission(module_mir);
+    var drifted_callee_span = false;
+    for (parsed.module.decls) |*decl| switch (decl.kind) {
+        .fn_decl => |*fn_decl| {
+            if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_call_target_fact")) continue;
+            const body = fn_decl.body orelse return error.TestUnexpectedResult;
+            for (body.items) |*stmt| switch (stmt.kind) {
+                .@"defer" => |*defer_expr| switch (defer_expr.kind) {
+                    .call => |*call| {
+                        call.callee.*.span.line += 1;
+                        drifted_callee_span = true;
+                    },
+                    else => return error.TestUnexpectedResult,
+                },
+                else => {},
+            };
+        },
+        else => {},
+    };
+    if (!drifted_callee_span) return error.TestUnexpectedResult;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_ordinary_defer_call_target_requires_fact.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM ordinary call-target defer emits typed cleanup" {
+    const source =
+        \\fn ordinary_defer_call_target_cleanup() -> void {
+        \\    defer fence.release();
+        \\    return;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_ordinary_defer_call_target_cleanup.mc", source);
+    defer parsed.deinit();
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmChecked(std.testing.allocator, parsed.module, &output, "llvm_ordinary_defer_call_target_cleanup.mc", .{}, false, .riscv64);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "fence release") != null);
+}
+
 test "LLVM explicit drop release cancellation requires MIR explicit-drop event" {
     const source =
         \\move struct Guard { id: u32 }
