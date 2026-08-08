@@ -241,7 +241,7 @@ def main() -> int:
         "MIR ownership event admission accepts sibling copy locals with reused names",
         "MIR records forget events for no-drop move resources",
         "MIR ownership authority does not let forget authorize auto-drop registration",
-        "MIR ownership authority separates auto-drop cleanup from legacy cancellation entries",
+        "MIR ownership authority skips cleanup registration for move-out",
         "MIR records explicit drop glue call ownership events",
         "MIR cleanup producer ignores move-out events that cannot reach fallthrough cleanup",
     ):
@@ -276,7 +276,7 @@ def main() -> int:
         ("docs/typed-semantic-facts.md", "The typed MIR identity migration has started with `BlockId`"),
         ("docs/compiler-production-readiness.md", "MIR owns the ownership event envelope"),
         ("docs/compiler-production-readiness.md", "MIR admission requires auto-drop to close storage"),
-        ("docs/compiler-production-readiness.md", "C/LLVM transfer auto-drop authorization requires MIR resource identity"),
+        ("docs/compiler-production-readiness.md", "C/LLVM transfer auto-drop validation requires MIR resource identity"),
         ("docs/compiler-production-readiness.md", "C/LLVM move auto-drop validation is MIR-event gated"),
         ("docs/compiler-production-readiness.md", "C/LLVM explicit release validation is MIR-event gated"),
         ("docs/compiler-production-readiness.md", "C/LLVM cleanup cancellation requires source-matched MIR events"),
@@ -294,10 +294,10 @@ def main() -> int:
 
     require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesAutoDropLocal")
     require_not_contains("src/mir_ownership_authority.zig", "pub fn authorizesMoveOutLocal(")
+    require_not_contains("src/mir_ownership_authority.zig", "legacy_cancellable_cleanup")
+    require_not_contains("src/ownership_facts.zig", "AutoDropCleanupRegistration")
     require_not_contains("src/lower_c_emitter.zig", "authorizesAutoDropLocal(")
     require_not_contains("src/lower_llvm.zig", "authorizesAutoDropLocal(")
-    require_not_contains("src/lower_c_emitter.zig", ".legacy_cancellable_cleanup => .legacy_cancellable_cleanup")
-    require_not_contains("src/lower_llvm.zig", ".legacy_cancellable_cleanup => .legacy_cancellable_cleanup")
 
     print("PASS: mir-identity-inventory - typed MIR identity seed is anchored")
     return 0

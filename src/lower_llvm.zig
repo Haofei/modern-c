@@ -2008,7 +2008,6 @@ const LlvmEmitter = struct {
     }
 
     fn emitAutoDropPointerCleanup(self: *LlvmEmitter, cleanup: ownership_facts.AutoDropLocalCleanup) !void {
-        if (cleanup.registration != .emit_auto_drop_cleanup) return error.UnsupportedLlvmEmission;
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
     }
@@ -2905,16 +2904,15 @@ const LlvmEmitter = struct {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const drop_fn = self.auto_drop_fns_by_type.get(type_name) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        const registration: ownership_facts.AutoDropCleanupRegistration = switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&self.mir_module, function, name.text, type_name, drop_fn)) {
-            .emit_auto_drop_cleanup => .emit_auto_drop_cleanup,
-            .legacy_cancellable_cleanup => return,
+        switch (mir_ownership_authority.autoDropLocalRegistrationDecision(&self.mir_module, function, name.text, type_name, drop_fn)) {
+            .emit_auto_drop_cleanup => {},
+            .skip_cleanup_registration => return,
             .reject => return error.UnsupportedLlvmEmission,
-        };
+        }
         try self.defer_stack.append(self.allocator, .{ .auto_drop = .{
             .fn_name = drop_fn,
             .local_name = name.text,
             .span = name.span,
-            .registration = registration,
         } });
     }
 

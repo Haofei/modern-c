@@ -4654,7 +4654,7 @@ test "MIR records simple move-out ownership events" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir ownership_event fn=return_guard kind=move_out") != null);
 }
 
-test "MIR ownership authority separates auto-drop cleanup from legacy cancellation entries" {
+test "MIR ownership authority skips cleanup registration for move-out" {
     const source =
         \\move struct Guard { id: u32 }
         \\fn make_guard() -> Guard { return .{ .id = 1 }; }
@@ -4674,7 +4674,7 @@ test "MIR ownership authority separates auto-drop cleanup from legacy cancellati
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.move_out, function.ownership_events[2].kind);
     try std.testing.expectEqual(
-        mir_ownership_authority.AutoDropLocalRegistrationDecision.legacy_cancellable_cleanup,
+        mir_ownership_authority.AutoDropLocalRegistrationDecision.skip_cleanup_registration,
         mir_ownership_authority.autoDropLocalRegistrationDecision(&module_mir, &function, "g", "Guard", "close_guard"),
     );
 }
