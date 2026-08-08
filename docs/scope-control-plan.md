@@ -34,7 +34,7 @@ summary.
 
 | Profile | Blocking scope | Non-blocking / experimental scope |
 |---|---|---|
-| `compiler-subset` | Parser/sema/MIR verifier, C backend reference path, diagnostics, source loading, C/LLVM differential for covered fixtures | Selfhost, deployable-kernel claims, advanced LSP, runtime TCB profiles |
+| `compiler-subset` | Parser/sema/MIR verifier, C backend reference path, diagnostics, source loading, C/LLVM differential for covered fixtures | Selfhost, deployable-kernel claims, advanced LSP, runtime product profiles |
 | `llvm-experimental` | LLVM verifier/object/differential smoke for supported fixtures | Full language-surface parity until typed MIR/fact boundaries are complete |
 | `selfhost-experimental` | Explicit bootstrap subset tests and fixpoint evidence | Any claim that selfhost is the production compiler or language authority |
 | `kernel-qemu` | QEMU boot/runtime workloads, kernel API model tests | Real hardware production support, power-loss/durable security claims |

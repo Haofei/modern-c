@@ -4,8 +4,8 @@
 # A trustworthy toolchain must be a pure function of its input: compiling the SAME source
 # twice, in the same environment, must yield BYTE-IDENTICAL output. Non-determinism (hash-map
 # iteration order leaking into emitted symbol order, embedded timestamps, temp-path names,
-# address-dependent ordering) silently breaks source-to-binary auditability and defeats
-# signed-image reproducibility (see the OTA / signed-boot gates).
+# address-dependent ordering) silently breaks source-to-binary auditability and
+# deterministic fixture comparison.
 #
 # This gate compiles a fixed input through mcc TWICE per backend and asserts the two emissions
 # are byte-identical. It compares the compiler's OWN TEXT OUTPUT (emitted C and emitted LLVM IR)

@@ -19,7 +19,7 @@
         ],
         "experimental_or_excluded": [
           "selfhost/",
-          "kernel production claims",
+          "kernel product claims",
           "advanced incremental LSP",
           "QuickJS/WAMR runtime profiles"
         ]

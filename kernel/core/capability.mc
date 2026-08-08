@@ -36,7 +36,7 @@ impl BootAuthority {
 
 // Privileged root creation seam. MC currently has unsafe blocks but not unsafe
 // function declarations, so the source audit gate restricts this unchecked root
-// to approved boot/TCB sites. Possessing the opaque linear token is required to
+// to approved boot authority sites. Possessing the opaque linear token is required to
 // mint new caps; non-root holders can only use, attenuate, transfer, or revoke
 // capabilities they already received.
 pub fn boot_authority_unchecked() -> BootAuthority {

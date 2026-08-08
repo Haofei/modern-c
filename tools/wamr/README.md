@@ -3,7 +3,8 @@
 Goal: replace the **wasm3** agent engine with **WAMR** (WebAssembly Micro Runtime) to gain what
 wasm3 lacks — **deterministic per-instruction fuel** (`wasm_runtime_set_instruction_count_limit`,
 WAMR's `WASM_ENABLE_INSTRUCTION_METERING`) and a path to **WASI Preview 2** — while keeping the
-confined U-mode model unchanged (engine is an untrusted payload; kernel TCB untouched).
+confined U-mode model unchanged (engine is an untrusted payload; kernel validation
+trust inputs unchanged).
 
 ## Status: engine RUNS wasm via the `mc` port (host-validated end-to-end)
 

@@ -6,7 +6,7 @@
 #   --mode double-fetch  (U2)   flag double-fetch / TOCTOU on user memory
 #   --mode taint         (U3)   flag user-derived lengths/indices used without a bound check
 #   --mode capability-mint (K1) flag direct capability/right mint or root authority
-#        creation outside the approved TCB roots
+#        creation outside the approved authority roots
 #
 # These modes share the same awk machinery (comment/string `strip()`, brace-depth /
 # function-scope tracking, the `nth_arg`/`call_args` argument splitter, the
@@ -186,7 +186,7 @@ import "std/rights.mc";
 
 // NEGATIVE TEST (must be flagged): ordinary kernel code must not directly call the
 // privileged setup-time mint/root primitives. Authority should be delegated from
-// the boot/TCB root instead.
+// the boot authority root instead.
 export fn bad_driver_mint() -> usize {
     var boot: BootAuthority = boot_authority_unchecked();
     var rights_root: RightsAuthority = rights_authority_unchecked();
@@ -601,7 +601,7 @@ function do_capability_mint(l, startfnr,   cur, call) {
     else if (call ~ /rights_grant|rights_single/) nrightsmint++
     else nauthroot++
     findings++
-    printf("CAP-MINT  %s:%d  direct capability/right mint `%s` outside the approved authority roots; delegate from the boot/TCB root instead\n",
+    printf("CAP-MINT  %s:%d  direct capability/right mint `%s` outside the approved authority roots; delegate from the boot authority root instead\n",
            FILENAME, startfnr, trim(call)) > "/dev/stderr"
     cur = substr(cur, RSTART + RLENGTH)
   }
@@ -616,7 +616,7 @@ function end_capability_mint() {
   printf("  rights_grant/single       %5d\n", nrightsmint)
   printf("  root authority creation   %5d\n\n", nauthroot)
   if (findings==0)
-    print "RESULT: clean — no production source directly calls capability/right mint or root authority creation outside the approved TCB roots."
+    print "RESULT: clean — no source directly calls capability/right mint or root authority creation outside the approved authority roots."
   else
     printf("RESULT: %d unapproved capability/right mint call(s) found (see CAP-MINT lines on stderr).\n", findings)
   print  "================================================================"

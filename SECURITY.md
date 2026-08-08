@@ -53,6 +53,5 @@ incorrect emitted runtime checks. Kernel validation-workload issues include
 violations of the agent isolation, capability, resource accounting, and
 hostile-input boundaries described in `docs/threat-model.md`.
 
-Vendored third-party engines are part of the trusted computing base where linked.
-Track upstream advisories for those projects until this repository has a formal CVE
-intake and vendored-dependency update process.
+Vendored third-party engines are validation dependencies where linked. Track
+upstream advisories for those projects as ordinary dependency maintenance.

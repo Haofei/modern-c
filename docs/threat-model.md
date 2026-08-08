@@ -21,16 +21,16 @@ failure modes we accept. It is the frame for the security-hardening work in §4.
 
 ## 2. Trust boundaries
 
-**Trusted computing base (TCB), assumed correct:**
+**Validation dependencies, assumed correct for the QEMU workload:**
 - The MC compiler/codegen and the runtime checks it emits (bounds, overflow, the
   move/typestate and `irq_context` static checks) for code that is accepted into
-  the kernel TCB. External users may compile untrusted MC source, so the compiler
+  the kernel validation workload. External users may compile untrusted MC source, so the compiler
   is also an attacker-reachable service surface (§5).
 - The microkernel: loader, page-table/uaccess paths, syscall dispatch, the brokers
   (FS/net), the scheduler, the capability registries.
-- The vendored engines linked into the kernel/host TCB where used: WAMR (agent wasm),
-  QuickJS, and openlibm. A bug in these is a TCB bug; release and vendoring controls
-  reduce exposure but runtime containment does not make these bugs harmless (§6).
+- The vendored engines linked into the validation workload where used: WAMR (agent
+  wasm), QuickJS, and openlibm. A bug in these can invalidate validation evidence;
+  release and vendoring controls reduce exposure (§6).
 - The boot firmware (OpenSBI on RISC-V) and the platform (QEMU virt / a real board).
 
 **Untrusted, attacker-controlled:**
@@ -77,17 +77,17 @@ failure modes we accept. It is the frame for the security-hardening work in §4.
 
 ## 5. Compiler as attack surface
 
-The compiler is part of the kernel TCB for trusted kernel sources, but it is also
+The compiler is trusted by the kernel validation workload, but it is also
 security-relevant outside the kernel because external users may run `mcc` on
 untrusted source, imports, package contents, and build paths. Runtime containment
-of agents does not protect against compiler or codegen bugs that produce an unsafe
-kernel image, leak source during diagnostics, or corrupt release artifacts.
+of agents does not protect against compiler or codegen bugs that produce unsafe
+output, leak source during diagnostics, or corrupt artifacts.
 
 | Threat | Mitigation / gate | Residual / gap |
 | --- | --- | --- |
 | Malformed source crashes or hangs `mcc` | fuzz and corpus gates with robust/fail-closed/determinism oracles; typed diagnostics instead of traps on attacker-reachable input | broader language-feature coverage |
 | Diagnostics leak source, host paths, or build topology | diagnostic/source-remap gates (`--remap-prefix=<build-root>=<logical-root>`) and review of error text emitted from import and parser paths | plugin/editor integrations must preserve remapping |
-| Miscompile removes safety checks or changes observable behavior | reference-oracle tests, corpus regression tests, and differential C/LLVM gates across opt levels and backends | trusted-kernel claims depend on these gates staying required |
+| Miscompile removes safety checks or changes observable behavior | reference-oracle tests, corpus regression tests, and differential C/LLVM gates across opt levels and backends | validation evidence depends on these gates staying required |
 | Malicious imports escape the project sandbox or read host files | import sandbox/root checks, path normalization, and deny-by-default filesystem access outside configured roots | package manager policy still needs explicit revocation/versioning |
 | Compiler pipeline accepts nondeterministic or target-specific unsafe output | differential C/LLVM gates, QEMU target smoke tests, release checksums, and reproducible release inventory | full reproducible-build verification is release-process work |
 
@@ -98,7 +98,7 @@ or release artifacts is in scope for toolchain hygiene. The kernel validation
 workloads treat WAMR, QuickJS, openlibm, Zig, LLVM, QEMU, and pinned CI actions as
 trusted inputs at runtime/build time; a malicious or broken component can
 invalidate validation evidence. The control is therefore provenance, pinning,
-and update discipline, not a kernel product TCB claim.
+and update discipline, not a kernel product claim.
 
 | Threat | Mitigation / gate | Residual / gap |
 | --- | --- | --- |
@@ -129,8 +129,8 @@ and update discipline, not a kernel product TCB claim.
   uniform per-agent memory/CPU budgets land. Timer-driven process preemption has landed,
   but a misbehaving agent may
   currently degrade throughput (it cannot escape isolation or forge authority).
-- **A TCB bug (WAMR/QuickJS/openlibm/compiler/toolchain) can break any guarantee** —
-  these are trusted inputs. Defense is vendoring/CVE discipline, pinned tools/actions,
+- **A validation-dependency bug (WAMR/QuickJS/openlibm/compiler/toolchain) can break any guarantee** —
+  these are trusted inputs. Defense is vendoring/update discipline, pinned tools/actions,
   release checksums/SBOM/attestations, SECURITY.md intake, and compiler/codegen gates,
   not runtime containment.
 - **Trapping (controlled halt) is an acceptable last resort** for "must not happen"

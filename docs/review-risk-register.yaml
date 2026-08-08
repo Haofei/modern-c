@@ -14,7 +14,7 @@ risks:
     blocks:
       - unrestricted-production-compiler
       - stable-release
-    summary: Product surface spans compiler, dual backends, selfhost, kernel/QEMU workloads, Agent runtime demos, LSP, release provenance, and multiple runtime TCBs before the core semantic boundary is stable; the deployable kernel product profile has been retired.
+    summary: Product surface spans compiler, dual backends, selfhost, kernel/QEMU workloads, Agent runtime demos, LSP, release provenance, and multiple runtime profiles before the core semantic boundary is stable; deployable kernel claims have been retired.
 
   - id: ARCH-COMPILATION-SESSION
     severity: high
@@ -106,14 +106,14 @@ risks:
       - third-party-kernel-components
     summary: Privileged capability/right mint APIs now require explicit opaque root tokens and the source audit gates root creation; this remains relevant to kernel/QEMU validation but no longer backs a deployable kernel release profile.
 
-  - id: TCB-PROFILE-MINIMIZATION
+  - id: COMPONENT-PROFILE-MINIMIZATION
     severity: medium
     scope: supply-chain
     status: open
     admitted_subset_status: profile-component-manifest-retained
     blocks:
-      - production-profile-minimal-tcb-claim
-    summary: Profile component manifests are retained only as dependency/provenance bookkeeping. Kernel-QEMU is a language-validation workload and no longer carries a gated security-advisory workflow or minimal-production-TCB claim.
+      - production-profile-minimal-component-claim
+    summary: Profile component manifests are retained only as dependency/provenance bookkeeping. Kernel-QEMU is a language-validation workload and no longer carries a gated security-advisory workflow or minimal product-component claim.
 
   - id: HARDWARE-PRODUCTION-QUALIFICATION
     severity: high

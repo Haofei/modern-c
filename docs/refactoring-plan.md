@@ -45,7 +45,7 @@ boundary is stable:
 - self-host expansion beyond the declared bootstrap subset;
 - advanced LSP/indexing work that requires a persistent query service;
 - deployable kernel, Agent product, or real hardware claims;
-- new vendored runtimes in the default production TCB.
+- new vendored runtimes in the default compiler profile.
 
 ## Active phases
 
@@ -55,7 +55,7 @@ boundary is stable:
 | 1 | Typed MIR identity | `ARCH-TYPED-MIR` | backend-critical types, symbols, values, ABI/layout, representation, and control facts are typed or verifier-owned. |
 | 2 | `VerifiedProgram` narrowing | `ARCH-TYPED-MIR`, `ARCH-BACKEND-FACTS` | production backend entrypoints no longer expose AST as semantic input. |
 | 3 | Artifact provenance | `ARCH-SOURCE-MAP-DIGEST` | emitted bytes, source maps, lowering options, source/MIR digests, and tool identity are bound together. |
-| 4 | Manifest-backed governance | `GATE-MANIFEST`, `TCB-PROFILE-MINIMIZATION` | build/CI/release/docs read status from manifests instead of Markdown counters. |
+| 4 | Manifest-backed governance | `GATE-MANIFEST`, `COMPONENT-PROFILE-MINIMIZATION` | build/CI/release/docs read status from manifests instead of Markdown counters. |
 | 5 | Profile-scoped kernel hardening | `KERNEL-CAPABILITY-MINT`, `HARDWARE-PRODUCTION-QUALIFICATION` | production capability/hardware claims are type-gated and evidence-backed. |
 
 Phases 0–2 are the default work. Phases 3–5 should not displace compiler P0

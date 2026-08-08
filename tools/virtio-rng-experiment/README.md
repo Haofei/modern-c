@@ -219,7 +219,7 @@ tools/virtio-rng-experiment/run-contract-mutations.sh \
   "$LINUX_REPO" zig-out/bin/mcc
 ```
 
-Capture reproducible source/object/TCB-marker metrics and a protocol-core
+Capture reproducible source/object/trust-marker metrics and a protocol-core
 microbenchmark:
 
 ```sh

@@ -103,4 +103,4 @@ if [ "$max_ratio" != 0 ]; then
 		}
 	' "$benchmark_report"
 fi
-echo "virtio-rng comparison metrics captured (source/object/TCB markers and protocol-core throughput)"
+echo "virtio-rng comparison metrics captured (source/object/trust markers and protocol-core throughput)"

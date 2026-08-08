@@ -402,7 +402,7 @@ def require_threat_model_metadata() -> None:
         "CycloneDX SBOM",
         "artifact attestations",
         "SECURITY.md",
-        "not a kernel product TCB claim",
+        "not a kernel product claim",
     ):
         if needle not in docs:
             fail(f"{path} does not document threat-model requirement {needle!r}")

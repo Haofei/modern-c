@@ -86,7 +86,8 @@ region, or the QEMU envelope.
 
 **Out of scope today:**
 
-- malicious kernel code or trusted runtime/compiler shims (they are in the TCB — §4);
+- malicious kernel code or trusted runtime/compiler shims (they are validation
+  dependencies — §4);
 - malicious hardware / DMA outside the modeled drivers;
 - physical attacks and side channels;
 - a formal seL4-style refinement proof (the guarantees here are type-system + test based,
@@ -100,7 +101,7 @@ verdict is not the kernel's job.
 
 ---
 
-## 4. Trusted Computing Base
+## 4. Validation Trust Inputs
 
 For "many bugs become compile errors" to hold, the following must be trusted. They are
 **not** verified by the kernel's own guarantees:
@@ -114,8 +115,9 @@ For "many bugs become compile errors" to hold, the following must be trusted. Th
 - any **C-ABI struct mirrors** and the generated `_Static_assert` layout checks that guard
   them.
 
-This TCB is small relative to a monolithic kernel, which is the point (small, auditable
-trust base for a semi-trusted workload) — but it is explicitly *trusted*, not proven.
+This trust base is small relative to a monolithic kernel, which is the point
+(small, auditable dependencies for a semi-trusted workload) — but it is explicitly
+*trusted*, not proven.
 
 ---
 
@@ -388,7 +390,7 @@ The kernel owns *mechanism*; policy can be set externally (`proc_schedctl`).
 
 `kernel/core/capability.mc`:
 
-- **`BootAuthority`** — opaque linear setup token. Creating it is the audited TCB
+- **`BootAuthority`** — opaque linear setup token. Creating it is the audited authority
   root seam; ordinary code cannot mint capabilities just by importing the module.
 - **`Cap<R>`** — `opaque move struct`. Unforgeable (private field; only
   `cap_mint(auth, ...)` constructs), linear (`move` — single owner), revoked by
