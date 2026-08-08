@@ -180,6 +180,7 @@ pub const OwnershipPlaceProjection = mir_model.OwnershipPlaceProjection;
 pub const OwnershipPlace = mir_model.OwnershipPlace;
 pub const OwnershipEvent = mir_model.OwnershipEvent;
 pub const AutoDropCleanupPlanEntry = mir_model.AutoDropCleanupPlanEntry;
+pub const ExplicitDropCleanupPlanEntry = mir_model.ExplicitDropCleanupPlanEntry;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
@@ -1608,6 +1609,31 @@ pub fn appendAutoDropCleanupPlan(
     }
 }
 
+pub fn appendExplicitDropCleanupPlan(
+    allocator: std.mem.Allocator,
+    module: Module,
+    function: Function,
+    out: *std.ArrayList(ExplicitDropCleanupPlanEntry),
+) error{ InvalidMirOwnershipEvents, OutOfMemory }!void {
+    for (function.ownership_events) |event| {
+        if (!ownershipEventValid(module, function, event)) return error.InvalidMirOwnershipEvents;
+    }
+    if (!ownershipEventSequenceValid(function)) return error.InvalidMirOwnershipEvents;
+
+    for (function.ownership_events, 0..) |event, index| {
+        if (event.kind != .explicit_drop) continue;
+        _ = simpleOwnershipRootValue(event.place) orelse return error.InvalidMirOwnershipEvents;
+        try out.append(allocator, .{
+            .explicit_drop_event_index = index,
+            .place = event.place,
+            .generation = event.generation,
+            .drop_glue_symbol_id = event.drop_glue_symbol_id,
+            .block_id = event.block_id,
+            .source = event.source,
+        });
+    }
+}
+
 fn verifyFunctionOwnershipEvents(module: Module, function: Function, reporter: *diagnostics.Reporter) void {
     for (function.ownership_events) |event| {
         if (ownershipEventValid(module, function, event)) continue;
@@ -1672,26 +1698,36 @@ fn ownershipEventSequenceValid(function: Function) bool {
         if (!event.place.root_type_symbol_id.isValid()) continue;
         if (!ownershipRootHasStorageLive(function, root)) continue;
         const state = ownershipRootStateBefore(function, index, root);
+        const generation = ownershipRootGenerationBefore(function, index, root);
         switch (event.kind) {
             .storage_live => {
                 if (state != .untracked) return false;
+                if (event.generation != 0) return false;
             },
             .init => {
                 if (state != .storage_live) return false;
+                if (event.generation != generation) return false;
             },
             .reinit => {
-                if (state == .untracked) return false;
+                switch (state) {
+                    .storage_live => if (event.generation != generation) return false,
+                    .consumed => if (event.generation != generation + 1) return false,
+                    .live, .untracked => return false,
+                }
             },
             .move_out, .forget, .explicit_drop, .auto_drop => {
                 if (state != .live) return false;
+                if (event.generation != generation) return false;
                 if (event.kind == .auto_drop and autoDropClosingStorageDeadIndex(function, index, root) == null) return false;
             },
             .borrow_begin, .set_drop_flag => {
                 if (state != .live) return false;
+                if (event.generation != generation) return false;
             },
             .borrow_end => {},
             .storage_dead => {
                 if (event.place.root_type_symbol_id.isValid() and state == .live) return false;
+                if (state != .untracked and event.generation != generation) return false;
             },
         }
     }
@@ -1737,6 +1773,24 @@ fn ownershipRootStateBefore(function: Function, event_index: usize, root: ValueI
         }
     }
     return state;
+}
+
+fn ownershipRootGenerationBefore(function: Function, event_index: usize, root: ValueId) u32 {
+    var generation: u32 = 0;
+    const target_block: ?BlockId = if (event_index < function.ownership_events.len) function.ownership_events[event_index].block_id else null;
+    for (function.ownership_events[0..event_index]) |event| {
+        const event_root = simpleOwnershipRootValue(event.place) orelse continue;
+        if (!event.place.root_type_symbol_id.isValid()) continue;
+        if (!event_root.eql(root)) continue;
+        if (target_block) |block_id| {
+            if (!ownershipEventCanReachBlock(function, event, block_id)) continue;
+        }
+        switch (event.kind) {
+            .storage_live, .init, .reinit, .move_out, .forget, .explicit_drop, .auto_drop, .storage_dead, .set_drop_flag => generation = event.generation,
+            .borrow_begin, .borrow_end => {},
+        }
+    }
+    return generation;
 }
 
 fn ownershipEventCanReachBlock(function: Function, event: OwnershipEvent, target: BlockId) bool {
@@ -7437,6 +7491,7 @@ const FunctionBuilder = struct {
                 .root_value_id = root_value_id,
                 .root_type_symbol_id = root_type_symbol_id,
             },
+            .generation = self.currentOwnershipRootGeneration(root_value_id),
             .drop_glue_symbol_id = if (kind == .explicit_drop) self.discardArgumentDropGlueIdentity(argument).?.release_symbol_id else .invalid,
             .block_id = block_id,
             .instruction_index = instruction_index,
@@ -7463,6 +7518,7 @@ const FunctionBuilder = struct {
                 .root_value_id = root_value_id,
                 .root_type_symbol_id = root_type_symbol_id,
             },
+            .generation = self.currentOwnershipRootGeneration(root_value_id),
             .drop_glue_symbol_id = drop_glue_identity.release_symbol_id,
             .block_id = block_id,
             .instruction_index = instruction_index,
@@ -7523,6 +7579,7 @@ const FunctionBuilder = struct {
             const identity = self.localDropGlueIdentity(name) orelse continue;
             const root_value_id = try self.internValueId(name);
             if (self.currentOwnershipRootState(root_value_id) != .live) continue;
+            const generation = self.currentOwnershipRootGeneration(root_value_id);
             const source = self.latestOwnershipSourceForRoot(root_value_id);
             const block_id = BlockId.fromIndex(self.current);
             try self.ownership_events.append(self.allocator, .{
@@ -7531,6 +7588,7 @@ const FunctionBuilder = struct {
                     .root_value_id = root_value_id,
                     .root_type_symbol_id = identity.resource_symbol_id,
                 },
+                .generation = generation,
                 .drop_glue_symbol_id = identity.release_symbol_id,
                 .block_id = block_id,
                 .source = source,
@@ -7541,6 +7599,7 @@ const FunctionBuilder = struct {
                     .root_value_id = root_value_id,
                     .root_type_symbol_id = identity.resource_symbol_id,
                 },
+                .generation = generation,
                 .block_id = block_id,
                 .source = source,
             });
@@ -7562,6 +7621,29 @@ const FunctionBuilder = struct {
             }
         }
         return state;
+    }
+
+    fn currentOwnershipRootGeneration(self: *FunctionBuilder, root: ValueId) u32 {
+        var generation: u32 = 0;
+        for (self.ownership_events.items) |event| {
+            const event_root = simpleOwnershipRootValue(event.place) orelse continue;
+            if (!event_root.eql(root)) continue;
+            if (!self.ownershipEventCanReachCurrent(event)) continue;
+            switch (event.kind) {
+                .storage_live, .init, .reinit, .move_out, .forget, .explicit_drop, .auto_drop, .storage_dead, .set_drop_flag => generation = event.generation,
+                .borrow_begin, .borrow_end => {},
+            }
+        }
+        return generation;
+    }
+
+    fn ownershipGenerationForLocalEvent(self: *FunctionBuilder, kind: OwnershipEventKind, root: ValueId) u32 {
+        const generation = self.currentOwnershipRootGeneration(root);
+        if (kind != .reinit) return generation;
+        return switch (self.currentOwnershipRootState(root)) {
+            .consumed => generation + 1,
+            else => generation,
+        };
     }
 
     fn latestOwnershipSourceForRoot(self: *FunctionBuilder, root: ValueId) SourcePoint {
@@ -7604,6 +7686,7 @@ const FunctionBuilder = struct {
                 .root_value_id = root_value_id,
                 .root_type_symbol_id = root_type_symbol_id,
             },
+            .generation = self.ownershipGenerationForLocalEvent(kind, root_value_id),
             .block_id = block_id,
             .instruction_index = instruction_index,
             .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },

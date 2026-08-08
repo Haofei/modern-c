@@ -570,6 +570,15 @@ pub const AutoDropCleanupPlanEntry = struct {
     source: SourcePoint,
 };
 
+pub const ExplicitDropCleanupPlanEntry = struct {
+    explicit_drop_event_index: usize,
+    place: OwnershipPlace,
+    generation: u32 = 0,
+    drop_glue_symbol_id: SymbolId,
+    block_id: BlockId,
+    source: SourcePoint,
+};
+
 pub const PointerProvenance = enum {
     global_storage,
     local_storage,

@@ -4622,6 +4622,13 @@ test "MIR records explicit drop glue call ownership events" {
     try std.testing.expect(function.ownership_events[4].drop_glue_symbol_id.isValid());
     try std.testing.expectEqual(mir.OwnershipEventKind.auto_drop, function.ownership_events[5].kind);
     try std.testing.expectEqual(mir.OwnershipEventKind.storage_dead, function.ownership_events[6].kind);
+    var explicit_drop_plan: std.ArrayList(mir.ExplicitDropCleanupPlanEntry) = .empty;
+    defer explicit_drop_plan.deinit(std.testing.allocator);
+    try mir.appendExplicitDropCleanupPlan(std.testing.allocator, module_mir, function, &explicit_drop_plan);
+    try std.testing.expectEqual(@as(usize, 1), explicit_drop_plan.items.len);
+    try std.testing.expectEqual(@as(usize, 4), explicit_drop_plan.items[0].explicit_drop_event_index);
+    try std.testing.expect(explicit_drop_plan.items[0].place.root_type_symbol_id.eql(function.ownership_events[4].place.root_type_symbol_id));
+    try std.testing.expect(explicit_drop_plan.items[0].drop_glue_symbol_id.eql(function.ownership_events[4].drop_glue_symbol_id));
     const release_decl = for (parsed.module.decls) |decl| {
         if (decl.kind != .fn_decl) continue;
         if (!std.mem.eql(u8, decl.kind.fn_decl.name.text, "release_one")) continue;
@@ -4629,20 +4636,20 @@ test "MIR records explicit drop glue call ownership events" {
     } else return error.TestUnexpectedResult;
     const release_expr = release_decl.body.?.items[2].kind.expr;
     const g_identity = valueIdentityBySpelling(function, "g") orelse return error.TestUnexpectedResult;
-    const cleanup = mir_ownership_authority.explicitDropLocalCleanup(&module_mir, &function, release_expr) orelse return error.TestUnexpectedResult;
+    const cleanup = (try mir_ownership_authority.explicitDropLocalCleanup(std.testing.allocator, &module_mir, &function, release_expr)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
     try std.testing.expectEqualStrings("g", cleanup.local_name);
     try std.testing.expect(cleanup.root_value_id.eql(g_identity.id));
     try std.testing.expect(cleanup.resource_type_symbol_id.eql(function.ownership_events[4].place.root_type_symbol_id));
     try std.testing.expect(cleanup.drop_glue_symbol_id.eql(function.ownership_events[4].drop_glue_symbol_id));
     try std.testing.expectEqual(@as(usize, 4), cleanup.explicit_drop_event_index);
-    try std.testing.expect(mir_ownership_authority.explicitDropCleanupEmissionAllowed(&module_mir, &function, cleanup));
+    try std.testing.expect(try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, cleanup));
     var stale_cleanup = cleanup;
     stale_cleanup.explicit_drop_event_index = 5;
-    try std.testing.expect(!mir_ownership_authority.explicitDropCleanupEmissionAllowed(&module_mir, &function, stale_cleanup));
+    try std.testing.expect(!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, stale_cleanup));
     stale_cleanup = cleanup;
     stale_cleanup.span.line += 1;
-    try std.testing.expect(!mir_ownership_authority.explicitDropCleanupEmissionAllowed(&module_mir, &function, stale_cleanup));
+    try std.testing.expect(!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, &function, stale_cleanup));
     try mir.validateLoweringAdmission(module_mir);
 }
 
@@ -4788,6 +4795,66 @@ test "MIR ownership event admission rejects duplicate local consumption" {
     try mir.verifyBuiltMir(bad_mir, &verifier_reporter);
     try std.testing.expect(verifier_reporter.has_errors);
     try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_OWNERSHIP_EVENT") != null);
+}
+
+test "MIR ownership event admission enforces local generations" {
+    // DIAGNOSTIC_UNIT: E_MIR_OWNERSHIP_EVENT
+    const source =
+        \\move struct Guard { id: u32 }
+        \\fn make_guard() -> Guard { return .{ .id = 1 }; }
+        \\fn return_guard() -> Guard {
+        \\    var g = make_guard();
+        \\    return move g;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("mir_ownership_generation.mc", source);
+    defer parsed.deinit();
+
+    var good_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer good_mir.deinit();
+    const good_function = functionByNameMut(&good_mir, "return_guard") orelse return error.TestUnexpectedResult;
+    const generated_good_events = good_function.ownership_events;
+    try std.testing.expectEqual(@as(usize, 3), generated_good_events.len);
+    const good_events = try std.testing.allocator.alloc(mir.OwnershipEvent, 5);
+    @memcpy(good_events[0..3], generated_good_events);
+    good_events[3] = generated_good_events[1];
+    good_events[3].kind = .reinit;
+    good_events[3].generation = 1;
+    good_events[4] = generated_good_events[2];
+    good_events[4].generation = 1;
+    good_function.ownership_events = good_events;
+    std.testing.allocator.free(generated_good_events);
+    try mir.validateLoweringAdmission(good_mir);
+
+    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer bad_mir.deinit();
+    const bad_function = functionByNameMut(&bad_mir, "return_guard") orelse return error.TestUnexpectedResult;
+    const generated_bad_events = bad_function.ownership_events;
+    const bad_events = try std.testing.allocator.alloc(mir.OwnershipEvent, 5);
+    @memcpy(bad_events[0..3], generated_bad_events);
+    bad_events[3] = generated_bad_events[1];
+    bad_events[3].kind = .reinit;
+    bad_events[3].generation = 0;
+    bad_events[4] = generated_bad_events[2];
+    bad_events[4].generation = 1;
+    bad_function.ownership_events = bad_events;
+    std.testing.allocator.free(generated_bad_events);
+    try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));
+
+    var stale_mir = try mir.build(std.testing.allocator, parsed.module);
+    defer stale_mir.deinit();
+    const stale_function = functionByNameMut(&stale_mir, "return_guard") orelse return error.TestUnexpectedResult;
+    const generated_stale_events = stale_function.ownership_events;
+    const stale_events = try std.testing.allocator.alloc(mir.OwnershipEvent, 5);
+    @memcpy(stale_events[0..3], generated_stale_events);
+    stale_events[3] = generated_stale_events[1];
+    stale_events[3].kind = .reinit;
+    stale_events[3].generation = 1;
+    stale_events[4] = generated_stale_events[2];
+    stale_events[4].generation = 0;
+    stale_function.ownership_events = stale_events;
+    std.testing.allocator.free(generated_stale_events);
+    try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(stale_mir));
 }
 
 test "MIR ownership event admission rejects malformed event identity" {

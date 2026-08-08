@@ -141,6 +141,7 @@ def main() -> int:
         "fn ownershipEventSequenceValid(function: Function) bool {",
         "fn typedOwnershipRootsClosed(function: Function) bool {",
         "fn ownershipRootStateBefore(function: Function, event_index: usize, root: ValueId) OwnershipRootState {",
+        "fn ownershipRootGenerationBefore(function: Function, event_index: usize, root: ValueId) u32 {",
         "fn simpleOwnershipRootValue(place: OwnershipPlace) ?ValueId {",
         "fn addDiscardOwnershipEvent(self: *FunctionBuilder, target: CallTargetKind, argument: ast.Expr, call_span: ast.Span) !void {",
         ".root_type_symbol_id = root_type_symbol_id,",
@@ -151,6 +152,8 @@ def main() -> int:
         "fn localRootTypeSymbol(self: *FunctionBuilder, name: []const u8) SymbolId {",
         "fn appendSimpleLocalCleanupOwnershipEvents(self: *FunctionBuilder) !void {",
         "fn currentOwnershipRootState(self: *FunctionBuilder, root: ValueId) OwnershipRootState {",
+        "fn currentOwnershipRootGeneration(self: *FunctionBuilder, root: ValueId) u32 {",
+        "fn ownershipGenerationForLocalEvent(self: *FunctionBuilder, kind: OwnershipEventKind, root: ValueId) u32 {",
         "fn addLocalOwnershipEvent(self: *FunctionBuilder, kind: OwnershipEventKind, name: []const u8, span: ast.Span) !void {",
         "const drop_glue_identity = self.discardArgumentDropGlueIdentity(argument) orelse return;",
         "const root_type_symbol_id = self.localRootTypeSymbol(name);",
@@ -244,12 +247,15 @@ def main() -> int:
         "MIR ownership authority skips cleanup registration for move-out",
         "MIR records explicit drop glue call ownership events",
         "MIR cleanup producer ignores move-out events that cannot reach fallthrough cleanup",
+        "MIR ownership event admission enforces local generations",
     ):
         require_contains("src/mir_tests.zig", needle)
 
     for path, needle in (
         ("src/mir_model.zig", "pub const AutoDropCleanupPlanEntry"),
+        ("src/mir_model.zig", "pub const ExplicitDropCleanupPlanEntry"),
         ("src/mir.zig", "pub fn appendAutoDropCleanupPlan"),
+        ("src/mir.zig", "pub fn appendExplicitDropCleanupPlan"),
         ("src/mir.zig", "fn autoDropClosingStorageDeadIndex"),
         ("src/mir.zig", "fn ownershipEventCanReachBlock"),
         ("src/mir.zig", "pub fn sourcePointFromSpan"),
@@ -264,6 +270,7 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "storage_dead_event_index: usize = std.math.maxInt(usize)"),
         ("src/mir_ownership_authority.zig", "pub fn autoDropLocalRegistrationDecision"),
         ("src/mir_ownership_authority.zig", "mir.appendAutoDropCleanupPlan"),
+        ("src/mir_ownership_authority.zig", "mir.appendExplicitDropCleanupPlan"),
         ("src/mir_ownership_authority.zig", "pub fn autoDropCleanupEmissionAllowed"),
         ("src/mir_ownership_authority.zig", "fn localHasConsumingOwnershipEvent"),
         ("src/mir_ownership_authority.zig", "entry.place.root_type_symbol_id.eql(ownership.typed_type_symbol_id)"),

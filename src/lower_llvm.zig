@@ -1848,7 +1848,7 @@ const LlvmEmitter = struct {
             .@"defer" => |expr| {
                 try self.cancelAutoDropForReleaseCall(expr);
                 const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-                switch (mir_ownership_authority.deferredExplicitDropCleanupDecision(&self.mir_module, function, expr)) {
+                switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(self.allocator, &self.mir_module, function, expr)) {
                     .ignore => try self.defer_stack.append(self.allocator, .{ .expr = expr }),
                     .emit_explicit_drop_cleanup => |cleanup| try self.defer_stack.append(self.allocator, .{ .explicit_drop = cleanup }),
                     .reject => return error.UnsupportedLlvmEmission,
@@ -1994,7 +1994,7 @@ const LlvmEmitter = struct {
 
     fn emitExplicitDropPointerCleanup(self: *LlvmEmitter, cleanup: mir_ownership_authority.AutoDropLocalCleanup) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!mir_ownership_authority.explicitDropCleanupEmissionAllowed(&self.mir_module, function, cleanup)) return error.UnsupportedLlvmEmission;
+        if (!try mir_ownership_authority.explicitDropCleanupEmissionAllowed(self.allocator, &self.mir_module, function, cleanup)) return error.UnsupportedLlvmEmission;
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
     }
