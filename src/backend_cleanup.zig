@@ -44,6 +44,30 @@ pub const DeferredCleanup = union(enum) {
     explicit_drop: mir_ownership_authority.OwnershipCleanupActionRef,
 };
 
+pub const DeferCleanupStackSnapshot = struct {
+    items: []DeferredCleanup,
+
+    pub fn deinit(self: *DeferCleanupStackSnapshot, allocator: std.mem.Allocator) void {
+        allocator.free(self.items);
+        self.items = &.{};
+    }
+};
+
+pub fn captureDeferCleanupStack(
+    allocator: std.mem.Allocator,
+    stack: []const DeferredCleanup,
+) !DeferCleanupStackSnapshot {
+    return .{ .items = try allocator.dupe(DeferredCleanup, stack) };
+}
+
+pub fn restoreDeferCleanupStack(
+    stack: *std.ArrayList(DeferredCleanup),
+    snapshot: DeferCleanupStackSnapshot,
+) void {
+    stack.items.len = snapshot.items.len;
+    @memcpy(stack.items[0..snapshot.items.len], snapshot.items);
+}
+
 pub fn deferCleanupRef(cleanup: DeferredCleanup) ?mir.DeferCleanupRef {
     return switch (cleanup) {
         .block => |entry| entry.defer_ref,
@@ -225,4 +249,26 @@ test "defer cleanup stack refs must be valid ordered and unique" {
     try std.testing.expect((deferCleanupRef(first_emit) orelse return error.TestUnexpectedResult).instruction_index == 1);
     try std.testing.expect((deferCleanupRef(second_emit) orelse return error.TestUnexpectedResult).instruction_index == 0);
     try std.testing.expect(deferCleanupAtEmissionIndex(function, stack[0..], 0, 2) == null);
+}
+
+test "defer cleanup stack snapshot restores full contents" {
+    const span = ast.Span{ .offset = 1, .len = 1, .line = 1, .column = 1 };
+    const later_span = ast.Span{ .offset = 2, .len = 1, .line = 1, .column = 2 };
+    const first: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 0, .source = mir.sourcePointFromSpan(span) };
+    const second: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 1, .source = mir.sourcePointFromSpan(later_span) };
+    const block: ast.Block = .{ .span = span, .items = &.{} };
+
+    var stack: std.ArrayList(DeferredCleanup) = .empty;
+    defer stack.deinit(std.testing.allocator);
+    try stack.append(std.testing.allocator, .{ .block = .{ .defer_ref = first, .block = block } });
+
+    var snapshot = try captureDeferCleanupStack(std.testing.allocator, stack.items);
+    defer snapshot.deinit(std.testing.allocator);
+
+    stack.items[0] = .{ .block = .{ .defer_ref = second, .block = block } };
+    try stack.append(std.testing.allocator, .{ .block = .{ .defer_ref = second, .block = block } });
+    restoreDeferCleanupStack(&stack, snapshot);
+
+    try std.testing.expectEqual(@as(usize, 1), stack.items.len);
+    try std.testing.expect((deferCleanupRef(stack.items[0]) orelse return error.TestUnexpectedResult).instruction_index == 0);
 }

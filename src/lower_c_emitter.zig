@@ -3386,11 +3386,11 @@ pub const CEmitter = struct {
     }
 
     fn emitBlockItemsWithDeferStackSnapshot(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        const saved_defer_stack = try self.allocator.dupe(DeferredCleanup, self.defer_stack.items);
-        defer self.allocator.free(saved_defer_stack);
-        errdefer self.restoreDeferStackSnapshot(saved_defer_stack);
+        var saved_defer_stack = try backend_cleanup.captureDeferCleanupStack(self.allocator, self.defer_stack.items);
+        defer saved_defer_stack.deinit(self.allocator);
+        errdefer backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
         try self.emitBlockItems(block, locals, return_ty);
-        self.restoreDeferStackSnapshot(saved_defer_stack);
+        backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
     }
 
     const BlockItemAction = enum {
@@ -3862,19 +3862,14 @@ pub const CEmitter = struct {
     }
 
     fn emitSwitchBody(self: *CEmitter, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        const saved_defer_stack = try self.allocator.dupe(DeferredCleanup, self.defer_stack.items);
-        defer self.allocator.free(saved_defer_stack);
-        errdefer self.restoreDeferStackSnapshot(saved_defer_stack);
+        var saved_defer_stack = try backend_cleanup.captureDeferCleanupStack(self.allocator, self.defer_stack.items);
+        defer saved_defer_stack.deinit(self.allocator);
+        errdefer backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
         switch (body) {
             .block => |block| try self.emitBlockItems(block, locals, return_ty),
             .expr => |expr| try self.emitExpressionStmt(expr, locals, return_ty),
         }
-        self.restoreDeferStackSnapshot(saved_defer_stack);
-    }
-
-    fn restoreDeferStackSnapshot(self: *CEmitter, saved: []const DeferredCleanup) void {
-        self.defer_stack.items.len = saved.len;
-        @memcpy(self.defer_stack.items[0..saved.len], saved);
+        backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
     }
 
     fn nullableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {

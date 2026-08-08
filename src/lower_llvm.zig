@@ -4124,9 +4124,9 @@ const LlvmEmitter = struct {
     }
 
     fn emitSwitchBody(self: *LlvmEmitter, body: ast.SwitchBody, ret_ty: ast.TypeExpr) !bool {
-        const saved_defer_stack = try self.allocator.dupe(DeferredCleanup, self.defer_stack.items);
-        defer self.allocator.free(saved_defer_stack);
-        errdefer self.restoreDeferStackSnapshot(saved_defer_stack);
+        var saved_defer_stack = try backend_cleanup.captureDeferCleanupStack(self.allocator, self.defer_stack.items);
+        defer saved_defer_stack.deinit(self.allocator);
+        errdefer backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
         const terminated = switch (body) {
             .block => |block| try self.emitBlock(block, ret_ty),
             .expr => |expr| blk: {
@@ -4139,22 +4139,17 @@ const LlvmEmitter = struct {
                 break :blk true;
             },
         };
-        self.restoreDeferStackSnapshot(saved_defer_stack);
+        backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
         return terminated;
     }
 
     fn emitBlockWithDeferStackSnapshot(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) !bool {
-        const saved_defer_stack = try self.allocator.dupe(DeferredCleanup, self.defer_stack.items);
-        defer self.allocator.free(saved_defer_stack);
-        errdefer self.restoreDeferStackSnapshot(saved_defer_stack);
+        var saved_defer_stack = try backend_cleanup.captureDeferCleanupStack(self.allocator, self.defer_stack.items);
+        defer saved_defer_stack.deinit(self.allocator);
+        errdefer backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
         const terminated = try self.emitBlock(block, ret_ty);
-        self.restoreDeferStackSnapshot(saved_defer_stack);
+        backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
         return terminated;
-    }
-
-    fn restoreDeferStackSnapshot(self: *LlvmEmitter, saved: []const DeferredCleanup) void {
-        self.defer_stack.items.len = saved.len;
-        @memcpy(self.defer_stack.items[0..saved.len], saved);
     }
 
     fn emitReturnVoid(self: *LlvmEmitter, span: ast.Span) !void {
