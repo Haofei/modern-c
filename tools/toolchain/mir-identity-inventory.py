@@ -269,6 +269,7 @@ def main() -> int:
         ("src/mir_ownership_authority.zig", "fn authorizesMoveOutLocalAutoDrop"),
         ("src/mir_ownership_authority.zig", "fn localHasAutoDropOwnershipEvent"),
         ("src/mir_ownership_authority.zig", "pub fn explicitDropLocalCleanup"),
+        ("src/mir_ownership_authority.zig", "valueIdForLocal(function, release.local_name)"),
         ("src/mir_ownership_authority.zig", "fn autoDropTypeSymbolHasGlue"),
         ("src/mir_ownership_authority.zig", "fn authorizesExplicitDropLocal"),
         ("src/backend_cleanup.zig", "pub const DeferredCleanup"),

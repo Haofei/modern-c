@@ -1259,6 +1259,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub const AutoDropCleanupKey": 1,
         "remove_auto_drop: AutoDropCleanupKey": 1,
         "pub fn explicitDropLocalCleanup": 1,
+        "valueIdForLocal(function, release.local_name)": 1,
         "pub fn dropGlueDeclArtifactMatches": 1,
         "pub fn directMovedLocalName": 0,
         "pub fn moveAutoDropCancellationDecision": 1,

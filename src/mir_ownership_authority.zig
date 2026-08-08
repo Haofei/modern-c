@@ -131,13 +131,19 @@ fn authorizesExplicitDropLocal(
     return null;
 }
 
-pub fn explicitDropLocalCleanup(module: *const mir.Module, expr: ast.Expr) ?AutoDropLocalCleanup {
+pub fn explicitDropLocalCleanup(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    expr: ast.Expr,
+) ?AutoDropLocalCleanup {
     const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return null;
     const drop_glue = dropGlueFactForReleaseFunction(module, release.fn_name) orelse return null;
+    const root_value_id = valueIdForLocal(function, release.local_name) orelse return null;
     return .{
         .fn_name = release.fn_name,
         .local_name = release.local_name,
         .span = release.span,
+        .root_value_id = root_value_id,
         .resource_type_symbol_id = drop_glue.typed_resource_symbol_id,
         .drop_glue_symbol_id = drop_glue.typed_release_symbol_id,
     };
@@ -161,7 +167,7 @@ pub fn explicitDropCancellationDecision(
     function: *const mir.Function,
     expr: ast.Expr,
 ) AutoDropCancellationDecision {
-    const release = explicitDropLocalCleanup(module, expr) orelse return .ignore;
+    const release = explicitDropLocalCleanup(module, function, expr) orelse return .ignore;
     if (authorizesExplicitDropLocal(module, function, release.local_name, release.fn_name, mir.sourcePointFromSpan(expr.span))) |key| return .{ .remove_auto_drop = key };
     if (localHasAutoDropOwnershipEvent(module, function, release.local_name)) return .reject;
     return .ignore;

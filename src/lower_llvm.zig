@@ -1986,7 +1986,8 @@ const LlvmEmitter = struct {
     }
 
     fn emitDeferredDropPointerRelease(self: *LlvmEmitter, expr: ast.Expr) !bool {
-        const cleanup = mir_ownership_authority.explicitDropLocalCleanup(&self.mir_module, expr) orelse return false;
+        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
+        const cleanup = mir_ownership_authority.explicitDropLocalCleanup(&self.mir_module, function, expr) orelse return false;
         const slot = self.local_slots.get(cleanup.local_name) orelse return error.UnsupportedLlvmEmission;
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
         return true;

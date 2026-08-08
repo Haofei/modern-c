@@ -4604,6 +4604,19 @@ test "MIR records explicit drop glue call ownership events" {
     try std.testing.expect(function.ownership_events[4].drop_glue_symbol_id.isValid());
     try std.testing.expectEqual(mir.OwnershipEventKind.auto_drop, function.ownership_events[5].kind);
     try std.testing.expectEqual(mir.OwnershipEventKind.storage_dead, function.ownership_events[6].kind);
+    const release_decl = for (parsed.module.decls) |decl| {
+        if (decl.kind != .fn_decl) continue;
+        if (!std.mem.eql(u8, decl.kind.fn_decl.name.text, "release_one")) continue;
+        break decl.kind.fn_decl;
+    } else return error.TestUnexpectedResult;
+    const release_expr = release_decl.body.?.items[2].kind.expr;
+    const g_identity = valueIdentityBySpelling(function, "g") orelse return error.TestUnexpectedResult;
+    const cleanup = mir_ownership_authority.explicitDropLocalCleanup(&module_mir, &function, release_expr) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
+    try std.testing.expectEqualStrings("g", cleanup.local_name);
+    try std.testing.expect(cleanup.root_value_id.eql(g_identity.id));
+    try std.testing.expect(cleanup.resource_type_symbol_id.eql(function.ownership_events[4].place.root_type_symbol_id));
+    try std.testing.expect(cleanup.drop_glue_symbol_id.eql(function.ownership_events[4].drop_glue_symbol_id));
     try mir.validateLoweringAdmission(module_mir);
 }
 
