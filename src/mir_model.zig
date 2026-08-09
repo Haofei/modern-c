@@ -640,6 +640,38 @@ pub const OwnershipCleanupEdgeTable = struct {
     }
 };
 
+pub const DeferCleanupEdgeKind = enum {
+    scope_exit,
+    return_exit,
+    break_exit,
+    continue_exit,
+    error_exit,
+};
+
+pub const DeferCleanupEdgeActionRef = struct {
+    block_id: BlockId,
+    instruction_index: usize,
+    source: SourcePoint,
+};
+
+pub const DeferCleanupEdge = struct {
+    kind: DeferCleanupEdgeKind,
+    source_block: BlockId = .invalid,
+    target_block: ?BlockId = null,
+    source: SourcePoint = .{ .line = 0, .column = 0 },
+    actions: []DeferCleanupEdgeActionRef = &.{},
+};
+
+pub const DeferCleanupEdgeTable = struct {
+    edges: []DeferCleanupEdge = &.{},
+
+    pub fn deinit(self: *DeferCleanupEdgeTable, allocator: std.mem.Allocator) void {
+        for (self.edges) |edge| allocator.free(edge.actions);
+        allocator.free(self.edges);
+        self.edges = &.{};
+    }
+};
+
 pub const PointerProvenance = enum {
     global_storage,
     local_storage,

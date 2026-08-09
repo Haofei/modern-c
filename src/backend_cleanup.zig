@@ -102,6 +102,23 @@ pub fn cleanupEdgeTableValid(
     return true;
 }
 
+fn cleanupEdgeTableValidWithMirEdges(
+    table: CleanupEdgeTable,
+    module: ?*const mir.Module,
+    function: mir.Function,
+    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    defer_edges: ?*const mir.DeferCleanupEdgeTable,
+    ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
+) bool {
+    for (table.edges) |edge| {
+        if (edge.cleanups.len != edge.refs.len) return false;
+        if (!cleanupEdgeValid(edge, module, function, cleanup_plan)) return false;
+        if (!cleanupEdgeDeferRefsAdmittedByMir(edge, defer_edges)) return false;
+        if (!cleanupEdgeOwnershipRefsAdmittedByMir(edge, ownership_edges)) return false;
+    }
+    return true;
+}
+
 pub const CleanupEdgePlan = struct {
     kind: CleanupEdgeKind,
     start: usize,
@@ -351,7 +368,9 @@ pub fn buildTransitionalCleanupEdgeTable(
         .refs = refs,
     };
     var table: CleanupEdgeTable = .{ .edges = edges };
-    if (!cleanupEdgeTableValid(table, module, function, cleanup_plan, ownership_edges)) {
+    var defer_edges = try mir.buildDeferCleanupEdgeTable(allocator, function);
+    defer defer_edges.deinit(allocator);
+    if (!cleanupEdgeTableValidWithMirEdges(table, module, function, cleanup_plan, &defer_edges, ownership_edges)) {
         table.deinit(allocator);
         return null;
     }
@@ -436,6 +455,24 @@ fn cleanupEdgeOwnershipRefsAdmittedByMir(
         }
     }
     return !saw_ownership_ref or ownership_edges != null;
+}
+
+fn cleanupEdgeDeferRefsAdmittedByMir(
+    edge: CleanupEdge,
+    defer_edges: ?*const mir.DeferCleanupEdgeTable,
+) bool {
+    var saw_defer_ref = false;
+    for (edge.refs) |ref| {
+        switch (ref) {
+            .defer_ref => |defer_ref| {
+                saw_defer_ref = true;
+                const table = defer_edges orelse return false;
+                if (!mir.deferCleanupEdgeTableContainsRef(table.*, defer_ref)) return false;
+            },
+            .ownership_action => {},
+        }
+    }
+    return !saw_defer_ref or defer_edges != null;
 }
 
 fn mirOwnershipEdgeTableContainsActionRef(
@@ -850,6 +887,17 @@ test "defer cleanup stack refs must be valid ordered and unique" {
     const first: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 0, .source = mir.sourcePointFromSpan(span) };
     const second: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 1, .source = mir.sourcePointFromSpan(later_span) };
     const block: ast.Block = .{ .span = span, .items = &.{} };
+
+    var mir_defer_edges = try mir.buildDeferCleanupEdgeTable(std.testing.allocator, function);
+    defer mir_defer_edges.deinit(std.testing.allocator);
+    try std.testing.expect(mir.deferCleanupEdgeTableValid(function, mir_defer_edges));
+    try std.testing.expectEqual(@as(usize, 1), mir_defer_edges.edges.len);
+    try std.testing.expectEqual(@as(usize, 2), mir_defer_edges.edges[0].actions.len);
+    try std.testing.expectEqual(@as(usize, 1), mir_defer_edges.edges[0].actions[0].instruction_index);
+    try std.testing.expect(mir.deferCleanupEdgeTableContainsRef(mir_defer_edges, second));
+    var stale_second = second;
+    stale_second.source.column += 1;
+    try std.testing.expect(!mir.deferCleanupEdgeTableContainsRef(mir_defer_edges, stale_second));
 
     try std.testing.expect(deferCleanupStackRefsValid(function, &.{
         .{ .block = .{ .defer_ref = first, .block = block } },

@@ -248,6 +248,95 @@ pub fn callTargetDeferCleanupAtSource(function: Function, defer_source: SourcePo
     return callTargetDeferCleanupForRef(function, defer_ref, call_source, callee_source, kind);
 }
 
+pub fn buildDeferCleanupEdgeTable(
+    allocator: std.mem.Allocator,
+    function: Function,
+) error{OutOfMemory}!DeferCleanupEdgeTable {
+    var refs: std.ArrayList(DeferCleanupEdgeActionRef) = .empty;
+    defer refs.deinit(allocator);
+
+    var block_index: usize = function.blocks.len;
+    while (block_index > 0) {
+        block_index -= 1;
+        const block = function.blocks[block_index];
+        var instruction_index: usize = block.instructions.len;
+        while (instruction_index > 0) {
+            instruction_index -= 1;
+            const instruction = block.instructions[instruction_index];
+            if (instruction.kind != .defer_cleanup) continue;
+            try refs.append(allocator, .{
+                .block_id = BlockId.fromIndex(block_index),
+                .instruction_index = instruction_index,
+                .source = sourcePointFromInstruction(instruction),
+            });
+        }
+    }
+
+    if (refs.items.len == 0) return .{};
+    const actions = try refs.toOwnedSlice(allocator);
+    errdefer allocator.free(actions);
+    const edges = try allocator.alloc(DeferCleanupEdge, 1);
+    errdefer allocator.free(edges);
+    edges[0] = .{
+        .kind = .scope_exit,
+        .actions = actions,
+    };
+    var table: DeferCleanupEdgeTable = .{ .edges = edges };
+    if (!deferCleanupEdgeTableValid(function, table)) {
+        table.deinit(allocator);
+        return .{};
+    }
+    return table;
+}
+
+pub fn deferCleanupEdgeTableValid(function: Function, table: DeferCleanupEdgeTable) bool {
+    for (table.edges) |edge| {
+        for (edge.actions) |ref| {
+            if (!deferCleanupEdgeActionRefValid(function, ref)) return false;
+        }
+    }
+    return true;
+}
+
+pub fn deferCleanupEdgeTableContainsRef(table: DeferCleanupEdgeTable, ref: DeferCleanupRef) bool {
+    for (table.edges) |edge| {
+        for (edge.actions) |action| {
+            if (!deferCleanupEdgeActionRefMatchesDeferRef(action, ref)) continue;
+            return true;
+        }
+    }
+    return false;
+}
+
+fn deferCleanupEdgeActionRefValid(function: Function, ref: DeferCleanupEdgeActionRef) bool {
+    if (!ref.block_id.isValid() or ref.block_id.index() >= function.blocks.len) return false;
+    const block = function.blocks[ref.block_id.index()];
+    if (ref.instruction_index >= block.instructions.len) return false;
+    const instruction = block.instructions[ref.instruction_index];
+    return instruction.kind == .defer_cleanup and sourcePointMatchesInstruction(ref.source, instruction);
+}
+
+fn deferCleanupEdgeActionRefMatchesDeferRef(action: DeferCleanupEdgeActionRef, ref: DeferCleanupRef) bool {
+    return action.block_id.eql(ref.block_id) and
+        action.instruction_index == ref.instruction_index and
+        sourcePointMatches(action.source, ref.source);
+}
+
+fn sourcePointFromInstruction(instruction: Instruction) SourcePoint {
+    return .{
+        .line = instruction.line,
+        .column = instruction.column,
+        .offset = instruction.source_offset,
+        .len = instruction.source_len,
+    };
+}
+
+fn sourcePointMatches(actual: SourcePoint, expected: SourcePoint) bool {
+    if (actual.line != expected.line or actual.column != expected.column) return false;
+    if (actual.offset == 0 and actual.len == 0 and expected.offset == 0 and expected.len == 0) return true;
+    return actual.offset == expected.offset and actual.len == expected.len;
+}
+
 fn directCallInstructionAtSource(function: Function, call_source: SourcePoint, fn_name: []const u8) bool {
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {
@@ -325,6 +414,10 @@ pub const OwnershipCleanupEdgeKind = mir_model.OwnershipCleanupEdgeKind;
 pub const OwnershipCleanupEdgeActionRef = mir_model.OwnershipCleanupEdgeActionRef;
 pub const OwnershipCleanupEdge = mir_model.OwnershipCleanupEdge;
 pub const OwnershipCleanupEdgeTable = mir_model.OwnershipCleanupEdgeTable;
+pub const DeferCleanupEdgeKind = mir_model.DeferCleanupEdgeKind;
+pub const DeferCleanupEdgeActionRef = mir_model.DeferCleanupEdgeActionRef;
+pub const DeferCleanupEdge = mir_model.DeferCleanupEdge;
+pub const DeferCleanupEdgeTable = mir_model.DeferCleanupEdgeTable;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
