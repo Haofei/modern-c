@@ -252,32 +252,17 @@ pub fn registerDeferredExplicitDropCleanup(
     return .applied;
 }
 
-pub fn registerOrdinaryDirectDeferCleanup(
+pub fn registerOrdinaryDeferCleanup(
     allocator: std.mem.Allocator,
     function: *const mir.Function,
+    defer_edges: ?*const mir.DeferCleanupEdgeTable,
     stack: *std.ArrayList(DeferredCleanup),
-    cleanup: OrdinaryDeferCallCleanup,
+    cleanup: DeferredCleanup,
 ) error{OutOfMemory}!AutoDropStackDecision {
-    return appendValidatedCleanup(allocator, function, stack, .{ .direct_call = cleanup });
-}
-
-pub fn registerOrdinaryCallTargetDeferCleanup(
-    allocator: std.mem.Allocator,
-    function: *const mir.Function,
-    stack: *std.ArrayList(DeferredCleanup),
-    cleanup: CallTargetDeferCleanup,
-) error{OutOfMemory}!AutoDropStackDecision {
-    return appendValidatedCleanup(allocator, function, stack, .{ .call_target = cleanup });
-}
-
-pub fn registerOrdinaryBlockDeferCleanup(
-    allocator: std.mem.Allocator,
-    function: *const mir.Function,
-    stack: *std.ArrayList(DeferredCleanup),
-    defer_ref: mir.DeferCleanupRef,
-    block: ast.Block,
-) error{OutOfMemory}!AutoDropStackDecision {
-    return appendValidatedCleanup(allocator, function, stack, .{ .block = .{ .defer_ref = defer_ref, .block = block } });
+    const ref = deferCleanupRef(cleanup) orelse return .ignored;
+    const edges = defer_edges orelse return .rejected;
+    if (!mir.deferCleanupEdgeTableContainsRef(edges.*, ref)) return .rejected;
+    return appendValidatedCleanup(allocator, function, stack, cleanup);
 }
 
 fn appendValidatedCleanup(
@@ -339,6 +324,7 @@ pub fn buildTransitionalCleanupEdgeTable(
     module: ?*const mir.Module,
     function: mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    defer_edges: ?*const mir.DeferCleanupEdgeTable,
     ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
     stack: []const DeferredCleanup,
     start: usize,
@@ -368,9 +354,13 @@ pub fn buildTransitionalCleanupEdgeTable(
         .refs = refs,
     };
     var table: CleanupEdgeTable = .{ .edges = edges };
-    var defer_edges = try mir.buildDeferCleanupEdgeTable(allocator, function);
-    defer defer_edges.deinit(allocator);
-    if (!cleanupEdgeTableValidWithMirEdges(table, module, function, cleanup_plan, &defer_edges, ownership_edges)) {
+    var owned_defer_edges = if (defer_edges == null)
+        try mir.buildDeferCleanupEdgeTable(allocator, function)
+    else
+        null;
+    defer if (owned_defer_edges) |*edges_table| edges_table.deinit(allocator);
+    const admitted_defer_edges = defer_edges orelse &owned_defer_edges.?;
+    if (!cleanupEdgeTableValidWithMirEdges(table, module, function, cleanup_plan, admitted_defer_edges, ownership_edges)) {
         table.deinit(allocator);
         return null;
     }
@@ -382,12 +372,13 @@ pub fn buildCleanupEdgePlan(
     module: ?*const mir.Module,
     function: mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    defer_edges: ?*const mir.DeferCleanupEdgeTable,
     ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
     stack: []const DeferredCleanup,
     start: usize,
     kind: CleanupEdgeKind,
 ) !?CleanupEdgePlan {
-    var table = (try buildTransitionalCleanupEdgeTable(allocator, module, function, cleanup_plan, ownership_edges, stack, start, kind)) orelse return null;
+    var table = (try buildTransitionalCleanupEdgeTable(allocator, module, function, cleanup_plan, defer_edges, ownership_edges, stack, start, kind)) orelse return null;
     defer table.deinit(allocator);
     return try cleanupEdgePlanFromTable(allocator, table, kind, start);
 }
@@ -898,6 +889,11 @@ test "defer cleanup stack refs must be valid ordered and unique" {
     var stale_second = second;
     stale_second.source.column += 1;
     try std.testing.expect(!mir.deferCleanupEdgeTableContainsRef(mir_defer_edges, stale_second));
+    var registration_stack: std.ArrayList(DeferredCleanup) = .empty;
+    defer registration_stack.deinit(std.testing.allocator);
+    try std.testing.expectEqual(AutoDropStackDecision.rejected, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, null, &registration_stack, .{ .block = .{ .defer_ref = first, .block = block } }));
+    try std.testing.expectEqual(AutoDropStackDecision.applied, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, &mir_defer_edges, &registration_stack, .{ .block = .{ .defer_ref = first, .block = block } }));
+    try std.testing.expectEqual(AutoDropStackDecision.rejected, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, &mir_defer_edges, &registration_stack, .{ .block = .{ .defer_ref = stale_second, .block = block } }));
 
     try std.testing.expect(deferCleanupStackRefsValid(function, &.{
         .{ .block = .{ .defer_ref = first, .block = block } },
@@ -923,7 +919,7 @@ test "defer cleanup stack refs must be valid ordered and unique" {
     try std.testing.expect((deferCleanupRef(second_emit) orelse return error.TestUnexpectedResult).instruction_index == 0);
     try std.testing.expect(deferCleanupAtEmissionIndex(function, stack[0..], 0, 2) == null);
 
-    var plan = (try buildCleanupEdgePlan(std.testing.allocator, null, function, null, null, stack[0..], 0, .return_exit)) orelse return error.TestUnexpectedResult;
+    var plan = (try buildCleanupEdgePlan(std.testing.allocator, null, function, null, &mir_defer_edges, null, stack[0..], 0, .return_exit)) orelse return error.TestUnexpectedResult;
     defer plan.deinit(std.testing.allocator);
     try std.testing.expectEqual(CleanupEdgeKind.return_exit, plan.kind);
     try std.testing.expectEqual(@as(usize, 0), plan.start);
@@ -931,7 +927,7 @@ test "defer cleanup stack refs must be valid ordered and unique" {
     try std.testing.expect((deferCleanupRef(plan.cleanups[0]) orelse return error.TestUnexpectedResult).instruction_index == 1);
     try std.testing.expect((deferCleanupRef(plan.cleanups[1]) orelse return error.TestUnexpectedResult).instruction_index == 0);
 
-    var table = (try buildTransitionalCleanupEdgeTable(std.testing.allocator, null, function, null, null, stack[0..], 0, .return_exit)) orelse return error.TestUnexpectedResult;
+    var table = (try buildTransitionalCleanupEdgeTable(std.testing.allocator, null, function, null, &mir_defer_edges, null, stack[0..], 0, .return_exit)) orelse return error.TestUnexpectedResult;
     defer table.deinit(std.testing.allocator);
     const edge = cleanupEdgeFor(table, .return_exit, 0) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(CleanupEdgeKind.return_exit, edge.kind);
@@ -974,7 +970,7 @@ test "cleanup edge table rejects ownership actions without MIR cleanup plan" {
     };
     const stack = [_]DeferredCleanup{.{ .auto_drop = cleanup_ref }};
 
-    try std.testing.expect((try buildTransitionalCleanupEdgeTable(std.testing.allocator, null, function, null, null, stack[0..], 0, .scope_exit)) == null);
+    try std.testing.expect((try buildTransitionalCleanupEdgeTable(std.testing.allocator, null, function, null, null, null, stack[0..], 0, .scope_exit)) == null);
 }
 
 test "defer cleanup stack snapshot restores full contents" {

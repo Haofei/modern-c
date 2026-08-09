@@ -512,6 +512,7 @@ const LlvmEmitter = struct {
     current_function: ?[]const u8 = null,
     current_ownership_cleanup_plan: ?mir.OwnershipCleanupPlan = null,
     current_ownership_cleanup_edges: ?mir.OwnershipCleanupEdgeTable = null,
+    current_defer_cleanup_edges: ?mir.DeferCleanupEdgeTable = null,
     current_params: ?[]const ast.Param = null,
     current_mir_range_target: ?[]const u8 = null,
     source_path: []const u8,
@@ -1289,10 +1290,17 @@ const LlvmEmitter = struct {
         else
             null;
         defer if (ownership_cleanup_edges) |*edges| edges.deinit(self.allocator);
+        var defer_cleanup_edges = if (self.currentMirFunction()) |function|
+            try mir.buildDeferCleanupEdgeTable(self.allocator, function.*)
+        else
+            null;
+        defer if (defer_cleanup_edges) |*edges| edges.deinit(self.allocator);
         self.current_ownership_cleanup_plan = ownership_cleanup_plan;
         defer self.current_ownership_cleanup_plan = null;
         self.current_ownership_cleanup_edges = ownership_cleanup_edges;
         defer self.current_ownership_cleanup_edges = null;
+        self.current_defer_cleanup_edges = defer_cleanup_edges;
+        defer self.current_defer_cleanup_edges = null;
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
         // epilogue. The body is a single inline-asm statement that performs the
         // ABI-correct jump/return itself; we terminate the entry block with
@@ -1858,15 +1866,16 @@ const LlvmEmitter = struct {
                 switch (try backend_cleanup.registerDeferredExplicitDropCleanup(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.defer_stack, expr)) {
                     .ignored => {
                         const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt.span)) orelse return error.UnsupportedLlvmEmission;
+                        const defer_edges = self.currentDeferCleanupEdges() orelse return error.UnsupportedLlvmEmission;
                         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-                            switch (try backend_cleanup.registerOrdinaryDirectDeferCleanup(self.allocator, function, &self.defer_stack, cleanup)) {
+                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.defer_stack, .{ .direct_call = cleanup })) {
                                 .applied => {},
                                 .ignored, .rejected => return error.UnsupportedLlvmEmission,
                             }
                             return false;
                         }
                         if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-                            switch (try backend_cleanup.registerOrdinaryCallTargetDeferCleanup(self.allocator, function, &self.defer_stack, cleanup)) {
+                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.defer_stack, .{ .call_target = cleanup })) {
                                 .applied => {},
                                 .ignored, .rejected => return error.UnsupportedLlvmEmission,
                             }
@@ -1874,7 +1883,7 @@ const LlvmEmitter = struct {
                         }
                         switch (expr.kind) {
                             .block => |block| {
-                                switch (try backend_cleanup.registerOrdinaryBlockDeferCleanup(self.allocator, function, &self.defer_stack, defer_ref, block)) {
+                                switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.defer_stack, .{ .block = .{ .defer_ref = defer_ref, .block = block } })) {
                                     .applied => {},
                                     .ignored, .rejected => return error.UnsupportedLlvmEmission,
                                 }
@@ -1998,7 +2007,7 @@ const LlvmEmitter = struct {
 
     fn emitCleanupEdge(self: *LlvmEmitter, start: usize, kind: backend_cleanup.CleanupEdgeKind, ret_ty: ast.TypeExpr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentOwnershipCleanupEdges(), self.defer_stack.items, start, kind)) orelse return error.UnsupportedLlvmEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentDeferCleanupEdges(), self.currentOwnershipCleanupEdges(), self.defer_stack.items, start, kind)) orelse return error.UnsupportedLlvmEmission;
         defer plan.deinit(self.allocator);
         for (plan.cleanups) |cleanup| {
             try self.emitDeferredCleanup(cleanup, ret_ty);
@@ -5944,6 +5953,11 @@ const LlvmEmitter = struct {
 
     fn currentOwnershipCleanupEdges(self: *const LlvmEmitter) ?*const mir.OwnershipCleanupEdgeTable {
         if (self.current_ownership_cleanup_edges) |*edges| return edges;
+        return null;
+    }
+
+    fn currentDeferCleanupEdges(self: *const LlvmEmitter) ?*const mir.DeferCleanupEdgeTable {
+        if (self.current_defer_cleanup_edges) |*edges| return edges;
         return null;
     }
 

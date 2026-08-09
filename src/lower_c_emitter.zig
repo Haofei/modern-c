@@ -318,6 +318,7 @@ pub const CEmitter = struct {
     current_function: ?[]const u8 = null,
     current_ownership_cleanup_plan: ?mir.OwnershipCleanupPlan = null,
     current_ownership_cleanup_edges: ?mir.OwnershipCleanupEdgeTable = null,
+    current_defer_cleanup_edges: ?mir.DeferCleanupEdgeTable = null,
     // Proven storage class per pointer-typed local, sourced from live MIR
     // pointer-provenance facts: .global_storage routes derefs through the
     // mc_race helpers; .local_storage is the positive locality proof that keeps
@@ -1180,10 +1181,17 @@ pub const CEmitter = struct {
         else
             null;
         defer if (ownership_cleanup_edges) |*edges| edges.deinit(self.allocator);
+        var defer_cleanup_edges = if (self.currentMirFunction()) |function|
+            try mir.buildDeferCleanupEdgeTable(self.allocator, function.*)
+        else
+            null;
+        defer if (defer_cleanup_edges) |*edges| edges.deinit(self.allocator);
         self.current_ownership_cleanup_plan = ownership_cleanup_plan;
         defer self.current_ownership_cleanup_plan = null;
         self.current_ownership_cleanup_edges = ownership_cleanup_edges;
         defer self.current_ownership_cleanup_edges = null;
+        self.current_defer_cleanup_edges = defer_cleanup_edges;
+        defer self.current_defer_cleanup_edges = null;
         self.mir_pointer_local_provenance.clearRetainingCapacity();
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_pointer_array_elements);
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_aggregate_pointer_fields);
@@ -3441,15 +3449,16 @@ pub const CEmitter = struct {
             .rejected => return error.UnsupportedCEmission,
         }
         const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt_span)) orelse return error.UnsupportedCEmission;
+        const defer_edges = self.currentDeferCleanupEdges() orelse return error.UnsupportedCEmission;
         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-            switch (try backend_cleanup.registerOrdinaryDirectDeferCleanup(self.allocator, function, &self.defer_stack, cleanup)) {
+            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.defer_stack, .{ .direct_call = cleanup })) {
                 .applied => {},
                 .ignored, .rejected => return error.UnsupportedCEmission,
             }
             return;
         }
         if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-            switch (try backend_cleanup.registerOrdinaryCallTargetDeferCleanup(self.allocator, function, &self.defer_stack, cleanup)) {
+            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.defer_stack, .{ .call_target = cleanup })) {
                 .applied => {},
                 .ignored, .rejected => return error.UnsupportedCEmission,
             }
@@ -3457,7 +3466,7 @@ pub const CEmitter = struct {
         }
         switch (expr.kind) {
             .block => |block| {
-                switch (try backend_cleanup.registerOrdinaryBlockDeferCleanup(self.allocator, function, &self.defer_stack, defer_ref, block)) {
+                switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.defer_stack, .{ .block = .{ .defer_ref = defer_ref, .block = block } })) {
                     .applied => {},
                     .ignored, .rejected => return error.UnsupportedCEmission,
                 }
@@ -3546,7 +3555,7 @@ pub const CEmitter = struct {
     // the active defers intact.
     fn emitCleanupEdge(self: *CEmitter, start: usize, kind: backend_cleanup.CleanupEdgeKind, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentOwnershipCleanupEdges(), self.defer_stack.items, start, kind)) orelse return error.UnsupportedCEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentDeferCleanupEdges(), self.currentOwnershipCleanupEdges(), self.defer_stack.items, start, kind)) orelse return error.UnsupportedCEmission;
         defer plan.deinit(self.allocator);
         for (plan.cleanups) |cleanup| {
             try self.emitDeferredCleanup(cleanup, locals, return_ty);
@@ -6208,6 +6217,11 @@ pub const CEmitter = struct {
 
     fn currentOwnershipCleanupEdges(self: *const CEmitter) ?*const mir.OwnershipCleanupEdgeTable {
         if (self.current_ownership_cleanup_edges) |*edges| return edges;
+        return null;
+    }
+
+    fn currentDeferCleanupEdges(self: *const CEmitter) ?*const mir.DeferCleanupEdgeTable {
+        if (self.current_defer_cleanup_edges) |*edges| return edges;
         return null;
     }
 
