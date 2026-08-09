@@ -1987,7 +1987,7 @@ const LlvmEmitter = struct {
 
     fn emitCleanupEdge(self: *LlvmEmitter, start: usize, kind: backend_cleanup.CleanupEdgeKind, ret_ty: ast.TypeExpr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, function.*, self.defer_stack.items, start, kind)) orelse return error.UnsupportedLlvmEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.defer_stack.items, start, kind)) orelse return error.UnsupportedLlvmEmission;
         defer plan.deinit(self.allocator);
         for (plan.cleanups) |cleanup| {
             try self.emitDeferredCleanup(cleanup, ret_ty);

@@ -3535,7 +3535,7 @@ pub const CEmitter = struct {
     // the active defers intact.
     fn emitCleanupEdge(self: *CEmitter, start: usize, kind: backend_cleanup.CleanupEdgeKind, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, function.*, self.defer_stack.items, start, kind)) orelse return error.UnsupportedCEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.defer_stack.items, start, kind)) orelse return error.UnsupportedCEmission;
         defer plan.deinit(self.allocator);
         for (plan.cleanups) |cleanup| {
             try self.emitDeferredCleanup(cleanup, locals, return_ty);
