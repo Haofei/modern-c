@@ -228,11 +228,9 @@ pub fn registerDeferredExplicitDropCleanup(
     stack: *std.ArrayList(DeferredCleanup),
     expr: ast.Expr,
 ) error{OutOfMemory}!AutoDropStackDecision {
-    const cleanup = switch (try mir_ownership_authority.deferredExplicitDropCleanupDecision(allocator, module, function, cleanup_plan, expr)) {
-        .ignore => return .ignored,
-        .emit_explicit_drop_cleanup => |entry| entry,
-        .reject => return .rejected,
-    };
+    const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return .ignored;
+    if (!dropGlueReleaseFunctionExists(module, release.fn_name)) return .ignored;
+    const cleanup = explicitDropLocalCleanupFromMirAction(module, function, cleanup_plan, expr) orelse return .rejected;
     try stack.append(allocator, .{ .explicit_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
     return .applied;
 }
@@ -558,6 +556,30 @@ fn cleanupRemovalRefFromMirExplicitDropAction(
     return null;
 }
 
+fn explicitDropLocalCleanupFromMirAction(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    expr: ast.Expr,
+) ?mir_ownership_authority.AutoDropLocalCleanup {
+    const plan = cleanup_plan orelse return null;
+    const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return null;
+    const action_match = explicitDropActionEntryFromMirPlan(plan, mir.sourcePointFromSpan(expr.span)) orelse return null;
+    if (action_match.entry.place.root_symbol_id.isValid() or action_match.entry.place.projection_count != 0) return null;
+    const root_value_id = action_match.entry.place.root_value_id;
+    const local_name = localNameForValueId(function, root_value_id) orelse return null;
+    if (!std.mem.eql(u8, local_name, release.local_name)) return null;
+    const ref: mir_ownership_authority.OwnershipCleanupActionRef = .{
+        .local_name = local_name,
+        .span = expr.span,
+        .cleanup_action_index = action_match.action_index,
+        .root_value_id = root_value_id,
+        .resource_type_symbol_id = action_match.entry.place.root_type_symbol_id,
+        .drop_glue_symbol_id = action_match.entry.drop_glue_symbol_id,
+    };
+    return mir_ownership_authority.explicitDropLocalCleanupFromActionRef(module, function, plan, ref);
+}
+
 const ExplicitDropActionMatch = struct {
     action_index: usize,
     entry: mir.CleanupActionPlanEntry,
@@ -615,6 +637,13 @@ fn typeSymbolHasDropGlue(module: *const mir.Module, type_symbol_id: mir.SymbolId
     for (module.type_ownership_facts) |fact| {
         if (!fact.typed_type_symbol_id.eql(type_symbol_id)) continue;
         return fact.drop_glue_symbol_id.isValid();
+    }
+    return false;
+}
+
+fn dropGlueReleaseFunctionExists(module: *const mir.Module, release_fn: []const u8) bool {
+    for (module.drop_glue_facts) |fact| {
+        if (std.mem.eql(u8, fact.release_fn, release_fn)) return true;
     }
     return false;
 }
