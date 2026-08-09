@@ -2431,7 +2431,7 @@ test "LLVM explicit drop release cancellation requires source-matched MIR explic
     try std.testing.expectError(error.UnsupportedLlvmEmission, lower_llvm.appendLlvmCheckedMir(std.testing.allocator, parsed.module, &module_mir, &output, "llvm_drop_attr_release_source_requires_event.mc", .{}, false, .riscv64, null));
 }
 
-test "LLVM if-let branches restore auto-drop cleanup stack" {
+test "LLVM if-let branches restore auto-drop cleanup state" {
     const source =
         \\move struct Guard { id: u32 }
         \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
@@ -2452,7 +2452,7 @@ test "LLVM if-let branches restore auto-drop cleanup stack" {
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "call void @close_guard(ptr %g.addr"));
 }
 
-test "LLVM loop bodies restore auto-drop cleanup stack" {
+test "LLVM loop bodies restore auto-drop cleanup state" {
     const source =
         \\move struct Guard { id: u32 }
         \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }

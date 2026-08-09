@@ -52,7 +52,7 @@ pub const EmitContext = struct {
     // enclosing loop, or null for an unlabeled loop. Used to resolve a labeled
     // `break :outer` / `continue :outer` to the right loop id.
     loop_labels: *std.ArrayList(?[]const u8),
-    loop_defer_marks: *std.ArrayList(backend_cleanup.CleanupStackMark),
+    loop_cleanup_cursors: *std.ArrayList(backend_cleanup.CleanupCursor),
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
     emit_expr_with_target: EmitExprWithTargetFn,
@@ -83,7 +83,7 @@ pub const ForLoopCore = struct {
     element_ty: ?ast.TypeExpr,
     element_c_type: []const u8,
     index_name: []const u8,
-    defer_stack_mark: backend_cleanup.CleanupStackMark,
+    cleanup_cursor: backend_cleanup.CleanupCursor,
 };
 
 pub const ForLoopElementPlan = struct {
@@ -130,7 +130,7 @@ pub fn emitContinueStmt(ctx: EmitContext, target: ?ast.Ident) anyerror!void {
     }
 }
 
-pub fn emitPlainWhileLoop(ctx: EmitContext, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, defer_stack_mark: backend_cleanup.CleanupStackMark) anyerror!void {
+pub fn emitPlainWhileLoop(ctx: EmitContext, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, cleanup_cursor: backend_cleanup.CleanupCursor) anyerror!void {
     const id = ctx.next_loop_id.*;
     ctx.next_loop_id.* += 1;
     const label: ?[]const u8 = if (loop.loop_label) |l| l.text else null;
@@ -139,8 +139,8 @@ pub fn emitPlainWhileLoop(ctx: EmitContext, loop: ast.Loop, locals: *std.StringH
     defer _ = ctx.loop_ids.pop();
     try ctx.loop_labels.append(ctx.allocator, label);
     defer _ = ctx.loop_labels.pop();
-    try ctx.loop_defer_marks.append(ctx.allocator, defer_stack_mark);
-    defer _ = ctx.loop_defer_marks.pop();
+    try ctx.loop_cleanup_cursors.append(ctx.allocator, cleanup_cursor);
+    defer _ = ctx.loop_cleanup_cursors.pop();
     try emitPlainWhileHeader(ctx, loop, locals);
     try emitPlainWhileBody(ctx, loop, locals, return_ty, id, jumps.cont);
     try emitPlainWhileFooter(ctx, id, jumps.brk);
@@ -172,7 +172,7 @@ pub fn forLoopElementPlan(ctx: EmitContext, iterable_array_ty: ?ast.TypeExpr, el
     };
 }
 
-pub fn emitForLoopWithElementPlan(ctx: EmitContext, loop: ast.Loop, binding: ast.Ident, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, element: ForLoopElementPlan, defer_stack_mark: backend_cleanup.CleanupStackMark) anyerror!void {
+pub fn emitForLoopWithElementPlan(ctx: EmitContext, loop: ast.Loop, binding: ast.Ident, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, element: ForLoopElementPlan, cleanup_cursor: backend_cleanup.CleanupCursor) anyerror!void {
     const index_name = try std.fmt.allocPrint(ctx.scratch, "mc_i{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
 
@@ -186,7 +186,7 @@ pub fn emitForLoopWithElementPlan(ctx: EmitContext, loop: ast.Loop, binding: ast
         .element_ty = element.element_ty,
         .element_c_type = element.element_c_type,
         .index_name = index_name,
-        .defer_stack_mark = defer_stack_mark,
+        .cleanup_cursor = cleanup_cursor,
     });
 }
 
@@ -320,8 +320,8 @@ pub fn emitForLoopCore(ctx: EmitContext, spec: ForLoopCore) anyerror!void {
     defer _ = ctx.loop_ids.pop();
     try ctx.loop_labels.append(ctx.allocator, label);
     defer _ = ctx.loop_labels.pop();
-    try ctx.loop_defer_marks.append(ctx.allocator, spec.defer_stack_mark);
-    defer _ = ctx.loop_defer_marks.pop();
+    try ctx.loop_cleanup_cursors.append(ctx.allocator, spec.cleanup_cursor);
+    defer _ = ctx.loop_cleanup_cursors.pop();
 
     var nested = try lower_c_access.cloneLocals(ctx.allocator, spec.locals.*);
     defer nested.deinit();

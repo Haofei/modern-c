@@ -1908,10 +1908,10 @@ order. `goto`/`longjmp`-style non-local jumps may not cross live ownership state
 The ownership authority for auto-drop is the typed MIR ownership-event stream:
 `auto_drop` followed by `storage_dead` closes a live local generation; `move_out`,
 `explicit_drop`, and `forget` consume or discharge that generation but are not
-auto-drop cleanup authority. Backend-local cleanup stacks are a transitional
-lowering mechanism only. They may mirror source-matched MIR events while cleanup
-edges migrate into MIR CFG blocks, but they do not define language semantics and
-must fail closed when MIR does not authorize the cleanup they are about to emit.
+auto-drop cleanup authority. Backend cleanup state is a MIR-admitted lowering
+cache only. It may carry backend-specific expression payloads for active cleanup
+cursors, but it does not define language semantics and must fail closed when MIR
+does not authorize the cleanup edge about to be emitted.
 
 Ownership is place-sensitive for locals, fields, and constant-index array elements.
 Dynamic array indexes and alias-derived ownership transfers fail closed in v0 rather

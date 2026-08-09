@@ -5,15 +5,12 @@ const ast_query = @import("ast_query.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 
-/// Transitional backend cleanup stack entry.
+/// Backend cleanup payload admitted by MIR cleanup facts.
 ///
-/// Ordinary `defer` expressions are still emitted from backend-local lexical
-/// stacks while cleanup edges migrate into MIR. Direct-call cleanup shapes carry
-/// a typed MIR-admitted payload, and deferred blocks are kept structured. Other
-/// expression cleanups must be admitted as typed direct-call/call-target payloads
-/// before either backend will lower them.
-/// Auto-drop payloads remain produced by MIR ownership authority; this module
-/// only owns the temporary stack mechanics shared by C and LLVM.
+/// C and LLVM lowering keep backend-specific expression payloads here, but all
+/// cleanup registration, cancellation, and exit-edge emission is routed through
+/// MIR-admitted cleanup cursors. Backends must not make cleanup lifetime
+/// decisions from source syntax alone.
 pub const OrdinaryDeferCallCleanup = struct {
     defer_ref: mir.DeferCleanupRef,
     fn_name: []const u8,
@@ -51,7 +48,7 @@ pub const AutoDropStackDecision = enum {
     rejected,
 };
 
-pub const CleanupStackMark = struct {
+pub const CleanupCursor = struct {
     index: usize,
 };
 
@@ -66,16 +63,51 @@ pub const CleanupState = struct {
         self.entries.clearRetainingCapacity();
     }
 
-    pub fn stack(self: *CleanupState) *std.ArrayList(DeferredCleanup) {
-        return &self.entries;
-    }
-
     pub fn slice(self: *const CleanupState) []const DeferredCleanup {
         return self.entries.items;
     }
 
-    pub fn mark(self: *const CleanupState) CleanupStackMark {
-        return currentCleanupStackMark(self.slice());
+    pub fn cursor(self: *const CleanupState) CleanupCursor {
+        return .{ .index = self.entries.items.len };
+    }
+
+    pub fn isAt(self: *const CleanupState, cleanup_cursor: CleanupCursor) bool {
+        return self.entries.items.len == cleanup_cursor.index;
+    }
+
+    pub fn restoreToCursor(self: *CleanupState, cleanup_cursor: CleanupCursor) void {
+        std.debug.assert(cleanup_cursor.index <= self.entries.capacity);
+        self.entries.items.len = cleanup_cursor.index;
+    }
+
+    pub fn capture(self: *const CleanupState, allocator: std.mem.Allocator) !CleanupStateSnapshot {
+        return .{ .items = try allocator.dupe(DeferredCleanup, self.entries.items) };
+    }
+
+    pub fn restore(self: *CleanupState, snapshot: CleanupStateSnapshot) void {
+        self.entries.items.len = snapshot.items.len;
+        @memcpy(self.entries.items[0..snapshot.items.len], snapshot.items);
+    }
+
+    fn append(self: *CleanupState, allocator: std.mem.Allocator, cleanup: DeferredCleanup) !void {
+        try self.entries.append(allocator, cleanup);
+    }
+
+    fn removeAutoDrop(self: *CleanupState, ref: mir_ownership_authority.OwnershipCleanupRemovalRef) bool {
+        var index = self.entries.items.len;
+        while (index > 0) {
+            index -= 1;
+            switch (self.entries.items[index]) {
+                .auto_drop => |cleanup| {
+                    if (!autoDropCleanupMatchesRef(cleanup, ref)) continue;
+                    _ = self.entries.orderedRemove(index);
+                    return true;
+                },
+                .block, .direct_call, .call_target => continue,
+                .explicit_drop => continue,
+            }
+        }
+        return false;
     }
 };
 
@@ -149,7 +181,7 @@ fn cleanupEdgeTableValidWithMirEdges(
 
 pub const CleanupEdgePlan = struct {
     kind: CleanupEdgeKind,
-    start: CleanupStackMark,
+    start: CleanupCursor,
     cleanups: []DeferredCleanup,
 
     pub fn deinit(self: *CleanupEdgePlan, allocator: std.mem.Allocator) void {
@@ -158,49 +190,21 @@ pub const CleanupEdgePlan = struct {
     }
 };
 
-pub const DeferCleanupStackSnapshot = struct {
+pub const CleanupStateSnapshot = struct {
     items: []DeferredCleanup,
 
-    pub fn deinit(self: *DeferCleanupStackSnapshot, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *CleanupStateSnapshot, allocator: std.mem.Allocator) void {
         allocator.free(self.items);
         self.items = &.{};
     }
 };
 
-pub fn captureDeferCleanupStack(
-    allocator: std.mem.Allocator,
-    stack: []const DeferredCleanup,
-) !DeferCleanupStackSnapshot {
-    return .{ .items = try allocator.dupe(DeferredCleanup, stack) };
-}
-
-pub fn currentCleanupStackMark(stack: []const DeferredCleanup) CleanupStackMark {
-    return .{ .index = stack.len };
-}
-
-pub fn rootCleanupStackMark() CleanupStackMark {
+pub fn rootCleanupCursor() CleanupCursor {
     return .{ .index = 0 };
 }
 
-pub fn cleanupStackMarkIndex(mark: CleanupStackMark) usize {
-    return mark.index;
-}
-
-pub fn restoreDeferCleanupStack(
-    stack: *std.ArrayList(DeferredCleanup),
-    snapshot: DeferCleanupStackSnapshot,
-) void {
-    stack.items.len = snapshot.items.len;
-    @memcpy(stack.items[0..snapshot.items.len], snapshot.items);
-}
-
-pub fn restoreDeferCleanupStackLength(stack: *std.ArrayList(DeferredCleanup), len: usize) void {
-    std.debug.assert(len <= stack.capacity);
-    stack.items.len = len;
-}
-
-pub fn restoreDeferCleanupStackToMark(stack: *std.ArrayList(DeferredCleanup), mark: CleanupStackMark) void {
-    restoreDeferCleanupStackLength(stack, cleanupStackMarkIndex(mark));
+pub fn cleanupCursorIndex(cursor: CleanupCursor) usize {
+    return cursor.index;
 }
 
 pub fn deferCleanupRef(cleanup: DeferredCleanup) ?mir.DeferCleanupRef {
@@ -218,7 +222,7 @@ pub fn registerAutoDropLocalCleanup(
     function: *const mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
     ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
-    stack: *std.ArrayList(DeferredCleanup),
+    state: *CleanupState,
     local_name: []const u8,
     type_name: []const u8,
     local_span: ast.Span,
@@ -230,7 +234,7 @@ pub fn registerAutoDropLocalCleanup(
         if (mir.ownershipLocalHasConsumingResourceEvent(function.*, root_value_id, ownership.typed_type_symbol_id)) return .ignored;
         return .rejected;
     };
-    try stack.append(allocator, .{ .auto_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
+    try state.append(allocator, .{ .auto_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
     return .applied;
 }
 
@@ -239,7 +243,7 @@ pub fn cancelAutoDropForMove(
     module: *const mir.Module,
     function: *const mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    stack: *std.ArrayList(DeferredCleanup),
+    state: *CleanupState,
     expr: ast.Expr,
     move_span: ast.Span,
 ) error{OutOfMemory}!AutoDropStackDecision {
@@ -253,7 +257,7 @@ pub fn cancelAutoDropForMove(
         }
         return .ignored;
     };
-    return if (removeAutoDropCleanup(stack, ref)) .applied else .ignored;
+    return if (state.removeAutoDrop(ref)) .applied else .ignored;
 }
 
 pub fn cancelAutoDropForExplicitDrop(
@@ -261,7 +265,7 @@ pub fn cancelAutoDropForExplicitDrop(
     module: *const mir.Module,
     function: *const mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    stack: *std.ArrayList(DeferredCleanup),
+    state: *CleanupState,
     expr: ast.Expr,
 ) error{OutOfMemory}!AutoDropStackDecision {
     _ = allocator;
@@ -269,7 +273,7 @@ pub fn cancelAutoDropForExplicitDrop(
     const ref = cleanupRemovalRefFromMirCancellation(function, cleanup_plan, .explicit_drop, source) orelse {
         if (cleanupCancellationEntryFromMirPlan(cleanup_plan orelse return .ignored, .explicit_drop, source) != null) return .ignored;
         if (cleanupRemovalRefFromMirExplicitDropAction(function, cleanup_plan, source)) |action_ref| {
-            return if (removeAutoDropCleanup(stack, action_ref)) .applied else .ignored;
+            return if (state.removeAutoDrop(action_ref)) .applied else .ignored;
         }
         if (explicitDropActionEntryFromMirPlan(cleanup_plan orelse return .ignored, source) != null) return .ignored;
         if (ast_query.dropPointerLocalReleaseCall(expr)) |release| {
@@ -278,7 +282,7 @@ pub fn cancelAutoDropForExplicitDrop(
         }
         return .ignored;
     };
-    return if (removeAutoDropCleanup(stack, ref)) .applied else .ignored;
+    return if (state.removeAutoDrop(ref)) .applied else .ignored;
 }
 
 pub fn registerDeferredExplicitDropCleanup(
@@ -286,13 +290,13 @@ pub fn registerDeferredExplicitDropCleanup(
     module: *const mir.Module,
     function: *const mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    stack: *std.ArrayList(DeferredCleanup),
+    state: *CleanupState,
     expr: ast.Expr,
 ) error{OutOfMemory}!AutoDropStackDecision {
     const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return .ignored;
     if (!dropGlueReleaseFunctionExists(module, release.fn_name)) return .ignored;
     const cleanup = explicitDropLocalCleanupFromMirAction(module, function, cleanup_plan, expr) orelse return .rejected;
-    try stack.append(allocator, .{ .explicit_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
+    try state.append(allocator, .{ .explicit_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
     return .applied;
 }
 
@@ -300,35 +304,35 @@ pub fn registerOrdinaryDeferCleanup(
     allocator: std.mem.Allocator,
     function: *const mir.Function,
     defer_edges: ?*const mir.DeferCleanupEdgeTable,
-    stack: *std.ArrayList(DeferredCleanup),
+    state: *CleanupState,
     cleanup: DeferredCleanup,
 ) error{OutOfMemory}!AutoDropStackDecision {
     const ref = deferCleanupRef(cleanup) orelse return .ignored;
     const edges = defer_edges orelse return .rejected;
     if (!mir.deferCleanupEdgeTableContainsRef(edges.*, ref)) return .rejected;
-    return appendValidatedCleanup(allocator, function, stack, cleanup);
+    return appendValidatedCleanup(allocator, function, state, cleanup);
 }
 
 fn appendValidatedCleanup(
     allocator: std.mem.Allocator,
     function: *const mir.Function,
-    stack: *std.ArrayList(DeferredCleanup),
+    state: *CleanupState,
     cleanup: DeferredCleanup,
 ) error{OutOfMemory}!AutoDropStackDecision {
-    const old_len = stack.items.len;
-    try stack.append(allocator, cleanup);
-    if (deferCleanupStackRefsValid(function.*, stack.items)) return .applied;
-    restoreDeferCleanupStackLength(stack, old_len);
+    const old_cursor = state.cursor();
+    try state.append(allocator, cleanup);
+    if (deferCleanupRefsValid(function.*, state.slice())) return .applied;
+    state.restoreToCursor(old_cursor);
     return .rejected;
 }
 
-pub fn deferCleanupStackRefsValid(function: mir.Function, stack: []const DeferredCleanup) bool {
-    for (stack, 0..) |cleanup, index| {
+fn deferCleanupRefsValid(function: mir.Function, cleanups: []const DeferredCleanup) bool {
+    for (cleanups, 0..) |cleanup, index| {
         const ref = deferCleanupRef(cleanup) orelse continue;
         if (!mir.deferCleanupRefValid(function, ref)) return false;
         var previous_index: usize = 0;
         while (previous_index < index) : (previous_index += 1) {
-            const previous = deferCleanupRef(stack[previous_index]) orelse continue;
+            const previous = deferCleanupRef(cleanups[previous_index]) orelse continue;
             if (sameDeferCleanupRef(previous, ref)) return false;
             if (deferCleanupRefAfter(function, previous, ref)) return false;
         }
@@ -336,13 +340,13 @@ pub fn deferCleanupStackRefsValid(function: mir.Function, stack: []const Deferre
     return true;
 }
 
-pub fn deferCleanupStackAdmittedByMir(
+pub fn cleanupStateAdmittedByMir(
     function: mir.Function,
     defer_edges: ?*const mir.DeferCleanupEdgeTable,
-    stack: []const DeferredCleanup,
+    state: *const CleanupState,
 ) bool {
-    if (!deferCleanupStackRefsValid(function, stack)) return false;
-    for (stack) |cleanup| {
+    if (!deferCleanupRefsValid(function, state.slice())) return false;
+    for (state.slice()) |cleanup| {
         const ref = deferCleanupRef(cleanup) orelse continue;
         const edges = defer_edges orelse return false;
         if (!mir.deferCleanupEdgeTableContainsRef(edges.*, ref)) return false;
@@ -350,47 +354,48 @@ pub fn deferCleanupStackAdmittedByMir(
     return true;
 }
 
-fn deferCleanupEmissionRangeValid(function: mir.Function, stack: []const DeferredCleanup, start: usize) bool {
-    if (start > stack.len) return false;
-    if (!deferCleanupStackRefsValid(function, stack)) return false;
-    for (stack[start..]) |cleanup| {
+fn deferCleanupEmissionRangeValid(function: mir.Function, cleanups: []const DeferredCleanup, start: usize) bool {
+    if (start > cleanups.len) return false;
+    if (!deferCleanupRefsValid(function, cleanups)) return false;
+    for (cleanups[start..]) |cleanup| {
         const ref = deferCleanupRef(cleanup) orelse continue;
         if (!mir.deferCleanupRefValid(function, ref)) return false;
     }
     return true;
 }
 
-fn deferCleanupEmissionCount(stack: []const DeferredCleanup, start: usize) ?usize {
-    if (start > stack.len) return null;
-    return stack.len - start;
+fn deferCleanupEmissionCount(cleanups: []const DeferredCleanup, start: usize) ?usize {
+    if (start > cleanups.len) return null;
+    return cleanups.len - start;
 }
 
 fn deferCleanupAtEmissionIndex(
     function: mir.Function,
-    stack: []const DeferredCleanup,
+    cleanups: []const DeferredCleanup,
     start: usize,
     emission_index: usize,
 ) ?DeferredCleanup {
-    const count = deferCleanupEmissionCount(stack, start) orelse return null;
+    const count = deferCleanupEmissionCount(cleanups, start) orelse return null;
     if (emission_index >= count) return null;
-    if (!deferCleanupEmissionRangeValid(function, stack, start)) return null;
-    return stack[stack.len - 1 - emission_index];
+    if (!deferCleanupEmissionRangeValid(function, cleanups, start)) return null;
+    return cleanups[cleanups.len - 1 - emission_index];
 }
 
-fn buildTransitionalCleanupEdgeTable(
+fn buildCleanupEdgeTableFromCursor(
     allocator: std.mem.Allocator,
     module: ?*const mir.Module,
     function: mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
     defer_edges: ?*const mir.DeferCleanupEdgeTable,
     ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
-    stack: []const DeferredCleanup,
-    start: CleanupStackMark,
+    state: *const CleanupState,
+    start: CleanupCursor,
     kind: CleanupEdgeKind,
 ) !?CleanupEdgeTable {
-    const start_index = cleanupStackMarkIndex(start);
-    const count = deferCleanupEmissionCount(stack, start_index) orelse return null;
-    if (!deferCleanupEmissionRangeValid(function, stack, start_index)) return null;
+    const cleanups_active = state.slice();
+    const start_index = cleanupCursorIndex(start);
+    const count = deferCleanupEmissionCount(cleanups_active, start_index) orelse return null;
+    if (!deferCleanupEmissionRangeValid(function, cleanups_active, start_index)) return null;
 
     const edges = try allocator.alloc(CleanupEdge, 1);
     errdefer allocator.free(edges);
@@ -401,7 +406,7 @@ fn buildTransitionalCleanupEdgeTable(
 
     var emission_index: usize = 0;
     while (emission_index < count) : (emission_index += 1) {
-        const cleanup = deferCleanupAtEmissionIndex(function, stack, start_index, emission_index) orelse return null;
+        const cleanup = deferCleanupAtEmissionIndex(function, cleanups_active, start_index, emission_index) orelse return null;
         cleanups[emission_index] = cleanup;
         refs[emission_index] = cleanupRef(cleanup);
     }
@@ -433,11 +438,11 @@ pub fn buildCleanupEdgePlan(
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
     defer_edges: ?*const mir.DeferCleanupEdgeTable,
     ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
-    stack: []const DeferredCleanup,
-    start: CleanupStackMark,
+    state: *const CleanupState,
+    start: CleanupCursor,
     kind: CleanupEdgeKind,
 ) !?CleanupEdgePlan {
-    var table = (try buildTransitionalCleanupEdgeTable(allocator, module, function, cleanup_plan, defer_edges, ownership_edges, stack, start, kind)) orelse return null;
+    var table = (try buildCleanupEdgeTableFromCursor(allocator, module, function, cleanup_plan, defer_edges, ownership_edges, state, start, kind)) orelse return null;
     defer table.deinit(allocator);
     return try cleanupEdgePlanFromTable(allocator, table, kind, start);
 }
@@ -446,7 +451,7 @@ pub fn cleanupEdgePlanFromTable(
     allocator: std.mem.Allocator,
     table: CleanupEdgeTable,
     kind: CleanupEdgeKind,
-    start: CleanupStackMark,
+    start: CleanupCursor,
 ) !?CleanupEdgePlan {
     const edge = cleanupEdgeFor(table, kind, start) orelse return null;
     const cleanups = try allocator.dupe(DeferredCleanup, edge.cleanups);
@@ -457,10 +462,10 @@ pub fn cleanupEdgePlanFromTable(
     };
 }
 
-pub fn cleanupEdgeFor(table: CleanupEdgeTable, kind: CleanupEdgeKind, start: CleanupStackMark) ?CleanupEdge {
+pub fn cleanupEdgeFor(table: CleanupEdgeTable, kind: CleanupEdgeKind, start: CleanupCursor) ?CleanupEdge {
     for (table.edges) |edge| {
         if (edge.kind != kind) continue;
-        if (edge.start != cleanupStackMarkIndex(start)) continue;
+        if (edge.start != cleanupCursorIndex(start)) continue;
         return edge;
     }
     return null;
@@ -847,28 +852,6 @@ fn deferCleanupSourceOrder(function: mir.Function, ref: mir.DeferCleanupRef) ?us
     return instruction.line * 1_000_000 + instruction.column;
 }
 
-/// Remove the most recent auto-drop cleanup for a MIR ownership action from a
-/// transitional backend cleanup stack. Returning `false` is a backend invariant
-/// failure: MIR identified a live cleanup obligation, but the backend-local stack
-/// no longer contains it. Callers must fail closed instead of continuing with a
-/// silently divergent cleanup model.
-pub fn removeAutoDropCleanup(stack: *std.ArrayList(DeferredCleanup), ref: mir_ownership_authority.OwnershipCleanupRemovalRef) bool {
-    var index = stack.items.len;
-    while (index > 0) {
-        index -= 1;
-        switch (stack.items[index]) {
-            .auto_drop => |cleanup| {
-                if (!autoDropCleanupMatchesRef(cleanup, ref)) continue;
-                _ = stack.orderedRemove(index);
-                return true;
-            },
-            .block, .direct_call, .call_target => continue,
-            .explicit_drop => continue,
-        }
-    }
-    return false;
-}
-
 fn autoDropCleanupMatchesRef(
     cleanup: mir_ownership_authority.OwnershipCleanupActionRef,
     ref: mir_ownership_authority.OwnershipCleanupRemovalRef,
@@ -881,30 +864,30 @@ fn autoDropCleanupMatchesRef(
     return true;
 }
 
-test "auto-drop cleanup stack removal uses typed local identity" {
+test "auto-drop cleanup state removal uses typed local identity" {
     const span = ast.Span{ .offset = 0, .len = 1, .line = 1, .column = 1 };
-    var stack: std.ArrayList(DeferredCleanup) = .empty;
-    defer stack.deinit(std.testing.allocator);
+    var state: CleanupState = .{};
+    defer state.deinit(std.testing.allocator);
 
     const root_old = mir.ValueId.fromIndex(1);
     const root_shadow = mir.ValueId.fromIndex(2);
     const resource_type = mir.SymbolId.fromIndex(3);
     const drop_glue = mir.SymbolId.fromIndex(4);
 
-    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .local_name = "g", .span = span, .cleanup_action_index = 0, .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue } });
-    try stack.append(std.testing.allocator, .{ .auto_drop = .{ .local_name = "g", .span = span, .cleanup_action_index = 1, .root_value_id = root_shadow, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue } });
+    try state.append(std.testing.allocator, .{ .auto_drop = .{ .local_name = "g", .span = span, .cleanup_action_index = 0, .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue } });
+    try state.append(std.testing.allocator, .{ .auto_drop = .{ .local_name = "g", .span = span, .cleanup_action_index = 1, .root_value_id = root_shadow, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue } });
 
-    try std.testing.expect(removeAutoDropCleanup(&stack, .{ .local_name = "g", .cleanup_action_index = 0, .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
-    try std.testing.expectEqual(@as(usize, 1), stack.items.len);
-    switch (stack.items[0]) {
+    try std.testing.expect(state.removeAutoDrop(.{ .local_name = "g", .cleanup_action_index = 0, .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
+    try std.testing.expectEqual(@as(usize, 1), state.slice().len);
+    switch (state.slice()[0]) {
         .auto_drop => |cleanup| try std.testing.expect(cleanup.root_value_id.eql(root_shadow)),
         .block, .direct_call, .call_target, .explicit_drop => return error.TestUnexpectedResult,
     }
-    try std.testing.expect(!removeAutoDropCleanup(&stack, .{ .local_name = "g", .cleanup_action_index = 0, .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
-    try std.testing.expect(!removeAutoDropCleanup(&stack, .{ .local_name = "g", .cleanup_action_index = 0, .root_value_id = root_shadow, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
+    try std.testing.expect(!state.removeAutoDrop(.{ .local_name = "g", .cleanup_action_index = 0, .root_value_id = root_old, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
+    try std.testing.expect(!state.removeAutoDrop(.{ .local_name = "g", .cleanup_action_index = 0, .root_value_id = root_shadow, .resource_type_symbol_id = resource_type, .drop_glue_symbol_id = drop_glue }));
 }
 
-test "defer cleanup stack refs must be valid ordered and unique" {
+test "defer cleanup state refs must be valid ordered and unique" {
     const span = ast.Span{ .offset = 10, .len = 1, .line = 1, .column = 10 };
     const later_span = ast.Span{ .offset = 20, .len = 1, .line = 1, .column = 20 };
     var instructions = [_]mir.Instruction{
@@ -948,53 +931,56 @@ test "defer cleanup stack refs must be valid ordered and unique" {
     var stale_second = second;
     stale_second.source.column += 1;
     try std.testing.expect(!mir.deferCleanupEdgeTableContainsRef(mir_defer_edges, stale_second));
-    var registration_stack: std.ArrayList(DeferredCleanup) = .empty;
-    defer registration_stack.deinit(std.testing.allocator);
-    try std.testing.expectEqual(AutoDropStackDecision.rejected, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, null, &registration_stack, .{ .block = .{ .defer_ref = first, .block = block } }));
-    try std.testing.expectEqual(AutoDropStackDecision.applied, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, &mir_defer_edges, &registration_stack, .{ .block = .{ .defer_ref = first, .block = block } }));
-    try std.testing.expectEqual(AutoDropStackDecision.rejected, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, &mir_defer_edges, &registration_stack, .{ .block = .{ .defer_ref = stale_second, .block = block } }));
+    var registration_state: CleanupState = .{};
+    defer registration_state.deinit(std.testing.allocator);
+    try std.testing.expectEqual(AutoDropStackDecision.rejected, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, null, &registration_state, .{ .block = .{ .defer_ref = first, .block = block } }));
+    try std.testing.expectEqual(AutoDropStackDecision.applied, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, &mir_defer_edges, &registration_state, .{ .block = .{ .defer_ref = first, .block = block } }));
+    try std.testing.expectEqual(AutoDropStackDecision.rejected, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, &mir_defer_edges, &registration_state, .{ .block = .{ .defer_ref = stale_second, .block = block } }));
 
-    try std.testing.expect(deferCleanupStackRefsValid(function, &.{
+    try std.testing.expect(deferCleanupRefsValid(function, &.{
         .{ .block = .{ .defer_ref = first, .block = block } },
         .{ .block = .{ .defer_ref = second, .block = block } },
     }));
-    try std.testing.expect(deferCleanupStackAdmittedByMir(function, &mir_defer_edges, &.{
-        .{ .block = .{ .defer_ref = first, .block = block } },
+    var admitted_state: CleanupState = .{};
+    defer admitted_state.deinit(std.testing.allocator);
+    try admitted_state.append(std.testing.allocator, .{ .block = .{ .defer_ref = first, .block = block } });
+    try admitted_state.append(std.testing.allocator, .{ .block = .{ .defer_ref = second, .block = block } });
+    try std.testing.expect(cleanupStateAdmittedByMir(function, &mir_defer_edges, &admitted_state));
+
+    var missing_edges_state: CleanupState = .{};
+    defer missing_edges_state.deinit(std.testing.allocator);
+    try missing_edges_state.append(std.testing.allocator, .{ .block = .{ .defer_ref = first, .block = block } });
+    try std.testing.expect(!cleanupStateAdmittedByMir(function, null, &missing_edges_state));
+    try std.testing.expect(!deferCleanupRefsValid(function, &.{
         .{ .block = .{ .defer_ref = second, .block = block } },
-    }));
-    try std.testing.expect(!deferCleanupStackAdmittedByMir(function, null, &.{
         .{ .block = .{ .defer_ref = first, .block = block } },
     }));
-    try std.testing.expect(!deferCleanupStackRefsValid(function, &.{
-        .{ .block = .{ .defer_ref = second, .block = block } },
-        .{ .block = .{ .defer_ref = first, .block = block } },
-    }));
-    try std.testing.expect(!deferCleanupStackRefsValid(function, &.{
+    try std.testing.expect(!deferCleanupRefsValid(function, &.{
         .{ .block = .{ .defer_ref = first, .block = block } },
         .{ .block = .{ .defer_ref = first, .block = block } },
     }));
 
-    const stack = [_]DeferredCleanup{
-        .{ .block = .{ .defer_ref = first, .block = block } },
-        .{ .block = .{ .defer_ref = second, .block = block } },
-    };
-    try std.testing.expectEqual(@as(?usize, 2), deferCleanupEmissionCount(stack[0..], 0));
-    const first_emit = deferCleanupAtEmissionIndex(function, stack[0..], 0, 0) orelse return error.TestUnexpectedResult;
-    const second_emit = deferCleanupAtEmissionIndex(function, stack[0..], 0, 1) orelse return error.TestUnexpectedResult;
+    var state: CleanupState = .{};
+    defer state.deinit(std.testing.allocator);
+    try state.append(std.testing.allocator, .{ .block = .{ .defer_ref = first, .block = block } });
+    try state.append(std.testing.allocator, .{ .block = .{ .defer_ref = second, .block = block } });
+    try std.testing.expectEqual(@as(?usize, 2), deferCleanupEmissionCount(state.slice(), 0));
+    const first_emit = deferCleanupAtEmissionIndex(function, state.slice(), 0, 0) orelse return error.TestUnexpectedResult;
+    const second_emit = deferCleanupAtEmissionIndex(function, state.slice(), 0, 1) orelse return error.TestUnexpectedResult;
     try std.testing.expect((deferCleanupRef(first_emit) orelse return error.TestUnexpectedResult).instruction_index == 1);
     try std.testing.expect((deferCleanupRef(second_emit) orelse return error.TestUnexpectedResult).instruction_index == 0);
-    try std.testing.expect(deferCleanupAtEmissionIndex(function, stack[0..], 0, 2) == null);
+    try std.testing.expect(deferCleanupAtEmissionIndex(function, state.slice(), 0, 2) == null);
 
-    const root_mark = rootCleanupStackMark();
-    var plan = (try buildCleanupEdgePlan(std.testing.allocator, null, function, null, &mir_defer_edges, null, stack[0..], root_mark, .return_exit)) orelse return error.TestUnexpectedResult;
+    const root_mark = rootCleanupCursor();
+    var plan = (try buildCleanupEdgePlan(std.testing.allocator, null, function, null, &mir_defer_edges, null, &state, root_mark, .return_exit)) orelse return error.TestUnexpectedResult;
     defer plan.deinit(std.testing.allocator);
     try std.testing.expectEqual(CleanupEdgeKind.return_exit, plan.kind);
-    try std.testing.expectEqual(@as(usize, 0), cleanupStackMarkIndex(plan.start));
+    try std.testing.expectEqual(@as(usize, 0), cleanupCursorIndex(plan.start));
     try std.testing.expectEqual(@as(usize, 2), plan.cleanups.len);
     try std.testing.expect((deferCleanupRef(plan.cleanups[0]) orelse return error.TestUnexpectedResult).instruction_index == 1);
     try std.testing.expect((deferCleanupRef(plan.cleanups[1]) orelse return error.TestUnexpectedResult).instruction_index == 0);
 
-    var table = (try buildTransitionalCleanupEdgeTable(std.testing.allocator, null, function, null, &mir_defer_edges, null, stack[0..], root_mark, .return_exit)) orelse return error.TestUnexpectedResult;
+    var table = (try buildCleanupEdgeTableFromCursor(std.testing.allocator, null, function, null, &mir_defer_edges, null, &state, root_mark, .return_exit)) orelse return error.TestUnexpectedResult;
     defer table.deinit(std.testing.allocator);
     const edge = cleanupEdgeFor(table, .return_exit, root_mark) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(CleanupEdgeKind.return_exit, edge.kind);
@@ -1035,34 +1021,36 @@ test "cleanup edge table rejects ownership actions without MIR cleanup plan" {
         .representation_facts = &.{},
         .elided_bounds = &.{},
     };
-    const stack = [_]DeferredCleanup{.{ .auto_drop = cleanup_ref }};
-    const root_mark = rootCleanupStackMark();
+    var state: CleanupState = .{};
+    defer state.deinit(std.testing.allocator);
+    try state.append(std.testing.allocator, .{ .auto_drop = cleanup_ref });
+    const root_mark = rootCleanupCursor();
 
-    try std.testing.expect((try buildTransitionalCleanupEdgeTable(std.testing.allocator, null, function, null, null, null, stack[0..], root_mark, .scope_exit)) == null);
+    try std.testing.expect((try buildCleanupEdgeTableFromCursor(std.testing.allocator, null, function, null, null, null, &state, root_mark, .scope_exit)) == null);
 }
 
-test "defer cleanup stack snapshot restores full contents" {
+test "cleanup state snapshot restores full contents" {
     const span = ast.Span{ .offset = 1, .len = 1, .line = 1, .column = 1 };
     const later_span = ast.Span{ .offset = 2, .len = 1, .line = 1, .column = 2 };
     const first: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 0, .source = mir.sourcePointFromSpan(span) };
     const second: mir.DeferCleanupRef = .{ .block_id = mir.BlockId.fromIndex(0), .instruction_index = 1, .source = mir.sourcePointFromSpan(later_span) };
     const block: ast.Block = .{ .span = span, .items = &.{} };
-    const root_mark = rootCleanupStackMark();
+    const root_mark = rootCleanupCursor();
 
-    var stack: std.ArrayList(DeferredCleanup) = .empty;
-    defer stack.deinit(std.testing.allocator);
-    try stack.append(std.testing.allocator, .{ .block = .{ .defer_ref = first, .block = block } });
+    var state: CleanupState = .{};
+    defer state.deinit(std.testing.allocator);
+    try state.append(std.testing.allocator, .{ .block = .{ .defer_ref = first, .block = block } });
 
-    var snapshot = try captureDeferCleanupStack(std.testing.allocator, stack.items);
+    var snapshot = try state.capture(std.testing.allocator);
     defer snapshot.deinit(std.testing.allocator);
 
-    stack.items[0] = .{ .block = .{ .defer_ref = second, .block = block } };
-    try stack.append(std.testing.allocator, .{ .block = .{ .defer_ref = second, .block = block } });
-    restoreDeferCleanupStack(&stack, snapshot);
+    state.entries.items[0] = .{ .block = .{ .defer_ref = second, .block = block } };
+    try state.append(std.testing.allocator, .{ .block = .{ .defer_ref = second, .block = block } });
+    state.restore(snapshot);
 
-    try std.testing.expectEqual(@as(usize, 1), stack.items.len);
-    try std.testing.expect((deferCleanupRef(stack.items[0]) orelse return error.TestUnexpectedResult).instruction_index == 0);
+    try std.testing.expectEqual(@as(usize, 1), state.slice().len);
+    try std.testing.expect((deferCleanupRef(state.slice()[0]) orelse return error.TestUnexpectedResult).instruction_index == 0);
 
-    restoreDeferCleanupStackToMark(&stack, root_mark);
-    try std.testing.expectEqual(@as(usize, 0), stack.items.len);
+    state.restoreToCursor(root_mark);
+    try std.testing.expectEqual(@as(usize, 0), state.slice().len);
 }

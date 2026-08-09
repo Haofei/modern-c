@@ -14636,7 +14636,7 @@ test "lower-c move auto-drop cancellation requires source-matched MIR move-out e
     try std.testing.expectError(error.UnsupportedCEmission, lower_c.appendCProfileWithMir(std.testing.allocator, parsed.module, &module_mir, &output, .kernel, "c_drop_attr_transfer_move_out_source.mc", .{}, false, null));
 }
 
-test "lower-c loop bodies restore auto-drop cleanup stack" {
+test "lower-c loop bodies restore auto-drop cleanup state" {
     const source =
         \\move struct Guard { id: u32 }
         \\fn make_guard(id: u32) -> Guard { return .{ .id = id }; }
