@@ -4336,6 +4336,16 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     try std.testing.expect(unified_cleanup_plan.items[0].place.root_value_id.eql(use_guard.ownership_events[2].place.root_value_id));
     try std.testing.expect(unified_cleanup_plan.items[0].place.root_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
     try std.testing.expect(unified_cleanup_plan.items[0].drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
+    var cleanup_edge_table = try mir.buildOwnershipCleanupEdgeTable(std.testing.allocator, module_mir, use_guard.*, .{ .actions = unified_cleanup_plan.items });
+    defer cleanup_edge_table.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), cleanup_edge_table.edges.len);
+    try std.testing.expectEqual(mir.OwnershipCleanupEdgeKind.scope_exit, cleanup_edge_table.edges[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), cleanup_edge_table.edges[0].actions.len);
+    try std.testing.expectEqual(@as(usize, 0), cleanup_edge_table.edges[0].actions[0].cleanup_action_index);
+    try std.testing.expect(cleanup_edge_table.edges[0].actions[0].root_value_id.eql(use_guard.ownership_events[2].place.root_value_id));
+    try std.testing.expect(mir.ownershipCleanupEdgeTableValid(module_mir, use_guard.*, .{ .actions = unified_cleanup_plan.items }, cleanup_edge_table));
+    cleanup_edge_table.edges[0].actions[0].drop_glue_symbol_id = .invalid;
+    try std.testing.expect(!mir.ownershipCleanupEdgeTableValid(module_mir, use_guard.*, .{ .actions = unified_cleanup_plan.items }, cleanup_edge_table));
     const g_identity = valueIdentityBySpelling(use_guard.*, "g") orelse return error.TestUnexpectedResult;
     try std.testing.expect(mir.ownershipLocalHasAutoDropResourceEvent(module_mir, use_guard.*, g_identity.id));
     const local_span = ast.Span{ .offset = 1, .len = 1, .line = 1, .column = 2 };
@@ -4666,6 +4676,15 @@ test "MIR records explicit drop glue call ownership events" {
     try std.testing.expectEqual(mir.CleanupActionKind.explicit_drop, built_cleanup_plan.actions[0].kind);
     try std.testing.expectEqual(mir.CleanupActionKind.auto_drop, built_cleanup_plan.actions[1].kind);
     try std.testing.expectEqual(mir.CleanupCancellationKind.explicit_drop, built_cleanup_plan.cancellations[0].kind);
+    var cleanup_edge_table = try mir.buildOwnershipCleanupEdgeTable(std.testing.allocator, module_mir, function, built_cleanup_plan);
+    defer cleanup_edge_table.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), cleanup_edge_table.edges.len);
+    try std.testing.expectEqual(@as(usize, 2), cleanup_edge_table.edges[0].actions.len);
+    try std.testing.expectEqual(@as(usize, 1), cleanup_edge_table.edges[0].actions[0].cleanup_action_index);
+    try std.testing.expectEqual(mir.CleanupActionKind.auto_drop, cleanup_edge_table.edges[0].actions[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), cleanup_edge_table.edges[0].actions[1].cleanup_action_index);
+    try std.testing.expectEqual(mir.CleanupActionKind.explicit_drop, cleanup_edge_table.edges[0].actions[1].kind);
+    try std.testing.expect(mir.ownershipCleanupEdgeTableValid(module_mir, function, built_cleanup_plan, cleanup_edge_table));
 
     const release_decl = for (parsed.module.decls) |decl| {
         if (decl.kind != .fn_decl) continue;

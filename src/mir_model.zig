@@ -601,6 +601,45 @@ pub const OwnershipCleanupPlan = struct {
     }
 };
 
+pub const OwnershipCleanupEdgeKind = enum {
+    scope_exit,
+    return_exit,
+    break_exit,
+    continue_exit,
+    error_exit,
+};
+
+pub const OwnershipCleanupEdgeActionRef = struct {
+    cleanup_action_index: usize,
+    kind: CleanupActionKind,
+    primary_event_index: usize,
+    storage_dead_event_index: usize = std.math.maxInt(usize),
+    root_value_id: ValueId,
+    resource_type_symbol_id: SymbolId,
+    drop_glue_symbol_id: SymbolId,
+    generation: u32 = 0,
+    block_id: BlockId,
+    source: SourcePoint,
+};
+
+pub const OwnershipCleanupEdge = struct {
+    kind: OwnershipCleanupEdgeKind,
+    source_block: BlockId = .invalid,
+    target_block: ?BlockId = null,
+    source: SourcePoint = .{ .line = 0, .column = 0 },
+    actions: []OwnershipCleanupEdgeActionRef = &.{},
+};
+
+pub const OwnershipCleanupEdgeTable = struct {
+    edges: []OwnershipCleanupEdge = &.{},
+
+    pub fn deinit(self: *OwnershipCleanupEdgeTable, allocator: std.mem.Allocator) void {
+        for (self.edges) |edge| allocator.free(edge.actions);
+        allocator.free(self.edges);
+        self.edges = &.{};
+    }
+};
+
 pub const PointerProvenance = enum {
     global_storage,
     local_storage,

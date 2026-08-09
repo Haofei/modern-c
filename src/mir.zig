@@ -321,6 +321,10 @@ pub const CleanupActionPlanEntry = mir_model.CleanupActionPlanEntry;
 pub const CleanupCancellationKind = mir_model.CleanupCancellationKind;
 pub const CleanupCancellationPlanEntry = mir_model.CleanupCancellationPlanEntry;
 pub const OwnershipCleanupPlan = mir_model.OwnershipCleanupPlan;
+pub const OwnershipCleanupEdgeKind = mir_model.OwnershipCleanupEdgeKind;
+pub const OwnershipCleanupEdgeActionRef = mir_model.OwnershipCleanupEdgeActionRef;
+pub const OwnershipCleanupEdge = mir_model.OwnershipCleanupEdge;
+pub const OwnershipCleanupEdgeTable = mir_model.OwnershipCleanupEdgeTable;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
@@ -1826,6 +1830,119 @@ pub fn buildOwnershipCleanupPlan(
         .actions = try actions.toOwnedSlice(allocator),
         .cancellations = try cancellations.toOwnedSlice(allocator),
     };
+}
+
+pub fn buildOwnershipCleanupEdgeTable(
+    allocator: std.mem.Allocator,
+    module: Module,
+    function: Function,
+    plan: OwnershipCleanupPlan,
+) error{ InvalidMirOwnershipEvents, OutOfMemory }!OwnershipCleanupEdgeTable {
+    if (!ownershipCleanupPlanValid(module, function, plan)) return error.InvalidMirOwnershipEvents;
+    if (plan.actions.len == 0) return .{};
+
+    var edges = try allocator.alloc(OwnershipCleanupEdge, 1);
+    errdefer allocator.free(edges);
+    var actions = try allocator.alloc(OwnershipCleanupEdgeActionRef, plan.actions.len);
+    errdefer allocator.free(actions);
+
+    var emission_index: usize = 0;
+    while (emission_index < plan.actions.len) : (emission_index += 1) {
+        const action_index = plan.actions.len - 1 - emission_index;
+        actions[emission_index] = ownershipCleanupEdgeActionRef(plan, action_index) orelse return error.InvalidMirOwnershipEvents;
+    }
+
+    edges[0] = .{
+        .kind = .scope_exit,
+        .actions = actions,
+    };
+    var table: OwnershipCleanupEdgeTable = .{ .edges = edges };
+    if (!ownershipCleanupEdgeTableValid(module, function, plan, table)) {
+        table.deinit(allocator);
+        return error.InvalidMirOwnershipEvents;
+    }
+    return table;
+}
+
+pub fn ownershipCleanupEdgeTableValid(
+    module: Module,
+    function: Function,
+    plan: OwnershipCleanupPlan,
+    table: OwnershipCleanupEdgeTable,
+) bool {
+    if (!ownershipCleanupPlanValid(module, function, plan)) return false;
+    for (table.edges) |edge| {
+        for (edge.actions) |ref| {
+            if (!ownershipCleanupEdgeActionRefValid(module, function, plan, ref)) return false;
+        }
+    }
+    return true;
+}
+
+fn ownershipCleanupPlanValid(module: Module, function: Function, plan: OwnershipCleanupPlan) bool {
+    for (plan.actions, 0..) |entry, index| {
+        const ref = ownershipCleanupEdgeActionRef(plan, index) orelse return false;
+        if (!ownershipCleanupEdgeActionRefMatchesEntry(module, function, entry, ref)) return false;
+    }
+    return true;
+}
+
+fn ownershipCleanupEdgeActionRef(
+    plan: OwnershipCleanupPlan,
+    action_index: usize,
+) ?OwnershipCleanupEdgeActionRef {
+    if (action_index >= plan.actions.len) return null;
+    const entry = plan.actions[action_index];
+    const root_value_id = simpleOwnershipRootValue(entry.place) orelse return null;
+    if (!entry.place.root_type_symbol_id.isValid()) return null;
+    if (!entry.drop_glue_symbol_id.isValid()) return null;
+    if (!entry.block_id.isValid()) return null;
+    return .{
+        .cleanup_action_index = action_index,
+        .kind = entry.kind,
+        .primary_event_index = entry.primary_event_index,
+        .storage_dead_event_index = entry.storage_dead_event_index,
+        .root_value_id = root_value_id,
+        .resource_type_symbol_id = entry.place.root_type_symbol_id,
+        .drop_glue_symbol_id = entry.drop_glue_symbol_id,
+        .generation = entry.generation,
+        .block_id = entry.block_id,
+        .source = entry.source,
+    };
+}
+
+fn ownershipCleanupEdgeActionRefValid(
+    module: Module,
+    function: Function,
+    plan: OwnershipCleanupPlan,
+    ref: OwnershipCleanupEdgeActionRef,
+) bool {
+    if (ref.cleanup_action_index >= plan.actions.len) return false;
+    return ownershipCleanupEdgeActionRefMatchesEntry(module, function, plan.actions[ref.cleanup_action_index], ref);
+}
+
+fn ownershipCleanupEdgeActionRefMatchesEntry(
+    module: Module,
+    function: Function,
+    entry: CleanupActionPlanEntry,
+    ref: OwnershipCleanupEdgeActionRef,
+) bool {
+    if (ref.primary_event_index != entry.primary_event_index) return false;
+    if (ref.storage_dead_event_index != entry.storage_dead_event_index) return false;
+    if (ref.kind != entry.kind) return false;
+    if (ref.generation != entry.generation) return false;
+    if (!ref.block_id.eql(entry.block_id)) return false;
+    if (ref.block_id.index() >= function.blocks.len) return false;
+    const root_value_id = simpleOwnershipRootValue(entry.place) orelse return false;
+    if (!ref.root_value_id.eql(root_value_id)) return false;
+    if (!ref.resource_type_symbol_id.eql(entry.place.root_type_symbol_id)) return false;
+    if (!ref.drop_glue_symbol_id.eql(entry.drop_glue_symbol_id)) return false;
+    if (!ownershipPlaceValid(module, function, entry.place)) return false;
+    if (!moduleSymbolIdentityValid(module, ref.resource_type_symbol_id)) return false;
+    if (!moduleSymbolIdentityValid(module, ref.drop_glue_symbol_id)) return false;
+    if (ref.source.line != entry.source.line or ref.source.column != entry.source.column) return false;
+    if (ref.source.offset != entry.source.offset or ref.source.len != entry.source.len) return false;
+    return true;
 }
 
 pub fn ownershipLocalHasAutoDropResourceEvent(module: Module, function: Function, root_value_id: ValueId) bool {
