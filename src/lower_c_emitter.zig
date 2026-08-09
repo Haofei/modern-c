@@ -2310,7 +2310,7 @@ pub const CEmitter = struct {
 
     fn emitDeferredCleanupsForTry(ctx: *anyopaque, locals: *std.StringHashMap(LocalInfo), return_ty: ast.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        try self.emitDeferredCleanupsFrom(0, locals, return_ty);
+        try self.emitCleanupEdge(0, .error_exit, locals, return_ty);
     }
 
     fn operandEmitTypeForAccess(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -3376,7 +3376,7 @@ pub const CEmitter = struct {
             try self.emitStmt(stmt, locals, return_ty);
         }
 
-        try self.emitDeferredCleanupsFrom(block_start, locals, return_ty);
+        try self.emitCleanupEdge(block_start, .scope_exit, locals, return_ty);
         backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
     }
 
@@ -3484,27 +3484,32 @@ pub const CEmitter = struct {
             try self.emitReturnExitItem(stmt.kind.@"return", stmt.span, locals, return_ty, block_start, cleanup_start);
             return;
         }
-        try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
+        const edge_kind: backend_cleanup.CleanupEdgeKind = switch (stmt.kind) {
+            .@"break" => .break_exit,
+            .@"continue" => .continue_exit,
+            else => return error.UnsupportedCEmission,
+        };
+        try self.emitCleanupEdge(cleanup_start, edge_kind, locals, return_ty);
         try self.emitStmt(stmt, locals, return_ty);
         backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
     }
 
     fn emitReturnExitItem(self: *CEmitter, maybe_expr: ?ast.Expr, stmt_span: ast.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: usize, cleanup_start: usize) anyerror!void {
         const expr = maybe_expr orelse {
-            try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
+            try self.emitCleanupEdge(cleanup_start, .return_exit, locals, return_ty);
             try self.writeLineDirective(stmt_span);
             try self.emitVoidReturnStmt();
             backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
             return;
         };
         const target_ty = return_ty orelse {
-            try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
+            try self.emitCleanupEdge(cleanup_start, .return_exit, locals, return_ty);
             try self.emitReturnStmt(maybe_expr, locals, return_ty);
             backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
             return;
         };
         if (isVoidType(target_ty) and isVoidLiteralExpr(expr)) {
-            try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
+            try self.emitCleanupEdge(cleanup_start, .return_exit, locals, return_ty);
             try self.emitVoidReturnStmt();
             backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
             return;
@@ -3517,7 +3522,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, " = ");
         try self.emitExprWithTarget(expr, locals, target_ty);
         try self.out.appendSlice(self.allocator, ";\n");
-        try self.emitDeferredCleanupsFrom(cleanup_start, locals, return_ty);
+        try self.emitCleanupEdge(cleanup_start, .return_exit, locals, return_ty);
         try self.writeLineDirective(stmt_span);
         try self.writeIndent();
         try self.out.print(self.allocator, "return {s};\n", .{tmp_name});
@@ -3528,12 +3533,11 @@ pub const CEmitter = struct {
     // (innermost first). Only reads the stack — callers truncate it when a scope ends — so
     // an exit edge such as `?` that does not pop the scope (the ok path continues) leaves
     // the active defers intact.
-    fn emitDeferredCleanupsFrom(self: *CEmitter, start: usize, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitCleanupEdge(self: *CEmitter, start: usize, kind: backend_cleanup.CleanupEdgeKind, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        const count = backend_cleanup.deferCleanupEmissionCount(self.defer_stack.items, start) orelse return error.UnsupportedCEmission;
-        var emission_index: usize = 0;
-        while (emission_index < count) : (emission_index += 1) {
-            const cleanup = backend_cleanup.deferCleanupAtEmissionIndex(function.*, self.defer_stack.items, start, emission_index) orelse return error.UnsupportedCEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, function.*, self.defer_stack.items, start, kind)) orelse return error.UnsupportedCEmission;
+        defer plan.deinit(self.allocator);
+        for (plan.cleanups) |cleanup| {
             try self.emitDeferredCleanup(cleanup, locals, return_ty);
         }
     }

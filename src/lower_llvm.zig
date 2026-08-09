@@ -1831,7 +1831,7 @@ const LlvmEmitter = struct {
             };
             if (terminated) return true;
         }
-        try self.emitDeferredCleanupsFrom(defer_start, ret_ty);
+        try self.emitCleanupEdge(defer_start, .scope_exit, ret_ty);
         backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, defer_start);
         return false;
     }
@@ -1901,14 +1901,14 @@ const LlvmEmitter = struct {
                         .grouped => |inner| if ((inner.*).kind != .void_literal) return error.UnsupportedLlvmEmission,
                         else => return error.UnsupportedLlvmEmission,
                     };
-                    try self.emitDeferredCleanupsFrom(0, ret_ty);
+                    try self.emitCleanupEdge(0, .return_exit, ret_ty);
                     try self.emitReturnVoid(stmt.span);
                 } else if (typeNameEql(ret_ty, "never")) {
                     return error.UnsupportedLlvmEmission;
                 } else {
                     const expr = maybe_expr orelse return error.UnsupportedLlvmEmission;
                     const value = try self.emitExprWithMirRangeTarget(expr, ret_ty, "value");
-                    try self.emitDeferredCleanupsFrom(0, ret_ty);
+                    try self.emitCleanupEdge(0, .return_exit, ret_ty);
                     try self.emitReturnValue(ret_ty, value, stmt.span);
                 }
                 return true;
@@ -1943,14 +1943,14 @@ const LlvmEmitter = struct {
             },
             .@"break" => |target| {
                 const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
-                try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
+                try self.emitCleanupEdge(labels.cleanup_start, .break_exit, ret_ty);
                 backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, labels.cleanup_start);
                 try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.break_label, try self.debugCallSuffix() });
                 return true;
             },
             .@"continue" => |target| {
                 const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
-                try self.emitDeferredCleanupsFrom(labels.cleanup_start, ret_ty);
+                try self.emitCleanupEdge(labels.cleanup_start, .continue_exit, ret_ty);
                 backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, labels.cleanup_start);
                 try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.continue_label, try self.debugCallSuffix() });
                 return true;
@@ -1985,12 +1985,11 @@ const LlvmEmitter = struct {
         return self.loop_stack.getLastOrNull();
     }
 
-    fn emitDeferredCleanupsFrom(self: *LlvmEmitter, start: usize, ret_ty: ast.TypeExpr) !void {
+    fn emitCleanupEdge(self: *LlvmEmitter, start: usize, kind: backend_cleanup.CleanupEdgeKind, ret_ty: ast.TypeExpr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        const count = backend_cleanup.deferCleanupEmissionCount(self.defer_stack.items, start) orelse return error.UnsupportedLlvmEmission;
-        var emission_index: usize = 0;
-        while (emission_index < count) : (emission_index += 1) {
-            const cleanup = backend_cleanup.deferCleanupAtEmissionIndex(function.*, self.defer_stack.items, start, emission_index) orelse return error.UnsupportedLlvmEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, function.*, self.defer_stack.items, start, kind)) orelse return error.UnsupportedLlvmEmission;
+        defer plan.deinit(self.allocator);
+        for (plan.cleanups) |cleanup| {
             try self.emitDeferredCleanup(cleanup, ret_ty);
         }
     }
@@ -2676,7 +2675,7 @@ const LlvmEmitter = struct {
         // defer first — exactly like an explicit `return`. Flush from 0 (whole function
         // scope) without truncating: the ok path continues after this block with the same
         // active defers.
-        try self.emitDeferredCleanupsFrom(0, return_ty);
+        try self.emitCleanupEdge(0, .error_exit, return_ty);
         try self.emitReturnValue(return_ty, propagated_value, span);
         try self.out.print(self.allocator, "{s}:\n", .{ok_label});
         return true;

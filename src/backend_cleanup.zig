@@ -50,6 +50,25 @@ pub const AutoDropStackDecision = enum {
     rejected,
 };
 
+pub const CleanupEdgeKind = enum {
+    scope_exit,
+    return_exit,
+    break_exit,
+    continue_exit,
+    error_exit,
+};
+
+pub const CleanupEdgePlan = struct {
+    kind: CleanupEdgeKind,
+    start: usize,
+    cleanups: []DeferredCleanup,
+
+    pub fn deinit(self: *CleanupEdgePlan, allocator: std.mem.Allocator) void {
+        allocator.free(self.cleanups);
+        self.cleanups = &.{};
+    }
+};
+
 pub const DeferCleanupStackSnapshot = struct {
     items: []DeferredCleanup,
 
@@ -241,6 +260,28 @@ pub fn deferCleanupAtEmissionIndex(
     return stack[stack.len - 1 - emission_index];
 }
 
+pub fn buildCleanupEdgePlan(
+    allocator: std.mem.Allocator,
+    function: mir.Function,
+    stack: []const DeferredCleanup,
+    start: usize,
+    kind: CleanupEdgeKind,
+) !?CleanupEdgePlan {
+    const count = deferCleanupEmissionCount(stack, start) orelse return null;
+    if (!deferCleanupEmissionRangeValid(function, stack, start)) return null;
+    const cleanups = try allocator.alloc(DeferredCleanup, count);
+    errdefer allocator.free(cleanups);
+    var emission_index: usize = 0;
+    while (emission_index < count) : (emission_index += 1) {
+        cleanups[emission_index] = deferCleanupAtEmissionIndex(function, stack, start, emission_index) orelse return null;
+    }
+    return .{
+        .kind = kind,
+        .start = start,
+        .cleanups = cleanups,
+    };
+}
+
 fn sameDeferCleanupRef(a: mir.DeferCleanupRef, b: mir.DeferCleanupRef) bool {
     return a.block_id.eql(b.block_id) and a.instruction_index == b.instruction_index;
 }
@@ -372,6 +413,14 @@ test "defer cleanup stack refs must be valid ordered and unique" {
     try std.testing.expect((deferCleanupRef(first_emit) orelse return error.TestUnexpectedResult).instruction_index == 1);
     try std.testing.expect((deferCleanupRef(second_emit) orelse return error.TestUnexpectedResult).instruction_index == 0);
     try std.testing.expect(deferCleanupAtEmissionIndex(function, stack[0..], 0, 2) == null);
+
+    var plan = (try buildCleanupEdgePlan(std.testing.allocator, function, stack[0..], 0, .return_exit)) orelse return error.TestUnexpectedResult;
+    defer plan.deinit(std.testing.allocator);
+    try std.testing.expectEqual(CleanupEdgeKind.return_exit, plan.kind);
+    try std.testing.expectEqual(@as(usize, 0), plan.start);
+    try std.testing.expectEqual(@as(usize, 2), plan.cleanups.len);
+    try std.testing.expect((deferCleanupRef(plan.cleanups[0]) orelse return error.TestUnexpectedResult).instruction_index == 1);
+    try std.testing.expect((deferCleanupRef(plan.cleanups[1]) orelse return error.TestUnexpectedResult).instruction_index == 0);
 }
 
 test "defer cleanup stack snapshot restores full contents" {
