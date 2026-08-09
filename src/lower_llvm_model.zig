@@ -1,4 +1,5 @@
 const ast = @import("ast.zig");
+const backend_cleanup = @import("backend_cleanup.zig");
 const mir_model = @import("mir_model.zig");
 
 pub const LocalSlot = struct {
@@ -167,7 +168,7 @@ pub const DebugLocal = struct {
 pub const LoopLabels = struct {
     break_label: []const u8,
     continue_label: []const u8,
-    cleanup_start: usize,
+    cleanup_start: backend_cleanup.CleanupStackMark,
     // G7: source loop label naming this loop (`outer:`), or null when unlabeled.
     // A labeled `break :outer` / `continue :outer` resolves against this.
     label: ?[]const u8 = null,

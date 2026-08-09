@@ -344,8 +344,8 @@ pub const CEmitter = struct {
     // (a function-scoped stack). User `defer` keeps its expression, but auto-drop
     // obligations are recorded as backend facts instead of self-parsing a
     // compiler-synthesized AST call on every cancel/emit path.
-    defer_stack: std.ArrayList(DeferredCleanup) = .empty,
-    loop_defer_marks: std.ArrayList(usize) = .empty,
+    cleanup_state: backend_cleanup.CleanupState = .{},
+    loop_defer_marks: std.ArrayList(backend_cleanup.CleanupStackMark) = .empty,
 
     fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8), mir_module: *const mir.Module, source_path: ?[]const u8, reporter: ?*diagnostics.Reporter) CEmitter {
         return .{
@@ -448,7 +448,7 @@ pub const CEmitter = struct {
     fn deinitControlFlowState(self: *CEmitter) void {
         self.loop_ids.deinit(self.allocator);
         self.loop_labels.deinit(self.allocator);
-        self.defer_stack.deinit(self.allocator);
+        self.cleanup_state.deinit(self.allocator);
         self.loop_defer_marks.deinit(self.allocator);
     }
 
@@ -2329,7 +2329,7 @@ pub const CEmitter = struct {
 
     fn emitDeferredCleanupsForTry(ctx: *anyopaque, locals: *std.StringHashMap(LocalInfo), return_ty: ast.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
-        try self.emitCleanupEdge(0, .error_exit, locals, return_ty);
+        try self.emitCleanupEdge(backend_cleanup.rootCleanupStackMark(), .error_exit, locals, return_ty);
     }
 
     fn operandEmitTypeForAccess(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -2854,7 +2854,7 @@ pub const CEmitter = struct {
         const ty = maybe_ty orelse if (locals.get(name.text)) |info| info.source_ty orelse return else return;
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (try backend_cleanup.registerAutoDropLocalCleanup(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), self.currentOwnershipCleanupEdges(), &self.defer_stack, name.text, type_name, name.span)) {
+        switch (try backend_cleanup.registerAutoDropLocalCleanup(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), self.currentOwnershipCleanupEdges(), self.cleanup_state.stack(), name.text, type_name, name.span)) {
             .applied, .ignored => {},
             .rejected => return error.UnsupportedCEmission,
         }
@@ -2862,7 +2862,7 @@ pub const CEmitter = struct {
 
     fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr, move_span: ast.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (try backend_cleanup.cancelAutoDropForMove(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.defer_stack, expr, move_span)) {
+        switch (try backend_cleanup.cancelAutoDropForMove(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), self.cleanup_state.stack(), expr, move_span)) {
             .applied, .ignored => {},
             .rejected => return error.UnsupportedCEmission,
         }
@@ -2870,7 +2870,7 @@ pub const CEmitter = struct {
 
     fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (try backend_cleanup.cancelAutoDropForExplicitDrop(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.defer_stack, expr)) {
+        switch (try backend_cleanup.cancelAutoDropForExplicitDrop(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), self.cleanup_state.stack(), expr)) {
             .applied, .ignored => {},
             .rejected => return error.UnsupportedCEmission,
         }
@@ -3350,7 +3350,7 @@ pub const CEmitter = struct {
     }
 
     fn emitPlainWhileLoop(self: *CEmitter, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        try lower_c_flow.emitPlainWhileLoop(self.flowEmitContext(), loop, locals, return_ty, self.defer_stack.items.len);
+        try lower_c_flow.emitPlainWhileLoop(self.flowEmitContext(), loop, locals, return_ty, self.cleanup_state.mark());
     }
 
     fn requireMirBoolTargetTypeForEmission(self: *CEmitter, kind: mir.TargetTypeKind, expr: ast.Expr) !ast.TypeExpr {
@@ -3384,7 +3384,7 @@ pub const CEmitter = struct {
     }
 
     fn emitBlockItems(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        const block_start = self.defer_stack.items.len;
+        const block_start = self.cleanup_state.mark();
 
         for (block.items) |stmt| {
             switch (try self.emitBlockControlItem(stmt, locals, return_ty, block_start)) {
@@ -3396,15 +3396,15 @@ pub const CEmitter = struct {
         }
 
         try self.emitCleanupEdge(block_start, .scope_exit, locals, return_ty);
-        backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
+        backend_cleanup.restoreDeferCleanupStackToMark(self.cleanup_state.stack(), block_start);
     }
 
     fn emitBlockItemsWithDeferStackSnapshot(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        var saved_defer_stack = try backend_cleanup.captureDeferCleanupStack(self.allocator, self.defer_stack.items);
+        var saved_defer_stack = try backend_cleanup.captureDeferCleanupStack(self.allocator, self.cleanup_state.slice());
         defer saved_defer_stack.deinit(self.allocator);
-        errdefer backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
+        errdefer backend_cleanup.restoreDeferCleanupStack(self.cleanup_state.stack(), saved_defer_stack);
         try self.emitBlockItems(block, locals, return_ty);
-        backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
+        backend_cleanup.restoreDeferCleanupStack(self.cleanup_state.stack(), saved_defer_stack);
     }
 
     const BlockItemAction = enum {
@@ -3413,14 +3413,14 @@ pub const CEmitter = struct {
         exit_block,
     };
 
-    fn emitBlockControlItem(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: usize) anyerror!BlockItemAction {
+    fn emitBlockControlItem(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: backend_cleanup.CleanupStackMark) anyerror!BlockItemAction {
         switch (stmt.kind) {
             .@"defer" => |expr| {
                 try self.emitBlockDeferItem(expr, stmt.span);
                 return .skip_stmt;
             },
             .@"return" => {
-                try self.emitBlockExitItem(stmt, locals, return_ty, block_start, 0);
+                try self.emitBlockExitItem(stmt, locals, return_ty, block_start, backend_cleanup.rootCleanupStackMark());
                 return .exit_block;
             },
             .@"break" => |target| {
@@ -3440,7 +3440,7 @@ pub const CEmitter = struct {
     fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr, stmt_span: ast.Span) !void {
         try self.cancelAutoDropForReleaseCall(expr);
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (try backend_cleanup.registerDeferredExplicitDropCleanup(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.defer_stack, expr)) {
+        switch (try backend_cleanup.registerDeferredExplicitDropCleanup(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), self.cleanup_state.stack(), expr)) {
             .ignored => {},
             .applied => {
                 try self.validateDeferCleanupStack();
@@ -3451,14 +3451,14 @@ pub const CEmitter = struct {
         const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt_span)) orelse return error.UnsupportedCEmission;
         const defer_edges = self.currentDeferCleanupEdges() orelse return error.UnsupportedCEmission;
         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.defer_stack, .{ .direct_call = cleanup })) {
+            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, self.cleanup_state.stack(), .{ .direct_call = cleanup })) {
                 .applied => {},
                 .ignored, .rejected => return error.UnsupportedCEmission,
             }
             return;
         }
         if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.defer_stack, .{ .call_target = cleanup })) {
+            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, self.cleanup_state.stack(), .{ .call_target = cleanup })) {
                 .applied => {},
                 .ignored, .rejected => return error.UnsupportedCEmission,
             }
@@ -3466,7 +3466,7 @@ pub const CEmitter = struct {
         }
         switch (expr.kind) {
             .block => |block| {
-                switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.defer_stack, .{ .block = .{ .defer_ref = defer_ref, .block = block } })) {
+                switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, self.cleanup_state.stack(), .{ .block = .{ .defer_ref = defer_ref, .block = block } })) {
                     .applied => {},
                     .ignored, .rejected => return error.UnsupportedCEmission,
                 }
@@ -3481,7 +3481,7 @@ pub const CEmitter = struct {
     // body defers). A bare jump targets the innermost loop (its mark = the top of the stack). This
     // mirrors `resolveLoopIndex` in lower_c_flow.zig, which emits the matching `goto`; sema rejects
     // unknown labels, so a labeled target always resolves.
-    fn loopDeferMarkFor(self: *CEmitter, target: ?ast.Ident, block_start: usize) usize {
+    fn loopDeferMarkFor(self: *CEmitter, target: ?ast.Ident, block_start: backend_cleanup.CleanupStackMark) backend_cleanup.CleanupStackMark {
         if (target) |t| {
             var i = self.loop_labels.items.len;
             while (i > 0) {
@@ -3494,11 +3494,11 @@ pub const CEmitter = struct {
         return self.loop_defer_marks.getLastOrNull() orelse block_start;
     }
 
-    fn emitBlockExitItem(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: usize, cleanup_start: usize) anyerror!void {
+    fn emitBlockExitItem(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: backend_cleanup.CleanupStackMark, cleanup_start: backend_cleanup.CleanupStackMark) anyerror!void {
         if (stmt.kind == .@"return") {
-            if (self.defer_stack.items.len == cleanup_start) {
+            if (self.cleanup_state.slice().len == backend_cleanup.cleanupStackMarkIndex(cleanup_start)) {
                 try self.emitStmt(stmt, locals, return_ty);
-                backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
+                backend_cleanup.restoreDeferCleanupStackToMark(self.cleanup_state.stack(), block_start);
                 return;
             }
             try self.emitReturnExitItem(stmt.kind.@"return", stmt.span, locals, return_ty, block_start, cleanup_start);
@@ -3511,27 +3511,27 @@ pub const CEmitter = struct {
         };
         try self.emitCleanupEdge(cleanup_start, edge_kind, locals, return_ty);
         try self.emitStmt(stmt, locals, return_ty);
-        backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
+        backend_cleanup.restoreDeferCleanupStackToMark(self.cleanup_state.stack(), block_start);
     }
 
-    fn emitReturnExitItem(self: *CEmitter, maybe_expr: ?ast.Expr, stmt_span: ast.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: usize, cleanup_start: usize) anyerror!void {
+    fn emitReturnExitItem(self: *CEmitter, maybe_expr: ?ast.Expr, stmt_span: ast.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, block_start: backend_cleanup.CleanupStackMark, cleanup_start: backend_cleanup.CleanupStackMark) anyerror!void {
         const expr = maybe_expr orelse {
             try self.emitCleanupEdge(cleanup_start, .return_exit, locals, return_ty);
             try self.writeLineDirective(stmt_span);
             try self.emitVoidReturnStmt();
-            backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
+            backend_cleanup.restoreDeferCleanupStackToMark(self.cleanup_state.stack(), block_start);
             return;
         };
         const target_ty = return_ty orelse {
             try self.emitCleanupEdge(cleanup_start, .return_exit, locals, return_ty);
             try self.emitReturnStmt(maybe_expr, locals, return_ty);
-            backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
+            backend_cleanup.restoreDeferCleanupStackToMark(self.cleanup_state.stack(), block_start);
             return;
         };
         if (isVoidType(target_ty) and isVoidLiteralExpr(expr)) {
             try self.emitCleanupEdge(cleanup_start, .return_exit, locals, return_ty);
             try self.emitVoidReturnStmt();
-            backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
+            backend_cleanup.restoreDeferCleanupStackToMark(self.cleanup_state.stack(), block_start);
             return;
         }
 
@@ -3546,16 +3546,16 @@ pub const CEmitter = struct {
         try self.writeLineDirective(stmt_span);
         try self.writeIndent();
         try self.out.print(self.allocator, "return {s};\n", .{tmp_name});
-        backend_cleanup.restoreDeferCleanupStackLength(&self.defer_stack, block_start);
+        backend_cleanup.restoreDeferCleanupStackToMark(self.cleanup_state.stack(), block_start);
     }
 
     // Emit the active defers from index `start` to the top of the stack, in reverse
     // (innermost first). Only reads the stack — callers truncate it when a scope ends — so
     // an exit edge such as `?` that does not pop the scope (the ok path continues) leaves
     // the active defers intact.
-    fn emitCleanupEdge(self: *CEmitter, start: usize, kind: backend_cleanup.CleanupEdgeKind, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitCleanupEdge(self: *CEmitter, start: backend_cleanup.CleanupStackMark, kind: backend_cleanup.CleanupEdgeKind, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentDeferCleanupEdges(), self.currentOwnershipCleanupEdges(), self.defer_stack.items, start, kind)) orelse return error.UnsupportedCEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentDeferCleanupEdges(), self.currentOwnershipCleanupEdges(), self.cleanup_state.slice(), start, kind)) orelse return error.UnsupportedCEmission;
         defer plan.deinit(self.allocator);
         for (plan.cleanups) |cleanup| {
             try self.emitDeferredCleanup(cleanup, locals, return_ty);
@@ -3564,7 +3564,7 @@ pub const CEmitter = struct {
 
     fn validateDeferCleanupStack(self: *CEmitter) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!backend_cleanup.deferCleanupStackAdmittedByMir(function.*, self.currentDeferCleanupEdges(), self.defer_stack.items)) return error.UnsupportedCEmission;
+        if (!backend_cleanup.deferCleanupStackAdmittedByMir(function.*, self.currentDeferCleanupEdges(), self.cleanup_state.slice())) return error.UnsupportedCEmission;
     }
 
     fn emitDeferredCleanup(self: *CEmitter, cleanup: DeferredCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
@@ -3886,14 +3886,14 @@ pub const CEmitter = struct {
     }
 
     fn emitSwitchBody(self: *CEmitter, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        var saved_defer_stack = try backend_cleanup.captureDeferCleanupStack(self.allocator, self.defer_stack.items);
+        var saved_defer_stack = try backend_cleanup.captureDeferCleanupStack(self.allocator, self.cleanup_state.slice());
         defer saved_defer_stack.deinit(self.allocator);
-        errdefer backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
+        errdefer backend_cleanup.restoreDeferCleanupStack(self.cleanup_state.stack(), saved_defer_stack);
         switch (body) {
             .block => |block| try self.emitBlockItems(block, locals, return_ty),
             .expr => |expr| try self.emitExpressionStmt(expr, locals, return_ty),
         }
-        backend_cleanup.restoreDeferCleanupStack(&self.defer_stack, saved_defer_stack);
+        backend_cleanup.restoreDeferCleanupStack(self.cleanup_state.stack(), saved_defer_stack);
     }
 
     fn nullableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
@@ -3992,7 +3992,7 @@ pub const CEmitter = struct {
         if (try lower_c_flow.emitForLoopSequencedIterable(self.flowEmitContext(), loop, iterable, types.iterable, locals, return_ty)) return;
         const iterable_array_ty = self.arrayTypeFromType(types.iterable);
         const element = try lower_c_flow.forLoopElementPlan(self.flowEmitContext(), iterable_array_ty, types.element);
-        try lower_c_flow.emitForLoopWithElementPlan(self.flowEmitContext(), loop, binding, iterable, locals, return_ty, element, self.defer_stack.items.len);
+        try lower_c_flow.emitForLoopWithElementPlan(self.flowEmitContext(), loop, binding, iterable, locals, return_ty, element, self.cleanup_state.mark());
     }
 
     fn requireMirForLoopTypes(self: *CEmitter, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !struct { iterable: ast.TypeExpr, element: ast.TypeExpr } {
