@@ -511,6 +511,7 @@ const LlvmEmitter = struct {
     current_return_ty: ?ast.TypeExpr = null,
     current_function: ?[]const u8 = null,
     current_ownership_cleanup_plan: ?mir.OwnershipCleanupPlan = null,
+    current_ownership_cleanup_edges: ?mir.OwnershipCleanupEdgeTable = null,
     current_params: ?[]const ast.Param = null,
     current_mir_range_target: ?[]const u8 = null,
     source_path: []const u8,
@@ -1280,8 +1281,18 @@ const LlvmEmitter = struct {
         else
             null;
         defer if (ownership_cleanup_plan) |plan| plan.deinit(self.allocator);
+        var ownership_cleanup_edges = if (ownership_cleanup_plan) |plan|
+            if (self.currentMirFunction()) |function|
+                try mir.buildOwnershipCleanupEdgeTable(self.allocator, self.mir_module, function.*, plan)
+            else
+                null
+        else
+            null;
+        defer if (ownership_cleanup_edges) |*edges| edges.deinit(self.allocator);
         self.current_ownership_cleanup_plan = ownership_cleanup_plan;
         defer self.current_ownership_cleanup_plan = null;
+        self.current_ownership_cleanup_edges = ownership_cleanup_edges;
+        defer self.current_ownership_cleanup_edges = null;
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
         // epilogue. The body is a single inline-asm statement that performs the
         // ABI-correct jump/return itself; we terminate the entry block with
@@ -1987,7 +1998,7 @@ const LlvmEmitter = struct {
 
     fn emitCleanupEdge(self: *LlvmEmitter, start: usize, kind: backend_cleanup.CleanupEdgeKind, ret_ty: ast.TypeExpr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.defer_stack.items, start, kind)) orelse return error.UnsupportedLlvmEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentOwnershipCleanupEdges(), self.defer_stack.items, start, kind)) orelse return error.UnsupportedLlvmEmission;
         defer plan.deinit(self.allocator);
         for (plan.cleanups) |cleanup| {
             try self.emitDeferredCleanup(cleanup, ret_ty);
@@ -5928,6 +5939,11 @@ const LlvmEmitter = struct {
 
     fn currentOwnershipCleanupPlan(self: *const LlvmEmitter) ?*const mir.OwnershipCleanupPlan {
         if (self.current_ownership_cleanup_plan) |*plan| return plan;
+        return null;
+    }
+
+    fn currentOwnershipCleanupEdges(self: *const LlvmEmitter) ?*const mir.OwnershipCleanupEdgeTable {
+        if (self.current_ownership_cleanup_edges) |*edges| return edges;
         return null;
     }
 
