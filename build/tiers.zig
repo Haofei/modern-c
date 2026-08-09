@@ -826,6 +826,18 @@ pub fn register(ctx: *h.Ctx) void {
     core_dev_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
     core_dev_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
 
+    const ownership_cleanup_dev_step = b.step("ownership-cleanup-dev", "Fast ownership cleanup authority loop: MIR cleanup shard and semantic/MIR inventories");
+    ownership_cleanup_dev_step.dependOn(ctx.cmd("test-shard-mir-cleanup"));
+    ownership_cleanup_dev_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
+    ownership_cleanup_dev_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
+
+    const ownership_backend_dev_step = b.step("ownership-backend-dev", "Ownership cleanup backend loop: MIR cleanup shard, C/LLVM lowering shards, and inventories");
+    ownership_backend_dev_step.dependOn(ctx.cmd("test-shard-mir-cleanup"));
+    ownership_backend_dev_step.dependOn(ctx.cmd("test-shard-lower-c"));
+    ownership_backend_dev_step.dependOn(ctx.cmd("test-shard-lower-llvm"));
+    ownership_backend_dev_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
+    ownership_backend_dev_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
+
     const m0_step = b.step("m0", "Run core M0 compiler qualification gates");
     // Keep the default M0 tier focused on deterministic compiler-core confidence.
     // The former exhaustive matrix remains available as `m0-full` for release/nightly qualification.

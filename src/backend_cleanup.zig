@@ -263,17 +263,6 @@ pub fn registerOrdinaryBlockDeferCleanup(
     return appendValidatedCleanup(allocator, function, stack, .{ .block = .{ .defer_ref = defer_ref, .block = block } });
 }
 
-fn cancelAutoDropWithDecision(
-    stack: *std.ArrayList(DeferredCleanup),
-    decision: mir_ownership_authority.AutoDropCancellationDecision,
-) AutoDropStackDecision {
-    return switch (decision) {
-        .ignore => .ignored,
-        .remove_auto_drop => |ref| if (removeAutoDropCleanup(stack, ref)) .applied else .rejected,
-        .reject => .rejected,
-    };
-}
-
 fn appendValidatedCleanup(
     allocator: std.mem.Allocator,
     function: *const mir.Function,

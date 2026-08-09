@@ -4346,41 +4346,45 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     try std.testing.expect(mir.ownershipCleanupEdgeTableValid(module_mir, use_guard.*, .{ .actions = unified_cleanup_plan.items }, cleanup_edge_table));
     cleanup_edge_table.edges[0].actions[0].drop_glue_symbol_id = .invalid;
     try std.testing.expect(!mir.ownershipCleanupEdgeTableValid(module_mir, use_guard.*, .{ .actions = unified_cleanup_plan.items }, cleanup_edge_table));
+    cleanup_edge_table.edges[0].actions[0].drop_glue_symbol_id = drop_fact.typed_release_symbol_id;
     const g_identity = valueIdentityBySpelling(use_guard.*, "g") orelse return error.TestUnexpectedResult;
     try std.testing.expect(mir.ownershipLocalHasAutoDropResourceEvent(module_mir, use_guard.*, g_identity.id));
     const local_span = ast.Span{ .offset = 1, .len = 1, .line = 1, .column = 2 };
-    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, use_guard, null, "g", "Guard", local_span)) {
-        .emit_auto_drop_cleanup => |cleanup| {
-            try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
-            try std.testing.expectEqualStrings("g", cleanup.local_name);
-            try std.testing.expectEqual(local_span, cleanup.span);
-            try std.testing.expect(cleanup.root_value_id.eql(g_identity.id));
-            try std.testing.expect(cleanup.resource_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
-            try std.testing.expect(cleanup.drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
-            try std.testing.expectEqual(@as(usize, 0), cleanup.cleanup_action_index);
-            try std.testing.expectEqual(unified_cleanup_plan.items[0].primary_event_index, cleanup.auto_drop_event_index);
-            try std.testing.expectEqual(unified_cleanup_plan.items[0].storage_dead_event_index, cleanup.storage_dead_event_index);
-            try std.testing.expect(try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, null, cleanup));
-            const cleanup_ref = mir_ownership_authority.ownershipCleanupActionRef(cleanup);
-            const ref_cleanup = mir_ownership_authority.autoDropLocalCleanupFromActionRef(&module_mir, use_guard, &.{ .actions = unified_cleanup_plan.items }, cleanup_ref) orelse return error.TestUnexpectedResult;
-            try std.testing.expectEqualStrings(cleanup.fn_name, ref_cleanup.fn_name);
-            try std.testing.expectEqual(cleanup.auto_drop_event_index, ref_cleanup.auto_drop_event_index);
-            try std.testing.expectEqual(cleanup.storage_dead_event_index, ref_cleanup.storage_dead_event_index);
-            var stale_ref = cleanup_ref;
-            stale_ref.cleanup_action_index = 99;
-            try std.testing.expect(mir_ownership_authority.autoDropLocalCleanupFromActionRef(&module_mir, use_guard, &.{ .actions = unified_cleanup_plan.items }, stale_ref) == null);
-            stale_ref = cleanup_ref;
-            stale_ref.drop_glue_symbol_id = .invalid;
-            try std.testing.expect(mir_ownership_authority.autoDropLocalCleanupFromActionRef(&module_mir, use_guard, &.{ .actions = unified_cleanup_plan.items }, stale_ref) == null);
-            var stale_cleanup = cleanup;
-            stale_cleanup.cleanup_action_index = 99;
-            try std.testing.expect(!try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, null, stale_cleanup));
-            stale_cleanup = cleanup;
-            stale_cleanup.storage_dead_event_index = cleanup.auto_drop_event_index;
-            try std.testing.expect(!try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, null, stale_cleanup));
-        },
-        else => return error.TestUnexpectedResult,
-    }
+    const cleanup_ref: mir_ownership_authority.OwnershipCleanupActionRef = .{
+        .local_name = "g",
+        .span = local_span,
+        .cleanup_action_index = cleanup_edge_table.edges[0].actions[0].cleanup_action_index,
+        .root_value_id = cleanup_edge_table.edges[0].actions[0].root_value_id,
+        .resource_type_symbol_id = cleanup_edge_table.edges[0].actions[0].resource_type_symbol_id,
+        .drop_glue_symbol_id = cleanup_edge_table.edges[0].actions[0].drop_glue_symbol_id,
+    };
+    const cleanup = mir_ownership_authority.autoDropLocalCleanupFromActionRef(&module_mir, use_guard, &.{ .actions = unified_cleanup_plan.items }, cleanup_ref) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("close_guard", cleanup.fn_name);
+    try std.testing.expectEqualStrings("g", cleanup.local_name);
+    try std.testing.expectEqual(local_span, cleanup.span);
+    try std.testing.expect(cleanup.root_value_id.eql(g_identity.id));
+    try std.testing.expect(cleanup.resource_type_symbol_id.eql(drop_fact.typed_resource_symbol_id));
+    try std.testing.expect(cleanup.drop_glue_symbol_id.eql(drop_fact.typed_release_symbol_id));
+    try std.testing.expectEqual(@as(usize, 0), cleanup.cleanup_action_index);
+    try std.testing.expectEqual(unified_cleanup_plan.items[0].primary_event_index, cleanup.auto_drop_event_index);
+    try std.testing.expectEqual(unified_cleanup_plan.items[0].storage_dead_event_index, cleanup.storage_dead_event_index);
+    try std.testing.expect(try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, null, cleanup));
+    const ref_cleanup = mir_ownership_authority.autoDropLocalCleanupFromActionRef(&module_mir, use_guard, &.{ .actions = unified_cleanup_plan.items }, mir_ownership_authority.ownershipCleanupActionRef(cleanup)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(cleanup.fn_name, ref_cleanup.fn_name);
+    try std.testing.expectEqual(cleanup.auto_drop_event_index, ref_cleanup.auto_drop_event_index);
+    try std.testing.expectEqual(cleanup.storage_dead_event_index, ref_cleanup.storage_dead_event_index);
+    var stale_ref = cleanup_ref;
+    stale_ref.cleanup_action_index = 99;
+    try std.testing.expect(mir_ownership_authority.autoDropLocalCleanupFromActionRef(&module_mir, use_guard, &.{ .actions = unified_cleanup_plan.items }, stale_ref) == null);
+    stale_ref = cleanup_ref;
+    stale_ref.drop_glue_symbol_id = .invalid;
+    try std.testing.expect(mir_ownership_authority.autoDropLocalCleanupFromActionRef(&module_mir, use_guard, &.{ .actions = unified_cleanup_plan.items }, stale_ref) == null);
+    var stale_cleanup = cleanup;
+    stale_cleanup.cleanup_action_index = 99;
+    try std.testing.expect(!try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, null, stale_cleanup));
+    stale_cleanup = cleanup;
+    stale_cleanup.storage_dead_event_index = cleanup.auto_drop_event_index;
+    try std.testing.expect(!try mir_ownership_authority.autoDropCleanupEmissionAllowed(std.testing.allocator, &module_mir, use_guard, null, stale_cleanup));
     const generated_events = use_guard.ownership_events;
     const events = try std.testing.allocator.alloc(mir.OwnershipEvent, 1);
     events[0] = .{
@@ -4615,10 +4619,12 @@ test "MIR ownership authority does not let forget authorize auto-drop registrati
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
     try std.testing.expectEqual(mir.OwnershipEventKind.forget, function.ownership_events[2].kind);
     try mir.validateLoweringAdmission(module_mir);
-    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, &function, null, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
-        .reject => {},
-        else => return error.TestUnexpectedResult,
-    }
+    var cleanup_plan = try mir.buildOwnershipCleanupPlan(std.testing.allocator, module_mir, function);
+    defer cleanup_plan.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), cleanup_plan.actions.len);
+    var cleanup_edge_table = try mir.buildOwnershipCleanupEdgeTable(std.testing.allocator, module_mir, function, cleanup_plan);
+    defer cleanup_edge_table.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), cleanup_edge_table.edges.len);
 }
 
 test "MIR records explicit drop glue call ownership events" {
@@ -4820,10 +4826,12 @@ test "MIR ownership authority skips cleanup registration for move-out" {
     try std.testing.expectEqual(mir.OwnershipEventKind.move_out, function.ownership_events[2].kind);
     const g_identity = valueIdentityBySpelling(function, "g") orelse return error.TestUnexpectedResult;
     try std.testing.expect(mir.ownershipLocalHasConsumingResourceEvent(function, g_identity.id, function.ownership_events[2].place.root_type_symbol_id));
-    switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(std.testing.allocator, &module_mir, &function, null, "g", "Guard", ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 })) {
-        .skip_cleanup_registration => {},
-        else => return error.TestUnexpectedResult,
-    }
+    var cleanup_plan = try mir.buildOwnershipCleanupPlan(std.testing.allocator, module_mir, function);
+    defer cleanup_plan.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), cleanup_plan.actions.len);
+    var cleanup_edge_table = try mir.buildOwnershipCleanupEdgeTable(std.testing.allocator, module_mir, function, cleanup_plan);
+    defer cleanup_edge_table.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 0), cleanup_edge_table.edges.len);
 }
 
 test "MIR cleanup producer ignores move-out events that cannot reach fallthrough cleanup" {
