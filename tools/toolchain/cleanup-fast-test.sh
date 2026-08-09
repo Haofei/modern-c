@@ -11,8 +11,9 @@ cd "$ROOT"
 
 python3 tools/toolchain/semantic-facts-inventory.py
 python3 tools/toolchain/mir-identity-inventory.py
-zig test src/main.zig --test-filter "defer"
-zig test src/main.zig --test-filter "auto-drop"
-zig test src/main.zig --test-filter "explicit drop glue"
+zig test src/main.zig \
+  --test-filter "defer" \
+  --test-filter "auto-drop" \
+  --test-filter "explicit drop glue"
 
 echo "PASS: cleanup-fast-test — MIR/backend defer and auto-drop cleanup authority checks passed"
