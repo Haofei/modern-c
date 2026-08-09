@@ -50,6 +50,20 @@ pub fn build(b: *std.Build) h.Ctx {
     const unit_test_step = b.step("test-unit", "Run compiler unit tests");
     unit_test_step.dependOn(&test_cmd.step);
 
+    const frontend_shard_step = addTestShard(b, target, optimize, options, "test-shard-frontend", "src/test_shard_frontend.zig", "Run frontend lexer/parser/loader unit-test shard");
+    const sema_shard_step = addTestShard(b, target, optimize, options, "test-shard-sema", "src/test_shard_sema.zig", "Run semantic analysis and monomorphization unit-test shard");
+    const mir_cleanup_shard_step = addTestShard(b, target, optimize, options, "test-shard-mir-cleanup", "src/test_shard_mir_cleanup.zig", "Run MIR/ownership cleanup authority unit-test shard");
+    const lower_c_shard_step = addTestShard(b, target, optimize, options, "test-shard-lower-c", "src/test_shard_lower_c.zig", "Run C backend unit-test shard");
+    const lower_llvm_shard_step = addTestShard(b, target, optimize, options, "test-shard-lower-llvm", "src/test_shard_lower_llvm.zig", "Run LLVM backend unit-test shard");
+    const backend_shard_step = addTestShard(b, target, optimize, options, "test-shard-backend", "src/test_shard_backend.zig", "Run C/LLVM backend unit-test shard");
+
+    const unit_shards_step = b.step("test-unit-shards", "Run compiler unit-test shards");
+    unit_shards_step.dependOn(frontend_shard_step);
+    unit_shards_step.dependOn(sema_shard_step);
+    unit_shards_step.dependOn(mir_cleanup_shard_step);
+    unit_shards_step.dependOn(lower_c_shard_step);
+    unit_shards_step.dependOn(lower_llvm_shard_step);
+
     // Keep the specification fixture suite as an explicit build dependency.
     // Importing it through main is not sufficient for Zig's lazy test analysis.
     const spec_test_module = b.createModule(.{
@@ -74,8 +88,40 @@ pub fn build(b: *std.Build) h.Ctx {
     test_step.dependOn(&test_cmd.step);
     test_step.dependOn(&spec_test_cmd.step);
     ctx.cmds.put("test-unit", unit_test_step) catch @panic("OOM");
+    ctx.cmds.put("test-shard-frontend", frontend_shard_step) catch @panic("OOM");
+    ctx.cmds.put("test-shard-sema", sema_shard_step) catch @panic("OOM");
+    ctx.cmds.put("test-shard-mir-cleanup", mir_cleanup_shard_step) catch @panic("OOM");
+    ctx.cmds.put("test-shard-lower-c", lower_c_shard_step) catch @panic("OOM");
+    ctx.cmds.put("test-shard-lower-llvm", lower_llvm_shard_step) catch @panic("OOM");
+    ctx.cmds.put("test-shard-backend", backend_shard_step) catch @panic("OOM");
+    ctx.cmds.put("test-unit-shards", unit_shards_step) catch @panic("OOM");
     ctx.cmds.put("test-spec", spec_test_step) catch @panic("OOM");
     ctx.cmds.put("test", test_step) catch @panic("OOM");
 
     return ctx;
+}
+
+fn addTestShard(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    options: *std.Build.Step.Options,
+    name: []const u8,
+    root_source_file: []const u8,
+    description: []const u8,
+) *std.Build.Step {
+    const module = b.createModule(.{
+        .root_source_file = b.path(root_source_file),
+        .target = target,
+        .optimize = optimize,
+    });
+    module.addOptions("build_options", options);
+    module.addAnonymousImport("diagnostics_reference_md", .{
+        .root_source_file = b.path("docs/diagnostics.md"),
+    });
+    const tests = b.addTest(.{ .root_module = module });
+    const run = b.addRunArtifact(tests);
+    const step = b.step(name, description);
+    step.dependOn(&run.step);
+    return step;
 }
