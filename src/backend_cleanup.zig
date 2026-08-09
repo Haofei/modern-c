@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const ast_query = @import("ast_query.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 
@@ -181,7 +182,17 @@ pub fn cancelAutoDropForMove(
     expr: ast.Expr,
     move_span: ast.Span,
 ) error{OutOfMemory}!AutoDropStackDecision {
-    return cancelAutoDropWithDecision(stack, try mir_ownership_authority.moveAutoDropCancellationDecision(allocator, module, function, cleanup_plan, expr, move_span));
+    _ = allocator;
+    const source = mir.sourcePointFromSpan(move_span);
+    const ref = cleanupRemovalRefFromMirCancellation(function, cleanup_plan, .move_out, source) orelse {
+        if (cleanupCancellationEntryFromMirPlan(cleanup_plan orelse return .ignored, .move_out, source) != null) return .ignored;
+        if (directMoveLocalName(expr)) |local_name| {
+            if (localHasConsumingAutoDropResourceEvent(module, function, local_name, .move_out)) return .rejected;
+            if (localHasAutoDropCancellationObligation(function, local_name)) return .rejected;
+        }
+        return .ignored;
+    };
+    return if (removeAutoDropCleanup(stack, ref)) .applied else .ignored;
 }
 
 pub fn cancelAutoDropForExplicitDrop(
@@ -192,7 +203,21 @@ pub fn cancelAutoDropForExplicitDrop(
     stack: *std.ArrayList(DeferredCleanup),
     expr: ast.Expr,
 ) error{OutOfMemory}!AutoDropStackDecision {
-    return cancelAutoDropWithDecision(stack, try mir_ownership_authority.explicitDropCancellationDecision(allocator, module, function, cleanup_plan, expr));
+    _ = allocator;
+    const source = mir.sourcePointFromSpan(expr.span);
+    const ref = cleanupRemovalRefFromMirCancellation(function, cleanup_plan, .explicit_drop, source) orelse {
+        if (cleanupCancellationEntryFromMirPlan(cleanup_plan orelse return .ignored, .explicit_drop, source) != null) return .ignored;
+        if (cleanupRemovalRefFromMirExplicitDropAction(function, cleanup_plan, source)) |action_ref| {
+            return if (removeAutoDropCleanup(stack, action_ref)) .applied else .ignored;
+        }
+        if (explicitDropActionEntryFromMirPlan(cleanup_plan orelse return .ignored, source) != null) return .ignored;
+        if (ast_query.dropPointerLocalReleaseCall(expr)) |release| {
+            if (localHasConsumingAutoDropResourceEvent(module, function, release.local_name, .explicit_drop)) return .rejected;
+            if (localHasAutoDropCancellationObligation(function, release.local_name)) return .rejected;
+        }
+        return .ignored;
+    };
+    return if (removeAutoDropCleanup(stack, ref)) .applied else .ignored;
 }
 
 pub fn registerDeferredExplicitDropCleanup(
@@ -477,6 +502,151 @@ fn autoDropLocalCleanupFromMirEdge(
     return null;
 }
 
+fn cleanupRemovalRefFromMirCancellation(
+    function: *const mir.Function,
+    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    kind: mir.CleanupCancellationKind,
+    source: mir.SourcePoint,
+) ?mir_ownership_authority.OwnershipCleanupRemovalRef {
+    const plan = cleanup_plan orelse return null;
+    const cancellation = cleanupCancellationEntryFromMirPlan(plan, kind, source) orelse return null;
+    if (cancellation.place.root_symbol_id.isValid() or cancellation.place.projection_count != 0) return null;
+    const root_value_id = cancellation.place.root_value_id;
+    const local_name = localNameForValueId(function, root_value_id) orelse return null;
+
+    for (plan.actions, 0..) |action, action_index| {
+        if (action.kind != .auto_drop) continue;
+        if (action.generation != cancellation.generation) continue;
+        if (!action.place.root_value_id.eql(root_value_id)) continue;
+        if (!action.place.root_type_symbol_id.eql(cancellation.place.root_type_symbol_id)) continue;
+        if (!action.drop_glue_symbol_id.eql(cancellation.drop_glue_symbol_id)) continue;
+        return .{
+            .local_name = local_name,
+            .cleanup_action_index = action_index,
+            .root_value_id = root_value_id,
+            .resource_type_symbol_id = cancellation.place.root_type_symbol_id,
+            .drop_glue_symbol_id = cancellation.drop_glue_symbol_id,
+        };
+    }
+    return null;
+}
+
+fn cleanupRemovalRefFromMirExplicitDropAction(
+    function: *const mir.Function,
+    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    source: mir.SourcePoint,
+) ?mir_ownership_authority.OwnershipCleanupRemovalRef {
+    const plan = cleanup_plan orelse return null;
+    const action_match = explicitDropActionEntryFromMirPlan(plan, source) orelse return null;
+    if (action_match.entry.place.root_symbol_id.isValid() or action_match.entry.place.projection_count != 0) return null;
+    const root_value_id = action_match.entry.place.root_value_id;
+    const local_name = localNameForValueId(function, root_value_id) orelse return null;
+    for (plan.actions, 0..) |action, action_index| {
+        if (action.kind != .auto_drop) continue;
+        if (action.generation != action_match.entry.generation) continue;
+        if (!action.place.root_value_id.eql(root_value_id)) continue;
+        if (!action.place.root_type_symbol_id.eql(action_match.entry.place.root_type_symbol_id)) continue;
+        if (!action.drop_glue_symbol_id.eql(action_match.entry.drop_glue_symbol_id)) continue;
+        return .{
+            .local_name = local_name,
+            .cleanup_action_index = action_index,
+            .root_value_id = root_value_id,
+            .resource_type_symbol_id = action_match.entry.place.root_type_symbol_id,
+            .drop_glue_symbol_id = action_match.entry.drop_glue_symbol_id,
+        };
+    }
+    return null;
+}
+
+const ExplicitDropActionMatch = struct {
+    action_index: usize,
+    entry: mir.CleanupActionPlanEntry,
+};
+
+fn explicitDropActionEntryFromMirPlan(
+    plan: *const mir.OwnershipCleanupPlan,
+    source: mir.SourcePoint,
+) ?ExplicitDropActionMatch {
+    var matched: ?ExplicitDropActionMatch = null;
+    for (plan.actions, 0..) |entry, action_index| {
+        if (entry.kind != .explicit_drop) continue;
+        if (!sourceMatches(entry.source, source)) continue;
+        if (matched != null) return null;
+        matched = .{ .action_index = action_index, .entry = entry };
+    }
+    return matched;
+}
+
+fn localHasAutoDropCancellationObligation(
+    function: *const mir.Function,
+    local_name: []const u8,
+) bool {
+    const root_value_id = valueIdForLocal(function, local_name) orelse return false;
+    for (function.ownership_events) |event| {
+        if (event.kind != .auto_drop) continue;
+        if (!event.place.root_value_id.eql(root_value_id)) continue;
+        return true;
+    }
+    return false;
+}
+
+fn localHasConsumingAutoDropResourceEvent(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    local_name: []const u8,
+    kind: mir.CleanupCancellationKind,
+) bool {
+    const root_value_id = valueIdForLocal(function, local_name) orelse return false;
+    const event_kind: mir.OwnershipEventKind = switch (kind) {
+        .move_out => .move_out,
+        .explicit_drop => .explicit_drop,
+    };
+    for (function.ownership_events) |event| {
+        if (event.kind != event_kind) continue;
+        if (!event.place.root_value_id.eql(root_value_id)) continue;
+        if (!typeSymbolHasDropGlue(module, event.place.root_type_symbol_id)) continue;
+        return true;
+    }
+    return false;
+}
+
+fn typeSymbolHasDropGlue(module: *const mir.Module, type_symbol_id: mir.SymbolId) bool {
+    if (!type_symbol_id.isValid()) return false;
+    for (module.type_ownership_facts) |fact| {
+        if (!fact.typed_type_symbol_id.eql(type_symbol_id)) continue;
+        return fact.drop_glue_symbol_id.isValid();
+    }
+    return false;
+}
+
+fn cleanupCancellationEntryFromMirPlan(
+    plan: *const mir.OwnershipCleanupPlan,
+    kind: mir.CleanupCancellationKind,
+    source: mir.SourcePoint,
+) ?mir.CleanupCancellationPlanEntry {
+    var matched: ?mir.CleanupCancellationPlanEntry = null;
+    for (plan.cancellations) |entry| {
+        if (entry.kind != kind) continue;
+        if (!sourceMatches(entry.source, source)) continue;
+        if (matched != null) return null;
+        matched = entry;
+    }
+    return matched;
+}
+
+fn directMoveLocalName(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| directMoveLocalName(inner.*),
+        .move_expr => |inner| switch (inner.kind) {
+            .grouped => directMoveLocalName(inner.*),
+            .ident => |ident| ident.text,
+            else => null,
+        },
+        .ident => |ident| ident.text,
+        else => null,
+    };
+}
+
 fn typeOwnershipFactForTypeName(module: *const mir.Module, type_name: []const u8) ?mir.TypeOwnershipFact {
     for (module.type_ownership_facts) |fact| {
         if (std.mem.eql(u8, fact.type_name, type_name)) return fact;
@@ -491,6 +661,20 @@ fn valueIdForLocal(function: *const mir.Function, local_name: []const u8) ?mir.V
         return identity.id;
     }
     return null;
+}
+
+fn localNameForValueId(function: *const mir.Function, value_id: mir.ValueId) ?[]const u8 {
+    if (!value_id.isValid()) return null;
+    for (function.value_identities) |identity| {
+        if (identity.id.eql(value_id)) return identity.spelling;
+    }
+    return null;
+}
+
+fn sourceMatches(actual: mir.SourcePoint, expected: mir.SourcePoint) bool {
+    if (actual.line != expected.line or actual.column != expected.column) return false;
+    if (actual.offset == 0 and actual.len == 0 and expected.offset == 0 and expected.len == 0) return true;
+    return actual.offset == expected.offset and actual.len == expected.len;
 }
 
 fn cleanupRefMatchesCleanup(ref: CleanupRef, cleanup: DeferredCleanup) bool {
