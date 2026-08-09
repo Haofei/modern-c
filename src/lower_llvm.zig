@@ -2016,7 +2016,7 @@ const LlvmEmitter = struct {
 
     fn validateDeferCleanupStack(self: *LlvmEmitter) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!backend_cleanup.deferCleanupStackRefsValid(function.*, self.defer_stack.items)) return error.UnsupportedLlvmEmission;
+        if (!backend_cleanup.deferCleanupStackAdmittedByMir(function.*, self.currentDeferCleanupEdges(), self.defer_stack.items)) return error.UnsupportedLlvmEmission;
     }
 
     fn emitDeferredCleanup(self: *LlvmEmitter, cleanup: DeferredCleanup, ret_ty: ast.TypeExpr) !void {

@@ -3564,7 +3564,7 @@ pub const CEmitter = struct {
 
     fn validateDeferCleanupStack(self: *CEmitter) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!backend_cleanup.deferCleanupStackRefsValid(function.*, self.defer_stack.items)) return error.UnsupportedCEmission;
+        if (!backend_cleanup.deferCleanupStackAdmittedByMir(function.*, self.currentDeferCleanupEdges(), self.defer_stack.items)) return error.UnsupportedCEmission;
     }
 
     fn emitDeferredCleanup(self: *CEmitter, cleanup: DeferredCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {

@@ -87,7 +87,7 @@ pub const CleanupEdgeTable = struct {
     }
 };
 
-pub fn cleanupEdgeTableValid(
+fn cleanupEdgeTableValid(
     table: CleanupEdgeTable,
     module: ?*const mir.Module,
     function: mir.Function,
@@ -292,7 +292,21 @@ pub fn deferCleanupStackRefsValid(function: mir.Function, stack: []const Deferre
     return true;
 }
 
-pub fn deferCleanupEmissionRangeValid(function: mir.Function, stack: []const DeferredCleanup, start: usize) bool {
+pub fn deferCleanupStackAdmittedByMir(
+    function: mir.Function,
+    defer_edges: ?*const mir.DeferCleanupEdgeTable,
+    stack: []const DeferredCleanup,
+) bool {
+    if (!deferCleanupStackRefsValid(function, stack)) return false;
+    for (stack) |cleanup| {
+        const ref = deferCleanupRef(cleanup) orelse continue;
+        const edges = defer_edges orelse return false;
+        if (!mir.deferCleanupEdgeTableContainsRef(edges.*, ref)) return false;
+    }
+    return true;
+}
+
+fn deferCleanupEmissionRangeValid(function: mir.Function, stack: []const DeferredCleanup, start: usize) bool {
     if (start > stack.len) return false;
     if (!deferCleanupStackRefsValid(function, stack)) return false;
     for (stack[start..]) |cleanup| {
@@ -302,12 +316,12 @@ pub fn deferCleanupEmissionRangeValid(function: mir.Function, stack: []const Def
     return true;
 }
 
-pub fn deferCleanupEmissionCount(stack: []const DeferredCleanup, start: usize) ?usize {
+fn deferCleanupEmissionCount(stack: []const DeferredCleanup, start: usize) ?usize {
     if (start > stack.len) return null;
     return stack.len - start;
 }
 
-pub fn deferCleanupAtEmissionIndex(
+fn deferCleanupAtEmissionIndex(
     function: mir.Function,
     stack: []const DeferredCleanup,
     start: usize,
@@ -319,7 +333,7 @@ pub fn deferCleanupAtEmissionIndex(
     return stack[stack.len - 1 - emission_index];
 }
 
-pub fn buildTransitionalCleanupEdgeTable(
+fn buildTransitionalCleanupEdgeTable(
     allocator: std.mem.Allocator,
     module: ?*const mir.Module,
     function: mir.Function,
@@ -898,6 +912,13 @@ test "defer cleanup stack refs must be valid ordered and unique" {
     try std.testing.expect(deferCleanupStackRefsValid(function, &.{
         .{ .block = .{ .defer_ref = first, .block = block } },
         .{ .block = .{ .defer_ref = second, .block = block } },
+    }));
+    try std.testing.expect(deferCleanupStackAdmittedByMir(function, &mir_defer_edges, &.{
+        .{ .block = .{ .defer_ref = first, .block = block } },
+        .{ .block = .{ .defer_ref = second, .block = block } },
+    }));
+    try std.testing.expect(!deferCleanupStackAdmittedByMir(function, null, &.{
+        .{ .block = .{ .defer_ref = first, .block = block } },
     }));
     try std.testing.expect(!deferCleanupStackRefsValid(function, &.{
         .{ .block = .{ .defer_ref = second, .block = block } },
