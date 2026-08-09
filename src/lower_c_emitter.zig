@@ -2846,7 +2846,7 @@ pub const CEmitter = struct {
         const ty = maybe_ty orelse if (locals.get(name.text)) |info| info.source_ty orelse return else return;
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (try backend_cleanup.registerAutoDropLocalCleanup(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.defer_stack, name.text, type_name, name.span)) {
+        switch (try backend_cleanup.registerAutoDropLocalCleanup(self.allocator, self.mir_module, function, self.currentOwnershipCleanupPlan(), self.currentOwnershipCleanupEdges(), &self.defer_stack, name.text, type_name, name.span)) {
             .applied, .ignored => {},
             .rejected => return error.UnsupportedCEmission,
         }

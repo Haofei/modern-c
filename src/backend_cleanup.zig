@@ -155,16 +155,18 @@ pub fn registerAutoDropLocalCleanup(
     module: *const mir.Module,
     function: *const mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
     stack: *std.ArrayList(DeferredCleanup),
     local_name: []const u8,
     type_name: []const u8,
     local_span: ast.Span,
 ) error{OutOfMemory}!AutoDropStackDecision {
     if (!mir_ownership_authority.autoDropEligibleTypeName(module, type_name)) return .ignored;
-    const cleanup = switch (try mir_ownership_authority.autoDropLocalRegistrationDecision(allocator, module, function, cleanup_plan, local_name, type_name, local_span)) {
-        .emit_auto_drop_cleanup => |entry| entry,
-        .skip_cleanup_registration => return .ignored,
-        .reject => return .rejected,
+    const cleanup = autoDropLocalCleanupFromMirEdge(module, function, cleanup_plan, ownership_edges, local_name, type_name, local_span) orelse {
+        const ownership = typeOwnershipFactForTypeName(module, type_name) orelse return .rejected;
+        const root_value_id = valueIdForLocal(function, local_name) orelse return .rejected;
+        if (mir.ownershipLocalHasConsumingResourceEvent(function.*, root_value_id, ownership.typed_type_symbol_id)) return .ignored;
+        return .rejected;
     };
     try stack.append(allocator, .{ .auto_drop = mir_ownership_authority.ownershipCleanupActionRef(cleanup) });
     return .applied;
@@ -438,6 +440,57 @@ fn mirOwnershipEdgeTableContainsActionRef(
         }
     }
     return false;
+}
+
+fn autoDropLocalCleanupFromMirEdge(
+    module: *const mir.Module,
+    function: *const mir.Function,
+    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
+    ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
+    local_name: []const u8,
+    type_name: []const u8,
+    local_span: ast.Span,
+) ?mir_ownership_authority.AutoDropLocalCleanup {
+    const plan = cleanup_plan orelse return null;
+    const edges = ownership_edges orelse return null;
+    const ownership = typeOwnershipFactForTypeName(module, type_name) orelse return null;
+    if (ownership.kind != .affine or !ownership.drop_glue_symbol_id.isValid()) return null;
+    const root_value_id = valueIdForLocal(function, local_name) orelse return null;
+
+    for (edges.edges) |edge| {
+        for (edge.actions) |action| {
+            if (action.kind != .auto_drop) continue;
+            if (!action.root_value_id.eql(root_value_id)) continue;
+            if (!action.resource_type_symbol_id.eql(ownership.typed_type_symbol_id)) continue;
+            if (!action.drop_glue_symbol_id.eql(ownership.drop_glue_symbol_id)) continue;
+            const ref: mir_ownership_authority.OwnershipCleanupActionRef = .{
+                .local_name = local_name,
+                .span = local_span,
+                .cleanup_action_index = action.cleanup_action_index,
+                .root_value_id = action.root_value_id,
+                .resource_type_symbol_id = action.resource_type_symbol_id,
+                .drop_glue_symbol_id = action.drop_glue_symbol_id,
+            };
+            return mir_ownership_authority.autoDropLocalCleanupFromActionRef(module, function, plan, ref);
+        }
+    }
+    return null;
+}
+
+fn typeOwnershipFactForTypeName(module: *const mir.Module, type_name: []const u8) ?mir.TypeOwnershipFact {
+    for (module.type_ownership_facts) |fact| {
+        if (std.mem.eql(u8, fact.type_name, type_name)) return fact;
+    }
+    return null;
+}
+
+fn valueIdForLocal(function: *const mir.Function, local_name: []const u8) ?mir.ValueId {
+    for (function.value_identities) |identity| {
+        if (!std.mem.eql(u8, identity.spelling, local_name)) continue;
+        if (!identity.id.isValid()) return null;
+        return identity.id;
+    }
+    return null;
 }
 
 fn cleanupRefMatchesCleanup(ref: CleanupRef, cleanup: DeferredCleanup) bool {

@@ -3012,7 +3012,7 @@ const LlvmEmitter = struct {
     fn registerAutoDropLocal(self: *LlvmEmitter, name: ast.Ident, ty: ast.TypeExpr) !void {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (try backend_cleanup.registerAutoDropLocalCleanup(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.defer_stack, name.text, type_name, name.span)) {
+        switch (try backend_cleanup.registerAutoDropLocalCleanup(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), self.currentOwnershipCleanupEdges(), &self.defer_stack, name.text, type_name, name.span)) {
             .applied, .ignored => {},
             .rejected => return error.UnsupportedLlvmEmission,
         }
