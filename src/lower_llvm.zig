@@ -511,8 +511,7 @@ const LlvmEmitter = struct {
     current_return_ty: ?ast.TypeExpr = null,
     current_function: ?[]const u8 = null,
     current_ownership_cleanup_plan: ?mir.OwnershipCleanupPlan = null,
-    current_ownership_cleanup_edges: ?mir.OwnershipCleanupEdgeTable = null,
-    current_defer_cleanup_edges: ?mir.DeferCleanupEdgeTable = null,
+    current_cleanup_cfg: ?mir.CleanupCfg = null,
     current_params: ?[]const ast.Param = null,
     current_mir_range_target: ?[]const u8 = null,
     source_path: []const u8,
@@ -1282,25 +1281,18 @@ const LlvmEmitter = struct {
         else
             null;
         defer if (ownership_cleanup_plan) |plan| plan.deinit(self.allocator);
-        var ownership_cleanup_edges = if (ownership_cleanup_plan) |plan|
+        var cleanup_cfg = if (ownership_cleanup_plan) |plan|
             if (self.currentMirFunction()) |function|
-                try mir.buildOwnershipCleanupEdgeTable(self.allocator, self.mir_module, function.*, plan)
+                try mir.buildCleanupCfg(self.allocator, self.mir_module, function.*, plan)
             else
                 null
         else
             null;
-        defer if (ownership_cleanup_edges) |*edges| edges.deinit(self.allocator);
-        var defer_cleanup_edges = if (self.currentMirFunction()) |function|
-            try mir.buildDeferCleanupEdgeTable(self.allocator, function.*)
-        else
-            null;
-        defer if (defer_cleanup_edges) |*edges| edges.deinit(self.allocator);
+        defer if (cleanup_cfg) |*cfg| cfg.deinit(self.allocator);
         self.current_ownership_cleanup_plan = ownership_cleanup_plan;
         defer self.current_ownership_cleanup_plan = null;
-        self.current_ownership_cleanup_edges = ownership_cleanup_edges;
-        defer self.current_ownership_cleanup_edges = null;
-        self.current_defer_cleanup_edges = defer_cleanup_edges;
-        defer self.current_defer_cleanup_edges = null;
+        self.current_cleanup_cfg = cleanup_cfg;
+        defer self.current_cleanup_cfg = null;
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
         // epilogue. The body is a single inline-asm statement that performs the
         // ABI-correct jump/return itself; we terminate the entry block with
@@ -1866,16 +1858,16 @@ const LlvmEmitter = struct {
                 switch (try backend_cleanup.registerDeferredExplicitDropCleanup(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.cleanup_state, expr)) {
                     .ignored => {
                         const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt.span)) orelse return error.UnsupportedLlvmEmission;
-                        const defer_edges = self.currentDeferCleanupEdges() orelse return error.UnsupportedLlvmEmission;
+                        const cleanup_cfg = self.currentCleanupCfg() orelse return error.UnsupportedLlvmEmission;
                         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.cleanup_state, .{ .direct_call = cleanup })) {
+                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, .{ .direct_call = cleanup })) {
                                 .applied => {},
                                 .ignored, .rejected => return error.UnsupportedLlvmEmission,
                             }
                             return false;
                         }
                         if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.cleanup_state, .{ .call_target = cleanup })) {
+                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, .{ .call_target = cleanup })) {
                                 .applied => {},
                                 .ignored, .rejected => return error.UnsupportedLlvmEmission,
                             }
@@ -1883,7 +1875,7 @@ const LlvmEmitter = struct {
                         }
                         switch (expr.kind) {
                             .block => |block| {
-                                switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, defer_edges, &self.cleanup_state, .{ .block = .{ .defer_ref = defer_ref, .block = block } })) {
+                                switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, .{ .block = .{ .defer_ref = defer_ref, .block = block } })) {
                                     .applied => {},
                                     .ignored, .rejected => return error.UnsupportedLlvmEmission,
                                 }
@@ -2007,7 +1999,7 @@ const LlvmEmitter = struct {
 
     fn emitCleanupEdge(self: *LlvmEmitter, start: backend_cleanup.CleanupCursor, kind: backend_cleanup.CleanupEdgeKind, ret_ty: ast.TypeExpr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentDeferCleanupEdges(), self.currentOwnershipCleanupEdges(), &self.cleanup_state, start, kind)) orelse return error.UnsupportedLlvmEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), &self.cleanup_state, start, kind)) orelse return error.UnsupportedLlvmEmission;
         defer plan.deinit(self.allocator);
         for (plan.cleanups) |cleanup| {
             try self.emitDeferredCleanup(cleanup, ret_ty);
@@ -2016,7 +2008,7 @@ const LlvmEmitter = struct {
 
     fn validateCleanupState(self: *LlvmEmitter) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!backend_cleanup.cleanupStateAdmittedByMir(function.*, self.currentDeferCleanupEdges(), &self.cleanup_state)) return error.UnsupportedLlvmEmission;
+        if (!backend_cleanup.cleanupStateAdmittedByMir(function.*, self.currentCleanupCfg(), &self.cleanup_state)) return error.UnsupportedLlvmEmission;
     }
 
     fn emitDeferredCleanup(self: *LlvmEmitter, cleanup: DeferredCleanup, ret_ty: ast.TypeExpr) !void {
@@ -3021,7 +3013,7 @@ const LlvmEmitter = struct {
     fn registerAutoDropLocal(self: *LlvmEmitter, name: ast.Ident, ty: ast.TypeExpr) !void {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (try backend_cleanup.registerAutoDropLocalCleanup(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), self.currentOwnershipCleanupEdges(), &self.cleanup_state, name.text, type_name, name.span)) {
+        switch (try backend_cleanup.registerAutoDropLocalCleanup(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), &self.cleanup_state, name.text, type_name, name.span)) {
             .applied, .ignored => {},
             .rejected => return error.UnsupportedLlvmEmission,
         }
@@ -5951,13 +5943,8 @@ const LlvmEmitter = struct {
         return null;
     }
 
-    fn currentOwnershipCleanupEdges(self: *const LlvmEmitter) ?*const mir.OwnershipCleanupEdgeTable {
-        if (self.current_ownership_cleanup_edges) |*edges| return edges;
-        return null;
-    }
-
-    fn currentDeferCleanupEdges(self: *const LlvmEmitter) ?*const mir.DeferCleanupEdgeTable {
-        if (self.current_defer_cleanup_edges) |*edges| return edges;
+    fn currentCleanupCfg(self: *const LlvmEmitter) ?*const mir.CleanupCfg {
+        if (self.current_cleanup_cfg) |*cfg| return cfg;
         return null;
     }
 

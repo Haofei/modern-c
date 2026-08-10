@@ -147,34 +147,17 @@ pub const CleanupEdgeTable = struct {
     }
 };
 
-fn cleanupEdgeTableValid(
-    table: CleanupEdgeTable,
-    module: ?*const mir.Module,
-    function: mir.Function,
-    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
-) bool {
-    for (table.edges) |edge| {
-        if (edge.cleanups.len != edge.refs.len) return false;
-        if (!cleanupEdgeValid(edge, module, function, cleanup_plan)) return false;
-        if (!cleanupEdgeOwnershipRefsAdmittedByMir(edge, ownership_edges)) return false;
-    }
-    return true;
-}
-
 fn cleanupEdgeTableValidWithMirEdges(
     table: CleanupEdgeTable,
     module: ?*const mir.Module,
     function: mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    defer_edges: ?*const mir.DeferCleanupEdgeTable,
-    ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
+    cleanup_cfg: ?*const mir.CleanupCfg,
 ) bool {
     for (table.edges) |edge| {
         if (edge.cleanups.len != edge.refs.len) return false;
         if (!cleanupEdgeValid(edge, module, function, cleanup_plan)) return false;
-        if (!cleanupEdgeDeferRefsAdmittedByMir(edge, defer_edges)) return false;
-        if (!cleanupEdgeOwnershipRefsAdmittedByMir(edge, ownership_edges)) return false;
+        if (!cleanupEdgeRefsAdmittedByCleanupCfg(edge, cleanup_cfg)) return false;
     }
     return true;
 }
@@ -221,14 +204,14 @@ pub fn registerAutoDropLocalCleanup(
     module: *const mir.Module,
     function: *const mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
+    cleanup_cfg: ?*const mir.CleanupCfg,
     state: *CleanupState,
     local_name: []const u8,
     type_name: []const u8,
     local_span: ast.Span,
 ) error{OutOfMemory}!AutoDropStackDecision {
     if (!mir_ownership_authority.autoDropEligibleTypeName(module, type_name)) return .ignored;
-    const cleanup = autoDropLocalCleanupFromMirEdge(module, function, cleanup_plan, ownership_edges, local_name, type_name, local_span) orelse {
+    const cleanup = autoDropLocalCleanupFromMirCfg(module, function, cleanup_plan, cleanup_cfg, local_name, type_name, local_span) orelse {
         const ownership = typeOwnershipFactForTypeName(module, type_name) orelse return .rejected;
         const root_value_id = valueIdForLocal(function, local_name) orelse return .rejected;
         if (mir.ownershipLocalHasConsumingResourceEvent(function.*, root_value_id, ownership.typed_type_symbol_id)) return .ignored;
@@ -303,13 +286,13 @@ pub fn registerDeferredExplicitDropCleanup(
 pub fn registerOrdinaryDeferCleanup(
     allocator: std.mem.Allocator,
     function: *const mir.Function,
-    defer_edges: ?*const mir.DeferCleanupEdgeTable,
+    cleanup_cfg: ?*const mir.CleanupCfg,
     state: *CleanupState,
     cleanup: DeferredCleanup,
 ) error{OutOfMemory}!AutoDropStackDecision {
     const ref = deferCleanupRef(cleanup) orelse return .ignored;
-    const edges = defer_edges orelse return .rejected;
-    if (!mir.deferCleanupEdgeTableContainsRef(edges.*, ref)) return .rejected;
+    const cfg = cleanup_cfg orelse return .rejected;
+    if (!cleanupCfgContainsRef(cfg.*, .{ .defer_ref = ref })) return .rejected;
     return appendValidatedCleanup(allocator, function, state, cleanup);
 }
 
@@ -342,14 +325,14 @@ fn deferCleanupRefsValid(function: mir.Function, cleanups: []const DeferredClean
 
 pub fn cleanupStateAdmittedByMir(
     function: mir.Function,
-    defer_edges: ?*const mir.DeferCleanupEdgeTable,
+    cleanup_cfg: ?*const mir.CleanupCfg,
     state: *const CleanupState,
 ) bool {
     if (!deferCleanupRefsValid(function, state.slice())) return false;
     for (state.slice()) |cleanup| {
         const ref = deferCleanupRef(cleanup) orelse continue;
-        const edges = defer_edges orelse return false;
-        if (!mir.deferCleanupEdgeTableContainsRef(edges.*, ref)) return false;
+        const cfg = cleanup_cfg orelse return false;
+        if (!cleanupCfgContainsRef(cfg.*, .{ .defer_ref = ref })) return false;
     }
     return true;
 }
@@ -386,8 +369,7 @@ fn buildCleanupEdgeTableFromCursor(
     module: ?*const mir.Module,
     function: mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    defer_edges: ?*const mir.DeferCleanupEdgeTable,
-    ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
+    cleanup_cfg: ?*const mir.CleanupCfg,
     state: *const CleanupState,
     start: CleanupCursor,
     kind: CleanupEdgeKind,
@@ -418,13 +400,7 @@ fn buildCleanupEdgeTableFromCursor(
         .refs = refs,
     };
     var table: CleanupEdgeTable = .{ .edges = edges };
-    var owned_defer_edges = if (defer_edges == null)
-        try mir.buildDeferCleanupEdgeTable(allocator, function)
-    else
-        null;
-    defer if (owned_defer_edges) |*edges_table| edges_table.deinit(allocator);
-    const admitted_defer_edges = defer_edges orelse &owned_defer_edges.?;
-    if (!cleanupEdgeTableValidWithMirEdges(table, module, function, cleanup_plan, admitted_defer_edges, ownership_edges)) {
+    if (!cleanupEdgeTableValidWithMirEdges(table, module, function, cleanup_plan, cleanup_cfg)) {
         table.deinit(allocator);
         return null;
     }
@@ -436,13 +412,12 @@ pub fn buildCleanupEdgePlan(
     module: ?*const mir.Module,
     function: mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    defer_edges: ?*const mir.DeferCleanupEdgeTable,
-    ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
+    cleanup_cfg: ?*const mir.CleanupCfg,
     state: *const CleanupState,
     start: CleanupCursor,
     kind: CleanupEdgeKind,
 ) !?CleanupEdgePlan {
-    var table = (try buildCleanupEdgeTableFromCursor(allocator, module, function, cleanup_plan, defer_edges, ownership_edges, state, start, kind)) orelse return null;
+    var table = (try buildCleanupEdgeTableFromCursor(allocator, module, function, cleanup_plan, cleanup_cfg, state, start, kind)) orelse return null;
     defer table.deinit(allocator);
     return try cleanupEdgePlanFromTable(allocator, table, kind, start);
 }
@@ -494,86 +469,78 @@ fn cleanupEdgeValid(
     return true;
 }
 
-fn cleanupEdgeOwnershipRefsAdmittedByMir(
+fn cleanupEdgeRefsAdmittedByCleanupCfg(
     edge: CleanupEdge,
-    ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
+    cleanup_cfg: ?*const mir.CleanupCfg,
 ) bool {
-    var saw_ownership_ref = false;
+    var saw_ref = false;
     for (edge.refs) |ref| {
-        switch (ref) {
-            .defer_ref => {},
-            .ownership_action => |action_ref| {
-                saw_ownership_ref = true;
-                const table = ownership_edges orelse return false;
-                if (!mirOwnershipEdgeTableContainsActionRef(table.*, action_ref)) return false;
-            },
-        }
+        saw_ref = true;
+        const cfg = cleanup_cfg orelse return false;
+        if (!cleanupCfgContainsRef(cfg.*, ref)) return false;
     }
-    return !saw_ownership_ref or ownership_edges != null;
+    return !saw_ref or cleanup_cfg != null;
 }
 
-fn cleanupEdgeDeferRefsAdmittedByMir(
-    edge: CleanupEdge,
-    defer_edges: ?*const mir.DeferCleanupEdgeTable,
-) bool {
-    var saw_defer_ref = false;
-    for (edge.refs) |ref| {
-        switch (ref) {
-            .defer_ref => |defer_ref| {
-                saw_defer_ref = true;
-                const table = defer_edges orelse return false;
-                if (!mir.deferCleanupEdgeTableContainsRef(table.*, defer_ref)) return false;
-            },
-            .ownership_action => {},
-        }
-    }
-    return !saw_defer_ref or defer_edges != null;
-}
-
-fn mirOwnershipEdgeTableContainsActionRef(
-    table: mir.OwnershipCleanupEdgeTable,
-    ref: mir_ownership_authority.OwnershipCleanupActionRef,
-) bool {
-    for (table.edges) |edge| {
+fn cleanupCfgContainsRef(cfg: mir.CleanupCfg, ref: CleanupRef) bool {
+    for (cfg.edges) |edge| {
         for (edge.actions) |action| {
-            if (action.cleanup_action_index != ref.cleanup_action_index) continue;
-            if (!action.root_value_id.eql(ref.root_value_id)) continue;
-            if (!action.resource_type_symbol_id.eql(ref.resource_type_symbol_id)) continue;
-            if (!action.drop_glue_symbol_id.eql(ref.drop_glue_symbol_id)) continue;
-            return true;
+            switch (ref) {
+                .defer_ref => |defer_ref| switch (action) {
+                    .defer_cleanup => |candidate| {
+                        if (candidate.block_id.eql(defer_ref.block_id) and
+                            candidate.instruction_index == defer_ref.instruction_index and
+                            sourceMatches(candidate.source, defer_ref.source)) return true;
+                    },
+                    .ownership => {},
+                },
+                .ownership_action => |ownership_ref| switch (action) {
+                    .ownership => |candidate| {
+                        if (candidate.cleanup_action_index == ownership_ref.cleanup_action_index and
+                            candidate.root_value_id.eql(ownership_ref.root_value_id) and
+                            candidate.resource_type_symbol_id.eql(ownership_ref.resource_type_symbol_id) and
+                            candidate.drop_glue_symbol_id.eql(ownership_ref.drop_glue_symbol_id)) return true;
+                    },
+                    .defer_cleanup => {},
+                },
+            }
         }
     }
     return false;
 }
 
-fn autoDropLocalCleanupFromMirEdge(
+fn autoDropLocalCleanupFromMirCfg(
     module: *const mir.Module,
     function: *const mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    ownership_edges: ?*const mir.OwnershipCleanupEdgeTable,
+    cleanup_cfg: ?*const mir.CleanupCfg,
     local_name: []const u8,
     type_name: []const u8,
     local_span: ast.Span,
 ) ?mir_ownership_authority.AutoDropLocalCleanup {
     const plan = cleanup_plan orelse return null;
-    const edges = ownership_edges orelse return null;
+    const cfg = cleanup_cfg orelse return null;
     const ownership = typeOwnershipFactForTypeName(module, type_name) orelse return null;
     if (ownership.kind != .affine or !ownership.drop_glue_symbol_id.isValid()) return null;
     const root_value_id = valueIdForLocal(function, local_name) orelse return null;
 
-    for (edges.edges) |edge| {
+    for (cfg.edges) |edge| {
         for (edge.actions) |action| {
-            if (action.kind != .auto_drop) continue;
-            if (!action.root_value_id.eql(root_value_id)) continue;
-            if (!action.resource_type_symbol_id.eql(ownership.typed_type_symbol_id)) continue;
-            if (!action.drop_glue_symbol_id.eql(ownership.drop_glue_symbol_id)) continue;
+            const ownership_action = switch (action) {
+                .ownership => |ref| ref,
+                .defer_cleanup => continue,
+            };
+            if (ownership_action.kind != .auto_drop) continue;
+            if (!ownership_action.root_value_id.eql(root_value_id)) continue;
+            if (!ownership_action.resource_type_symbol_id.eql(ownership.typed_type_symbol_id)) continue;
+            if (!ownership_action.drop_glue_symbol_id.eql(ownership.drop_glue_symbol_id)) continue;
             const ref: mir_ownership_authority.OwnershipCleanupActionRef = .{
                 .local_name = local_name,
                 .span = local_span,
-                .cleanup_action_index = action.cleanup_action_index,
-                .root_value_id = action.root_value_id,
-                .resource_type_symbol_id = action.resource_type_symbol_id,
-                .drop_glue_symbol_id = action.drop_glue_symbol_id,
+                .cleanup_action_index = ownership_action.cleanup_action_index,
+                .root_value_id = ownership_action.root_value_id,
+                .resource_type_symbol_id = ownership_action.resource_type_symbol_id,
+                .drop_glue_symbol_id = ownership_action.drop_glue_symbol_id,
             };
             return mir_ownership_authority.autoDropLocalCleanupFromActionRef(module, function, plan, ref);
         }
@@ -931,11 +898,20 @@ test "defer cleanup state refs must be valid ordered and unique" {
     var stale_second = second;
     stale_second.source.column += 1;
     try std.testing.expect(!mir.deferCleanupEdgeTableContainsRef(mir_defer_edges, stale_second));
+    var test_cfg_actions = [_]mir.CleanupCfgActionRef{
+        .{ .defer_cleanup = mir_defer_edges.edges[0].actions[0] },
+        .{ .defer_cleanup = mir_defer_edges.edges[0].actions[1] },
+    };
+    var test_cfg_edges = [_]mir.CleanupCfgEdge{.{
+        .kind = .scope_exit,
+        .actions = test_cfg_actions[0..],
+    }};
+    const test_cleanup_cfg: mir.CleanupCfg = .{ .edges = test_cfg_edges[0..] };
     var registration_state: CleanupState = .{};
     defer registration_state.deinit(std.testing.allocator);
     try std.testing.expectEqual(AutoDropStackDecision.rejected, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, null, &registration_state, .{ .block = .{ .defer_ref = first, .block = block } }));
-    try std.testing.expectEqual(AutoDropStackDecision.applied, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, &mir_defer_edges, &registration_state, .{ .block = .{ .defer_ref = first, .block = block } }));
-    try std.testing.expectEqual(AutoDropStackDecision.rejected, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, &mir_defer_edges, &registration_state, .{ .block = .{ .defer_ref = stale_second, .block = block } }));
+    try std.testing.expectEqual(AutoDropStackDecision.applied, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, &test_cleanup_cfg, &registration_state, .{ .block = .{ .defer_ref = first, .block = block } }));
+    try std.testing.expectEqual(AutoDropStackDecision.rejected, try registerOrdinaryDeferCleanup(std.testing.allocator, &function, &test_cleanup_cfg, &registration_state, .{ .block = .{ .defer_ref = stale_second, .block = block } }));
 
     try std.testing.expect(deferCleanupRefsValid(function, &.{
         .{ .block = .{ .defer_ref = first, .block = block } },
@@ -945,7 +921,7 @@ test "defer cleanup state refs must be valid ordered and unique" {
     defer admitted_state.deinit(std.testing.allocator);
     try admitted_state.append(std.testing.allocator, .{ .block = .{ .defer_ref = first, .block = block } });
     try admitted_state.append(std.testing.allocator, .{ .block = .{ .defer_ref = second, .block = block } });
-    try std.testing.expect(cleanupStateAdmittedByMir(function, &mir_defer_edges, &admitted_state));
+    try std.testing.expect(cleanupStateAdmittedByMir(function, &test_cleanup_cfg, &admitted_state));
 
     var missing_edges_state: CleanupState = .{};
     defer missing_edges_state.deinit(std.testing.allocator);
@@ -972,7 +948,16 @@ test "defer cleanup state refs must be valid ordered and unique" {
     try std.testing.expect(deferCleanupAtEmissionIndex(function, state.slice(), 0, 2) == null);
 
     const root_mark = rootCleanupCursor();
-    var plan = (try buildCleanupEdgePlan(std.testing.allocator, null, function, null, &mir_defer_edges, null, &state, root_mark, .return_exit)) orelse return error.TestUnexpectedResult;
+    var cleanup_cfg_actions = [_]mir.CleanupCfgActionRef{
+        .{ .defer_cleanup = mir_defer_edges.edges[0].actions[0] },
+        .{ .defer_cleanup = mir_defer_edges.edges[0].actions[1] },
+    };
+    var cleanup_cfg_edges = [_]mir.CleanupCfgEdge{.{
+        .kind = .return_exit,
+        .actions = cleanup_cfg_actions[0..],
+    }};
+    const cleanup_cfg: mir.CleanupCfg = .{ .edges = cleanup_cfg_edges[0..] };
+    var plan = (try buildCleanupEdgePlan(std.testing.allocator, null, function, null, &cleanup_cfg, &state, root_mark, .return_exit)) orelse return error.TestUnexpectedResult;
     defer plan.deinit(std.testing.allocator);
     try std.testing.expectEqual(CleanupEdgeKind.return_exit, plan.kind);
     try std.testing.expectEqual(@as(usize, 0), cleanupCursorIndex(plan.start));
@@ -980,7 +965,7 @@ test "defer cleanup state refs must be valid ordered and unique" {
     try std.testing.expect((deferCleanupRef(plan.cleanups[0]) orelse return error.TestUnexpectedResult).instruction_index == 1);
     try std.testing.expect((deferCleanupRef(plan.cleanups[1]) orelse return error.TestUnexpectedResult).instruction_index == 0);
 
-    var table = (try buildCleanupEdgeTableFromCursor(std.testing.allocator, null, function, null, &mir_defer_edges, null, &state, root_mark, .return_exit)) orelse return error.TestUnexpectedResult;
+    var table = (try buildCleanupEdgeTableFromCursor(std.testing.allocator, null, function, null, &cleanup_cfg, &state, root_mark, .return_exit)) orelse return error.TestUnexpectedResult;
     defer table.deinit(std.testing.allocator);
     const edge = cleanupEdgeFor(table, .return_exit, root_mark) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(CleanupEdgeKind.return_exit, edge.kind);
@@ -1026,7 +1011,7 @@ test "cleanup edge table rejects ownership actions without MIR cleanup plan" {
     try state.append(std.testing.allocator, .{ .auto_drop = cleanup_ref });
     const root_mark = rootCleanupCursor();
 
-    try std.testing.expect((try buildCleanupEdgeTableFromCursor(std.testing.allocator, null, function, null, null, null, &state, root_mark, .scope_exit)) == null);
+    try std.testing.expect((try buildCleanupEdgeTableFromCursor(std.testing.allocator, null, function, null, null, &state, root_mark, .scope_exit)) == null);
 }
 
 test "cleanup state snapshot restores full contents" {

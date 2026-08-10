@@ -672,6 +672,37 @@ pub const DeferCleanupEdgeTable = struct {
     }
 };
 
+pub const CleanupCfgEdgeKind = enum {
+    scope_exit,
+    return_exit,
+    break_exit,
+    continue_exit,
+    error_exit,
+};
+
+pub const CleanupCfgActionRef = union(enum) {
+    ownership: OwnershipCleanupEdgeActionRef,
+    defer_cleanup: DeferCleanupEdgeActionRef,
+};
+
+pub const CleanupCfgEdge = struct {
+    kind: CleanupCfgEdgeKind,
+    source_block: BlockId = .invalid,
+    target_block: ?BlockId = null,
+    source: SourcePoint = .{ .line = 0, .column = 0 },
+    actions: []CleanupCfgActionRef = &.{},
+};
+
+pub const CleanupCfg = struct {
+    edges: []CleanupCfgEdge = &.{},
+
+    pub fn deinit(self: *CleanupCfg, allocator: std.mem.Allocator) void {
+        for (self.edges) |edge| allocator.free(edge.actions);
+        allocator.free(self.edges);
+        self.edges = &.{};
+    }
+};
+
 pub const PointerProvenance = enum {
     global_storage,
     local_storage,

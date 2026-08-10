@@ -289,6 +289,109 @@ pub fn buildDeferCleanupEdgeTable(
     return table;
 }
 
+pub fn cleanupCfgEdgeKindFromOwnership(kind: OwnershipCleanupEdgeKind) CleanupCfgEdgeKind {
+    return switch (kind) {
+        .scope_exit => .scope_exit,
+        .return_exit => .return_exit,
+        .break_exit => .break_exit,
+        .continue_exit => .continue_exit,
+        .error_exit => .error_exit,
+    };
+}
+
+pub fn cleanupCfgEdgeKindFromDefer(kind: DeferCleanupEdgeKind) CleanupCfgEdgeKind {
+    return switch (kind) {
+        .scope_exit => .scope_exit,
+        .return_exit => .return_exit,
+        .break_exit => .break_exit,
+        .continue_exit => .continue_exit,
+        .error_exit => .error_exit,
+    };
+}
+
+pub fn buildCleanupCfg(
+    allocator: std.mem.Allocator,
+    module: Module,
+    function: Function,
+    ownership_plan: OwnershipCleanupPlan,
+) error{ InvalidMirOwnershipEvents, OutOfMemory }!CleanupCfg {
+    var ownership_edges = try buildOwnershipCleanupEdgeTable(allocator, module, function, ownership_plan);
+    defer ownership_edges.deinit(allocator);
+    var defer_edges = try buildDeferCleanupEdgeTable(allocator, function);
+    defer defer_edges.deinit(allocator);
+    return try buildCleanupCfgFromEdgeTables(allocator, module, function, ownership_plan, ownership_edges, defer_edges);
+}
+
+pub fn buildCleanupCfgFromEdgeTables(
+    allocator: std.mem.Allocator,
+    module: Module,
+    function: Function,
+    ownership_plan: OwnershipCleanupPlan,
+    ownership_edges: OwnershipCleanupEdgeTable,
+    defer_edges: DeferCleanupEdgeTable,
+) error{ InvalidMirOwnershipEvents, OutOfMemory }!CleanupCfg {
+    if (!ownershipCleanupEdgeTableValid(module, function, ownership_plan, ownership_edges)) return error.InvalidMirOwnershipEvents;
+    if (!deferCleanupEdgeTableValid(function, defer_edges)) return error.InvalidMirOwnershipEvents;
+
+    var cfg_edges: std.ArrayList(CleanupCfgEdge) = .empty;
+    errdefer {
+        for (cfg_edges.items) |*edge| allocator.free(edge.actions);
+        cfg_edges.deinit(allocator);
+    }
+
+    for (ownership_edges.edges) |edge| {
+        var actions = try allocator.alloc(CleanupCfgActionRef, edge.actions.len);
+        errdefer allocator.free(actions);
+        for (edge.actions, 0..) |action, index| actions[index] = .{ .ownership = action };
+        try cfg_edges.append(allocator, .{
+            .kind = cleanupCfgEdgeKindFromOwnership(edge.kind),
+            .source_block = edge.source_block,
+            .target_block = edge.target_block,
+            .source = edge.source,
+            .actions = actions,
+        });
+    }
+
+    for (defer_edges.edges) |edge| {
+        var actions = try allocator.alloc(CleanupCfgActionRef, edge.actions.len);
+        errdefer allocator.free(actions);
+        for (edge.actions, 0..) |action, index| actions[index] = .{ .defer_cleanup = action };
+        try cfg_edges.append(allocator, .{
+            .kind = cleanupCfgEdgeKindFromDefer(edge.kind),
+            .source_block = edge.source_block,
+            .target_block = edge.target_block,
+            .source = edge.source,
+            .actions = actions,
+        });
+    }
+
+    const edges = try cfg_edges.toOwnedSlice(allocator);
+    var cfg: CleanupCfg = .{ .edges = edges };
+    if (!cleanupCfgValid(module, function, ownership_plan, cfg)) {
+        cfg.deinit(allocator);
+        return error.InvalidMirOwnershipEvents;
+    }
+    return cfg;
+}
+
+pub fn cleanupCfgValid(
+    module: Module,
+    function: Function,
+    ownership_plan: OwnershipCleanupPlan,
+    cfg: CleanupCfg,
+) bool {
+    if (!ownershipCleanupPlanValid(module, function, ownership_plan)) return false;
+    for (cfg.edges) |edge| {
+        for (edge.actions) |action| {
+            switch (action) {
+                .ownership => |ref| if (!ownershipCleanupEdgeActionRefValid(module, function, ownership_plan, ref)) return false,
+                .defer_cleanup => |ref| if (!deferCleanupEdgeActionRefValid(function, ref)) return false,
+            }
+        }
+    }
+    return true;
+}
+
 pub fn deferCleanupEdgeTableValid(function: Function, table: DeferCleanupEdgeTable) bool {
     for (table.edges) |edge| {
         for (edge.actions) |ref| {
@@ -418,6 +521,10 @@ pub const DeferCleanupEdgeKind = mir_model.DeferCleanupEdgeKind;
 pub const DeferCleanupEdgeActionRef = mir_model.DeferCleanupEdgeActionRef;
 pub const DeferCleanupEdge = mir_model.DeferCleanupEdge;
 pub const DeferCleanupEdgeTable = mir_model.DeferCleanupEdgeTable;
+pub const CleanupCfgEdgeKind = mir_model.CleanupCfgEdgeKind;
+pub const CleanupCfgActionRef = mir_model.CleanupCfgActionRef;
+pub const CleanupCfgEdge = mir_model.CleanupCfgEdge;
+pub const CleanupCfg = mir_model.CleanupCfg;
 pub const PointerProvenanceInvalidationPolicy = mir_model.PointerProvenanceInvalidationPolicy;
 pub const PointerProvenanceInvalidationReason = mir_model.PointerProvenanceInvalidationReason;
 pub const Block = mir_model.Block;
