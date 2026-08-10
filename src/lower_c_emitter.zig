@@ -242,8 +242,6 @@ pub fn appendModuleMir(
     try emitter.emitModule(declarations);
 }
 
-const DeferredCleanup = backend_cleanup.DeferredCleanup;
-
 pub const CEmitter = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
@@ -3428,22 +3426,22 @@ pub const CEmitter = struct {
         const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt_span)) orelse return error.UnsupportedCEmission;
         const cleanup_cfg = self.currentCleanupCfg() orelse return error.UnsupportedCEmission;
         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, .{ .direct_call = cleanup })) {
+            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, cleanup.defer_ref)) {
                 .applied => {},
                 .ignored, .rejected => return error.UnsupportedCEmission,
             }
             return;
         }
         if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, .{ .call_target = cleanup })) {
+            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, cleanup.defer_ref)) {
                 .applied => {},
                 .ignored, .rejected => return error.UnsupportedCEmission,
             }
             return;
         }
         switch (expr.kind) {
-            .block => |block| {
-                switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, .{ .block = .{ .defer_ref = defer_ref, .block = block } })) {
+            .block => {
+                switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, defer_ref)) {
                     .applied => {},
                     .ignored, .rejected => return error.UnsupportedCEmission,
                 }
@@ -3541,36 +3539,6 @@ pub const CEmitter = struct {
     fn validateCleanupState(self: *CEmitter) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         if (!backend_cleanup.cleanupStateAdmittedByMir(function.*, self.currentCleanupCfg(), &self.cleanup_state)) return error.UnsupportedCEmission;
-    }
-
-    fn emitDeferredCleanup(self: *CEmitter, cleanup: DeferredCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
-        switch (cleanup) {
-            .block => |entry| {
-                const expr = self.deferExprForRef(entry.defer_ref) orelse return error.UnsupportedCEmission;
-                const block = switch (expr.kind) {
-                    .block => |block| block,
-                    else => entry.block,
-                };
-                try self.writeLineDirective(block.span);
-                try self.emitBracedBlockBody(block, locals, return_ty);
-            },
-            .direct_call => |entry| {
-                try self.writeLineDirective(entry.span);
-                try self.emitOrdinaryDeferDirectCallCleanup(entry, locals, return_ty);
-            },
-            .call_target => |entry| {
-                try self.writeLineDirective(entry.span);
-                try self.emitCallTargetDeferCleanup(entry, locals);
-            },
-            .auto_drop => |entry| {
-                try self.writeLineDirective(entry.span);
-                try self.emitAutoDropPointerCleanup(entry);
-            },
-            .explicit_drop => |entry| {
-                try self.writeLineDirective(entry.span);
-                try self.emitExplicitDropPointerCleanup(entry);
-            },
-        }
     }
 
     fn emitCleanupRef(self: *CEmitter, ref: backend_cleanup.CleanupRef, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {

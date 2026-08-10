@@ -161,7 +161,6 @@ const DebugLocal = lower_llvm_model.DebugLocal;
 const DebugLocalKind = lower_llvm_model.DebugLocalKind;
 const LoopLabels = lower_llvm_model.LoopLabels;
 
-const DeferredCleanup = backend_cleanup.DeferredCleanup;
 const RawManyOffsetInfo = lower_llvm_model.RawManyOffsetInfo;
 const EnumRawCallInfo = lower_llvm_model.EnumRawCallInfo;
 const ReduceTypes = struct {
@@ -1845,22 +1844,22 @@ const LlvmEmitter = struct {
                         const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt.span)) orelse return error.UnsupportedLlvmEmission;
                         const cleanup_cfg = self.currentCleanupCfg() orelse return error.UnsupportedLlvmEmission;
                         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, .{ .direct_call = cleanup })) {
+                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, cleanup.defer_ref)) {
                                 .applied => {},
                                 .ignored, .rejected => return error.UnsupportedLlvmEmission,
                             }
                             return false;
                         }
                         if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, .{ .call_target = cleanup })) {
+                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, cleanup.defer_ref)) {
                                 .applied => {},
                                 .ignored, .rejected => return error.UnsupportedLlvmEmission,
                             }
                             return false;
                         }
                         switch (expr.kind) {
-                            .block => |block| {
-                                switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, .{ .block = .{ .defer_ref = defer_ref, .block = block } })) {
+                            .block => {
+                                switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, defer_ref)) {
                                     .applied => {},
                                     .ignored, .rejected => return error.UnsupportedLlvmEmission,
                                 }
@@ -1994,23 +1993,6 @@ const LlvmEmitter = struct {
     fn validateCleanupState(self: *LlvmEmitter) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         if (!backend_cleanup.cleanupStateAdmittedByMir(function.*, self.currentCleanupCfg(), &self.cleanup_state)) return error.UnsupportedLlvmEmission;
-    }
-
-    fn emitDeferredCleanup(self: *LlvmEmitter, cleanup: DeferredCleanup, ret_ty: ast.TypeExpr) !void {
-        switch (cleanup) {
-            .block => |entry| {
-                const expr = self.deferExprForRef(entry.defer_ref) orelse return error.UnsupportedLlvmEmission;
-                const block = switch (expr.kind) {
-                    .block => |block| block,
-                    else => entry.block,
-                };
-                if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission;
-            },
-            .direct_call => |entry| try self.emitOrdinaryDeferDirectCallCleanup(entry),
-            .call_target => |entry| try self.emitCallTargetDeferCleanup(entry),
-            .auto_drop => |entry| try self.emitAutoDropPointerCleanup(entry),
-            .explicit_drop => |entry| try self.emitExplicitDropPointerCleanup(entry),
-        }
     }
 
     fn emitCleanupRef(self: *LlvmEmitter, ref: backend_cleanup.CleanupRef, ret_ty: ast.TypeExpr) !void {
