@@ -378,22 +378,37 @@ fn buildCleanupEdgeTableFromCursor(
 ) !?CleanupEdgeTable {
     const cleanups_active = state.slice();
     const start_index = cleanupCursorIndex(start);
-    const count = deferCleanupEmissionCount(cleanups_active, start_index) orelse return null;
+    const active_count = deferCleanupEmissionCount(cleanups_active, start_index) orelse return null;
     if (!deferCleanupEmissionRangeValid(function, cleanups_active, start_index)) return null;
+    if (active_count == 0) {
+        const empty_edges = try allocator.alloc(CleanupEdge, 1);
+        errdefer allocator.free(empty_edges);
+        empty_edges[0] = .{ .kind = kind, .start = start_index };
+        return .{ .edges = empty_edges };
+    }
+
+    const cfg = cleanup_cfg orelse return null;
+    const cfg_edge = cleanupCfgEdgeForKind(cfg.*, cleanupCfgKindFromBackend(kind)) orelse return null;
+
+    var cleanup_items: std.ArrayList(DeferredCleanup) = .empty;
+    errdefer cleanup_items.deinit(allocator);
+    var ref_items: std.ArrayList(CleanupRef) = .empty;
+    errdefer ref_items.deinit(allocator);
+
+    for (cfg_edge.actions) |action| {
+        const ref = cleanupRefFromCleanupCfgAction(action);
+        const cleanup = cleanupForRefInEmissionRange(function, cleanups_active, start_index, ref) orelse continue;
+        try cleanup_items.append(allocator, cleanup);
+        try ref_items.append(allocator, ref);
+    }
+    if (cleanup_items.items.len != active_count) return null;
 
     const edges = try allocator.alloc(CleanupEdge, 1);
     errdefer allocator.free(edges);
-    var cleanups = try allocator.alloc(DeferredCleanup, count);
+    const cleanups = try cleanup_items.toOwnedSlice(allocator);
     errdefer allocator.free(cleanups);
-    var refs = try allocator.alloc(CleanupRef, count);
+    const refs = try ref_items.toOwnedSlice(allocator);
     errdefer allocator.free(refs);
-
-    var emission_index: usize = 0;
-    while (emission_index < count) : (emission_index += 1) {
-        const cleanup = deferCleanupAtEmissionIndex(function, cleanups_active, start_index, emission_index) orelse return null;
-        cleanups[emission_index] = cleanup;
-        refs[emission_index] = cleanupRef(cleanup);
-    }
 
     edges[0] = .{
         .kind = kind,
@@ -407,6 +422,42 @@ fn buildCleanupEdgeTableFromCursor(
         return null;
     }
     return table;
+}
+
+fn cleanupCfgEdgeForKind(cfg: mir.CleanupCfg, kind: mir.CleanupCfgEdgeKind) ?mir.CleanupCfgEdge {
+    for (cfg.edges) |edge| {
+        if (edge.kind == kind) return edge;
+    }
+    return null;
+}
+
+fn cleanupRefFromCleanupCfgAction(action: mir.CleanupCfgActionRef) CleanupRef {
+    return switch (action) {
+        .defer_cleanup => |ref| .{ .defer_ref = .{ .block_id = ref.block_id, .instruction_index = ref.instruction_index, .source = ref.source } },
+        .ownership => |ref| .{ .ownership_action = .{
+            .local_name = "",
+            .span = ast.Span{ .offset = ref.source.offset, .len = ref.source.len, .line = ref.source.line, .column = ref.source.column },
+            .cleanup_action_index = ref.cleanup_action_index,
+            .root_value_id = ref.root_value_id,
+            .resource_type_symbol_id = ref.resource_type_symbol_id,
+            .drop_glue_symbol_id = ref.drop_glue_symbol_id,
+        } },
+    };
+}
+
+fn cleanupForRefInEmissionRange(
+    function: mir.Function,
+    cleanups: []const DeferredCleanup,
+    start: usize,
+    ref: CleanupRef,
+) ?DeferredCleanup {
+    const count = deferCleanupEmissionCount(cleanups, start) orelse return null;
+    var emission_index: usize = 0;
+    while (emission_index < count) : (emission_index += 1) {
+        const cleanup = deferCleanupAtEmissionIndex(function, cleanups, start, emission_index) orelse return null;
+        if (cleanupRefMatchesCleanup(ref, cleanup)) return cleanup;
+    }
+    return null;
 }
 
 pub fn buildCleanupEdgePlan(
@@ -839,7 +890,7 @@ fn ownershipCleanupActionRefsEqual(
     if (!a.root_value_id.eql(b.root_value_id)) return false;
     if (!a.resource_type_symbol_id.eql(b.resource_type_symbol_id)) return false;
     if (!a.drop_glue_symbol_id.eql(b.drop_glue_symbol_id)) return false;
-    return std.mem.eql(u8, a.local_name, b.local_name);
+    return true;
 }
 
 fn sameDeferCleanupRef(a: mir.DeferCleanupRef, b: mir.DeferCleanupRef) bool {
