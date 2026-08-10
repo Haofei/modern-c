@@ -274,19 +274,62 @@ pub fn buildDeferCleanupEdgeTable(
 
     if (refs.items.len == 0) return .{};
     const actions = try refs.toOwnedSlice(allocator);
-    errdefer allocator.free(actions);
-    const edges = try allocator.alloc(DeferCleanupEdge, 1);
-    errdefer allocator.free(edges);
-    edges[0] = .{
-        .kind = .scope_exit,
-        .actions = actions,
-    };
+    defer allocator.free(actions);
+
+    var edge_list: std.ArrayList(DeferCleanupEdge) = .empty;
+    errdefer {
+        for (edge_list.items) |*edge| allocator.free(edge.actions);
+        edge_list.deinit(allocator);
+    }
+
+    try appendDeferCleanupCfgEdge(allocator, &edge_list, .scope_exit, .invalid, null, .{ .line = 0, .column = 0 }, actions);
+    try appendDeferCleanupCfgEdge(allocator, &edge_list, .error_exit, .invalid, null, .{ .line = 0, .column = 0 }, actions);
+
+    for (function.blocks) |block| {
+        const source = cleanupEdgeSourceForBlock(block);
+        switch (block.terminator) {
+            .return_ => try appendDeferCleanupCfgEdge(allocator, &edge_list, .return_exit, block.typed_id, null, source, actions),
+            .jump => |target| {
+                const target_block: ?BlockId = if (target < function.blocks.len) function.blocks[target].typed_id else null;
+                try appendDeferCleanupCfgEdge(allocator, &edge_list, .break_exit, block.typed_id, target_block, source, actions);
+                try appendDeferCleanupCfgEdge(allocator, &edge_list, .continue_exit, block.typed_id, target_block, source, actions);
+            },
+            .fallthrough, .branch, .trap_, .unreachable_, .switch_ => {},
+        }
+    }
+
+    const edges = try edge_list.toOwnedSlice(allocator);
     var table: DeferCleanupEdgeTable = .{ .edges = edges };
     if (!deferCleanupEdgeTableValid(function, table)) {
         table.deinit(allocator);
         return .{};
     }
     return table;
+}
+
+fn appendDeferCleanupCfgEdge(
+    allocator: std.mem.Allocator,
+    edges: *std.ArrayList(DeferCleanupEdge),
+    kind: DeferCleanupEdgeKind,
+    source_block: BlockId,
+    target_block: ?BlockId,
+    source: SourcePoint,
+    actions: []const DeferCleanupEdgeActionRef,
+) error{OutOfMemory}!void {
+    const edge_actions = try allocator.dupe(DeferCleanupEdgeActionRef, actions);
+    errdefer allocator.free(edge_actions);
+    try edges.append(allocator, .{
+        .kind = kind,
+        .source_block = source_block,
+        .target_block = target_block,
+        .source = source,
+        .actions = edge_actions,
+    });
+}
+
+fn cleanupEdgeSourceForBlock(block: Block) SourcePoint {
+    if (block.instructions.len == 0) return .{ .line = 0, .column = 0 };
+    return sourcePointFromInstruction(block.instructions[block.instructions.len - 1]);
 }
 
 pub fn cleanupCfgEdgeKindFromOwnership(kind: OwnershipCleanupEdgeKind) CleanupCfgEdgeKind {
@@ -2041,10 +2084,8 @@ pub fn buildOwnershipCleanupEdgeTable(
     if (!ownershipCleanupPlanValid(module, function, plan)) return error.InvalidMirOwnershipEvents;
     if (plan.actions.len == 0) return .{};
 
-    var edges = try allocator.alloc(OwnershipCleanupEdge, 1);
-    errdefer allocator.free(edges);
     var actions = try allocator.alloc(OwnershipCleanupEdgeActionRef, plan.actions.len);
-    errdefer allocator.free(actions);
+    defer allocator.free(actions);
 
     var emission_index: usize = 0;
     while (emission_index < plan.actions.len) : (emission_index += 1) {
@@ -2052,16 +2093,55 @@ pub fn buildOwnershipCleanupEdgeTable(
         actions[emission_index] = ownershipCleanupEdgeActionRef(plan, action_index) orelse return error.InvalidMirOwnershipEvents;
     }
 
-    edges[0] = .{
-        .kind = .scope_exit,
-        .actions = actions,
-    };
+    var edge_list: std.ArrayList(OwnershipCleanupEdge) = .empty;
+    errdefer {
+        for (edge_list.items) |*edge| allocator.free(edge.actions);
+        edge_list.deinit(allocator);
+    }
+
+    try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .scope_exit, .invalid, null, .{ .line = 0, .column = 0 }, actions);
+    try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .error_exit, .invalid, null, .{ .line = 0, .column = 0 }, actions);
+
+    for (function.blocks) |block| {
+        const source = cleanupEdgeSourceForBlock(block);
+        switch (block.terminator) {
+            .return_ => try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .return_exit, block.typed_id, null, source, actions),
+            .jump => |target| {
+                const target_block: ?BlockId = if (target < function.blocks.len) function.blocks[target].typed_id else null;
+                try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .break_exit, block.typed_id, target_block, source, actions);
+                try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .continue_exit, block.typed_id, target_block, source, actions);
+            },
+            .fallthrough, .branch, .trap_, .unreachable_, .switch_ => {},
+        }
+    }
+
+    const edges = try edge_list.toOwnedSlice(allocator);
     var table: OwnershipCleanupEdgeTable = .{ .edges = edges };
     if (!ownershipCleanupEdgeTableValid(module, function, plan, table)) {
         table.deinit(allocator);
         return error.InvalidMirOwnershipEvents;
     }
     return table;
+}
+
+fn appendOwnershipCleanupCfgEdge(
+    allocator: std.mem.Allocator,
+    edges: *std.ArrayList(OwnershipCleanupEdge),
+    kind: OwnershipCleanupEdgeKind,
+    source_block: BlockId,
+    target_block: ?BlockId,
+    source: SourcePoint,
+    actions: []const OwnershipCleanupEdgeActionRef,
+) error{OutOfMemory}!void {
+    const edge_actions = try allocator.dupe(OwnershipCleanupEdgeActionRef, actions);
+    errdefer allocator.free(edge_actions);
+    try edges.append(allocator, .{
+        .kind = kind,
+        .source_block = source_block,
+        .target_block = target_block,
+        .source = source,
+        .actions = edge_actions,
+    });
 }
 
 pub fn ownershipCleanupEdgeTableValid(
