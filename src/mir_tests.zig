@@ -4733,11 +4733,9 @@ test "MIR records explicit drop glue call ownership events" {
     const scope_cleanup_edge = for (cleanup_edge_table.edges) |edge| {
         if (edge.kind == .scope_exit) break edge;
     } else return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 2), scope_cleanup_edge.actions.len);
+    try std.testing.expectEqual(@as(usize, 1), scope_cleanup_edge.actions.len);
     try std.testing.expectEqual(@as(usize, 1), scope_cleanup_edge.actions[0].cleanup_action_index);
     try std.testing.expectEqual(mir.CleanupActionKind.auto_drop, scope_cleanup_edge.actions[0].kind);
-    try std.testing.expectEqual(@as(usize, 0), scope_cleanup_edge.actions[1].cleanup_action_index);
-    try std.testing.expectEqual(mir.CleanupActionKind.explicit_drop, scope_cleanup_edge.actions[1].kind);
     try std.testing.expect(mir.ownershipCleanupEdgeTableValid(module_mir, function, built_cleanup_plan, cleanup_edge_table));
 
     const release_decl = for (parsed.module.decls) |decl| {

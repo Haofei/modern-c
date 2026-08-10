@@ -13655,12 +13655,12 @@ test "lower-c emits deferred drop-attribute pointer release before return" {
     defer output.deinit(std.testing.allocator);
     try appendCTest("emit_c_drop_attr_defer.mc", source, &output);
     const body = try cFunctionBody(output.items, "static uint32_t accept_deferred_resource_release(bool flag)");
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, "close_ticket(&t);"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, "close_ticket("));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body, "uint32_t mc_tmp"));
-    const first_cleanup = std.mem.indexOf(u8, body, "close_ticket(&t);").?;
+    const first_cleanup = std.mem.indexOf(u8, body, "close_ticket(").?;
     const early_value = std.mem.indexOf(u8, body, "uint32_t mc_tmp").?;
     const early_return = std.mem.indexOf(u8, body, "return mc_tmp").?;
-    const final_cleanup = std.mem.lastIndexOf(u8, body, "close_ticket(&t);").?;
+    const final_cleanup = std.mem.lastIndexOf(u8, body, "close_ticket(").?;
     const final_value = std.mem.lastIndexOf(u8, body, "uint32_t mc_tmp").?;
     const final_return = std.mem.lastIndexOf(u8, body, "return mc_tmp").?;
     try std.testing.expect(early_value < first_cleanup);

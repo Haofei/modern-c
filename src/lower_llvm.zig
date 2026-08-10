@@ -383,7 +383,6 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .local_slice_aggregate_pointer_array_fields = std.StringHashMap([]const u8).init(allocator),
         .aggregate_return_pointer_fields = std.StringHashMap(mir.PointerProvenance).init(allocator),
         .loop_stack = std.ArrayList(LoopLabels).empty,
-        .cleanup_state = .{},
         .string_literals = std.ArrayList(StringLiteralGlobal).empty,
         .debug_functions = std.ArrayList(DebugFunction).empty,
         .debug_locations = std.ArrayList(DebugLocation).empty,
@@ -497,7 +496,6 @@ const LlvmEmitter = struct {
     // outside a function body, in which case `emitAlloca` falls back to streaming inline.
     entry_allocas: ?*std.ArrayList(u8) = null,
     loop_stack: std.ArrayList(LoopLabels) = undefined,
-    cleanup_state: backend_cleanup.CleanupState = .{},
     string_literals: std.ArrayList(StringLiteralGlobal) = undefined,
     debug_functions: std.ArrayList(DebugFunction) = undefined,
     debug_locations: std.ArrayList(DebugLocation) = undefined,
@@ -581,7 +579,6 @@ const LlvmEmitter = struct {
         self.deinitOwnedStringValueMap(&self.local_slice_aggregate_pointer_array_fields);
         self.deinitOwnedStringProvenanceMap(&self.aggregate_return_pointer_fields);
         self.loop_stack.deinit(self.allocator);
-        self.cleanup_state.deinit(self.allocator);
         self.string_literals.deinit(self.allocator);
         self.debug_functions.deinit(self.allocator);
         self.debug_locations.deinit(self.allocator);
@@ -1388,7 +1385,6 @@ const LlvmEmitter = struct {
         self.local_slice_global_pointer_arrays.clearRetainingCapacity();
         self.local_slice_pointer_array_ranges.clearRetainingCapacity();
         self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
-        self.cleanup_state.clearRetainingCapacity();
         for (fn_decl.params, 0..) |param, i| {
             try self.local_types.put(param.name.text, param.ty);
             if (self.isVaListType(param.ty)) {
@@ -1810,8 +1806,10 @@ const LlvmEmitter = struct {
     }
 
     fn emitBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) anyerror!bool {
-        const defer_start = self.cleanup_state.cursor();
-        errdefer self.cleanup_state.restoreToCursor(defer_start);
+        return try self.emitBlockWithScopeCleanup(block, ret_ty, true);
+    }
+
+    fn emitBlockWithScopeCleanup(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr, emit_scope_cleanup: bool) anyerror!bool {
         for (block.items) |stmt| {
             const old_debug_span = self.current_debug_span;
             if (isSourceSpan(stmt.span)) self.current_debug_span = stmt.span;
@@ -1826,8 +1824,7 @@ const LlvmEmitter = struct {
             };
             if (terminated) return true;
         }
-        try self.emitCleanupEdge(defer_start, .scope_exit, ret_ty);
-        self.cleanup_state.restoreToCursor(defer_start);
+        if (emit_scope_cleanup) try self.emitCleanupEdge(.scope_exit, ret_ty, block.span, null);
         return false;
     }
 
@@ -1839,38 +1836,38 @@ const LlvmEmitter = struct {
             .@"defer" => |expr| {
                 try self.cancelAutoDropForReleaseCall(expr);
                 const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-                switch (try backend_cleanup.registerDeferredExplicitDropCleanup(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.cleanup_state, expr)) {
-                    .ignored => {
-                        const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt.span)) orelse return error.UnsupportedLlvmEmission;
-                        const cleanup_cfg = self.currentCleanupCfg() orelse return error.UnsupportedLlvmEmission;
-                        if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
-                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, cleanup.defer_ref)) {
-                                .applied => {},
-                                .ignored, .rejected => return error.UnsupportedLlvmEmission,
-                            }
-                            return false;
-                        }
-                        if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
-                            switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, cleanup.defer_ref)) {
-                                .applied => {},
-                                .ignored, .rejected => return error.UnsupportedLlvmEmission,
-                            }
-                            return false;
-                        }
-                        switch (expr.kind) {
-                            .block => {
-                                switch (try backend_cleanup.registerOrdinaryDeferCleanup(self.allocator, function, cleanup_cfg, &self.cleanup_state, defer_ref)) {
-                                    .applied => {},
-                                    .ignored, .rejected => return error.UnsupportedLlvmEmission,
-                                }
-                            },
-                            else => return error.UnsupportedLlvmEmission,
-                        }
-                    },
+                const deferred_drop = backend_cleanup.registerDeferredExplicitDropCleanup(&self.mir_module, function, self.currentOwnershipCleanupPlan(), expr);
+                switch (deferred_drop) {
+                    .ignored => {},
                     .applied => {
-                        try self.validateCleanupState();
+                        try self.validateCleanupCfg();
                     },
                     .rejected => return error.UnsupportedLlvmEmission,
+                }
+                const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt.span)) orelse return error.UnsupportedLlvmEmission;
+                const cleanup_cfg = self.currentCleanupCfg() orelse return error.UnsupportedLlvmEmission;
+                if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
+                    switch (backend_cleanup.registerOrdinaryDeferCleanup(function, cleanup_cfg, cleanup.defer_ref)) {
+                        .applied => {},
+                        .ignored, .rejected => return error.UnsupportedLlvmEmission,
+                    }
+                    return false;
+                }
+                if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
+                    switch (backend_cleanup.registerOrdinaryDeferCleanup(function, cleanup_cfg, cleanup.defer_ref)) {
+                        .applied => {},
+                        .ignored, .rejected => return error.UnsupportedLlvmEmission,
+                    }
+                    return false;
+                }
+                switch (expr.kind) {
+                    .block => {
+                        switch (backend_cleanup.registerOrdinaryDeferCleanup(function, cleanup_cfg, defer_ref)) {
+                            .applied => {},
+                            .ignored, .rejected => return error.UnsupportedLlvmEmission,
+                        }
+                    },
+                    else => return error.UnsupportedLlvmEmission,
                 }
             },
             .loop => |node| {
@@ -1897,14 +1894,14 @@ const LlvmEmitter = struct {
                         .grouped => |inner| if ((inner.*).kind != .void_literal) return error.UnsupportedLlvmEmission,
                         else => return error.UnsupportedLlvmEmission,
                     };
-                    try self.emitCleanupEdge(backend_cleanup.rootCleanupCursor(), .return_exit, ret_ty);
+                    try self.emitCleanupEdge(.return_exit, ret_ty, null, stmt.span);
                     try self.emitReturnVoid(stmt.span);
                 } else if (typeNameEql(ret_ty, "never")) {
                     return error.UnsupportedLlvmEmission;
                 } else {
                     const expr = maybe_expr orelse return error.UnsupportedLlvmEmission;
                     const value = try self.emitExprWithMirRangeTarget(expr, ret_ty, "value");
-                    try self.emitCleanupEdge(backend_cleanup.rootCleanupCursor(), .return_exit, ret_ty);
+                    try self.emitCleanupEdge(.return_exit, ret_ty, null, stmt.span);
                     try self.emitReturnValue(ret_ty, value, stmt.span);
                 }
                 return true;
@@ -1939,15 +1936,13 @@ const LlvmEmitter = struct {
             },
             .@"break" => |target| {
                 const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
-                try self.emitCleanupEdge(labels.cleanup_start, .break_exit, ret_ty);
-                self.cleanup_state.restoreToCursor(labels.cleanup_start);
+                try self.emitCleanupEdge(.break_exit, ret_ty, null, stmt.span);
                 try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.break_label, try self.debugCallSuffix() });
                 return true;
             },
             .@"continue" => |target| {
                 const labels = self.resolveLoopLabels(target) orelse return error.UnsupportedLlvmEmission;
-                try self.emitCleanupEdge(labels.cleanup_start, .continue_exit, ret_ty);
-                self.cleanup_state.restoreToCursor(labels.cleanup_start);
+                try self.emitCleanupEdge(.continue_exit, ret_ty, null, stmt.span);
                 try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ labels.continue_label, try self.debugCallSuffix() });
                 return true;
             },
@@ -1981,18 +1976,17 @@ const LlvmEmitter = struct {
         return self.loop_stack.getLastOrNull();
     }
 
-    fn emitCleanupEdge(self: *LlvmEmitter, start: backend_cleanup.CleanupCursor, kind: backend_cleanup.CleanupEdgeKind, ret_ty: ast.TypeExpr) !void {
+    fn emitCleanupEdge(self: *LlvmEmitter, kind: backend_cleanup.CleanupEdgeKind, ret_ty: ast.TypeExpr, scope_span: ?ast.Span, before_span: ?ast.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), &self.cleanup_state, start, kind)) orelse return error.UnsupportedLlvmEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), kind, scope_span, before_span)) orelse return error.UnsupportedLlvmEmission;
         defer plan.deinit(self.allocator);
         for (plan.refs) |ref| {
             try self.emitCleanupRef(ref, ret_ty);
         }
     }
 
-    fn validateCleanupState(self: *LlvmEmitter) !void {
-        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!backend_cleanup.cleanupStateAdmittedByMir(function.*, self.currentCleanupCfg(), &self.cleanup_state)) return error.UnsupportedLlvmEmission;
+    fn validateCleanupCfg(self: *LlvmEmitter) !void {
+        if (self.currentMirFunction() == null or self.currentCleanupCfg() == null) return error.UnsupportedLlvmEmission;
     }
 
     fn emitCleanupRef(self: *LlvmEmitter, ref: backend_cleanup.CleanupRef, ret_ty: ast.TypeExpr) !void {
@@ -2009,7 +2003,7 @@ const LlvmEmitter = struct {
                     return;
                 }
                 switch (expr.kind) {
-                    .block => |block| if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission,
+                    .block => |block| if (try self.emitScopedBlockWithCleanup(block, ret_ty, false)) return error.UnsupportedLlvmEmission,
                     else => return error.UnsupportedLlvmEmission,
                 }
             },
@@ -2135,6 +2129,10 @@ const LlvmEmitter = struct {
     }
 
     fn emitScopedBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) !bool {
+        return try self.emitScopedBlockWithCleanup(block, ret_ty, true);
+    }
+
+    fn emitScopedBlockWithCleanup(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr, emit_scope_cleanup: bool) !bool {
         var saved_types = std.StringHashMap(ast.TypeExpr).init(self.allocator);
         var restore_installed = false;
         errdefer if (!restore_installed) saved_types.deinit();
@@ -2204,7 +2202,7 @@ const LlvmEmitter = struct {
             self.local_slice_aggregate_pointer_array_fields = saved_local_slice_aggregate_pointer_array_fields;
         }
 
-        const terminated = try self.emitBlock(block, ret_ty);
+        const terminated = try self.emitBlockWithScopeCleanup(block, ret_ty, emit_scope_cleanup);
         try self.preserveOuterPointerLocalProvenanceAfterScope(&saved_types, &saved_pointer_local_provenance);
         try self.preserveOuterAggregatePointerFieldProvenanceAfterScope(&saved_types, &saved_aggregate_global_pointer_fields);
         try self.preserveOuterLocalArrayPointerElementProvenanceAfterScope(&saved_types, &saved_local_array_global_pointer_elements);
@@ -2692,7 +2690,7 @@ const LlvmEmitter = struct {
         // defer first — exactly like an explicit `return`. Flush from 0 (whole function
         // scope) without truncating: the ok path continues after this block with the same
         // active defers.
-        try self.emitCleanupEdge(backend_cleanup.rootCleanupCursor(), .error_exit, return_ty);
+        try self.emitCleanupEdge(.error_exit, return_ty, null, null);
         try self.emitReturnValue(return_ty, propagated_value, span);
         try self.out.print(self.allocator, "{s}:\n", .{ok_label});
         return true;
@@ -3018,7 +3016,7 @@ const LlvmEmitter = struct {
     fn registerAutoDropLocal(self: *LlvmEmitter, name: ast.Ident, ty: ast.TypeExpr) !void {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (try backend_cleanup.registerAutoDropLocalCleanup(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), &self.cleanup_state, name.text, type_name, name.span)) {
+        switch (backend_cleanup.registerAutoDropLocalCleanup(&self.mir_module, function, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), name.text, type_name, name.span)) {
             .applied, .ignored => {},
             .rejected => return error.UnsupportedLlvmEmission,
         }
@@ -3026,7 +3024,7 @@ const LlvmEmitter = struct {
 
     fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr, move_span: ast.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (try backend_cleanup.cancelAutoDropForMove(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.cleanup_state, expr, move_span)) {
+        switch (backend_cleanup.cancelAutoDropForMove(&self.mir_module, function, self.currentOwnershipCleanupPlan(), expr, move_span)) {
             .applied, .ignored => {},
             .rejected => return error.UnsupportedLlvmEmission,
         }
@@ -3034,7 +3032,7 @@ const LlvmEmitter = struct {
 
     fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (try backend_cleanup.cancelAutoDropForExplicitDrop(self.allocator, &self.mir_module, function, self.currentOwnershipCleanupPlan(), &self.cleanup_state, expr)) {
+        switch (backend_cleanup.cancelAutoDropForExplicitDrop(&self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
             .applied, .ignored => {},
             .rejected => return error.UnsupportedLlvmEmission,
         }
@@ -3560,7 +3558,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  br label %{s}{s}\n{s}:\n", .{ cond_label, try self.debugCallSuffix(), cond_label });
         const condition = try self.emitExpr(condition_expr, condition_ty);
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, body_label, end_label, try self.debugCallSuffix(), body_label });
-        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = cond_label, .cleanup_start = self.cleanup_state.cursor(), .label = if (loop.loop_label) |l| l.text else null });
+        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = cond_label, .label = if (loop.loop_label) |l| l.text else null });
         defer _ = self.loop_stack.pop();
         const body_terminated = try self.emitBlockWithDeferStackSnapshot(loop.body, ret_ty);
         if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ cond_label, try self.debugCallSuffix() });
@@ -3735,7 +3733,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ element_value, element_llvm, element_ptr });
         try self.emitConcreteObjectStore(binding_ptr, element_ty, element_value);
 
-        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = step_label, .cleanup_start = self.cleanup_state.cursor(), .label = if (loop.loop_label) |l| l.text else null });
+        try self.loop_stack.append(self.allocator, .{ .break_label = end_label, .continue_label = step_label, .label = if (loop.loop_label) |l| l.text else null });
         defer _ = self.loop_stack.pop();
         const body_terminated = try self.emitBlockWithDeferStackSnapshot(loop.body, ret_ty);
         if (!body_terminated) try self.out.print(self.allocator, "  br label %{s}{s}\n", .{ step_label, try self.debugCallSuffix() });
@@ -4140,10 +4138,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitSwitchBody(self: *LlvmEmitter, body: ast.SwitchBody, ret_ty: ast.TypeExpr) !bool {
-        var saved_cleanup_state = try self.cleanup_state.capture(self.allocator);
-        defer saved_cleanup_state.deinit(self.allocator);
-        errdefer self.cleanup_state.restore(saved_cleanup_state);
-        const terminated = switch (body) {
+        return switch (body) {
             .block => |block| try self.emitBlock(block, ret_ty),
             .expr => |expr| blk: {
                 if (typeNameEql(ret_ty, "void")) {
@@ -4155,17 +4150,10 @@ const LlvmEmitter = struct {
                 break :blk true;
             },
         };
-        self.cleanup_state.restore(saved_cleanup_state);
-        return terminated;
     }
 
     fn emitBlockWithDeferStackSnapshot(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) !bool {
-        var saved_cleanup_state = try self.cleanup_state.capture(self.allocator);
-        defer saved_cleanup_state.deinit(self.allocator);
-        errdefer self.cleanup_state.restore(saved_cleanup_state);
-        const terminated = try self.emitBlock(block, ret_ty);
-        self.cleanup_state.restore(saved_cleanup_state);
-        return terminated;
+        return self.emitBlock(block, ret_ty);
     }
 
     fn emitReturnVoid(self: *LlvmEmitter, span: ast.Span) !void {

@@ -2204,14 +2204,20 @@ pub fn buildOwnershipCleanupEdgeTable(
     if (!ownershipCleanupPlanValid(module, function, plan)) return error.InvalidMirOwnershipEvents;
     if (plan.actions.len == 0) return .{};
 
-    var actions = try allocator.alloc(OwnershipCleanupEdgeActionRef, plan.actions.len);
-    defer allocator.free(actions);
+    var action_refs: std.ArrayList(OwnershipCleanupEdgeActionRef) = .empty;
+    defer action_refs.deinit(allocator);
 
     var emission_index: usize = 0;
     while (emission_index < plan.actions.len) : (emission_index += 1) {
         const action_index = plan.actions.len - 1 - emission_index;
-        actions[emission_index] = ownershipCleanupEdgeActionRef(plan, action_index) orelse return error.InvalidMirOwnershipEvents;
+        const action = plan.actions[action_index];
+        switch (action.kind) {
+            .auto_drop => {},
+            .explicit_drop => continue,
+        }
+        try action_refs.append(allocator, ownershipCleanupEdgeActionRef(plan, action_index) orelse return error.InvalidMirOwnershipEvents);
     }
+    if (action_refs.items.len == 0) return .{};
 
     var edge_list: std.ArrayList(OwnershipCleanupEdge) = .empty;
     errdefer {
@@ -2219,17 +2225,17 @@ pub fn buildOwnershipCleanupEdgeTable(
         edge_list.deinit(allocator);
     }
 
-    try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .scope_exit, .invalid, null, .{ .line = 0, .column = 0 }, actions);
-    try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .error_exit, .invalid, null, .{ .line = 0, .column = 0 }, actions);
+    try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .scope_exit, .invalid, null, .{ .line = 0, .column = 0 }, action_refs.items, &plan);
+    try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .error_exit, .invalid, null, .{ .line = 0, .column = 0 }, action_refs.items, &plan);
 
     for (function.blocks) |block| {
         const source = cleanupEdgeSourceForBlock(block);
         switch (block.terminator) {
-            .return_ => try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .return_exit, block.typed_id, null, source, actions),
+            .return_ => try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .return_exit, block.typed_id, null, source, action_refs.items, &plan),
             .jump => |target| {
                 const target_block: ?BlockId = if (target < function.blocks.len) function.blocks[target].typed_id else null;
-                try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .break_exit, block.typed_id, target_block, source, actions);
-                try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .continue_exit, block.typed_id, target_block, source, actions);
+                try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .break_exit, block.typed_id, target_block, source, action_refs.items, &plan);
+                try appendOwnershipCleanupCfgEdge(allocator, &edge_list, .continue_exit, block.typed_id, target_block, source, action_refs.items, &plan);
             },
             .fallthrough, .branch, .trap_, .unreachable_, .switch_ => {},
         }
@@ -2252,8 +2258,15 @@ fn appendOwnershipCleanupCfgEdge(
     target_block: ?BlockId,
     source: SourcePoint,
     actions: []const OwnershipCleanupEdgeActionRef,
+    plan: *const OwnershipCleanupPlan,
 ) error{OutOfMemory}!void {
-    const edge_actions = try allocator.dupe(OwnershipCleanupEdgeActionRef, actions);
+    var filtered_actions: std.ArrayList(OwnershipCleanupEdgeActionRef) = .empty;
+    defer filtered_actions.deinit(allocator);
+    for (actions) |action| {
+        if (ownershipCleanupActionCancelledOnEdge(plan, action, source_block, source)) continue;
+        try filtered_actions.append(allocator, action);
+    }
+    const edge_actions = try allocator.dupe(OwnershipCleanupEdgeActionRef, filtered_actions.items);
     errdefer allocator.free(edge_actions);
     try edges.append(allocator, .{
         .kind = kind,
@@ -2262,6 +2275,26 @@ fn appendOwnershipCleanupCfgEdge(
         .source = source,
         .actions = edge_actions,
     });
+}
+
+fn ownershipCleanupActionCancelledOnEdge(
+    plan: *const OwnershipCleanupPlan,
+    action: OwnershipCleanupEdgeActionRef,
+    source_block: BlockId,
+    source: SourcePoint,
+) bool {
+    const has_source = !(source.offset == 0 and source.len == 0 and source.line == 0 and source.column == 0);
+    for (plan.cancellations) |cancellation| {
+        const same_source = has_source and sourcePointMatches(cancellation.source, source);
+        const same_block = source_block.isValid() and cancellation.block_id.eql(source_block);
+        if (!same_source and !same_block) continue;
+        if (cancellation.generation != action.generation) continue;
+        if (!cancellation.place.root_value_id.eql(action.root_value_id)) continue;
+        if (!cancellation.place.root_type_symbol_id.eql(action.resource_type_symbol_id)) continue;
+        if (!cancellation.drop_glue_symbol_id.eql(action.drop_glue_symbol_id)) continue;
+        return true;
+    }
+    return false;
 }
 
 pub fn ownershipCleanupEdgeTableValid(
