@@ -3529,7 +3529,8 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), &self.cleanup_state, start, kind)) orelse return error.UnsupportedCEmission;
         defer plan.deinit(self.allocator);
-        for (plan.cleanups) |cleanup| {
+        for (plan.refs) |ref| {
+            const cleanup = backend_cleanup.cleanupForRefInEmissionRange(function.*, self.cleanup_state.slice(), backend_cleanup.cleanupCursorIndex(start), ref) orelse return error.UnsupportedCEmission;
             try self.emitDeferredCleanup(cleanup, locals, return_ty);
         }
     }

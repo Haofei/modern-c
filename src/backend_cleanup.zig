@@ -165,11 +165,11 @@ fn cleanupEdgeTableValidWithMirEdges(
 pub const CleanupEdgePlan = struct {
     kind: CleanupEdgeKind,
     start: CleanupCursor,
-    cleanups: []DeferredCleanup,
+    refs: []CleanupRef,
 
     pub fn deinit(self: *CleanupEdgePlan, allocator: std.mem.Allocator) void {
-        allocator.free(self.cleanups);
-        self.cleanups = &.{};
+        allocator.free(self.refs);
+        self.refs = &.{};
     }
 };
 
@@ -396,7 +396,7 @@ fn buildCleanupEdgeTableFromCursor(
     errdefer ref_items.deinit(allocator);
 
     for (cfg_edge.actions) |action| {
-        const ref = cleanupRefFromCleanupCfgAction(action);
+        const ref = cleanupRefFromCleanupCfgAction(function, action) orelse return null;
         const cleanup = cleanupForRefInEmissionRange(function, cleanups_active, start_index, ref) orelse continue;
         try cleanup_items.append(allocator, cleanup);
         try ref_items.append(allocator, ref);
@@ -431,11 +431,11 @@ fn cleanupCfgEdgeForKind(cfg: mir.CleanupCfg, kind: mir.CleanupCfgEdgeKind) ?mir
     return null;
 }
 
-fn cleanupRefFromCleanupCfgAction(action: mir.CleanupCfgActionRef) CleanupRef {
+fn cleanupRefFromCleanupCfgAction(function: mir.Function, action: mir.CleanupCfgActionRef) ?CleanupRef {
     return switch (action) {
         .defer_cleanup => |ref| .{ .defer_ref = .{ .block_id = ref.block_id, .instruction_index = ref.instruction_index, .source = ref.source } },
         .ownership => |ref| .{ .ownership_action = .{
-            .local_name = "",
+            .local_name = localNameForValueId(&function, ref.root_value_id) orelse return null,
             .span = ast.Span{ .offset = ref.source.offset, .len = ref.source.len, .line = ref.source.line, .column = ref.source.column },
             .cleanup_action_index = ref.cleanup_action_index,
             .root_value_id = ref.root_value_id,
@@ -445,7 +445,7 @@ fn cleanupRefFromCleanupCfgAction(action: mir.CleanupCfgActionRef) CleanupRef {
     };
 }
 
-fn cleanupForRefInEmissionRange(
+pub fn cleanupForRefInEmissionRange(
     function: mir.Function,
     cleanups: []const DeferredCleanup,
     start: usize,
@@ -482,11 +482,11 @@ pub fn cleanupEdgePlanFromTable(
     start: CleanupCursor,
 ) !?CleanupEdgePlan {
     const edge = cleanupEdgeFor(table, kind, start) orelse return null;
-    const cleanups = try allocator.dupe(DeferredCleanup, edge.cleanups);
+    const refs = try allocator.dupe(CleanupRef, edge.refs);
     return .{
         .kind = edge.kind,
         .start = start,
-        .cleanups = cleanups,
+        .refs = refs,
     };
 }
 
@@ -1055,9 +1055,15 @@ test "defer cleanup state refs must be valid ordered and unique" {
     defer plan.deinit(std.testing.allocator);
     try std.testing.expectEqual(CleanupEdgeKind.return_exit, plan.kind);
     try std.testing.expectEqual(@as(usize, 0), cleanupCursorIndex(plan.start));
-    try std.testing.expectEqual(@as(usize, 2), plan.cleanups.len);
-    try std.testing.expect((deferCleanupRef(plan.cleanups[0]) orelse return error.TestUnexpectedResult).instruction_index == 1);
-    try std.testing.expect((deferCleanupRef(plan.cleanups[1]) orelse return error.TestUnexpectedResult).instruction_index == 0);
+    try std.testing.expectEqual(@as(usize, 2), plan.refs.len);
+    switch (plan.refs[0]) {
+        .defer_ref => |ref| try std.testing.expect(ref.instruction_index == 1),
+        .ownership_action => return error.TestUnexpectedResult,
+    }
+    switch (plan.refs[1]) {
+        .defer_ref => |ref| try std.testing.expect(ref.instruction_index == 0),
+        .ownership_action => return error.TestUnexpectedResult,
+    }
 
     var table = (try buildCleanupEdgeTableFromCursor(std.testing.allocator, null, function, null, &cleanup_cfg, &state, root_mark, .return_exit)) orelse return error.TestUnexpectedResult;
     defer table.deinit(std.testing.allocator);
@@ -1073,8 +1079,11 @@ test "defer cleanup state refs must be valid ordered and unique" {
 
     var queried_plan = (try cleanupEdgePlanFromTable(std.testing.allocator, table, .return_exit, root_mark)) orelse return error.TestUnexpectedResult;
     defer queried_plan.deinit(std.testing.allocator);
-    try std.testing.expectEqual(@as(usize, 2), queried_plan.cleanups.len);
-    try std.testing.expect((deferCleanupRef(queried_plan.cleanups[0]) orelse return error.TestUnexpectedResult).instruction_index == 1);
+    try std.testing.expectEqual(@as(usize, 2), queried_plan.refs.len);
+    switch (queried_plan.refs[0]) {
+        .defer_ref => |ref| try std.testing.expect(ref.instruction_index == 1),
+        .ownership_action => return error.TestUnexpectedResult,
+    }
 }
 
 test "cleanup edge table rejects ownership actions without MIR cleanup plan" {
