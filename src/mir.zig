@@ -435,6 +435,110 @@ pub fn cleanupCfgValid(
     return true;
 }
 
+pub fn ownershipCleanupPlanEquivalent(a: OwnershipCleanupPlan, b: OwnershipCleanupPlan) bool {
+    if (a.actions.len != b.actions.len or a.cancellations.len != b.cancellations.len) return false;
+    for (a.actions, b.actions) |left, right| {
+        if (!cleanupActionPlanEntryEquivalent(left, right)) return false;
+    }
+    for (a.cancellations, b.cancellations) |left, right| {
+        if (!cleanupCancellationPlanEntryEquivalent(left, right)) return false;
+    }
+    return true;
+}
+
+pub fn cleanupCfgEquivalent(a: CleanupCfg, b: CleanupCfg) bool {
+    if (a.edges.len != b.edges.len) return false;
+    for (a.edges, b.edges) |left, right| {
+        if (left.kind != right.kind) return false;
+        if (!left.source_block.eql(right.source_block)) return false;
+        if (left.target_block == null and right.target_block != null) return false;
+        if (left.target_block != null and right.target_block == null) return false;
+        if (left.target_block) |left_target| {
+            if (!left_target.eql(right.target_block.?)) return false;
+        }
+        if (!sourcePointEquivalent(left.source, right.source)) return false;
+        if (left.actions.len != right.actions.len) return false;
+        for (left.actions, right.actions) |left_action, right_action| {
+            if (!cleanupCfgActionRefEquivalent(left_action, right_action)) return false;
+        }
+    }
+    return true;
+}
+
+fn cleanupActionPlanEntryEquivalent(a: CleanupActionPlanEntry, b: CleanupActionPlanEntry) bool {
+    return a.kind == b.kind and
+        a.primary_event_index == b.primary_event_index and
+        a.storage_dead_event_index == b.storage_dead_event_index and
+        ownershipPlaceEquivalent(a.place, b.place) and
+        a.generation == b.generation and
+        a.drop_glue_symbol_id.eql(b.drop_glue_symbol_id) and
+        a.block_id.eql(b.block_id) and
+        sourcePointEquivalent(a.source, b.source);
+}
+
+fn cleanupCancellationPlanEntryEquivalent(a: CleanupCancellationPlanEntry, b: CleanupCancellationPlanEntry) bool {
+    return a.kind == b.kind and
+        a.event_index == b.event_index and
+        ownershipPlaceEquivalent(a.place, b.place) and
+        a.generation == b.generation and
+        a.drop_glue_symbol_id.eql(b.drop_glue_symbol_id) and
+        a.block_id.eql(b.block_id) and
+        sourcePointEquivalent(a.source, b.source);
+}
+
+fn ownershipPlaceEquivalent(a: OwnershipPlace, b: OwnershipPlace) bool {
+    if (!a.root_value_id.eql(b.root_value_id)) return false;
+    if (!a.root_symbol_id.eql(b.root_symbol_id)) return false;
+    if (!a.root_type_symbol_id.eql(b.root_type_symbol_id)) return false;
+    if (a.projection_count != b.projection_count) return false;
+    var index: usize = 0;
+    while (index < a.projection_count) : (index += 1) {
+        if (!ownershipPlaceProjectionEquivalent(a.projections[index], b.projections[index])) return false;
+    }
+    return true;
+}
+
+fn ownershipPlaceProjectionEquivalent(a: OwnershipPlaceProjection, b: OwnershipPlaceProjection) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .field => |field| field.eql(b.field),
+        .constant_index => |constant_index| constant_index == b.constant_index,
+        .deref => true,
+        .wildcard_index => true,
+    };
+}
+
+fn cleanupCfgActionRefEquivalent(a: CleanupCfgActionRef, b: CleanupCfgActionRef) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .ownership => |left| ownershipCleanupEdgeActionRefEquivalent(left, b.ownership),
+        .defer_cleanup => |left| deferCleanupEdgeActionRefEquivalent(left, b.defer_cleanup),
+    };
+}
+
+fn ownershipCleanupEdgeActionRefEquivalent(a: OwnershipCleanupEdgeActionRef, b: OwnershipCleanupEdgeActionRef) bool {
+    return a.cleanup_action_index == b.cleanup_action_index and
+        a.kind == b.kind and
+        a.primary_event_index == b.primary_event_index and
+        a.storage_dead_event_index == b.storage_dead_event_index and
+        a.root_value_id.eql(b.root_value_id) and
+        a.resource_type_symbol_id.eql(b.resource_type_symbol_id) and
+        a.drop_glue_symbol_id.eql(b.drop_glue_symbol_id) and
+        a.generation == b.generation and
+        a.block_id.eql(b.block_id) and
+        sourcePointEquivalent(a.source, b.source);
+}
+
+fn deferCleanupEdgeActionRefEquivalent(a: DeferCleanupEdgeActionRef, b: DeferCleanupEdgeActionRef) bool {
+    return a.block_id.eql(b.block_id) and
+        a.instruction_index == b.instruction_index and
+        sourcePointEquivalent(a.source, b.source);
+}
+
+fn sourcePointEquivalent(a: SourcePoint, b: SourcePoint) bool {
+    return a.line == b.line and a.column == b.column and a.offset == b.offset and a.len == b.len;
+}
+
 pub fn deferCleanupEdgeTableValid(function: Function, table: DeferCleanupEdgeTable) bool {
     for (table.edges) |edge| {
         for (edge.actions) |ref| {
@@ -865,16 +969,32 @@ pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: Build
 
     const symbol_identities = try buildSymbolIdentities(allocator, &symbol_ids);
     errdefer allocator.free(symbol_identities);
+    const functions_slice = try functions.toOwnedSlice(allocator);
+    errdefer {
+        for (functions_slice) |function| freeFunction(allocator, function);
+        allocator.free(functions_slice);
+    }
 
-    return .{
+    var built_module: Module = .{
         .allocator = allocator,
         .symbol_identities = symbol_identities,
-        .functions = try functions.toOwnedSlice(allocator),
+        .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
         .type_ownership_facts = type_ownership_facts,
         .aggregate_return_summaries = aggregate_return_facts.summaries,
         .aggregate_return_pointer_facts = aggregate_return_facts.pointer_facts,
     };
+    try attachFunctionCleanupCfgs(allocator, &built_module);
+    return built_module;
+}
+
+fn attachFunctionCleanupCfgs(allocator: std.mem.Allocator, module: *Module) error{ InvalidMirOwnershipEvents, OutOfMemory }!void {
+    for (module.functions) |*function| {
+        var cleanup_plan = try buildOwnershipCleanupPlan(allocator, module.*, function.*);
+        errdefer cleanup_plan.deinit(allocator);
+        function.cleanup_cfg = try buildCleanupCfg(allocator, module.*, function.*, cleanup_plan);
+        function.ownership_cleanup_plan = cleanup_plan;
+    }
 }
 
 fn internSymbolId(symbol_ids: *std.StringHashMap(SymbolId), spelling: []const u8) !SymbolId {
@@ -11603,6 +11723,9 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.value_identities.len != 0) allocator.free(function.value_identities);
     if (function.target_owner_identities.len != 0) allocator.free(function.target_owner_identities);
     if (function.ownership_events.len != 0) allocator.free(function.ownership_events);
+    function.ownership_cleanup_plan.deinit(allocator);
+    var cleanup_cfg = function.cleanup_cfg;
+    cleanup_cfg.deinit(allocator);
     if (function.ffi_param_contracts.len != 0) allocator.free(function.ffi_param_contracts);
     for (function.generated_type_expr_nodes) |node| allocator.destroy(node);
     if (function.generated_type_expr_nodes.len != 0) allocator.free(function.generated_type_expr_nodes);

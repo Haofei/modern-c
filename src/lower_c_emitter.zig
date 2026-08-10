@@ -316,8 +316,6 @@ pub const CEmitter = struct {
     // hook is not spliced into a context where the result must remain assignable.
     suppress_load_hook: bool = false,
     current_function: ?[]const u8 = null,
-    current_ownership_cleanup_plan: ?mir.OwnershipCleanupPlan = null,
-    current_cleanup_cfg: ?mir.CleanupCfg = null,
     // Proven storage class per pointer-typed local, sourced from live MIR
     // pointer-provenance facts: .global_storage routes derefs through the
     // mc_race helpers; .local_storage is the positive locality proof that keeps
@@ -1167,23 +1165,6 @@ pub const CEmitter = struct {
         const previous_function = self.current_function;
         self.current_function = fn_decl.name.text;
         defer self.current_function = previous_function;
-        const ownership_cleanup_plan = if (self.currentMirFunction()) |function|
-            try mir.buildOwnershipCleanupPlan(self.allocator, self.mir_module.*, function.*)
-        else
-            null;
-        defer if (ownership_cleanup_plan) |plan| plan.deinit(self.allocator);
-        var cleanup_cfg = if (ownership_cleanup_plan) |plan|
-            if (self.currentMirFunction()) |function|
-                try mir.buildCleanupCfg(self.allocator, self.mir_module.*, function.*, plan)
-            else
-                null
-        else
-            null;
-        defer if (cleanup_cfg) |*cfg| cfg.deinit(self.allocator);
-        self.current_ownership_cleanup_plan = ownership_cleanup_plan;
-        defer self.current_ownership_cleanup_plan = null;
-        self.current_cleanup_cfg = cleanup_cfg;
-        defer self.current_cleanup_cfg = null;
         self.mir_pointer_local_provenance.clearRetainingCapacity();
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_pointer_array_elements);
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_aggregate_pointer_fields);
@@ -6202,12 +6183,31 @@ pub const CEmitter = struct {
     }
 
     fn currentOwnershipCleanupPlan(self: *const CEmitter) ?*const mir.OwnershipCleanupPlan {
-        if (self.current_ownership_cleanup_plan) |*plan| return plan;
+        const function_name = self.current_function orelse return null;
+        for (self.mir_module.functions) |*function| {
+            if (!std.mem.eql(u8, function.name, function_name)) continue;
+            if (!mir.cleanupCfgValid(self.mir_module.*, function.*, function.ownership_cleanup_plan, function.cleanup_cfg)) return null;
+            var rebuilt_plan = mir.buildOwnershipCleanupPlan(self.allocator, self.mir_module.*, function.*) catch return null;
+            defer rebuilt_plan.deinit(self.allocator);
+            if (!mir.ownershipCleanupPlanEquivalent(function.ownership_cleanup_plan, rebuilt_plan)) return null;
+            return &function.ownership_cleanup_plan;
+        }
         return null;
     }
 
     fn currentCleanupCfg(self: *const CEmitter) ?*const mir.CleanupCfg {
-        if (self.current_cleanup_cfg) |*cfg| return cfg;
+        const function_name = self.current_function orelse return null;
+        for (self.mir_module.functions) |*function| {
+            if (!std.mem.eql(u8, function.name, function_name)) continue;
+            if (!mir.cleanupCfgValid(self.mir_module.*, function.*, function.ownership_cleanup_plan, function.cleanup_cfg)) return null;
+            var rebuilt_plan = mir.buildOwnershipCleanupPlan(self.allocator, self.mir_module.*, function.*) catch return null;
+            defer rebuilt_plan.deinit(self.allocator);
+            if (!mir.ownershipCleanupPlanEquivalent(function.ownership_cleanup_plan, rebuilt_plan)) return null;
+            var rebuilt_cfg = mir.buildCleanupCfg(self.allocator, self.mir_module.*, function.*, rebuilt_plan) catch return null;
+            defer rebuilt_cfg.deinit(self.allocator);
+            if (!mir.cleanupCfgEquivalent(function.cleanup_cfg, rebuilt_cfg)) return null;
+            return &function.cleanup_cfg;
+        }
         return null;
     }
 

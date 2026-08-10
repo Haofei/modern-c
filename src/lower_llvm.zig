@@ -510,8 +510,6 @@ const LlvmEmitter = struct {
     current_debug_span: ?ast.Span = null,
     current_return_ty: ?ast.TypeExpr = null,
     current_function: ?[]const u8 = null,
-    current_ownership_cleanup_plan: ?mir.OwnershipCleanupPlan = null,
-    current_cleanup_cfg: ?mir.CleanupCfg = null,
     current_params: ?[]const ast.Param = null,
     current_mir_range_target: ?[]const u8 = null,
     source_path: []const u8,
@@ -1276,23 +1274,6 @@ const LlvmEmitter = struct {
             self.current_function = old_function;
             self.current_params = old_params;
         }
-        const ownership_cleanup_plan = if (self.currentMirFunction()) |function|
-            try mir.buildOwnershipCleanupPlan(self.allocator, self.mir_module, function.*)
-        else
-            null;
-        defer if (ownership_cleanup_plan) |plan| plan.deinit(self.allocator);
-        var cleanup_cfg = if (ownership_cleanup_plan) |plan|
-            if (self.currentMirFunction()) |function|
-                try mir.buildCleanupCfg(self.allocator, self.mir_module, function.*, plan)
-            else
-                null
-        else
-            null;
-        defer if (cleanup_cfg) |*cfg| cfg.deinit(self.allocator);
-        self.current_ownership_cleanup_plan = ownership_cleanup_plan;
-        defer self.current_ownership_cleanup_plan = null;
-        self.current_cleanup_cfg = cleanup_cfg;
-        defer self.current_cleanup_cfg = null;
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
         // epilogue. The body is a single inline-asm statement that performs the
         // ABI-correct jump/return itself; we terminate the entry block with
@@ -5939,12 +5920,31 @@ const LlvmEmitter = struct {
     }
 
     fn currentOwnershipCleanupPlan(self: *const LlvmEmitter) ?*const mir.OwnershipCleanupPlan {
-        if (self.current_ownership_cleanup_plan) |*plan| return plan;
+        const function_name = self.current_function orelse return null;
+        for (self.mir_module.functions) |*function| {
+            if (!std.mem.eql(u8, function.name, function_name)) continue;
+            if (!mir.cleanupCfgValid(self.mir_module, function.*, function.ownership_cleanup_plan, function.cleanup_cfg)) return null;
+            var rebuilt_plan = mir.buildOwnershipCleanupPlan(self.allocator, self.mir_module, function.*) catch return null;
+            defer rebuilt_plan.deinit(self.allocator);
+            if (!mir.ownershipCleanupPlanEquivalent(function.ownership_cleanup_plan, rebuilt_plan)) return null;
+            return &function.ownership_cleanup_plan;
+        }
         return null;
     }
 
     fn currentCleanupCfg(self: *const LlvmEmitter) ?*const mir.CleanupCfg {
-        if (self.current_cleanup_cfg) |*cfg| return cfg;
+        const function_name = self.current_function orelse return null;
+        for (self.mir_module.functions) |*function| {
+            if (!std.mem.eql(u8, function.name, function_name)) continue;
+            if (!mir.cleanupCfgValid(self.mir_module, function.*, function.ownership_cleanup_plan, function.cleanup_cfg)) return null;
+            var rebuilt_plan = mir.buildOwnershipCleanupPlan(self.allocator, self.mir_module, function.*) catch return null;
+            defer rebuilt_plan.deinit(self.allocator);
+            if (!mir.ownershipCleanupPlanEquivalent(function.ownership_cleanup_plan, rebuilt_plan)) return null;
+            var rebuilt_cfg = mir.buildCleanupCfg(self.allocator, self.mir_module, function.*, rebuilt_plan) catch return null;
+            defer rebuilt_cfg.deinit(self.allocator);
+            if (!mir.cleanupCfgEquivalent(function.cleanup_cfg, rebuilt_cfg)) return null;
+            return &function.cleanup_cfg;
+        }
         return null;
     }
 

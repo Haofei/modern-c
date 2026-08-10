@@ -231,9 +231,10 @@ pub fn cancelAutoDropForMove(
     move_span: ast.Span,
 ) error{OutOfMemory}!AutoDropStackDecision {
     _ = allocator;
+    const plan = cleanup_plan orelse return .rejected;
     const source = mir.sourcePointFromSpan(move_span);
-    const ref = cleanupRemovalRefFromMirCancellation(function, cleanup_plan, .move_out, source) orelse {
-        if (cleanupCancellationEntryFromMirPlan(cleanup_plan orelse return .ignored, .move_out, source) != null) return .ignored;
+    const ref = cleanupRemovalRefFromMirCancellation(function, plan, .move_out, source) orelse {
+        if (cleanupCancellationEntryFromMirPlan(plan, .move_out, source) != null) return .ignored;
         if (directMoveLocalName(expr)) |local_name| {
             if (localHasConsumingAutoDropResourceEvent(module, function, local_name, .move_out)) return .rejected;
             if (localHasAutoDropCancellationObligation(function, local_name)) return .rejected;
@@ -252,13 +253,14 @@ pub fn cancelAutoDropForExplicitDrop(
     expr: ast.Expr,
 ) error{OutOfMemory}!AutoDropStackDecision {
     _ = allocator;
+    const plan = cleanup_plan orelse return .rejected;
     const source = mir.sourcePointFromSpan(expr.span);
-    const ref = cleanupRemovalRefFromMirCancellation(function, cleanup_plan, .explicit_drop, source) orelse {
-        if (cleanupCancellationEntryFromMirPlan(cleanup_plan orelse return .ignored, .explicit_drop, source) != null) return .ignored;
-        if (cleanupRemovalRefFromMirExplicitDropAction(function, cleanup_plan, source)) |action_ref| {
+    const ref = cleanupRemovalRefFromMirCancellation(function, plan, .explicit_drop, source) orelse {
+        if (cleanupCancellationEntryFromMirPlan(plan, .explicit_drop, source) != null) return .ignored;
+        if (cleanupRemovalRefFromMirExplicitDropAction(function, plan, source)) |action_ref| {
             return if (state.removeAutoDrop(action_ref)) .applied else .ignored;
         }
-        if (explicitDropActionEntryFromMirPlan(cleanup_plan orelse return .ignored, source) != null) return .ignored;
+        if (explicitDropActionEntryFromMirPlan(plan, source) != null) return .ignored;
         if (ast_query.dropPointerLocalReleaseCall(expr)) |release| {
             if (localHasConsumingAutoDropResourceEvent(module, function, release.local_name, .explicit_drop)) return .rejected;
             if (localHasAutoDropCancellationObligation(function, release.local_name)) return .rejected;

@@ -832,6 +832,8 @@ pub const Function = struct {
     value_identities: []ValueIdentity = &.{},
     target_owner_identities: []SymbolIdentity = &.{},
     ownership_events: []OwnershipEvent = &.{},
+    ownership_cleanup_plan: OwnershipCleanupPlan = .{},
+    cleanup_cfg: CleanupCfg = .{},
     generated_type_expr_nodes: []*ast.TypeExpr = &.{},
     generated_type_expr_args: [][]ast.TypeExpr = &.{},
     pointer_provenance_facts: []PointerProvenanceFact,
@@ -874,6 +876,9 @@ pub const Module = struct {
             if (function.value_identities.len != 0) self.allocator.free(function.value_identities);
             if (function.target_owner_identities.len != 0) self.allocator.free(function.target_owner_identities);
             if (function.ownership_events.len != 0) self.allocator.free(function.ownership_events);
+            function.ownership_cleanup_plan.deinit(self.allocator);
+            var cleanup_cfg = function.cleanup_cfg;
+            cleanup_cfg.deinit(self.allocator);
             if (function.ffi_param_contracts.len != 0) self.allocator.free(function.ffi_param_contracts);
             for (function.generated_type_expr_nodes) |node| self.allocator.destroy(node);
             if (function.generated_type_expr_nodes.len != 0) self.allocator.free(function.generated_type_expr_nodes);
