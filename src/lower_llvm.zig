@@ -511,6 +511,7 @@ const LlvmEmitter = struct {
     current_return_ty: ?ast.TypeExpr = null,
     current_function: ?[]const u8 = null,
     current_params: ?[]const ast.Param = null,
+    current_function_body: ?ast.Block = null,
     current_mir_range_target: ?[]const u8 = null,
     source_path: []const u8,
     target_arch: backend_mod.TargetArch,
@@ -1261,11 +1262,13 @@ const LlvmEmitter = struct {
         const old_return_ty = self.current_return_ty;
         const old_function = self.current_function;
         const old_params = self.current_params;
+        const old_function_body = self.current_function_body;
         self.current_debug_scope = if (self.fn_sigs.get(fn_decl.name.text)) |sig| sig.debug_id else null;
         self.current_debug_span = fn_decl.name.span;
         self.current_return_ty = ret_ty;
         self.current_function = fn_decl.name.text;
         self.current_params = fn_decl.params;
+        self.current_function_body = body;
         const entry_label = try self.functionEntryLabel();
         defer {
             self.current_debug_scope = old_scope;
@@ -1273,6 +1276,7 @@ const LlvmEmitter = struct {
             self.current_return_ty = old_return_ty;
             self.current_function = old_function;
             self.current_params = old_params;
+            self.current_function_body = old_function_body;
         }
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
         // epilogue. The body is a single inline-asm statement that performs the
@@ -1983,8 +1987,7 @@ const LlvmEmitter = struct {
         var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), &self.cleanup_state, start, kind)) orelse return error.UnsupportedLlvmEmission;
         defer plan.deinit(self.allocator);
         for (plan.refs) |ref| {
-            const cleanup = backend_cleanup.cleanupForRefInEmissionRange(function.*, self.cleanup_state.slice(), backend_cleanup.cleanupCursorIndex(start), ref) orelse return error.UnsupportedLlvmEmission;
-            try self.emitDeferredCleanup(cleanup, ret_ty);
+            try self.emitCleanupRef(ref, ret_ty);
         }
     }
 
@@ -1996,9 +1999,11 @@ const LlvmEmitter = struct {
     fn emitDeferredCleanup(self: *LlvmEmitter, cleanup: DeferredCleanup, ret_ty: ast.TypeExpr) !void {
         switch (cleanup) {
             .block => |entry| {
-                const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-                if (!mir.deferCleanupRefValid(function.*, entry.defer_ref)) return error.UnsupportedLlvmEmission;
-                const block = entry.block;
+                const expr = self.deferExprForRef(entry.defer_ref) orelse return error.UnsupportedLlvmEmission;
+                const block = switch (expr.kind) {
+                    .block => |block| block,
+                    else => entry.block,
+                };
                 if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission;
             },
             .direct_call => |entry| try self.emitOrdinaryDeferDirectCallCleanup(entry),
@@ -2006,6 +2011,42 @@ const LlvmEmitter = struct {
             .auto_drop => |entry| try self.emitAutoDropPointerCleanup(entry),
             .explicit_drop => |entry| try self.emitExplicitDropPointerCleanup(entry),
         }
+    }
+
+    fn emitCleanupRef(self: *LlvmEmitter, ref: backend_cleanup.CleanupRef, ret_ty: ast.TypeExpr) !void {
+        switch (ref) {
+            .defer_ref => |defer_ref| {
+                const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
+                const expr = self.deferExprForRef(defer_ref) orelse return error.UnsupportedLlvmEmission;
+                if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
+                    try self.emitOrdinaryDeferDirectCallCleanup(cleanup);
+                    return;
+                }
+                if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
+                    try self.emitCallTargetDeferCleanup(cleanup);
+                    return;
+                }
+                switch (expr.kind) {
+                    .block => |block| if (try self.emitScopedBlock(block, ret_ty)) return error.UnsupportedLlvmEmission,
+                    else => return error.UnsupportedLlvmEmission,
+                }
+            },
+            .ownership_action => |action_ref| {
+                const plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedLlvmEmission;
+                if (action_ref.cleanup_action_index >= plan.actions.len) return error.UnsupportedLlvmEmission;
+                switch (plan.actions[action_ref.cleanup_action_index].kind) {
+                    .auto_drop => try self.emitAutoDropPointerCleanup(action_ref),
+                    .explicit_drop => try self.emitExplicitDropPointerCleanup(action_ref),
+                }
+            },
+        }
+    }
+
+    fn deferExprForRef(self: *LlvmEmitter, ref: mir.DeferCleanupRef) ?ast.Expr {
+        const function = self.currentMirFunction() orelse return null;
+        if (!mir.deferCleanupRefValid(function.*, ref)) return null;
+        const body = self.current_function_body orelse return null;
+        return deferExprForRefInBlock(body, ref);
     }
 
     fn ordinaryDeferDirectCallCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
@@ -10777,6 +10818,44 @@ const LlvmEmitter = struct {
 // module; these aliases keep the existing call sites in this file reading unchanged.
 const ResultSwitchPattern = switch_lower.ResultArmPattern;
 const TaggedUnionBinding = switch_lower.TaggedUnionArmBinding;
+
+fn deferExprForRefInBlock(block: ast.Block, ref: mir.DeferCleanupRef) ?ast.Expr {
+    for (block.items) |stmt| {
+        if (stmt.kind == .@"defer" and sourcePointMatchesSpan(ref.source, stmt.span)) return stmt.kind.@"defer";
+        switch (stmt.kind) {
+            .block, .comptime_block, .unsafe_block => |nested| {
+                if (deferExprForRefInBlock(nested, ref)) |expr| return expr;
+            },
+            .contract_block => |contract| {
+                if (deferExprForRefInBlock(contract.block, ref)) |expr| return expr;
+            },
+            .if_let => |node| {
+                if (deferExprForRefInBlock(node.then_block, ref)) |expr| return expr;
+                if (node.else_block) |else_block| {
+                    if (deferExprForRefInBlock(else_block, ref)) |expr| return expr;
+                }
+            },
+            .@"switch" => |node| {
+                for (node.arms) |arm| switch (arm.body) {
+                    .block => |nested| if (deferExprForRefInBlock(nested, ref)) |expr| return expr,
+                    .expr => {},
+                };
+            },
+            .loop => |node| {
+                if (deferExprForRefInBlock(node.body, ref)) |expr| return expr;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn sourcePointMatchesSpan(source: mir.SourcePoint, span: ast.Span) bool {
+    return source.line == span.line and
+        source.column == span.column and
+        source.offset == span.offset and
+        source.len == span.len;
+}
 
 fn isSourceSpan(span: ast.Span) bool {
     return span.line != 0 and span.column != 0;

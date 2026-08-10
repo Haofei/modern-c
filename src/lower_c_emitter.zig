@@ -316,6 +316,7 @@ pub const CEmitter = struct {
     // hook is not spliced into a context where the result must remain assignable.
     suppress_load_hook: bool = false,
     current_function: ?[]const u8 = null,
+    current_function_body: ?ast.Block = null,
     // Proven storage class per pointer-typed local, sourced from live MIR
     // pointer-provenance facts: .global_storage routes derefs through the
     // mc_race helpers; .local_storage is the positive locality proof that keeps
@@ -1163,8 +1164,11 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, " {\n");
 
         const previous_function = self.current_function;
+        const previous_function_body = self.current_function_body;
         self.current_function = fn_decl.name.text;
+        self.current_function_body = body;
         defer self.current_function = previous_function;
+        defer self.current_function_body = previous_function_body;
         self.mir_pointer_local_provenance.clearRetainingCapacity();
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_pointer_array_elements);
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_aggregate_pointer_fields);
@@ -3530,8 +3534,7 @@ pub const CEmitter = struct {
         var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), &self.cleanup_state, start, kind)) orelse return error.UnsupportedCEmission;
         defer plan.deinit(self.allocator);
         for (plan.refs) |ref| {
-            const cleanup = backend_cleanup.cleanupForRefInEmissionRange(function.*, self.cleanup_state.slice(), backend_cleanup.cleanupCursorIndex(start), ref) orelse return error.UnsupportedCEmission;
-            try self.emitDeferredCleanup(cleanup, locals, return_ty);
+            try self.emitCleanupRef(ref, locals, return_ty);
         }
     }
 
@@ -3543,9 +3546,11 @@ pub const CEmitter = struct {
     fn emitDeferredCleanup(self: *CEmitter, cleanup: DeferredCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         switch (cleanup) {
             .block => |entry| {
-                const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-                if (!mir.deferCleanupRefValid(function.*, entry.defer_ref)) return error.UnsupportedCEmission;
-                const block = entry.block;
+                const expr = self.deferExprForRef(entry.defer_ref) orelse return error.UnsupportedCEmission;
+                const block = switch (expr.kind) {
+                    .block => |block| block,
+                    else => entry.block,
+                };
                 try self.writeLineDirective(block.span);
                 try self.emitBracedBlockBody(block, locals, return_ty);
             },
@@ -3566,6 +3571,49 @@ pub const CEmitter = struct {
                 try self.emitExplicitDropPointerCleanup(entry);
             },
         }
+    }
+
+    fn emitCleanupRef(self: *CEmitter, ref: backend_cleanup.CleanupRef, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+        switch (ref) {
+            .defer_ref => |defer_ref| {
+                const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+                const expr = self.deferExprForRef(defer_ref) orelse return error.UnsupportedCEmission;
+                try self.writeLineDirective(expr.span);
+                if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
+                    try self.emitOrdinaryDeferDirectCallCleanup(cleanup, locals, return_ty);
+                    return;
+                }
+                if (try self.ordinaryDeferCallTargetCleanup(function, expr, defer_ref)) |cleanup| {
+                    try self.emitCallTargetDeferCleanup(cleanup, locals);
+                    return;
+                }
+                switch (expr.kind) {
+                    .block => |block| try self.emitBracedBlockBody(block, locals, return_ty),
+                    else => return error.UnsupportedCEmission,
+                }
+            },
+            .ownership_action => |action_ref| {
+                const plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedCEmission;
+                if (action_ref.cleanup_action_index >= plan.actions.len) return error.UnsupportedCEmission;
+                switch (plan.actions[action_ref.cleanup_action_index].kind) {
+                    .auto_drop => {
+                        try self.writeLineDirective(action_ref.span);
+                        try self.emitAutoDropPointerCleanup(action_ref);
+                    },
+                    .explicit_drop => {
+                        try self.writeLineDirective(action_ref.span);
+                        try self.emitExplicitDropPointerCleanup(action_ref);
+                    },
+                }
+            },
+        }
+    }
+
+    fn deferExprForRef(self: *CEmitter, ref: mir.DeferCleanupRef) ?ast.Expr {
+        const function = self.currentMirFunction() orelse return null;
+        if (!mir.deferCleanupRefValid(function.*, ref)) return null;
+        const body = self.current_function_body orelse return null;
+        return deferExprForRefInBlock(body, ref);
     }
 
     fn ordinaryDeferDirectCallCleanup(self: *CEmitter, function: *const mir.Function, expr: ast.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedCEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
@@ -8887,6 +8935,44 @@ pub const CEmitter = struct {
         return self.arrayLenTextForExpr(expr);
     }
 };
+
+fn deferExprForRefInBlock(block: ast.Block, ref: mir.DeferCleanupRef) ?ast.Expr {
+    for (block.items) |stmt| {
+        if (stmt.kind == .@"defer" and sourcePointMatchesSpan(ref.source, stmt.span)) return stmt.kind.@"defer";
+        switch (stmt.kind) {
+            .block, .comptime_block, .unsafe_block => |nested| {
+                if (deferExprForRefInBlock(nested, ref)) |expr| return expr;
+            },
+            .contract_block => |contract| {
+                if (deferExprForRefInBlock(contract.block, ref)) |expr| return expr;
+            },
+            .if_let => |node| {
+                if (deferExprForRefInBlock(node.then_block, ref)) |expr| return expr;
+                if (node.else_block) |else_block| {
+                    if (deferExprForRefInBlock(else_block, ref)) |expr| return expr;
+                }
+            },
+            .@"switch" => |node| {
+                for (node.arms) |arm| switch (arm.body) {
+                    .block => |nested| if (deferExprForRefInBlock(nested, ref)) |expr| return expr,
+                    .expr => {},
+                };
+            },
+            .loop => |node| {
+                if (deferExprForRefInBlock(node.body, ref)) |expr| return expr;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+fn sourcePointMatchesSpan(source: mir.SourcePoint, span: ast.Span) bool {
+    return source.line == span.line and
+        source.column == span.column and
+        source.offset == span.offset and
+        source.len == span.len;
+}
 
 fn isSourceSpan(span: ast.Span) bool {
     return span.line != 0 and span.column != 0;
