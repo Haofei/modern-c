@@ -31,7 +31,7 @@ EXACT_BACKEND_COUNTS = {
     '@import("mir_facts_view.zig")': 2,
     '@import("type_syntax.zig")': 5,
     "[]const ast.Decl": 7,
-    "LegacyDeclarationSlice": 5,
+    "LegacyDeclarationSlice": 0,
     "SourceMapMechanicsView": 3,
     "initFromDecls": 0,
 }
@@ -60,7 +60,7 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "pub const LegacyDeclarationSlice = struct"): 0,
     ("src/backend.zig", "pub const SourceMapMechanicsView = struct"): 0,
     ("src/legacy_backend_syntax.zig", "[]const ast.Decl"): 1,
-    ("src/legacy_backend_syntax.zig", "pub const LegacyDeclarationSlice = struct"): 1,
+    ("src/legacy_backend_syntax.zig", "pub const LegacyDeclarationSlice = struct"): 0,
     ("src/legacy_backend_syntax.zig", "pub const SourceMapMechanicsView = struct"): 0,
     ("src/source_map_mechanics.zig", "[]const ast.Decl"): 3,
     ("src/source_map_mechanics.zig", "pub const SourceMapMechanicsView = struct"): 1,
@@ -89,9 +89,9 @@ REQUIRED_ANCHORS = {
         "MIR verifier",
     ),
     "src/legacy_backend_syntax.zig": (
-        "Transitional declaration slice",
-        "every call site must name the remaining",
-        "legacy declaration dependency explicitly.",
+        "Transitional early declaration metadata view",
+        "callers must name that specific metadata dependency",
+        "generic legacy declaration handle",
     ),
     "src/source_map_mechanics.zig": (
         "Transitional source-map mechanics view",

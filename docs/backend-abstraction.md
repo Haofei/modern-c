@@ -115,11 +115,12 @@ It then exposes:
 
 - `source_spelling`: MIR-owned spelling by typed symbol id.
 
-A transitional declaration slice still exists as `LegacyDeclarationSlice`, but
-it is carried behind the named `LowerRequest.legacy_declarations` adapter rather
-than stored on `VerifiedProgram` or passed as a standalone backend parameter. It
-is narrower than giving the backend a full `ast.Module`, but it is not the final
-semantic boundary. Source-map row enumeration still uses
+A transitional declaration slice still exists behind
+`EarlyDeclarationMetadataView`, carried by the named
+`LowerRequest.early_declaration_metadata` adapter rather than stored on
+`VerifiedProgram` or passed as a standalone backend parameter. It is narrower
+than giving the backend a full `ast.Module`, but it is not the final semantic
+boundary. Source-map row enumeration still uses
 `SourceMapMechanicsView`, but it is carried only by `EmitMapRequest` rather than
 ordinary lowering. Declaration-list mechanics live in
 `legacy_backend_syntax.zig`; source-map row mechanics live separately in

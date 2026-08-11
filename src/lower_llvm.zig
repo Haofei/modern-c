@@ -308,7 +308,7 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
 }
 
 pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls).earlyDeclarationMetadata(), module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
+    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, legacy_backend_syntax.EarlyDeclarationMetadataView.forDecls(module.decls), module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
 }
 
 fn appendLlvmCheckedMirProfileWithSourceSpelling(

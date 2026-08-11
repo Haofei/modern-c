@@ -92,7 +92,7 @@ fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, o
 }
 
 pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
-    return appendCProfileWithMirSourceSpelling(allocator, legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls).earlyDeclarationMetadata(), typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
+    return appendCProfileWithMirSourceSpelling(allocator, legacy_backend_syntax.EarlyDeclarationMetadataView.forDecls(module.decls), typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCProfileWithMirSourceSpelling(
