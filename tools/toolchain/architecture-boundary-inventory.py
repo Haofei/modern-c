@@ -26,20 +26,24 @@ BACKEND_EXTRA_FILES = {
 }
 
 EXACT_BACKEND_COUNTS = {
-    '@import("ast.zig")': 51,
+    '@import("ast.zig")': 50,
     '@import("sema': 0,
     '@import("mir_facts_view.zig")': 2,
     '@import("type_syntax.zig")': 5,
-    "[]const ast.Decl": 13,
-    "LegacyDeclarationSlice": 19,
-    "SourceMapMechanicsView": 9,
+    "[]const ast.Decl": 7,
+    "LegacyDeclarationSlice": 18,
+    "SourceMapMechanicsView": 8,
     "initFromDecls": 0,
 }
 
 EXACT_FILE_COUNTS = {
-    ("src/backend.zig", "[]const ast.Decl"): 6,
-    ("src/backend.zig", "pub const LegacyDeclarationSlice = struct"): 1,
-    ("src/backend.zig", "pub const SourceMapMechanicsView = struct"): 1,
+    ("src/backend.zig", "[]const ast.Decl"): 0,
+    ("src/backend.zig", "@import(\"ast.zig\")"): 0,
+    ("src/backend.zig", "pub const LegacyDeclarationSlice = struct"): 0,
+    ("src/backend.zig", "pub const SourceMapMechanicsView = struct"): 0,
+    ("src/legacy_backend_syntax.zig", "[]const ast.Decl"): 6,
+    ("src/legacy_backend_syntax.zig", "pub const LegacyDeclarationSlice = struct"): 1,
+    ("src/legacy_backend_syntax.zig", "pub const SourceMapMechanicsView = struct"): 1,
     ("src/backend.zig", "pub fn init("): 1,
     ("src/backend.zig", "pub fn initFromDecls("): 0,
     ("src/backend.zig", "declaration_metadata"): 0,
@@ -55,9 +59,11 @@ EXACT_FILE_COUNTS = {
 
 REQUIRED_ANCHORS = {
     "src/backend.zig": (
+        "MIR verifier",
+    ),
+    "src/legacy_backend_syntax.zig": (
         "Transitional declaration slice",
         "Transitional source-map mechanics view",
-        "MIR verifier",
         "every call site must name the remaining",
         "legacy declaration dependency explicitly.",
     ),

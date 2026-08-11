@@ -122,9 +122,11 @@ it is passed as an explicit legacy backend parameter rather than stored on
 `VerifiedProgram`. It is narrower than giving the backend a full `ast.Module`,
 but it is not the final semantic boundary. Source-map row enumeration still uses
 `SourceMapMechanicsView`, but it is passed only to the `emit-map` path rather
-than stored on `VerifiedProgram`. New backend work should prefer MIR identities
-and typed facts and should avoid adding new semantic decisions to syntax-backed
-views.
+than stored on `VerifiedProgram`. Both syntax-backed mechanics views live in
+`legacy_backend_syntax.zig`; `backend.zig` only re-exports them so the core
+backend seam does not directly import AST declarations. New backend work should
+prefer MIR identities and typed facts and should avoid adding new semantic
+decisions to syntax-backed views.
 
 ## Error boundary
 
