@@ -2,6 +2,7 @@ const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
 const lexer = @import("lexer.zig");
+const module_graph = @import("module_graph.zig");
 const path_policy = @import("path_policy.zig");
 const string_literal = @import("string_literal.zig");
 const token = @import("token.zig");
@@ -64,50 +65,12 @@ const ImportOrigin = struct {
     requested: []const u8,
 };
 
-pub const FileBoundary = diagnostics.FileBoundary;
-pub const FileId = enum(u32) { _ };
-
-pub const ModuleFile = struct {
-    id: FileId,
-    canonical_path: []const u8,
-    display_path: []const u8,
-    depth: usize,
-    source_start: usize = 0,
-    source_len: usize = 0,
-};
-
-pub const ImportEdge = struct {
-    importer: FileId,
-    imported: FileId,
-    span: diagnostics.Span,
-};
-
-pub const ModuleGraph = struct {
-    files: []ModuleFile,
-    imports: []ImportEdge,
-
-    pub fn deinit(self: *ModuleGraph, allocator: std.mem.Allocator) void {
-        for (self.files) |file| {
-            allocator.free(file.canonical_path);
-            allocator.free(file.display_path);
-        }
-        allocator.free(self.files);
-        allocator.free(self.imports);
-    }
-};
-
-pub const LoadedProject = struct {
-    source: []u8,
-    boundaries: []FileBoundary,
-    graph: ModuleGraph,
-
-    pub fn deinit(self: *LoadedProject, allocator: std.mem.Allocator) void {
-        allocator.free(self.source);
-        for (self.boundaries) |boundary| allocator.free(boundary.path);
-        allocator.free(self.boundaries);
-        self.graph.deinit(allocator);
-    }
-};
+pub const FileBoundary = module_graph.FileBoundary;
+pub const FileId = module_graph.FileId;
+pub const ModuleFile = module_graph.ModuleFile;
+pub const ImportEdge = module_graph.ImportEdge;
+pub const ModuleGraph = module_graph.ModuleGraph;
+pub const LoadedProject = module_graph.LoadedProject;
 
 const GraphBuilder = struct {
     files: std.ArrayList(ModuleFile) = .empty,

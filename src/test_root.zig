@@ -19,6 +19,7 @@ const lower_c_tests = @import("lower_c_tests.zig");
 const lower_llvm_tests = @import("lower_llvm_tests.zig");
 const mangle_private_tests = @import("mangle_private_tests.zig");
 const mir_tests = @import("mir_tests.zig");
+const module_graph = @import("module_graph.zig");
 const monomorphize_tests = @import("monomorphize_tests.zig");
 const parser_tests = @import("parser_tests.zig");
 const sema_tests = @import("sema_tests.zig");
@@ -39,6 +40,7 @@ test {
     _ = lower_llvm_tests;
     _ = mangle_private_tests;
     _ = mir_tests;
+    _ = module_graph;
     _ = monomorphize_tests;
     _ = parser_tests;
     _ = sema_tests;
