@@ -11,7 +11,7 @@ const early_declaration_metadata = @import("early_declaration_metadata.zig");
 /// writing output.  Layout-header emission deliberately uses this same phase.
 pub fn collect(emitter: anytype, early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
     emitter.setComptimeDeclarations(.{
-        .const_globals = early_metadata.const_globals,
+        .globals = early_metadata.globals,
         .type_aliases = early_metadata.type_aliases,
         .structs = early_metadata.structs,
     });

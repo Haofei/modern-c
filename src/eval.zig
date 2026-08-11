@@ -590,7 +590,7 @@ pub const ComptimeScope = struct {
 };
 
 pub const ComptimeDeclarations = struct {
-    const_globals: []const ast.GlobalDecl = &.{},
+    globals: []const ast.GlobalDecl = &.{},
     type_aliases: []const ast.TypeAlias = &.{},
     structs: []const ast.StructDecl = &.{},
     legacy_decls: ?[]const ast.Decl = null,
@@ -857,7 +857,7 @@ pub fn collectConstGlobalsFromDeclarationsWithOptions(
         }
         return;
     }
-    for (declarations.const_globals) |global| try collectConstGlobal(allocator, &scope, global, out, options);
+    for (declarations.globals) |global| try collectConstGlobal(allocator, &scope, global, out, options);
 }
 
 fn collectConstGlobal(
@@ -1013,7 +1013,7 @@ fn moduleGlobalType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr
         }
         return null;
     }
-    for (declarations.const_globals) |global| {
+    for (declarations.globals) |global| {
         if (std.mem.eql(u8, global.name.text, name)) return global.ty;
     }
     return null;

@@ -347,7 +347,7 @@ pub const Checker = struct {
     // comptime folds such as `~CONST_U32`.
     const_global_widths: ?*const std.StringHashMap(u16) = null,
     const_global_domains: ?*const std.StringHashMap(eval.DomainWidth) = null,
-    comptime_decls: ?[]const ast.Decl = null,
+    comptime_declarations: ?eval.ComptimeDeclarations = null,
     // Functions that declare at least one `comptime` parameter (section 22),
     // keyed by name, so call sites can re-check their comptime assertions with
     // the parameters bound to the call's constant arguments.
@@ -463,8 +463,6 @@ pub const Checker = struct {
     }
 
     pub fn checkModule(self: *Checker, module: ast.Module) void {
-        self.comptime_decls = module.decls;
-        defer self.comptime_decls = null;
         defer self.live_locals.deinit(self.reporter.allocator); // free the block-scoping liveness stack
         var mmio_structs = std.StringHashMap(MmioStruct).init(self.reporter.allocator);
         defer deinitMmioStructs(&mmio_structs);
@@ -520,6 +518,32 @@ pub const Checker = struct {
         self.collectGlobals(module, &globals);
         const safe_module = moduleHasSafeModuleAttr(module);
 
+        var comptime_globals: std.ArrayList(ast.GlobalDecl) = .empty;
+        defer comptime_globals.deinit(self.reporter.allocator);
+        var comptime_type_aliases: std.ArrayList(ast.TypeAlias) = .empty;
+        defer comptime_type_aliases.deinit(self.reporter.allocator);
+        var comptime_structs: std.ArrayList(ast.StructDecl) = .empty;
+        defer comptime_structs.deinit(self.reporter.allocator);
+        for (module.decls) |decl| switch (decl.kind) {
+            .global_decl => |global| comptime_globals.append(self.reporter.allocator, global) catch {
+                self.oom = true;
+            },
+            .type_alias => |alias| comptime_type_aliases.append(self.reporter.allocator, alias) catch {
+                self.oom = true;
+            },
+            .struct_decl => |struct_decl| comptime_structs.append(self.reporter.allocator, struct_decl) catch {
+                self.oom = true;
+            },
+            else => {},
+        };
+        const comptime_declarations = eval.ComptimeDeclarations{
+            .globals = comptime_globals.items,
+            .type_aliases = comptime_type_aliases.items,
+            .structs = comptime_structs.items,
+        };
+        self.comptime_declarations = comptime_declarations;
+        defer self.comptime_declarations = null;
+
         // Orphan rule: an `impl` of an `opaque struct` must live in the type's defining file,
         // so a peer `impl <OpaqueType>` written in another file cannot become an authorized
         // associated implementation. Trait impls follow the spec's
@@ -566,7 +590,7 @@ pub const Checker = struct {
         defer eval.deinitConstGlobals(self.reporter.allocator, &const_globals);
         var const_global_domains = std.StringHashMap(eval.DomainWidth).init(self.reporter.allocator);
         defer const_global_domains.deinit();
-        eval.collectConstGlobalsWithOptions(self.reporter.allocator, module, &const_fns, &const_globals, .{
+        eval.collectConstGlobalsFromDeclarationsWithOptions(self.reporter.allocator, comptime_declarations, &const_fns, &const_globals, .{
             .reflect = sema_reflect.comptimeReflectThunk,
             .reflect_ctx = &reflect_env,
             .domains = &const_global_domains,
@@ -2216,7 +2240,7 @@ pub const Checker = struct {
 
     fn seedComptimeScope(self: *Checker, scope: *eval.ComptimeScope) void {
         scope.funcs = self.const_fns;
-        if (self.comptime_decls) |decls| scope.declarations = eval.ComptimeDeclarations.fromDecls(decls);
+        if (self.comptime_declarations) |declarations| scope.declarations = declarations;
         scope.globals = self.const_globals;
         scope.global_domains = self.const_global_domains;
         if (self.reflect_env) |env| {

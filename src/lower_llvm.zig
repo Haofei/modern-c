@@ -332,7 +332,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
     };
     if (!source_spelling.validateAgainstMir(module_mir.*)) return error.UnsupportedLlvmEmission;
     const comptime_declarations = eval.ComptimeDeclarations{
-        .const_globals = early_metadata.const_globals,
+        .globals = early_metadata.globals,
         .type_aliases = early_metadata.type_aliases,
         .structs = early_metadata.structs,
     };
