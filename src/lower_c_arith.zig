@@ -6,7 +6,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -17,6 +17,7 @@ const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_target = @import("lower_c_target.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const appendCIntLiteral = lower_c_const.appendCIntLiteral;
 const appendCFloatLiteral = lower_c_const.appendCFloatLiteral;
@@ -33,16 +34,16 @@ const genericChildType = lower_c_shape.genericChildType;
 const intTypeRange = lower_c_type.intTypeRange;
 const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
 const isNoTrapBitwiseInfixOp = lower_c_op.isNoTrapBitwiseInfixOp;
-const isIdentNamed = ast_query.isIdentNamed;
-const isSatType = ast_query.isSatType;
-const isWrapType = ast_query.isWrapType;
-const memberCallee = ast_query.memberCallee;
+const isIdentNamed = expr_syntax.isIdentNamed;
+const isSatType = type_syntax.isSatType;
+const isWrapType = type_syntax.isWrapType;
+const memberCallee = expr_syntax.memberCallee;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const satHelperParts = lower_c_op.satHelperParts;
 const signedTypeSuffix = lower_c_type.signedTypeSuffix;
-const simpleNameType = ast_query.simpleNameType;
+const simpleNameType = type_syntax.simpleNameType;
 const sameCStorageType = lower_c_type.sameCStorageType;
-const typeName = ast_query.typeName;
+const typeName = type_syntax.typeName;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
 const uncheckedNoOverflowOperator = lower_c_expr.uncheckedNoOverflowOperator;
 

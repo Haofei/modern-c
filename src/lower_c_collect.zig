@@ -3,7 +3,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
@@ -18,10 +18,10 @@ const PackedBitsField = lower_c_model.PackedBitsField;
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const ResultInfo = lower_c_model.ResultInfo;
 const SliceInfo = lower_c_model.SliceInfo;
-const calleeIdentName = ast_query.calleeIdentName;
-const memberCallee = ast_query.memberCallee;
+const calleeIdentName = expr_syntax.calleeIdentName;
+const memberCallee = expr_syntax.memberCallee;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
-const typeName = ast_query.typeName;
+const typeName = type_syntax.typeName;
 
 pub const TypeArtifactFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!void;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;

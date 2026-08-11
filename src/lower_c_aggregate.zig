@@ -6,18 +6,19 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const AggregateEmitUnit = lower_c_model.AggregateEmitUnit;
 const ArrayInfo = lower_c_model.ArrayInfo;
 const cPayloadFieldName = lower_c_type.cPayloadFieldName;
-const calleeIdentName = ast_query.calleeIdentName;
+const calleeIdentName = expr_syntax.calleeIdentName;
 const GlobalAccess = lower_c_model.GlobalAccess;
 const LocalInfo = lower_c_model.LocalInfo;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
@@ -27,9 +28,9 @@ const resolvedArrayChildType = lower_c_shape.resolvedArrayChildType;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
 const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const structFieldType = lower_c_shape.structFieldType;
-const taggedUnionCase = ast_query.taggedUnionCase;
-const typeName = ast_query.typeName;
-const simpleNameType = ast_query.simpleNameType;
+const taggedUnionCase = expr_syntax.taggedUnionCase;
+const typeName = type_syntax.typeName;
+const simpleNameType = type_syntax.simpleNameType;
 
 pub const DepNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
 pub const EmitUnitFn = *const fn (ctx: *anyopaque, unit: AggregateEmitUnit) anyerror!void;
@@ -433,7 +434,7 @@ pub fn emitPackedBitsLiteral(ctx: EmitContext, fields: []const ast.StructLiteral
             const temp = try nextTempName(ctx);
             try temps.append(ctx.scratch, temp);
             try ctx.out.print(ctx.allocator, "bool {s} = ", .{temp});
-            try ctx.emit_expr_with_target(ctx.emit_ctx, field.value, scope, ast_query.simpleNameType("bool", field.value.span));
+            try ctx.emit_expr_with_target(ctx.emit_ctx, field.value, scope, simpleNameType("bool", field.value.span));
             try ctx.out.appendSlice(ctx.allocator, "; ");
         }
     }
@@ -449,7 +450,7 @@ pub fn emitPackedBitsLiteral(ctx: EmitContext, fields: []const ast.StructLiteral
         if (temps.items.len != 0) {
             try ctx.out.appendSlice(ctx.allocator, temps.items[i]);
         } else {
-            try ctx.emit_expr_with_target(ctx.emit_ctx, field.value, locals, ast_query.simpleNameType("bool", field.value.span));
+            try ctx.emit_expr_with_target(ctx.emit_ctx, field.value, locals, simpleNameType("bool", field.value.span));
         }
         try ctx.out.print(ctx.allocator, " ? {s} : ({s})0)", .{ mask, packed_name });
     }
@@ -495,7 +496,7 @@ pub fn emitTaggedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std
 // `Union.variant(...)` — qualified, self-typed tagged-union constructor. The union is
 // the callee owner (not a target type), so this lowers the same in any position.
 pub fn emitQualifiedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), union_ty: ast.TypeExpr) !bool {
-    const q = ast_query.qualifiedMemberCallee(call.callee.*) orelse return false;
+    const q = expr_syntax.qualifiedMemberCallee(call.callee.*) orelse return false;
     const union_name = typeName(union_ty) orelse return false;
     if (!std.mem.eql(u8, union_name, q.owner)) return error.UnsupportedCEmission;
     const union_decl = ctx.tagged_unions.get(union_name) orelse return false;

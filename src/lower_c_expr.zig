@@ -1,14 +1,15 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const type_syntax = @import("type_syntax.zig");
 
-const calleeIdentName = ast_query.calleeIdentName;
+const calleeIdentName = expr_syntax.calleeIdentName;
 const binaryCOp = lower_c_op.binaryCOp;
 const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
 const isComparisonOp = lower_c_op.isComparisonOp;
@@ -61,7 +62,7 @@ pub fn emitUnaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashM
     };
     if (node.op == .neg and !ctx.expr_resolves_to_float(ctx.emit_ctx, node.expr.*, locals)) {
         const resolved = lower_c_alias.resolveAliasType(ctx.type_aliases, result_ty);
-        if (!ast_query.isWrapType(resolved) and !ast_query.isSatType(resolved)) {
+        if (!type_syntax.isWrapType(resolved) and !type_syntax.isSatType(resolved)) {
             if (try ctx.emit_checked_unary(ctx.emit_ctx, expr, locals, result_ty)) return;
         }
     }
@@ -96,7 +97,7 @@ pub fn emitBinaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHash
     if (isCheckedBinaryOp(node.op) and !binaryResolvesToFloat(ctx, node, locals)) {
         if (ctx.numeric_expr_type(ctx.emit_ctx, expr, locals)) |inferred| {
             const inferred_dom = lower_c_alias.resolveAliasType(ctx.type_aliases, inferred);
-            if (ast_query.isWrapType(inferred_dom) or ast_query.isSatType(inferred_dom)) {
+            if (type_syntax.isWrapType(inferred_dom) or type_syntax.isSatType(inferred_dom)) {
                 try ctx.emit_expr_with_target(ctx.emit_ctx, expr, locals, inferred);
                 return;
             }

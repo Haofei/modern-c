@@ -6,7 +6,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_arith = @import("lower_c_arith.zig");
 const lower_c_atomic = @import("lower_c_atomic.zig");
@@ -20,7 +20,7 @@ const lower_c_reflect = @import("lower_c_reflect.zig");
 const mir = @import("mir.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
-const memberCallee = ast_query.memberCallee;
+const memberCallee = expr_syntax.memberCallee;
 
 const EnumRawTypes = struct {
     source: ast.TypeExpr,

@@ -3,17 +3,18 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
+const type_syntax = @import("type_syntax.zig");
 
-const callExpr = ast_query.callExpr;
-const calleeIdentName = ast_query.calleeIdentName;
+const callExpr = expr_syntax.callExpr;
+const calleeIdentName = expr_syntax.calleeIdentName;
 const exprContainsCall = lower_c_expr.exprContainsCall;
-const indexExpr = ast_query.indexExpr;
+const indexExpr = expr_syntax.indexExpr;
 const ConstGetCallInfo = lower_c_model.ConstGetCallInfo;
 const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
 const GlobalAccess = lower_c_model.GlobalAccess;
@@ -25,8 +26,8 @@ const SliceAccess = lower_c_model.SliceAccess;
 const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const TryReplacement = lower_c_model.TryReplacement;
 const arrayElementType = lower_c_shape.arrayElementType;
-const memberCallee = ast_query.memberCallee;
-const simpleNameType = ast_query.simpleNameType;
+const memberCallee = expr_syntax.memberCallee;
+const simpleNameType = type_syntax.simpleNameType;
 const sliceElementType = lower_c_shape.sliceElementType;
 const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;
 

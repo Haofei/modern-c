@@ -6,19 +6,20 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const intTypeRange = lower_c_type.intTypeRange;
 const isNumericStorageType = lower_c_type.isNumericStorageType;
-const memberCallee = ast_query.memberCallee;
+const memberCallee = expr_syntax.memberCallee;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
-const simpleNameType = ast_query.simpleNameType;
-const typeName = ast_query.typeName;
+const simpleNameType = type_syntax.simpleNameType;
+const typeName = type_syntax.typeName;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;

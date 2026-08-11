@@ -3,14 +3,14 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const mir = @import("mir.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
-const byteViewAddressTarget = ast_query.byteViewAddressTarget;
-const isIdentNamed = ast_query.isIdentNamed;
-const memberCallee = ast_query.memberCallee;
+const byteViewAddressTarget = expr_syntax.byteViewAddressTarget;
+const isIdentNamed = expr_syntax.isIdentNamed;
+const memberCallee = expr_syntax.memberCallee;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void;

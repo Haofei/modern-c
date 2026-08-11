@@ -6,8 +6,8 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const error_from = @import("error_from.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_arith = @import("lower_c_arith.zig");
@@ -29,8 +29,8 @@ const TryReplacement = lower_c_model.TryReplacement;
 const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;
 const appendGlobalStorePrefix = lower_c_global.appendGlobalStorePrefix;
 const appendGlobalStoreSuffix = lower_c_global.appendGlobalStoreSuffix;
-const calleeIdentName = ast_query.calleeIdentName;
-const callExpr = ast_query.callExpr;
+const calleeIdentName = expr_syntax.calleeIdentName;
+const callExpr = expr_syntax.callExpr;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
 
 pub const TryPredicateFn = *const fn (ctx: *anyopaque, operand: ast.Expr) bool;
@@ -167,7 +167,7 @@ pub fn emitTryExprWithReplacements(
                 try ctx.out.appendSlice(ctx.allocator, ")");
                 return;
             }
-            const fn_info = if (ast_query.calleeIdentName(node.callee.*)) |name| ctx.functions.get(name) else null;
+            const fn_info = if (calleeIdentName(node.callee.*)) |name| ctx.functions.get(name) else null;
             try ctx.emit_expr(ctx.emit_ctx, node.callee.*, locals);
             try ctx.out.appendSlice(ctx.allocator, "(");
             for (node.args, 0..) |arg, i| {
@@ -187,7 +187,7 @@ pub fn emitTryExprWithReplacements(
         .binary => |node| {
             if (lower_c_op.isCheckedBinaryOp(node.op)) {
                 const target = target_ty orelse return error.UnsupportedCEmission;
-                const target_name = ast_query.typeName(target) orelse return error.UnsupportedCEmission;
+                const target_name = type_syntax.typeName(target) orelse return error.UnsupportedCEmission;
                 const helper = lower_c_op.checkedHelperParts(node.op, target_name) orelse return error.UnsupportedCEmission;
                 try ctx.out.print(ctx.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
                 try emitTryExprWithReplacements(ctx, mode, node.left.*, locals, target, replacements);
@@ -956,7 +956,7 @@ fn emitNullableTryTrapHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!bool {
 fn assignmentTargetType(ctx: TryReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return ctx.operand_emit_type(ctx.emit_ctx, assignment.target, locals) orelse blk: {
         const target = ctx.global_assignment_target(ctx.emit_ctx, assignment.target, locals) orelse return null;
-        break :blk ast_query.simpleNameType(target.info.type_name, assignment.value.span);
+        break :blk type_syntax.simpleNameType(target.info.type_name, assignment.value.span);
     };
 }
 
@@ -973,8 +973,8 @@ fn emitAssignmentFromTemp(ctx: TryReplacementEmitContext, target: ast.Expr, loca
 fn emitCheckedUnaryTryReplacement(ctx: TryReplacementEmitContext, mode: TryReplacementMode, node: anytype, locals: ?*std.StringHashMap(lower_c_model.LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const lower_c_model.TryReplacement) anyerror!bool {
     if (node.op != .neg) return false;
     const target = if (target_ty) |ty| lower_c_alias.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
-    if (ast_query.isWrapType(target) or ast_query.isSatType(target)) return false;
-    const target_name = ast_query.typeName(target) orelse return error.UnsupportedCEmission;
+    if (type_syntax.isWrapType(target) or type_syntax.isSatType(target)) return false;
+    const target_name = type_syntax.typeName(target) orelse return error.UnsupportedCEmission;
     const suffix = lower_c_type.signedTypeSuffix(target_name) orelse return false;
 
     try ctx.out.print(ctx.allocator, "mc_checked_neg_{s}(", .{suffix});

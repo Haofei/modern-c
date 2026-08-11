@@ -6,7 +6,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_arith = @import("lower_c_arith.zig");
@@ -19,6 +19,7 @@ const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_try = @import("lower_c_try.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const FnInfo = lower_c_model.FnInfo;
@@ -30,8 +31,8 @@ const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;
 const appendGlobalStorePrefix = lower_c_global.appendGlobalStorePrefix;
 const appendGlobalStoreSuffix = lower_c_global.appendGlobalStoreSuffix;
-const calleeIdentName = ast_query.calleeIdentName;
-const memberExpr = ast_query.memberExpr;
+const calleeIdentName = expr_syntax.calleeIdentName;
+const memberExpr = expr_syntax.memberExpr;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
 const mmioFieldWidthBytes = lower_c_type.mmioFieldWidthBytes;
 const orderingArg = lower_c_atomic.orderingArg;
@@ -160,7 +161,7 @@ pub fn emitReadExprWithReplacements(
             try ctx.out.appendSlice(ctx.allocator, ")");
         },
         .call => |node| {
-            const fn_info = if (ast_query.calleeIdentName(node.callee.*)) |name| ctx.functions.get(name) else null;
+            const fn_info = if (calleeIdentName(node.callee.*)) |name| ctx.functions.get(name) else null;
             try ctx.emit_expr(ctx.emit_ctx, node.callee.*, locals);
             try ctx.out.appendSlice(ctx.allocator, "(");
             for (node.args, 0..) |arg, i| {
@@ -180,7 +181,7 @@ pub fn emitReadExprWithReplacements(
         .binary => |node| {
             if (lower_c_op.isCheckedBinaryOp(node.op)) {
                 const target = target_ty orelse return error.UnsupportedCEmission;
-                const target_name = ast_query.typeName(target) orelse return error.UnsupportedCEmission;
+                const target_name = type_syntax.typeName(target) orelse return error.UnsupportedCEmission;
                 const helper = lower_c_op.checkedHelperParts(node.op, target_name) orelse return error.UnsupportedCEmission;
                 try ctx.out.print(ctx.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
                 try emitReadExprWithReplacements(ctx, node.left.*, locals, target, replacements);
@@ -234,9 +235,9 @@ pub fn classifyAccess(ctx: AccessContext, callee: ast.Expr, args: []const ast.Ex
     const storage_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_storage, callee.span) orelse return null;
     const value_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_value, callee.span) orelse return null;
     _ = ctx.mir_target_type(ctx.emit_ctx, .mmio_result, callee.span) orelse return null;
-    const struct_name = ast_query.typeName(struct_ty) orelse return null;
-    const width = ast_query.typeName(storage_ty) orelse return null;
-    const value_type = ast_query.typeName(value_ty) orelse return null;
+    const struct_name = type_syntax.typeName(struct_ty) orelse return null;
+    const width = type_syntax.typeName(storage_ty) orelse return null;
+    const value_type = type_syntax.typeName(value_ty) orelse return null;
     return .{
         .kind = kind,
         .param = param,
@@ -296,8 +297,8 @@ fn emitFieldPadding(ctx: Context, field: ast.Field, running: *u64, pad_n: *usize
 fn emitCheckedUnaryReadReplacement(ctx: ReplacementEmitContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const MmioReadReplacement) anyerror!bool {
     if (node.op != .neg) return false;
     const target = if (target_ty) |ty| lower_c_alias.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
-    if (ast_query.isWrapType(target) or ast_query.isSatType(target)) return false;
-    const target_name = ast_query.typeName(target) orelse return error.UnsupportedCEmission;
+    if (type_syntax.isWrapType(target) or type_syntax.isSatType(target)) return false;
+    const target_name = type_syntax.typeName(target) orelse return error.UnsupportedCEmission;
     const suffix = lower_c_type.signedTypeSuffix(target_name) orelse return false;
 
     try ctx.out.print(ctx.allocator, "mc_checked_neg_{s}(", .{suffix});
@@ -332,7 +333,7 @@ pub fn emitInlineReadCall(ctx: EmitContext, call: anytype, locals_opt: ?*std.Str
 }
 
 pub fn emitWriteStmt(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = ast_query.callExpr(expr) orelse return false;
+    const call = expr_syntax.callExpr(expr) orelse return false;
     return emitWriteCall(ctx, call.callee.*, call.args, locals);
 }
 
@@ -342,7 +343,7 @@ pub fn emitWriteCall(ctx: EmitContext, callee: ast.Expr, args: []const ast.Expr,
     if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
     if (args.len == 0) return error.UnsupportedCEmission;
 
-    const value_ty = ast_query.simpleNameType(access.value_type, args[0].span);
+    const value_ty = type_syntax.simpleNameType(access.value_type, args[0].span);
     const value_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, args[0], locals, value_ty);
     if (std.mem.eql(u8, access.ordering, "release")) {
         try writeIndent(ctx.context);
@@ -383,7 +384,7 @@ pub fn emitDirectReadReturn(ctx: EmitContext, call: anytype, locals: *std.String
 }
 
 pub fn emitDirectReadReturnExpr(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = ast_query.callExpr(expr) orelse return false;
+    const call = expr_syntax.callExpr(expr) orelse return false;
     return emitDirectReadReturn(ctx, call, locals);
 }
 
@@ -399,12 +400,12 @@ pub fn emitDirectReadLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.
 }
 
 pub fn emitDirectReadLocalInitExpr(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = ast_query.callExpr(initializer) orelse return false;
+    const call = expr_syntax.callExpr(initializer) orelse return false;
     return emitDirectReadLocalInit(ctx, name, decl_ty, call, locals);
 }
 
 pub fn emitDirectReadAssignment(ctx: EmitContext, replacement_ctx: ReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = ast_query.callExpr(assignment.value) orelse return false;
+    const call = expr_syntax.callExpr(assignment.value) orelse return false;
     const read = (try directReadAccess(ctx, call, locals)) orelse return false;
 
     const temp_name = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
@@ -420,7 +421,7 @@ pub fn emitDirectReadInferredLocalInit(ctx: EmitContext, name: []const u8, initi
     const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer_span, name, null) orelse return error.UnsupportedCEmission;
     const inferred_c_type = try ctx.c_type(ctx.emit_ctx, inferred_ty);
     if (!std.mem.eql(u8, inferred_c_type, read.value_c_type)) return error.UnsupportedCEmission;
-    const source_type_name = ast_query.typeName(inferred_ty) orelse return error.UnsupportedCEmission;
+    const source_type_name = type_syntax.typeName(inferred_ty) orelse return error.UnsupportedCEmission;
 
     try emitReadDecl(ctx.context, inferred_c_type, name, read.access);
     try emitAcquireBarrierIfNeeded(ctx.context, read.access);
@@ -431,7 +432,7 @@ pub fn emitDirectReadInferredLocalInit(ctx: EmitContext, name: []const u8, initi
 }
 
 pub fn emitDirectReadInferredLocalInitExpr(ctx: EmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = ast_query.callExpr(initializer) orelse return false;
+    const call = expr_syntax.callExpr(initializer) orelse return false;
     const info = (try emitDirectReadInferredLocalInit(ctx, name, initializer.span, call, locals)) orelse return false;
     try locals.put(name, info);
     return true;
@@ -647,7 +648,7 @@ pub fn emitReadExprReturn(ctx: CallEmitContext, expr: ast.Expr, locals: *std.Str
 }
 
 pub fn emitReadCallReturn(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = ast_query.callExpr(expr) orelse return false;
+    const call = expr_syntax.callExpr(expr) orelse return false;
     if (call.args.len == 0) return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
 
@@ -685,7 +686,7 @@ pub fn emitReadExprLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: as
 }
 
 pub fn emitReadCallLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = ast_query.callExpr(initializer) orelse return false;
+    const call = expr_syntax.callExpr(initializer) orelse return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
     if (!fn_info.acceptsArgCount(call.args.len)) return false;
@@ -698,7 +699,7 @@ pub fn emitReadCallLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: as
 }
 
 pub fn emitReadCallAssignment(ctx: CallEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = ast_query.callExpr(assignment.value) orelse return false;
+    const call = expr_syntax.callExpr(assignment.value) orelse return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
     const call_return_ty = fn_info.return_type orelse return false;
@@ -713,7 +714,7 @@ pub fn emitReadCallAssignment(ctx: CallEmitContext, assignment: anytype, locals:
 }
 
 pub fn emitReadCallExprStmt(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = ast_query.callExpr(expr) orelse return false;
+    const call = expr_syntax.callExpr(expr) orelse return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
     if (!fn_info.acceptsArgCount(call.args.len)) return false;
@@ -811,7 +812,7 @@ fn emitReadSequencedBinaryOperandTemp(ctx_ptr: *anyopaque, expr: ast.Expr, local
 fn assignmentTargetType(ctx: ReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return ctx.operand_emit_type(ctx.emit_ctx, assignment.target, locals) orelse blk: {
         const target = ctx.global_assignment_target(ctx.emit_ctx, assignment.target, locals) orelse return null;
-        break :blk ast_query.simpleNameType(target.info.type_name, assignment.value.span);
+        break :blk type_syntax.simpleNameType(target.info.type_name, assignment.value.span);
     };
 }
 
@@ -870,7 +871,7 @@ pub fn emitReadInferredLocalInitWithReplacements(ctx: Context, replacement_ctx: 
     var nested = try emitReadReplacementFrame(ctx, locals.*, replacements);
     defer nested.deinit();
 
-    const source_ty = ast_query.simpleNameType("u32", initializer.span);
+    const source_ty = type_syntax.simpleNameType("u32", initializer.span);
     try locals.put(name, .{
         .source_ty = source_ty,
         .c_type = "uint32_t",

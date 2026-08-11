@@ -7,13 +7,14 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const mir = @import("mir.zig");
+const type_syntax = @import("type_syntax.zig");
 
-const isIdentNamed = ast_query.isIdentNamed;
-const memberCallee = ast_query.memberCallee;
-const typeName = ast_query.typeName;
+const isIdentNamed = expr_syntax.isIdentNamed;
+const memberCallee = expr_syntax.memberCallee;
+const typeName = type_syntax.typeName;
 const LocalInfo = lower_c_model.LocalInfo;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;

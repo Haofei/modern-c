@@ -6,7 +6,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 
@@ -14,7 +14,7 @@ const BindThunk = lower_c_model.BindThunk;
 const FnInfo = lower_c_model.FnInfo;
 const cTraitIsObjectSafe = lower_c_shape.cTraitIsObjectSafe;
 const implMethodMangled = lower_c_shape.implMethodMangled;
-const memberCallee = ast_query.memberCallee;
+const memberCallee = expr_syntax.memberCallee;
 
 pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
 pub const DynTypeNameFn = *const fn (ctx: *anyopaque, trait_name: []const u8) anyerror![]const u8;

@@ -7,13 +7,13 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
-const memberCallee = ast_query.memberCallee;
+const memberCallee = expr_syntax.memberCallee;
 const signedCTypeForInner = lower_c_type.signedCTypeForInner;
 const signedMinMacroForInner = lower_c_type.signedMinMacroForInner;
 
