@@ -74,23 +74,42 @@ pub const VerifiedProgram = struct {
 };
 
 test "VerifiedProgram exposes MIR-owned source spelling view" {
-    const source =
-        \\fn add_one(value: u32) -> u32 {
-        \\    return value + 1;
-        \\}
-    ;
-
+    const source = "verified MIR fixture";
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "backend_source_spelling.mc", source);
     defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const parser_mod = @import("parser.zig");
-    var p = parser_mod.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
 
-    var module_mir = try mir.build(std.testing.allocator, module);
+    const symbols = try std.testing.allocator.alloc(mir.SymbolIdentity, 1);
+    symbols[0] = .{ .id = mir.SymbolId.fromIndex(0), .spelling = "add_one" };
+    const blocks = try std.testing.allocator.alloc(mir.Block, 1);
+    blocks[0] = .{
+        .id = 0,
+        .typed_id = mir.BlockId.fromIndex(0),
+        .kind = "entry",
+        .instructions = &.{},
+        .successors = &.{},
+        .typed_successors = &.{},
+        .terminator = .{ .return_ = .void },
+    };
+    const functions = try std.testing.allocator.alloc(mir.Function, 1);
+    functions[0] = .{
+        .name = "add_one",
+        .typed_symbol_id = mir.SymbolId.fromIndex(0),
+        .return_ty = .void,
+        .no_lang_trap = false,
+        .irq_context = false,
+        .blocks = blocks,
+        .trap_edges = &.{},
+        .contract_regions = &.{},
+        .range_facts = &.{},
+        .pointer_provenance_facts = &.{},
+        .representation_facts = &.{},
+        .elided_bounds = &.{},
+    };
+    var module_mir = mir.Module{
+        .allocator = std.testing.allocator,
+        .symbol_identities = symbols,
+        .functions = functions,
+    };
     defer module_mir.deinit();
 
     const program = try VerifiedProgram.init(&module_mir, &reporter);
