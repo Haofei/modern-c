@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const artifact_model = @import("artifact_model.zig");
 const ast = @import("ast.zig");
 const backend = @import("backend.zig");
 const backend_registry = @import("backend_registry.zig");
@@ -719,7 +720,7 @@ fn runLowerC(session: *CompilationSession, path: []const u8, source: []const u8)
 fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: backend.Profile, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
     const allocator = session.allocator;
     const optimize = checks.optimize;
-    const source_sha256 = backend.sha256Bytes(source);
+    const source_sha256 = artifact_model.sha256Bytes(source);
     var diag = session.initReporter(path, source);
     defer diag.deinit();
 
@@ -756,7 +757,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         },
         else => return err,
     };
-    var bundle = backend.ArtifactBundle.forArtifact(output.items, lower_opts, .{
+    var bundle = artifact_model.ArtifactBundle.forArtifact(output.items, lower_opts, .{
         .artifact_kind = "c",
         .backend_name = "c",
     });
@@ -767,7 +768,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
 fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, target_arch: backend.TargetArch, output_path: []const u8, clang_bin: []const u8) !void {
     const allocator = session.allocator;
     const io = session.io;
-    const source_sha256 = backend.sha256Bytes(source);
+    const source_sha256 = artifact_model.sha256Bytes(source);
     var diag = session.initReporter(path, source);
     defer diag.deinit();
 
@@ -858,7 +859,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     defer allocator.free(executable_bytes);
     const toolchain_identity = try clangToolchainIdentity(allocator, io, clang_bin);
     defer allocator.free(toolchain_identity);
-    var bundle = backend.ArtifactBundle.forArtifact(executable_bytes, lower_opts, .{
+    var bundle = artifact_model.ArtifactBundle.forArtifact(executable_bytes, lower_opts, .{
         .artifact_kind = "host-executable",
         .backend_name = "c",
         .toolchain_identity = toolchain_identity,
@@ -879,7 +880,7 @@ fn attachCSourceMapDigests(
     source_map: backend.SourceMapMechanicsView,
     generated_c: []const u8,
     lower_opts: backend.LowerOptions,
-    bundle: *backend.ArtifactBundle,
+    bundle: *artifact_model.ArtifactBundle,
 ) !void {
     if (!be.supportsEmitMap()) return;
     var map_bytes: std.ArrayList(u8) = .empty;
@@ -890,7 +891,7 @@ fn attachCSourceMapDigests(
     bundle.mir_facts_sha256 = try metadataDigestHeader(map_bytes.items, "mir_facts_sha256");
 }
 
-fn metadataDigestHeader(bytes: []const u8, name: []const u8) !backend.Sha256Digest {
+fn metadataDigestHeader(bytes: []const u8, name: []const u8) !artifact_model.Sha256Digest {
     var lines = std.mem.splitScalar(u8, bytes, '\n');
     while (lines.next()) |raw_line| {
         const line = std.mem.trim(u8, raw_line, "\r");
@@ -900,7 +901,7 @@ fn metadataDigestHeader(bytes: []const u8, name: []const u8) !backend.Sha256Dige
         if (!std.mem.eql(u8, body[0..eq], name)) continue;
         const value = body[eq + 1 ..];
         if (value.len != 64) return error.InvalidArtifactMetadata;
-        var digest: backend.Sha256Digest = undefined;
+        var digest: artifact_model.Sha256Digest = undefined;
         var index: usize = 0;
         while (index < digest.len) : (index += 1) {
             digest[index] = try std.fmt.parseInt(u8, value[index * 2 .. index * 2 + 2], 16);
@@ -1042,14 +1043,14 @@ fn resolveExplicitToolPath(allocator: std.mem.Allocator, io: std.Io, path: []con
 fn toolDigestIdentityForPath(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !?[]const u8 {
     const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_artifact_metadata_bytes)) catch return null;
     defer allocator.free(bytes);
-    const digest = backend.sha256Bytes(bytes);
+    const digest = artifact_model.sha256Bytes(bytes);
     const digest_hex = try allocHexDigest(allocator, digest);
     defer allocator.free(digest_hex);
     const identity = try std.fmt.allocPrint(allocator, "path={s};sha256={s}", .{ path, digest_hex });
     return identity;
 }
 
-fn allocHexDigest(allocator: std.mem.Allocator, digest: backend.Sha256Digest) ![]const u8 {
+fn allocHexDigest(allocator: std.mem.Allocator, digest: artifact_model.Sha256Digest) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
     for (digest) |byte| {
@@ -1123,7 +1124,7 @@ fn isCIdentifierContinue(ch: u8) bool {
 fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: backend.Profile, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
     const allocator = session.allocator;
     const optimize = checks.optimize;
-    var source_sha256: backend.Sha256Digest = undefined;
+    var source_sha256: artifact_model.Sha256Digest = undefined;
     std.crypto.hash.sha2.Sha256.hash(source, &source_sha256, .{});
     var diag = session.initReporter(path, source);
     defer diag.deinit();
@@ -1180,7 +1181,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
 fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, linux_kernel: bool, output_path: ?[]const u8) !void {
     const allocator = session.allocator;
     const optimize = checks.optimize;
-    const source_sha256 = backend.sha256Bytes(source);
+    const source_sha256 = artifact_model.sha256Bytes(source);
     var diag = session.initReporter(path, source);
     defer diag.deinit();
 
@@ -1218,7 +1219,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
         },
         else => return err,
     };
-    const bundle = backend.ArtifactBundle.forArtifact(output.items, lower_opts, .{
+    const bundle = artifact_model.ArtifactBundle.forArtifact(output.items, lower_opts, .{
         .artifact_kind = "llvm-ir",
         .backend_name = "llvm",
     });

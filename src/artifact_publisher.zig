@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const backend = @import("backend.zig");
+const artifact_model = @import("artifact_model.zig");
 
 pub const max_metadata_bytes = 512 * 1024 * 1024;
 
@@ -106,13 +106,13 @@ pub const Publisher = struct {
         }
     }
 
-    pub fn prepareMetadataSidecar(self: Publisher, output_path: []const u8, bundle: backend.ArtifactBundle) !MetadataDraft {
+    pub fn prepareMetadataSidecar(self: Publisher, output_path: []const u8, bundle: artifact_model.ArtifactBundle) !MetadataDraft {
         const metadata_path = try metadataPath(self.allocator, output_path);
         errdefer self.allocator.free(metadata_path);
 
         var metadata: std.ArrayList(u8) = .empty;
         errdefer metadata.deinit(self.allocator);
-        try backend.appendArtifactMetadata(self.allocator, &metadata, bundle);
+        try artifact_model.appendArtifactMetadata(self.allocator, &metadata, bundle);
 
         return .{
             .path = metadata_path,
@@ -125,13 +125,13 @@ pub const Publisher = struct {
         return self.writeStdout(bytes);
     }
 
-    pub fn writeArtifactMetadataSidecar(self: Publisher, output_path: []const u8, bundle: backend.ArtifactBundle) !void {
+    pub fn writeArtifactMetadataSidecar(self: Publisher, output_path: []const u8, bundle: artifact_model.ArtifactBundle) !void {
         var metadata = try self.prepareMetadataSidecar(output_path, bundle);
         defer metadata.deinit(self.allocator);
         try self.writeOutputPath(metadata.path, metadata.bytes.items);
     }
 
-    pub fn writeArtifactWithMetadata(self: Publisher, bytes: []const u8, output_path: ?[]const u8, bundle: backend.ArtifactBundle) !void {
+    pub fn writeArtifactWithMetadata(self: Publisher, bytes: []const u8, output_path: ?[]const u8, bundle: artifact_model.ArtifactBundle) !void {
         const path = output_path orelse return self.writeStdout(bytes);
 
         var metadata = try self.prepareMetadataSidecar(path, bundle);
@@ -187,7 +187,7 @@ pub const Publisher = struct {
         self: Publisher,
         tmp_path: []const u8,
         output_path: []const u8,
-        bundle: backend.ArtifactBundle,
+        bundle: artifact_model.ArtifactBundle,
         artifact_label: []const u8,
     ) !void {
         var metadata = try self.prepareMetadataSidecar(output_path, bundle);

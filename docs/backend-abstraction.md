@@ -48,7 +48,7 @@ pub const LowerOptions = struct {
     checks: Checks = .{},
     stub_asm: bool = false,
     reporter: ?*diagnostics.Reporter = null,
-    source_sha256: ?Sha256Digest = null,
+    source_sha256: ?artifact_model.Sha256Digest = null,
     compiler_version: ?[]const u8 = null,
     toolchain_identity: ?[]const u8 = null,
     linux_kernel: bool = false,
@@ -127,6 +127,8 @@ than stored on `VerifiedProgram`. Both syntax-backed mechanics views live in
 backend seam does not directly import AST declarations. New backend work should
 prefer MIR identities and typed facts and should avoid adding new semantic
 decisions to syntax-backed views.
+
+Artifact envelope metadata is not owned by the backend seam. `.mcmeta` and `.mcmap` use `artifact_model.ArtifactBundle`; backend lowering only receives the source digest through `LowerOptions`.
 
 ## Error boundary
 

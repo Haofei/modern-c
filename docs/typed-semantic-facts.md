@@ -79,8 +79,9 @@ emit weak/default trap and sanitizer hook bodies; per-backend
 `moduleDefinesHook` helpers are exact-zero gated, and the AST is no longer the
 authority for that prelude symbol-spelling decision.
 
-Artifact metadata consumers are also converging on the shared `ArtifactBundle`
-contract instead of local header checks. `mcmap-verify.py` now validates
+Artifact metadata consumers are also converging on the shared
+`artifact_model.ArtifactBundle` contract instead of local header checks.
+`mcmap-verify.py` now validates
 metadata sidecar `artifact_kind` and `backend` identity when the consumer
 declares an expected class, plus generated artifact and loaded-source SHA-256
 when those paired files are supplied. C/source-map-bearing artifacts additionally

@@ -42,7 +42,7 @@ REQUIRED_GOVERNANCE_GATES = {
     "ci-pass-gates-test",
 }
 ARTIFACT_METADATA_ANCHORS: dict[str, list[str]] = {
-    "src/backend.zig": [
+    "src/artifact_model.zig": [
         "pub const ArtifactBundle = struct",
         "pub fn forArtifact(",
         "pub fn forSourceMap(",
@@ -52,16 +52,22 @@ ARTIFACT_METADATA_ANCHORS: dict[str, list[str]] = {
         "generated_artifact_sha256",
         "source_map_payload_sha256",
     ],
+    "src/backend.zig": [
+        "source_sha256: ?artifact_model.Sha256Digest = null",
+    ],
+    "src/artifact_publisher.zig": [
+        "pub fn writeArtifactMetadataSidecar(self: Publisher",
+        "pub fn writeArtifactWithMetadata(self: Publisher",
+        "try artifact_model.appendArtifactMetadata(self.allocator, &metadata, bundle);",
+    ],
     "src/main.zig": [
-        "fn writeArtifactMetadataSidecar(",
-        "fn writeArtifactWithMetadata(",
         '.artifact_kind = "c"',
         '.artifact_kind = "llvm-ir"',
         '.artifact_kind = "host-executable"',
     ],
     "src/lower_c_map.zig": [
-        "const bundle = backend.ArtifactBundle.forSourceMap(",
-        "try backend.appendArtifactBundle(allocator, out, bundle, .source_map)",
+        "const bundle = artifact_model.ArtifactBundle.forSourceMap(",
+        "try artifact_model.appendArtifactBundle(allocator, out, bundle, .source_map)",
     ],
     "tools/toolchain/mcmap-verify.py": [
         'expected_magic=b"# mcmap v1" if args.map is not None else b"# mcmeta v1"',

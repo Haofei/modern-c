@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const artifact_model = @import("artifact_model.zig");
 const artifact_publisher = @import("artifact_publisher.zig");
 const ast = @import("ast.zig");
 const async_lower = @import("async_lower.zig");
@@ -72,7 +73,7 @@ pub const CompilationSession = struct {
         try self.publisher().restoreMetadataSidecar(path, snapshot);
     }
 
-    pub fn prepareArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !ArtifactMetadataDraft {
+    pub fn prepareArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: artifact_model.ArtifactBundle) !ArtifactMetadataDraft {
         return self.publisher().prepareMetadataSidecar(output_path, bundle);
     }
 
@@ -80,11 +81,11 @@ pub const CompilationSession = struct {
         try self.publisher().writeArtifact(bytes, output_path);
     }
 
-    pub fn writeArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !void {
+    pub fn writeArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: artifact_model.ArtifactBundle) !void {
         try self.publisher().writeArtifactMetadataSidecar(output_path, bundle);
     }
 
-    pub fn writeArtifactWithMetadata(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8, bundle: backend.ArtifactBundle) !void {
+    pub fn writeArtifactWithMetadata(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8, bundle: artifact_model.ArtifactBundle) !void {
         try self.publisher().writeArtifactWithMetadata(bytes, output_path, bundle);
     }
 
@@ -92,7 +93,7 @@ pub const CompilationSession = struct {
         self: *CompilationSession,
         tmp_path: []const u8,
         output_path: []const u8,
-        bundle: backend.ArtifactBundle,
+        bundle: artifact_model.ArtifactBundle,
         artifact_label: []const u8,
     ) !void {
         try self.publisher().publishExistingFileWithMetadata(tmp_path, output_path, bundle, artifact_label);

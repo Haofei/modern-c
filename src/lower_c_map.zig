@@ -6,6 +6,7 @@
 
 const std = @import("std");
 
+const artifact_model = @import("artifact_model.zig");
 const ast = @import("ast.zig");
 const backend = @import("backend.zig");
 const mir = @import("mir.zig");
@@ -45,9 +46,9 @@ pub fn appendSourceMap(
     defer mir_facts_input.deinit(allocator);
     try appendMirFactsDigestInput(allocator, &mir_facts_input, mir_module);
 
-    const bundle = backend.ArtifactBundle.forSourceMap(generated_c, payload.items, mir_facts_input.items, opts);
+    const bundle = artifact_model.ArtifactBundle.forSourceMap(generated_c, payload.items, mir_facts_input.items, opts);
 
-    try backend.appendArtifactBundle(allocator, out, bundle, .source_map);
+    try artifact_model.appendArtifactBundle(allocator, out, bundle, .source_map);
     try out.appendSlice(allocator, payload.items);
 }
 
