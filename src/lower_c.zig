@@ -4,7 +4,7 @@ const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const early_declaration_metadata = @import("early_declaration_metadata.zig");
-const source_map_mechanics = @import("source_map_mechanics.zig");
+const source_map_rows = @import("source_map_rows.zig");
 const mir = @import("mir.zig");
 const lower_c_emitter = @import("lower_c_emitter.zig");
 const lower_c_inspect = @import("lower_c_inspect.zig");
@@ -53,7 +53,7 @@ fn backendEmitMap(
     _ = ctx;
     return appendCSourceMapFromGenerated(
         allocator,
-        request.source_map_mechanics,
+        request.source_map_rows,
         request.out,
         request.generated_artifact,
         request.program.typed_mir,
@@ -142,7 +142,7 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
 
-    try appendCSourceMapFromGenerated(allocator, source_map_mechanics.SourceMapMechanicsView.forDecls(module.decls), out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
+    try appendCSourceMapFromGenerated(allocator, source_map_rows.SourceMapRowsView.forDecls(module.decls), out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
         .profile = profile,
         .source_path = source_path,
     });
@@ -150,7 +150,7 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
 
 pub fn appendCSourceMapFromGenerated(
     allocator: std.mem.Allocator,
-    source_map_view: source_map_mechanics.SourceMapMechanicsView,
+    source_map_view: source_map_rows.SourceMapRowsView,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     typed_mir: *const mir.Module,

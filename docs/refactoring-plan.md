@@ -400,6 +400,7 @@ removing backend authority before adding new abstractions:
 | 212 | Carry early declaration metadata through codegen requests. | Complete: `LowerRequest` now carries `early_declaration_metadata: EarlyDeclarationMetadataView` instead of `legacy_declarations: LegacyDeclarationSlice`; C/LLVM backend vtables no longer receive the generic declaration slice, and the remaining wrappers construct the narrow early-metadata view at the syntax compatibility edge. |
 | 213 | Delete the generic legacy declaration slice wrapper. | Complete: `LegacyDeclarationSlice` was removed; compatibility callers now construct `EarlyDeclarationMetadataView.forDecls(module.decls)` directly, and architecture inventory ratchets the remaining backend `LegacyDeclarationSlice` count to zero. |
 | 214 | Rename declaration metadata mechanics by current role. | Complete: `EarlyDeclarationMetadataView` moved from the obsolete `legacy_backend_syntax.zig` container to `early_declaration_metadata.zig`; C/LLVM, CLI, tests, and `LowerRequest` now import the named early-metadata module directly. |
+| 215 | Rename source-map syntax mechanics by current role. | Complete: `SourceMapMechanicsView` moved to `source_map_rows.zig` as `SourceMapRowsView`; `EmitMapRequest` now carries `source_map_rows`, making the remaining AST declaration dependency explicitly map-row-only. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

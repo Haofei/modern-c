@@ -2,7 +2,7 @@ const std = @import("std");
 
 const codegen_options = @import("codegen_options.zig");
 const early_declaration_metadata = @import("early_declaration_metadata.zig");
-const source_map_mechanics = @import("source_map_mechanics.zig");
+const source_map_rows = @import("source_map_rows.zig");
 const verified_program = @import("verified_program.zig");
 
 /// Backend lowering request.
@@ -20,11 +20,11 @@ pub const LowerRequest = struct {
 };
 
 /// Backend source-map request. This stays separate from ordinary lowering so
-/// the remaining source-map syntax mechanics are explicit and isolated from
-/// code-generation semantics.
+/// the remaining source-map syntax row enumeration is explicit and isolated
+/// from code-generation semantics.
 pub const EmitMapRequest = struct {
     program: verified_program.VerifiedProgram,
-    source_map_mechanics: source_map_mechanics.SourceMapMechanicsView,
+    source_map_rows: source_map_rows.SourceMapRowsView,
     out: *std.ArrayList(u8),
     generated_artifact: []const u8,
     opts: codegen_options.LowerOptions,
@@ -35,5 +35,5 @@ test "codegen requests keep legacy syntax mechanics behind named adapter fields"
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "early_declaration_metadata") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "source_map_mechanics") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "source_map_rows") != null);
 }

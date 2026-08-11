@@ -9,13 +9,13 @@ const std = @import("std");
 const artifact_model = @import("artifact_model.zig");
 const ast = @import("ast.zig");
 const backend = @import("backend.zig");
-const source_map_mechanics = @import("source_map_mechanics.zig");
+const source_map_rows = @import("source_map_rows.zig");
 const mir = @import("mir.zig");
 const mir_syntax = @import("mir_syntax.zig");
 
 pub fn appendSourceMap(
     allocator: std.mem.Allocator,
-    source_map: source_map_mechanics.SourceMapMechanicsView,
+    source_map: source_map_rows.SourceMapRowsView,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     mir_module: *const mir.Module,

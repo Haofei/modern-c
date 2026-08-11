@@ -24,7 +24,7 @@ const module_graph = @import("module_graph.zig");
 const monomorphize_tests = @import("monomorphize_tests.zig");
 const parser_tests = @import("parser_tests.zig");
 const sema_tests = @import("sema_tests.zig");
-const source_map_mechanics = @import("source_map_mechanics.zig");
+const source_map_rows = @import("source_map_rows.zig");
 const spec_tests = @import("spec_tests.zig");
 
 test {
@@ -47,6 +47,6 @@ test {
     _ = monomorphize_tests;
     _ = parser_tests;
     _ = sema_tests;
-    _ = source_map_mechanics;
+    _ = source_map_rows;
     _ = spec_tests;
 }
