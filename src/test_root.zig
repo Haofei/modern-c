@@ -6,6 +6,7 @@
 
 const main = @import("main.zig");
 const artifact_model = @import("artifact_model.zig");
+const codegen_options = @import("codegen_options.zig");
 const compiler_session = @import("compiler_session.zig");
 const verified_program = @import("verified_program.zig");
 
@@ -25,6 +26,7 @@ const spec_tests = @import("spec_tests.zig");
 test {
     _ = main;
     _ = artifact_model;
+    _ = codegen_options;
     _ = compiler_session;
     _ = verified_program;
     _ = eval_tests;

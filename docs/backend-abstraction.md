@@ -38,7 +38,9 @@ Those remain private implementation details of each lowerer.
 
 ## Current contract
 
-The key types live in `src/backend.zig`.
+The backend vtable lives in `src/backend.zig`. Request options live in
+`src/codegen_options.zig` and are re-exported by `backend.zig` for the existing
+backend API.
 
 ```zig
 pub const LowerOptions = struct {
