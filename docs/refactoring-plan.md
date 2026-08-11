@@ -401,6 +401,7 @@ removing backend authority before adding new abstractions:
 | 213 | Delete the generic legacy declaration slice wrapper. | Complete: `LegacyDeclarationSlice` was removed; compatibility callers now construct `EarlyDeclarationMetadataView.forDecls(module.decls)` directly, and architecture inventory ratchets the remaining backend `LegacyDeclarationSlice` count to zero. |
 | 214 | Rename declaration metadata mechanics by current role. | Complete: `EarlyDeclarationMetadataView` moved from the obsolete `legacy_backend_syntax.zig` container to `early_declaration_metadata.zig`; C/LLVM, CLI, tests, and `LowerRequest` now import the named early-metadata module directly. |
 | 215 | Rename source-map syntax mechanics by current role. | Complete: `SourceMapMechanicsView` moved to `source_map_rows.zig` as `SourceMapRowsView`; `EmitMapRequest` now carries `source_map_rows`, making the remaining AST declaration dependency explicitly map-row-only. |
+| 216 | Make MIR facts module-wide fallback explicit. | Complete: `MirFactsView` local target-type queries no longer perform hidden module scans; generated-plumbing fallback is isolated behind `targetTypeFact*WithModuleFallback`, backend uses are exact-count gated, and MIR tests assert local lookup and fallback lookup stay separate. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

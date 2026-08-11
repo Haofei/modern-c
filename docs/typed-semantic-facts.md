@@ -145,7 +145,9 @@ The compiler already has several fact-like surfaces, but they are not a single
 typed semantic source of truth.  `src/mir_facts_view.zig` is the current narrow
 production query boundary: both C and LLVM consult it for target-type facts, so
 source-span matching, owner matching, and `TypeId`/`SpanId`/`SymbolId` identity
-validation are no longer independently reimplemented by each backend.
+validation are no longer independently reimplemented by each backend. Local
+queries no longer hide module-wide scans; the remaining generated-plumbing
+fallback is explicit in the `*WithModuleFallback` APIs and exact-count gated.
 
 - `mcc facts` parses a module and prints `src/ir.zig`'s fact collector output via
   `ir.appendFacts`. These are textual inspection facts for semantic traps,

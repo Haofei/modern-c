@@ -283,7 +283,7 @@ test "MIR target-type owner identities mirror direct calls" {
     try std.testing.expect(std.mem.indexOf(u8, dump.items, expected_fact_owner) != null);
 }
 
-test "semantic db can query target-type facts by typed identity" {
+test "MIR facts view keeps typed lookup and module fallback separate" {
     const source =
         \\fn callee(x: u32) -> u32 {
         \\    return x;
@@ -306,9 +306,20 @@ test "semantic db can query target-type facts by typed identity" {
     var module_mir = try mir.build(std.testing.allocator, module);
     defer module_mir.deinit();
 
+    const callee = functionByName(module_mir, "callee").?;
     const caller = functionByName(module_mir, "caller").?;
     const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
     const db = mir_facts_view.MirFactsView.init(&module_mir);
+    const result_span = ast.Span{
+        .line = result_fact.source.line,
+        .column = result_fact.source.column,
+        .offset = result_fact.source.offset,
+        .len = result_fact.source.len,
+    };
+
+    try std.testing.expect(db.targetTypeFactAtOwned(&callee, .direct_call_result, result_span, result_fact.target_owner.?, result_fact.target_index) == null);
+    const fallback_fact = db.targetTypeFactAtOwnedWithModuleFallback(&callee, .direct_call_result, result_span, result_fact.target_owner.?, result_fact.target_index) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(std.meta.eql(result_fact, fallback_fact));
 
     const wrong_span = ast.Span{
         .line = result_fact.source.line + 100,

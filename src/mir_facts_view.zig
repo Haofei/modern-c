@@ -24,24 +24,43 @@ pub const MirFactsView = struct {
         return .{ .module = module };
     }
 
-    /// Returns an unowned, verified target-type fact.  `current` is preferred
-    /// to retain function-local meaning; a source-spanned fact may fall back to
-    /// a unique matching module fact for generated cross-function plumbing.
+    /// Returns an unowned, verified target-type fact from the current function.
+    ///
+    /// This is the preferred source-spanned compatibility query while callers
+    /// are being migrated to `targetTypeFactById`.
     pub fn targetTypeFactAt(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
+        _ = self;
         if (kind == .expression_result and !isSourceSpan(span)) return null;
         if (current) |function| {
             if (targetTypeFactInFunction(function, kind, span, null, null)) |fact| return fact;
         }
+        return null;
+    }
+
+    /// Transitional generated-plumbing query.  It first checks the current
+    /// function, then falls back to a unique module-wide source match.  Keeping
+    /// this fallback explicitly named prevents broad scans from hiding behind
+    /// the ordinary local facts query.
+    pub fn targetTypeFactAtWithModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
+        if (self.targetTypeFactAt(current, kind, span)) |fact| return fact;
         if (!isSourceSpan(span)) return null;
         return uniqueModuleTargetTypeFact(self.module, kind, span, null, null);
     }
 
-    /// Same query for fact families whose target belongs to a typed owner and
-    /// optional target index (for example atomic-init payload/result pairs).
+    /// Same local query for fact families whose target belongs to a typed owner
+    /// and optional target index (for example atomic-init payload/result pairs).
     pub fn targetTypeFactAtOwned(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
+        _ = self;
         if (current) |function| {
             if (targetTypeFactInFunction(function, kind, span, owner, index)) |fact| return fact;
         }
+        return null;
+    }
+
+    /// Transitional generated-plumbing owner query with explicit module-wide
+    /// fallback.  New code should prefer `targetTypeFactById`.
+    pub fn targetTypeFactAtOwnedWithModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
+        if (self.targetTypeFactAtOwned(current, kind, span, owner, index)) |fact| return fact;
         if (!isSourceSpan(span)) return null;
         return uniqueModuleTargetTypeFact(self.module, kind, span, owner, index);
     }
