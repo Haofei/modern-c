@@ -6,6 +6,7 @@ const backend_cleanup = @import("backend_cleanup.zig");
 const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
+const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
@@ -278,7 +279,7 @@ fn backendLower(
     ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
     program: backend_mod.VerifiedProgram,
-    declarations: backend_mod.LegacyDeclarationSlice,
+    declarations: legacy_backend_syntax.LegacyDeclarationSlice,
     out: *std.ArrayList(u8),
     opts: backend_mod.LowerOptions,
 ) backend_mod.LowerError!void {
@@ -310,12 +311,12 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
 }
 
 pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, backend_mod.LegacyDeclarationSlice.forDecls(module.decls), module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
+    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls), module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
 }
 
 fn appendLlvmCheckedMirProfileWithSourceSpelling(
     allocator: std.mem.Allocator,
-    declarations: backend_mod.LegacyDeclarationSlice,
+    declarations: legacy_backend_syntax.LegacyDeclarationSlice,
     module_mir: *const mir.Module,
     source_spelling: backend_mod.SourceSpellingView,
     out: *std.ArrayList(u8),

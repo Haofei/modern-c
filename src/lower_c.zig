@@ -3,6 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
+const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
 const mir = @import("mir.zig");
 const lower_c_emitter = @import("lower_c_emitter.zig");
 const lower_c_inspect = @import("lower_c_inspect.zig");
@@ -38,7 +39,7 @@ fn backendLower(
     ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
     program: backend_mod.VerifiedProgram,
-    declarations: backend_mod.LegacyDeclarationSlice,
+    declarations: legacy_backend_syntax.LegacyDeclarationSlice,
     out: *std.ArrayList(u8),
     opts: backend_mod.LowerOptions,
 ) backend_mod.LowerError!void {
@@ -50,7 +51,7 @@ fn backendEmitMap(
     ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
     program: backend_mod.VerifiedProgram,
-    source_map: backend_mod.SourceMapMechanicsView,
+    source_map: legacy_backend_syntax.SourceMapMechanicsView,
     out: *std.ArrayList(u8),
     generated_artifact: []const u8,
     opts: backend_mod.LowerOptions,
@@ -97,12 +98,12 @@ fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, o
 }
 
 pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
-    return appendCProfileWithMirSourceSpelling(allocator, backend_mod.LegacyDeclarationSlice.forDecls(module.decls), typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
+    return appendCProfileWithMirSourceSpelling(allocator, legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls), typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCProfileWithMirSourceSpelling(
     allocator: std.mem.Allocator,
-    declarations: backend_mod.LegacyDeclarationSlice,
+    declarations: legacy_backend_syntax.LegacyDeclarationSlice,
     typed_mir: *const mir.Module,
     source_spelling: backend_mod.SourceSpellingView,
     out: *std.ArrayList(u8),
@@ -147,7 +148,7 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
 
-    try appendCSourceMapFromGenerated(allocator, backend_mod.SourceMapMechanicsView.forDecls(module.decls), out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
+    try appendCSourceMapFromGenerated(allocator, legacy_backend_syntax.SourceMapMechanicsView.forDecls(module.decls), out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
         .profile = profile,
         .source_path = source_path,
     });
@@ -155,7 +156,7 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
 
 pub fn appendCSourceMapFromGenerated(
     allocator: std.mem.Allocator,
-    source_map_view: backend_mod.SourceMapMechanicsView,
+    source_map_view: legacy_backend_syntax.SourceMapMechanicsView,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     typed_mir: *const mir.Module,

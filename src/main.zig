@@ -13,6 +13,7 @@ const eval = @import("eval.zig");
 const fmt = @import("fmt.zig");
 const hir = @import("hir.zig");
 const ir = @import("ir.zig");
+const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
 const lexer = @import("lexer.zig");
 const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
@@ -748,7 +749,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const declarations = backend.LegacyDeclarationSlice.forDecls(module.decls);
+    const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
     be.lower(allocator, program, declarations, &output, lower_opts) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
@@ -761,7 +762,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .artifact_kind = "c",
         .backend_name = "c",
     });
-    try attachCSourceMapDigests(allocator, be, program, backend.SourceMapMechanicsView.forDecls(module.decls), output.items, lower_opts, &bundle);
+    try attachCSourceMapDigests(allocator, be, program, legacy_backend_syntax.SourceMapMechanicsView.forDecls(module.decls), output.items, lower_opts, &bundle);
     try session.writeArtifactWithMetadata(output.items, output_path, bundle);
 }
 
@@ -794,7 +795,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const declarations = backend.LegacyDeclarationSlice.forDecls(module.decls);
+    const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
     be.lower(allocator, program, declarations, &raw_c, lower_opts) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
@@ -864,7 +865,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .backend_name = "c",
         .toolchain_identity = toolchain_identity,
     });
-    try attachCSourceMapDigests(allocator, be, program, backend.SourceMapMechanicsView.forDecls(module.decls), raw_c.items, lower_opts, &bundle);
+    try attachCSourceMapDigests(allocator, be, program, legacy_backend_syntax.SourceMapMechanicsView.forDecls(module.decls), raw_c.items, lower_opts, &bundle);
     session.publishExistingArtifactWithMetadata(tmp_exe, output_path, bundle, "executable") catch {
         return error.BuildFailed;
     };
@@ -877,7 +878,7 @@ fn attachCSourceMapDigests(
     allocator: std.mem.Allocator,
     be: backend.Backend,
     program: backend.VerifiedProgram,
-    source_map: backend.SourceMapMechanicsView,
+    source_map: legacy_backend_syntax.SourceMapMechanicsView,
     generated_c: []const u8,
     lower_opts: backend.LowerOptions,
     bundle: *artifact_model.ArtifactBundle,
@@ -1143,7 +1144,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     const be = backend_registry.byName("c").?;
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    const declarations = backend.LegacyDeclarationSlice.forDecls(module.decls);
+    const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
     be.lower(allocator, program, declarations, &generated_c, .{
         .profile = profile,
         .source_path = artifact_source_path,
@@ -1164,7 +1165,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    const source_map = backend.SourceMapMechanicsView.forDecls(module.decls);
+    const source_map = legacy_backend_syntax.SourceMapMechanicsView.forDecls(module.decls);
     try be.emitMap(allocator, program, source_map, &output, generated_c.items, .{
         .profile = profile,
         .source_path = artifact_source_path,
@@ -1210,7 +1211,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const declarations = backend.LegacyDeclarationSlice.forDecls(module.decls);
+    const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
     be.lower(allocator, program, declarations, &output, lower_opts) catch |err| switch (err) {
         error.UnsupportedLlvmEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "LLVM");

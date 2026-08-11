@@ -392,6 +392,7 @@ removing backend authority before adding new abstractions:
 | 204 | Move backend request options out of backend seam. | Complete: `Profile`, `Checks`, `TargetArch`, `LowerOptions`, and `targetArchFromName` moved to `codegen_options.zig`; `backend.zig` re-exports them for compatibility but no longer imports artifact metadata or diagnostics just to define lowering request options. |
 | 205 | Move lowering error boundary out of backend seam. | Complete: `LowerError` and `lowerErrorFromAny` moved to `lower_error.zig`; `backend.zig` re-exports them for compatibility while the domain lowering error set is owned by a dedicated boundary module. |
 | 206 | Split module graph data model from textual loader. | Complete: `FileId`, `ModuleFile`, `ImportEdge`, `ModuleGraph`, and `LoadedProject` moved to `module_graph.zig`; `loader.zig` still performs textual inclusion but now re-exports the graph model instead of owning it, giving the real module model migration an independent boundary. |
+| 207 | Remove legacy syntax mechanics aliases from backend seam. | Complete: `backend.zig` no longer publicly re-exports `LegacyDeclarationSlice` or `SourceMapMechanicsView`; C/LLVM compatibility entrypoints and source-map code import `legacy_backend_syntax.zig` directly, keeping syntax mechanics explicit instead of hiding them behind the backend contract. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

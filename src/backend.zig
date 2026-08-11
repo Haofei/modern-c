@@ -14,8 +14,6 @@ pub const targetArchFromName = codegen_options.targetArchFromName;
 pub const LowerError = lower_error.LowerError;
 pub const lowerErrorFromAny = lower_error.lowerErrorFromAny;
 pub const SourceSpellingView = verified_program.SourceSpellingView;
-pub const LegacyDeclarationSlice = legacy_backend_syntax.LegacyDeclarationSlice;
-pub const SourceMapMechanicsView = legacy_backend_syntax.SourceMapMechanicsView;
 pub const VerifiedProgram = verified_program.VerifiedProgram;
 
 /// A code-generation backend: the seam at which `main.zig` selects a target and
@@ -45,7 +43,7 @@ pub const Backend = struct {
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
-        declarations: LegacyDeclarationSlice,
+        declarations: legacy_backend_syntax.LegacyDeclarationSlice,
         out: *std.ArrayList(u8),
         opts: LowerOptions,
     ) LowerError!void,
@@ -58,7 +56,7 @@ pub const Backend = struct {
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
-        source_map: SourceMapMechanicsView,
+        source_map: legacy_backend_syntax.SourceMapMechanicsView,
         out: *std.ArrayList(u8),
         generated_artifact: []const u8,
         opts: LowerOptions,
@@ -69,7 +67,7 @@ pub const Backend = struct {
         self: Backend,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
-        declarations: LegacyDeclarationSlice,
+        declarations: legacy_backend_syntax.LegacyDeclarationSlice,
         out: *std.ArrayList(u8),
         opts: LowerOptions,
     ) LowerError!void {
@@ -86,7 +84,7 @@ pub const Backend = struct {
         self: Backend,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
-        source_map: SourceMapMechanicsView,
+        source_map: legacy_backend_syntax.SourceMapMechanicsView,
         out: *std.ArrayList(u8),
         generated_artifact: []const u8,
         opts: LowerOptions,

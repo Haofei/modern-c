@@ -31,8 +31,8 @@ EXACT_BACKEND_COUNTS = {
     '@import("mir_facts_view.zig")': 2,
     '@import("type_syntax.zig")': 5,
     "[]const ast.Decl": 7,
-    "LegacyDeclarationSlice": 18,
-    "SourceMapMechanicsView": 8,
+    "LegacyDeclarationSlice": 16,
+    "SourceMapMechanicsView": 6,
     "initFromDecls": 0,
 }
 
@@ -53,6 +53,8 @@ EXACT_FILE_COUNTS = {
     ("src/codegen_options.zig", "pub const LowerOptions = struct"): 1,
     ("src/lower_error.zig", "pub const LowerError = std.mem.Allocator.Error || error"): 1,
     ("src/lower_error.zig", "pub fn lowerErrorFromAny"): 1,
+    ("src/backend.zig", "pub const LegacyDeclarationSlice = legacy_backend_syntax.LegacyDeclarationSlice"): 0,
+    ("src/backend.zig", "pub const SourceMapMechanicsView = legacy_backend_syntax.SourceMapMechanicsView"): 0,
     ("src/backend.zig", "pub const LegacyDeclarationSlice = struct"): 0,
     ("src/backend.zig", "pub const SourceMapMechanicsView = struct"): 0,
     ("src/legacy_backend_syntax.zig", "[]const ast.Decl"): 6,
