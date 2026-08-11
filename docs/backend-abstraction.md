@@ -107,7 +107,9 @@ pub fn byName(name: []const u8) ?backend.Backend;
 ## VerifiedProgram
 
 `VerifiedProgram` is the only code-generation input accepted by a registered
-backend. Construction performs MIR admission first:
+backend. Its implementation lives in `verified_program.zig`; `backend.zig`
+re-exports the type for the backend vtable. Construction performs MIR admission
+first:
 
 - `mir.verifyBuiltMir`,
 - `mir.validateLoweringAdmission`,

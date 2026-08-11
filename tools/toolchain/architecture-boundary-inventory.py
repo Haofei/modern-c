@@ -44,8 +44,10 @@ EXACT_FILE_COUNTS = {
     ("src/legacy_backend_syntax.zig", "[]const ast.Decl"): 6,
     ("src/legacy_backend_syntax.zig", "pub const LegacyDeclarationSlice = struct"): 1,
     ("src/legacy_backend_syntax.zig", "pub const SourceMapMechanicsView = struct"): 1,
-    ("src/backend.zig", "pub fn init("): 1,
+    ("src/backend.zig", "pub fn init("): 0,
     ("src/backend.zig", "pub fn initFromDecls("): 0,
+    ("src/verified_program.zig", "pub fn init("): 1,
+    ("src/verified_program.zig", "pub fn initFromDecls("): 0,
     ("src/backend.zig", "declaration_metadata"): 0,
     ("src/backend.zig", "declarationMetadata"): 0,
     ("src/backend.zig", "source_map_mechanics"): 0,
@@ -58,7 +60,7 @@ EXACT_FILE_COUNTS = {
 }
 
 REQUIRED_ANCHORS = {
-    "src/backend.zig": (
+    "src/verified_program.zig": (
         "MIR verifier",
     ),
     "src/legacy_backend_syntax.zig": (

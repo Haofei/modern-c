@@ -3,7 +3,7 @@ const std = @import("std");
 const artifact_model = @import("artifact_model.zig");
 const diagnostics = @import("diagnostics.zig");
 const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
-const mir = @import("mir.zig");
+const verified_program = @import("verified_program.zig");
 
 /// Code-generation profile (`kernel`/`hosted`). The backend seam owns this
 /// request-level option; profile-aware backends act on it and profile-agnostic
@@ -128,79 +128,10 @@ pub const LowerOptions = struct {
     linux_kernel: bool = false,
 };
 
-/// Backend-facing source spelling view. This is intentionally backed by
-/// verified MIR identities, not by an AST rescan. It is the first explicit
-/// source/symbol table that backend entrypoints can consume while legacy
-/// lowerers still carry declaration slices for not-yet-normalized metadata.
-pub const SourceSpellingView = struct {
-    symbols: []const mir.SymbolIdentity,
-
-    pub fn symbolSpelling(self: SourceSpellingView, id: mir.SymbolId) ?[]const u8 {
-        if (!id.isValid()) return null;
-        const index = id.index();
-        if (index >= self.symbols.len) return null;
-        const identity = self.symbols[index];
-        if (!identity.id.eql(id)) return null;
-        return identity.spelling;
-    }
-
-    fn functionSpelling(self: SourceSpellingView, function: mir.Function) ?[]const u8 {
-        return self.symbolSpelling(function.typed_symbol_id);
-    }
-
-    /// True when verified MIR contains a non-extern function definition whose
-    /// source spelling matches `name`. Backends use this for emission mechanics
-    /// such as runtime-hook stub suppression; the query is intentionally
-    /// MIR-backed so it cannot rescan syntax declarations as semantic authority.
-    pub fn definesFunctionSpelling(self: SourceSpellingView, typed_mir: mir.Module, name: []const u8) bool {
-        for (typed_mir.functions) |function| {
-            if (function.is_extern) continue;
-            const spelling = self.functionSpelling(function) orelse continue;
-            if (std.mem.eql(u8, spelling, name)) return true;
-        }
-        return false;
-    }
-
-    pub fn validateAgainstMir(self: SourceSpellingView, typed_mir: mir.Module) bool {
-        if (self.symbols.len != typed_mir.symbol_identities.len) return false;
-        for (self.symbols, typed_mir.symbol_identities) |left, right| {
-            if (!left.id.eql(right.id)) return false;
-            if (!std.mem.eql(u8, left.spelling, right.spelling)) return false;
-        }
-        for (typed_mir.functions) |function| {
-            const spelling = self.functionSpelling(function) orelse return false;
-            if (!std.mem.eql(u8, spelling, function.name)) return false;
-        }
-        return true;
-    }
-};
-
+pub const SourceSpellingView = verified_program.SourceSpellingView;
 pub const LegacyDeclarationSlice = legacy_backend_syntax.LegacyDeclarationSlice;
 pub const SourceMapMechanicsView = legacy_backend_syntax.SourceMapMechanicsView;
-
-/// The only code-generation input accepted by a Backend for ordinary lowering.
-/// Construction runs the MIR verifier and exposes MIR-owned source spelling plus
-/// a narrow declaration slice for early metadata that MIR emission has not yet
-/// normalized.
-pub const VerifiedProgram = struct {
-    source_spelling: SourceSpellingView,
-    typed_mir: *const mir.Module,
-
-    pub fn init(
-        typed_mir: *const mir.Module,
-        reporter: *diagnostics.Reporter,
-    ) !VerifiedProgram {
-        try mir.verifyBuiltMir(typed_mir.*, reporter);
-        if (reporter.has_errors) return error.InvalidMir;
-        try mir.validateLoweringAdmission(typed_mir.*);
-        const source_spelling = SourceSpellingView{ .symbols = typed_mir.symbol_identities };
-        if (!source_spelling.validateAgainstMir(typed_mir.*)) return error.InvalidMir;
-        return .{
-            .source_spelling = source_spelling,
-            .typed_mir = typed_mir,
-        };
-    }
-};
+pub const VerifiedProgram = verified_program.VerifiedProgram;
 
 /// A code-generation backend: the seam at which `main.zig` selects a target and
 /// invokes lowering. This is the *entry* abstraction — it routes backend
@@ -278,37 +209,6 @@ pub const Backend = struct {
         return self.emitMapFn.?(self.ctx, allocator, program, source_map, out, generated_artifact, opts);
     }
 };
-
-test "VerifiedProgram exposes MIR-owned source spelling view" {
-    const source =
-        \\fn add_one(value: u32) -> u32 {
-        \\    return value + 1;
-        \\}
-    ;
-
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "backend_source_spelling.mc", source);
-    defer reporter.deinit();
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const parser_mod = @import("parser.zig");
-    var p = parser_mod.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
-    var module_mir = try mir.build(std.testing.allocator, module);
-    defer module_mir.deinit();
-
-    const program = try VerifiedProgram.init(&module_mir, &reporter);
-    try std.testing.expect(program.source_spelling.validateAgainstMir(module_mir));
-    try std.testing.expect(module_mir.functions.len != 0);
-    try std.testing.expectEqualStrings(
-        "add_one",
-        program.source_spelling.symbolSpelling(module_mir.functions[0].typed_symbol_id).?,
-    );
-    try std.testing.expect(program.source_spelling.definesFunctionSpelling(module_mir, "add_one"));
-    try std.testing.expect(!program.source_spelling.definesFunctionSpelling(module_mir, "missing"));
-}
 
 test "backend interface does not import concrete lowerers" {
     const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "src/backend.zig", std.testing.allocator, .limited(1 << 20));

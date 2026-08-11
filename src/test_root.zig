@@ -7,6 +7,7 @@
 const main = @import("main.zig");
 const artifact_model = @import("artifact_model.zig");
 const compiler_session = @import("compiler_session.zig");
+const verified_program = @import("verified_program.zig");
 
 const eval_tests = @import("eval_tests.zig");
 const hir_tests = @import("hir_tests.zig");
@@ -25,6 +26,7 @@ test {
     _ = main;
     _ = artifact_model;
     _ = compiler_session;
+    _ = verified_program;
     _ = eval_tests;
     _ = hir_tests;
     _ = ir_tests;
