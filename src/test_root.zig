@@ -5,6 +5,7 @@
 //! subsets; this root preserves the historical `test-unit` coverage.
 
 const main = @import("main.zig");
+const compiler_session = @import("compiler_session.zig");
 
 const eval_tests = @import("eval_tests.zig");
 const hir_tests = @import("hir_tests.zig");
@@ -21,6 +22,7 @@ const spec_tests = @import("spec_tests.zig");
 
 test {
     _ = main;
+    _ = compiler_session;
     _ = eval_tests;
     _ = hir_tests;
     _ = ir_tests;

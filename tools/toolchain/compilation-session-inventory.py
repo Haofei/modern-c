@@ -93,9 +93,6 @@ def main() -> int:
         "_ = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.LowerMirFailed);",
         "try mir.appendDumpFromMir(allocator, module_mir, &output);",
         "const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.EmitCFailed);",
-        'test "CompilationSession keeps parse context request scoped"',
-        "try std.testing.expectEqual(ast.VisibilityMode.explicit_public, module_a.visibility_mode);",
-        "try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, module_b.visibility_mode);",
     ):
         require_contains(main_zig, needle)
 
@@ -107,6 +104,11 @@ def main() -> int:
         "checker.file_boundaries = self.file_boundaries;",
         "module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });",
         "const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {",
+        'test "CompilationSession keeps parse context request scoped"',
+        'test "CompilationSession restores artifact metadata sidecar snapshots"',
+        'test "CompilationSession diagnostic stage failures use a bounded error set"',
+        "try std.testing.expectEqual(ast.VisibilityMode.explicit_public, module_a.visibility_mode);",
+        "try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, module_b.visibility_mode);",
     ):
         require_contains(session_zig, needle)
 
@@ -148,6 +150,7 @@ def main() -> int:
         fail("main.zig must not aggregate repository test modules")
     require_contains("src/mir.zig", "pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: *std.ArrayList(u8)) !void {")
     require_contains("src/test_root.zig", 'const main = @import("main.zig");')
+    require_contains("src/test_root.zig", 'const compiler_session = @import("compiler_session.zig");')
     require_contains("src/test_root.zig", 'const lower_c_tests = @import("lower_c_tests.zig");')
     require_contains("src/test_root.zig", 'const lower_llvm_tests = @import("lower_llvm_tests.zig");')
 

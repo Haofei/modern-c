@@ -197,3 +197,75 @@ pub const CompilationSession = struct {
 pub fn artifactMetadataPath(allocator: std.mem.Allocator, output_path: []const u8) ![]const u8 {
     return artifact_publisher.metadataPath(allocator, output_path);
 }
+
+test "CompilationSession keeps parse context request scoped" {
+    const source = "fn answer() -> u32 { return 1; }\n";
+
+    var boundaries_a = [_]loader.FileBoundary{.{ .start = 0, .path = "a.mc" }};
+    var session_a = CompilationSession.init(std.testing.allocator, std.testing.io);
+    session_a.visibility_mode = .explicit_public;
+    session_a.file_boundaries = boundaries_a[0..];
+    var diag_a = session_a.initReporter("root_a.mc", source);
+    defer diag_a.deinit();
+    try std.testing.expectEqualStrings("a.mc", diag_a.file_boundaries.?[0].path);
+    var arena_a = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_a.deinit();
+    const module_a = try session_a.parseModuleOrReportMode(source, arena_a.allocator(), &diag_a, false);
+    defer module_a.deinit(arena_a.allocator());
+    try std.testing.expectEqual(ast.VisibilityMode.explicit_public, module_a.visibility_mode);
+
+    var boundaries_b = [_]loader.FileBoundary{.{ .start = 0, .path = "b.mc" }};
+    var session_b = CompilationSession.init(std.testing.allocator, std.testing.io);
+    session_b.file_boundaries = boundaries_b[0..];
+    var diag_b = session_b.initReporter("root_b.mc", source);
+    defer diag_b.deinit();
+    try std.testing.expectEqualStrings("b.mc", diag_b.file_boundaries.?[0].path);
+    var arena_b = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_b.deinit();
+    const module_b = try session_b.parseModuleOrReportMode(source, arena_b.allocator(), &diag_b, false);
+    defer module_b.deinit(arena_b.allocator());
+    try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, module_b.visibility_mode);
+}
+
+test "CompilationSession restores artifact metadata sidecar snapshots" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const allocator = std.testing.allocator;
+    const artifact_path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/artifact", .{tmp.sub_path});
+    defer allocator.free(artifact_path);
+    const metadata_path = try artifactMetadataPath(allocator, artifact_path);
+    defer allocator.free(metadata_path);
+
+    var session = CompilationSession.init(allocator, std.testing.io);
+    try session.writeOutputPath(metadata_path, "old metadata");
+    var present_snapshot = try session.snapshotMetadataSidecar(metadata_path);
+    defer present_snapshot.deinit(allocator);
+    try session.writeOutputPath(metadata_path, "new metadata");
+    try session.restoreMetadataSidecar(metadata_path, present_snapshot);
+    const restored = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, metadata_path, allocator, .limited(1024));
+    defer allocator.free(restored);
+    try std.testing.expectEqualStrings("old metadata", restored);
+
+    try std.Io.Dir.cwd().deleteFile(std.testing.io, metadata_path);
+    var absent_snapshot = try session.snapshotMetadataSidecar(metadata_path);
+    defer absent_snapshot.deinit(allocator);
+    try session.writeOutputPath(metadata_path, "new metadata");
+    try session.restoreMetadataSidecar(metadata_path, absent_snapshot);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(std.testing.io, metadata_path, .{}));
+}
+
+test "CompilationSession diagnostic stage failures use a bounded error set" {
+    const allowed = [_]StageFailure{
+        error.CheckFailed,
+        error.LowerMirFailed,
+        error.VerifyFailed,
+        error.EmitCFailed,
+        error.BuildFailed,
+        error.EmitLlvmFailed,
+        error.EmitLayoutFailed,
+        error.EmitCStructFailed,
+    };
+    comptime std.debug.assert(@TypeOf(allowed[0]) == StageFailure);
+    try std.testing.expectEqual(@as(usize, 8), allowed.len);
+}
