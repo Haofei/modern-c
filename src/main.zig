@@ -750,10 +750,10 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
+    const early_metadata = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls).earlyDeclarationMetadata();
     be.lowerRequest(allocator, .{
         .program = program,
-        .legacy_declarations = declarations,
+        .early_declaration_metadata = early_metadata,
         .out = &output,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -801,10 +801,10 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
+    const early_metadata = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls).earlyDeclarationMetadata();
     be.lowerRequest(allocator, .{
         .program = program,
-        .legacy_declarations = declarations,
+        .early_declaration_metadata = early_metadata,
         .out = &raw_c,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -1161,10 +1161,10 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     const be = backend_registry.byName("c").?;
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
+    const early_metadata = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls).earlyDeclarationMetadata();
     be.lowerRequest(allocator, .{
         .program = program,
-        .legacy_declarations = declarations,
+        .early_declaration_metadata = early_metadata,
         .out = &generated_c,
         .opts = .{
         .profile = profile,
@@ -1239,10 +1239,10 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
+    const early_metadata = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls).earlyDeclarationMetadata();
     be.lowerRequest(allocator, .{
         .program = program,
-        .legacy_declarations = declarations,
+        .early_declaration_metadata = early_metadata,
         .out = &output,
         .opts = lower_opts,
     }) catch |err| switch (err) {

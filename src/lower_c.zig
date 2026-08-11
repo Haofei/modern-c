@@ -42,7 +42,7 @@ fn backendLower(
     request: backend_mod.LowerRequest,
 ) backend_mod.LowerError!void {
     _ = ctx;
-    return appendCProfileWithMirSourceSpelling(allocator, request.legacy_declarations, request.program.typed_mir, request.program.source_spelling, request.out, request.opts.profile, request.opts.source_path, request.opts.checks, request.opts.stub_asm, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
+    return appendCProfileWithMirSourceSpelling(allocator, request.early_declaration_metadata, request.program.typed_mir, request.program.source_spelling, request.out, request.opts.profile, request.opts.source_path, request.opts.checks, request.opts.stub_asm, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 fn backendEmitMap(
@@ -92,12 +92,12 @@ fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, o
 }
 
 pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
-    return appendCProfileWithMirSourceSpelling(allocator, legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls), typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
+    return appendCProfileWithMirSourceSpelling(allocator, legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls).earlyDeclarationMetadata(), typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCProfileWithMirSourceSpelling(
     allocator: std.mem.Allocator,
-    declarations: legacy_backend_syntax.LegacyDeclarationSlice,
+    early_metadata: legacy_backend_syntax.EarlyDeclarationMetadataView,
     typed_mir: *const mir.Module,
     source_spelling: backend_mod.SourceSpellingView,
     out: *std.ArrayList(u8),
@@ -122,7 +122,7 @@ fn appendCProfileWithMirSourceSpelling(
 
     try lower_c_emitter.appendModuleMir(
         allocator,
-        declarations,
+        early_metadata,
         typed_mir,
         out,
         source_path,

@@ -9,8 +9,7 @@ const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
 
 /// Populate all declaration and type artifacts needed by C emission without
 /// writing output.  Layout-header emission deliberately uses this same phase.
-pub fn collect(emitter: anytype, declarations: legacy_backend_syntax.LegacyDeclarationSlice) anyerror!void {
-    const early_metadata = declarations.earlyDeclarationMetadata();
+pub fn collect(emitter: anytype, early_metadata: legacy_backend_syntax.EarlyDeclarationMetadataView) anyerror!void {
     const decls = early_metadata.declsForEarlyDeclarationScan();
     emitter.setComptimeDecls(decls);
     try emitter.collectEarlyDeclarationMetadataFromDecls(decls);
@@ -21,9 +20,9 @@ pub fn collect(emitter: anytype, declarations: legacy_backend_syntax.LegacyDecla
 }
 
 /// Emit a complete translation unit in dependency-safe module order.
-pub fn emit(emitter: anytype, declarations: legacy_backend_syntax.LegacyDeclarationSlice) anyerror!void {
+pub fn emit(emitter: anytype, early_metadata: legacy_backend_syntax.EarlyDeclarationMetadataView) anyerror!void {
     defer emitter.deinit();
-    try collect(emitter, declarations);
+    try collect(emitter, early_metadata);
     try emitter.emitTypePrelude();
     try emitter.emitFunctionDeclarations();
     try emitter.emitGeneratedDispatchArtifacts();
