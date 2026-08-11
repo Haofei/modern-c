@@ -462,30 +462,26 @@ pub const CEmitter = struct {
         self.comptime_decls = decls;
     }
 
-    pub fn collectEarlyDeclarationMetadataFromDecls(self: *CEmitter, decls: []const ast.Decl) !void {
+    pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) !void {
         // Pre-pass: collect const/comptime metadata and pre-register nominal type
         // names up front, so fixed-array lengths, reflection queries, and type-name
         // mangling resolve during the artifact-collection pass below. Const global
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
-        for (decls) |decl| switch (decl.kind) {
-            .fn_decl => |fn_decl| {
-                if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
-            },
-            .global_decl => |global| {
-                if (!global.is_const) continue;
-                const ty = global.ty orelse continue;
-                const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
-                try self.const_global_widths.put(global.name.text, bits);
-            },
-            .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
-            .struct_decl => |struct_decl| {
-                if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl);
-            },
-            .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
-            .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
-            else => {},
-        };
+        for (artifacts.const_fns) |fn_decl| {
+            if (!self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+        }
+        for (artifacts.const_globals) |global| {
+            const ty = global.ty orelse continue;
+            const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
+            try self.const_global_widths.put(global.name.text, bits);
+        }
+        for (artifacts.type_aliases) |alias| try self.type_aliases.put(alias.name.text, alias.ty);
+        for (artifacts.structs) |struct_decl| {
+            if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl);
+        }
+        for (artifacts.enums) |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl);
+        for (artifacts.unions) |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl);
     }
 
     pub fn collectConstGlobals(self: *CEmitter) !void {

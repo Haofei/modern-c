@@ -405,7 +405,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .linux_kernel = linux_kernel,
     };
     defer ctx.deinit();
-    try ctx.preRegisterTypeDeclsFromDecls(decls);
+    try ctx.preRegisterTypeDeclsFromArtifacts(early_metadata);
     var reflect_env = ctx.reflectEnv();
     try eval.collectConstGlobalsFromDeclsWithOptions(allocator, decls, &ctx.const_fns, &ctx.const_globals, .{
         .reflect = lower_llvm_reflect.comptimeReflectThunk,
@@ -594,30 +594,27 @@ const LlvmEmitter = struct {
         self.scratch.deinit();
     }
 
-    fn preRegisterTypeDeclsFromDecls(self: *LlvmEmitter, decls: []const ast.Decl) !void {
-        for (decls) |decl| {
+    fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) !void {
+        for (artifacts.declsForLegacyArtifactEnumeration()) |decl| {
             try self.decl_artifacts.append(self.allocator, decl);
-            switch (decl.kind) {
-                .fn_decl => |fn_decl| {
-                    if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
-                },
-                .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
-                .enum_decl => |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl),
-                .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
-                .packed_bits_decl => |packed_bits| try self.packed_bits.put(packed_bits.name.text, .{
-                    .repr = packed_bits.repr,
-                    .fields = packed_bits.fields,
-                }),
-                .struct_decl => |struct_decl| {
-                    if (struct_decl.type_params.len != 0) continue;
-                    if (struct_decl.abi) |abi| {
-                        if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
-                    }
-                    try self.struct_decl_artifacts.append(self.allocator, struct_decl);
-                    try self.struct_types.put(struct_decl.name.text, struct_decl);
-                },
-                else => {},
+        }
+        for (artifacts.const_fns) |fn_decl| {
+            if (!self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+        }
+        for (artifacts.type_aliases) |alias| try self.type_aliases.put(alias.name.text, alias.ty);
+        for (artifacts.enums) |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl);
+        for (artifacts.unions) |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl);
+        for (artifacts.packed_bits) |packed_bits| try self.packed_bits.put(packed_bits.name.text, .{
+            .repr = packed_bits.repr,
+            .fields = packed_bits.fields,
+        });
+        for (artifacts.structs) |struct_decl| {
+            if (struct_decl.type_params.len != 0) continue;
+            if (struct_decl.abi) |abi| {
+                if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
             }
+            try self.struct_decl_artifacts.append(self.allocator, struct_decl);
+            try self.struct_types.put(struct_decl.name.text, struct_decl);
         }
     }
 

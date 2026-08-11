@@ -70,8 +70,9 @@ declaration slice. Declaration-list mechanics now go through collected
 `EarlyDeclarationArtifacts`, carried by `LowerRequest` instead of being stored
 on `VerifiedProgram`. Source-map row syntax enumeration is isolated in
 `source_map_rows.zig`; `EmitMapRequest` carries collected `SourceMapRows`
-artifacts rather than a declaration view. The early metadata artifact boundary still carries
-declaration slices for not-yet-normalized mechanics, but the remaining
+artifacts rather than a declaration view. The early metadata artifact boundary
+now pre-collects const fn/global/type/aggregate categories while still carrying
+declaration slices for not-yet-normalized legacy artifact/comptime mechanics, but the remaining
 syntax-shaped ingress is named and exact-gated by the inventory. C and LLVM runtime hook suppression already consume the shared
 `SourceSpellingView.definesFunctionSpelling` query when deciding whether to
 emit weak/default trap and sanitizer hook bodies; per-backend

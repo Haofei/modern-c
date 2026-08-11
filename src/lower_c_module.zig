@@ -12,7 +12,7 @@ const early_declaration_metadata = @import("early_declaration_metadata.zig");
 pub fn collect(emitter: anytype, early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
     const decls = early_metadata.declsForLegacyArtifactEnumeration();
     emitter.setComptimeDecls(decls);
-    try emitter.collectEarlyDeclarationMetadataFromDecls(decls);
+    try emitter.collectEarlyDeclarationMetadata(early_metadata);
     try emitter.collectConstGlobals();
     try emitter.collectDeclArtifactsFromDecls(decls);
     try emitter.validateDropGlueFactsAgainstDecls();
