@@ -399,14 +399,13 @@ pub const SourceMapMechanicsView = struct {
     }
 };
 
-/// The only code-generation input accepted by a Backend. Construction runs the
-/// MIR verifier and exposes MIR-owned source spelling plus narrow declaration
-/// slices for metadata/source-map mechanics that MIR emission has not yet
+/// The only code-generation input accepted by a Backend for ordinary lowering.
+/// Construction runs the MIR verifier and exposes MIR-owned source spelling plus
+/// a narrow declaration slice for early metadata that MIR emission has not yet
 /// normalized.
 pub const VerifiedProgram = struct {
     source_spelling: SourceSpellingView,
     declaration_metadata: DeclarationMetadataView,
-    source_map_mechanics: SourceMapMechanicsView,
     typed_mir: *const mir.Module,
 
     pub fn initFromDecls(
@@ -422,7 +421,6 @@ pub const VerifiedProgram = struct {
         return .{
             .source_spelling = source_spelling,
             .declaration_metadata = DeclarationMetadataView.forDecls(decls),
-            .source_map_mechanics = SourceMapMechanicsView.forDecls(decls),
             .typed_mir = typed_mir,
         };
     }
@@ -432,13 +430,6 @@ pub const VerifiedProgram = struct {
     /// should prefer `source_spelling`, MIR identities, or explicit facts.
     pub fn declarationMetadata(self: VerifiedProgram) DeclarationMetadataView {
         return self.declaration_metadata;
-    }
-
-    /// Source-map mechanics still walk syntax spans to enumerate source rows.
-    /// This accessor makes that use explicit and keeps ordinary backend code
-    /// from reaching for syntax as an unclassified semantic input.
-    pub fn sourceMapMechanics(self: VerifiedProgram) SourceMapMechanicsView {
-        return self.source_map_mechanics;
     }
 };
 
@@ -481,6 +472,7 @@ pub const Backend = struct {
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
+        source_map: SourceMapMechanicsView,
         out: *std.ArrayList(u8),
         generated_artifact: []const u8,
         opts: LowerOptions,
@@ -507,11 +499,12 @@ pub const Backend = struct {
         self: Backend,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
+        source_map: SourceMapMechanicsView,
         out: *std.ArrayList(u8),
         generated_artifact: []const u8,
         opts: LowerOptions,
     ) LowerError!void {
-        return self.emitMapFn.?(self.ctx, allocator, program, out, generated_artifact, opts);
+        return self.emitMapFn.?(self.ctx, allocator, program, source_map, out, generated_artifact, opts);
     }
 };
 

@@ -1071,7 +1071,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .artifact_kind = "c",
         .backend_name = "c",
     });
-    try attachCSourceMapDigests(allocator, be, program, output.items, lower_opts, &bundle);
+    try attachCSourceMapDigests(allocator, be, program, backend.SourceMapMechanicsView.forDecls(module.decls), output.items, lower_opts, &bundle);
     try session.writeArtifactWithMetadata(output.items, output_path, bundle);
 }
 
@@ -1173,7 +1173,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .backend_name = "c",
         .toolchain_identity = toolchain_identity,
     });
-    try attachCSourceMapDigests(allocator, be, program, raw_c.items, lower_opts, &bundle);
+    try attachCSourceMapDigests(allocator, be, program, backend.SourceMapMechanicsView.forDecls(module.decls), raw_c.items, lower_opts, &bundle);
     var metadata = try session.prepareArtifactMetadataSidecar(output_path, bundle);
     defer metadata.deinit(allocator);
     try session.ensureReplaceTargetNotDirectory(output_path, "output");
@@ -1216,6 +1216,7 @@ fn attachCSourceMapDigests(
     allocator: std.mem.Allocator,
     be: backend.Backend,
     program: backend.VerifiedProgram,
+    source_map: backend.SourceMapMechanicsView,
     generated_c: []const u8,
     lower_opts: backend.LowerOptions,
     bundle: *backend.ArtifactBundle,
@@ -1223,7 +1224,7 @@ fn attachCSourceMapDigests(
     if (!be.supportsEmitMap()) return;
     var map_bytes: std.ArrayList(u8) = .empty;
     defer map_bytes.deinit(allocator);
-    try be.emitMap(allocator, program, &map_bytes, generated_c, lower_opts);
+    try be.emitMap(allocator, program, source_map, &map_bytes, generated_c, lower_opts);
     bundle.source_map_generated_artifact_sha256 = try metadataDigestHeader(map_bytes.items, "generated_artifact_sha256");
     bundle.source_map_payload_sha256 = try metadataDigestHeader(map_bytes.items, "source_map_payload_sha256");
     bundle.mir_facts_sha256 = try metadataDigestHeader(map_bytes.items, "mir_facts_sha256");
@@ -1501,7 +1502,8 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try be.emitMap(allocator, program, &output, generated_c.items, .{
+    const source_map = backend.SourceMapMechanicsView.forDecls(module.decls);
+    try be.emitMap(allocator, program, source_map, &output, generated_c.items, .{
         .profile = profile,
         .source_path = artifact_source_path,
         .target_arch = target_arch,

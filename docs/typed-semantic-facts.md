@@ -67,11 +67,12 @@ together back to untyped result-type or line/column matching.
 through this explicit view instead of treating the AST as the source-spelling
 table. `VerifiedProgram` no longer stores a general `ast.Module` or raw
 declaration slice. Declaration metadata goes through the explicit
-`DeclarationMetadataView`, while source-map row mechanics go through
-`SourceMapMechanicsView` exposed by `VerifiedProgram.sourceMapMechanics()`.
-Those transitional views still carry declaration slices for not-yet-normalized
-mechanics, but the remaining syntax-shaped ingress is named and exact-gated by
-the inventory. C and LLVM runtime hook suppression already consume the shared
+`DeclarationMetadataView`. Source-map row mechanics still go through
+`SourceMapMechanicsView`, but that view is passed only to the C `emit-map` path
+instead of being stored on `VerifiedProgram`. These transitional views still
+carry declaration slices for not-yet-normalized mechanics, but the remaining
+syntax-shaped ingress is named and exact-gated by the inventory. C and LLVM
+runtime hook suppression already consume the shared
 `SourceSpellingView.definesFunctionSpelling` query when deciding whether to
 emit weak/default trap and sanitizer hook bodies; per-backend
 `moduleDefinesHook` helpers are exact-zero gated, and the AST is no longer the

@@ -111,18 +111,18 @@ backend. Construction performs MIR admission first:
 - `mir.validateLoweringAdmission`,
 - source-spelling validation against MIR symbol identities.
 
-It then exposes three views:
+It then exposes two views:
 
 - `source_spelling`: MIR-owned spelling by typed symbol id.
 - `declarationMetadata()`: transitional declaration metadata that still wraps
   `[]const ast.Decl`.
-- `sourceMapMechanics()`: transitional source-map row enumeration over syntax
-  spans.
 
-The two transitional views are explicit debt. They are narrower than giving the
-backend a full `ast.Module`, but they are not the final semantic boundary.
+The transitional declaration metadata view is explicit debt. It is narrower
+than giving the backend a full `ast.Module`, but it is not the final semantic
+boundary. Source-map row enumeration still uses `SourceMapMechanicsView`, but it
+is passed only to the `emit-map` path rather than stored on `VerifiedProgram`.
 New backend work should prefer MIR identities and typed facts and should avoid
-adding new semantic decisions to these syntax-backed views.
+adding new semantic decisions to syntax-backed views.
 
 ## Error boundary
 

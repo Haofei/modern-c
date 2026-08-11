@@ -41,6 +41,8 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "pub const DeclarationMetadataView = struct"): 1,
     ("src/backend.zig", "pub const SourceMapMechanicsView = struct"): 1,
     ("src/backend.zig", "pub fn initFromDecls("): 1,
+    ("src/backend.zig", "source_map_mechanics"): 0,
+    ("src/backend.zig", "sourceMapMechanics"): 0,
     ("src/loader.zig", "*textual inclusion*"): 1,
     ("src/hir.zig", "inspection_only_header"): 3,
     ("src/mir_facts_view.zig", "pub const MirFactsView = struct"): 1,
