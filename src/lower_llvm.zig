@@ -381,6 +381,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .backend_names = std.StringHashMap([]const u8).init(allocator),
         .decl_artifacts = early_metadata.decl_artifacts,
         .callable_value_artifacts = early_metadata.callable_value_artifacts,
+        .type_artifacts = early_metadata.type_artifacts,
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
         .global_is_const = std.StringHashMap(bool).init(allocator),
         .global_initializers = std.StringHashMap(ast.Expr).init(allocator),
@@ -480,6 +481,7 @@ const LlvmEmitter = struct {
     backend_names: std.StringHashMap([]const u8) = undefined,
     decl_artifacts: []const early_declaration_metadata.DeclArtifact = &.{},
     callable_value_artifacts: []const early_declaration_metadata.CallableValueArtifact = &.{},
+    type_artifacts: []const early_declaration_metadata.TypeArtifact = &.{},
     struct_decl_artifacts: std.ArrayList(ast.StructDecl) = .empty,
     function_decl_artifacts: std.ArrayList(LlvmFunctionDeclArtifact) = .empty,
     global_decl_artifacts: std.ArrayList(ast.GlobalDecl) = .empty,
@@ -650,14 +652,14 @@ const LlvmEmitter = struct {
     }
 
     fn collectNonStructTypeArtifacts(self: *LlvmEmitter) !void {
-        for (self.decl_artifacts) |artifact| {
+        for (self.type_artifacts) |artifact| {
             switch (artifact) {
                 .packed_bits => |packed_bits| try self.collectPackedBits(packed_bits),
                 .overlay_union => |overlay_union| try self.collectOverlayUnion(overlay_union),
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
                 .type_alias => |alias| try self.collectTypeAlias(alias),
                 .enum_decl => |enum_decl| try self.collectEnum(enum_decl),
-                else => {},
+                .struct_decl, .opaque_decl => {},
             }
         }
     }
