@@ -36,37 +36,44 @@ def require_absent(path: str, pattern: str, description: str) -> None:
 
 def main() -> int:
     main_zig = "src/main.zig"
+    session_zig = "src/compiler_session.zig"
     for needle in (
-        "const CompilationSession = struct {",
+        'const compiler_session = @import("compiler_session.zig");',
+        "const CompilationSession = compiler_session.CompilationSession;",
+        "const CompilationStageFailure = compiler_session.StageFailure;",
+        "const max_artifact_metadata_bytes = compiler_session.max_artifact_metadata_bytes;",
+    ):
+        require_contains(main_zig, needle)
+
+    for needle in (
+        "pub const CompilationSession = struct {",
         "allocator: std.mem.Allocator,",
         "io: std.Io,",
         "file_boundaries: ?[]const loader.FileBoundary = null,",
         "module_graph: ?*const loader.ModuleGraph = null,",
         "visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in,",
-        "fn writeStdout(self: *CompilationSession, bytes: []const u8) !void {",
-        "fn writeOutputPath(self: *CompilationSession, path: []const u8, bytes: []const u8) !void {",
-        "const ArtifactMetadataDraft = struct {",
-        "fn ensureReplaceTargetNotDirectory(self: *CompilationSession, path: []const u8, label: []const u8) !void {",
-        "fn prepareArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !ArtifactMetadataDraft {",
-        "fn writeArtifact(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8) !void {",
-        "fn writeArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !void {",
-        "fn writeArtifactWithMetadata(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8, bundle: backend.ArtifactBundle) !void {",
-        "fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {",
-        "fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
-        "fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
-        "fn parseCheckedModuleOrReport(",
-        "fn buildVerifiedProgram(",
+        "pub fn writeStdout(self: *CompilationSession, bytes: []const u8) !void {",
+        "pub fn writeOutputPath(self: *CompilationSession, path: []const u8, bytes: []const u8) !void {",
+        "pub const ArtifactMetadataDraft = struct {",
+        "pub fn ensureReplaceTargetNotDirectory(self: *CompilationSession, path: []const u8, label: []const u8) !void {",
+        "pub fn prepareArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !ArtifactMetadataDraft {",
+        "pub fn writeArtifact(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8) !void {",
+        "pub fn writeArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !void {",
+        "pub fn writeArtifactWithMetadata(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8, bundle: backend.ArtifactBundle) !void {",
+        "pub fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {",
+        "pub fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
+        "pub fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
+        "pub fn parseCheckedModuleOrReport(",
+        "pub fn buildVerifiedProgram(",
+        "pub fn artifactMetadataPath(allocator: std.mem.Allocator, output_path: []const u8) ![]const u8 {",
+    ):
+        require_contains(session_zig, needle)
+
+    for needle in (
         "var session = CompilationSession.init(allocator, init.io);",
         "session.visibility_mode = options.visibility_mode;",
         "session.file_boundaries = loaded.boundaries;",
         "session.module_graph = &loaded.graph;",
-        "module.visibility_mode = self.visibility_mode;",
-        "name_resolve.transformWithGraph(allocator, module, self.module_graph)",
-        "generic_precheck.check(allocator, lowered, diag, self.file_boundaries)",
-        "mangle_private.transform(allocator, specialized, self.file_boundaries)",
-        "checker.file_boundaries = self.file_boundaries;",
-        "module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });",
-        "const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {",
         "const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);",
         "_ = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.LowerMirFailed);",
         "try mir.appendDumpFromMir(allocator, module_mir, &output);",
@@ -77,14 +84,40 @@ def main() -> int:
     ):
         require_contains(main_zig, needle)
 
+    for needle in (
+        "module.visibility_mode = self.visibility_mode;",
+        "name_resolve.transformWithGraph(allocator, module, self.module_graph)",
+        "generic_precheck.check(allocator, lowered, diag, self.file_boundaries)",
+        "mangle_private.transform(allocator, specialized, self.file_boundaries)",
+        "checker.file_boundaries = self.file_boundaries;",
+        "module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });",
+        "const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {",
+    ):
+        require_contains(session_zig, needle)
+
     main_text = read(main_zig)
-    if main_text.count("var checker = sema.Checker.init") != 1:
+    session_text = read(session_zig)
+    if session_text.count("var checker = sema.Checker.init") != 1:
         fail("sema checker construction must stay centralized in CompilationSession.checkModule")
-    if main_text.count("mir.buildOpt(") != 1:
+    if main_text.count("var checker = sema.Checker.init") != 0:
+        fail("main.zig must not construct sema checkers")
+    if session_text.count("mir.buildOpt(") != 1:
         fail("MIR build must stay centralized in CompilationSession.buildVerifiedProgram")
-    if main_text.count("backend.VerifiedProgram.initFromDecls(") != 0:
+    if main_text.count("mir.buildOpt(") != 0:
+        fail("main.zig must not build MIR directly")
+    for forbidden_import in (
+        '@import("async_lower.zig")',
+        '@import("generic_precheck.zig")',
+        '@import("mangle_private.zig")',
+        '@import("name_resolve.zig")',
+        '@import("parser.zig")',
+        '@import("sema.zig")',
+    ):
+        if forbidden_import in main_text:
+            fail(f"main.zig must not import compiler pipeline stage {forbidden_import}")
+    if (main_text + session_text).count("backend.VerifiedProgram.initFromDecls(") != 0:
         fail("VerifiedProgram declaration-slice construction must not be used")
-    if main_text.count("backend.VerifiedProgram.init(") != 1:
+    if session_text.count("backend.VerifiedProgram.init(") != 1:
         fail("VerifiedProgram construction must stay centralized in CompilationSession.buildVerifiedProgram")
     if main_text.count("session.parseCheckedModuleOrReport(") < 7:
         fail("compile-like CLI commands must share CompilationSession.parseCheckedModuleOrReport")
@@ -120,7 +153,8 @@ def main() -> int:
         ("tools/toolchain/mcc-cli-test.sh", "emit-c metadata sidecar preflight"),
         ("tools/toolchain/mcc-build-test.sh", "metadata sidecar failure corrupted an existing executable"),
         ("tools/toolchain/mcc-build-test.sh", "directory output target did not fail closed"),
-        ("docs/refactoring-plan.md", "CompilationSession owns file-boundary, module-graph, visibility, IO, parse/check, MIR build, VerifiedProgram construction, artifact output, and metadata sidecar preflight."),
+        ("docs/refactoring-plan.md", "`src/compiler_session.zig` owns `CompilationSession`: file-boundary,"),
+        ("docs/refactoring-plan.md", "`src/main.zig`"),
     ):
         require_contains(path, needle)
 
