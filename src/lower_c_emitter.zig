@@ -509,6 +509,7 @@ pub const CEmitter = struct {
             .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
             .packed_bits => |packed_bits| try self.collectPackedBits(packed_bits),
             .overlay_union => |overlay_union| try self.collectOverlayUnion(overlay_union),
+            .opaque_decl => {},
             .function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, false),
             .extern_function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, true),
             .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),

@@ -769,7 +769,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .artifact_kind = "c",
         .backend_name = "c",
     });
-    var source_rows = try source_map_rows.SourceMapRows.collectFromDecls(allocator, module.decls);
+    var source_rows = try source_map_rows.SourceMapRows.collectFromArtifacts(allocator, early_metadata.decl_artifacts, early_metadata.decl_origins);
     defer source_rows.deinit(allocator);
     try attachCSourceMapDigests(allocator, be, program, source_rows, output.items, lower_opts, &bundle);
     try session.writeArtifactWithMetadata(output.items, output_path, bundle);
@@ -880,7 +880,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .backend_name = "c",
         .toolchain_identity = toolchain_identity,
     });
-    var source_rows = try source_map_rows.SourceMapRows.collectFromDecls(allocator, module.decls);
+    var source_rows = try source_map_rows.SourceMapRows.collectFromArtifacts(allocator, early_metadata.decl_artifacts, early_metadata.decl_origins);
     defer source_rows.deinit(allocator);
     try attachCSourceMapDigests(allocator, be, program, source_rows, raw_c.items, lower_opts, &bundle);
     session.publishExistingArtifactWithMetadata(tmp_exe, output_path, bundle, "executable") catch {
@@ -1174,14 +1174,14 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
         .early_declaration_metadata = early_metadata,
         .out = &generated_c,
         .opts = .{
-        .profile = profile,
-        .source_path = artifact_source_path,
-        .target_arch = target_arch,
-        .checks = checks,
-        .stub_asm = stub_asm,
-        .reporter = &diag,
-        .source_sha256 = source_sha256,
-        .compiler_version = build_options.version,
+            .profile = profile,
+            .source_path = artifact_source_path,
+            .target_arch = target_arch,
+            .checks = checks,
+            .stub_asm = stub_asm,
+            .reporter = &diag,
+            .source_sha256 = source_sha256,
+            .compiler_version = build_options.version,
         },
     }) catch |err| switch (err) {
         error.UnsupportedCEmission => {
@@ -1194,7 +1194,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    var source_map = try source_map_rows.SourceMapRows.collectFromDecls(allocator, module.decls);
+    var source_map = try source_map_rows.SourceMapRows.collectFromArtifacts(allocator, early_metadata.decl_artifacts, early_metadata.decl_origins);
     defer source_map.deinit(allocator);
     try be.emitMapRequest(allocator, .{
         .program = program,
@@ -1202,14 +1202,14 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
         .out = &output,
         .generated_artifact = generated_c.items,
         .opts = .{
-        .profile = profile,
-        .source_path = artifact_source_path,
-        .target_arch = target_arch,
-        .checks = checks,
-        .stub_asm = stub_asm,
-        .reporter = &diag,
-        .source_sha256 = source_sha256,
-        .compiler_version = build_options.version,
+            .profile = profile,
+            .source_path = artifact_source_path,
+            .target_arch = target_arch,
+            .checks = checks,
+            .stub_asm = stub_asm,
+            .reporter = &diag,
+            .source_sha256 = source_sha256,
+            .compiler_version = build_options.version,
         },
     });
     try session.writeArtifact(output.items, output_path);

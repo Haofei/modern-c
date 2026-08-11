@@ -16,6 +16,7 @@ pub const EarlyDeclarationArtifacts = struct {
     packed_bits: []const ast.PackedBitsDecl,
     overlay_unions: []const ast.OverlayUnionDecl,
     decl_artifacts: []const DeclArtifact,
+    decl_origins: []const []const u8,
 
     pub fn collectFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !EarlyDeclarationArtifacts {
         var const_fns: std.ArrayList(ast.FnDecl) = .empty;
@@ -36,44 +37,66 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer overlay_unions.deinit(allocator);
         var decl_artifacts: std.ArrayList(DeclArtifact) = .empty;
         errdefer decl_artifacts.deinit(allocator);
+        var decl_origins: std.ArrayList([]const u8) = .empty;
+        errdefer decl_origins.deinit(allocator);
 
         for (decls) |decl| switch (decl.kind) {
             .fn_decl => |fn_decl| {
                 if (fn_decl.is_const) try const_fns.append(allocator, fn_decl);
                 try decl_artifacts.append(allocator, .{ .function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
+                try decl_origins.append(allocator, declOrigin(decl));
             },
-            .extern_fn => |fn_decl| try decl_artifacts.append(allocator, .{ .extern_function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } }),
+            .extern_fn => |fn_decl| {
+                try decl_artifacts.append(allocator, .{ .extern_function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
+                try decl_origins.append(allocator, declOrigin(decl));
+            },
             .global_decl => |global| {
                 if (global.is_const) try const_globals.append(allocator, global);
                 try decl_artifacts.append(allocator, .{ .global = global });
+                try decl_origins.append(allocator, declOrigin(decl));
             },
             .type_alias => |alias| {
                 try type_aliases.append(allocator, alias);
                 try decl_artifacts.append(allocator, .{ .type_alias = alias });
+                try decl_origins.append(allocator, declOrigin(decl));
             },
             .struct_decl => |struct_decl| {
                 try structs.append(allocator, struct_decl);
                 try decl_artifacts.append(allocator, .{ .struct_decl = struct_decl });
+                try decl_origins.append(allocator, declOrigin(decl));
             },
             .enum_decl => |enum_decl| {
                 try enums.append(allocator, enum_decl);
                 try decl_artifacts.append(allocator, .{ .enum_decl = enum_decl });
+                try decl_origins.append(allocator, declOrigin(decl));
             },
             .union_decl => |union_decl| {
                 try unions.append(allocator, union_decl);
                 try decl_artifacts.append(allocator, .{ .union_decl = union_decl });
+                try decl_origins.append(allocator, declOrigin(decl));
             },
             .packed_bits_decl => |packed_bits_decl| {
                 try packed_bits.append(allocator, packed_bits_decl);
                 try decl_artifacts.append(allocator, .{ .packed_bits = packed_bits_decl });
+                try decl_origins.append(allocator, declOrigin(decl));
             },
             .overlay_union_decl => |overlay_union| {
                 try overlay_unions.append(allocator, overlay_union);
                 try decl_artifacts.append(allocator, .{ .overlay_union = overlay_union });
+                try decl_origins.append(allocator, declOrigin(decl));
             },
-            .trait_decl => |trait_decl| try decl_artifacts.append(allocator, .{ .trait_decl = trait_decl }),
-            .impl_trait => |impl_trait| try decl_artifacts.append(allocator, .{ .impl_trait = impl_trait }),
-            else => {},
+            .opaque_decl => |name| {
+                try decl_artifacts.append(allocator, .{ .opaque_decl = name });
+                try decl_origins.append(allocator, declOrigin(decl));
+            },
+            .trait_decl => |trait_decl| {
+                try decl_artifacts.append(allocator, .{ .trait_decl = trait_decl });
+                try decl_origins.append(allocator, declOrigin(decl));
+            },
+            .impl_trait => |impl_trait| {
+                try decl_artifacts.append(allocator, .{ .impl_trait = impl_trait });
+                try decl_origins.append(allocator, declOrigin(decl));
+            },
         };
 
         const owned_const_fns = try const_fns.toOwnedSlice(allocator);
@@ -94,6 +117,8 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer allocator.free(owned_overlay_unions);
         const owned_decl_artifacts = try decl_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_decl_artifacts);
+        const owned_decl_origins = try decl_origins.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_decl_origins);
 
         return .{
             .const_fns = owned_const_fns,
@@ -105,6 +130,7 @@ pub const EarlyDeclarationArtifacts = struct {
             .packed_bits = owned_packed_bits,
             .overlay_unions = owned_overlay_unions,
             .decl_artifacts = owned_decl_artifacts,
+            .decl_origins = owned_decl_origins,
         };
     }
 
@@ -118,6 +144,7 @@ pub const EarlyDeclarationArtifacts = struct {
         allocator.free(self.packed_bits);
         allocator.free(self.overlay_unions);
         allocator.free(self.decl_artifacts);
+        allocator.free(self.decl_origins);
         self.* = empty;
     }
 
@@ -131,8 +158,17 @@ pub const EarlyDeclarationArtifacts = struct {
         .packed_bits = &.{},
         .overlay_unions = &.{},
         .decl_artifacts = &.{},
+        .decl_origins = &.{},
     };
 };
+
+fn declOrigin(decl: ast.Decl) []const u8 {
+    for (decl.attrs) |attr| switch (attr.kind) {
+        .origin => |origin| return origin,
+        else => {},
+    };
+    return if (std.meta.activeTag(decl.kind) == .extern_fn) "external" else "source";
+}
 
 pub const DeclArtifact = union(enum) {
     type_alias: ast.TypeAlias,
@@ -142,6 +178,7 @@ pub const DeclArtifact = union(enum) {
     union_decl: ast.UnionDecl,
     packed_bits: ast.PackedBitsDecl,
     overlay_union: ast.OverlayUnionDecl,
+    opaque_decl: ast.Ident,
     function: Function,
     extern_function: Function,
     trait_decl: ast.TraitDecl,

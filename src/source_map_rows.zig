@@ -1,4 +1,5 @@
 const ast = @import("ast.zig");
+const early_declaration_metadata = @import("early_declaration_metadata.zig");
 const std = @import("std");
 
 /// Transitional source-map row artifacts. Source maps still need syntax spans
@@ -8,11 +9,16 @@ const std = @import("std");
 pub const SourceMapRows = struct {
     artifacts: []const RowArtifact,
 
-    pub fn collectFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !SourceMapRows {
+    pub fn collectFromArtifacts(
+        allocator: std.mem.Allocator,
+        decls: []const early_declaration_metadata.DeclArtifact,
+        origins: []const []const u8,
+    ) !SourceMapRows {
+        if (decls.len != origins.len) return error.InvalidSourceMapRows;
         var artifacts: std.ArrayList(RowArtifact) = .empty;
         errdefer artifacts.deinit(allocator);
-        for (decls) |decl| {
-            if (RowArtifact.fromDecl(decl)) |artifact| {
+        for (decls, origins) |decl, origin| {
+            if (RowArtifact.fromDeclArtifact(decl, origin)) |artifact| {
                 try artifacts.append(allocator, artifact);
             }
         }
@@ -61,49 +67,41 @@ pub const RowArtifact = union(enum) {
         origin: []const u8,
     };
 
-    fn fromDecl(decl: ast.Decl) ?RowArtifact {
-        return switch (decl.kind) {
-            .global_decl => |global| .{ .global = .{
+    fn fromDeclArtifact(decl: early_declaration_metadata.DeclArtifact, origin: []const u8) ?RowArtifact {
+        return switch (decl) {
+            .global => |global| .{ .global = .{
                 .symbol = global.name.text,
                 .name_span = global.name.span,
                 .init_span = if (global.init) |init| init.span else null,
                 .is_const = global.is_const,
-                .origin = declOrigin(decl),
+                .origin = origin,
             } },
-            .fn_decl => |fn_decl| if (fn_decl.body) |body| .{ .function = .{
-                .symbol = fn_decl.name.text,
-                .name_span = fn_decl.name.span,
+            .function => |function| if (function.fn_decl.body) |body| .{ .function = .{
+                .symbol = function.fn_decl.name.text,
+                .name_span = function.fn_decl.name.span,
                 .body = body,
-                .object_symbol = backendNameOverride(decl.attrs) orelse fn_decl.name.text,
-                .exported = fn_decl.exported,
-                .origin = declOrigin(decl),
+                .object_symbol = backendNameOverride(function.attrs) orelse function.fn_decl.name.text,
+                .exported = function.fn_decl.exported,
+                .origin = origin,
             } } else .{ .extern_fn = .{
-                .symbol = fn_decl.name.text,
-                .name_span = fn_decl.name.span,
-                .origin = declOrigin(decl),
+                .symbol = function.fn_decl.name.text,
+                .name_span = function.fn_decl.name.span,
+                .origin = origin,
             } },
-            .extern_fn => |fn_decl| .{ .extern_fn = .{
-                .symbol = fn_decl.name.text,
-                .name_span = fn_decl.name.span,
-                .origin = declOrigin(decl),
+            .extern_function => |function| .{ .extern_fn = .{
+                .symbol = function.fn_decl.name.text,
+                .name_span = function.fn_decl.name.span,
+                .origin = origin,
             } },
-            else => if (declTypeName(decl.kind)) |name| .{ .type_decl = .{
-                .kind = declKindName(decl.kind),
+            else => if (declArtifactTypeName(decl)) |name| .{ .type_decl = .{
+                .kind = declArtifactKindName(decl),
                 .symbol = name.text,
                 .name_span = name.span,
-                .origin = declOrigin(decl),
+                .origin = origin,
             } } else null,
         };
     }
 };
-
-fn declOrigin(decl: ast.Decl) []const u8 {
-    for (decl.attrs) |attr| switch (attr.kind) {
-        .origin => |origin| return origin,
-        else => {},
-    };
-    return if (std.meta.activeTag(decl.kind) == .extern_fn) "external" else "source";
-}
 
 fn backendNameOverride(attrs: []const ast.Attr) ?[]const u8 {
     for (attrs) |attr| switch (attr.kind) {
@@ -113,26 +111,26 @@ fn backendNameOverride(attrs: []const ast.Attr) ?[]const u8 {
     return null;
 }
 
-fn declTypeName(kind: ast.Decl.Kind) ?ast.Ident {
-    return switch (kind) {
-        .struct_decl => |decl| decl.name,
-        .enum_decl => |decl| decl.name,
-        .union_decl => |decl| decl.name,
-        .packed_bits_decl => |decl| decl.name,
-        .overlay_union_decl => |decl| decl.name,
+fn declArtifactTypeName(decl: early_declaration_metadata.DeclArtifact) ?ast.Ident {
+    return switch (decl) {
+        .struct_decl => |node| node.name,
+        .enum_decl => |node| node.name,
+        .union_decl => |node| node.name,
+        .packed_bits => |node| node.name,
+        .overlay_union => |node| node.name,
         .opaque_decl => |name| name,
-        .type_alias => |decl| decl.name,
+        .type_alias => |node| node.name,
         else => null,
     };
 }
 
-fn declKindName(kind: ast.Decl.Kind) []const u8 {
-    return switch (kind) {
+fn declArtifactKindName(decl: early_declaration_metadata.DeclArtifact) []const u8 {
+    return switch (decl) {
         .struct_decl => "struct",
         .enum_decl => "enum",
         .union_decl => "union",
-        .packed_bits_decl => "packed_bits",
-        .overlay_union_decl => "overlay_union",
+        .packed_bits => "packed_bits",
+        .overlay_union => "overlay_union",
         .opaque_decl => "opaque",
         .type_alias => "type_alias",
         else => "decl",

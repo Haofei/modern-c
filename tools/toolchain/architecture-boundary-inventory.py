@@ -64,7 +64,7 @@ EXACT_FILE_COUNTS = {
     ("src/early_declaration_metadata.zig", "[]const ast.Decl"): 1,
     ("src/early_declaration_metadata.zig", "pub const EarlyDeclarationMetadataView = struct"): 0,
     ("src/early_declaration_metadata.zig", "pub const EarlyDeclarationArtifacts = struct"): 1,
-    ("src/source_map_rows.zig", "[]const ast.Decl"): 1,
+    ("src/source_map_rows.zig", "[]const ast.Decl"): 0,
     ("src/source_map_rows.zig", "pub const SourceMapRows = struct"): 1,
     ("src/source_map_rows.zig", "pub const RowArtifact = union(enum)"): 1,
     ("src/mir_facts_view.zig", "targetTypeFactAtWithModuleFallback"): 1,
