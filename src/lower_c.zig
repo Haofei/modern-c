@@ -146,7 +146,7 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
 
     var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
-    var source_rows = try source_map_rows.SourceMapRows.collectFromArtifacts(allocator, early_metadata.decl_artifacts, early_metadata.decl_origins);
+    var source_rows = try source_map_rows.SourceMapRows.collectFromSourceArtifacts(allocator, early_metadata.source_map_artifacts);
     defer source_rows.deinit(allocator);
     try appendCSourceMapFromGenerated(allocator, source_rows, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
         .profile = profile,

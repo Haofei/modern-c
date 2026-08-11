@@ -15,7 +15,7 @@ pub const EarlyDeclarationArtifacts = struct {
     packed_bits: []const ast.PackedBitsDecl,
     overlay_unions: []const ast.OverlayUnionDecl,
     decl_artifacts: []const DeclArtifact,
-    decl_origins: []const []const u8,
+    source_map_artifacts: []const SourceMapArtifact,
 
     pub fn collectFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !EarlyDeclarationArtifacts {
         var globals: std.ArrayList(ast.GlobalDecl) = .empty;
@@ -34,64 +34,64 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer overlay_unions.deinit(allocator);
         var decl_artifacts: std.ArrayList(DeclArtifact) = .empty;
         errdefer decl_artifacts.deinit(allocator);
-        var decl_origins: std.ArrayList([]const u8) = .empty;
-        errdefer decl_origins.deinit(allocator);
+        var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
+        errdefer source_map_artifacts.deinit(allocator);
 
         for (decls) |decl| switch (decl.kind) {
             .fn_decl => |fn_decl| {
                 try decl_artifacts.append(allocator, .{ .function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .extern_fn => |fn_decl| {
                 try decl_artifacts.append(allocator, .{ .extern_function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .global_decl => |global| {
                 try globals.append(allocator, global);
                 try decl_artifacts.append(allocator, .{ .global = global });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .type_alias => |alias| {
                 try type_aliases.append(allocator, alias);
                 try decl_artifacts.append(allocator, .{ .type_alias = alias });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .struct_decl => |struct_decl| {
                 try structs.append(allocator, struct_decl);
                 try decl_artifacts.append(allocator, .{ .struct_decl = struct_decl });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .enum_decl => |enum_decl| {
                 try enums.append(allocator, enum_decl);
                 try decl_artifacts.append(allocator, .{ .enum_decl = enum_decl });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .union_decl => |union_decl| {
                 try unions.append(allocator, union_decl);
                 try decl_artifacts.append(allocator, .{ .union_decl = union_decl });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .packed_bits_decl => |packed_bits_decl| {
                 try packed_bits.append(allocator, packed_bits_decl);
                 try decl_artifacts.append(allocator, .{ .packed_bits = packed_bits_decl });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .overlay_union_decl => |overlay_union| {
                 try overlay_unions.append(allocator, overlay_union);
                 try decl_artifacts.append(allocator, .{ .overlay_union = overlay_union });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .opaque_decl => |name| {
                 try decl_artifacts.append(allocator, .{ .opaque_decl = name });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .trait_decl => |trait_decl| {
                 try decl_artifacts.append(allocator, .{ .trait_decl = trait_decl });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .impl_trait => |impl_trait| {
                 try decl_artifacts.append(allocator, .{ .impl_trait = impl_trait });
-                try decl_origins.append(allocator, declOrigin(decl));
+                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
         };
 
@@ -111,8 +111,8 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer allocator.free(owned_overlay_unions);
         const owned_decl_artifacts = try decl_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_decl_artifacts);
-        const owned_decl_origins = try decl_origins.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_decl_origins);
+        const owned_source_map_artifacts = try source_map_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_source_map_artifacts);
 
         return .{
             .globals = owned_globals,
@@ -123,7 +123,7 @@ pub const EarlyDeclarationArtifacts = struct {
             .packed_bits = owned_packed_bits,
             .overlay_unions = owned_overlay_unions,
             .decl_artifacts = owned_decl_artifacts,
-            .decl_origins = owned_decl_origins,
+            .source_map_artifacts = owned_source_map_artifacts,
         };
     }
 
@@ -136,7 +136,7 @@ pub const EarlyDeclarationArtifacts = struct {
         allocator.free(self.packed_bits);
         allocator.free(self.overlay_unions);
         allocator.free(self.decl_artifacts);
-        allocator.free(self.decl_origins);
+        allocator.free(self.source_map_artifacts);
         self.* = empty;
     }
 
@@ -149,7 +149,7 @@ pub const EarlyDeclarationArtifacts = struct {
         .packed_bits = &.{},
         .overlay_unions = &.{},
         .decl_artifacts = &.{},
-        .decl_origins = &.{},
+        .source_map_artifacts = &.{},
     };
 };
 
@@ -180,3 +180,95 @@ pub const DeclArtifact = union(enum) {
         attrs: []const ast.Attr,
     };
 };
+
+pub const SourceMapArtifact = union(enum) {
+    global: Global,
+    function: Function,
+    extern_fn: ExternFn,
+    type_decl: TypeDecl,
+
+    pub const Global = struct {
+        symbol: []const u8,
+        name_span: ast.Span,
+        init_span: ?ast.Span,
+        is_const: bool,
+        origin: []const u8,
+    };
+
+    pub const Function = struct {
+        symbol: []const u8,
+        name_span: ast.Span,
+        body: ast.Block,
+        object_symbol: []const u8,
+        exported: bool,
+        origin: []const u8,
+    };
+
+    pub const ExternFn = struct {
+        symbol: []const u8,
+        name_span: ast.Span,
+        origin: []const u8,
+    };
+
+    pub const TypeDecl = struct {
+        kind: []const u8,
+        symbol: []const u8,
+        name_span: ast.Span,
+        origin: []const u8,
+    };
+};
+
+fn sourceMapArtifactFromDecl(decl: ast.Decl) ?SourceMapArtifact {
+    const origin = declOrigin(decl);
+    return switch (decl.kind) {
+        .global_decl => |global| .{ .global = .{
+            .symbol = global.name.text,
+            .name_span = global.name.span,
+            .init_span = if (global.init) |init| init.span else null,
+            .is_const = global.is_const,
+            .origin = origin,
+        } },
+        .fn_decl => |fn_decl| if (fn_decl.body) |body| .{ .function = .{
+            .symbol = fn_decl.name.text,
+            .name_span = fn_decl.name.span,
+            .body = body,
+            .object_symbol = backendNameOverride(decl.attrs) orelse fn_decl.name.text,
+            .exported = fn_decl.exported,
+            .origin = origin,
+        } } else .{ .extern_fn = .{
+            .symbol = fn_decl.name.text,
+            .name_span = fn_decl.name.span,
+            .origin = origin,
+        } },
+        .extern_fn => |fn_decl| .{ .extern_fn = .{
+            .symbol = fn_decl.name.text,
+            .name_span = fn_decl.name.span,
+            .origin = origin,
+        } },
+        .struct_decl => |node| typeSourceMapArtifact("struct", node.name, origin),
+        .enum_decl => |node| typeSourceMapArtifact("enum", node.name, origin),
+        .union_decl => |node| typeSourceMapArtifact("union", node.name, origin),
+        .packed_bits_decl => |node| typeSourceMapArtifact("packed_bits", node.name, origin),
+        .overlay_union_decl => |node| typeSourceMapArtifact("overlay_union", node.name, origin),
+        .opaque_decl => |name| typeSourceMapArtifact("opaque", name, origin),
+        .type_alias => |node| typeSourceMapArtifact("type_alias", node.name, origin),
+        else => null,
+    };
+}
+
+fn typeSourceMapArtifact(kind: []const u8, name: ast.Ident, origin: []const u8) SourceMapArtifact {
+    return .{ .type_decl = .{
+        .kind = kind,
+        .symbol = name.text,
+        .name_span = name.span,
+        .origin = origin,
+    } };
+}
+
+fn backendNameOverride(attrs: []const ast.Attr) ?[]const u8 {
+    for (attrs) |attr| switch (attr.kind) {
+        .backend_name => |name| return name,
+        else => {},
+    };
+    return null;
+}

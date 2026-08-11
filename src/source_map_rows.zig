@@ -9,19 +9,13 @@ const std = @import("std");
 pub const SourceMapRows = struct {
     artifacts: []const RowArtifact,
 
-    pub fn collectFromArtifacts(
+    pub fn collectFromSourceArtifacts(
         allocator: std.mem.Allocator,
-        decls: []const early_declaration_metadata.DeclArtifact,
-        origins: []const []const u8,
+        source_artifacts: []const early_declaration_metadata.SourceMapArtifact,
     ) !SourceMapRows {
-        if (decls.len != origins.len) return error.InvalidSourceMapRows;
         var artifacts: std.ArrayList(RowArtifact) = .empty;
         errdefer artifacts.deinit(allocator);
-        for (decls, origins) |decl, origin| {
-            if (RowArtifact.fromDeclArtifact(decl, origin)) |artifact| {
-                try artifacts.append(allocator, artifact);
-            }
-        }
+        for (source_artifacts) |artifact| try artifacts.append(allocator, RowArtifact.fromSourceMapArtifact(artifact));
         return .{ .artifacts = try artifacts.toOwnedSlice(allocator) };
     }
 
@@ -67,72 +61,34 @@ pub const RowArtifact = union(enum) {
         origin: []const u8,
     };
 
-    fn fromDeclArtifact(decl: early_declaration_metadata.DeclArtifact, origin: []const u8) ?RowArtifact {
-        return switch (decl) {
+    fn fromSourceMapArtifact(artifact: early_declaration_metadata.SourceMapArtifact) RowArtifact {
+        return switch (artifact) {
             .global => |global| .{ .global = .{
-                .symbol = global.name.text,
-                .name_span = global.name.span,
-                .init_span = if (global.init) |init| init.span else null,
+                .symbol = global.symbol,
+                .name_span = global.name_span,
+                .init_span = global.init_span,
                 .is_const = global.is_const,
-                .origin = origin,
+                .origin = global.origin,
             } },
-            .function => |function| if (function.fn_decl.body) |body| .{ .function = .{
-                .symbol = function.fn_decl.name.text,
-                .name_span = function.fn_decl.name.span,
-                .body = body,
-                .object_symbol = backendNameOverride(function.attrs) orelse function.fn_decl.name.text,
-                .exported = function.fn_decl.exported,
-                .origin = origin,
-            } } else .{ .extern_fn = .{
-                .symbol = function.fn_decl.name.text,
-                .name_span = function.fn_decl.name.span,
-                .origin = origin,
+            .function => |function| .{ .function = .{
+                .symbol = function.symbol,
+                .name_span = function.name_span,
+                .body = function.body,
+                .object_symbol = function.object_symbol,
+                .exported = function.exported,
+                .origin = function.origin,
             } },
-            .extern_function => |function| .{ .extern_fn = .{
-                .symbol = function.fn_decl.name.text,
-                .name_span = function.fn_decl.name.span,
-                .origin = origin,
+            .extern_fn => |function| .{ .extern_fn = .{
+                .symbol = function.symbol,
+                .name_span = function.name_span,
+                .origin = function.origin,
             } },
-            else => if (declArtifactTypeName(decl)) |name| .{ .type_decl = .{
-                .kind = declArtifactKindName(decl),
-                .symbol = name.text,
-                .name_span = name.span,
-                .origin = origin,
-            } } else null,
+            .type_decl => |decl| .{ .type_decl = .{
+                .kind = decl.kind,
+                .symbol = decl.symbol,
+                .name_span = decl.name_span,
+                .origin = decl.origin,
+            } },
         };
     }
 };
-
-fn backendNameOverride(attrs: []const ast.Attr) ?[]const u8 {
-    for (attrs) |attr| switch (attr.kind) {
-        .backend_name => |name| return name,
-        else => {},
-    };
-    return null;
-}
-
-fn declArtifactTypeName(decl: early_declaration_metadata.DeclArtifact) ?ast.Ident {
-    return switch (decl) {
-        .struct_decl => |node| node.name,
-        .enum_decl => |node| node.name,
-        .union_decl => |node| node.name,
-        .packed_bits => |node| node.name,
-        .overlay_union => |node| node.name,
-        .opaque_decl => |name| name,
-        .type_alias => |node| node.name,
-        else => null,
-    };
-}
-
-fn declArtifactKindName(decl: early_declaration_metadata.DeclArtifact) []const u8 {
-    return switch (decl) {
-        .struct_decl => "struct",
-        .enum_decl => "enum",
-        .union_decl => "union",
-        .packed_bits => "packed_bits",
-        .overlay_union => "overlay_union",
-        .opaque_decl => "opaque",
-        .type_alias => "type_alias",
-        else => "decl",
-    };
-}

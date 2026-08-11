@@ -769,7 +769,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .artifact_kind = "c",
         .backend_name = "c",
     });
-    var source_rows = try source_map_rows.SourceMapRows.collectFromArtifacts(allocator, early_metadata.decl_artifacts, early_metadata.decl_origins);
+    var source_rows = try source_map_rows.SourceMapRows.collectFromSourceArtifacts(allocator, early_metadata.source_map_artifacts);
     defer source_rows.deinit(allocator);
     try attachCSourceMapDigests(allocator, be, program, source_rows, output.items, lower_opts, &bundle);
     try session.writeArtifactWithMetadata(output.items, output_path, bundle);
@@ -880,7 +880,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .backend_name = "c",
         .toolchain_identity = toolchain_identity,
     });
-    var source_rows = try source_map_rows.SourceMapRows.collectFromArtifacts(allocator, early_metadata.decl_artifacts, early_metadata.decl_origins);
+    var source_rows = try source_map_rows.SourceMapRows.collectFromSourceArtifacts(allocator, early_metadata.source_map_artifacts);
     defer source_rows.deinit(allocator);
     try attachCSourceMapDigests(allocator, be, program, source_rows, raw_c.items, lower_opts, &bundle);
     session.publishExistingArtifactWithMetadata(tmp_exe, output_path, bundle, "executable") catch {
@@ -1194,7 +1194,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    var source_map = try source_map_rows.SourceMapRows.collectFromArtifacts(allocator, early_metadata.decl_artifacts, early_metadata.decl_origins);
+    var source_map = try source_map_rows.SourceMapRows.collectFromSourceArtifacts(allocator, early_metadata.source_map_artifacts);
     defer source_map.deinit(allocator);
     try be.emitMapRequest(allocator, .{
         .program = program,
