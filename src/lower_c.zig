@@ -38,34 +38,27 @@ pub fn mcBackend() backend_mod.Backend {
 fn backendLower(
     ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
-    program: backend_mod.VerifiedProgram,
-    declarations: legacy_backend_syntax.LegacyDeclarationSlice,
-    out: *std.ArrayList(u8),
-    opts: backend_mod.LowerOptions,
+    request: backend_mod.LowerRequest,
 ) backend_mod.LowerError!void {
     _ = ctx;
-    return appendCProfileWithMirSourceSpelling(allocator, declarations, program.typed_mir, program.source_spelling, out, opts.profile, opts.source_path, opts.checks, opts.stub_asm, opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
+    return appendCProfileWithMirSourceSpelling(allocator, request.legacy_declarations, request.program.typed_mir, request.program.source_spelling, request.out, request.opts.profile, request.opts.source_path, request.opts.checks, request.opts.stub_asm, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 fn backendEmitMap(
     ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
-    program: backend_mod.VerifiedProgram,
-    source_map: legacy_backend_syntax.SourceMapMechanicsView,
-    out: *std.ArrayList(u8),
-    generated_artifact: []const u8,
-    opts: backend_mod.LowerOptions,
+    request: backend_mod.EmitMapRequest,
 ) backend_mod.LowerError!void {
     _ = ctx;
     return appendCSourceMapFromGenerated(
         allocator,
-        source_map,
-        out,
-        generated_artifact,
-        program.typed_mir,
-        opts.source_path orelse "-",
+        request.legacy_source_map,
+        request.out,
+        request.generated_artifact,
+        request.program.typed_mir,
+        request.opts.source_path orelse "-",
         null,
-        opts,
+        request.opts,
     ) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 

@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const codegen_options = @import("codegen_options.zig");
-const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
+const codegen_request = @import("codegen_request.zig");
 const lower_error = @import("lower_error.zig");
 const verified_program = @import("verified_program.zig");
 
@@ -13,6 +13,8 @@ pub const targetArchFromName = codegen_options.targetArchFromName;
 
 pub const LowerError = lower_error.LowerError;
 pub const lowerErrorFromAny = lower_error.lowerErrorFromAny;
+pub const LowerRequest = codegen_request.LowerRequest;
+pub const EmitMapRequest = codegen_request.EmitMapRequest;
 pub const SourceSpellingView = verified_program.SourceSpellingView;
 pub const VerifiedProgram = verified_program.VerifiedProgram;
 
@@ -42,10 +44,7 @@ pub const Backend = struct {
     lowerFn: *const fn (
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
-        program: VerifiedProgram,
-        declarations: legacy_backend_syntax.LegacyDeclarationSlice,
-        out: *std.ArrayList(u8),
-        opts: LowerOptions,
+        request: LowerRequest,
     ) LowerError!void,
     /// Optional source-map emission ("emit-map"). Only the C backend supplies
     /// this; null means the backend has no source-map artifact. The map is
@@ -55,23 +54,16 @@ pub const Backend = struct {
     emitMapFn: ?*const fn (
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
-        program: VerifiedProgram,
-        source_map: legacy_backend_syntax.SourceMapMechanicsView,
-        out: *std.ArrayList(u8),
-        generated_artifact: []const u8,
-        opts: LowerOptions,
+        request: EmitMapRequest,
     ) LowerError!void = null,
 
-    /// Lower `module` to its textual artifact via the backend's vtable.
-    pub fn lower(
+    /// Lower a verified program to its textual artifact via the backend's vtable.
+    pub fn lowerRequest(
         self: Backend,
         allocator: std.mem.Allocator,
-        program: VerifiedProgram,
-        declarations: legacy_backend_syntax.LegacyDeclarationSlice,
-        out: *std.ArrayList(u8),
-        opts: LowerOptions,
+        request: LowerRequest,
     ) LowerError!void {
-        return self.lowerFn(self.ctx, allocator, program, declarations, out, opts);
+        return self.lowerFn(self.ctx, allocator, request);
     }
 
     /// Whether this backend can emit a source map (i.e. `emitMapFn != null`).
@@ -80,16 +72,12 @@ pub const Backend = struct {
     }
 
     /// Emit a source map. Asserts the backend supports it (`supportsEmitMap`).
-    pub fn emitMap(
+    pub fn emitMapRequest(
         self: Backend,
         allocator: std.mem.Allocator,
-        program: VerifiedProgram,
-        source_map: legacy_backend_syntax.SourceMapMechanicsView,
-        out: *std.ArrayList(u8),
-        generated_artifact: []const u8,
-        opts: LowerOptions,
+        request: EmitMapRequest,
     ) LowerError!void {
-        return self.emitMapFn.?(self.ctx, allocator, program, source_map, out, generated_artifact, opts);
+        return self.emitMapFn.?(self.ctx, allocator, request);
     }
 };
 

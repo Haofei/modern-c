@@ -278,13 +278,10 @@ pub fn mcBackend() backend_mod.Backend {
 fn backendLower(
     ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
-    program: backend_mod.VerifiedProgram,
-    declarations: legacy_backend_syntax.LegacyDeclarationSlice,
-    out: *std.ArrayList(u8),
-    opts: backend_mod.LowerOptions,
+    request: backend_mod.LowerRequest,
 ) backend_mod.LowerError!void {
     _ = ctx;
-    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, declarations, program.typed_mir, program.source_spelling, out, opts.source_path orelse "input.mc", opts.checks, opts.stub_asm, opts.target_arch, opts.linux_kernel, opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
+    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, request.legacy_declarations, request.program.typed_mir, request.program.source_spelling, request.out, request.opts.source_path orelse "input.mc", request.opts.checks, request.opts.stub_asm, request.opts.target_arch, request.opts.linux_kernel, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {

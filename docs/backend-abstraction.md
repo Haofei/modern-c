@@ -81,20 +81,13 @@ pub const Backend = struct {
     lowerFn: *const fn (
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
-        program: VerifiedProgram,
-        declarations: LegacyDeclarationSlice,
-        out: *std.ArrayList(u8),
-        opts: LowerOptions,
+        request: LowerRequest,
     ) LowerError!void,
 
     emitMapFn: ?*const fn (
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
-        program: VerifiedProgram,
-        source_map: SourceMapMechanicsView,
-        out: *std.ArrayList(u8),
-        generated_artifact: []const u8,
-        opts: LowerOptions,
+        request: EmitMapRequest,
     ) LowerError!void = null,
 };
 ```
@@ -123,15 +116,16 @@ It then exposes:
 - `source_spelling`: MIR-owned spelling by typed symbol id.
 
 A transitional declaration slice still exists as `LegacyDeclarationSlice`, but
-it is passed as an explicit legacy backend parameter rather than stored on
-`VerifiedProgram`. It is narrower than giving the backend a full `ast.Module`,
-but it is not the final semantic boundary. Source-map row enumeration still uses
-`SourceMapMechanicsView`, but it is passed only to the `emit-map` path rather
-than stored on `VerifiedProgram`. Both syntax-backed mechanics views live in
-`legacy_backend_syntax.zig`; `backend.zig` only re-exports them so the core
-backend seam does not directly import AST declarations. New backend work should
-prefer MIR identities and typed facts and should avoid adding new semantic
-decisions to syntax-backed views.
+it is carried behind the named `LowerRequest.legacy_declarations` adapter rather
+than stored on `VerifiedProgram` or passed as a standalone backend parameter. It
+is narrower than giving the backend a full `ast.Module`, but it is not the final
+semantic boundary. Source-map row enumeration still uses
+`SourceMapMechanicsView`, but it is carried only by `EmitMapRequest` rather than
+ordinary lowering. Both syntax-backed mechanics views live in
+`legacy_backend_syntax.zig`; `backend.zig` imports only `codegen_request.zig` so
+the core backend seam does not directly import AST declarations. New backend
+work should prefer MIR identities and typed facts and should avoid adding new
+semantic decisions to syntax-backed views.
 
 Artifact envelope metadata is not owned by the backend seam. `.mcmeta` and `.mcmap` use `artifact_model.ArtifactBundle`; backend lowering only receives the source digest through `LowerOptions`.
 
@@ -190,8 +184,8 @@ source identity.
    }
    ```
 
-3. Make `backendLower` accept `backend.VerifiedProgram` plus the explicit
-   transitional `LegacyDeclarationSlice`, then return `backend.LowerError!void`.
+3. Make `backendLower` accept `backend.LowerRequest`, then return
+   `backend.LowerError!void`.
 4. Register the backend in `src/backend_registry.zig`.
 5. Add CLI dispatch in `src/main.zig` if it needs a first-class command.
 

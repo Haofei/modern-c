@@ -750,7 +750,12 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .compiler_version = build_options.version,
     };
     const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
-    be.lower(allocator, program, declarations, &output, lower_opts) catch |err| switch (err) {
+    be.lowerRequest(allocator, .{
+        .program = program,
+        .legacy_declarations = declarations,
+        .out = &output,
+        .opts = lower_opts,
+    }) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
             diag.render();
@@ -796,7 +801,12 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .compiler_version = build_options.version,
     };
     const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
-    be.lower(allocator, program, declarations, &raw_c, lower_opts) catch |err| switch (err) {
+    be.lowerRequest(allocator, .{
+        .program = program,
+        .legacy_declarations = declarations,
+        .out = &raw_c,
+        .opts = lower_opts,
+    }) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
             diag.render();
@@ -886,7 +896,13 @@ fn attachCSourceMapDigests(
     if (!be.supportsEmitMap()) return;
     var map_bytes: std.ArrayList(u8) = .empty;
     defer map_bytes.deinit(allocator);
-    try be.emitMap(allocator, program, source_map, &map_bytes, generated_c, lower_opts);
+    try be.emitMapRequest(allocator, .{
+        .program = program,
+        .legacy_source_map = source_map,
+        .out = &map_bytes,
+        .generated_artifact = generated_c,
+        .opts = lower_opts,
+    });
     bundle.source_map_generated_artifact_sha256 = try metadataDigestHeader(map_bytes.items, "generated_artifact_sha256");
     bundle.source_map_payload_sha256 = try metadataDigestHeader(map_bytes.items, "source_map_payload_sha256");
     bundle.mir_facts_sha256 = try metadataDigestHeader(map_bytes.items, "mir_facts_sha256");
@@ -1145,7 +1161,11 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
     const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
-    be.lower(allocator, program, declarations, &generated_c, .{
+    be.lowerRequest(allocator, .{
+        .program = program,
+        .legacy_declarations = declarations,
+        .out = &generated_c,
+        .opts = .{
         .profile = profile,
         .source_path = artifact_source_path,
         .target_arch = target_arch,
@@ -1154,6 +1174,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
         .reporter = &diag,
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
+        },
     }) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
@@ -1166,7 +1187,12 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     const source_map = legacy_backend_syntax.SourceMapMechanicsView.forDecls(module.decls);
-    try be.emitMap(allocator, program, source_map, &output, generated_c.items, .{
+    try be.emitMapRequest(allocator, .{
+        .program = program,
+        .legacy_source_map = source_map,
+        .out = &output,
+        .generated_artifact = generated_c.items,
+        .opts = .{
         .profile = profile,
         .source_path = artifact_source_path,
         .target_arch = target_arch,
@@ -1175,6 +1201,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
         .reporter = &diag,
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
+        },
     });
     try session.writeArtifact(output.items, output_path);
 }
@@ -1212,7 +1239,12 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
         .compiler_version = build_options.version,
     };
     const declarations = legacy_backend_syntax.LegacyDeclarationSlice.forDecls(module.decls);
-    be.lower(allocator, program, declarations, &output, lower_opts) catch |err| switch (err) {
+    be.lowerRequest(allocator, .{
+        .program = program,
+        .legacy_declarations = declarations,
+        .out = &output,
+        .opts = lower_opts,
+    }) catch |err| switch (err) {
         error.UnsupportedLlvmEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "LLVM");
             diag.render();

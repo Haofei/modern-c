@@ -31,8 +31,8 @@ EXACT_BACKEND_COUNTS = {
     '@import("mir_facts_view.zig")': 2,
     '@import("type_syntax.zig")': 5,
     "[]const ast.Decl": 7,
-    "LegacyDeclarationSlice": 16,
-    "SourceMapMechanicsView": 6,
+    "LegacyDeclarationSlice": 12,
+    "SourceMapMechanicsView": 3,
     "initFromDecls": 0,
 }
 
@@ -41,6 +41,8 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "@import(\"ast.zig\")"): 0,
     ("src/backend.zig", "@import(\"artifact_model.zig\")"): 0,
     ("src/backend.zig", "@import(\"diagnostics.zig\")"): 0,
+    ("src/backend.zig", "@import(\"legacy_backend_syntax.zig\")"): 0,
+    ("src/backend.zig", "@import(\"codegen_request.zig\")"): 1,
     ("src/backend.zig", "pub const Profile = enum"): 0,
     ("src/backend.zig", "pub const Checks = struct"): 0,
     ("src/backend.zig", "pub const TargetArch = enum"): 0,
