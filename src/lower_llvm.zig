@@ -308,12 +308,14 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
 }
 
 pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, early_declaration_metadata.EarlyDeclarationMetadataView.forDecls(module.decls), module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
+    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    defer early_metadata.deinit(allocator);
+    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, early_metadata, module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
 }
 
 fn appendLlvmCheckedMirProfileWithSourceSpelling(
     allocator: std.mem.Allocator,
-    early_metadata: early_declaration_metadata.EarlyDeclarationMetadataView,
+    early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts,
     module_mir: *const mir.Module,
     source_spelling: backend_mod.SourceSpellingView,
     out: *std.ArrayList(u8),
@@ -329,7 +331,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         else => return err,
     };
     if (!source_spelling.validateAgainstMir(module_mir.*)) return error.UnsupportedLlvmEmission;
-    const decls = early_metadata.declsForEarlyDeclarationScan();
+    const decls = early_metadata.declsForLegacyArtifactEnumeration();
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;

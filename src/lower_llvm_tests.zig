@@ -13543,7 +13543,8 @@ test "LLVM unsupported diagnostics use nearest source span for generated nodes" 
     var module_mir = try mir.build(std.testing.allocator, module);
     defer module_mir.deinit();
     const verified = try backend_mod.VerifiedProgram.init(&module_mir, &reporter);
-    const early_metadata = early_declaration_metadata.EarlyDeclarationMetadataView.forDecls(module.decls);
+    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(std.testing.allocator, module.decls);
+    defer early_metadata.deinit(std.testing.allocator);
     const llvm_backend = lower_llvm.mcBackend();
     try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerRequest(std.testing.allocator, .{
         .program = verified,

@@ -62,7 +62,8 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "pub const LegacyDeclarationSlice = struct"): 0,
     ("src/backend.zig", "pub const SourceMapRowsView = struct"): 0,
     ("src/early_declaration_metadata.zig", "[]const ast.Decl"): 1,
-    ("src/early_declaration_metadata.zig", "pub const EarlyDeclarationMetadataView = struct"): 1,
+    ("src/early_declaration_metadata.zig", "pub const EarlyDeclarationMetadataView = struct"): 0,
+    ("src/early_declaration_metadata.zig", "pub const EarlyDeclarationArtifacts = struct"): 1,
     ("src/source_map_rows.zig", "[]const ast.Decl"): 1,
     ("src/source_map_rows.zig", "pub const SourceMapRows = struct"): 1,
     ("src/source_map_rows.zig", "pub const RowArtifact = union(enum)"): 1,
@@ -97,9 +98,9 @@ REQUIRED_ANCHORS = {
         "MIR verifier",
     ),
     "src/early_declaration_metadata.zig": (
-        "Transitional early declaration metadata view",
-        "callers must name that specific metadata dependency",
-        "generic legacy declaration handle",
+        "Transitional early declaration artifacts",
+        "declaration enumeration is isolated here",
+        "generic legacy view",
     ),
     "src/source_map_rows.zig": (
         "Transitional source-map row artifacts",

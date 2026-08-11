@@ -9,8 +9,8 @@ const early_declaration_metadata = @import("early_declaration_metadata.zig");
 
 /// Populate all declaration and type artifacts needed by C emission without
 /// writing output.  Layout-header emission deliberately uses this same phase.
-pub fn collect(emitter: anytype, early_metadata: early_declaration_metadata.EarlyDeclarationMetadataView) anyerror!void {
-    const decls = early_metadata.declsForEarlyDeclarationScan();
+pub fn collect(emitter: anytype, early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
+    const decls = early_metadata.declsForLegacyArtifactEnumeration();
     emitter.setComptimeDecls(decls);
     try emitter.collectEarlyDeclarationMetadataFromDecls(decls);
     try emitter.collectConstGlobals();
@@ -20,7 +20,7 @@ pub fn collect(emitter: anytype, early_metadata: early_declaration_metadata.Earl
 }
 
 /// Emit a complete translation unit in dependency-safe module order.
-pub fn emit(emitter: anytype, early_metadata: early_declaration_metadata.EarlyDeclarationMetadataView) anyerror!void {
+pub fn emit(emitter: anytype, early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
     defer emitter.deinit();
     try collect(emitter, early_metadata);
     try emitter.emitTypePrelude();

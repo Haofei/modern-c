@@ -403,6 +403,7 @@ removing backend authority before adding new abstractions:
 | 215 | Rename source-map syntax mechanics by current role. | Complete: `SourceMapMechanicsView` moved to `source_map_rows.zig` as `SourceMapRowsView`, making the remaining source-map AST declaration dependency explicit before the row-artifact split. |
 | 216 | Make MIR facts module-wide fallback explicit. | Complete: `MirFactsView` local target-type queries no longer perform hidden module scans; generated-plumbing fallback is isolated behind `targetTypeFact*WithModuleFallback`, backend uses are exact-count gated, and MIR tests assert local lookup and fallback lookup stay separate. |
 | 217 | Collect source-map rows before backend map requests. | Complete: `source_map_rows.zig` now owns AST declaration enumeration and produces `SourceMapRows`/`RowArtifact` values; `EmitMapRequest` and `lower_c_map` consume row artifacts instead of a `SourceMapRowsView` declaration view, and the old row-view accessors are exact-zero-gated. |
+| 218 | Replace early declaration view with collected artifacts. | Complete: `EarlyDeclarationMetadataView` was retired in favor of `EarlyDeclarationArtifacts.collectFromDecls(...)`; `LowerRequest`, C module orchestration, LLVM lowering, CLI, and tests now pass a collected artifact object while the remaining declaration-slice compatibility methods are named as legacy artifact/comptime accessors and exact-gated. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

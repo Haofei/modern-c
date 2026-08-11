@@ -115,10 +115,10 @@ It then exposes:
 
 - `source_spelling`: MIR-owned spelling by typed symbol id.
 
-A transitional declaration slice still exists behind
-`EarlyDeclarationMetadataView`, carried by the named
-`LowerRequest.early_declaration_metadata` adapter rather than stored on
-`VerifiedProgram` or passed as a standalone backend parameter. It is narrower
+A transitional declaration slice still exists behind collected
+`EarlyDeclarationArtifacts`, carried by the named
+`LowerRequest.early_declaration_metadata` artifact boundary rather than stored
+on `VerifiedProgram` or passed as a standalone backend parameter. It is narrower
 than giving the backend a full `ast.Module`, but it is not the final semantic
 boundary. Source-map row enumeration is isolated in `source_map_rows.zig`, and
 `EmitMapRequest` carries collected `SourceMapRows` artifacts rather than an AST

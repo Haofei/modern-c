@@ -8,13 +8,13 @@ const verified_program = @import("verified_program.zig");
 /// Backend lowering request.
 ///
 /// `early_declaration_metadata` is intentionally named as a transitional
-/// adapter: lowerers still need declaration slices for not-yet-normalized early
-/// metadata and comptime mechanics, but the backend vtable receives the narrow
-/// view needed for that use case rather than a generic legacy declaration
-/// handle.
+/// artifact boundary: lowerers still need declaration-derived data for
+/// not-yet-normalized early metadata and comptime mechanics, but the backend
+/// vtable receives a pre-collected artifact object rather than a generic legacy
+/// declaration view.
 pub const LowerRequest = struct {
     program: verified_program.VerifiedProgram,
-    early_declaration_metadata: early_declaration_metadata.EarlyDeclarationMetadataView,
+    early_declaration_metadata: early_declaration_metadata.EarlyDeclarationArtifacts,
     out: *std.ArrayList(u8),
     opts: codegen_options.LowerOptions,
 };

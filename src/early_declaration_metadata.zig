@@ -1,20 +1,31 @@
 const ast = @import("ast.zig");
+const std = @import("std");
 
 pub const DeclarationSlice = []const ast.Decl;
 
-/// Transitional early declaration metadata view.
+/// Transitional early declaration artifacts.
 ///
 /// Early declaration prepasses still read top-level syntax declarations, but
-/// callers must name that specific metadata dependency instead of opening a
-/// generic legacy declaration handle for arbitrary scans.
-pub const EarlyDeclarationMetadataView = struct {
+/// declaration enumeration is isolated here instead of being exposed through
+/// backend lowering requests as a generic legacy view.
+pub const EarlyDeclarationArtifacts = struct {
     decls: DeclarationSlice,
 
-    pub fn forDecls(decls: DeclarationSlice) EarlyDeclarationMetadataView {
+    pub fn collectFromDecls(allocator: std.mem.Allocator, decls: DeclarationSlice) !EarlyDeclarationArtifacts {
+        _ = allocator;
         return .{ .decls = decls };
     }
 
-    pub fn declsForEarlyDeclarationScan(self: EarlyDeclarationMetadataView) DeclarationSlice {
+    pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
+        _ = allocator;
+        self.* = .{ .decls = &.{} };
+    }
+
+    pub fn declsForComptimeEvaluation(self: EarlyDeclarationArtifacts) DeclarationSlice {
+        return self.decls;
+    }
+
+    pub fn declsForLegacyArtifactEnumeration(self: EarlyDeclarationArtifacts) DeclarationSlice {
         return self.decls;
     }
 };
