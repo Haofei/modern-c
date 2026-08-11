@@ -12,7 +12,6 @@ const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
 const numeric = @import("numeric.zig");
 const sema_type = @import("sema_type.zig");
-const sema_decl = @import("sema_decl.zig");
 
 // Pure AST-shape queries shared with sema/mir/lower_c (see `ast_query.zig`); aliased so the
 // existing call sites read unchanged.
@@ -102,7 +101,16 @@ const MirSubjectType = struct {
     target_ty: ast.TypeExpr,
     nullable_representation: ?NullableRepresentation = null,
 };
-const hasNamedAttr = sema_decl.hasNamedAttr;
+
+fn hasNamedAttr(attrs: []const ast.Attr, name: []const u8) bool {
+    for (attrs) |attr| {
+        switch (attr.kind) {
+            .named => |id| if (std.mem.eql(u8, id.text, name)) return true,
+            else => {},
+        }
+    }
+    return false;
+}
 
 const LlvmFunctionDeclArtifact = mir_ownership_authority.FunctionDeclArtifact;
 

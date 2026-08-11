@@ -27,7 +27,7 @@ BACKEND_EXTRA_FILES = {
 
 EXACT_BACKEND_COUNTS = {
     '@import("ast.zig")': 51,
-    '@import("sema': 7,
+    '@import("sema': 5,
     '@import("mir_facts_view.zig")': 2,
     "[]const ast.Decl": 17,
     "DeclarationMetadataView": 25,

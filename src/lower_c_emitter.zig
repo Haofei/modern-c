@@ -10,7 +10,6 @@ const eval = @import("eval.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
-const sema_decl = @import("sema_decl.zig");
 const sema_type = @import("sema_type.zig");
 const switch_lower = @import("switch_lower.zig");
 
@@ -134,7 +133,16 @@ const simpleNameType = ast_query.simpleNameType;
 const contractName = ast_query.contractName;
 const calleeIdentName = ast_query.calleeIdentName;
 const callExpr = ast_query.callExpr;
-const hasNamedAttr = sema_decl.hasNamedAttr;
+
+fn hasNamedAttr(attrs: []const ast.Attr, name: []const u8) bool {
+    for (attrs) |attr| {
+        switch (attr.kind) {
+            .named => |id| if (std.mem.eql(u8, id.text, name)) return true,
+            else => {},
+        }
+    }
+    return false;
+}
 
 const MirSubjectType = struct {
     target_ty: ast.TypeExpr,
