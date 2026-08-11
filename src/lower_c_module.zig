@@ -10,8 +10,11 @@ const early_declaration_metadata = @import("early_declaration_metadata.zig");
 /// Populate all declaration and type artifacts needed by C emission without
 /// writing output.  Layout-header emission deliberately uses this same phase.
 pub fn collect(emitter: anytype, early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
-    const decls = early_metadata.declsForLegacyArtifactEnumeration();
-    emitter.setComptimeDecls(decls);
+    emitter.setComptimeDeclarations(.{
+        .const_globals = early_metadata.const_globals,
+        .type_aliases = early_metadata.type_aliases,
+        .structs = early_metadata.structs,
+    });
     try emitter.collectEarlyDeclarationMetadata(early_metadata);
     try emitter.collectConstGlobals();
     try emitter.collectDeclArtifacts(early_metadata);

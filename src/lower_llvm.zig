@@ -331,7 +331,11 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         else => return err,
     };
     if (!source_spelling.validateAgainstMir(module_mir.*)) return error.UnsupportedLlvmEmission;
-    const decls = early_metadata.declsForComptimeEvaluation();
+    const comptime_declarations = eval.ComptimeDeclarations{
+        .const_globals = early_metadata.const_globals,
+        .type_aliases = early_metadata.type_aliases,
+        .structs = early_metadata.structs,
+    };
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;
@@ -363,7 +367,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
         .const_global_widths = std.StringHashMap(u16).init(allocator),
         .const_global_domains = std.StringHashMap(eval.DomainWidth).init(allocator),
-        .comptime_decls = decls,
+        .comptime_declarations = comptime_declarations,
         .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
         .enum_types = std.StringHashMap(ast.EnumDecl).init(allocator),
         .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
@@ -408,7 +412,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
     defer ctx.deinit();
     try ctx.preRegisterTypeDeclsFromArtifacts(early_metadata);
     var reflect_env = ctx.reflectEnv();
-    try eval.collectConstGlobalsFromDeclsWithOptions(allocator, decls, &ctx.const_fns, &ctx.const_globals, .{
+    try eval.collectConstGlobalsFromDeclarationsWithOptions(allocator, comptime_declarations, &ctx.const_fns, &ctx.const_globals, .{
         .reflect = lower_llvm_reflect.comptimeReflectThunk,
         .reflect_ctx = &reflect_env,
         .domains = &ctx.const_global_domains,
@@ -451,7 +455,7 @@ const LlvmEmitter = struct {
     const_globals: std.StringHashMap(eval.ComptimeValue) = undefined,
     const_global_widths: std.StringHashMap(u16) = undefined,
     const_global_domains: std.StringHashMap(eval.DomainWidth) = undefined,
-    comptime_decls: []const ast.Decl,
+    comptime_declarations: eval.ComptimeDeclarations,
     type_aliases: std.StringHashMap(ast.TypeExpr) = undefined,
     enum_types: std.StringHashMap(ast.EnumDecl) = undefined,
     packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
@@ -1076,7 +1080,7 @@ const LlvmEmitter = struct {
 
     fn seedConstFoldScope(self: *LlvmEmitter, scope: *eval.ComptimeScope, reflect_env: *LlvmReflectEnv) bool {
         if (!lower_llvm_reflect.seedConstFoldScope(reflect_env, scope)) return false;
-        scope.decls = self.comptime_decls;
+        scope.declarations = self.comptime_declarations;
         return true;
     }
 

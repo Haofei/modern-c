@@ -2216,7 +2216,7 @@ pub const Checker = struct {
 
     fn seedComptimeScope(self: *Checker, scope: *eval.ComptimeScope) void {
         scope.funcs = self.const_fns;
-        scope.decls = self.comptime_decls;
+        if (self.comptime_decls) |decls| scope.declarations = eval.ComptimeDeclarations.fromDecls(decls);
         scope.globals = self.const_globals;
         scope.global_domains = self.const_global_domains;
         if (self.reflect_env) |env| {

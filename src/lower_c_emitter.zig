@@ -278,7 +278,7 @@ pub const CEmitter = struct {
     const_globals: std.StringHashMap(eval.ComptimeValue),
     const_global_widths: std.StringHashMap(u16),
     const_global_domains: std.StringHashMap(eval.DomainWidth),
-    comptime_decls: ?[]const ast.Decl = null,
+    comptime_declarations: ?eval.ComptimeDeclarations = null,
     structs: std.StringHashMap(ast.StructDecl),
     aggregate_decl_artifacts: std.ArrayList(AggregateDeclArtifact) = .empty,
     mmio_structs: std.StringHashMap(MmioStruct),
@@ -458,8 +458,8 @@ pub const CEmitter = struct {
         try lower_c_module.collect(self, early_metadata);
     }
 
-    pub fn setComptimeDecls(self: *CEmitter, decls: []const ast.Decl) void {
-        self.comptime_decls = decls;
+    pub fn setComptimeDeclarations(self: *CEmitter, declarations: eval.ComptimeDeclarations) void {
+        self.comptime_declarations = declarations;
     }
 
     pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) !void {
@@ -486,8 +486,8 @@ pub const CEmitter = struct {
 
     pub fn collectConstGlobals(self: *CEmitter) !void {
         var reflect_env = self.reflectEnv();
-        const decls = self.comptime_decls orelse return error.UnsupportedCEmission;
-        try eval.collectConstGlobalsFromDeclsWithOptions(self.allocator, decls, &self.const_fns, &self.const_globals, .{
+        const declarations = self.comptime_declarations orelse return error.UnsupportedCEmission;
+        try eval.collectConstGlobalsFromDeclarationsWithOptions(self.allocator, declarations, &self.const_fns, &self.const_globals, .{
             .reflect = lower_c_reflect.comptimeReflectThunk,
             .reflect_ctx = &reflect_env,
             .domains = &self.const_global_domains,
@@ -731,7 +731,7 @@ pub const CEmitter = struct {
 
     fn seedConstFoldScope(self: *CEmitter, scope: *eval.ComptimeScope, reflect_env: *ReflectEnv) bool {
         scope.funcs = &self.const_fns;
-        scope.decls = self.comptime_decls;
+        scope.declarations = self.comptime_declarations;
         scope.globals = &self.const_globals;
         scope.global_domains = &self.const_global_domains;
         scope.reflect = lower_c_reflect.comptimeReflectThunk;

@@ -480,9 +480,10 @@ pub const ComptimeScope = struct {
     type_bindings: std.StringHashMap(ast.TypeExpr),
     // Registry of `const fn` declarations callable at comptime (section 22).
     funcs: ?*const std.StringHashMap(ast.FnDecl) = null,
-    // Parsed declarations used to resolve global types, aliases, and aggregate
-    // field types while folding. AST storage is owned by the caller.
-    decls: ?[]const ast.Decl = null,
+    // Narrow declaration view used to resolve global types, aliases, and
+    // aggregate field types while folding. AST storage is owned by the caller,
+    // but callers do not need to expose a generic top-level declaration slice.
+    declarations: ?ComptimeDeclarations = null,
     // Named compile-time constants (`const NAME: T = …` globals), resolved when
     // an identifier is not a local binding.
     globals: ?*const std.StringHashMap(ComptimeValue) = null,
@@ -585,6 +586,20 @@ pub const ComptimeScope = struct {
             };
             try self.bindWidth(name, dw.bits);
         }
+    }
+};
+
+pub const ComptimeDeclarations = struct {
+    const_globals: []const ast.GlobalDecl = &.{},
+    type_aliases: []const ast.TypeAlias = &.{},
+    structs: []const ast.StructDecl = &.{},
+    legacy_decls: ?[]const ast.Decl = null,
+
+    pub fn fromDecls(decls: []const ast.Decl) ComptimeDeclarations {
+        // Compatibility adapter for older frontend call sites. It keeps the
+        // generic declaration scan inside eval instead of leaking it into
+        // backend lowering state.
+        return .{ .legacy_decls = decls };
     }
 };
 
@@ -811,44 +826,68 @@ pub fn collectConstGlobalsFromDeclsWithOptions(
     out: *std.StringHashMap(ComptimeValue),
     options: CollectConstGlobalsOptions,
 ) !void {
+    return collectConstGlobalsFromDeclarationsWithOptions(allocator, ComptimeDeclarations.fromDecls(decls), funcs, out, options);
+}
+
+pub fn collectConstGlobalsFromDeclarationsWithOptions(
+    allocator: std.mem.Allocator,
+    declarations: ComptimeDeclarations,
+    funcs: *const std.StringHashMap(ast.FnDecl),
+    out: *std.StringHashMap(ComptimeValue),
+    options: CollectConstGlobalsOptions,
+) !void {
     // Fold scratch (e.g. array temporaries) lives in an arena that is freed
     // here; values retained in `out` must therefore be deep-cloned.
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     var scope = ComptimeScope.init(arena.allocator());
     defer scope.deinit();
-    scope.decls = decls;
+    scope.declarations = declarations;
     scope.funcs = funcs;
     scope.globals = out;
     scope.reflect = options.reflect;
     scope.reflect_ctx = options.reflect_ctx;
-    for (decls) |decl| {
-        const global = switch (decl.kind) {
-            .global_decl => |g| g,
-            else => continue,
-        };
-        if (!global.is_const) continue;
-        const init_expr = global.init orelse continue;
-        const folded = if (global.ty) |ty|
-            foldComptimeExprExpected(&scope, init_expr, ty)
-        else
-            foldComptimeExpr(&scope, init_expr);
-        switch (folded) {
-            .value => |folded_value| {
-                const cloned = try cloneComptimeValue(allocator, folded_value);
-                errdefer freeComptimeValue(allocator, cloned);
-                try out.put(global.name.text, cloned);
-                if (global.ty) |ty| {
-                    try scope.bindTypeInfo(global.name.text, ty);
-                    if (options.domains) |domains| {
-                        if (comptimeTypeDomainWidth(ty)) |dw| try domains.put(global.name.text, dw);
-                    }
-                }
-            },
-            else => {},
+    if (declarations.legacy_decls) |decls| {
+        for (decls) |decl| {
+            const global = switch (decl.kind) {
+                .global_decl => |g| g,
+                else => continue,
+            };
+            try collectConstGlobal(allocator, &scope, global, out, options);
         }
-        if (scope.hasOom()) return error.OutOfMemory;
+        return;
     }
+    for (declarations.const_globals) |global| try collectConstGlobal(allocator, &scope, global, out, options);
+}
+
+fn collectConstGlobal(
+    allocator: std.mem.Allocator,
+    scope: *ComptimeScope,
+    global: ast.GlobalDecl,
+    out: *std.StringHashMap(ComptimeValue),
+    options: CollectConstGlobalsOptions,
+) !void {
+    if (!global.is_const) return;
+    const init_expr = global.init orelse return;
+    const folded = if (global.ty) |ty|
+        foldComptimeExprExpected(scope, init_expr, ty)
+    else
+        foldComptimeExpr(scope, init_expr);
+    switch (folded) {
+        .value => |folded_value| {
+            const cloned = try cloneComptimeValue(allocator, folded_value);
+            errdefer freeComptimeValue(allocator, cloned);
+            try out.put(global.name.text, cloned);
+            if (global.ty) |ty| {
+                try scope.bindTypeInfo(global.name.text, ty);
+                if (options.domains) |domains| {
+                    if (comptimeTypeDomainWidth(ty)) |dw| try domains.put(global.name.text, dw);
+                }
+            }
+        },
+        else => {},
+    }
+    if (scope.hasOom()) return error.OutOfMemory;
 }
 
 fn comptimeIdentValue(scope: *const ComptimeScope, name: []const u8) ?ComptimeValue {
@@ -945,25 +984,55 @@ fn trySubstituteTypePtr(scope: *const ComptimeScope, ty: ast.TypeExpr) ?*ast.Typ
 }
 
 fn moduleAliasType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr {
-    const decls = scope.decls orelse return null;
-    for (decls) |decl| {
-        const alias = switch (decl.kind) {
-            .type_alias => |node| node,
-            else => continue,
-        };
+    const declarations = scope.declarations orelse return null;
+    if (declarations.legacy_decls) |decls| {
+        for (decls) |decl| {
+            const alias = switch (decl.kind) {
+                .type_alias => |node| node,
+                else => continue,
+            };
+            if (std.mem.eql(u8, alias.name.text, name)) return alias.ty;
+        }
+        return null;
+    }
+    for (declarations.type_aliases) |alias| {
         if (std.mem.eql(u8, alias.name.text, name)) return alias.ty;
     }
     return null;
 }
 
 fn moduleGlobalType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr {
-    const decls = scope.decls orelse return null;
-    for (decls) |decl| {
-        const global = switch (decl.kind) {
-            .global_decl => |node| node,
-            else => continue,
-        };
+    const declarations = scope.declarations orelse return null;
+    if (declarations.legacy_decls) |decls| {
+        for (decls) |decl| {
+            const global = switch (decl.kind) {
+                .global_decl => |node| node,
+                else => continue,
+            };
+            if (std.mem.eql(u8, global.name.text, name)) return global.ty;
+        }
+        return null;
+    }
+    for (declarations.const_globals) |global| {
         if (std.mem.eql(u8, global.name.text, name)) return global.ty;
+    }
+    return null;
+}
+
+fn moduleStructDecl(scope: *const ComptimeScope, name: []const u8) ?ast.StructDecl {
+    const declarations = scope.declarations orelse return null;
+    if (declarations.legacy_decls) |decls| {
+        for (decls) |decl| {
+            const struct_decl = switch (decl.kind) {
+                .struct_decl => |node| node,
+                else => continue,
+            };
+            if (std.mem.eql(u8, struct_decl.name.text, name)) return struct_decl;
+        }
+        return null;
+    }
+    for (declarations.structs) |struct_decl| {
+        if (std.mem.eql(u8, struct_decl.name.text, name)) return struct_decl;
     }
     return null;
 }
@@ -974,17 +1043,9 @@ fn moduleStructFieldType(scope: *const ComptimeScope, ty: ast.TypeExpr, field_na
         .name => |name| name.text,
         else => return null,
     };
-    const decls = scope.decls orelse return null;
-    for (decls) |decl| {
-        const struct_decl = switch (decl.kind) {
-            .struct_decl => |node| node,
-            else => continue,
-        };
-        if (!std.mem.eql(u8, struct_decl.name.text, struct_name)) continue;
-        for (struct_decl.fields) |field| {
-            if (std.mem.eql(u8, field.name.text, field_name)) return resolveComptimeType(scope, field.ty);
-        }
-        return null;
+    const struct_decl = moduleStructDecl(scope, struct_name) orelse return null;
+    for (struct_decl.fields) |field| {
+        if (std.mem.eql(u8, field.name.text, field_name)) return resolveComptimeType(scope, field.ty);
     }
     return null;
 }
@@ -1018,7 +1079,7 @@ fn comptimeCallReturnType(scope: *const ComptimeScope, call: anytype) ?ast.TypeE
 
     var call_scope = ComptimeScope.init(scope.bindings.allocator);
     defer call_scope.deinit();
-    call_scope.decls = scope.decls;
+    call_scope.declarations = scope.declarations;
     call_scope.funcs = scope.funcs;
     for (fn_decl.params, call.args) |param, arg| {
         if (!isComptimeTypeParam(param)) continue;
@@ -1231,19 +1292,7 @@ fn foldComptimeStructLiteralExpected(scope: *const ComptimeScope, fields: []cons
         .name => |name| name.text,
         else => return foldComptimeStructLiteral(scope, fields),
     };
-    const decls = scope.decls orelse return foldComptimeStructLiteral(scope, fields);
-    var struct_decl: ?ast.StructDecl = null;
-    for (decls) |decl| {
-        const candidate = switch (decl.kind) {
-            .struct_decl => |node| node,
-            else => continue,
-        };
-        if (std.mem.eql(u8, candidate.name.text, struct_name)) {
-            struct_decl = candidate;
-            break;
-        }
-    }
-    const declaration = struct_decl orelse return foldComptimeStructLiteral(scope, fields);
+    const declaration = moduleStructDecl(scope, struct_name) orelse return foldComptimeStructLiteral(scope, fields);
     const out = scope.alloc(ComptimeStructField, fields.len) catch return .unknown;
     for (fields, 0..) |field, i| {
         var field_ty: ?ast.TypeExpr = null;
@@ -1572,7 +1621,7 @@ fn foldComptimeCall(scope: *const ComptimeScope, call: anytype) ComptimeFold {
     var callee_scope = ComptimeScope.init(scope.bindings.allocator);
     defer callee_scope.deinit();
     callee_scope.funcs = scope.funcs;
-    callee_scope.decls = scope.decls;
+    callee_scope.declarations = scope.declarations;
     callee_scope.globals = scope.globals;
     callee_scope.global_domains = scope.global_domains;
     callee_scope.reflect = scope.reflect;

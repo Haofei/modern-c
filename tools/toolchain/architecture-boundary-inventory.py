@@ -30,7 +30,7 @@ EXACT_BACKEND_COUNTS = {
     '@import("sema': 0,
     '@import("mir_facts_view.zig")': 2,
     '@import("type_syntax.zig")': 5,
-    "[]const ast.Decl": 3,
+    "[]const ast.Decl": 0,
     "LegacyDeclarationSlice": 0,
     "SourceMapRowsView": 0,
     "initFromDecls": 0,
