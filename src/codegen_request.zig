@@ -24,7 +24,7 @@ pub const LowerRequest = struct {
 /// from code-generation semantics.
 pub const EmitMapRequest = struct {
     program: verified_program.VerifiedProgram,
-    source_map_rows: source_map_rows.SourceMapRowsView,
+    source_map_rows: source_map_rows.SourceMapRows,
     out: *std.ArrayList(u8),
     generated_artifact: []const u8,
     opts: codegen_options.LowerOptions,

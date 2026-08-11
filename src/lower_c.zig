@@ -142,7 +142,9 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
 
-    try appendCSourceMapFromGenerated(allocator, source_map_rows.SourceMapRowsView.forDecls(module.decls), out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
+    var source_rows = try source_map_rows.SourceMapRows.collectFromDecls(allocator, module.decls);
+    defer source_rows.deinit(allocator);
+    try appendCSourceMapFromGenerated(allocator, source_rows, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
         .profile = profile,
         .source_path = source_path,
     });
@@ -150,7 +152,7 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *
 
 pub fn appendCSourceMapFromGenerated(
     allocator: std.mem.Allocator,
-    source_map_view: source_map_rows.SourceMapRowsView,
+    source_map_view: source_map_rows.SourceMapRows,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     typed_mir: *const mir.Module,

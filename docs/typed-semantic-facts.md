@@ -68,12 +68,11 @@ through this explicit view instead of treating the AST as the source-spelling
 table. `VerifiedProgram` no longer stores a general `ast.Module` or raw
 declaration slice. Declaration-list mechanics now go through the explicit
 `EarlyDeclarationMetadataView`, carried by `LowerRequest` instead of being
-stored on `VerifiedProgram`. Source-map row mechanics still go through
-`SourceMapRowsView`, but that view is carried only by `EmitMapRequest` and
-lives in `source_map_rows.zig` instead of sharing the backend declaration
-adapter. These transitional views still carry declaration slices for
-not-yet-normalized mechanics, but the remaining syntax-shaped ingress is named
-and exact-gated by the inventory. C and LLVM runtime hook suppression already consume the shared
+stored on `VerifiedProgram`. Source-map row syntax enumeration is isolated in
+`source_map_rows.zig`; `EmitMapRequest` carries collected `SourceMapRows`
+artifacts rather than a declaration view. The early metadata view still carries
+declaration slices for not-yet-normalized mechanics, but the remaining
+syntax-shaped ingress is named and exact-gated by the inventory. C and LLVM runtime hook suppression already consume the shared
 `SourceSpellingView.definesFunctionSpelling` query when deciding whether to
 emit weak/default trap and sanitizer hook bodies; per-backend
 `moduleDefinesHook` helpers are exact-zero gated, and the AST is no longer the

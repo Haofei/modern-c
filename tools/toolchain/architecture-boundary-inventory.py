@@ -30,9 +30,9 @@ EXACT_BACKEND_COUNTS = {
     '@import("sema': 0,
     '@import("mir_facts_view.zig")': 2,
     '@import("type_syntax.zig")': 5,
-    "[]const ast.Decl": 7,
+    "[]const ast.Decl": 6,
     "LegacyDeclarationSlice": 0,
-    "SourceMapRowsView": 3,
+    "SourceMapRowsView": 0,
     "initFromDecls": 0,
 }
 
@@ -63,8 +63,9 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "pub const SourceMapRowsView = struct"): 0,
     ("src/early_declaration_metadata.zig", "[]const ast.Decl"): 1,
     ("src/early_declaration_metadata.zig", "pub const EarlyDeclarationMetadataView = struct"): 1,
-    ("src/source_map_rows.zig", "[]const ast.Decl"): 3,
-    ("src/source_map_rows.zig", "pub const SourceMapRowsView = struct"): 1,
+    ("src/source_map_rows.zig", "[]const ast.Decl"): 1,
+    ("src/source_map_rows.zig", "pub const SourceMapRows = struct"): 1,
+    ("src/source_map_rows.zig", "pub const RowArtifact = union(enum)"): 1,
     ("src/mir_facts_view.zig", "targetTypeFactAtWithModuleFallback"): 1,
     ("src/mir_facts_view.zig", "targetTypeFactAtOwnedWithModuleFallback"): 1,
     ("src/lower_c_emitter.zig", "targetTypeFactAtWithModuleFallback"): 1,
@@ -101,8 +102,8 @@ REQUIRED_ANCHORS = {
         "generic legacy declaration handle",
     ),
     "src/source_map_rows.zig": (
-        "Transitional source-map rows view",
-        "map-only AST access separate",
+        "Transitional source-map row artifacts",
+        "enumeration is isolated here",
     ),
     "src/loader.zig": (
         "MC has no",

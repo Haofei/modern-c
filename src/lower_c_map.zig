@@ -15,7 +15,7 @@ const mir_syntax = @import("mir_syntax.zig");
 
 pub fn appendSourceMap(
     allocator: std.mem.Allocator,
-    source_map: source_map_rows.SourceMapRowsView,
+    source_map: source_map_rows.SourceMapRows,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     mir_module: *const mir.Module,
@@ -29,7 +29,6 @@ pub fn appendSourceMap(
     var payload: std.ArrayList(u8) = .empty;
     defer payload.deinit(allocator);
     try payload.appendSlice(allocator, "# columns: kind symbol source_line source_column source_len generated_c_line source_path generated_c_path typed_ast_node mir_block object_symbol source_module source_qualname symbol_kind visibility backend_name origin\n");
-    const decls = source_map.declsForRowEnumeration();
     var mapper = SourceMapEmitter{
         .allocator = allocator,
         .out = &payload,
@@ -40,7 +39,7 @@ pub fn appendSourceMap(
         .module_name = moduleNameFromPath(source_path),
     };
     defer mapper.deinit();
-    try mapper.collectRowArtifactsFromDecls(decls);
+    try mapper.collectRowArtifacts(source_map.artifacts);
     try mapper.emitCollectedRows();
 
     var mir_facts_input: std.ArrayList(u8) = .empty;
@@ -269,54 +268,6 @@ fn moduleNameFromPath(source_path: []const u8) []const u8 {
     return if (name.len == 0) "-" else name;
 }
 
-// The declared name of a type-level declaration, for inventory rows.
-fn declTypeName(kind: ast.Decl.Kind) ?ast.Ident {
-    return switch (kind) {
-        .struct_decl => |d| d.name,
-        .enum_decl => |d| d.name,
-        .union_decl => |d| d.name,
-        .packed_bits_decl => |d| d.name,
-        .overlay_union_decl => |d| d.name,
-        .opaque_decl => |name| name,
-        .type_alias => |d| d.name,
-        else => null,
-    };
-}
-
-// FFI/autogen boundary classification for an inventory row: an explicit `#[origin("...")]`
-// override, else `external` for an extern declaration, else `source`.
-fn declOrigin(decl: ast.Decl) []const u8 {
-    for (decl.attrs) |attr| switch (attr.kind) {
-        .origin => |o| return o,
-        else => {},
-    };
-    return if (std.meta.activeTag(decl.kind) == .extern_fn) "external" else "source";
-}
-
-// The `#[backend_name("Y")]` override string for a declaration, if present.
-fn backendNameOverride(attrs: []const ast.Attr) ?[]const u8 {
-    for (attrs) |attr| {
-        switch (attr.kind) {
-            .backend_name => |name| return name,
-            else => {},
-        }
-    }
-    return null;
-}
-
-fn declKindName(kind: ast.Decl.Kind) []const u8 {
-    return switch (kind) {
-        .struct_decl => "struct",
-        .enum_decl => "enum",
-        .union_decl => "union",
-        .packed_bits_decl => "packed_bits",
-        .overlay_union_decl => "overlay_union",
-        .opaque_decl => "opaque",
-        .type_alias => "type_alias",
-        else => "decl",
-    };
-}
-
 const GeneratedLine = struct {
     source_line: usize,
     generated_line: usize,
@@ -367,51 +318,49 @@ const SourceMapEmitter = struct {
     symbol_kind: []const u8 = "value",
     visibility: []const u8 = "internal",
     origin: []const u8 = "source",
-    decl_row_artifacts: std.ArrayList(ast.Decl) = .empty,
+    decl_row_artifacts: std.ArrayList(source_map_rows.RowArtifact) = .empty,
 
     fn deinit(self: *SourceMapEmitter) void {
         self.decl_row_artifacts.deinit(self.allocator);
     }
 
-    fn collectRowArtifactsFromDecls(self: *SourceMapEmitter, decls: []const ast.Decl) !void {
-        for (decls) |decl| {
-            try self.decl_row_artifacts.append(self.allocator, decl);
+    fn collectRowArtifacts(self: *SourceMapEmitter, artifacts: []const source_map_rows.RowArtifact) !void {
+        for (artifacts) |artifact| {
+            try self.decl_row_artifacts.append(self.allocator, artifact);
         }
     }
 
     fn emitCollectedRows(self: *SourceMapEmitter) !void {
-        for (self.decl_row_artifacts.items) |decl| {
-            self.origin = declOrigin(decl);
-            switch (decl.kind) {
-                .global_decl => |global| {
+        for (self.decl_row_artifacts.items) |artifact| {
+            switch (artifact) {
+                .global => |global| {
+                    self.origin = global.origin;
                     self.symbol_kind = if (global.is_const) "assoc_const" else "value";
                     self.visibility = "internal";
-                    try self.emitEntry("global", global.name.text, global.name.span, global.name.text, "mir:global:init");
-                    if (global.init) |init| try self.emitEntry("global_initializer_expr", global.name.text, init.span, global.name.text, "mir:global:init");
+                    try self.emitEntry("global", global.symbol, global.name_span, global.symbol, "mir:global:init");
+                    if (global.init_span) |init_span| try self.emitEntry("global_initializer_expr", global.symbol, init_span, global.symbol, "mir:global:init");
                 },
-                .fn_decl => |fn_decl| if (fn_decl.body) |body| {
+                .function => |function| {
+                    self.origin = function.origin;
                     self.symbol_kind = "free_fn";
-                    self.visibility = if (fn_decl.exported) "exported" else "internal";
-                    const obj = backendNameOverride(decl.attrs) orelse fn_decl.name.text;
-                    try self.emitEntry("function", fn_decl.name.text, fn_decl.name.span, obj, "mir:function:entry");
+                    self.visibility = if (function.exported) "exported" else "internal";
+                    try self.emitEntry("function", function.symbol, function.name_span, function.object_symbol, "mir:function:entry");
                     const previous_function = self.current_function;
-                    self.current_function = fn_decl.name.text;
-                    try self.emitBlock(body);
+                    self.current_function = function.symbol;
+                    try self.emitBlock(function.body);
                     self.current_function = previous_function;
                 },
-                .extern_fn => |fn_decl| {
+                .extern_fn => |function| {
+                    self.origin = function.origin;
                     self.symbol_kind = "extern_fn";
                     self.visibility = "exported";
-                    try self.emitEntry("extern_fn", fn_decl.name.text, fn_decl.name.span, fn_decl.name.text, "mir:function:entry");
+                    try self.emitEntry("extern_fn", function.symbol, function.name_span, function.symbol, "mir:function:entry");
                 },
-                else => {
-                    // Type-level declarations: emit one inventory row each so the symbol map
-                    // is a complete declared-symbol inventory, not just executable code.
-                    if (declTypeName(decl.kind)) |name| {
-                        self.symbol_kind = if (std.meta.activeTag(decl.kind) == .type_alias) "type_alias" else "type";
-                        self.visibility = "internal";
-                        try self.emitEntry(declKindName(decl.kind), name.text, name.span, name.text, "-");
-                    }
+                .type_decl => |decl| {
+                    self.origin = decl.origin;
+                    self.symbol_kind = if (std.mem.eql(u8, decl.kind, "type_alias")) "type_alias" else "type";
+                    self.visibility = "internal";
+                    try self.emitEntry(decl.kind, decl.symbol, decl.name_span, decl.symbol, "-");
                 },
             }
         }
