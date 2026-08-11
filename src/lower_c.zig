@@ -38,7 +38,7 @@ fn backendLower(
     ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
     program: backend_mod.VerifiedProgram,
-    declarations: backend_mod.DeclarationMetadataView,
+    declarations: backend_mod.LegacyDeclarationSlice,
     out: *std.ArrayList(u8),
     opts: backend_mod.LowerOptions,
 ) backend_mod.LowerError!void {
@@ -97,12 +97,12 @@ fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, o
 }
 
 pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
-    return appendCProfileWithMirSourceSpelling(allocator, backend_mod.DeclarationMetadataView.forDecls(module.decls), typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
+    return appendCProfileWithMirSourceSpelling(allocator, backend_mod.LegacyDeclarationSlice.forDecls(module.decls), typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCProfileWithMirSourceSpelling(
     allocator: std.mem.Allocator,
-    declarations: backend_mod.DeclarationMetadataView,
+    declarations: backend_mod.LegacyDeclarationSlice,
     typed_mir: *const mir.Module,
     source_spelling: backend_mod.SourceSpellingView,
     out: *std.ArrayList(u8),
@@ -117,7 +117,6 @@ fn appendCProfileWithMirSourceSpelling(
         else => return err,
     };
     if (!source_spelling.validateAgainstMir(typed_mir.*)) return error.UnsupportedCEmission;
-    const early_metadata = declarations.cEarlyDeclarationMetadata();
     const profile_marker = switch (profile) {
         .kernel => "/* mc-profile: kernel (freestanding) */\n",
         .hosted => "/* mc-profile: hosted (links libc + -lm) */\n",
@@ -128,7 +127,7 @@ fn appendCProfileWithMirSourceSpelling(
 
     try lower_c_emitter.appendModuleMir(
         allocator,
-        early_metadata,
+        declarations,
         typed_mir,
         out,
         source_path,

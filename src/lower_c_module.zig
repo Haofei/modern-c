@@ -9,7 +9,7 @@ const backend = @import("backend.zig");
 
 /// Populate all declaration and type artifacts needed by C emission without
 /// writing output.  Layout-header emission deliberately uses this same phase.
-pub fn collect(emitter: anytype, declarations: backend.CEarlyDeclarationMetadataView) anyerror!void {
+pub fn collect(emitter: anytype, declarations: backend.LegacyDeclarationSlice) anyerror!void {
     const decls = declarations.declsForEarlyDeclarationScan();
     emitter.setComptimeDecls(decls);
     try emitter.collectEarlyDeclarationMetadataFromDecls(decls);
@@ -20,7 +20,7 @@ pub fn collect(emitter: anytype, declarations: backend.CEarlyDeclarationMetadata
 }
 
 /// Emit a complete translation unit in dependency-safe module order.
-pub fn emit(emitter: anytype, declarations: backend.CEarlyDeclarationMetadataView) anyerror!void {
+pub fn emit(emitter: anytype, declarations: backend.LegacyDeclarationSlice) anyerror!void {
     defer emitter.deinit();
     try collect(emitter, declarations);
     try emitter.emitTypePrelude();

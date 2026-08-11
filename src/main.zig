@@ -747,7 +747,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const declarations = backend.DeclarationMetadataView.forDecls(module.decls);
+    const declarations = backend.LegacyDeclarationSlice.forDecls(module.decls);
     be.lower(allocator, program, declarations, &output, lower_opts) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
@@ -793,7 +793,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const declarations = backend.DeclarationMetadataView.forDecls(module.decls);
+    const declarations = backend.LegacyDeclarationSlice.forDecls(module.decls);
     be.lower(allocator, program, declarations, &raw_c, lower_opts) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
@@ -1142,7 +1142,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     const be = backend_registry.byName("c").?;
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    const declarations = backend.DeclarationMetadataView.forDecls(module.decls);
+    const declarations = backend.LegacyDeclarationSlice.forDecls(module.decls);
     be.lower(allocator, program, declarations, &generated_c, .{
         .profile = profile,
         .source_path = artifact_source_path,
@@ -1209,7 +1209,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const declarations = backend.DeclarationMetadataView.forDecls(module.decls);
+    const declarations = backend.LegacyDeclarationSlice.forDecls(module.decls);
     be.lower(allocator, program, declarations, &output, lower_opts) catch |err| switch (err) {
         error.UnsupportedLlvmEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "LLVM");

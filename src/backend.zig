@@ -343,42 +343,18 @@ pub const SourceSpellingView = struct {
     }
 };
 
-/// Transitional declaration metadata view for backend mechanics that still need
+/// Transitional declaration slice for backend mechanics that still need
 /// not-yet-normalized declarations. This is narrower than exposing a syntax
 /// module at backend entrypoints: every call site must name the remaining
 /// legacy declaration dependency explicitly.
-pub const DeclarationMetadataView = struct {
+pub const LegacyDeclarationSlice = struct {
     decls: []const ast.Decl,
 
-    pub fn forDecls(decls: []const ast.Decl) DeclarationMetadataView {
+    pub fn forDecls(decls: []const ast.Decl) LegacyDeclarationSlice {
         return .{ .decls = decls };
     }
 
-    pub fn cEarlyDeclarationMetadata(self: DeclarationMetadataView) CEarlyDeclarationMetadataView {
-        return .{ .decls = self.decls };
-    }
-
-    pub fn llvmEarlyDeclarationMetadata(self: DeclarationMetadataView) LlvmEarlyDeclarationMetadataView {
-        return .{ .decls = self.decls };
-    }
-};
-
-/// Transitional C declaration metadata prepass view. This is the only C backend
-/// syntax escape for early const/type/declaration artifact collection.
-pub const CEarlyDeclarationMetadataView = struct {
-    decls: []const ast.Decl,
-
-    pub fn declsForEarlyDeclarationScan(self: CEarlyDeclarationMetadataView) []const ast.Decl {
-        return self.decls;
-    }
-};
-
-/// Transitional LLVM declaration metadata prepass view. This is the only LLVM
-/// backend syntax escape for early type/declaration artifact collection.
-pub const LlvmEarlyDeclarationMetadataView = struct {
-    decls: []const ast.Decl,
-
-    pub fn declsForEarlyDeclarationScan(self: LlvmEarlyDeclarationMetadataView) []const ast.Decl {
+    pub fn declsForEarlyDeclarationScan(self: LegacyDeclarationSlice) []const ast.Decl {
         return self.decls;
     }
 };
@@ -450,7 +426,7 @@ pub const Backend = struct {
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
-        declarations: DeclarationMetadataView,
+        declarations: LegacyDeclarationSlice,
         out: *std.ArrayList(u8),
         opts: LowerOptions,
     ) LowerError!void,
@@ -474,7 +450,7 @@ pub const Backend = struct {
         self: Backend,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
-        declarations: DeclarationMetadataView,
+        declarations: LegacyDeclarationSlice,
         out: *std.ArrayList(u8),
         opts: LowerOptions,
     ) LowerError!void {

@@ -30,15 +30,15 @@ EXACT_BACKEND_COUNTS = {
     '@import("sema': 0,
     '@import("mir_facts_view.zig")': 2,
     '@import("type_syntax.zig")': 5,
-    "[]const ast.Decl": 16,
-    "DeclarationMetadataView": 26,
+    "[]const ast.Decl": 13,
+    "LegacyDeclarationSlice": 19,
     "SourceMapMechanicsView": 9,
     "initFromDecls": 0,
 }
 
 EXACT_FILE_COUNTS = {
-    ("src/backend.zig", "[]const ast.Decl"): 9,
-    ("src/backend.zig", "pub const DeclarationMetadataView = struct"): 1,
+    ("src/backend.zig", "[]const ast.Decl"): 6,
+    ("src/backend.zig", "pub const LegacyDeclarationSlice = struct"): 1,
     ("src/backend.zig", "pub const SourceMapMechanicsView = struct"): 1,
     ("src/backend.zig", "pub fn init("): 1,
     ("src/backend.zig", "pub fn initFromDecls("): 0,
@@ -55,9 +55,7 @@ EXACT_FILE_COUNTS = {
 
 REQUIRED_ANCHORS = {
     "src/backend.zig": (
-        "Transitional declaration metadata view",
-        "Transitional C declaration metadata prepass view",
-        "Transitional LLVM declaration metadata prepass view",
+        "Transitional declaration slice",
         "Transitional source-map mechanics view",
         "MIR verifier",
         "every call site must name the remaining",

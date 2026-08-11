@@ -66,8 +66,8 @@ together back to untyped result-type or line/column matching.
 `SymbolIdentity` table. Backend entrypoints can resolve function symbol spelling
 through this explicit view instead of treating the AST as the source-spelling
 table. `VerifiedProgram` no longer stores a general `ast.Module` or raw
-declaration slice. Declaration metadata still goes through the explicit
-`DeclarationMetadataView`, but it is now passed as a legacy backend parameter
+declaration slice. Declaration-list mechanics still go through the explicit
+`LegacyDeclarationSlice`, but it is now passed as a legacy backend parameter
 instead of being stored on `VerifiedProgram`. Source-map row mechanics still go
 through `SourceMapMechanicsView`, but that view is passed only to the C
 `emit-map` path instead of being stored on `VerifiedProgram`. These transitional

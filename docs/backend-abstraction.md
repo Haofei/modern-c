@@ -79,7 +79,7 @@ pub const Backend = struct {
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
-        declarations: DeclarationMetadataView,
+        declarations: LegacyDeclarationSlice,
         out: *std.ArrayList(u8),
         opts: LowerOptions,
     ) LowerError!void,
@@ -117,7 +117,7 @@ It then exposes:
 
 - `source_spelling`: MIR-owned spelling by typed symbol id.
 
-Transitional declaration metadata still exists as `DeclarationMetadataView`, but
+A transitional declaration slice still exists as `LegacyDeclarationSlice`, but
 it is passed as an explicit legacy backend parameter rather than stored on
 `VerifiedProgram`. It is narrower than giving the backend a full `ast.Module`,
 but it is not the final semantic boundary. Source-map row enumeration still uses
@@ -181,7 +181,7 @@ source identity.
    ```
 
 3. Make `backendLower` accept `backend.VerifiedProgram` plus the explicit
-   transitional `DeclarationMetadataView`, then return `backend.LowerError!void`.
+   transitional `LegacyDeclarationSlice`, then return `backend.LowerError!void`.
 4. Register the backend in `src/backend_registry.zig`.
 5. Add CLI dispatch in `src/main.zig` if it needs a first-class command.
 
