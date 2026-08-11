@@ -63,67 +63,34 @@ pub const CleanupEdgePlan = struct {
     }
 };
 
-pub fn registerAutoDropLocalCleanup(
+pub fn validateFunctionCleanupAuthority(
     module: *const mir.Module,
     function: *const mir.Function,
-    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    cleanup_cfg: ?*const mir.CleanupCfg,
-    local_name: []const u8,
-    type_name: []const u8,
-    local_span: ast.Span,
-) AutoDropStackDecision {
-    if (!mir_ownership_authority.autoDropEligibleTypeName(module, type_name)) return .ignored;
-    _ = autoDropLocalCleanupFromMirCfg(module, function, cleanup_plan, cleanup_cfg, local_name, type_name, local_span) orelse {
-        const ownership = typeOwnershipFactForTypeName(module, type_name) orelse return .rejected;
-        const root_value_id = valueIdForLocal(function, local_name) orelse return .rejected;
-        if (mir.ownershipLocalHasConsumingResourceEvent(function.*, root_value_id, ownership.typed_type_symbol_id)) return .ignored;
-        return .rejected;
-    };
-    return .applied;
-}
+    cleanup_plan: *const mir.OwnershipCleanupPlan,
+    cleanup_cfg: *const mir.CleanupCfg,
+) bool {
+    for (cleanup_cfg.edges) |edge| {
+        for (edge.actions) |action| {
+            const ref = cleanupRefFromCleanupCfgAction(function.*, action) orelse return false;
+            if (!cleanupRefValidForEdge(ref, module, function.*, cleanup_plan)) return false;
+            if (!cleanupCfgContainsRefOnKind(cleanup_cfg.*, edge.kind, ref)) return false;
+        }
+    }
 
-pub fn cancelAutoDropForMove(
-    module: *const mir.Module,
-    function: *const mir.Function,
-    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    expr: ast.Expr,
-    move_span: ast.Span,
-) AutoDropStackDecision {
-    const plan = cleanup_plan orelse return .rejected;
-    const source = mir.sourcePointFromSpan(move_span);
-    _ = cleanupRemovalRefFromMirCancellation(function, plan, .move_out, source) orelse {
-        if (cleanupCancellationEntryFromMirPlan(plan, .move_out, source) != null) return .ignored;
-        if (directMoveLocalName(expr)) |local_name| {
-            if (localHasConsumingAutoDropResourceEvent(module, function, local_name, .move_out)) return .rejected;
-            if (localHasAutoDropCancellationObligation(function, local_name)) return .rejected;
+    for (cleanup_plan.actions, 0..) |action, action_index| {
+        switch (action.kind) {
+            .auto_drop => {
+                if (!cleanupActionHasCfgRef(cleanup_cfg.*, action_index) and
+                    !cleanupActionHasCancellation(cleanup_plan.*, action))
+                    return false;
+            },
+            .explicit_drop => {
+                if (!action.drop_glue_symbol_id.isValid()) return false;
+                if (!action.place.hasValidRoot()) return false;
+            },
         }
-        return .ignored;
-    };
-    return .applied;
-}
-
-pub fn cancelAutoDropForExplicitDrop(
-    module: *const mir.Module,
-    function: *const mir.Function,
-    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    expr: ast.Expr,
-) AutoDropStackDecision {
-    const plan = cleanup_plan orelse return .rejected;
-    const source = mir.sourcePointFromSpan(expr.span);
-    _ = cleanupRemovalRefFromMirCancellation(function, plan, .explicit_drop, source) orelse {
-        if (cleanupCancellationEntryFromMirPlan(plan, .explicit_drop, source) != null) return .ignored;
-        if (cleanupRemovalRefFromMirExplicitDropAction(function, plan, source)) |action_ref| {
-            _ = action_ref;
-            return .applied;
-        }
-        if (explicitDropActionEntryFromMirPlan(plan, source) != null) return .ignored;
-        if (ast_query.dropPointerLocalReleaseCall(expr)) |release| {
-            if (localHasConsumingAutoDropResourceEvent(module, function, release.local_name, .explicit_drop)) return .rejected;
-            if (localHasAutoDropCancellationObligation(function, release.local_name)) return .rejected;
-        }
-        return .ignored;
-    };
-    return .applied;
+    }
+    return true;
 }
 
 pub fn registerDeferredExplicitDropCleanup(
@@ -219,6 +186,59 @@ fn cleanupRefsContain(refs: []const CleanupRef, needle: CleanupRef) bool {
         if (cleanupRefEquivalent(ref, needle)) return true;
     }
     return false;
+}
+
+fn cleanupActionHasCfgRef(cfg: mir.CleanupCfg, action_index: usize) bool {
+    for (cfg.edges) |edge| {
+        for (edge.actions) |action| switch (action) {
+            .ownership => |ref| if (ref.cleanup_action_index == action_index) return true,
+            .defer_cleanup => {},
+        };
+    }
+    return false;
+}
+
+fn cleanupActionHasCancellation(plan: mir.OwnershipCleanupPlan, action: mir.CleanupActionPlanEntry) bool {
+    for (plan.cancellations) |cancellation| {
+        if (cancellation.generation != action.generation) continue;
+        if (!cancellation.drop_glue_symbol_id.eql(action.drop_glue_symbol_id)) continue;
+        if (!simpleOwnershipPlacesEquivalent(cancellation.place, action.place)) continue;
+        return true;
+    }
+    return false;
+}
+
+fn simpleOwnershipPlacesEquivalent(a: mir.OwnershipPlace, b: mir.OwnershipPlace) bool {
+    if (!a.root_value_id.eql(b.root_value_id)) return false;
+    if (!a.root_symbol_id.eql(b.root_symbol_id)) return false;
+    if (!a.root_type_symbol_id.eql(b.root_type_symbol_id)) return false;
+    if (a.projection_count != b.projection_count) return false;
+    var index: usize = 0;
+    while (index < a.projection_count) : (index += 1) {
+        if (!ownershipPlaceProjectionEquivalent(a.projections[index], b.projections[index])) return false;
+    }
+    return true;
+}
+
+fn ownershipPlaceProjectionEquivalent(a: mir.OwnershipPlaceProjection, b: mir.OwnershipPlaceProjection) bool {
+    return switch (a) {
+        .field => |a_field| switch (b) {
+            .field => |b_field| a_field.eql(b_field),
+            else => false,
+        },
+        .constant_index => |a_index| switch (b) {
+            .constant_index => |b_index| a_index == b_index,
+            else => false,
+        },
+        .wildcard_index => switch (b) {
+            .wildcard_index => true,
+            else => false,
+        },
+        .deref => switch (b) {
+            .deref => true,
+            else => false,
+        },
+    };
 }
 
 fn cleanupRefEquivalent(a: CleanupRef, b: CleanupRef) bool {
@@ -323,101 +343,6 @@ fn cleanupCfgKindFromBackend(kind: CleanupEdgeKind) mir.CleanupCfgEdgeKind {
     };
 }
 
-fn autoDropLocalCleanupFromMirCfg(
-    module: *const mir.Module,
-    function: *const mir.Function,
-    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    cleanup_cfg: ?*const mir.CleanupCfg,
-    local_name: []const u8,
-    type_name: []const u8,
-    local_span: ast.Span,
-) ?mir_ownership_authority.AutoDropLocalCleanup {
-    const plan = cleanup_plan orelse return null;
-    const cfg = cleanup_cfg orelse return null;
-    const ownership = typeOwnershipFactForTypeName(module, type_name) orelse return null;
-    if (ownership.kind != .affine or !ownership.drop_glue_symbol_id.isValid()) return null;
-    const root_value_id = valueIdForLocal(function, local_name) orelse return null;
-
-    for (cfg.edges) |edge| {
-        for (edge.actions) |action| {
-            const ownership_action = switch (action) {
-                .ownership => |ref| ref,
-                .defer_cleanup => continue,
-            };
-            if (ownership_action.kind != .auto_drop) continue;
-            if (!ownership_action.root_value_id.eql(root_value_id)) continue;
-            if (!ownership_action.resource_type_symbol_id.eql(ownership.typed_type_symbol_id)) continue;
-            if (!ownership_action.drop_glue_symbol_id.eql(ownership.drop_glue_symbol_id)) continue;
-            const ref: mir_ownership_authority.OwnershipCleanupActionRef = .{
-                .local_name = local_name,
-                .span = local_span,
-                .cleanup_action_index = ownership_action.cleanup_action_index,
-                .root_value_id = ownership_action.root_value_id,
-                .resource_type_symbol_id = ownership_action.resource_type_symbol_id,
-                .drop_glue_symbol_id = ownership_action.drop_glue_symbol_id,
-            };
-            return mir_ownership_authority.autoDropLocalCleanupFromActionRef(module, function, plan, ref);
-        }
-    }
-    return null;
-}
-
-fn cleanupRemovalRefFromMirCancellation(
-    function: *const mir.Function,
-    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    kind: mir.CleanupCancellationKind,
-    source: mir.SourcePoint,
-) ?mir_ownership_authority.OwnershipCleanupRemovalRef {
-    const plan = cleanup_plan orelse return null;
-    const cancellation = cleanupCancellationEntryFromMirPlan(plan, kind, source) orelse return null;
-    if (cancellation.place.root_symbol_id.isValid() or cancellation.place.projection_count != 0) return null;
-    const root_value_id = cancellation.place.root_value_id;
-    const local_name = localNameForValueId(function, root_value_id) orelse return null;
-
-    for (plan.actions, 0..) |action, action_index| {
-        if (action.kind != .auto_drop) continue;
-        if (action.generation != cancellation.generation) continue;
-        if (!action.place.root_value_id.eql(root_value_id)) continue;
-        if (!action.place.root_type_symbol_id.eql(cancellation.place.root_type_symbol_id)) continue;
-        if (!action.drop_glue_symbol_id.eql(cancellation.drop_glue_symbol_id)) continue;
-        return .{
-            .local_name = local_name,
-            .cleanup_action_index = action_index,
-            .root_value_id = root_value_id,
-            .resource_type_symbol_id = cancellation.place.root_type_symbol_id,
-            .drop_glue_symbol_id = cancellation.drop_glue_symbol_id,
-        };
-    }
-    return null;
-}
-
-fn cleanupRemovalRefFromMirExplicitDropAction(
-    function: *const mir.Function,
-    cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    source: mir.SourcePoint,
-) ?mir_ownership_authority.OwnershipCleanupRemovalRef {
-    const plan = cleanup_plan orelse return null;
-    const action_match = explicitDropActionEntryFromMirPlan(plan, source) orelse return null;
-    if (action_match.entry.place.root_symbol_id.isValid() or action_match.entry.place.projection_count != 0) return null;
-    const root_value_id = action_match.entry.place.root_value_id;
-    const local_name = localNameForValueId(function, root_value_id) orelse return null;
-    for (plan.actions, 0..) |action, action_index| {
-        if (action.kind != .auto_drop) continue;
-        if (action.generation != action_match.entry.generation) continue;
-        if (!action.place.root_value_id.eql(root_value_id)) continue;
-        if (!action.place.root_type_symbol_id.eql(action_match.entry.place.root_type_symbol_id)) continue;
-        if (!action.drop_glue_symbol_id.eql(action_match.entry.drop_glue_symbol_id)) continue;
-        return .{
-            .local_name = local_name,
-            .cleanup_action_index = action_index,
-            .root_value_id = root_value_id,
-            .resource_type_symbol_id = action_match.entry.place.root_type_symbol_id,
-            .drop_glue_symbol_id = action_match.entry.drop_glue_symbol_id,
-        };
-    }
-    return null;
-}
-
 fn explicitDropLocalCleanupFromMirAction(
     module: *const mir.Module,
     function: *const mir.Function,
@@ -461,97 +386,11 @@ fn explicitDropActionEntryFromMirPlan(
     return matched;
 }
 
-fn localHasAutoDropCancellationObligation(
-    function: *const mir.Function,
-    local_name: []const u8,
-) bool {
-    const root_value_id = valueIdForLocal(function, local_name) orelse return false;
-    for (function.ownership_events) |event| {
-        if (event.kind != .auto_drop) continue;
-        if (!event.place.root_value_id.eql(root_value_id)) continue;
-        return true;
-    }
-    return false;
-}
-
-fn localHasConsumingAutoDropResourceEvent(
-    module: *const mir.Module,
-    function: *const mir.Function,
-    local_name: []const u8,
-    kind: mir.CleanupCancellationKind,
-) bool {
-    const root_value_id = valueIdForLocal(function, local_name) orelse return false;
-    const event_kind: mir.OwnershipEventKind = switch (kind) {
-        .move_out => .move_out,
-        .explicit_drop => .explicit_drop,
-    };
-    for (function.ownership_events) |event| {
-        if (event.kind != event_kind) continue;
-        if (!event.place.root_value_id.eql(root_value_id)) continue;
-        if (!typeSymbolHasDropGlue(module, event.place.root_type_symbol_id)) continue;
-        return true;
-    }
-    return false;
-}
-
-fn typeSymbolHasDropGlue(module: *const mir.Module, type_symbol_id: mir.SymbolId) bool {
-    if (!type_symbol_id.isValid()) return false;
-    for (module.type_ownership_facts) |fact| {
-        if (!fact.typed_type_symbol_id.eql(type_symbol_id)) continue;
-        return fact.drop_glue_symbol_id.isValid();
-    }
-    return false;
-}
-
 fn dropGlueReleaseFunctionExists(module: *const mir.Module, release_fn: []const u8) bool {
     for (module.drop_glue_facts) |fact| {
         if (std.mem.eql(u8, fact.release_fn, release_fn)) return true;
     }
     return false;
-}
-
-fn cleanupCancellationEntryFromMirPlan(
-    plan: *const mir.OwnershipCleanupPlan,
-    kind: mir.CleanupCancellationKind,
-    source: mir.SourcePoint,
-) ?mir.CleanupCancellationPlanEntry {
-    var matched: ?mir.CleanupCancellationPlanEntry = null;
-    for (plan.cancellations) |entry| {
-        if (entry.kind != kind) continue;
-        if (!sourceMatches(entry.source, source)) continue;
-        if (matched != null) return null;
-        matched = entry;
-    }
-    return matched;
-}
-
-fn directMoveLocalName(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .grouped => |inner| directMoveLocalName(inner.*),
-        .move_expr => |inner| switch (inner.kind) {
-            .grouped => directMoveLocalName(inner.*),
-            .ident => |ident| ident.text,
-            else => null,
-        },
-        .ident => |ident| ident.text,
-        else => null,
-    };
-}
-
-fn typeOwnershipFactForTypeName(module: *const mir.Module, type_name: []const u8) ?mir.TypeOwnershipFact {
-    for (module.type_ownership_facts) |fact| {
-        if (std.mem.eql(u8, fact.type_name, type_name)) return fact;
-    }
-    return null;
-}
-
-fn valueIdForLocal(function: *const mir.Function, local_name: []const u8) ?mir.ValueId {
-    for (function.value_identities) |identity| {
-        if (!std.mem.eql(u8, identity.spelling, local_name)) continue;
-        if (!identity.id.isValid()) return null;
-        return identity.id;
-    }
-    return null;
 }
 
 fn localNameForValueId(function: *const mir.Function, value_id: mir.ValueId) ?[]const u8 {

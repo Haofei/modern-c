@@ -1167,6 +1167,7 @@ pub const CEmitter = struct {
         self.current_function_body = body;
         defer self.current_function = previous_function;
         defer self.current_function_body = previous_function_body;
+        try self.validateFunctionCleanupAuthority();
         self.mir_pointer_local_provenance.clearRetainingCapacity();
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_pointer_array_elements);
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_aggregate_pointer_fields);
@@ -2816,37 +2817,9 @@ pub const CEmitter = struct {
                 if (local.init) |initializer| try self.applyMirPointerProvenanceForLocalInitializer(name.text, decl_ty, initializer, locals);
             }
             if (try self.emitSpecialLocalDecl(name.text, local, locals, return_ty)) {
-                try self.registerAutoDropLocal(name, local.ty, locals);
                 continue;
             }
             try self.emitDefaultLocalDecl(name.text, local.ty, local.init, locals);
-            try self.registerAutoDropLocal(name, local.ty, locals);
-        }
-    }
-
-    fn registerAutoDropLocal(self: *CEmitter, name: ast.Ident, maybe_ty: ?ast.TypeExpr, locals: *std.StringHashMap(LocalInfo)) !void {
-        const ty = maybe_ty orelse if (locals.get(name.text)) |info| info.source_ty orelse return else return;
-        const type_name = typeName(self.resolveAliasType(ty)) orelse return;
-        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (backend_cleanup.registerAutoDropLocalCleanup(self.mir_module, function, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), name.text, type_name, name.span)) {
-            .applied, .ignored => {},
-            .rejected => return error.UnsupportedCEmission,
-        }
-    }
-
-    fn cancelAutoDropForMove(self: *CEmitter, expr: ast.Expr, move_span: ast.Span) !void {
-        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (backend_cleanup.cancelAutoDropForMove(self.mir_module, function, self.currentOwnershipCleanupPlan(), expr, move_span)) {
-            .applied, .ignored => {},
-            .rejected => return error.UnsupportedCEmission,
-        }
-    }
-
-    fn cancelAutoDropForReleaseCall(self: *CEmitter, expr: ast.Expr) !void {
-        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        switch (backend_cleanup.cancelAutoDropForExplicitDrop(self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
-            .applied, .ignored => {},
-            .rejected => return error.UnsupportedCEmission,
         }
     }
 
@@ -3247,7 +3220,6 @@ pub const CEmitter = struct {
 
     fn emitExpressionStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
         if (try self.emitNeverExprStmt(expr, locals)) return;
-        try self.cancelAutoDropForReleaseCall(expr);
         if (try lower_c_memory.emitMaybeUninitWriteStmt(self.memoryContext(), expr, locals)) return;
         if (try lower_c_mmio.emitWriteStmt(self.mmioEmitContext(), expr, locals)) return;
         if (try self.emitRawStoreStmt(expr, locals)) return;
@@ -3407,7 +3379,6 @@ pub const CEmitter = struct {
     }
 
     fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr, stmt_span: ast.Span) !void {
-        try self.cancelAutoDropForReleaseCall(expr);
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         const deferred_drop = backend_cleanup.registerDeferredExplicitDropCleanup(self.mir_module, function, self.currentOwnershipCleanupPlan(), expr);
         switch (deferred_drop) {
@@ -3515,6 +3486,13 @@ pub const CEmitter = struct {
 
     fn validateCleanupCfg(self: *CEmitter) !void {
         if (self.currentMirFunction() == null or self.currentCleanupCfg() == null) return error.UnsupportedCEmission;
+    }
+
+    fn validateFunctionCleanupAuthority(self: *CEmitter) !void {
+        const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
+        const cleanup_plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedCEmission;
+        const cleanup_cfg = self.currentCleanupCfg() orelse return error.UnsupportedCEmission;
+        if (!backend_cleanup.validateFunctionCleanupAuthority(self.mir_module, function, cleanup_plan, cleanup_cfg)) return error.UnsupportedCEmission;
     }
 
     fn emitCleanupRef(self: *CEmitter, ref: backend_cleanup.CleanupRef, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
@@ -4198,7 +4176,6 @@ pub const CEmitter = struct {
             .struct_literal => try self.emitUnsupportedTargetlessAggregateExpr(expr, "struct"),
             .grouped => |inner| try self.emitGroupedExpr(inner.*, locals),
             .move_expr => |inner| {
-                try self.cancelAutoDropForMove(inner.*, expr.span);
                 try self.emitExpr(inner.*, locals);
             },
             .unreachable_expr => try self.out.appendSlice(self.allocator, "mc_trap_Unreachable()"),
@@ -4909,7 +4886,6 @@ pub const CEmitter = struct {
             .char_literal => |literal| try self.emitCharLiteralWithTarget(literal, expr.span, semantic_target_ty),
             .grouped => |inner| try self.emitGroupedExprWithTarget(inner.*, locals, semantic_target_ty),
             .move_expr => |inner| {
-                try self.cancelAutoDropForMove(inner.*, expr.span);
                 try self.emitExprWithTarget(inner.*, locals, semantic_target_ty);
             },
             .address_of => try self.emitAddressOfExprWithTarget(expr, locals, semantic_target_ty),

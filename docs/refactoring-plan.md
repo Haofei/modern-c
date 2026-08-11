@@ -393,6 +393,7 @@ removing backend authority before adding new abstractions:
 | 205 | Move lowering error boundary out of backend seam. | Complete: `LowerError` and `lowerErrorFromAny` moved to `lower_error.zig`; `backend.zig` re-exports them for compatibility while the domain lowering error set is owned by a dedicated boundary module. |
 | 206 | Split module graph data model from textual loader. | Complete: `FileId`, `ModuleFile`, `ImportEdge`, `ModuleGraph`, and `LoadedProject` moved to `module_graph.zig`; `loader.zig` still performs textual inclusion but now re-exports the graph model instead of owning it, giving the real module model migration an independent boundary. |
 | 207 | Remove legacy syntax mechanics aliases from backend seam. | Complete: `backend.zig` no longer publicly re-exports `LegacyDeclarationSlice` or `SourceMapMechanicsView`; C/LLVM compatibility entrypoints and source-map code import `legacy_backend_syntax.zig` directly, keeping syntax mechanics explicit instead of hiding them behind the backend contract. |
+| 208 | Stop backend-local auto-drop register/cancel events. | Complete: C and LLVM lowerers now validate `OwnershipCleanupPlan`/`CleanupCfg` once at function entry via `backend_cleanup.validateFunctionCleanupAuthority`; AST declaration and move/drop expression traversal no longer calls backend cleanup register/cancel hooks, and the old event-level helper functions are exact-zero-gated. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

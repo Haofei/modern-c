@@ -1283,6 +1283,7 @@ const LlvmEmitter = struct {
             self.current_params = old_params;
             self.current_function_body = old_function_body;
         }
+        try self.validateFunctionCleanupAuthority();
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
         // epilogue. The body is a single inline-asm statement that performs the
         // ABI-correct jump/return itself; we terminate the entry block with
@@ -1549,10 +1550,7 @@ const LlvmEmitter = struct {
             else
                 error.UnsupportedLlvmEmission,
             .grouped => |inner| self.emitExpr(inner.*, expected_ty),
-            .move_expr => |inner| blk: {
-                try self.cancelAutoDropForMove(inner.*, expr.span);
-                break :blk try self.emitExpr(inner.*, expected_ty);
-            },
+            .move_expr => |inner| try self.emitExpr(inner.*, expected_ty),
             .call => |call| try self.emitCall(call, expected_ty, expr.span),
             .array_literal => |items| if (self.contextualTargetTypeAt(.array_literal, expr.span, semantic_expected_ty)) |target_ty|
                 try self.emitArrayLiteralValue(target_ty, items)
@@ -1843,7 +1841,6 @@ const LlvmEmitter = struct {
             .var_decl => |local| try self.emitLocalDecl(local, true),
             .assignment => |node| try self.emitAssignment(node.target, node.value, stmt.span),
             .@"defer" => |expr| {
-                try self.cancelAutoDropForReleaseCall(expr);
                 const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
                 const deferred_drop = backend_cleanup.registerDeferredExplicitDropCleanup(&self.mir_module, function, self.currentOwnershipCleanupPlan(), expr);
                 switch (deferred_drop) {
@@ -1996,6 +1993,13 @@ const LlvmEmitter = struct {
 
     fn validateCleanupCfg(self: *LlvmEmitter) !void {
         if (self.currentMirFunction() == null or self.currentCleanupCfg() == null) return error.UnsupportedLlvmEmission;
+    }
+
+    fn validateFunctionCleanupAuthority(self: *LlvmEmitter) !void {
+        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
+        const cleanup_plan = self.currentOwnershipCleanupPlan() orelse return error.UnsupportedLlvmEmission;
+        const cleanup_cfg = self.currentCleanupCfg() orelse return error.UnsupportedLlvmEmission;
+        if (!backend_cleanup.validateFunctionCleanupAuthority(&self.mir_module, function, cleanup_plan, cleanup_cfg)) return error.UnsupportedLlvmEmission;
     }
 
     fn emitCleanupRef(self: *LlvmEmitter, ref: backend_cleanup.CleanupRef, ret_ty: ast.TypeExpr) !void {
@@ -2407,7 +2411,6 @@ const LlvmEmitter = struct {
                 // the program; emit the trap/call followed by `unreachable` (no value needed even
                 // in a value-returning function, since this path does not fall through).
                 if (try self.emitNeverExpr(expr)) return;
-                try self.cancelAutoDropForReleaseCall(expr);
                 const call_span = call.callee.*.span;
                 const call_kind = self.mirCallTargetKindAt(call_span);
                 if (call_kind) |kind| {
@@ -2454,7 +2457,6 @@ const LlvmEmitter = struct {
             },
             .grouped => |inner| try self.emitExprStatement(inner.*),
             .move_expr => |inner| {
-                try self.cancelAutoDropForMove(inner.*, expr.span);
                 try self.emitExprStatement(inner.*);
             },
             else => {
@@ -2993,7 +2995,6 @@ const LlvmEmitter = struct {
             } else {
                 try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, try self.zeroInitializer(ty), ptr, try self.debugCallSuffix() });
             }
-            try self.registerAutoDropLocal(local.names[0], ty);
             return;
         }
         if (resolved_ty.kind == .array) {
@@ -3003,7 +3004,6 @@ const LlvmEmitter = struct {
                 const value = try self.emitExprWithMirRangeTarget(init, ty, name);
                 try self.emitConcreteObjectStore(ptr, ty, value);
             }
-            try self.registerAutoDropLocal(local.names[0], ty);
             return;
         }
         if (self.structDeclForType(resolved_ty)) |_| {
@@ -3014,37 +3014,10 @@ const LlvmEmitter = struct {
                 const value = try self.emitExprWithMirRangeTarget(init, ty, name);
                 try self.emitConcreteObjectStore(ptr, ty, value);
             }
-            try self.registerAutoDropLocal(local.names[0], ty);
             return;
         }
         const value = try self.emitExprWithMirRangeTarget(init, ty, name);
         try self.emitConcreteObjectStore(ptr, ty, value);
-        try self.registerAutoDropLocal(local.names[0], ty);
-    }
-
-    fn registerAutoDropLocal(self: *LlvmEmitter, name: ast.Ident, ty: ast.TypeExpr) !void {
-        const type_name = typeName(self.resolveAliasType(ty)) orelse return;
-        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (backend_cleanup.registerAutoDropLocalCleanup(&self.mir_module, function, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), name.text, type_name, name.span)) {
-            .applied, .ignored => {},
-            .rejected => return error.UnsupportedLlvmEmission,
-        }
-    }
-
-    fn cancelAutoDropForMove(self: *LlvmEmitter, expr: ast.Expr, move_span: ast.Span) !void {
-        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (backend_cleanup.cancelAutoDropForMove(&self.mir_module, function, self.currentOwnershipCleanupPlan(), expr, move_span)) {
-            .applied, .ignored => {},
-            .rejected => return error.UnsupportedLlvmEmission,
-        }
-    }
-
-    fn cancelAutoDropForReleaseCall(self: *LlvmEmitter, expr: ast.Expr) !void {
-        const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        switch (backend_cleanup.cancelAutoDropForExplicitDrop(&self.mir_module, function, self.currentOwnershipCleanupPlan(), expr)) {
-            .applied, .ignored => {},
-            .rejected => return error.UnsupportedLlvmEmission,
-        }
     }
 
     fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {
