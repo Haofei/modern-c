@@ -9,7 +9,7 @@ const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
-const semantic_db = @import("semantic_db.zig");
+const mir_facts_view = @import("mir_facts_view.zig");
 const sema_decl = @import("sema_decl.zig");
 const sema_type = @import("sema_type.zig");
 const switch_lower = @import("switch_lower.zig");
@@ -6246,7 +6246,7 @@ pub const CEmitter = struct {
     }
 
     fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
-        return semantic_db.SemanticDb.init(self.mir_module).targetTypeFactAt(self.currentMirFunction(), kind, span);
+        return mir_facts_view.MirFactsView.init(self.mir_module).targetTypeFactAt(self.currentMirFunction(), kind, span);
     }
 
     fn mirTargetTypeFactMatchingType(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, expected_ty: ast.TypeExpr) ?mir.TargetTypeFact {
@@ -6260,7 +6260,7 @@ pub const CEmitter = struct {
     }
 
     fn mirTargetTypeFactAtOwned(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-        return semantic_db.SemanticDb.init(self.mir_module).targetTypeFactAtOwned(self.currentMirFunction(), kind, span, target_owner, target_index);
+        return mir_facts_view.MirFactsView.init(self.mir_module).targetTypeFactAtOwned(self.currentMirFunction(), kind, span, target_owner, target_index);
     }
 
     fn mirConstGetIndexAt(self: *CEmitter, span: ast.Span) ?usize {

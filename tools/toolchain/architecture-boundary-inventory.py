@@ -27,8 +27,8 @@ BACKEND_EXTRA_FILES = {
 
 EXACT_BACKEND_COUNTS = {
     '@import("ast.zig")': 51,
-    '@import("sema': 9,
-    '@import("semantic_db.zig")': 2,
+    '@import("sema': 7,
+    '@import("mir_facts_view.zig")': 2,
     "[]const ast.Decl": 17,
     "DeclarationMetadataView": 25,
     "SourceMapMechanicsView": 9,
@@ -42,7 +42,7 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "pub fn initFromDecls("): 1,
     ("src/loader.zig", "*textual inclusion*"): 1,
     ("src/hir.zig", "inspection_only_header"): 3,
-    ("src/semantic_db.zig", "pub const SemanticDb = struct"): 1,
+    ("src/mir_facts_view.zig", "pub const MirFactsView = struct"): 1,
 }
 
 REQUIRED_ANCHORS = {
@@ -63,7 +63,7 @@ REQUIRED_ANCHORS = {
     "src/hir.zig": (
         'pub const inspection_only_header = "hir mode=inspection-only production_boundary=false\\n";',
     ),
-    "src/semantic_db.zig": (
+    "src/mir_facts_view.zig": (
         "MIR owns construction and verification.",
         "small query surface",
         "targetTypeFactById",

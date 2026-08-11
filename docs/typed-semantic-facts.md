@@ -139,7 +139,7 @@ conservative callback/exported ambiguity. Arbitrary-CFG aggregate provenance
 remains open.
 
 The compiler already has several fact-like surfaces, but they are not a single
-typed semantic source of truth.  `src/semantic_db.zig` is the current narrow
+typed semantic source of truth.  `src/mir_facts_view.zig` is the current narrow
 production query boundary: both C and LLVM consult it for target-type facts, so
 source-span matching, owner matching, and `TypeId`/`SpanId`/`SymbolId` identity
 validation are no longer independently reimplemented by each backend.

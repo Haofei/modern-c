@@ -191,7 +191,7 @@ null.
 These modules are legitimate shared inputs for backend work:
 
 - `mir.zig`: typed MIR, facts, verifier/admission.
-- `semantic_db.zig`: transitional query layer for facts not yet indexed by
+- `mir_facts_view.zig`: transitional query layer for facts not yet indexed by
   stable typed ids.
 - `layout.zig`: layout calculation shared by semantic and backend code.
 - `eval.zig`: compile-time constant evaluation.

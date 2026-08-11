@@ -1,4 +1,4 @@
-//! Read-only typed semantic facts exposed to code generators.
+//! Read-only MIR facts exposed to code generators.
 //!
 //! MIR owns construction and verification.  This module deliberately exposes a
 //! small query surface so backends do not each reimplement source-span matching
@@ -17,17 +17,17 @@ pub const TargetTypeLookupKey = struct {
     target_index: ?usize = null,
 };
 
-pub const SemanticDb = struct {
+pub const MirFactsView = struct {
     module: *const mir.Module,
 
-    pub fn init(module: *const mir.Module) SemanticDb {
+    pub fn init(module: *const mir.Module) MirFactsView {
         return .{ .module = module };
     }
 
     /// Returns an unowned, verified target-type fact.  `current` is preferred
     /// to retain function-local meaning; a source-spanned fact may fall back to
     /// a unique matching module fact for generated cross-function plumbing.
-    pub fn targetTypeFactAt(self: SemanticDb, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
+    pub fn targetTypeFactAt(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
         if (kind == .expression_result and !isSourceSpan(span)) return null;
         if (current) |function| {
             if (targetTypeFactInFunction(function, kind, span, null, null)) |fact| return fact;
@@ -38,7 +38,7 @@ pub const SemanticDb = struct {
 
     /// Same query for fact families whose target belongs to a typed owner and
     /// optional target index (for example atomic-init payload/result pairs).
-    pub fn targetTypeFactAtOwned(self: SemanticDb, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
+    pub fn targetTypeFactAtOwned(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
         if (current) |function| {
             if (targetTypeFactInFunction(function, kind, span, owner, index)) |fact| return fact;
         }
@@ -52,7 +52,7 @@ pub const SemanticDb = struct {
     /// intentionally does not fall back to scanning the whole module by source
     /// span or owner spelling.  Callers that already have MIR identities should
     /// use this entry point instead of rebuilding identity from source text.
-    pub fn targetTypeFactById(self: SemanticDb, current: *const mir.Function, key: TargetTypeLookupKey) ?mir.TargetTypeFact {
+    pub fn targetTypeFactById(self: MirFactsView, current: *const mir.Function, key: TargetTypeLookupKey) ?mir.TargetTypeFact {
         _ = self;
         return targetTypeFactInFunctionById(current, key);
     }

@@ -5,7 +5,7 @@ const diagnostics = @import("diagnostics.zig");
 const parser = @import("parser.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
-const semantic_db = @import("semantic_db.zig");
+const mir_facts_view = @import("mir_facts_view.zig");
 const test_support = @import("test_support.zig");
 
 const Block = mir.Block;
@@ -294,7 +294,7 @@ test "semantic db can query target-type facts by typed identity" {
         \\}
     ;
 
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "semantic_db_typed_target_type.mc", source);
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_facts_view_typed_target_type.mc", source);
     defer reporter.deinit();
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -308,7 +308,7 @@ test "semantic db can query target-type facts by typed identity" {
 
     const caller = functionByName(module_mir, "caller").?;
     const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
-    const db = semantic_db.SemanticDb.init(&module_mir);
+    const db = mir_facts_view.MirFactsView.init(&module_mir);
 
     const wrong_span = ast.Span{
         .line = result_fact.source.line + 100,
