@@ -501,26 +501,30 @@ pub const CEmitter = struct {
     }
 
     pub fn collectDeclArtifacts(self: *CEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
-        for (artifacts.decl_artifacts) |artifact| {
-            try self.collectDeclArtifact(artifact);
-        }
+        try self.collectCallableValueArtifacts(artifacts.callable_value_artifacts);
+        try self.collectTypeArtifactsFromArtifacts(artifacts.type_artifacts);
     }
 
-    fn collectDeclArtifact(self: *CEmitter, artifact: early_declaration_metadata.DeclArtifact) anyerror!void {
-        switch (artifact) {
-            .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
+    fn collectCallableValueArtifacts(self: *CEmitter, artifacts: []const early_declaration_metadata.CallableValueArtifact) anyerror!void {
+        for (artifacts) |artifact| switch (artifact) {
             .global => |global| try self.collectGlobalDeclArtifact(global),
+            .function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, false),
+            .extern_function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, true),
+            .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),
+            .impl_trait => |impl_trait| try self.collectImplTraitArtifact(impl_trait),
+        };
+    }
+
+    fn collectTypeArtifactsFromArtifacts(self: *CEmitter, artifacts: []const early_declaration_metadata.TypeArtifact) anyerror!void {
+        for (artifacts) |artifact| switch (artifact) {
+            .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
             .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
             .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
             .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
             .packed_bits => |packed_bits| try self.collectPackedBits(packed_bits),
             .overlay_union => |overlay_union| try self.collectOverlayUnion(overlay_union),
             .opaque_decl => {},
-            .function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, false),
-            .extern_function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, true),
-            .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),
-            .impl_trait => |impl_trait| try self.collectImplTraitArtifact(impl_trait),
-        }
+        };
     }
 
     fn collectGlobalDeclArtifact(self: *CEmitter, global: ast.GlobalDecl) !void {
