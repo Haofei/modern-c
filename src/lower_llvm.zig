@@ -379,7 +379,6 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .impl_methods = std.StringHashMap([]const ast.ImplTraitMethod).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
-        .decl_artifacts = early_metadata.decl_artifacts,
         .callable_value_artifacts = early_metadata.callable_value_artifacts,
         .type_artifacts = early_metadata.type_artifacts,
         .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
@@ -479,7 +478,6 @@ const LlvmEmitter = struct {
     // alias `@Y = alias <fnty>, ptr @name` so the override symbol is linkable (the C backend
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
-    decl_artifacts: []const early_declaration_metadata.DeclArtifact = &.{},
     callable_value_artifacts: []const early_declaration_metadata.CallableValueArtifact = &.{},
     type_artifacts: []const early_declaration_metadata.TypeArtifact = &.{},
     struct_decl_artifacts: std.ArrayList(ast.StructDecl) = .empty,
@@ -603,7 +601,7 @@ const LlvmEmitter = struct {
     }
 
     fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) !void {
-        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+        for (artifacts.callable_value_artifacts) |artifact| switch (artifact) {
             .function => |function| {
                 const fn_decl = function.fn_decl;
                 if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
