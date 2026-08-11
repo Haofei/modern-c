@@ -278,6 +278,7 @@ pub const CEmitter = struct {
     const_globals: std.StringHashMap(eval.ComptimeValue),
     const_global_widths: std.StringHashMap(u16),
     const_global_domains: std.StringHashMap(eval.DomainWidth),
+    owned_comptime_declarations: early_declaration_metadata.ComptimeDeclarationArtifacts = .empty,
     comptime_declarations: ?eval.ComptimeDeclarations = null,
     structs: std.StringHashMap(ast.StructDecl),
     aggregate_decl_artifacts: std.ArrayList(AggregateDeclArtifact) = .empty,
@@ -443,6 +444,7 @@ pub const CEmitter = struct {
         self.const_global_widths.deinit();
         self.const_global_domains.deinit();
         self.const_fns.deinit();
+        self.owned_comptime_declarations.deinit(self.allocator);
         eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.static_initializers.deinit();
         self.global_decl_artifacts.deinit(self.allocator);
@@ -458,8 +460,10 @@ pub const CEmitter = struct {
         try lower_c_module.collect(self, early_metadata);
     }
 
-    pub fn setComptimeDeclarations(self: *CEmitter, declarations: eval.ComptimeDeclarations) void {
-        self.comptime_declarations = declarations;
+    pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) !void {
+        self.owned_comptime_declarations.deinit(self.allocator);
+        self.owned_comptime_declarations = try early_declaration_metadata.ComptimeDeclarationArtifacts.collectFromArtifacts(self.allocator, artifacts);
+        self.comptime_declarations = self.owned_comptime_declarations.view();
     }
 
     pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) !void {
@@ -482,12 +486,13 @@ pub const CEmitter = struct {
             const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
             try self.const_global_widths.put(global.name.text, bits);
         }
-        for (artifacts.type_aliases) |alias| try self.type_aliases.put(alias.name.text, alias.ty);
-        for (artifacts.structs) |struct_decl| {
-            if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl);
-        }
-        for (artifacts.enums) |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl);
-        for (artifacts.unions) |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl);
+        for (artifacts.type_artifacts) |artifact| switch (artifact) {
+            .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
+            .struct_decl => |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl),
+            .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
+            .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
+            else => {},
+        };
     }
 
     pub fn collectConstGlobals(self: *CEmitter) !void {

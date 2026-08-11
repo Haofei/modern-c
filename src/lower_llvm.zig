@@ -331,11 +331,9 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         else => return err,
     };
     if (!source_spelling.validateAgainstMir(module_mir.*)) return error.UnsupportedLlvmEmission;
-    const comptime_declarations = eval.ComptimeDeclarations{
-        .globals = early_metadata.globals,
-        .type_aliases = early_metadata.type_aliases,
-        .structs = early_metadata.structs,
-    };
+    var owned_comptime_declarations = try early_declaration_metadata.ComptimeDeclarationArtifacts.collectFromArtifacts(allocator, early_metadata);
+    defer owned_comptime_declarations.deinit(allocator);
+    const comptime_declarations = owned_comptime_declarations.view();
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;
@@ -608,21 +606,24 @@ const LlvmEmitter = struct {
             },
             else => {},
         };
-        for (artifacts.type_aliases) |alias| try self.type_aliases.put(alias.name.text, alias.ty);
-        for (artifacts.enums) |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl);
-        for (artifacts.unions) |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl);
-        for (artifacts.packed_bits) |packed_bits| try self.packed_bits.put(packed_bits.name.text, .{
-            .repr = packed_bits.repr,
-            .fields = packed_bits.fields,
-        });
-        for (artifacts.structs) |struct_decl| {
-            if (struct_decl.type_params.len != 0) continue;
-            if (struct_decl.abi) |abi| {
-                if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
-            }
-            try self.struct_decl_artifacts.append(self.allocator, struct_decl);
-            try self.struct_types.put(struct_decl.name.text, struct_decl);
-        }
+        for (artifacts.type_artifacts) |artifact| switch (artifact) {
+            .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
+            .enum_decl => |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl),
+            .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
+            .packed_bits => |packed_bits| try self.packed_bits.put(packed_bits.name.text, .{
+                .repr = packed_bits.repr,
+                .fields = packed_bits.fields,
+            }),
+            .struct_decl => |struct_decl| {
+                if (struct_decl.type_params.len != 0) continue;
+                if (struct_decl.abi) |abi| {
+                    if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
+                }
+                try self.struct_decl_artifacts.append(self.allocator, struct_decl);
+                try self.struct_types.put(struct_decl.name.text, struct_decl);
+            },
+            else => {},
+        };
     }
 
     fn collectStructArtifacts(self: *LlvmEmitter) !void {
