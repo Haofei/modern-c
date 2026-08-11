@@ -4,11 +4,17 @@ const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const numeric = @import("numeric.zig");
 const sema_model = @import("sema_model.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const Context = sema_model.Context;
 const TypeClass = sema_model.TypeClass;
 const integerLiteralValue = numeric.integerLiteralValue;
 const typeName = ast_query.typeName;
+pub const ViewKind = type_syntax.ViewKind;
+pub const ViewType = type_syntax.ViewType;
+pub const sameTypeSyntax = type_syntax.sameTypeSyntax;
+pub const viewElementType = type_syntax.viewElementType;
+pub const viewType = type_syntax.viewType;
 
 pub fn isTrapBinary(op: ast.BinaryOp) bool {
     return switch (op) {
@@ -606,44 +612,6 @@ pub fn isConstStorageType(ty: ast.TypeExpr) bool {
     };
 }
 
-pub const ViewKind = enum {
-    pointer,
-    raw_many_pointer,
-    slice,
-};
-
-pub const ViewType = struct {
-    kind: ViewKind,
-    mutability: ast.Mutability,
-    nullable: bool = false,
-};
-
-pub fn viewType(ty: ast.TypeExpr) ?ViewType {
-    return switch (ty.kind) {
-        .pointer => |node| .{ .kind = .pointer, .mutability = node.mutability },
-        .raw_many_pointer => |node| .{ .kind = .raw_many_pointer, .mutability = node.mutability },
-        .slice => |node| .{ .kind = .slice, .mutability = node.mutability },
-        .nullable => |child| {
-            var view = viewType(child.*) orelse return null;
-            view.nullable = true;
-            return view;
-        },
-        .qualified => |node| viewType(node.child.*),
-        else => null,
-    };
-}
-
-pub fn viewElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
-    return switch (ty.kind) {
-        .pointer => |node| node.child.*,
-        .raw_many_pointer => |node| node.child.*,
-        .slice => |node| node.child.*,
-        .nullable => |child| viewElementType(child.*),
-        .qualified => |node| viewElementType(node.child.*),
-        else => null,
-    };
-}
-
 pub fn isCVoidPointerClass(kind: TypeClass) bool {
     return switch (kind) {
         .c_void_pointer, .nullable_c_void_pointer => true,
@@ -663,114 +631,6 @@ pub fn isFixedUnsignedMmioWidth(ty: ast.TypeExpr) bool {
             std.mem.eql(u8, name.text, "u64"),
         .qualified => |node| isFixedUnsignedMmioWidth(node.child.*),
         else => false,
-    };
-}
-
-pub fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool {
-    if (std.meta.activeTag(left.kind) != std.meta.activeTag(right.kind)) return false;
-    return switch (left.kind) {
-        .name => |left_name| std.mem.eql(u8, left_name.text, switch (right.kind) {
-            .name => |right_name| right_name.text,
-            else => unreachable,
-        }),
-        .enum_literal => |left_name| std.mem.eql(u8, left_name.text, switch (right.kind) {
-            .enum_literal => |right_name| right_name.text,
-            else => unreachable,
-        }),
-        .member => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .member => |node| node,
-                else => unreachable,
-            };
-            break :blk sameTypeSyntax(left_node.base.*, right_node.base.*) and
-                std.mem.eql(u8, left_node.field.text, right_node.field.text);
-        },
-        .nullable => |left_child| sameTypeSyntax(left_child.*, switch (right.kind) {
-            .nullable => |right_child| right_child.*,
-            else => unreachable,
-        }),
-        .qualified => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .qualified => |node| node,
-                else => unreachable,
-            };
-            break :blk left_node.mutability == right_node.mutability and
-                sameTypeSyntax(left_node.child.*, right_node.child.*);
-        },
-        .pointer => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .pointer => |node| node,
-                else => unreachable,
-            };
-            break :blk left_node.mutability == right_node.mutability and
-                sameTypeSyntax(left_node.child.*, right_node.child.*);
-        },
-        .raw_many_pointer => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .raw_many_pointer => |node| node,
-                else => unreachable,
-            };
-            break :blk left_node.mutability == right_node.mutability and
-                sameTypeSyntax(left_node.child.*, right_node.child.*);
-        },
-        .slice => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .slice => |node| node,
-                else => unreachable,
-            };
-            break :blk left_node.mutability == right_node.mutability and
-                sameTypeSyntax(left_node.child.*, right_node.child.*);
-        },
-        .array => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .array => |node| node,
-                else => unreachable,
-            };
-            break :blk sameExprSyntax(left_node.len, right_node.len) and
-                sameTypeSyntax(left_node.child.*, right_node.child.*);
-        },
-        .generic => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .generic => |node| node,
-                else => unreachable,
-            };
-            if (!std.mem.eql(u8, left_node.base.text, right_node.base.text)) break :blk false;
-            if (left_node.args.len != right_node.args.len) break :blk false;
-            for (left_node.args, right_node.args) |left_arg, right_arg| {
-                if (!sameTypeSyntax(left_arg, right_arg)) break :blk false;
-            }
-            break :blk true;
-        },
-        .fn_pointer => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .fn_pointer => |node| node,
-                else => unreachable,
-            };
-            if (left_node.params.len != right_node.params.len) break :blk false;
-            for (left_node.params, right_node.params) |left_param, right_param| {
-                if (!sameTypeSyntax(left_param, right_param)) break :blk false;
-            }
-            break :blk sameTypeSyntax(left_node.ret.*, right_node.ret.*);
-        },
-        .closure_type => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .closure_type => |node| node,
-                else => unreachable,
-            };
-            if (left_node.params.len != right_node.params.len) break :blk false;
-            for (left_node.params, right_node.params) |left_param, right_param| {
-                if (!sameTypeSyntax(left_param, right_param)) break :blk false;
-            }
-            break :blk sameTypeSyntax(left_node.ret.*, right_node.ret.*);
-        },
-        .dyn_trait => |left_node| blk: {
-            const right_node = switch (right.kind) {
-                .dyn_trait => |node| node,
-                else => unreachable,
-            };
-            break :blk left_node.mutability == right_node.mutability and
-                std.mem.eql(u8, left_node.trait_name.text, right_node.trait_name.text);
-        },
     };
 }
 

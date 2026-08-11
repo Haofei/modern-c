@@ -10,7 +10,7 @@ const eval = @import("eval.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
-const sema_type = @import("sema_type.zig");
+const type_syntax = @import("type_syntax.zig");
 const switch_lower = @import("switch_lower.zig");
 
 const lower_c_type = @import("lower_c_type.zig");
@@ -1962,7 +1962,7 @@ pub const CEmitter = struct {
         // positive magnitude may independently default to u32, including for
         // `-2147483648`, so it must not override the MIR-owned unary result.
         if (inferred) |ty| if (!(node.op == .neg and lower_c_const.isIntegerLiteralExpr(node.expr.*))) {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return null;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return null;
         };
         return fact_ty;
     }
@@ -2504,7 +2504,7 @@ pub const CEmitter = struct {
                     const payload = self.resolveAliasType(child.*);
                     const name = try lower_c_names.optTypeName(self.typeNameContext(), payload);
                     if (self.opt_types.get(name)) |existing| {
-                        if (!sema_type.sameTypeSyntax(existing.payload_ty, payload)) return error.GeneratedTypeNameCollision;
+                        if (!type_syntax.sameTypeSyntax(existing.payload_ty, payload)) return error.GeneratedTypeNameCollision;
                     } else try self.opt_types.put(name, .{ .name = name, .payload_ty = payload });
                 }
             },
@@ -2958,7 +2958,7 @@ pub const CEmitter = struct {
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, null)) orelse return error.UnsupportedCEmission;
         const pointer = self.pointerNodeFromCandidate(inferred_ty) orelse return error.UnsupportedCEmission;
         if (pointer.mutability != place.mutability) return error.UnsupportedCEmission;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(place.ty))) return error.UnsupportedCEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(place.ty))) return error.UnsupportedCEmission;
         var info = try self.localInfoFromType(inferred_ty);
         if (locals.get(name)) |existing| info.is_mutable = existing.is_mutable;
         try locals.put(name, info);
@@ -2995,7 +2995,7 @@ pub const CEmitter = struct {
             },
             .deref => |inner| blk: {
                 const pointer_ty = self.directAddressOfLocalPointerType(inner.*, locals) orelse break :blk null;
-                const view = sema_type.viewType(self.resolveAliasType(pointer_ty)) orelse break :blk null;
+                const view = type_syntax.viewType(self.resolveAliasType(pointer_ty)) orelse break :blk null;
                 const mutability = switch (view.kind) {
                     .pointer, .raw_many_pointer => view.mutability,
                     else => break :blk null,
@@ -3032,7 +3032,7 @@ pub const CEmitter = struct {
                 };
                 const fact_ty = (self.mirTargetTypeFactAt(.expression_result, initializer.span) orelse break :blk null).target_ty;
                 if (expected_ty) |expected| {
-                    if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(expected))) return error.UnsupportedCEmission;
+                    if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(expected))) return error.UnsupportedCEmission;
                 }
                 break :blk fact_ty;
             },
@@ -3339,7 +3339,7 @@ pub const CEmitter = struct {
     fn requireMirTargetTypeForEmission(self: *CEmitter, kind: mir.TargetTypeKind, expr: ast.Expr, known_ty: ?ast.TypeExpr) !ast.TypeExpr {
         const fact_ty = (self.mirTargetTypeFactAt(kind, expr.span) orelse return error.UnsupportedCEmission).target_ty;
         if (known_ty) |ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
         }
         return fact_ty;
     }
@@ -3822,7 +3822,7 @@ pub const CEmitter = struct {
         const subject_fact = fact orelse return error.UnsupportedCEmission;
         const fact_ty = subject_fact.target_ty;
         if (known_ty) |ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
         }
         return .{
             .target_ty = fact_ty,
@@ -3959,7 +3959,7 @@ pub const CEmitter = struct {
         const iterable_ty = try self.requireMirForIterableTypeForEmission(iterable, locals);
         const element_ty = try self.requireMirForElementTypeForEmission(iterable);
         const expected_element = self.arrayOrSliceElementTypeFromCandidate(iterable_ty) orelse return error.UnsupportedCEmission;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(expected_element))) return error.UnsupportedCEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(expected_element))) return error.UnsupportedCEmission;
         return .{ .iterable = iterable_ty, .element = element_ty };
     }
 
@@ -4011,7 +4011,7 @@ pub const CEmitter = struct {
         const fact_ty = fact.target_ty;
         const known_ty = self.operandEmitType(value, locals);
         if (known_ty) |ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
         }
         return .{
             .target_ty = fact_ty,
@@ -4283,7 +4283,7 @@ pub const CEmitter = struct {
     fn emitDerefExpr(self: *CEmitter, inner: ast.Expr, deref_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const inferred_pointee_ty = self.derefPointeeType(inner, locals) orelse return error.UnsupportedCEmission;
         const pointee_ty = (self.mirTargetTypeFactAt(.expression_result, deref_span) orelse return error.UnsupportedCEmission).target_ty;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointee_ty), self.resolveAliasType(inferred_pointee_ty))) return error.UnsupportedCEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(pointee_ty), self.resolveAliasType(inferred_pointee_ty))) return error.UnsupportedCEmission;
         switch (try self.derefAccessLoweringForPointee(inner, pointee_ty, locals)) {
             .plain => {
                 try self.out.appendSlice(self.allocator, "*");
@@ -4348,7 +4348,7 @@ pub const CEmitter = struct {
         if (locals) |local_set| {
             if (self.overlayIndexResultType(node, local_set)) |inferred_element_ty| {
                 const element_ty = (self.mirTargetTypeFactAt(.expression_result, index_span) orelse return error.UnsupportedCEmission).target_ty;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedCEmission;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedCEmission;
                 if (try self.emitOverlayIndexReadExpr(node, local_set)) return;
                 return error.UnsupportedCEmission;
             }
@@ -4356,7 +4356,7 @@ pub const CEmitter = struct {
         const base_ty = self.arrayOrSliceBaseTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
         const inferred_element_ty = self.arrayOrSliceElementTypeFromCandidate(base_ty) orelse return error.UnsupportedCEmission;
         const element_ty = (self.mirTargetTypeFactAt(.expression_result, index_span) orelse return error.UnsupportedCEmission).target_ty;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedCEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedCEmission;
         if (locals) |local_set| {
             if (try self.emitOverlayIndexReadExpr(node, local_set)) return;
         }
@@ -4422,7 +4422,7 @@ pub const CEmitter = struct {
             if (self.sliceTypeFromCandidate(base_ty) != null and std.mem.eql(u8, node.name.text, "len")) {
                 const usize_ty = simpleNameType("usize", member_span);
                 const field_ty = self.memberResultTypeOrGenerated(member_span, usize_ty) orelse return error.UnsupportedCEmission;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(usize_ty))) return error.UnsupportedCEmission;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(usize_ty))) return error.UnsupportedCEmission;
                 try self.emitExpr(node.base.*, locals);
                 try self.out.print(self.allocator, ".{s}", .{slice.len_field});
                 return true;
@@ -4432,7 +4432,7 @@ pub const CEmitter = struct {
         if (locals) |local_set| {
             if (self.overlayMemberResultType(node, local_set)) |inferred_field_ty| {
                 const field_ty = self.memberResultTypeOrGenerated(member_span, inferred_field_ty) orelse return error.UnsupportedCEmission;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
             }
             if (try self.emitOverlayMemberReadExpr(node, local_set)) return true;
         }
@@ -4452,7 +4452,7 @@ pub const CEmitter = struct {
         // MIR fact; the generated struct declaration remains the typed authority.
         // User-source members still require the exact expression-result fact.
         const field_ty = self.memberResultTypeOrGenerated(member_span, inferred_field_ty) orelse return error.UnsupportedCEmission;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
         try self.emitOrdinaryMemberLoadExpr(node, locals);
         return true;
     }
@@ -5083,7 +5083,7 @@ pub const CEmitter = struct {
         else blk: {
             break :blk (self.mirTargetTypeFactAt(.view_const_narrow_target, expr.span) orelse return error.UnsupportedCEmission).target_ty;
         };
-        if (expr.kind != .cast and !sema_type.sameTypeSyntax(self.resolveAliasType(fact_target_ty), self.resolveAliasType(target_ty))) return false;
+        if (expr.kind != .cast and !type_syntax.sameTypeSyntax(self.resolveAliasType(fact_target_ty), self.resolveAliasType(target_ty))) return false;
         const resolved_target = self.resolveAliasType(fact_target_ty);
         const target_node = switch (resolved_target.kind) {
             .slice => |node| node,
@@ -5135,7 +5135,7 @@ pub const CEmitter = struct {
     fn emitCharLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast.Span, expected_ty: ?ast.TypeExpr) !void {
         const fact = self.mirTargetTypeFactAt(.char_literal, span) orelse return error.UnsupportedCEmission;
         const expected = expected_ty orelse return error.UnsupportedCEmission;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected))) return error.UnsupportedCEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected))) return error.UnsupportedCEmission;
         const value = numeric.parseCharLiteral(literal) orelse return error.UnsupportedCEmission;
         try self.out.print(self.allocator, "(({s}){d})", .{ try self.cTypeFor(fact.target_ty, .typedef_name), value });
     }
@@ -5340,7 +5340,7 @@ pub const CEmitter = struct {
         const info = self.packed_bits.get(base_ty) orelse return false;
         const field = info.fields.get(node.name.text) orelse return false;
         const field_ty = (self.mirTargetTypeFactAt(.expression_result, member_span) orelse return error.UnsupportedCEmission).target_ty;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(ast_query.simpleNameType("bool", member_span)))) return error.UnsupportedCEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(ast_query.simpleNameType("bool", member_span)))) return error.UnsupportedCEmission;
         try self.emitPackedBitsMaskTest(node.base.*, locals, info, field.bit_index);
         return true;
     }
@@ -5530,11 +5530,11 @@ pub const CEmitter = struct {
             .grouped => |inner| return self.requireOverlayReturnExpressionResult(inner.*, locals),
             .member => |node| if (self.overlayMemberResultType(node, locals)) |inferred_field_ty| {
                 const field_ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return error.UnsupportedCEmission).target_ty;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field_ty))) return error.UnsupportedCEmission;
             },
             .index => |node| if (self.overlayIndexResultType(node, locals)) |inferred_element_ty| {
                 const element_ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return error.UnsupportedCEmission).target_ty;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedCEmission;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedCEmission;
             },
             else => {},
         }
@@ -5560,7 +5560,7 @@ pub const CEmitter = struct {
         const base_ty = self.arrayOrSliceBaseTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
         const inferred_slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedCEmission;
         const slice_ty = (self.mirTargetTypeFactAt(.expression_result, slice_span) orelse return error.UnsupportedCEmission).target_ty;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(slice_ty), self.resolveAliasType(inferred_slice_ty))) return error.UnsupportedCEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(slice_ty), self.resolveAliasType(inferred_slice_ty))) return error.UnsupportedCEmission;
         const slice_name = try self.sliceTypeName(slice_ty.kind.slice.child.*, slice_ty.kind.slice.mutability);
         const resolved = self.resolveAliasType(base_ty);
         const n = self.temp_index;
@@ -6018,7 +6018,7 @@ pub const CEmitter = struct {
     fn mirInferredLocalType(self: *CEmitter, name: []const u8, initializer: ast.Expr, known_ty: ?ast.TypeExpr) !?ast.TypeExpr {
         const fact_ty = (self.mirTargetTypeFactAtOwned(.inferred_local, initializer.span, name, null) orelse return null).target_ty;
         if (known_ty) |ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
         }
         return fact_ty;
     }
@@ -6230,22 +6230,22 @@ pub const CEmitter = struct {
         for (function.target_type_facts) |result_fact| {
             if (result_fact.kind != .atomic_init_result or result_fact.target_owner == null or result_fact.target_index == null or !mirSourceMatches(span, result_fact.source)) continue;
             if (!std.mem.eql(u8, result_fact.target_owner.?, "atomic.init")) continue;
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_fact.target_ty), self.resolveAliasType(expected_result_ty))) continue;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(result_fact.target_ty), self.resolveAliasType(expected_result_ty))) continue;
             found_result = true;
 
             var group_payload_ty: ?ast.TypeExpr = null;
             for (function.target_type_facts) |payload_fact| {
                 if (payload_fact.kind != .atomic_init_payload or payload_fact.target_index != result_fact.target_index or payload_fact.target_owner == null or !mirSourceMatches(span, payload_fact.source)) continue;
                 if (!std.mem.eql(u8, payload_fact.target_owner.?, "atomic.init")) continue;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(payload_fact.target_ty), self.resolveAliasType(expected_payload_ty))) return null;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(payload_fact.target_ty), self.resolveAliasType(expected_payload_ty))) return null;
                 if (group_payload_ty) |known| {
-                    if (!sema_type.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_fact.target_ty))) return null;
+                    if (!type_syntax.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_fact.target_ty))) return null;
                 }
                 group_payload_ty = payload_fact.target_ty;
             }
             const payload_ty = group_payload_ty orelse return null;
             if (matched_payload_ty) |known| {
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_ty))) return null;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_ty))) return null;
             }
             matched_payload_ty = payload_ty;
         }
@@ -6262,7 +6262,7 @@ pub const CEmitter = struct {
         for (function.target_type_facts) |fact| {
             if (fact.kind != kind or fact.target_index != null or fact.target_owner != null) continue;
             if (!mirTargetTypeSourceMatches(kind, span, fact.source)) continue;
-            if (sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected_ty))) return fact;
+            if (type_syntax.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected_ty))) return fact;
         }
         return null;
     }
@@ -6324,7 +6324,7 @@ pub const CEmitter = struct {
                 // TypeExpr carries source spans. Two f32 facts at different
                 // literals are semantically equal even though their AST values
                 // are not byte-for-byte equal.
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(left.?), self.resolveAliasType(right.?))) return error.UnsupportedCEmission;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(left.?), self.resolveAliasType(right.?))) return error.UnsupportedCEmission;
                 break :blk left;
             },
             else => null,
@@ -8156,9 +8156,9 @@ pub const CEmitter = struct {
     fn checkedCastResultTypeForEmission(self: *CEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) ?ast.TypeExpr {
         if (!isSourceSpan(expr.span)) return expected_ty;
         const target_ty = (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span) orelse return null).target_ty;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(target_ty), self.resolveAliasType(expected_ty))) return null;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(target_ty), self.resolveAliasType(expected_ty))) return null;
         const fact_ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(target_ty))) return null;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(target_ty))) return null;
         return fact_ty;
     }
 
@@ -8373,7 +8373,7 @@ pub const CEmitter = struct {
         const pointee = self.derefPointeeType(inner, locals) orelse return null;
         if (!isSourceSpan(expr.span)) return pointee;
         const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(pointee))) return null;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(pointee))) return null;
         return fact.target_ty;
     }
 
@@ -8526,7 +8526,7 @@ pub const CEmitter = struct {
     fn checkedExpressionResultTypeForEmission(self: *CEmitter, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
         if (!isSourceSpan(expr.span)) return inferred;
         const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) return null;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) return null;
         return fact.target_ty;
     }
 
@@ -8746,7 +8746,7 @@ pub const CEmitter = struct {
                     break :fallback if (locals) |local_set| localIndexElementType(node.base.*, local_set) else null;
                 } orelse break :blk null;
                 const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse break :blk null;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
                 break :blk fact.target_ty;
             },
             // A real source slice has a complete MIR-owned result type. The
@@ -8765,7 +8765,7 @@ pub const CEmitter = struct {
                 if (node.op != .neg) break :blk null;
                 const inferred = self.exprSourceTypeForEmission(node.expr.*, locals) orelse break :blk null;
                 const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse break :blk null;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) break :blk null;
                 break :blk fact.target_ty;
             },
             else => null,
@@ -8785,7 +8785,7 @@ pub const CEmitter = struct {
             else => self.exprSourceTypeForEmission(node.left.*, locals) orelse self.exprSourceTypeForEmission(node.right.*, locals),
         };
         if (inferred) |ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(ty))) return null;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(ty))) return null;
         }
         return fact.target_ty;
     }

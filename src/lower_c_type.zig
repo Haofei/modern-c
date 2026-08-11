@@ -12,7 +12,7 @@ const ast_query = @import("ast_query.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
-const sema_type = @import("sema_type.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const typeName = ast_query.typeName;
 const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
@@ -117,14 +117,14 @@ pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast.TypeExp
         .fn_pointer => {
             const name = try ctx.fn_ptr_type_name(ctx.emit_ctx, ty);
             if (ctx.fn_ptr_types.get(name)) |existing| {
-                if (!sema_type.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
+                if (!type_syntax.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
             } else try ctx.fn_ptr_types.put(name, ty);
             return out.appendSlice(ctx.scratch, name);
         },
         .closure_type => {
             const name = try ctx.closure_type_name(ctx.emit_ctx, ty);
             if (ctx.closure_types.get(name)) |existing| {
-                if (!sema_type.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
+                if (!type_syntax.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
             } else try ctx.closure_types.put(name, ty);
             return out.appendSlice(ctx.scratch, name);
         },

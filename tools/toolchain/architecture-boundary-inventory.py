@@ -27,8 +27,9 @@ BACKEND_EXTRA_FILES = {
 
 EXACT_BACKEND_COUNTS = {
     '@import("ast.zig")': 51,
-    '@import("sema': 5,
+    '@import("sema': 0,
     '@import("mir_facts_view.zig")': 2,
+    '@import("type_syntax.zig")': 5,
     "[]const ast.Decl": 17,
     "DeclarationMetadataView": 25,
     "SourceMapMechanicsView": 9,
@@ -43,6 +44,8 @@ EXACT_FILE_COUNTS = {
     ("src/loader.zig", "*textual inclusion*"): 1,
     ("src/hir.zig", "inspection_only_header"): 3,
     ("src/mir_facts_view.zig", "pub const MirFactsView = struct"): 1,
+    ("src/type_syntax.zig", "pub fn sameTypeSyntax("): 1,
+    ("src/type_syntax.zig", "pub fn viewType("): 1,
 }
 
 REQUIRED_ANCHORS = {
@@ -67,6 +70,11 @@ REQUIRED_ANCHORS = {
         "MIR owns construction and verification.",
         "small query surface",
         "targetTypeFactById",
+    ),
+    "src/type_syntax.zig": (
+        "pub const ViewType = struct",
+        "pub fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool",
+        "fn sameExprSyntax(left: ast.Expr, right: ast.Expr) bool",
     ),
 }
 

@@ -8,7 +8,7 @@ const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
-const sema_type = @import("sema_type.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const ArrayInfo = lower_c_model.ArrayInfo;
 const BindThunk = lower_c_model.BindThunk;
@@ -197,7 +197,7 @@ pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast.TypeExpr) anyerror!vo
             for (node.params) |param| try collectFnPtrType(ctx, param);
             const name = try ctx.fn_ptr_type_name(ctx.emit_ctx, ty);
             if (ctx.fn_ptr_types.get(name)) |existing| {
-                if (!sema_type.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
+                if (!type_syntax.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
             } else try ctx.fn_ptr_types.put(name, ty);
         },
         .closure_type => |node| {
@@ -205,7 +205,7 @@ pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast.TypeExpr) anyerror!vo
             for (node.params) |param| try collectFnPtrType(ctx, param);
             const name = try ctx.closure_type_name(ctx.emit_ctx, ty);
             if (ctx.closure_types.get(name)) |existing| {
-                if (!sema_type.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
+                if (!type_syntax.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
             } else try ctx.closure_types.put(name, ty);
         },
         .pointer => |node| try collectFnPtrType(ctx, node.child.*),
@@ -264,7 +264,7 @@ pub fn collectResultType(ctx: ResultArtifactContext, ty: ast.TypeExpr) anyerror!
             if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
                 const name = try ctx.result_type_name(ctx.emit_ctx, node.args[0], node.args[1]);
                 if (ctx.result_types.get(name)) |existing| {
-                    if (!sema_type.sameTypeSyntax(existing.ok_ty, node.args[0]) or !sema_type.sameTypeSyntax(existing.err_ty, node.args[1])) return error.GeneratedTypeNameCollision;
+                    if (!type_syntax.sameTypeSyntax(existing.ok_ty, node.args[0]) or !type_syntax.sameTypeSyntax(existing.err_ty, node.args[1])) return error.GeneratedTypeNameCollision;
                 } else {
                     try ctx.result_types.put(name, .{ .name = name, .ok_ty = node.args[0], .err_ty = node.args[1] });
                 }

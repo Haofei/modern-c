@@ -11,7 +11,7 @@ const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
 const numeric = @import("numeric.zig");
-const sema_type = @import("sema_type.zig");
+const type_syntax = @import("type_syntax.zig");
 
 // Pure AST-shape queries shared with sema/mir/lower_c (see `ast_query.zig`); aliased so the
 // existing call sites read unchanged.
@@ -257,7 +257,7 @@ const LocalSliceAggregatePointerArrayBase = struct {
 
 fn directCallFactMatchesDeclared(fact_ty: ast.TypeExpr, declared_ty: ast.TypeExpr) bool {
     if (std.meta.eql(fact_ty, declared_ty)) return true;
-    if (sema_type.sameTypeSyntax(fact_ty, declared_ty)) return true;
+    if (type_syntax.sameTypeSyntax(fact_ty, declared_ty)) return true;
     return (typeNameEql(fact_ty, "void") and typeNameEql(declared_ty, "void")) or
         (typeNameEql(fact_ty, "never") and typeNameEql(declared_ty, "never"));
 }
@@ -851,7 +851,7 @@ const LlvmEmitter = struct {
         const view_narrow_target = self.mirTargetTypeFactAt(.view_const_narrow_target, expr.span);
         if (view_narrow_target) |fact| {
             _ = self.mirTargetTypeFactAt(.view_const_narrow_source, expr.span) orelse return error.UnsupportedLlvmEmission;
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(ty))) return error.UnsupportedLlvmEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(ty))) return error.UnsupportedLlvmEmission;
         }
         const semantic_ty = switch (expr.kind) {
             .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else return error.UnsupportedLlvmEmission,
@@ -1613,7 +1613,7 @@ const LlvmEmitter = struct {
     fn coerceExprValue(self: *LlvmEmitter, value: []const u8, expr: ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
         if (self.mirTargetTypeFactAt(.view_const_narrow_target, expr.span)) |target_fact| {
             const source_fact = self.mirTargetTypeFactAt(.view_const_narrow_source, expr.span) orelse return error.UnsupportedLlvmEmission;
-            if (sema_type.sameTypeSyntax(self.resolveAliasType(target_fact.target_ty), self.resolveAliasType(expected_ty))) {
+            if (type_syntax.sameTypeSyntax(self.resolveAliasType(target_fact.target_ty), self.resolveAliasType(expected_ty))) {
                 if (!std.mem.eql(u8, try self.llvmType(source_fact.target_ty), try self.llvmType(target_fact.target_ty))) return error.UnsupportedLlvmEmission;
                 return value;
             }
@@ -3054,19 +3054,19 @@ const LlvmEmitter = struct {
                 else => return error.UnsupportedLlvmEmission,
             };
             if (pointer.mutability != place.mutability) return error.UnsupportedLlvmEmission;
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(place.ty))) return error.UnsupportedLlvmEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(place.ty))) return error.UnsupportedLlvmEmission;
             return fact_ty;
         }
         if (try self.requireMirTryExpressionResultType(initializer)) |known_ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
             return fact_ty;
         }
         if (try self.requireMirBinaryExpressionResultType(initializer)) |known_ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
             return fact_ty;
         }
         if (self.exprType(initializer)) |known_ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
         return fact_ty;
     }
@@ -3081,7 +3081,7 @@ const LlvmEmitter = struct {
                     info.ok_ty
                 else
                     self.nullableInnerType(operand_ty) orelse return error.UnsupportedLlvmEmission;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
                 break :blk result_ty;
             },
             else => null,
@@ -3097,7 +3097,7 @@ const LlvmEmitter = struct {
                     simpleType(initializer.span, "bool")
                 else
                     self.exprType(node.left.*) orelse return error.UnsupportedLlvmEmission;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
                 break :blk result_ty;
             },
             else => null,
@@ -3144,7 +3144,7 @@ const LlvmEmitter = struct {
             },
             .deref => |inner| blk: {
                 const pointer_ty = self.directAddressOfLocalPointerType(inner.*) orelse break :blk null;
-                const view = sema_type.viewType(self.resolveAliasType(pointer_ty)) orelse break :blk null;
+                const view = type_syntax.viewType(self.resolveAliasType(pointer_ty)) orelse break :blk null;
                 switch (view.kind) {
                     .pointer, .raw_many_pointer => {},
                     .slice => break :blk null,
@@ -3587,7 +3587,7 @@ const LlvmEmitter = struct {
         const fact = self.mirTargetTypeFactAt(kind, subject.span) orelse return error.UnsupportedLlvmEmission;
         const fact_ty = fact.target_ty;
         if (self.exprType(subject)) |known_ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return error.UnsupportedLlvmEmission;
         }
         const resolved_fact_ty = self.resolveAliasType(fact_ty);
         return .{
@@ -3600,7 +3600,7 @@ const LlvmEmitter = struct {
         if (!isSourceSpan(expr.span)) return self.exprType(expr);
         const fact_ty = (self.mirTargetTypeFactAt(kind, expr.span) orelse return null).target_ty;
         if (self.exprType(expr)) |known_ty| {
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return null;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(known_ty))) return null;
         }
         return fact_ty;
     }
@@ -3661,7 +3661,7 @@ const LlvmEmitter = struct {
             .slice => |node| node.child.*,
             else => return error.UnsupportedLlvmEmission,
         };
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(expected_element))) return error.UnsupportedLlvmEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(expected_element))) return error.UnsupportedLlvmEmission;
         return .{ .iterable = iterable_ty, .element = element_ty };
     }
 
@@ -4311,7 +4311,7 @@ const LlvmEmitter = struct {
     fn emitDeref(self: *LlvmEmitter, ptr_expr: ast.Expr, deref_span: ast.Span) ![]const u8 {
         const inferred_pointee_ty = self.derefPointeeType(ptr_expr) orelse return error.UnsupportedLlvmEmission;
         const pointee_ty = self.expressionResultTypeAt(deref_span, inferred_pointee_ty) orelse return error.UnsupportedLlvmEmission;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointee_ty), self.resolveAliasType(inferred_pointee_ty))) return error.UnsupportedLlvmEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(pointee_ty), self.resolveAliasType(inferred_pointee_ty))) return error.UnsupportedLlvmEmission;
         const ptr = try self.emitExpr(ptr_expr, try self.pointerTypeFor(pointee_ty));
         if (self.isAggregateType(pointee_ty) and !self.pointerExprHasProvenLocalStorage(ptr_expr)) {
             return try self.emitRaceTolerantAggregateDerefLoad(ptr, pointee_ty);
@@ -4326,7 +4326,7 @@ const LlvmEmitter = struct {
         if (base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) {
             const usize_ty = simpleType(member_span, "usize");
             const field_ty = self.requireExpressionResultType(.{ .kind = .{ .member = node }, .span = member_span }, usize_ty) orelse return error.UnsupportedLlvmEmission;
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(usize_ty))) return error.UnsupportedLlvmEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(usize_ty))) return error.UnsupportedLlvmEmission;
             const base = try self.emitExpr(node.base.*, base_ty);
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ result, try self.llvmType(base_ty), base });
@@ -4335,7 +4335,7 @@ const LlvmEmitter = struct {
         if (self.packedBitsInfoForType(base_ty)) |info| {
             const bit_index = self.packedBitsFieldIndex(info, node.name.text) orelse return error.UnsupportedLlvmEmission;
             const field_ty = self.requireExpressionResultType(.{ .kind = .{ .member = node }, .span = member_span }, simpleType(member_span, "bool")) orelse return error.UnsupportedLlvmEmission;
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(simpleType(member_span, "bool")))) return error.UnsupportedLlvmEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(simpleType(member_span, "bool")))) return error.UnsupportedLlvmEmission;
             const base = try self.emitExpr(node.base.*, base_ty);
             const masked = try self.nextTemp();
             const result = try self.nextTemp();
@@ -4348,14 +4348,14 @@ const LlvmEmitter = struct {
             // a bare member load only applies to scalar members.
             if (overlayArrayElementType(field.ty) != null) return error.UnsupportedLlvmEmission;
             const field_ty = self.expressionResultTypeAt(member_span, field.ty) orelse return error.UnsupportedLlvmEmission;
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(field.ty))) return error.UnsupportedLlvmEmission;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(field.ty))) return error.UnsupportedLlvmEmission;
             const ptr = try self.emitOverlayFieldAddress(node.base.*, field);
             try self.emitOrdinaryShadowHook(ptr, field.ty, .load_pre);
             return try self.emitOrdinaryLoad(field.ty, ptr, self.memberBaseIsGlobal(node));
         }
         const inferred_field = self.memberField(node.base.*, node.name.text) orelse return error.UnsupportedLlvmEmission;
         const field_ty = self.expressionResultTypeAt(member_span, inferred_field.ty) orelse return error.UnsupportedLlvmEmission;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field.ty))) return error.UnsupportedLlvmEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(inferred_field.ty))) return error.UnsupportedLlvmEmission;
         const field = inferred_field;
         const ptr = try self.emitMemberAddress(node);
         if (self.isAggregateType(field.ty) and self.pointerMemberBaseUsesRaceTolerantLowering(node.base.*)) {
@@ -5435,7 +5435,7 @@ const LlvmEmitter = struct {
         const pointee_len = self.arrayLenValue(pointee_array.len) orelse return null;
         const source_len = self.arrayLenValue(source_array.len) orelse return null;
         if (pointee_len != source_len) return null;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(pointee_array.child.*), self.resolveAliasType(source_array.child.*))) return null;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(pointee_array.child.*), self.resolveAliasType(source_array.child.*))) return null;
         return array_name;
     }
 
@@ -5998,22 +5998,22 @@ const LlvmEmitter = struct {
         for (function.target_type_facts) |result_fact| {
             if (result_fact.kind != .atomic_init_result or result_fact.target_owner == null or result_fact.target_index == null or !mirSourceMatches(span, result_fact.source)) continue;
             if (!std.mem.eql(u8, result_fact.target_owner.?, "atomic.init")) continue;
-            if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_fact.target_ty), self.resolveAliasType(expected_result_ty))) continue;
+            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(result_fact.target_ty), self.resolveAliasType(expected_result_ty))) continue;
             found_result = true;
 
             var group_payload_ty: ?ast.TypeExpr = null;
             for (function.target_type_facts) |payload_fact| {
                 if (payload_fact.kind != .atomic_init_payload or payload_fact.target_index != result_fact.target_index or payload_fact.target_owner == null or !mirSourceMatches(span, payload_fact.source)) continue;
                 if (!std.mem.eql(u8, payload_fact.target_owner.?, "atomic.init")) continue;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(payload_fact.target_ty), self.resolveAliasType(expected_payload_ty))) return null;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(payload_fact.target_ty), self.resolveAliasType(expected_payload_ty))) return null;
                 if (group_payload_ty) |known| {
-                    if (!sema_type.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_fact.target_ty))) return null;
+                    if (!type_syntax.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_fact.target_ty))) return null;
                 }
                 group_payload_ty = payload_fact.target_ty;
             }
             const payload_ty = group_payload_ty orelse return null;
             if (matched_payload_ty) |known| {
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_ty))) return null;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_ty))) return null;
             }
             matched_payload_ty = payload_ty;
         }
@@ -7106,7 +7106,7 @@ const LlvmEmitter = struct {
                 // over the storage base, so the load just uses the element type.
                 const element_ty = overlayArrayElementType(field.ty) orelse return error.UnsupportedLlvmEmission;
                 const result_ty = (self.mirTargetTypeFactAt(.expression_result, index_span) orelse return error.UnsupportedLlvmEmission).target_ty;
-                if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(element_ty))) return error.UnsupportedLlvmEmission;
+                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(element_ty))) return error.UnsupportedLlvmEmission;
                 const ptr = try self.emitIndexAddress(node);
                 const result = try self.nextTemp();
                 try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}{s}\n", .{ result, try self.llvmType(element_ty), ptr, try self.debugCallSuffix() });
@@ -7115,7 +7115,7 @@ const LlvmEmitter = struct {
         }
         const inferred_element_ty = self.indexElementType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const element_ty = (self.mirTargetTypeFactAt(.expression_result, index_span) orelse return error.UnsupportedLlvmEmission).target_ty;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedLlvmEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(element_ty), self.resolveAliasType(inferred_element_ty))) return error.UnsupportedLlvmEmission;
         const ptr = try self.emitIndexAddress(node);
         if (self.aggregateIndexUsesRaceTolerantLowering(node.base.*, element_ty)) {
             return try self.emitRaceTolerantAggregateDerefLoad(ptr, element_ty);
@@ -7299,7 +7299,7 @@ const LlvmEmitter = struct {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const inferred_slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedLlvmEmission;
         const slice_ty = (self.mirTargetTypeFactAt(.expression_result, slice_span) orelse return error.UnsupportedLlvmEmission).target_ty;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(slice_ty), self.resolveAliasType(inferred_slice_ty))) return error.UnsupportedLlvmEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(slice_ty), self.resolveAliasType(inferred_slice_ty))) return error.UnsupportedLlvmEmission;
         const slice = switch (slice_ty.kind) {
             .slice => |slice| slice,
             else => return error.UnsupportedLlvmEmission,
@@ -9581,7 +9581,7 @@ const LlvmEmitter = struct {
         if (!isSourceSpan(expr.span)) return self.exprType(expr);
         const fact = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
         const known = self.exprType(expr) orelse return null;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact), self.resolveAliasType(known))) return null;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact), self.resolveAliasType(known))) return null;
         return fact;
     }
 
@@ -9624,13 +9624,13 @@ const LlvmEmitter = struct {
         // sentinel span, so a span-keyed MIR lookup cannot identify one fact.
         if (!isSourceSpan(span)) return inferred;
         const fact = self.mirTargetTypeFactAt(.expression_result, span) orelse return null;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) return null;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) return null;
         return fact.target_ty;
     }
 
     fn emitCharLiteralWithTarget(self: *LlvmEmitter, literal: []const u8, span: ast.Span, expected_ty: ast.TypeExpr) ![]const u8 {
         const fact = self.mirTargetTypeFactAt(.char_literal, span) orelse return error.UnsupportedLlvmEmission;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
         return charLiteralValue(self.scratch.allocator(), literal);
     }
 
@@ -9650,7 +9650,7 @@ const LlvmEmitter = struct {
             info.ok_ty
         else
             self.nullableInnerType(operand_ty) orelse return null;
-        if (!sema_type.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return null;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return null;
         return result_ty;
     }
 

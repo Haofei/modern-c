@@ -2519,7 +2519,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "if (!mirCallTargetSourceMatches(span, fact.source)) continue;": 1,
         "fact.kind == kind and mirCallTargetSourceMatches(span, fact.source)": 1,
         "fact.kind == kind and mirSourceMatches(span, fact.source)": 0,
-        "if (sema_type.sameTypeSyntax(fact_ty, declared_ty)) return true;": 1,
+        "if (type_syntax.sameTypeSyntax(fact_ty, declared_ty)) return true;": 1,
         "mirTargetTypeFactAtOwned(.direct_call_result": 3,
         "mirTargetTypeFactAtOwned(.direct_call_argument": 2,
         "mirTargetTypeFactAt(.indirect_call_callee": 2,

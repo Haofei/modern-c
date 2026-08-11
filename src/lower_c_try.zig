@@ -18,7 +18,7 @@ const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
-const sema_type = @import("sema_type.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const FnInfo = lower_c_model.FnInfo;
@@ -518,7 +518,7 @@ fn tryExpressionResultType(ctx: TryDirectEmitContext, expr: ast.Expr) !?ast.Type
                 else => return error.UnsupportedCEmission,
             };
             const fact_ty = ctx.replacement.mir_target_type(ctx.replacement.emit_ctx, .expression_result, expr.span) orelse return error.UnsupportedCEmission;
-            if (!sema_type.sameTypeSyntax(
+            if (!type_syntax.sameTypeSyntax(
                 lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, fact_ty),
                 lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, expected_ty),
             )) return error.UnsupportedCEmission;

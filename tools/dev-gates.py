@@ -237,6 +237,7 @@ RULES: tuple[Rule, ...] = (
             "src/hir.zig",
             "src/loader.zig",
             "src/mir_facts_view.zig",
+            "src/type_syntax.zig",
         ),
         ("architecture-boundary-inventory-test",),
         "compiler architecture boundary changes need the backend syntax-escape and cleanup-state ratchet",
