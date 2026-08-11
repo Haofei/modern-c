@@ -31,7 +31,7 @@ EXACT_BACKEND_COUNTS = {
     '@import("mir_facts_view.zig")': 2,
     '@import("type_syntax.zig")': 5,
     "[]const ast.Decl": 16,
-    "DeclarationMetadataView": 29,
+    "DeclarationMetadataView": 26,
     "SourceMapMechanicsView": 9,
     "initFromDecls": 0,
 }

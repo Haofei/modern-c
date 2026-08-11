@@ -50,14 +50,12 @@ fn backendEmitMap(
     ctx: ?*anyopaque,
     allocator: std.mem.Allocator,
     program: backend_mod.VerifiedProgram,
-    declarations: backend_mod.DeclarationMetadataView,
     source_map: backend_mod.SourceMapMechanicsView,
     out: *std.ArrayList(u8),
     generated_artifact: []const u8,
     opts: backend_mod.LowerOptions,
 ) backend_mod.LowerError!void {
     _ = ctx;
-    _ = declarations;
     return appendCSourceMapFromGenerated(
         allocator,
         source_map,

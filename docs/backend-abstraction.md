@@ -88,7 +88,6 @@ pub const Backend = struct {
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
-        declarations: DeclarationMetadataView,
         source_map: SourceMapMechanicsView,
         out: *std.ArrayList(u8),
         generated_artifact: []const u8,

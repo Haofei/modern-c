@@ -463,7 +463,6 @@ pub const Backend = struct {
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
-        declarations: DeclarationMetadataView,
         source_map: SourceMapMechanicsView,
         out: *std.ArrayList(u8),
         generated_artifact: []const u8,
@@ -492,13 +491,12 @@ pub const Backend = struct {
         self: Backend,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
-        declarations: DeclarationMetadataView,
         source_map: SourceMapMechanicsView,
         out: *std.ArrayList(u8),
         generated_artifact: []const u8,
         opts: LowerOptions,
     ) LowerError!void {
-        return self.emitMapFn.?(self.ctx, allocator, program, declarations, source_map, out, generated_artifact, opts);
+        return self.emitMapFn.?(self.ctx, allocator, program, source_map, out, generated_artifact, opts);
     }
 };
 
