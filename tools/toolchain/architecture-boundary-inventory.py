@@ -1,0 +1,186 @@
+#!/usr/bin/env python3
+"""Ratchet compiler architecture boundaries called out by review.
+
+This is intentionally an inventory gate, not a claim that the boundary is
+finished.  It makes the remaining transitional backend syntax/sema escapes
+explicit and prevents the old backend cleanup state machines from coming back.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+BACKEND_SOURCE_PREFIXES = (
+    "backend",
+    "lower_c",
+    "lower_llvm",
+)
+BACKEND_EXTRA_FILES = {
+    "lower_cov.zig",
+}
+
+EXACT_BACKEND_COUNTS = {
+    '@import("ast.zig")': 51,
+    '@import("sema': 9,
+    '@import("semantic_db.zig")': 2,
+    "[]const ast.Decl": 17,
+    "DeclarationMetadataView": 25,
+    "SourceMapMechanicsView": 9,
+    "initFromDecls": 2,
+}
+
+EXACT_FILE_COUNTS = {
+    ("src/backend.zig", "[]const ast.Decl"): 10,
+    ("src/backend.zig", "pub const DeclarationMetadataView = struct"): 1,
+    ("src/backend.zig", "pub const SourceMapMechanicsView = struct"): 1,
+    ("src/backend.zig", "pub fn initFromDecls("): 1,
+    ("src/loader.zig", "*textual inclusion*"): 1,
+    ("src/hir.zig", "inspection_only_header"): 3,
+    ("src/semantic_db.zig", "pub const SemanticDb = struct"): 1,
+}
+
+REQUIRED_ANCHORS = {
+    "src/backend.zig": (
+        "Transitional declaration metadata view",
+        "Transitional C declaration metadata prepass view",
+        "Transitional LLVM declaration metadata prepass view",
+        "Transitional source-map mechanics view",
+        "MIR verifier",
+        "New backend consumers",
+        "should prefer `source_spelling`, MIR identities, or explicit facts.",
+    ),
+    "src/loader.zig": (
+        "MC has no",
+        "separate module/object model",
+        "combined source",
+    ),
+    "src/hir.zig": (
+        'pub const inspection_only_header = "hir mode=inspection-only production_boundary=false\\n";',
+    ),
+    "src/semantic_db.zig": (
+        "MIR owns construction and verification.",
+        "small query surface",
+        "targetTypeFactById",
+    ),
+}
+
+FORBIDDEN_BACKEND_PATTERNS = {
+    r"\bCleanupState\b": "backend cleanup state type",
+    r"\bCleanupCursor\b": "backend cleanup cursor type",
+    r"\bcleanup_state\b": "backend cleanup_state field",
+    r"\bcleanup_start\b": "backend cleanup_start cursor",
+    r"\bloop_cleanup_cursors\b": "loop cleanup cursor cache",
+    r"\bdefer_stack\b": "backend defer_stack",
+    r"\bDeferredCleanup\b": "backend deferred cleanup stack entry",
+    r"\bAutoDropCleanupEntry\b": "backend auto-drop cleanup stack entry",
+    r"\bcaptureDeferCleanupStack\b": "defer stack snapshot helper",
+    r"\brestoreDeferCleanupStack\b": "defer stack restore helper",
+    r"\brestoreToCursor\b": "cleanup cursor restore helper",
+    r"\brootCleanupCursor\b": "root cleanup cursor helper",
+    r"\bcleanupCursorIndex\b": "cleanup cursor index helper",
+}
+
+FORBIDDEN_GLOBAL_PATTERNS = {
+    r"VerifiedProgram\.init\(": "module-shaped VerifiedProgram construction",
+}
+
+
+def fail(message: str) -> None:
+    print(f"FAIL: architecture-boundary-inventory - {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def read(rel_path: str) -> str:
+    path = ROOT / rel_path
+    if not path.is_file():
+        fail(f"missing {rel_path}")
+    return path.read_text(encoding="utf-8")
+
+
+def backend_sources() -> list[Path]:
+    paths: list[Path] = []
+    for path in (ROOT / "src").glob("*.zig"):
+        name = path.name
+        if name.endswith("_tests.zig"):
+            continue
+        if name in BACKEND_EXTRA_FILES or any(name.startswith(prefix) for prefix in BACKEND_SOURCE_PREFIXES):
+            paths.append(path)
+    return sorted(paths)
+
+
+def count_in_backend(needle: str) -> int:
+    return sum(path.read_text(encoding="utf-8").count(needle) for path in backend_sources())
+
+
+def require_exact_backend_count(needle: str, expected: int) -> None:
+    actual = count_in_backend(needle)
+    if actual != expected:
+        fail(f"backend count for {needle!r} is {actual}, expected {expected}; update only when the count intentionally decreases")
+
+
+def require_exact_file_count(rel_path: str, needle: str, expected: int) -> None:
+    actual = read(rel_path).count(needle)
+    if actual != expected:
+        fail(f"{rel_path} count for {needle!r} is {actual}, expected {expected}; update only when the count intentionally decreases")
+
+
+def require_contains(rel_path: str, needle: str) -> None:
+    if needle not in read(rel_path):
+        fail(f"{rel_path} missing {needle!r}")
+
+
+def require_absent_in_backend(pattern: str, description: str) -> None:
+    regex = re.compile(pattern)
+    for path in backend_sources():
+        text = path.read_text(encoding="utf-8")
+        match = regex.search(text)
+        if match:
+            rel_path = path.relative_to(ROOT)
+            fail(f"{rel_path} contains {description}: {match.group(0)!r}")
+
+
+def require_absent_glob(pattern: str, description: str) -> None:
+    regex = re.compile(pattern)
+    for path in (ROOT / "src").glob("*.zig"):
+        if path.name.endswith("_tests.zig"):
+            continue
+        text = path.read_text(encoding="utf-8")
+        match = regex.search(text)
+        if match:
+            rel_path = path.relative_to(ROOT)
+            fail(f"{rel_path} contains {description}: {match.group(0)!r}")
+
+
+def main() -> int:
+    sources = backend_sources()
+    if len(sources) != 56:
+        fail(f"backend source inventory has {len(sources)} files, expected 56")
+
+    for needle, expected in EXACT_BACKEND_COUNTS.items():
+        require_exact_backend_count(needle, expected)
+
+    for (rel_path, needle), expected in EXACT_FILE_COUNTS.items():
+        require_exact_file_count(rel_path, needle, expected)
+
+    for rel_path, needles in REQUIRED_ANCHORS.items():
+        for needle in needles:
+            require_contains(rel_path, needle)
+
+    for pattern, description in FORBIDDEN_BACKEND_PATTERNS.items():
+        require_absent_in_backend(pattern, description)
+
+    for pattern, description in FORBIDDEN_GLOBAL_PATTERNS.items():
+        require_absent_glob(pattern, description)
+
+    print("PASS: architecture-boundary-inventory - backend cleanup state stays removed and syntax escapes are ratcheted")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

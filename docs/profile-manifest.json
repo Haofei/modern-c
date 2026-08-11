@@ -36,6 +36,7 @@
         "bad-diagnostics-test",
         "diagnostics-reference-test",
         "diagnostic-code-inventory-test",
+        "architecture-boundary-inventory-test",
         "compilation-session-inventory-test",
         "mir-identity-inventory-test",
         "semantic-facts-inventory-test",

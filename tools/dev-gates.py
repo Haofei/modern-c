@@ -229,6 +229,20 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         (
+            "tools/toolchain/architecture-boundary-inventory.py",
+            "src/backend.zig",
+            "src/backend_cleanup.zig",
+            "src/lower_c*.zig",
+            "src/lower_llvm*.zig",
+            "src/hir.zig",
+            "src/loader.zig",
+            "src/semantic_db.zig",
+        ),
+        ("architecture-boundary-inventory-test",),
+        "compiler architecture boundary changes need the backend syntax-escape and cleanup-state ratchet",
+    ),
+    Rule(
+        (
             "tools/toolchain/compilation-session-inventory.py",
             "src/main.zig",
             "docs/refactoring-plan.md",

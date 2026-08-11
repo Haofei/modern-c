@@ -24,6 +24,7 @@
         "diagnostics-reference-test",
         "diagnostic-code-inventory-test",
         "semantic-facts-inventory-test",
+        "architecture-boundary-inventory-test",
         "compilation-session-inventory-test",
         "mir-identity-inventory-test",
         "gate-manifest-test",
@@ -121,6 +122,24 @@
       "id": "semantic-facts-inventory-test",
       "owner": "backend-authority",
       "category": "semantic-fact-inventory",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "blocking_profiles": [
+        "compiler-subset"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "architecture-boundary-inventory-test",
+      "owner": "compiler-architecture",
+      "category": "architecture-boundary-inventory",
       "tier": "pr",
       "required_tools": [
         "python3"
