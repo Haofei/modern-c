@@ -942,6 +942,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub const Checks = struct": 0,
         "pub const TargetArch = enum": 0,
         "pub const LowerOptions = struct": 0,
+        "pub const LowerError = lower_error.LowerError": 1,
+        "pub const lowerErrorFromAny = lower_error.lowerErrorFromAny": 1,
+        "pub const LowerError = std.mem.Allocator.Error || error": 0,
+        "pub fn lowerErrorFromAny": 0,
         "pub const SourceSpellingView = verified_program.SourceSpellingView": 1,
         "pub const VerifiedProgram = verified_program.VerifiedProgram": 1,
         "pub const SourceSpellingView = struct": 0,
@@ -980,6 +984,12 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub const LowerOptions = struct": 1,
         "pub fn targetArchFromName": 1,
         "source_sha256: ?artifact_model.Sha256Digest = null": 1,
+    },
+    "src/lower_error.zig": {
+        "pub const LowerError = std.mem.Allocator.Error || error": 1,
+        "pub fn lowerErrorFromAny": 1,
+        "InternalLoweringFailure": 3,
+        "test \"lowering errors are mapped to the domain error set\"": 1,
     },
     "src/verified_program.zig": {
         "pub const SourceSpellingView = struct": 1,

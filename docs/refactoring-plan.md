@@ -390,6 +390,7 @@ removing backend authority before adding new abstractions:
 | 202 | Move artifact envelope ownership out of backend seam. | Complete: `ArtifactBundle`, digest helpers, and `.mcmeta`/`.mcmap` writers moved to `artifact_model.zig`; `main`, `lower_c_map`, `artifact_publisher`, and `CompilationSession` consume the artifact model directly, while `backend.zig` only references the digest type needed by `LowerOptions`. |
 | 203 | Move verified program admission out of backend seam. | Complete: `SourceSpellingView` and `VerifiedProgram` moved to `verified_program.zig`; `backend.zig` re-exports the admitted program type for backend vtables but no longer imports MIR directly or owns the MIR verifier/admission construction. |
 | 204 | Move backend request options out of backend seam. | Complete: `Profile`, `Checks`, `TargetArch`, `LowerOptions`, and `targetArchFromName` moved to `codegen_options.zig`; `backend.zig` re-exports them for compatibility but no longer imports artifact metadata or diagnostics just to define lowering request options. |
+| 205 | Move lowering error boundary out of backend seam. | Complete: `LowerError` and `lowerErrorFromAny` moved to `lower_error.zig`; `backend.zig` re-exports them for compatibility while the domain lowering error set is owned by a dedicated boundary module. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

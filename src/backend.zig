@@ -2,6 +2,7 @@ const std = @import("std");
 
 const codegen_options = @import("codegen_options.zig");
 const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
+const lower_error = @import("lower_error.zig");
 const verified_program = @import("verified_program.zig");
 
 pub const Profile = codegen_options.Profile;
@@ -10,39 +11,8 @@ pub const TargetArch = codegen_options.TargetArch;
 pub const LowerOptions = codegen_options.LowerOptions;
 pub const targetArchFromName = codegen_options.targetArchFromName;
 
-pub const LowerError = std.mem.Allocator.Error || error{
-    UnsupportedCEmission,
-    UnsupportedLlvmEmission,
-    InvalidMirTargetTypeFacts,
-    InvalidMirCallTargetFacts,
-    InvalidMirConstGetFacts,
-    InvalidMirIntegerFacts,
-    InvalidMirRepresentationFacts,
-    StaleMirTargetTypeFacts,
-    GeneratedTypeNameCollision,
-    LayoutStructNotFound,
-    LayoutUnresolved,
-    InternalLoweringFailure,
-};
-
-pub fn lowerErrorFromAny(err: anyerror) LowerError {
-    return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        error.UnsupportedCEmission => error.UnsupportedCEmission,
-        error.UnsupportedLlvmEmission => error.UnsupportedLlvmEmission,
-        error.InvalidMirTargetTypeFacts => error.InvalidMirTargetTypeFacts,
-        error.InvalidMirCallTargetFacts => error.InvalidMirCallTargetFacts,
-        error.InvalidMirConstGetFacts => error.InvalidMirConstGetFacts,
-        error.InvalidMirIntegerFacts => error.InvalidMirIntegerFacts,
-        error.InvalidMirRepresentationFacts => error.InvalidMirRepresentationFacts,
-        error.StaleMirTargetTypeFacts => error.StaleMirTargetTypeFacts,
-        error.GeneratedTypeNameCollision => error.GeneratedTypeNameCollision,
-        error.LayoutStructNotFound => error.LayoutStructNotFound,
-        error.LayoutUnresolved => error.LayoutUnresolved,
-        else => error.InternalLoweringFailure,
-    };
-}
-
+pub const LowerError = lower_error.LowerError;
+pub const lowerErrorFromAny = lower_error.lowerErrorFromAny;
 pub const SourceSpellingView = verified_program.SourceSpellingView;
 pub const LegacyDeclarationSlice = legacy_backend_syntax.LegacyDeclarationSlice;
 pub const SourceMapMechanicsView = legacy_backend_syntax.SourceMapMechanicsView;
@@ -131,11 +101,4 @@ test "backend interface does not import concrete lowerers" {
 
     try std.testing.expect(std.mem.indexOf(u8, source, "@import(\"lower_c.zig\")") == null);
     try std.testing.expect(std.mem.indexOf(u8, source, "@import(\"lower_llvm.zig\")") == null);
-}
-
-test "backend lowering errors are mapped to the domain error set" {
-    try std.testing.expectEqual(LowerError.UnsupportedCEmission, lowerErrorFromAny(error.UnsupportedCEmission));
-    try std.testing.expectEqual(LowerError.InvalidMirTargetTypeFacts, lowerErrorFromAny(error.InvalidMirTargetTypeFacts));
-    try std.testing.expectEqual(LowerError.OutOfMemory, lowerErrorFromAny(error.OutOfMemory));
-    try std.testing.expectEqual(LowerError.InternalLoweringFailure, lowerErrorFromAny(error.UnexpectedBackendBug));
 }

@@ -56,6 +56,7 @@ pub const LowerOptions = struct {
     linux_kernel: bool = false,
 };
 
+// Defined in src/lower_error.zig and re-exported by backend.zig.
 pub const LowerError = std.mem.Allocator.Error || error{
     UnsupportedCEmission,
     UnsupportedLlvmEmission,
@@ -136,7 +137,8 @@ Artifact envelope metadata is not owned by the backend seam. `.mcmeta` and `.mcm
 
 ## Error boundary
 
-The registry interface returns `backend.LowerError`, not `anyerror`. C and LLVM
+The registry interface returns `backend.LowerError`, not `anyerror`; the
+concrete error set and mapping live in `lower_error.zig`. C and LLVM
 lowerers still contain internal helper functions with wider error sets, but
 their adapter functions map those errors through `backend.lowerErrorFromAny`.
 
