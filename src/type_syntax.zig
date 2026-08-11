@@ -40,6 +40,40 @@ pub fn viewElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
+pub fn typeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .name => |n| n.text,
+        .qualified => |q| typeName(q.child.*),
+        else => null,
+    };
+}
+
+pub fn simpleNameType(name: []const u8, span: ast.Span) ast.TypeExpr {
+    return .{ .span = span, .kind = .{ .name = .{ .text = name, .span = span } } };
+}
+
+pub fn isSatType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .generic => |node| std.mem.eql(u8, node.base.text, "sat"),
+        .qualified => |node| isSatType(node.child.*),
+        else => false,
+    };
+}
+
+pub fn isWrapType(ty: ast.TypeExpr) bool {
+    return switch (ty.kind) {
+        .generic => |node| std.mem.eql(u8, node.base.text, "wrap"),
+        .qualified => |node| isWrapType(node.child.*),
+        else => false,
+    };
+}
+
+pub fn isOpaqueAddressTypeName(name: []const u8) bool {
+    return std.mem.eql(u8, name, "PAddr") or
+        std.mem.eql(u8, name, "VAddr") or
+        std.mem.eql(u8, name, "DmaAddr");
+}
+
 pub fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool {
     if (std.meta.activeTag(left.kind) != std.meta.activeTag(right.kind)) return false;
     return switch (left.kind) {

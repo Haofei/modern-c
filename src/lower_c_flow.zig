@@ -3,7 +3,6 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
@@ -11,6 +10,7 @@ const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const GlobalAccess = lower_c_model.GlobalAccess;
 const LocalInfo = lower_c_model.LocalInfo;
@@ -24,7 +24,7 @@ const isBoolType = lower_c_type.isBoolType;
 const isComparisonOp = lower_c_op.isComparisonOp;
 const sameCStorageType = lower_c_type.sameCStorageType;
 const sequencedConditionCandidate = lower_c_expr.sequencedConditionCandidate;
-const simpleNameType = ast_query.simpleNameType;
+const simpleNameType = type_syntax.simpleNameType;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;

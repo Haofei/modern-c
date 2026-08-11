@@ -6,7 +6,6 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const eval = @import("eval.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -14,6 +13,7 @@ const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_reflect = @import("lower_c_reflect.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const GlobalInfo = lower_c_model.GlobalInfo;
 const MmioField = lower_c_model.MmioField;
@@ -21,7 +21,7 @@ const OverlayLayout = lower_c_model.OverlayLayout;
 const cType = lower_c_type.cType;
 const constArrayLenValue = lower_c_const.constArrayLenValue;
 const intLiteralText = lower_c_expr.intLiteralText;
-const typeName = ast_query.typeName;
+const typeName = type_syntax.typeName;
 const widthBits = lower_c_op.widthBits;
 
 pub fn globalInfoFromType(ty: ast.TypeExpr) GlobalInfo {

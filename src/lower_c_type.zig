@@ -8,14 +8,13 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const type_syntax = @import("type_syntax.zig");
 
-const typeName = ast_query.typeName;
-const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
+const typeName = type_syntax.typeName;
+const isOpaqueAddressTypeName = type_syntax.isOpaqueAddressTypeName;
 
 const MmioStruct = lower_c_model.MmioStruct;
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;

@@ -12,10 +12,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const numeric = @import("numeric.zig");
-
-const isIdentNamed = ast_query.isIdentNamed;
 
 pub fn binaryIsComparison(op: ast.BinaryOp) bool {
     return switch (op) {

@@ -3,7 +3,6 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const lower_c_model = @import("lower_c_model.zig");
 
 const ReflectionCallKind = lower_c_model.ReflectionCallKind;

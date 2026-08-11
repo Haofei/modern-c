@@ -11,11 +11,11 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const numeric = @import("numeric.zig");
 const scalar_repr = @import("scalar_repr.zig");
+const type_syntax = @import("type_syntax.zig");
 
-const typeName = ast_query.typeName;
+const typeName = type_syntax.typeName;
 
 pub fn simpleType(span: ast.Span, name: []const u8) ast.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .span = span, .text = name } } };

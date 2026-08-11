@@ -3,9 +3,9 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const type_syntax = @import("type_syntax.zig");
 
-const typeName = ast_query.typeName;
+const typeName = type_syntax.typeName;
 
 pub fn resolveAliasType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) ast.TypeExpr {
     return resolveAliasTypeDepth(type_aliases, ty, 0);

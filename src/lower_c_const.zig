@@ -4,13 +4,11 @@ const std = @import("std");
 
 const array_len = @import("array_len.zig");
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const eval = @import("eval.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const numeric = @import("numeric.zig");
 
-const isIdentNamed = ast_query.isIdentNamed;
 const LocalInfo = lower_c_model.LocalInfo;
 const intTypeRange = lower_c_type.intTypeRange;
 pub const parseI128Literal = numeric.parseI128Literal;

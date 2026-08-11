@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const eval = @import("eval.zig");
 const lower_llvm_model = @import("lower_llvm_model.zig");
 const lower_llvm_type = @import("lower_llvm_type.zig");

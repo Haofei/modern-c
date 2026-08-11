@@ -11,9 +11,6 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
-
-const isIdentNamed = ast_query.isIdentNamed;
 
 pub const AtomicOrderContext = enum {
     load,
@@ -72,5 +69,13 @@ pub fn fenceOrderingForCall(callee: ast.Expr) ?[]const u8 {
         },
         .grouped => |inner| fenceOrderingForCall(inner.*),
         else => null,
+    };
+}
+
+fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
+    return switch (expr.kind) {
+        .ident => |ident| std.mem.eql(u8, ident.text, name),
+        .grouped, .move_expr => |inner| isIdentNamed(inner.*, name),
+        else => false,
     };
 }
