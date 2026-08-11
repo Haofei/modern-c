@@ -468,7 +468,7 @@ pub const CEmitter = struct {
         // mangling resolve during the artifact-collection pass below. Const global
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
-        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+        for (artifacts.callable_value_artifacts) |artifact| switch (artifact) {
             .function => |function| {
                 const fn_decl = function.fn_decl;
                 if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);

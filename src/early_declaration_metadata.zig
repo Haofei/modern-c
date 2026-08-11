@@ -15,6 +15,7 @@ pub const EarlyDeclarationArtifacts = struct {
     packed_bits: []const ast.PackedBitsDecl,
     overlay_unions: []const ast.OverlayUnionDecl,
     decl_artifacts: []const DeclArtifact,
+    callable_value_artifacts: []const CallableValueArtifact,
     source_map_artifacts: []const SourceMapArtifact,
 
     pub fn collectFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !EarlyDeclarationArtifacts {
@@ -34,21 +35,26 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer overlay_unions.deinit(allocator);
         var decl_artifacts: std.ArrayList(DeclArtifact) = .empty;
         errdefer decl_artifacts.deinit(allocator);
+        var callable_value_artifacts: std.ArrayList(CallableValueArtifact) = .empty;
+        errdefer callable_value_artifacts.deinit(allocator);
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
         errdefer source_map_artifacts.deinit(allocator);
 
         for (decls) |decl| switch (decl.kind) {
             .fn_decl => |fn_decl| {
                 try decl_artifacts.append(allocator, .{ .function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
+                try callable_value_artifacts.append(allocator, .{ .function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .extern_fn => |fn_decl| {
                 try decl_artifacts.append(allocator, .{ .extern_function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
+                try callable_value_artifacts.append(allocator, .{ .extern_function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .global_decl => |global| {
                 try globals.append(allocator, global);
                 try decl_artifacts.append(allocator, .{ .global = global });
+                try callable_value_artifacts.append(allocator, .{ .global = global });
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .type_alias => |alias| {
@@ -87,10 +93,12 @@ pub const EarlyDeclarationArtifacts = struct {
             },
             .trait_decl => |trait_decl| {
                 try decl_artifacts.append(allocator, .{ .trait_decl = trait_decl });
+                try callable_value_artifacts.append(allocator, .{ .trait_decl = trait_decl });
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .impl_trait => |impl_trait| {
                 try decl_artifacts.append(allocator, .{ .impl_trait = impl_trait });
+                try callable_value_artifacts.append(allocator, .{ .impl_trait = impl_trait });
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
         };
@@ -111,6 +119,8 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer allocator.free(owned_overlay_unions);
         const owned_decl_artifacts = try decl_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_decl_artifacts);
+        const owned_callable_value_artifacts = try callable_value_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_callable_value_artifacts);
         const owned_source_map_artifacts = try source_map_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_source_map_artifacts);
 
@@ -123,6 +133,7 @@ pub const EarlyDeclarationArtifacts = struct {
             .packed_bits = owned_packed_bits,
             .overlay_unions = owned_overlay_unions,
             .decl_artifacts = owned_decl_artifacts,
+            .callable_value_artifacts = owned_callable_value_artifacts,
             .source_map_artifacts = owned_source_map_artifacts,
         };
     }
@@ -136,6 +147,7 @@ pub const EarlyDeclarationArtifacts = struct {
         allocator.free(self.packed_bits);
         allocator.free(self.overlay_unions);
         allocator.free(self.decl_artifacts);
+        allocator.free(self.callable_value_artifacts);
         allocator.free(self.source_map_artifacts);
         self.* = empty;
     }
@@ -149,6 +161,7 @@ pub const EarlyDeclarationArtifacts = struct {
         .packed_bits = &.{},
         .overlay_unions = &.{},
         .decl_artifacts = &.{},
+        .callable_value_artifacts = &.{},
         .source_map_artifacts = &.{},
     };
 };
@@ -170,6 +183,19 @@ pub const DeclArtifact = union(enum) {
     packed_bits: ast.PackedBitsDecl,
     overlay_union: ast.OverlayUnionDecl,
     opaque_decl: ast.Ident,
+    function: Function,
+    extern_function: Function,
+    trait_decl: ast.TraitDecl,
+    impl_trait: ast.ImplTrait,
+
+    pub const Function = struct {
+        fn_decl: ast.FnDecl,
+        attrs: []const ast.Attr,
+    };
+};
+
+pub const CallableValueArtifact = union(enum) {
+    global: ast.GlobalDecl,
     function: Function,
     extern_function: Function,
     trait_decl: ast.TraitDecl,
