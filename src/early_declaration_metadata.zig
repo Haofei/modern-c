@@ -8,8 +8,6 @@ const std = @import("std");
 /// backend lowering requests as a generic legacy view.
 pub const EarlyDeclarationArtifacts = struct {
     globals: []const ast.GlobalDecl,
-    const_fns: []const ast.FnDecl,
-    const_globals: []const ast.GlobalDecl,
     type_aliases: []const ast.TypeAlias,
     structs: []const ast.StructDecl,
     enums: []const ast.EnumDecl,
@@ -20,12 +18,8 @@ pub const EarlyDeclarationArtifacts = struct {
     decl_origins: []const []const u8,
 
     pub fn collectFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !EarlyDeclarationArtifacts {
-        var const_fns: std.ArrayList(ast.FnDecl) = .empty;
-        errdefer const_fns.deinit(allocator);
         var globals: std.ArrayList(ast.GlobalDecl) = .empty;
         errdefer globals.deinit(allocator);
-        var const_globals: std.ArrayList(ast.GlobalDecl) = .empty;
-        errdefer const_globals.deinit(allocator);
         var type_aliases: std.ArrayList(ast.TypeAlias) = .empty;
         errdefer type_aliases.deinit(allocator);
         var structs: std.ArrayList(ast.StructDecl) = .empty;
@@ -45,7 +39,6 @@ pub const EarlyDeclarationArtifacts = struct {
 
         for (decls) |decl| switch (decl.kind) {
             .fn_decl => |fn_decl| {
-                if (fn_decl.is_const) try const_fns.append(allocator, fn_decl);
                 try decl_artifacts.append(allocator, .{ .function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
                 try decl_origins.append(allocator, declOrigin(decl));
             },
@@ -55,7 +48,6 @@ pub const EarlyDeclarationArtifacts = struct {
             },
             .global_decl => |global| {
                 try globals.append(allocator, global);
-                if (global.is_const) try const_globals.append(allocator, global);
                 try decl_artifacts.append(allocator, .{ .global = global });
                 try decl_origins.append(allocator, declOrigin(decl));
             },
@@ -105,10 +97,6 @@ pub const EarlyDeclarationArtifacts = struct {
 
         const owned_globals = try globals.toOwnedSlice(allocator);
         errdefer allocator.free(owned_globals);
-        const owned_const_fns = try const_fns.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_const_fns);
-        const owned_const_globals = try const_globals.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_const_globals);
         const owned_type_aliases = try type_aliases.toOwnedSlice(allocator);
         errdefer allocator.free(owned_type_aliases);
         const owned_structs = try structs.toOwnedSlice(allocator);
@@ -128,8 +116,6 @@ pub const EarlyDeclarationArtifacts = struct {
 
         return .{
             .globals = owned_globals,
-            .const_fns = owned_const_fns,
-            .const_globals = owned_const_globals,
             .type_aliases = owned_type_aliases,
             .structs = owned_structs,
             .enums = owned_enums,
@@ -143,8 +129,6 @@ pub const EarlyDeclarationArtifacts = struct {
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
         allocator.free(self.globals);
-        allocator.free(self.const_fns);
-        allocator.free(self.const_globals);
         allocator.free(self.type_aliases);
         allocator.free(self.structs);
         allocator.free(self.enums);
@@ -158,8 +142,6 @@ pub const EarlyDeclarationArtifacts = struct {
 
     pub const empty = EarlyDeclarationArtifacts{
         .globals = &.{},
-        .const_fns = &.{},
-        .const_globals = &.{},
         .type_aliases = &.{},
         .structs = &.{},
         .enums = &.{},

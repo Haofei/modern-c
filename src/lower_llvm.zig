@@ -599,9 +599,13 @@ const LlvmEmitter = struct {
     }
 
     fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) !void {
-        for (artifacts.const_fns) |fn_decl| {
-            if (!self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
-        }
+        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+            .function => |function| {
+                const fn_decl = function.fn_decl;
+                if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+            },
+            else => {},
+        };
         for (artifacts.type_aliases) |alias| try self.type_aliases.put(alias.name.text, alias.ty);
         for (artifacts.enums) |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl);
         for (artifacts.unions) |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl);

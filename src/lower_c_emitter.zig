@@ -468,10 +468,16 @@ pub const CEmitter = struct {
         // mangling resolve during the artifact-collection pass below. Const global
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
-        for (artifacts.const_fns) |fn_decl| {
-            if (!self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
-        }
-        for (artifacts.const_globals) |global| {
+        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+            .function => |function| {
+                const fn_decl = function.fn_decl;
+                if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+            },
+            else => {},
+        };
+        const declarations = self.comptime_declarations orelse return error.UnsupportedCEmission;
+        for (declarations.globals) |global| {
+            if (!global.is_const) continue;
             const ty = global.ty orelse continue;
             const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
             try self.const_global_widths.put(global.name.text, bits);
