@@ -90,7 +90,12 @@ def main() -> int:
         fail("compile-like CLI commands must share CompilationSession.parseCheckedModuleOrReport")
     if main_text.count("session.checkModule(") != 0:
         fail("compile-like CLI commands must not bypass parseCheckedModuleOrReport")
+    if re.search(r'@import\("[^"]*_tests\.zig"\)', main_text):
+        fail("main.zig must not aggregate repository test modules")
     require_contains("src/mir.zig", "pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: *std.ArrayList(u8)) !void {")
+    require_contains("src/test_root.zig", 'const main = @import("main.zig");')
+    require_contains("src/test_root.zig", 'const lower_c_tests = @import("lower_c_tests.zig");')
+    require_contains("src/test_root.zig", 'const lower_llvm_tests = @import("lower_llvm_tests.zig");')
 
     for pattern, description in (
         (r"^var\s+combined_boundaries\s*:", "combined_boundaries module global"),
@@ -106,6 +111,7 @@ def main() -> int:
 
     for path, needle in (
         ("build/qemu.zig", "compilation-session-inventory-test"),
+        ("build/compiler.zig", '.root_source_file = b.path("src/test_root.zig"),'),
         ("build/tiers.zig", 'm0_step.dependOn(ctx.cmd("compilation-session-inventory-test"))'),
         ("build/tiers.zig", 'fast_step.dependOn(ctx.cmd("compilation-session-inventory-test"))'),
         ("build/tiers.zig", 'c0_step.dependOn(ctx.cmd("compilation-session-inventory-test"))'),

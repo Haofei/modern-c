@@ -8,38 +8,26 @@ const cli = @import("cli.zig");
 const diagnostics = @import("diagnostics.zig");
 const diagnostic_explain = @import("diagnostic_explain.zig");
 const eval = @import("eval.zig");
-const eval_tests = @import("eval_tests.zig");
 const fmt = @import("fmt.zig");
 const generic_precheck = @import("generic_precheck.zig");
 const hir = @import("hir.zig");
-const hir_tests = @import("hir_tests.zig");
 const ir = @import("ir.zig");
-const ir_tests = @import("ir_tests.zig");
 const lexer = @import("lexer.zig");
-const lexer_tests = @import("lexer_tests.zig");
 const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
-const lower_c_tests = @import("lower_c_tests.zig");
 // Lowering-coverage instrumentation (hardening V3.2). Zero-cost unless the
 // `MC_LOWER_COV` env var is set; `tools/toolchain/lowering-coverage.sh` injects
 // per-function `lower_cov.hit(...)` probes into split lower_c*/lower_llvm* modules
 // in an isolated temporary checkout before building the instrumented compiler.
 const lower_cov = @import("lower_cov.zig");
 const lower_llvm = @import("lower_llvm.zig");
-const lower_llvm_tests = @import("lower_llvm_tests.zig");
 const mir = @import("mir.zig");
-const mir_tests = @import("mir_tests.zig");
 const monomorphize = @import("monomorphize.zig");
-const monomorphize_tests = @import("monomorphize_tests.zig");
 const async_lower = @import("async_lower.zig");
 const mangle_private = @import("mangle_private.zig");
-const mangle_private_tests = @import("mangle_private_tests.zig");
 const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
-const parser_tests = @import("parser_tests.zig");
 const sema = @import("sema.zig");
-const sema_tests = @import("sema_tests.zig");
-const spec_tests = @import("spec_tests.zig");
 const symbols = @import("symbols.zig");
 
 const usage =
@@ -1748,31 +1736,19 @@ test "CompilationSession diagnostic stage failures use a bounded error set" {
 test {
     _ = diagnostics;
     _ = eval;
-    _ = eval_tests;
     _ = ast;
     _ = backend;
     _ = generic_precheck;
     _ = hir;
-    _ = hir_tests;
     _ = ir;
-    _ = ir_tests;
     _ = lexer;
-    _ = lexer_tests;
     _ = loader;
-    _ = mangle_private_tests;
     _ = name_resolve;
     _ = lower_c;
-    _ = lower_c_tests;
     _ = lower_llvm;
-    _ = lower_llvm_tests;
     _ = mir;
-    _ = mir_tests;
     _ = monomorphize;
-    _ = monomorphize_tests;
     _ = async_lower;
     _ = parser;
-    _ = parser_tests;
     _ = sema;
-    _ = sema_tests;
-    _ = spec_tests;
 }

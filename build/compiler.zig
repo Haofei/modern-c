@@ -43,8 +43,17 @@ pub fn build(b: *std.Build) h.Ctx {
     const run_step = b.step("run", "Run the MC compiler");
     run_step.dependOn(&run_cmd.step);
 
+    const unit_test_module = b.createModule(.{
+        .root_source_file = b.path("src/test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    unit_test_module.addOptions("build_options", options);
+    unit_test_module.addAnonymousImport("diagnostics_reference_md", .{
+        .root_source_file = b.path("docs/diagnostics.md"),
+    });
     const unit_tests = b.addTest(.{
-        .root_module = root_module,
+        .root_module = unit_test_module,
     });
     const test_cmd = b.addRunArtifact(unit_tests);
     const unit_test_step = b.step("test-unit", "Run compiler unit tests");
