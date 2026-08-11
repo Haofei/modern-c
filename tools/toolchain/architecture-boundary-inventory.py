@@ -59,7 +59,7 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "pub const SourceMapMechanicsView = legacy_backend_syntax.SourceMapMechanicsView"): 0,
     ("src/backend.zig", "pub const LegacyDeclarationSlice = struct"): 0,
     ("src/backend.zig", "pub const SourceMapMechanicsView = struct"): 0,
-    ("src/legacy_backend_syntax.zig", "[]const ast.Decl"): 3,
+    ("src/legacy_backend_syntax.zig", "[]const ast.Decl"): 1,
     ("src/legacy_backend_syntax.zig", "pub const LegacyDeclarationSlice = struct"): 1,
     ("src/legacy_backend_syntax.zig", "pub const SourceMapMechanicsView = struct"): 0,
     ("src/source_map_mechanics.zig", "[]const ast.Decl"): 3,

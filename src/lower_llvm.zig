@@ -329,7 +329,8 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         else => return err,
     };
     if (!source_spelling.validateAgainstMir(module_mir.*)) return error.UnsupportedLlvmEmission;
-    const decls = declarations.declsForEarlyDeclarationScan();
+    const early_metadata = declarations.earlyDeclarationMetadata();
+    const decls = early_metadata.declsForEarlyDeclarationScan();
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;
