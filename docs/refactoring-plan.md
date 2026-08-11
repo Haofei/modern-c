@@ -33,7 +33,8 @@ safety decisions.
 Anchored current invariant:
 `src/compiler_session.zig` owns `CompilationSession`: file-boundary,
 module-graph, visibility, IO, parse/check, MIR build, VerifiedProgram
-construction, artifact output, and metadata sidecar preflight. `src/main.zig`
+construction, and request-scoped diagnostics. `src/artifact_publisher.zig` owns
+artifact output, metadata sidecar preflight, rollback, and publication. `src/main.zig`
 is the CLI composition root for command dispatch.
 MIR already has typed seeds for block, function symbol, value, type, and span.
 Verifier/admission checks reject result/span/owner drift.

@@ -864,37 +864,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .toolchain_identity = toolchain_identity,
     });
     try attachCSourceMapDigests(allocator, be, program, backend.SourceMapMechanicsView.forDecls(module.decls), raw_c.items, lower_opts, &bundle);
-    var metadata = try session.prepareArtifactMetadataSidecar(output_path, bundle);
-    defer metadata.deinit(allocator);
-    try session.ensureReplaceTargetNotDirectory(output_path, "output");
-    try session.ensureReplaceTargetNotDirectory(metadata.path, "metadata sidecar");
-    var metadata_snapshot = try session.snapshotMetadataSidecar(metadata.path);
-    defer metadata_snapshot.deinit(allocator);
-
-    var metadata_file = std.Io.Dir.cwd().createFileAtomic(io, metadata.path, .{
-        .replace = true,
-    }) catch |err| {
-        std.debug.print("error: unable to write metadata sidecar \"{s}\": {s}\n", .{ metadata.path, @errorName(err) });
-        return error.BuildFailed;
-    };
-    defer metadata_file.deinit(io);
-    metadata_file.file.writeStreamingAll(io, metadata.bytes.items) catch |err| {
-        std.debug.print("error: unable to write metadata sidecar \"{s}\": {s}\n", .{ metadata.path, @errorName(err) });
-        return error.BuildFailed;
-    };
-
-    // Commit metadata before publishing the executable. A stale executable
-    // paired with newer metadata is rejected by digest validation; a new
-    // executable without its sidecar is the fail-open state to avoid.
-    metadata_file.replace(io) catch |err| {
-        std.debug.print("error: unable to commit metadata sidecar \"{s}\": {s}\n", .{ metadata.path, @errorName(err) });
-        return error.BuildFailed;
-    };
-    std.Io.Dir.cwd().rename(tmp_exe, std.Io.Dir.cwd(), output_path, io) catch |err| {
-        std.debug.print("mcc build: unable to commit {s}: {s}\n", .{ output_path, @errorName(err) });
-        session.restoreMetadataSidecar(metadata.path, metadata_snapshot) catch |restore_err| {
-            std.debug.print("error: unable to roll back metadata sidecar \"{s}\" after executable commit failure: {s}\n", .{ metadata.path, @errorName(restore_err) });
-        };
+    session.publishExistingArtifactWithMetadata(tmp_exe, output_path, bundle, "executable") catch {
         return error.BuildFailed;
     };
     try session.writeStdout("mcc build: wrote ");

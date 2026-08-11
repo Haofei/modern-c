@@ -54,12 +54,15 @@ def main() -> int:
         "visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in,",
         "pub fn writeStdout(self: *CompilationSession, bytes: []const u8) !void {",
         "pub fn writeOutputPath(self: *CompilationSession, path: []const u8, bytes: []const u8) !void {",
-        "pub const ArtifactMetadataDraft = struct {",
+        "fn publisher(self: *CompilationSession) artifact_publisher.Publisher {",
+        "pub const ArtifactMetadataDraft = artifact_publisher.Publisher.MetadataDraft;",
+        "pub const MetadataSidecarSnapshot = artifact_publisher.Publisher.MetadataSidecarSnapshot;",
         "pub fn ensureReplaceTargetNotDirectory(self: *CompilationSession, path: []const u8, label: []const u8) !void {",
         "pub fn prepareArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !ArtifactMetadataDraft {",
         "pub fn writeArtifact(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8) !void {",
         "pub fn writeArtifactMetadataSidecar(self: *CompilationSession, output_path: []const u8, bundle: backend.ArtifactBundle) !void {",
         "pub fn writeArtifactWithMetadata(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8, bundle: backend.ArtifactBundle) !void {",
+        "pub fn publishExistingArtifactWithMetadata(",
         "pub fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {",
         "pub fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
         "pub fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
@@ -68,6 +71,18 @@ def main() -> int:
         "pub fn artifactMetadataPath(allocator: std.mem.Allocator, output_path: []const u8) ![]const u8 {",
     ):
         require_contains(session_zig, needle)
+
+    for needle in (
+        "pub const Publisher = struct {",
+        "pub fn writeOutputPath(self: Publisher, path: []const u8, bytes: []const u8) !void {",
+        "pub const MetadataDraft = struct {",
+        "pub const MetadataSidecarSnapshot = union(enum) {",
+        "pub fn prepareMetadataSidecar(self: Publisher, output_path: []const u8, bundle: backend.ArtifactBundle) !MetadataDraft {",
+        "pub fn writeArtifactWithMetadata(self: Publisher, bytes: []const u8, output_path: ?[]const u8, bundle: backend.ArtifactBundle) !void {",
+        "pub fn publishExistingFileWithMetadata(",
+        "pub fn metadataPath(allocator: std.mem.Allocator, output_path: []const u8) ![]const u8 {",
+    ):
+        require_contains("src/artifact_publisher.zig", needle)
 
     for needle in (
         "var session = CompilationSession.init(allocator, init.io);",
@@ -105,6 +120,12 @@ def main() -> int:
         fail("MIR build must stay centralized in CompilationSession.buildVerifiedProgram")
     if main_text.count("mir.buildOpt(") != 0:
         fail("main.zig must not build MIR directly")
+    if "createFileAtomic(" in main_text:
+        fail("main.zig must not own artifact publication transactions")
+    if "metadata_file" in main_text:
+        fail("main.zig must not write metadata sidecars directly")
+    if "std.Io.Dir.cwd().rename(tmp_exe" in main_text:
+        fail("main.zig must not commit existing build artifacts directly")
     for forbidden_import in (
         '@import("async_lower.zig")',
         '@import("generic_precheck.zig")',
@@ -154,6 +175,7 @@ def main() -> int:
         ("tools/toolchain/mcc-build-test.sh", "metadata sidecar failure corrupted an existing executable"),
         ("tools/toolchain/mcc-build-test.sh", "directory output target did not fail closed"),
         ("docs/refactoring-plan.md", "`src/compiler_session.zig` owns `CompilationSession`: file-boundary,"),
+        ("docs/refactoring-plan.md", "`src/artifact_publisher.zig` owns"),
         ("docs/refactoring-plan.md", "`src/main.zig`"),
     ):
         require_contains(path, needle)
