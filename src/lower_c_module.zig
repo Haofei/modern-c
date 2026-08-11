@@ -14,7 +14,7 @@ pub fn collect(emitter: anytype, early_metadata: early_declaration_metadata.Earl
     emitter.setComptimeDecls(decls);
     try emitter.collectEarlyDeclarationMetadata(early_metadata);
     try emitter.collectConstGlobals();
-    try emitter.collectDeclArtifactsFromDecls(decls);
+    try emitter.collectDeclArtifacts(early_metadata);
     try emitter.validateDropGlueFactsAgainstDecls();
     try emitter.collectBindThunks();
 }

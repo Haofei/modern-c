@@ -494,26 +494,25 @@ pub const CEmitter = struct {
         });
     }
 
-    pub fn collectDeclArtifactsFromDecls(self: *CEmitter, decls: []const ast.Decl) anyerror!void {
-        for (decls) |decl| {
-            try self.collectDeclArtifact(decl);
+    pub fn collectDeclArtifacts(self: *CEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
+        for (artifacts.decl_artifacts) |artifact| {
+            try self.collectDeclArtifact(artifact);
         }
     }
 
-    fn collectDeclArtifact(self: *CEmitter, decl: ast.Decl) anyerror!void {
-        switch (decl.kind) {
+    fn collectDeclArtifact(self: *CEmitter, artifact: early_declaration_metadata.DeclArtifact) anyerror!void {
+        switch (artifact) {
             .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
-            .global_decl => |global| try self.collectGlobalDeclArtifact(global),
+            .global => |global| try self.collectGlobalDeclArtifact(global),
             .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
             .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
             .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
-            .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
-            .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
-            .fn_decl => |fn_decl| try self.collectFnDeclArtifact(fn_decl, decl.attrs, false),
-            .extern_fn => |fn_decl| try self.collectFnDeclArtifact(fn_decl, decl.attrs, true),
-            .trait_decl => |t| try self.trait_decls.put(t.name.text, t),
-            .impl_trait => |it| try self.collectImplTraitArtifact(it),
-            else => {},
+            .packed_bits => |packed_bits| try self.collectPackedBits(packed_bits),
+            .overlay_union => |overlay_union| try self.collectOverlayUnion(overlay_union),
+            .function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, false),
+            .extern_function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, true),
+            .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),
+            .impl_trait => |impl_trait| try self.collectImplTraitArtifact(impl_trait),
         }
     }
 

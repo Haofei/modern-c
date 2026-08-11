@@ -18,6 +18,7 @@ pub const EarlyDeclarationArtifacts = struct {
     unions: []const ast.UnionDecl,
     packed_bits: []const ast.PackedBitsDecl,
     overlay_unions: []const ast.OverlayUnionDecl,
+    decl_artifacts: []const DeclArtifact,
 
     pub fn collectFromDecls(allocator: std.mem.Allocator, decls: DeclarationSlice) !EarlyDeclarationArtifacts {
         var const_fns: std.ArrayList(ast.FnDecl) = .empty;
@@ -36,16 +37,45 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer packed_bits.deinit(allocator);
         var overlay_unions: std.ArrayList(ast.OverlayUnionDecl) = .empty;
         errdefer overlay_unions.deinit(allocator);
+        var decl_artifacts: std.ArrayList(DeclArtifact) = .empty;
+        errdefer decl_artifacts.deinit(allocator);
 
         for (decls) |decl| switch (decl.kind) {
-            .fn_decl => |fn_decl| if (fn_decl.is_const) try const_fns.append(allocator, fn_decl),
-            .global_decl => |global| if (global.is_const) try const_globals.append(allocator, global),
-            .type_alias => |alias| try type_aliases.append(allocator, alias),
-            .struct_decl => |struct_decl| try structs.append(allocator, struct_decl),
-            .enum_decl => |enum_decl| try enums.append(allocator, enum_decl),
-            .union_decl => |union_decl| try unions.append(allocator, union_decl),
-            .packed_bits_decl => |packed_bits_decl| try packed_bits.append(allocator, packed_bits_decl),
-            .overlay_union_decl => |overlay_union| try overlay_unions.append(allocator, overlay_union),
+            .fn_decl => |fn_decl| {
+                if (fn_decl.is_const) try const_fns.append(allocator, fn_decl);
+                try decl_artifacts.append(allocator, .{ .function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
+            },
+            .extern_fn => |fn_decl| try decl_artifacts.append(allocator, .{ .extern_function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } }),
+            .global_decl => |global| {
+                if (global.is_const) try const_globals.append(allocator, global);
+                try decl_artifacts.append(allocator, .{ .global = global });
+            },
+            .type_alias => |alias| {
+                try type_aliases.append(allocator, alias);
+                try decl_artifacts.append(allocator, .{ .type_alias = alias });
+            },
+            .struct_decl => |struct_decl| {
+                try structs.append(allocator, struct_decl);
+                try decl_artifacts.append(allocator, .{ .struct_decl = struct_decl });
+            },
+            .enum_decl => |enum_decl| {
+                try enums.append(allocator, enum_decl);
+                try decl_artifacts.append(allocator, .{ .enum_decl = enum_decl });
+            },
+            .union_decl => |union_decl| {
+                try unions.append(allocator, union_decl);
+                try decl_artifacts.append(allocator, .{ .union_decl = union_decl });
+            },
+            .packed_bits_decl => |packed_bits_decl| {
+                try packed_bits.append(allocator, packed_bits_decl);
+                try decl_artifacts.append(allocator, .{ .packed_bits = packed_bits_decl });
+            },
+            .overlay_union_decl => |overlay_union| {
+                try overlay_unions.append(allocator, overlay_union);
+                try decl_artifacts.append(allocator, .{ .overlay_union = overlay_union });
+            },
+            .trait_decl => |trait_decl| try decl_artifacts.append(allocator, .{ .trait_decl = trait_decl }),
+            .impl_trait => |impl_trait| try decl_artifacts.append(allocator, .{ .impl_trait = impl_trait }),
             else => {},
         };
 
@@ -65,6 +95,8 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer allocator.free(owned_packed_bits);
         const owned_overlay_unions = try overlay_unions.toOwnedSlice(allocator);
         errdefer allocator.free(owned_overlay_unions);
+        const owned_decl_artifacts = try decl_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_decl_artifacts);
 
         return .{
             .decls = decls,
@@ -76,6 +108,7 @@ pub const EarlyDeclarationArtifacts = struct {
             .unions = owned_unions,
             .packed_bits = owned_packed_bits,
             .overlay_unions = owned_overlay_unions,
+            .decl_artifacts = owned_decl_artifacts,
         };
     }
 
@@ -88,6 +121,7 @@ pub const EarlyDeclarationArtifacts = struct {
         allocator.free(self.unions);
         allocator.free(self.packed_bits);
         allocator.free(self.overlay_unions);
+        allocator.free(self.decl_artifacts);
         self.* = empty;
     }
 
@@ -109,5 +143,25 @@ pub const EarlyDeclarationArtifacts = struct {
         .unions = &.{},
         .packed_bits = &.{},
         .overlay_unions = &.{},
+        .decl_artifacts = &.{},
+    };
+};
+
+pub const DeclArtifact = union(enum) {
+    type_alias: ast.TypeAlias,
+    global: ast.GlobalDecl,
+    struct_decl: ast.StructDecl,
+    enum_decl: ast.EnumDecl,
+    union_decl: ast.UnionDecl,
+    packed_bits: ast.PackedBitsDecl,
+    overlay_union: ast.OverlayUnionDecl,
+    function: Function,
+    extern_function: Function,
+    trait_decl: ast.TraitDecl,
+    impl_trait: ast.ImplTrait,
+
+    pub const Function = struct {
+        fn_decl: ast.FnDecl,
+        attrs: []const ast.Attr,
     };
 };
