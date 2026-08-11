@@ -1,15 +1,12 @@
 const ast = @import("ast.zig");
 const std = @import("std");
 
-pub const DeclarationSlice = []const ast.Decl;
-
 /// Transitional early declaration artifacts.
 ///
 /// Early declaration prepasses still read top-level syntax declarations, but
 /// declaration enumeration is isolated here instead of being exposed through
 /// backend lowering requests as a generic legacy view.
 pub const EarlyDeclarationArtifacts = struct {
-    decls: DeclarationSlice,
     const_fns: []const ast.FnDecl,
     const_globals: []const ast.GlobalDecl,
     type_aliases: []const ast.TypeAlias,
@@ -20,7 +17,7 @@ pub const EarlyDeclarationArtifacts = struct {
     overlay_unions: []const ast.OverlayUnionDecl,
     decl_artifacts: []const DeclArtifact,
 
-    pub fn collectFromDecls(allocator: std.mem.Allocator, decls: DeclarationSlice) !EarlyDeclarationArtifacts {
+    pub fn collectFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !EarlyDeclarationArtifacts {
         var const_fns: std.ArrayList(ast.FnDecl) = .empty;
         errdefer const_fns.deinit(allocator);
         var const_globals: std.ArrayList(ast.GlobalDecl) = .empty;
@@ -99,7 +96,6 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer allocator.free(owned_decl_artifacts);
 
         return .{
-            .decls = decls,
             .const_fns = owned_const_fns,
             .const_globals = owned_const_globals,
             .type_aliases = owned_type_aliases,
@@ -125,16 +121,7 @@ pub const EarlyDeclarationArtifacts = struct {
         self.* = empty;
     }
 
-    pub fn declsForComptimeEvaluation(self: EarlyDeclarationArtifacts) DeclarationSlice {
-        return self.decls;
-    }
-
-    pub fn declsForLegacyArtifactEnumeration(self: EarlyDeclarationArtifacts) DeclarationSlice {
-        return self.decls;
-    }
-
     pub const empty = EarlyDeclarationArtifacts{
-        .decls = &.{},
         .const_fns = &.{},
         .const_globals = &.{},
         .type_aliases = &.{},
