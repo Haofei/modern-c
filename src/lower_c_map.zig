@@ -9,7 +9,6 @@ const std = @import("std");
 const artifact_model = @import("artifact_model.zig");
 const ast = @import("ast.zig");
 const backend = @import("backend.zig");
-const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
 const source_map_mechanics = @import("source_map_mechanics.zig");
 const mir = @import("mir.zig");
 const mir_syntax = @import("mir_syntax.zig");

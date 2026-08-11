@@ -42,6 +42,8 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "@import(\"artifact_model.zig\")"): 0,
     ("src/backend.zig", "@import(\"diagnostics.zig\")"): 0,
     ("src/backend.zig", "@import(\"legacy_backend_syntax.zig\")"): 0,
+    ("src/codegen_request.zig", "@import(\"legacy_backend_syntax.zig\")"): 0,
+    ("src/codegen_request.zig", "@import(\"early_declaration_metadata.zig\")"): 1,
     ("src/backend.zig", "@import(\"codegen_request.zig\")"): 1,
     ("src/backend.zig", "pub const Profile = enum"): 0,
     ("src/backend.zig", "pub const Checks = struct"): 0,
@@ -59,9 +61,8 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "pub const SourceMapMechanicsView = legacy_backend_syntax.SourceMapMechanicsView"): 0,
     ("src/backend.zig", "pub const LegacyDeclarationSlice = struct"): 0,
     ("src/backend.zig", "pub const SourceMapMechanicsView = struct"): 0,
-    ("src/legacy_backend_syntax.zig", "[]const ast.Decl"): 1,
-    ("src/legacy_backend_syntax.zig", "pub const LegacyDeclarationSlice = struct"): 0,
-    ("src/legacy_backend_syntax.zig", "pub const SourceMapMechanicsView = struct"): 0,
+    ("src/early_declaration_metadata.zig", "[]const ast.Decl"): 1,
+    ("src/early_declaration_metadata.zig", "pub const EarlyDeclarationMetadataView = struct"): 1,
     ("src/source_map_mechanics.zig", "[]const ast.Decl"): 3,
     ("src/source_map_mechanics.zig", "pub const SourceMapMechanicsView = struct"): 1,
     ("src/backend.zig", "pub fn init("): 0,
@@ -88,7 +89,7 @@ REQUIRED_ANCHORS = {
     "src/verified_program.zig": (
         "MIR verifier",
     ),
-    "src/legacy_backend_syntax.zig": (
+    "src/early_declaration_metadata.zig": (
         "Transitional early declaration metadata view",
         "callers must name that specific metadata dependency",
         "generic legacy declaration handle",

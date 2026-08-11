@@ -6,7 +6,7 @@ const backend_cleanup = @import("backend_cleanup.zig");
 const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
-const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
+const early_declaration_metadata = @import("early_declaration_metadata.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
@@ -308,12 +308,12 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, mo
 }
 
 pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, legacy_backend_syntax.EarlyDeclarationMetadataView.forDecls(module.decls), module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
+    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, early_declaration_metadata.EarlyDeclarationMetadataView.forDecls(module.decls), module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
 }
 
 fn appendLlvmCheckedMirProfileWithSourceSpelling(
     allocator: std.mem.Allocator,
-    early_metadata: legacy_backend_syntax.EarlyDeclarationMetadataView,
+    early_metadata: early_declaration_metadata.EarlyDeclarationMetadataView,
     module_mir: *const mir.Module,
     source_spelling: backend_mod.SourceSpellingView,
     out: *std.ArrayList(u8),

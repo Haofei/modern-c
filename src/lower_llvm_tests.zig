@@ -3,7 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
-const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
+const early_declaration_metadata = @import("early_declaration_metadata.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const lower_llvm_prelude = @import("lower_llvm_prelude.zig");
 const mir = @import("mir.zig");
@@ -13543,7 +13543,7 @@ test "LLVM unsupported diagnostics use nearest source span for generated nodes" 
     var module_mir = try mir.build(std.testing.allocator, module);
     defer module_mir.deinit();
     const verified = try backend_mod.VerifiedProgram.init(&module_mir, &reporter);
-    const early_metadata = legacy_backend_syntax.EarlyDeclarationMetadataView.forDecls(module.decls);
+    const early_metadata = early_declaration_metadata.EarlyDeclarationMetadataView.forDecls(module.decls);
     const llvm_backend = lower_llvm.mcBackend();
     try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerRequest(std.testing.allocator, .{
         .program = verified,

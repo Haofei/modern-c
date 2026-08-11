@@ -13,7 +13,7 @@ const eval = @import("eval.zig");
 const fmt = @import("fmt.zig");
 const hir = @import("hir.zig");
 const ir = @import("ir.zig");
-const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
+const early_declaration_metadata = @import("early_declaration_metadata.zig");
 const lexer = @import("lexer.zig");
 const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
@@ -750,7 +750,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const early_metadata = legacy_backend_syntax.EarlyDeclarationMetadataView.forDecls(module.decls);
+    const early_metadata = early_declaration_metadata.EarlyDeclarationMetadataView.forDecls(module.decls);
     be.lowerRequest(allocator, .{
         .program = program,
         .early_declaration_metadata = early_metadata,
@@ -801,7 +801,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const early_metadata = legacy_backend_syntax.EarlyDeclarationMetadataView.forDecls(module.decls);
+    const early_metadata = early_declaration_metadata.EarlyDeclarationMetadataView.forDecls(module.decls);
     be.lowerRequest(allocator, .{
         .program = program,
         .early_declaration_metadata = early_metadata,
@@ -1161,7 +1161,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     const be = backend_registry.byName("c").?;
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    const early_metadata = legacy_backend_syntax.EarlyDeclarationMetadataView.forDecls(module.decls);
+    const early_metadata = early_declaration_metadata.EarlyDeclarationMetadataView.forDecls(module.decls);
     be.lowerRequest(allocator, .{
         .program = program,
         .early_declaration_metadata = early_metadata,
@@ -1239,7 +1239,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    const early_metadata = legacy_backend_syntax.EarlyDeclarationMetadataView.forDecls(module.decls);
+    const early_metadata = early_declaration_metadata.EarlyDeclarationMetadataView.forDecls(module.decls);
     be.lowerRequest(allocator, .{
         .program = program,
         .early_declaration_metadata = early_metadata,

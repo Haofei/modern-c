@@ -123,7 +123,7 @@ than giving the backend a full `ast.Module`, but it is not the final semantic
 boundary. Source-map row enumeration still uses
 `SourceMapMechanicsView`, but it is carried only by `EmitMapRequest` rather than
 ordinary lowering. Declaration-list mechanics live in
-`legacy_backend_syntax.zig`; source-map row mechanics live separately in
+`early_declaration_metadata.zig`; source-map row mechanics live separately in
 `source_map_mechanics.zig`; `backend.zig` imports only `codegen_request.zig` so
 the core backend seam does not directly import AST declarations. New backend
 work should prefer MIR identities and typed facts and should avoid adding new

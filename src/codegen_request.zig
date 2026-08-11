@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const codegen_options = @import("codegen_options.zig");
-const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
+const early_declaration_metadata = @import("early_declaration_metadata.zig");
 const source_map_mechanics = @import("source_map_mechanics.zig");
 const verified_program = @import("verified_program.zig");
 
@@ -14,7 +14,7 @@ const verified_program = @import("verified_program.zig");
 /// handle.
 pub const LowerRequest = struct {
     program: verified_program.VerifiedProgram,
-    early_declaration_metadata: legacy_backend_syntax.EarlyDeclarationMetadataView,
+    early_declaration_metadata: early_declaration_metadata.EarlyDeclarationMetadataView,
     out: *std.ArrayList(u8),
     opts: codegen_options.LowerOptions,
 };

@@ -3,7 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
-const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
+const early_declaration_metadata = @import("early_declaration_metadata.zig");
 const source_map_mechanics = @import("source_map_mechanics.zig");
 const mir = @import("mir.zig");
 const lower_c_emitter = @import("lower_c_emitter.zig");
@@ -92,12 +92,12 @@ fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, o
 }
 
 pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
-    return appendCProfileWithMirSourceSpelling(allocator, legacy_backend_syntax.EarlyDeclarationMetadataView.forDecls(module.decls), typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
+    return appendCProfileWithMirSourceSpelling(allocator, early_declaration_metadata.EarlyDeclarationMetadataView.forDecls(module.decls), typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCProfileWithMirSourceSpelling(
     allocator: std.mem.Allocator,
-    early_metadata: legacy_backend_syntax.EarlyDeclarationMetadataView,
+    early_metadata: early_declaration_metadata.EarlyDeclarationMetadataView,
     typed_mir: *const mir.Module,
     source_spelling: backend_mod.SourceSpellingView,
     out: *std.ArrayList(u8),

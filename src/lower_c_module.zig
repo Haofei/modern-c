@@ -5,11 +5,11 @@
 //! narrow callback context, keeping collection/emission ordering independent of
 //! expression lowering and the emitter's large mutable function state.
 
-const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
+const early_declaration_metadata = @import("early_declaration_metadata.zig");
 
 /// Populate all declaration and type artifacts needed by C emission without
 /// writing output.  Layout-header emission deliberately uses this same phase.
-pub fn collect(emitter: anytype, early_metadata: legacy_backend_syntax.EarlyDeclarationMetadataView) anyerror!void {
+pub fn collect(emitter: anytype, early_metadata: early_declaration_metadata.EarlyDeclarationMetadataView) anyerror!void {
     const decls = early_metadata.declsForEarlyDeclarationScan();
     emitter.setComptimeDecls(decls);
     try emitter.collectEarlyDeclarationMetadataFromDecls(decls);
@@ -20,7 +20,7 @@ pub fn collect(emitter: anytype, early_metadata: legacy_backend_syntax.EarlyDecl
 }
 
 /// Emit a complete translation unit in dependency-safe module order.
-pub fn emit(emitter: anytype, early_metadata: legacy_backend_syntax.EarlyDeclarationMetadataView) anyerror!void {
+pub fn emit(emitter: anytype, early_metadata: early_declaration_metadata.EarlyDeclarationMetadataView) anyerror!void {
     defer emitter.deinit();
     try collect(emitter, early_metadata);
     try emitter.emitTypePrelude();
