@@ -79,6 +79,7 @@ pub const Backend = struct {
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
+        declarations: DeclarationMetadataView,
         out: *std.ArrayList(u8),
         opts: LowerOptions,
     ) LowerError!void,
@@ -87,6 +88,8 @@ pub const Backend = struct {
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
+        declarations: DeclarationMetadataView,
+        source_map: SourceMapMechanicsView,
         out: *std.ArrayList(u8),
         generated_artifact: []const u8,
         opts: LowerOptions,
@@ -111,18 +114,18 @@ backend. Construction performs MIR admission first:
 - `mir.validateLoweringAdmission`,
 - source-spelling validation against MIR symbol identities.
 
-It then exposes two views:
+It then exposes:
 
 - `source_spelling`: MIR-owned spelling by typed symbol id.
-- `declarationMetadata()`: transitional declaration metadata that still wraps
-  `[]const ast.Decl`.
 
-The transitional declaration metadata view is explicit debt. It is narrower
-than giving the backend a full `ast.Module`, but it is not the final semantic
-boundary. Source-map row enumeration still uses `SourceMapMechanicsView`, but it
-is passed only to the `emit-map` path rather than stored on `VerifiedProgram`.
-New backend work should prefer MIR identities and typed facts and should avoid
-adding new semantic decisions to syntax-backed views.
+Transitional declaration metadata still exists as `DeclarationMetadataView`, but
+it is passed as an explicit legacy backend parameter rather than stored on
+`VerifiedProgram`. It is narrower than giving the backend a full `ast.Module`,
+but it is not the final semantic boundary. Source-map row enumeration still uses
+`SourceMapMechanicsView`, but it is passed only to the `emit-map` path rather
+than stored on `VerifiedProgram`. New backend work should prefer MIR identities
+and typed facts and should avoid adding new semantic decisions to syntax-backed
+views.
 
 ## Error boundary
 
@@ -178,8 +181,8 @@ source identity.
    }
    ```
 
-3. Make `backendLower` accept `backend.VerifiedProgram` and return
-   `backend.LowerError!void`.
+3. Make `backendLower` accept `backend.VerifiedProgram` plus the explicit
+   transitional `DeclarationMetadataView`, then return `backend.LowerError!void`.
 4. Register the backend in `src/backend_registry.zig`.
 5. Add CLI dispatch in `src/main.zig` if it needs a first-class command.
 

@@ -419,7 +419,7 @@ const CompilationSession = struct {
     ) !backend.VerifiedProgram {
         module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });
         errdefer module_mir.deinit();
-        const program = backend.VerifiedProgram.initFromDecls(module.decls, module_mir, diag) catch |err| {
+        const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {
             if (diag.has_errors) return failure_error;
             return err;
         };
@@ -1059,7 +1059,8 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    be.lower(allocator, program, &output, lower_opts) catch |err| switch (err) {
+    const declarations = backend.DeclarationMetadataView.forDecls(module.decls);
+    be.lower(allocator, program, declarations, &output, lower_opts) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
             diag.render();
@@ -1071,7 +1072,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .artifact_kind = "c",
         .backend_name = "c",
     });
-    try attachCSourceMapDigests(allocator, be, program, backend.SourceMapMechanicsView.forDecls(module.decls), output.items, lower_opts, &bundle);
+    try attachCSourceMapDigests(allocator, be, program, declarations, backend.SourceMapMechanicsView.forDecls(module.decls), output.items, lower_opts, &bundle);
     try session.writeArtifactWithMetadata(output.items, output_path, bundle);
 }
 
@@ -1104,7 +1105,8 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    be.lower(allocator, program, &raw_c, lower_opts) catch |err| switch (err) {
+    const declarations = backend.DeclarationMetadataView.forDecls(module.decls);
+    be.lower(allocator, program, declarations, &raw_c, lower_opts) catch |err| switch (err) {
         error.UnsupportedCEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
             diag.render();
@@ -1173,7 +1175,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .backend_name = "c",
         .toolchain_identity = toolchain_identity,
     });
-    try attachCSourceMapDigests(allocator, be, program, backend.SourceMapMechanicsView.forDecls(module.decls), raw_c.items, lower_opts, &bundle);
+    try attachCSourceMapDigests(allocator, be, program, declarations, backend.SourceMapMechanicsView.forDecls(module.decls), raw_c.items, lower_opts, &bundle);
     var metadata = try session.prepareArtifactMetadataSidecar(output_path, bundle);
     defer metadata.deinit(allocator);
     try session.ensureReplaceTargetNotDirectory(output_path, "output");
@@ -1216,6 +1218,7 @@ fn attachCSourceMapDigests(
     allocator: std.mem.Allocator,
     be: backend.Backend,
     program: backend.VerifiedProgram,
+    declarations: backend.DeclarationMetadataView,
     source_map: backend.SourceMapMechanicsView,
     generated_c: []const u8,
     lower_opts: backend.LowerOptions,
@@ -1224,7 +1227,7 @@ fn attachCSourceMapDigests(
     if (!be.supportsEmitMap()) return;
     var map_bytes: std.ArrayList(u8) = .empty;
     defer map_bytes.deinit(allocator);
-    try be.emitMap(allocator, program, source_map, &map_bytes, generated_c, lower_opts);
+    try be.emitMap(allocator, program, declarations, source_map, &map_bytes, generated_c, lower_opts);
     bundle.source_map_generated_artifact_sha256 = try metadataDigestHeader(map_bytes.items, "generated_artifact_sha256");
     bundle.source_map_payload_sha256 = try metadataDigestHeader(map_bytes.items, "source_map_payload_sha256");
     bundle.mir_facts_sha256 = try metadataDigestHeader(map_bytes.items, "mir_facts_sha256");
@@ -1482,7 +1485,8 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     const be = backend_registry.byName("c").?;
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    be.lower(allocator, program, &generated_c, .{
+    const declarations = backend.DeclarationMetadataView.forDecls(module.decls);
+    be.lower(allocator, program, declarations, &generated_c, .{
         .profile = profile,
         .source_path = artifact_source_path,
         .target_arch = target_arch,
@@ -1503,7 +1507,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
     const source_map = backend.SourceMapMechanicsView.forDecls(module.decls);
-    try be.emitMap(allocator, program, source_map, &output, generated_c.items, .{
+    try be.emitMap(allocator, program, declarations, source_map, &output, generated_c.items, .{
         .profile = profile,
         .source_path = artifact_source_path,
         .target_arch = target_arch,
@@ -1548,7 +1552,8 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    be.lower(allocator, program, &output, lower_opts) catch |err| switch (err) {
+    const declarations = backend.DeclarationMetadataView.forDecls(module.decls);
+    be.lower(allocator, program, declarations, &output, lower_opts) catch |err| switch (err) {
         error.UnsupportedLlvmEmission => {
             if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "LLVM");
             diag.render();

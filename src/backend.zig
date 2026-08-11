@@ -405,11 +405,9 @@ pub const SourceMapMechanicsView = struct {
 /// normalized.
 pub const VerifiedProgram = struct {
     source_spelling: SourceSpellingView,
-    declaration_metadata: DeclarationMetadataView,
     typed_mir: *const mir.Module,
 
-    pub fn initFromDecls(
-        decls: []const ast.Decl,
+    pub fn init(
         typed_mir: *const mir.Module,
         reporter: *diagnostics.Reporter,
     ) !VerifiedProgram {
@@ -420,16 +418,8 @@ pub const VerifiedProgram = struct {
         if (!source_spelling.validateAgainstMir(typed_mir.*)) return error.InvalidMir;
         return .{
             .source_spelling = source_spelling,
-            .declaration_metadata = DeclarationMetadataView.forDecls(decls),
             .typed_mir = typed_mir,
         };
-    }
-
-    /// Temporary compatibility view for legacy declaration metadata that has
-    /// not yet been normalized into typed MIR tables. New backend consumers
-    /// should prefer `source_spelling`, MIR identities, or explicit facts.
-    pub fn declarationMetadata(self: VerifiedProgram) DeclarationMetadataView {
-        return self.declaration_metadata;
     }
 };
 
@@ -460,6 +450,7 @@ pub const Backend = struct {
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
+        declarations: DeclarationMetadataView,
         out: *std.ArrayList(u8),
         opts: LowerOptions,
     ) LowerError!void,
@@ -472,6 +463,7 @@ pub const Backend = struct {
         ctx: ?*anyopaque,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
+        declarations: DeclarationMetadataView,
         source_map: SourceMapMechanicsView,
         out: *std.ArrayList(u8),
         generated_artifact: []const u8,
@@ -483,10 +475,11 @@ pub const Backend = struct {
         self: Backend,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
+        declarations: DeclarationMetadataView,
         out: *std.ArrayList(u8),
         opts: LowerOptions,
     ) LowerError!void {
-        return self.lowerFn(self.ctx, allocator, program, out, opts);
+        return self.lowerFn(self.ctx, allocator, program, declarations, out, opts);
     }
 
     /// Whether this backend can emit a source map (i.e. `emitMapFn != null`).
@@ -499,12 +492,13 @@ pub const Backend = struct {
         self: Backend,
         allocator: std.mem.Allocator,
         program: VerifiedProgram,
+        declarations: DeclarationMetadataView,
         source_map: SourceMapMechanicsView,
         out: *std.ArrayList(u8),
         generated_artifact: []const u8,
         opts: LowerOptions,
     ) LowerError!void {
-        return self.emitMapFn.?(self.ctx, allocator, program, source_map, out, generated_artifact, opts);
+        return self.emitMapFn.?(self.ctx, allocator, program, declarations, source_map, out, generated_artifact, opts);
     }
 };
 
@@ -528,7 +522,7 @@ test "VerifiedProgram exposes MIR-owned source spelling view" {
     var module_mir = try mir.build(std.testing.allocator, module);
     defer module_mir.deinit();
 
-    const program = try VerifiedProgram.initFromDecls(module.decls, &module_mir, &reporter);
+    const program = try VerifiedProgram.init(&module_mir, &reporter);
     try std.testing.expect(program.source_spelling.validateAgainstMir(module_mir));
     try std.testing.expect(module_mir.functions.len != 0);
     try std.testing.expectEqualStrings(

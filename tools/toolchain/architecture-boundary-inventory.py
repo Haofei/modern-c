@@ -30,17 +30,20 @@ EXACT_BACKEND_COUNTS = {
     '@import("sema': 0,
     '@import("mir_facts_view.zig")': 2,
     '@import("type_syntax.zig")': 5,
-    "[]const ast.Decl": 17,
-    "DeclarationMetadataView": 25,
+    "[]const ast.Decl": 16,
+    "DeclarationMetadataView": 29,
     "SourceMapMechanicsView": 9,
-    "initFromDecls": 2,
+    "initFromDecls": 0,
 }
 
 EXACT_FILE_COUNTS = {
-    ("src/backend.zig", "[]const ast.Decl"): 10,
+    ("src/backend.zig", "[]const ast.Decl"): 9,
     ("src/backend.zig", "pub const DeclarationMetadataView = struct"): 1,
     ("src/backend.zig", "pub const SourceMapMechanicsView = struct"): 1,
-    ("src/backend.zig", "pub fn initFromDecls("): 1,
+    ("src/backend.zig", "pub fn init("): 1,
+    ("src/backend.zig", "pub fn initFromDecls("): 0,
+    ("src/backend.zig", "declaration_metadata"): 0,
+    ("src/backend.zig", "declarationMetadata"): 0,
     ("src/backend.zig", "source_map_mechanics"): 0,
     ("src/backend.zig", "sourceMapMechanics"): 0,
     ("src/loader.zig", "*textual inclusion*"): 1,
@@ -57,8 +60,8 @@ REQUIRED_ANCHORS = {
         "Transitional LLVM declaration metadata prepass view",
         "Transitional source-map mechanics view",
         "MIR verifier",
-        "New backend consumers",
-        "should prefer `source_spelling`, MIR identities, or explicit facts.",
+        "every call site must name the remaining",
+        "legacy declaration dependency explicitly.",
     ),
     "src/loader.zig": (
         "MC has no",
@@ -97,7 +100,7 @@ FORBIDDEN_BACKEND_PATTERNS = {
 }
 
 FORBIDDEN_GLOBAL_PATTERNS = {
-    r"VerifiedProgram\.init\(": "module-shaped VerifiedProgram construction",
+    r"VerifiedProgram\.initFromDecls\(": "declaration-slice VerifiedProgram construction",
 }
 
 

@@ -66,7 +66,7 @@ def main() -> int:
         "mangle_private.transform(allocator, specialized, self.file_boundaries)",
         "checker.file_boundaries = self.file_boundaries;",
         "module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });",
-        "const program = backend.VerifiedProgram.initFromDecls(module.decls, module_mir, diag) catch |err| {",
+        "const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {",
         "const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);",
         "_ = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.LowerMirFailed);",
         "try mir.appendDumpFromMir(allocator, module_mir, &output);",
@@ -82,9 +82,9 @@ def main() -> int:
         fail("sema checker construction must stay centralized in CompilationSession.checkModule")
     if main_text.count("mir.buildOpt(") != 1:
         fail("MIR build must stay centralized in CompilationSession.buildVerifiedProgram")
-    if main_text.count("backend.VerifiedProgram.init(") != 0:
-        fail("VerifiedProgram module-shaped construction must not be used")
-    if main_text.count("backend.VerifiedProgram.initFromDecls(") != 1:
+    if main_text.count("backend.VerifiedProgram.initFromDecls(") != 0:
+        fail("VerifiedProgram declaration-slice construction must not be used")
+    if main_text.count("backend.VerifiedProgram.init(") != 1:
         fail("VerifiedProgram construction must stay centralized in CompilationSession.buildVerifiedProgram")
     if main_text.count("session.parseCheckedModuleOrReport(") < 7:
         fail("compile-like CLI commands must share CompilationSession.parseCheckedModuleOrReport")
