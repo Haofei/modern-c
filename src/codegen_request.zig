@@ -2,6 +2,7 @@ const std = @import("std");
 
 const codegen_options = @import("codegen_options.zig");
 const legacy_backend_syntax = @import("legacy_backend_syntax.zig");
+const source_map_mechanics = @import("source_map_mechanics.zig");
 const verified_program = @import("verified_program.zig");
 
 /// Backend lowering request.
@@ -22,7 +23,7 @@ pub const LowerRequest = struct {
 /// code-generation semantics.
 pub const EmitMapRequest = struct {
     program: verified_program.VerifiedProgram,
-    legacy_source_map: legacy_backend_syntax.SourceMapMechanicsView,
+    source_map_mechanics: source_map_mechanics.SourceMapMechanicsView,
     out: *std.ArrayList(u8),
     generated_artifact: []const u8,
     opts: codegen_options.LowerOptions,
@@ -33,5 +34,5 @@ test "codegen requests keep legacy syntax mechanics behind named adapter fields"
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "legacy_declarations") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "legacy_source_map") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "source_map_mechanics") != null);
 }

@@ -59,9 +59,11 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "pub const SourceMapMechanicsView = legacy_backend_syntax.SourceMapMechanicsView"): 0,
     ("src/backend.zig", "pub const LegacyDeclarationSlice = struct"): 0,
     ("src/backend.zig", "pub const SourceMapMechanicsView = struct"): 0,
-    ("src/legacy_backend_syntax.zig", "[]const ast.Decl"): 6,
+    ("src/legacy_backend_syntax.zig", "[]const ast.Decl"): 3,
     ("src/legacy_backend_syntax.zig", "pub const LegacyDeclarationSlice = struct"): 1,
-    ("src/legacy_backend_syntax.zig", "pub const SourceMapMechanicsView = struct"): 1,
+    ("src/legacy_backend_syntax.zig", "pub const SourceMapMechanicsView = struct"): 0,
+    ("src/source_map_mechanics.zig", "[]const ast.Decl"): 3,
+    ("src/source_map_mechanics.zig", "pub const SourceMapMechanicsView = struct"): 1,
     ("src/backend.zig", "pub fn init("): 0,
     ("src/backend.zig", "pub fn initFromDecls("): 0,
     ("src/verified_program.zig", "pub fn init("): 1,
@@ -88,9 +90,12 @@ REQUIRED_ANCHORS = {
     ),
     "src/legacy_backend_syntax.zig": (
         "Transitional declaration slice",
-        "Transitional source-map mechanics view",
         "every call site must name the remaining",
         "legacy declaration dependency explicitly.",
+    ),
+    "src/source_map_mechanics.zig": (
+        "Transitional source-map mechanics view",
+        "map-only AST access separate",
     ),
     "src/loader.zig": (
         "MC has no",

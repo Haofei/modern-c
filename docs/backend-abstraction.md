@@ -121,8 +121,9 @@ than stored on `VerifiedProgram` or passed as a standalone backend parameter. It
 is narrower than giving the backend a full `ast.Module`, but it is not the final
 semantic boundary. Source-map row enumeration still uses
 `SourceMapMechanicsView`, but it is carried only by `EmitMapRequest` rather than
-ordinary lowering. Both syntax-backed mechanics views live in
-`legacy_backend_syntax.zig`; `backend.zig` imports only `codegen_request.zig` so
+ordinary lowering. Declaration-list mechanics live in
+`legacy_backend_syntax.zig`; source-map row mechanics live separately in
+`source_map_mechanics.zig`; `backend.zig` imports only `codegen_request.zig` so
 the core backend seam does not directly import AST declarations. New backend
 work should prefer MIR identities and typed facts and should avoid adding new
 semantic decisions to syntax-backed views.
