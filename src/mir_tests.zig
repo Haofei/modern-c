@@ -293,6 +293,10 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
         \\    let local = callee(7);
         \\    return local;
         \\}
+        \\
+        \\fn literal_source() -> f64 {
+        \\    return 1.5;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_facts_view_typed_target_type.mc", source);
@@ -309,9 +313,11 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
 
     const callee = functionByName(module_mir, "callee").?;
     const caller = functionByName(module_mir, "caller").?;
+    const literal_source = functionByName(module_mir, "literal_source").?;
     const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
     const expression_fact = targetTypeFactByKind(caller, .expression_result) orelse return error.TestUnexpectedResult;
     const local_fact = targetTypeFactByKind(caller, .inferred_local) orelse return error.TestUnexpectedResult;
+    const float_fact = targetTypeFactByKind(literal_source, .float_literal) orelse return error.TestUnexpectedResult;
     const db = mir_facts_view.MirFactsView.init(&module_mir);
     const result_span = result_fact.source;
 
@@ -340,6 +346,13 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
             .source = local_fact.source,
             .owner = local_fact.target_owner.?,
             .index = local_fact.target_index,
+        },
+    }) == null);
+    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+        .current = &callee,
+        .fact = .{
+            .kind = .float_literal,
+            .source = float_fact.source,
         },
     }) == null);
 
