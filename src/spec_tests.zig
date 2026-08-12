@@ -555,7 +555,7 @@ test "tests/spec fixtures produce declared IR inspection facts" {
 
         var facts: std.ArrayList(u8) = .empty;
         defer facts.deinit(allocator);
-        try ir.appendFacts(allocator, module, &facts);
+        try ir.appendFacts(allocator, module.decls, &facts);
 
         var checks = std.mem.splitScalar(u8, check_value, ',');
         while (checks.next()) |raw_check| {
@@ -566,7 +566,7 @@ test "tests/spec fixtures produce declared IR inspection facts" {
                 try std.testing.expect(false);
             }
             if (std.mem.eql(u8, check, "no-language-trap-edge") or std.mem.eql(u8, check, "contract_region")) {
-                var module_ir = try ir.buildModuleIrFromModuleForSpecHarness(allocator, module);
+                var module_ir = try ir.buildModuleIrFromDeclSliceForSpecHarness(allocator, module.decls);
                 defer module_ir.deinit();
                 if (!hasLowerIrEvidenceForCheck(module_ir, check)) {
                     std.debug.print("{s}: expected lower-ir artifact evidence for {s}\n", .{ path, check });

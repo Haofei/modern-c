@@ -102,7 +102,15 @@ fn deinitFunctionIr(allocator: std.mem.Allocator, function: FunctionIr) void {
     allocator.free(function.unchecked_calls);
 }
 
-pub fn buildModuleIrFromModuleForSpecHarness(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr {
+pub fn buildModuleIrFromDeclSliceForSpecHarness(allocator: std.mem.Allocator, decls: []const ast.Decl) !ModuleIr {
+    return buildModuleIrFromDeclItems(allocator, decls, false);
+}
+
+pub fn buildModuleIrFromDecls(allocator: std.mem.Allocator, decls: []const module_parser.ResolvedDecl) !ModuleIr {
+    return buildModuleIrFromDeclItems(allocator, decls, true);
+}
+
+fn buildModuleIrFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, comptime resolved_items: bool) !ModuleIr {
     var functions: std.ArrayList(FunctionIr) = .empty;
     errdefer {
         for (functions.items) |function| {
@@ -111,42 +119,13 @@ pub fn buildModuleIrFromModuleForSpecHarness(allocator: std.mem.Allocator, modul
         functions.deinit(allocator);
     }
 
-    for (module.decls) |decl| {
+    for (decl_items) |item| {
+        const decl = if (resolved_items) item.decl else item;
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
                     const function_ir = blk: {
                         var builder = try FunctionIrBuilder.init(allocator, fn_decl, hasNoLangTrap(decl.attrs));
-                        errdefer builder.deinit();
-                        try builder.collectBlock(body);
-                        break :blk try builder.finish();
-                    };
-                    errdefer deinitFunctionIr(allocator, function_ir);
-                    try functions.append(allocator, function_ir);
-                }
-            },
-            .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
-        }
-    }
-
-    return .{ .allocator = allocator, .functions = try functions.toOwnedSlice(allocator) };
-}
-
-pub fn buildModuleIrFromDecls(allocator: std.mem.Allocator, decls: []const module_parser.ResolvedDecl) !ModuleIr {
-    var functions: std.ArrayList(FunctionIr) = .empty;
-    errdefer {
-        for (functions.items) |function| {
-            deinitFunctionIr(allocator, function);
-        }
-        functions.deinit(allocator);
-    }
-
-    for (decls) |entry| {
-        switch (entry.decl.kind) {
-            .fn_decl, .extern_fn => |fn_decl| {
-                if (fn_decl.body) |body| {
-                    const function_ir = blk: {
-                        var builder = try FunctionIrBuilder.init(allocator, fn_decl, hasNoLangTrap(entry.decl.attrs));
                         errdefer builder.deinit();
                         try builder.collectBlock(body);
                         break :blk try builder.finish();
@@ -556,11 +535,11 @@ pub const FactKind = enum {
 
 pub fn appendFacts(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    decls: []const ast.Decl,
     out: *std.ArrayList(u8),
 ) anyerror!void {
     var collector = ModuleFactCollector.init(allocator);
-    try collector.appendFacts(module, out);
+    try collector.appendFactsFromDeclSliceForSpecHarness(decls, out);
 }
 
 pub fn appendFactsFromResolvedSources(
@@ -570,11 +549,6 @@ pub fn appendFactsFromResolvedSources(
 ) anyerror!void {
     var collector = ModuleFactCollector.init(allocator);
     try collector.appendResolvedFacts(sources, out);
-}
-
-pub fn writeFacts(module: ast.Module, writer: anytype) !void {
-    var collector = ModuleFactCollector.init(std.heap.page_allocator);
-    try collector.writeFacts(module, writer);
 }
 
 const Context = struct {
@@ -630,9 +604,11 @@ const ModuleFactCollector = struct {
         self.globals.deinit();
     }
 
-    fn appendFacts(self: *ModuleFactCollector, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
+    fn appendFactsFromDeclSliceForSpecHarness(self: *ModuleFactCollector, decls: []const ast.Decl, out: *std.ArrayList(u8)) anyerror!void {
         var writer: ListFactWriter = .{ .allocator = self.allocator, .out = out };
-        try self.writeFacts(module, &writer);
+        defer self.deinit();
+        try self.collectDeclFactsFromSyntaxDecls(decls);
+        for (decls) |decl| try self.writeDeclFacts(decl, &writer);
     }
 
     fn appendResolvedFacts(self: *ModuleFactCollector, sources: module_parser.ResolvedSourceDatabase, out: *std.ArrayList(u8)) anyerror!void {
@@ -644,14 +620,8 @@ const ModuleFactCollector = struct {
         for (decls) |entry| try self.writeDeclFacts(entry.decl, &writer);
     }
 
-    fn writeFacts(self: *ModuleFactCollector, module: ast.Module, writer: anytype) anyerror!void {
-        defer self.deinit();
-        try self.collectDeclFacts(module);
-        for (module.decls) |decl| try self.writeDeclFacts(decl, writer);
-    }
-
-    fn collectDeclFacts(self: *ModuleFactCollector, module: ast.Module) !void {
-        for (module.decls) |decl| {
+    fn collectDeclFactsFromSyntaxDecls(self: *ModuleFactCollector, decls: []const ast.Decl) !void {
+        for (decls) |decl| {
             try self.collectDeclFact(decl);
         }
     }
