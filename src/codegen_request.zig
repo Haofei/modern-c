@@ -1,20 +1,19 @@
 const std = @import("std");
 
 const codegen_options = @import("codegen_options.zig");
-const early_declaration_metadata = @import("early_declaration_metadata.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const source_map_rows = @import("source_map_rows.zig");
 const verified_program = @import("verified_program.zig");
 
 /// Backend lowering request.
 ///
-/// `early_declaration_metadata` is intentionally named as a transitional
-/// artifact boundary: lowerers still need declaration-derived data for
-/// not-yet-normalized early metadata and comptime mechanics, but the backend
-/// vtable receives a pre-collected artifact object rather than a generic legacy
-/// declaration view.
+/// `declaration_artifacts` is the transitional artifact boundary: lowerers
+/// still need declaration-derived data for not-yet-normalized early metadata
+/// and comptime mechanics, but the backend vtable receives a pre-collected
+/// artifact object rather than a generic legacy declaration view.
 pub const LowerRequest = struct {
     program: verified_program.VerifiedProgram,
-    early_declaration_metadata: early_declaration_metadata.EarlyDeclarationArtifacts,
+    declaration_artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
     out: *std.ArrayList(u8),
     opts: codegen_options.LowerOptions,
 };
@@ -30,10 +29,10 @@ pub const EmitMapRequest = struct {
     opts: codegen_options.LowerOptions,
 };
 
-test "codegen requests keep legacy syntax mechanics behind named adapter fields" {
+test "codegen requests keep syntax mechanics behind named artifact fields" {
     const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "src/codegen_request.zig", std.testing.allocator, .limited(1 << 20));
     defer std.testing.allocator.free(source);
 
-    try std.testing.expect(std.mem.indexOf(u8, source, "early_declaration_metadata") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "declaration_artifacts") != null);
     try std.testing.expect(std.mem.indexOf(u8, source, "source_map_rows") != null);
 }

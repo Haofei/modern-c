@@ -280,7 +280,7 @@ fn backendLower(
     request: backend_mod.LowerRequest,
 ) backend_mod.LowerError!void {
     _ = ctx;
-    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, request.early_declaration_metadata, request.program.typed_mir, request.program.source_spelling, request.out, request.opts.source_path orelse "input.mc", request.opts.checks, request.opts.stub_asm, request.opts.target_arch, request.opts.linux_kernel, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
+    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, request.declaration_artifacts, request.program.typed_mir, request.program.source_spelling, request.out, request.opts.source_path orelse "input.mc", request.opts.checks, request.opts.stub_asm, request.opts.target_arch, request.opts.linux_kernel, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 pub fn appendLlvm(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8)) !void {

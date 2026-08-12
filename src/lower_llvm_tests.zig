@@ -13548,7 +13548,7 @@ test "LLVM unsupported diagnostics use nearest source span for generated nodes" 
     const llvm_backend = lower_llvm.mcBackend();
     try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerRequest(std.testing.allocator, .{
         .program = verified,
-        .early_declaration_metadata = early_metadata,
+        .declaration_artifacts = early_metadata,
         .out = &out,
         .opts = .{
             .profile = .kernel,

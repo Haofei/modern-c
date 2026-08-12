@@ -754,7 +754,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
     defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
-        .early_declaration_metadata = early_metadata,
+        .declaration_artifacts = early_metadata,
         .out = &output,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -808,7 +808,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
-        .early_declaration_metadata = early_metadata,
+        .declaration_artifacts = early_metadata,
         .out = &raw_c,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -1171,7 +1171,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
-        .early_declaration_metadata = early_metadata,
+        .declaration_artifacts = early_metadata,
         .out = &generated_c,
         .opts = .{
             .profile = profile,
@@ -1251,7 +1251,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
     defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
-        .early_declaration_metadata = early_metadata,
+        .declaration_artifacts = early_metadata,
         .out = &output,
         .opts = lower_opts,
     }) catch |err| switch (err) {
