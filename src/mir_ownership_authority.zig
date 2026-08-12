@@ -4,37 +4,11 @@ const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const mir = @import("mir.zig");
 
-pub const FunctionDeclArtifact = struct {
-    name: ast.Ident,
-    associated_owner: ?ast.Ident,
-    abi: ?[]const u8,
-    params: []ast.Param,
-    return_type: ?ast.TypeExpr,
-    return_borrow_source: ?ast.Ident,
-    body: ?ast.Block,
-    is_const: bool,
-    exported: bool,
-    is_variadic: bool,
-    bounds: []ast.TraitBound,
-    is_async: bool,
-    attrs: []const ast.Attr,
-    is_extern: bool,
-};
-
 pub const DropGlueDeclArtifact = struct {
     name: ast.Ident,
     params: []ast.Param,
     attrs: []const ast.Attr,
     is_extern: bool,
-
-    pub fn fromFunctionArtifact(function: FunctionDeclArtifact) DropGlueDeclArtifact {
-        return .{
-            .name = function.name,
-            .params = function.params,
-            .attrs = function.attrs,
-            .is_extern = function.is_extern,
-        };
-    }
 };
 
 pub const AutoDropLocalCleanup = struct {
@@ -102,12 +76,12 @@ pub fn dropGlueDeclMatches(module: *const mir.Module, type_name: []const u8, rel
 
 pub fn dropGlueFactsMatchDeclArtifacts(
     module: *const mir.Module,
-    artifacts: []const FunctionDeclArtifact,
+    artifacts: []const DropGlueDeclArtifact,
 ) bool {
     for (module.drop_glue_facts) |fact| {
         var matched = false;
         for (artifacts) |artifact| {
-            if (!dropGlueDeclArtifactMatches(module, fact, DropGlueDeclArtifact.fromFunctionArtifact(artifact))) continue;
+            if (!dropGlueDeclArtifactMatches(module, fact, artifact)) continue;
             matched = true;
             break;
         }

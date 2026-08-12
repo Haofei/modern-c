@@ -156,7 +156,7 @@ const isStringLiteralTarget = type_bridge.isStringLiteralTarget;
 const isMmioStructAbi = type_bridge.isMmioStructAbi;
 const dynCalleeMethodName = syntax_bridge.dynCalleeMethodName;
 
-const FunctionDeclArtifact = mir_ownership_authority.FunctionDeclArtifact;
+const DropGlueDeclArtifact = mir_ownership_authority.DropGlueDeclArtifact;
 
 const AggregateDeclArtifact = union(enum) {
     struct_decl: ast_bridge.StructDecl,
@@ -248,7 +248,8 @@ pub const CEmitter = struct {
     static_initializers: std.StringHashMap(ast_bridge.Expr),
     type_aliases: std.StringHashMap(ast_bridge.TypeExpr),
     functions: std.StringHashMap(FnInfo),
-    function_decl_artifacts: std.ArrayList(FunctionDeclArtifact) = .empty,
+    function_decl_artifacts: std.ArrayList(declaration_artifacts.FunctionArtifact) = .empty,
+    drop_glue_decl_artifacts: std.ArrayList(DropGlueDeclArtifact) = .empty,
     // Source function name -> overridden object/backend symbol (`#[backend_name("Y")]`).
     // Emitted as a C `__asm__("Y")` label so the object symbol is renamed without touching
     // any C-level call site.
@@ -386,6 +387,7 @@ pub const CEmitter = struct {
 
     fn deinitFunctionCollections(self: *CEmitter) void {
         self.function_decl_artifacts.deinit(self.allocator);
+        self.drop_glue_decl_artifacts.deinit(self.allocator);
         self.fn_ptr_types.deinit();
         self.closure_types.deinit();
         self.bind_thunks.deinit();
@@ -534,32 +536,23 @@ pub const CEmitter = struct {
                 if (!mir_ownership_authority.dropGlueDeclMatches(self.mir_module, type_name, function.name.text)) return error.UnsupportedCEmission;
             }
         }
-        try self.function_decl_artifacts.append(self.allocator, functionDeclArtifact(function));
+        try self.function_decl_artifacts.append(self.allocator, function);
+        try self.drop_glue_decl_artifacts.append(self.allocator, dropGlueDeclArtifact(function));
         if (!function.is_extern) if (backendNameOverride(function.attrs)) |name| try self.backend_names.put(function.name.text, name);
         try self.collectFunctionArtifactSliceTypes(function);
     }
 
-    fn functionDeclArtifact(function: declaration_artifacts.FunctionArtifact) FunctionDeclArtifact {
+    fn dropGlueDeclArtifact(function: declaration_artifacts.FunctionArtifact) DropGlueDeclArtifact {
         return .{
             .name = function.name,
-            .associated_owner = function.associated_owner,
-            .abi = function.abi,
             .params = function.params,
-            .return_type = function.return_type,
-            .return_borrow_source = function.return_borrow_source,
-            .body = function.body,
-            .is_const = function.is_const,
-            .exported = function.exported,
-            .is_variadic = function.is_variadic,
-            .bounds = function.bounds,
-            .is_async = function.is_async,
             .attrs = function.attrs,
             .is_extern = function.is_extern,
         };
     }
 
     pub fn validateDropGlueFactsAgainstDecls(self: *CEmitter) !void {
-        if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(self.mir_module, self.function_decl_artifacts.items)) return error.UnsupportedCEmission;
+        if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(self.mir_module, self.drop_glue_decl_artifacts.items)) return error.UnsupportedCEmission;
     }
 
     fn collectImplTraitArtifact(self: *CEmitter, impl_trait: declaration_artifacts.ImplTraitArtifact) !void {
