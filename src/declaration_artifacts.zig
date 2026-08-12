@@ -1,20 +1,12 @@
-//! Syntax-backed declaration artifacts for the codegen compatibility edge.
-//!
-//! Declarations are still collected from top-level syntax while they are being
-//! normalized into VerifiedProgram facts. Backend modules consume the collected
-//! artifacts through `codegen_request` rather than importing this collector
-//! directly or receiving a generic declaration slice.
+//! Declaration artifacts for the remaining codegen compatibility edge.
+//! Backends consume these through `codegen_request`, not raw declaration slices.
 
 const ast = @import("ast.zig");
 const eval = @import("eval.zig");
 const module_parser = @import("module_parser.zig");
 const std = @import("std");
 
-/// Transitional declaration artifacts.
-///
-/// Codegen compatibility prepasses still read top-level syntax declarations,
-/// but declaration enumeration is isolated here instead of being exposed
-/// through backend lowering requests as a generic legacy view.
+/// Transitional declaration artifacts isolated from backend lowering requests.
 pub const EarlyDeclarationArtifacts = struct {
     function_artifacts: []const FunctionArtifact,
     global_artifacts: []const GlobalArtifact,
@@ -29,6 +21,10 @@ pub const EarlyDeclarationArtifacts = struct {
     source_map_artifacts: []const SourceMapArtifact,
 
     fn collectFromSyntaxDecls(allocator: std.mem.Allocator, syntax_items: []const ast.Decl) !EarlyDeclarationArtifacts {
+        return collectFromDeclItems(allocator, syntax_items, false);
+    }
+
+    fn collectFromDeclItems(allocator: std.mem.Allocator, items: anytype, comptime resolved_items: bool) !EarlyDeclarationArtifacts {
         var function_artifacts: std.ArrayList(FunctionArtifact) = .empty;
         errdefer function_artifacts.deinit(allocator);
         var global_artifacts: std.ArrayList(GlobalArtifact) = .empty;
@@ -52,55 +48,58 @@ pub const EarlyDeclarationArtifacts = struct {
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
         errdefer source_map_artifacts.deinit(allocator);
 
-        for (syntax_items) |decl| switch (decl.kind) {
-            .fn_decl => |fn_decl| {
-                try function_artifacts.append(allocator, FunctionArtifact.fromDecl(fn_decl, decl.attrs, false));
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-            .extern_fn => |fn_decl| {
-                try function_artifacts.append(allocator, FunctionArtifact.fromDecl(fn_decl, decl.attrs, true));
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-            .global_decl => |global| {
-                try global_artifacts.append(allocator, GlobalArtifact.fromDecl(global));
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-            .type_alias => |alias| {
-                try type_alias_artifacts.append(allocator, alias);
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-            .struct_decl => |struct_decl| {
-                try struct_artifacts.append(allocator, struct_decl);
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-            .enum_decl => |enum_decl| {
-                try enum_artifacts.append(allocator, enum_decl);
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-            .union_decl => |union_decl| {
-                try union_artifacts.append(allocator, union_decl);
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-            .packed_bits_decl => |packed_bits_decl| {
-                try packed_bits_artifacts.append(allocator, packed_bits_decl);
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-            .overlay_union_decl => |overlay_union| {
-                try overlay_union_artifacts.append(allocator, overlay_union);
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-            .opaque_decl => {
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-            .trait_decl => |trait_decl| {
-                try trait_decl_artifacts.append(allocator, TraitDeclArtifact.fromDecl(trait_decl));
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-            .impl_trait => |impl_trait| {
-                try impl_trait_artifacts.append(allocator, ImplTraitArtifact.fromDecl(impl_trait));
-                if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
-            },
-        };
+        for (items) |item| {
+            const decl = if (resolved_items) item.decl else item;
+            switch (decl.kind) {
+                .fn_decl => |fn_decl| {
+                    try function_artifacts.append(allocator, FunctionArtifact.fromDecl(fn_decl, decl.attrs, false));
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+                .extern_fn => |fn_decl| {
+                    try function_artifacts.append(allocator, FunctionArtifact.fromDecl(fn_decl, decl.attrs, true));
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+                .global_decl => |global| {
+                    try global_artifacts.append(allocator, GlobalArtifact.fromDecl(global));
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+                .type_alias => |alias| {
+                    try type_alias_artifacts.append(allocator, alias);
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+                .struct_decl => |struct_decl| {
+                    try struct_artifacts.append(allocator, struct_decl);
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+                .enum_decl => |enum_decl| {
+                    try enum_artifacts.append(allocator, enum_decl);
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+                .union_decl => |union_decl| {
+                    try union_artifacts.append(allocator, union_decl);
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+                .packed_bits_decl => |packed_bits_decl| {
+                    try packed_bits_artifacts.append(allocator, packed_bits_decl);
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+                .overlay_union_decl => |overlay_union| {
+                    try overlay_union_artifacts.append(allocator, overlay_union);
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+                .opaque_decl => {
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+                .trait_decl => |trait_decl| {
+                    try trait_decl_artifacts.append(allocator, TraitDeclArtifact.fromDecl(trait_decl));
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+                .impl_trait => |impl_trait| {
+                    try impl_trait_artifacts.append(allocator, ImplTraitArtifact.fromDecl(impl_trait));
+                    if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
+                },
+            }
+        }
 
         const owned_function_artifacts = try function_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_function_artifacts);
@@ -140,22 +139,12 @@ pub const EarlyDeclarationArtifacts = struct {
         };
     }
 
-    /// Collect declaration artifacts from the per-file resolved declaration
-    /// stream.
-    ///
-    /// This is intentionally a compatibility adapter today: `SourceMapArtifact`
-    /// still stores legacy source spans without a `FileId`, so production
-    /// codegen must not switch to this entrypoint until source-map artifacts are
-    /// file-id aware. The adapter gives module-aware callers and tests a single
-    /// named boundary while the artifact schema is being normalized.
+    /// Collect declaration artifacts from the per-file resolved declaration stream.
     pub fn collectFromResolvedDecls(
         allocator: std.mem.Allocator,
-        decls: []const module_parser.ResolvedDecl,
+        resolved_decls: []const module_parser.ResolvedDecl,
     ) !EarlyDeclarationArtifacts {
-        var syntax_decls = try allocator.alloc(ast.Decl, decls.len);
-        defer allocator.free(syntax_decls);
-        for (decls, 0..) |entry, i| syntax_decls[i] = entry.decl;
-        return collectFromSyntaxDecls(allocator, syntax_decls);
+        return collectFromDeclItems(allocator, resolved_decls, true);
     }
 
     pub fn collectFromModuleDeclsForTests(allocator: std.mem.Allocator, syntax_items: []const ast.Decl) !EarlyDeclarationArtifacts {
