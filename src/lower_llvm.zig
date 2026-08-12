@@ -5953,19 +5953,19 @@ const LlvmEmitter = struct {
 
     fn atomicInitPayloadTypeAt(self: *LlvmEmitter, span: ast.Span, expected_result_ty: ast.TypeExpr) ?ast.TypeExpr {
         const function = self.currentMirFunction() orelse return null;
+        const view = mir_facts_view.MirFactsView.init(&self.mir_module);
+        const source = mir.sourcePointFromSpan(span);
         const expected_payload_ty = self.atomicPayloadType(self.resolveAliasType(expected_result_ty)) orelse return null;
         var matched_payload_ty: ?ast.TypeExpr = null;
         var found_result = false;
         for (function.target_type_facts) |result_fact| {
-            if (result_fact.kind != .atomic_init_result or result_fact.target_owner == null or result_fact.target_index == null or !mirSourceMatches(span, result_fact.source)) continue;
-            if (!std.mem.eql(u8, result_fact.target_owner.?, "atomic.init")) continue;
+            if (result_fact.target_index == null or !view.targetTypeFactMatchesFamily(function, result_fact, .atomic_init_result, source, "atomic.init")) continue;
             if (!type_syntax.sameTypeSyntax(self.resolveAliasType(result_fact.target_ty), self.resolveAliasType(expected_result_ty))) continue;
             found_result = true;
 
             var group_payload_ty: ?ast.TypeExpr = null;
             for (function.target_type_facts) |payload_fact| {
-                if (payload_fact.kind != .atomic_init_payload or payload_fact.target_index != result_fact.target_index or payload_fact.target_owner == null or !mirSourceMatches(span, payload_fact.source)) continue;
-                if (!std.mem.eql(u8, payload_fact.target_owner.?, "atomic.init")) continue;
+                if (payload_fact.target_index != result_fact.target_index or !view.targetTypeFactMatchesFamily(function, payload_fact, .atomic_init_payload, source, "atomic.init")) continue;
                 if (!type_syntax.sameTypeSyntax(self.resolveAliasType(payload_fact.target_ty), self.resolveAliasType(expected_payload_ty))) return null;
                 if (group_payload_ty) |known| {
                     if (!type_syntax.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_fact.target_ty))) return null;

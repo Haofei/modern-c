@@ -16,6 +16,13 @@ pub const TargetTypeLookupKey = struct {
     target_index: ?usize = null,
 };
 
+pub const TargetTypeFactQuery = struct {
+    kind: mir.TargetTypeKind,
+    source: mir.SourcePoint,
+    owner: ?[]const u8 = null,
+    index: ?usize = null,
+};
+
 pub const MirFactsView = struct {
     module: *const mir.Module,
 
@@ -127,6 +134,19 @@ pub const MirFactsView = struct {
         }
         return matched;
     }
+
+    pub fn targetTypeFactMatchesQuery(self: MirFactsView, current: *const mir.Function, fact: mir.TargetTypeFact, query: TargetTypeFactQuery) bool {
+        _ = self;
+        return targetTypeFactMatches(current, fact, query);
+    }
+
+    pub fn targetTypeFactMatchesFamily(self: MirFactsView, current: *const mir.Function, fact: mir.TargetTypeFact, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: ?[]const u8) bool {
+        _ = self;
+        if (fact.kind != kind) return false;
+        if (!ownerMatches(fact.target_owner, owner)) return false;
+        if (!sourceMatches(kind, source, fact.source)) return false;
+        return typedIdentityIsValid(current, fact);
+    }
 };
 
 fn uniqueModuleTargetTypeFact(module: *const mir.Module, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {
@@ -144,13 +164,17 @@ fn uniqueModuleTargetTypeFact(module: *const mir.Module, kind: mir.TargetTypeKin
 
 fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {
     for (function.target_type_facts) |fact| {
-        if (fact.kind != kind or fact.target_index != index) continue;
-        if (!ownerMatches(fact.target_owner, owner)) continue;
-        if (!sourceMatches(kind, source, fact.source)) continue;
-        if (!typedIdentityIsValid(function, fact)) return null;
+        if (!targetTypeFactMatches(function, fact, .{ .kind = kind, .source = source, .owner = owner, .index = index })) continue;
         return fact;
     }
     return null;
+}
+
+fn targetTypeFactMatches(function: *const mir.Function, fact: mir.TargetTypeFact, query: TargetTypeFactQuery) bool {
+    if (fact.kind != query.kind or fact.target_index != query.index) return false;
+    if (!ownerMatches(fact.target_owner, query.owner)) return false;
+    if (!sourceMatches(query.kind, query.source, fact.source)) return false;
+    return typedIdentityIsValid(function, fact);
 }
 
 fn targetTypeFactInFunctionById(function: *const mir.Function, key: TargetTypeLookupKey) ?mir.TargetTypeFact {
