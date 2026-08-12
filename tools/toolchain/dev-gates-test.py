@@ -213,6 +213,7 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/fmt-test.sh"], ["fmt-test"])
     assert_gates(module, ["tools/toolchain/mcc-symbols-test.sh"], ["mcc-symbols-test"])
     assert_gates(module, ["tools/toolchain/mcc-inspection-modules-test.sh"], ["mcc-inspection-modules-test"])
+    assert_gates(module, ["tools/toolchain/mcc-list-tests-modules-test.sh"], ["mcc-list-tests-modules-test"])
     assert_gates(module, ["tools/toolchain/std-api-docs.py"], ["std-api-docs-test"])
     assert_gates(module, ["tools/toolchain/vendoring-test.py"], ["vendoring-test"])
     assert_gates(module, ["tools/toolchain/third-party-licenses-test.py"], ["third-party-licenses-test"])

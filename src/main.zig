@@ -600,6 +600,16 @@ fn runListTests(session: *CompilationSession, path: []const u8, source: []const 
     var diag = session.initReporter(path, source);
     defer diag.deinit();
 
+    if (session.resolved_sources) |resolved_sources| {
+        var out: std.ArrayList(u8) = .empty;
+        defer out.deinit(allocator);
+        for (resolved_sources.files) |file| {
+            try appendModuleTests(allocator, file.module, &out);
+        }
+        try session.writeStdout(out.items);
+        return;
+    }
+
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
@@ -614,6 +624,11 @@ fn runListTests(session: *CompilationSession, path: []const u8, source: []const 
 
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
+    try appendModuleTests(allocator, module, &out);
+    try session.writeStdout(out.items);
+}
+
+fn appendModuleTests(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
     for (module.decls) |decl| {
         var is_test = false;
         for (decl.attrs) |attr| {
@@ -632,7 +647,6 @@ fn runListTests(session: *CompilationSession, path: []const u8, source: []const 
         try out.appendSlice(allocator, name);
         try out.append(allocator, '\n');
     }
-    try session.writeStdout(out.items);
 }
 
 fn runFacts(session: *CompilationSession, path: []const u8, source: []const u8) !void {

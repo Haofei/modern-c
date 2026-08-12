@@ -425,6 +425,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("fmt-test"));
     m0_full_step.dependOn(ctx.cmd("mcc-symbols-test"));
     m0_full_step.dependOn(ctx.cmd("mcc-inspection-modules-test"));
+    m0_full_step.dependOn(ctx.cmd("mcc-list-tests-modules-test"));
     m0_full_step.dependOn(ctx.cmd("lsp-test"));
     m0_full_step.dependOn(ctx.cmd("editor-client-test"));
     // pkg-test exercises the mcc-pkg manifest build (needs clang).
