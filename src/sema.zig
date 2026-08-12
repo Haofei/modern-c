@@ -491,7 +491,7 @@ pub const Checker = struct {
         defer globals.deinit();
         var type_aliases = std.StringHashMap(ast.TypeExpr).init(self.reporter.allocator);
         defer type_aliases.deinit();
-        self.qualified_owners = module.qualified_owners;
+        self.qualified_owners = qualified_owners;
         self.known_traits = std.StringHashMap(void).init(self.reporter.allocator);
         defer self.known_traits.deinit();
         self.object_safe_traits = std.StringHashMap(void).init(self.reporter.allocator);
@@ -507,25 +507,25 @@ pub const Checker = struct {
         self.trait_decls = &trait_decls;
         defer self.trait_decls = null;
         if (!self.generic_template_precheck) {
-            self.checkTopLevelNames(module);
+            self.checkTopLevelNames(decls);
             self.checkBackendNameUniqueness(module);
         }
-        self.collectTypeAliases(module, &type_aliases);
-        if (!self.generic_template_precheck) self.checkTypeAliasCycles(module, &type_aliases);
-        self.collectMmioStructs(module, &mmio_structs);
-        self.collectStructs(module, &structs);
+        self.collectTypeAliases(decls, &type_aliases);
+        if (!self.generic_template_precheck) self.checkTypeAliasCycles(decls, &type_aliases);
+        self.collectMmioStructs(decls, &mmio_structs);
+        self.collectStructs(decls, &structs);
         self.active_structs = &structs;
         defer self.active_structs = null;
-        self.collectPackedBits(module, &packed_bits);
-        self.collectOverlayUnions(module, &overlay_unions);
-        self.collectTaggedUnions(module, &tagged_unions);
+        self.collectPackedBits(decls, &packed_bits);
+        self.collectOverlayUnions(decls, &overlay_unions);
+        self.collectTaggedUnions(decls, &tagged_unions);
         self.active_tagged_unions = &tagged_unions;
         defer self.active_tagged_unions = null;
-        self.collectEnums(module, &enums);
-        self.collectFunctions(module, &functions);
+        self.collectEnums(decls, &enums);
+        self.collectFunctions(decls, &functions);
         if (!self.generic_template_precheck) self.checkErrorFromDecls(module);
-        self.collectGlobals(module, &globals);
-        const safe_module = moduleHasSafeModuleAttr(module);
+        self.collectGlobals(decls, &globals);
+        const safe_module = moduleHasSafeModuleAttr(decls);
 
         var comptime_globals: std.ArrayList(ast.GlobalDecl) = .empty;
         defer comptime_globals.deinit(self.reporter.allocator);
@@ -533,7 +533,7 @@ pub const Checker = struct {
         defer comptime_type_aliases.deinit(self.reporter.allocator);
         var comptime_structs: std.ArrayList(ast.StructDecl) = .empty;
         defer comptime_structs.deinit(self.reporter.allocator);
-        for (module.decls) |decl| switch (decl.kind) {
+        for (decls) |decl| switch (decl.kind) {
             .global_decl => |global| comptime_globals.append(self.reporter.allocator, global) catch {
                 self.oom = true;
             },
@@ -569,7 +569,7 @@ pub const Checker = struct {
 
         var const_fns = std.StringHashMap(ast.FnDecl).init(self.reporter.allocator);
         defer const_fns.deinit();
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             const fn_decl = switch (decl.kind) {
                 .fn_decl => |node| node,
                 else => continue,
@@ -616,13 +616,13 @@ pub const Checker = struct {
 
         var const_global_widths = std.StringHashMap(u16).init(self.reporter.allocator);
         defer const_global_widths.deinit();
-        self.collectConstGlobalWidths(module, &const_global_widths);
+        self.collectConstGlobalWidths(decls, &const_global_widths);
         self.const_global_widths = &const_global_widths;
         defer self.const_global_widths = null;
 
         var comptime_fns = std.StringHashMap(ast.FnDecl).init(self.reporter.allocator);
         defer comptime_fns.deinit();
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             const fn_decl = switch (decl.kind) {
                 .fn_decl => |node| node,
                 else => continue,
@@ -648,7 +648,7 @@ pub const Checker = struct {
         defer thread_move_types.deinit();
         var trivial_drop_types = std.StringHashMap(void).init(self.reporter.allocator);
         defer trivial_drop_types.deinit();
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             if (decl.kind == .struct_decl and decl.kind.struct_decl.is_region and declHasTrivialDrop(decl)) {
                 self.errorCode(decl.span, "E_REGION_RESOURCE_CONFLICT", "`region struct` is region-owned and cannot declare #[trivial_drop]");
             }
@@ -679,8 +679,8 @@ pub const Checker = struct {
                 }
             }
         }
-        self.collectImplicitMoveAggregates(module, &move_types, &linear_types, &type_aliases);
-        self.collectThreadMoveAggregates(module, &move_types, &thread_move_types);
+        self.collectImplicitMoveAggregates(decls, &move_types, &linear_types, &type_aliases);
+        self.collectThreadMoveAggregates(decls, &move_types, &thread_move_types);
         self.move_types = &move_types;
         defer self.move_types = null;
         self.linear_types = &linear_types;
@@ -692,7 +692,7 @@ pub const Checker = struct {
 
         var drop_ptr_release_fns = std.StringHashMap([]const u8).init(self.reporter.allocator);
         defer drop_ptr_release_fns.deinit();
-        self.collectDropPointerReleaseFns(module, &move_types, &linear_types, &structs, &drop_ptr_release_fns);
+        self.collectDropPointerReleaseFns(decls, &move_types, &linear_types, &structs, &drop_ptr_release_fns);
         self.drop_ptr_release_fns = &drop_ptr_release_fns;
         defer self.drop_ptr_release_fns = null;
 
@@ -703,14 +703,14 @@ pub const Checker = struct {
         if (self.file_boundaries != null) {
             var strict_files = std.StringHashMap(void).init(self.reporter.allocator);
             defer strict_files.deinit();
-            if (module.visibility_mode == .explicit_public) {
+            if (visibility_mode == .explicit_public) {
                 for (self.file_boundaries.?) |boundary| {
                     strict_files.put(boundary.path, {}) catch {
                         self.oom = true;
                     };
                 }
             } else {
-                for (module.decls) |decl| {
+                for (decls) |decl| {
                     if (decl.is_pub) {
                         if (self.originFile(decl.span.offset)) |f| strict_files.put(f, {}) catch {
                             self.oom = true;
@@ -719,7 +719,7 @@ pub const Checker = struct {
                 }
             }
             if (strict_files.count() > 0) {
-                for (module.decls) |decl| {
+                for (decls) |decl| {
                     if (decl.kind == .impl_trait) continue; // no own importable name
                     if (declIsPublic(decl)) continue;
                     const file = self.originFile(decl.span.offset) orelse continue;
@@ -733,7 +733,7 @@ pub const Checker = struct {
         self.private_items = &private_items;
         defer self.private_items = null;
 
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             if (self.generic_template_precheck and !self.shouldCheckGenericTemplateDecl(decl)) continue;
             self.checkDecl(decl, safe_module, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
         }
@@ -755,7 +755,7 @@ pub const Checker = struct {
                 .enums = &enums,
                 .tagged_unions = &tagged_unions,
             };
-            for (module.decls) |decl| {
+            for (decls) |decl| {
                 if (decl.kind == .fn_decl) self.checkDefiniteInit(decl.kind.fn_decl, di_ctx);
             }
         }
@@ -763,7 +763,7 @@ pub const Checker = struct {
         // Linear `move`/liveness pass (section 18.1, annex D.7), also owns the
         // scoped-borrow state machine. It is skipped only when the module has
         // neither checked resource types nor explicit `borrow` expressions.
-        if (!self.generic_template_precheck and (move_types.count() > 0 or moduleHasScopedBorrow(module))) {
+        if (!self.generic_template_precheck and (move_types.count() > 0 or moduleHasScopedBorrow(decls))) {
             var move_ctx = Context{
                 .safe_module = safe_module,
                 .functions = &functions,
@@ -780,7 +780,7 @@ pub const Checker = struct {
             defer self.move_loop_stack.deinit(self.reporter.allocator); // free the loop-entry snapshot stack
             defer self.move_place_keys.deinit(self.reporter.allocator); // free the field-move place-key list
             defer self.move_place_depth_diagnostic_offsets.deinit(self.reporter.allocator);
-            for (module.decls) |decl| {
+            for (decls) |decl| {
                 if (decl.kind == .fn_decl) sema_move.checkMoveLinearity(self, decl.kind.fn_decl, &type_aliases);
             }
         }
@@ -799,15 +799,15 @@ pub const Checker = struct {
         };
     }
 
-    fn moduleHasSafeModuleAttr(module: ast.Module) bool {
-        for (module.decls) |decl| {
+    fn moduleHasSafeModuleAttr(decls: []const ast.Decl) bool {
+        for (decls) |decl| {
             if (hasNamedAttr(decl.attrs, "safe_module")) return true;
         }
         return false;
     }
 
-    fn collectTypeAliases(self: *Checker, module: ast.Module, type_aliases: *std.StringHashMap(ast.TypeExpr)) void {
-        for (module.decls) |decl| {
+    fn collectTypeAliases(self: *Checker, decls: []const ast.Decl, type_aliases: *std.StringHashMap(ast.TypeExpr)) void {
+        for (decls) |decl| {
             switch (decl.kind) {
                 .type_alias => |alias| if (!type_aliases.contains(alias.name.text)) type_aliases.put(alias.name.text, alias.ty) catch {
                     self.oom = true;
@@ -820,8 +820,8 @@ pub const Checker = struct {
         }
     }
 
-    fn checkTypeAliasCycles(self: *Checker, module: ast.Module, type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
-        for (module.decls) |decl| {
+    fn checkTypeAliasCycles(self: *Checker, decls: []const ast.Decl, type_aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+        for (decls) |decl| {
             const alias = switch (decl.kind) {
                 .type_alias => |alias| alias,
                 else => continue,
@@ -878,8 +878,8 @@ pub const Checker = struct {
         }
     }
 
-    fn collectMmioStructs(self: *Checker, module: ast.Module, mmio_structs: *std.StringHashMap(MmioStruct)) void {
-        for (module.decls) |decl| {
+    fn collectMmioStructs(self: *Checker, decls: []const ast.Decl, mmio_structs: *std.StringHashMap(MmioStruct)) void {
+        for (decls) |decl| {
             switch (decl.kind) {
                 .struct_decl => |struct_decl| {
                     if (struct_decl.abi) |abi| {
@@ -906,8 +906,8 @@ pub const Checker = struct {
         };
     }
 
-    fn collectStructs(self: *Checker, module: ast.Module, structs: *std.StringHashMap(StructInfo)) void {
-        for (module.decls) |decl| {
+    fn collectStructs(self: *Checker, decls: []const ast.Decl, structs: *std.StringHashMap(StructInfo)) void {
+        for (decls) |decl| {
             switch (decl.kind) {
                 .struct_decl => |struct_decl| self.collectStruct(struct_decl, structs),
                 .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
@@ -928,8 +928,8 @@ pub const Checker = struct {
         };
     }
 
-    fn collectPackedBits(self: *Checker, module: ast.Module, packed_bits: *std.StringHashMap(LayoutFieldInfo)) void {
-        for (module.decls) |decl| {
+    fn collectPackedBits(self: *Checker, decls: []const ast.Decl, packed_bits: *std.StringHashMap(LayoutFieldInfo)) void {
+        for (decls) |decl| {
             switch (decl.kind) {
                 .packed_bits_decl => |packed_bits_decl| self.collectLayoutFields(packed_bits_decl.name.text, packed_bits_decl.fields, packed_bits_decl.repr, packed_bits),
                 .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .union_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
@@ -937,8 +937,8 @@ pub const Checker = struct {
         }
     }
 
-    fn collectOverlayUnions(self: *Checker, module: ast.Module, overlay_unions: *std.StringHashMap(LayoutFieldInfo)) void {
-        for (module.decls) |decl| {
+    fn collectOverlayUnions(self: *Checker, decls: []const ast.Decl, overlay_unions: *std.StringHashMap(LayoutFieldInfo)) void {
+        for (decls) |decl| {
             switch (decl.kind) {
                 .overlay_union_decl => |overlay_union_decl| self.collectLayoutFields(overlay_union_decl.name.text, overlay_union_decl.fields, null, overlay_unions),
                 .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
@@ -946,8 +946,8 @@ pub const Checker = struct {
         }
     }
 
-    fn collectTaggedUnions(self: *Checker, module: ast.Module, tagged_unions: *std.StringHashMap(UnionInfo)) void {
-        for (module.decls) |decl| {
+    fn collectTaggedUnions(self: *Checker, decls: []const ast.Decl, tagged_unions: *std.StringHashMap(UnionInfo)) void {
+        for (decls) |decl| {
             switch (decl.kind) {
                 .union_decl => |union_decl| self.collectTaggedUnion(union_decl, tagged_unions),
                 .fn_decl, .extern_fn, .type_alias, .struct_decl, .enum_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
@@ -981,8 +981,8 @@ pub const Checker = struct {
         };
     }
 
-    fn collectFunctions(self: *Checker, module: ast.Module, functions: *std.StringHashMap(FunctionInfo)) void {
-        for (module.decls) |decl| {
+    fn collectFunctions(self: *Checker, decls: []const ast.Decl, functions: *std.StringHashMap(FunctionInfo)) void {
+        for (decls) |decl| {
             switch (decl.kind) {
                 .fn_decl, .extern_fn => |fn_decl| {
                     if (!functions.contains(fn_decl.name.text)) functions.put(fn_decl.name.text, .{
@@ -1009,10 +1009,10 @@ pub const Checker = struct {
         }
     }
 
-    fn collectDropPointerReleaseFns(self: *Checker, module: ast.Module, move_types: *const std.StringHashMap(void), linear_types: *const std.StringHashMap(void), structs: *const std.StringHashMap(StructInfo), release_fns: *std.StringHashMap([]const u8)) void {
+    fn collectDropPointerReleaseFns(self: *Checker, decls: []const ast.Decl, move_types: *const std.StringHashMap(void), linear_types: *const std.StringHashMap(void), structs: *const std.StringHashMap(StructInfo), release_fns: *std.StringHashMap([]const u8)) void {
         var release_by_type = std.StringHashMap([]const u8).init(self.reporter.allocator);
         defer release_by_type.deinit();
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             if (!hasNamedAttr(decl.attrs, "drop")) continue;
             const fn_decl = switch (decl.kind) {
                 .fn_decl => |node| node,
@@ -1070,7 +1070,7 @@ pub const Checker = struct {
         }
     }
 
-    fn collectImplicitMoveAggregates(self: *Checker, module: ast.Module, move_types: *std.StringHashMap(void), linear_types: *std.StringHashMap(void), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
+    fn collectImplicitMoveAggregates(self: *Checker, decls: []const ast.Decl, move_types: *std.StringHashMap(void), linear_types: *std.StringHashMap(void), aliases: *const std.StringHashMap(ast.TypeExpr)) void {
         self.move_types = move_types;
         self.linear_types = linear_types;
         defer {
@@ -1082,7 +1082,7 @@ pub const Checker = struct {
         var passes: usize = 0;
         while (changed and passes < 64) : (passes += 1) {
             changed = false;
-            for (module.decls) |decl| {
+            for (decls) |decl| {
                 const struct_decl = switch (decl.kind) {
                     .struct_decl => |node| node,
                     else => continue,
@@ -1109,13 +1109,13 @@ pub const Checker = struct {
             }
         }
         if (changed) {
-            const span = if (module.decls.len > 0) module.decls[0].span else diagnostics.Span{ .offset = 0, .len = 0, .line = 1, .column = 1 };
+            const span = if (decls.len > 0) decls[0].span else diagnostics.Span{ .offset = 0, .len = 0, .line = 1, .column = 1 };
             self.errorCode(span, "E_INTERNAL_OOM", "compiler exceeded implicit resource aggregate classification depth");
         }
     }
 
-    fn collectThreadMoveAggregates(self: *Checker, module: ast.Module, move_types: *const std.StringHashMap(void), thread_move_types: *std.StringHashMap(void)) void {
-        for (module.decls) |decl| {
+    fn collectThreadMoveAggregates(self: *Checker, decls: []const ast.Decl, move_types: *const std.StringHashMap(void), thread_move_types: *std.StringHashMap(void)) void {
+        for (decls) |decl| {
             const struct_decl = switch (decl.kind) {
                 .struct_decl => |node| node,
                 else => continue,
@@ -1137,8 +1137,8 @@ pub const Checker = struct {
         };
     }
 
-    fn collectEnums(self: *Checker, module: ast.Module, enums: *std.StringHashMap(EnumInfo)) void {
-        for (module.decls) |decl| {
+    fn collectEnums(self: *Checker, decls: []const ast.Decl, enums: *std.StringHashMap(EnumInfo)) void {
+        for (decls) |decl| {
             switch (decl.kind) {
                 .enum_decl => |enum_decl| self.collectEnum(enum_decl, enums),
                 .fn_decl, .extern_fn, .type_alias, .struct_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
@@ -1159,8 +1159,8 @@ pub const Checker = struct {
         };
     }
 
-    fn collectGlobals(self: *Checker, module: ast.Module, globals: *std.StringHashMap(GlobalInfo)) void {
-        for (module.decls) |decl| {
+    fn collectGlobals(self: *Checker, decls: []const ast.Decl, globals: *std.StringHashMap(GlobalInfo)) void {
+        for (decls) |decl| {
             switch (decl.kind) {
                 .global_decl => |global| if (global.ty) |ty| {
                     if (!globals.contains(global.name.text)) globals.put(global.name.text, .{ .ty = ty, .unsafe_ffi = hasNamedAttr(decl.attrs, "unsafe_ffi") }) catch {
@@ -1172,8 +1172,8 @@ pub const Checker = struct {
         }
     }
 
-    fn collectConstGlobalWidths(self: *Checker, module: ast.Module, widths: *std.StringHashMap(u16)) void {
-        for (module.decls) |decl| {
+    fn collectConstGlobalWidths(self: *Checker, decls: []const ast.Decl, widths: *std.StringHashMap(u16)) void {
+        for (decls) |decl| {
             const global = switch (decl.kind) {
                 .global_decl => |g| g,
                 else => continue,
@@ -1187,11 +1187,11 @@ pub const Checker = struct {
         }
     }
 
-    fn checkTopLevelNames(self: *Checker, module: ast.Module) void {
+    fn checkTopLevelNames(self: *Checker, decls: []const ast.Decl) void {
         var names = std.StringHashMap(void).init(self.reporter.allocator);
         defer names.deinit();
 
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             // An `impl Trait for Type` record introduces no top-level name of its own
             // (its methods are separate `Type__m` fn_decls); skip the uniqueness check.
             if (decl.kind == .impl_trait) continue;
@@ -8809,8 +8809,8 @@ fn typeExprIsGenericValueArg(ty: ast.TypeExpr, ctx: Context) bool {
     };
 }
 
-fn moduleHasScopedBorrow(module: ast.Module) bool {
-    for (module.decls) |decl| {
+fn moduleHasScopedBorrow(decls: []const ast.Decl) bool {
+    for (decls) |decl| {
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| if (fn_decl.body) |body| {
                 if (blockHasScopedBorrow(body)) return true;
