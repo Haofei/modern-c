@@ -3,7 +3,7 @@
 const std = @import("std");
 
 const array_len = @import("array_len.zig");
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const eval = @import("eval.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
@@ -13,7 +13,7 @@ const LocalInfo = lower_c_model.LocalInfo;
 const intTypeRange = lower_c_type.intTypeRange;
 pub const parseI128Literal = numeric.parseI128Literal;
 
-pub fn isStaticCInitializer(expr: ast.Expr) bool {
+pub fn isStaticCInitializer(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .int_literal, .float_literal, .bool_literal, .null_literal, .void_literal, .enum_literal, .string_literal, .char_literal => true,
         .address_of => true,
@@ -24,7 +24,7 @@ pub fn isStaticCInitializer(expr: ast.Expr) bool {
     };
 }
 
-pub fn isArrayLiteralExpr(expr: ast.Expr) bool {
+pub fn isArrayLiteralExpr(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .array_literal => true,
         .grouped => |inner| isArrayLiteralExpr(inner.*),
@@ -32,7 +32,7 @@ pub fn isArrayLiteralExpr(expr: ast.Expr) bool {
     };
 }
 
-pub fn isStructLiteralExpr(expr: ast.Expr) bool {
+pub fn isStructLiteralExpr(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .struct_literal => true,
         .grouped => |inner| isStructLiteralExpr(inner.*),
@@ -40,7 +40,7 @@ pub fn isStructLiteralExpr(expr: ast.Expr) bool {
     };
 }
 
-pub fn isDirectStaticCInitializer(expr: ast.Expr) bool {
+pub fn isDirectStaticCInitializer(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .unary => |node| node.op == .neg and isNegativeStaticCOperand(node.expr.*),
         .grouped => |inner| isDirectStaticCInitializer(inner.*),
@@ -48,7 +48,7 @@ pub fn isDirectStaticCInitializer(expr: ast.Expr) bool {
     };
 }
 
-pub fn isNegativeStaticCOperand(expr: ast.Expr) bool {
+pub fn isNegativeStaticCOperand(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .int_literal, .float_literal => true,
         .grouped => |inner| isNegativeStaticCOperand(inner.*),
@@ -56,7 +56,7 @@ pub fn isNegativeStaticCOperand(expr: ast.Expr) bool {
     };
 }
 
-pub fn emitStaticCInitializer(allocator: std.mem.Allocator, out: *std.ArrayList(u8), expr: ast.Expr) !bool {
+pub fn emitStaticCInitializer(allocator: std.mem.Allocator, out: *std.ArrayList(u8), expr: ast_bridge.Expr) !bool {
     switch (expr.kind) {
         .grouped => |inner| {
             if (!isDirectStaticCInitializer(inner.*)) return false;
@@ -74,7 +74,7 @@ pub fn emitStaticCInitializer(allocator: std.mem.Allocator, out: *std.ArrayList(
     }
 }
 
-fn emitStaticNegativeOperand(allocator: std.mem.Allocator, out: *std.ArrayList(u8), expr: ast.Expr, negated: bool) !bool {
+fn emitStaticNegativeOperand(allocator: std.mem.Allocator, out: *std.ArrayList(u8), expr: ast_bridge.Expr, negated: bool) !bool {
     switch (expr.kind) {
         .int_literal => |literal| {
             if (negated)
@@ -99,12 +99,12 @@ fn emitStaticNegativeOperand(allocator: std.mem.Allocator, out: *std.ArrayList(u
     }
 }
 
-pub fn staticCInitializer(expr: ast.Expr, static_initializers: anytype, functions: anytype, allocator: std.mem.Allocator) ?ast.Expr {
+pub fn staticCInitializer(expr: ast_bridge.Expr, static_initializers: anytype, functions: anytype, allocator: std.mem.Allocator) ?ast_bridge.Expr {
     return switch (expr.kind) {
         .ident => |ident| static_initializers.get(ident.text) orelse if (functions.contains(ident.text)) expr else null,
         .grouped => |inner| if (staticCInitializer(inner.*, static_initializers, functions, allocator)) |resolved| resolved else if (isStaticCInitializer(expr)) expr else null,
         .cast => |node| if (staticCInitializer(node.value.*, static_initializers, functions, allocator)) |resolved| blk: {
-            const value = allocator.create(ast.Expr) catch break :blk null;
+            const value = allocator.create(ast_bridge.Expr) catch break :blk null;
             value.* = resolved;
             break :blk .{ .span = expr.span, .kind = .{ .cast = .{ .value = value, .ty = node.ty } } };
         } else if (isStaticCInitializer(expr)) expr else null,
@@ -217,7 +217,7 @@ pub fn appendCComptimeFloat(
     );
 }
 
-pub fn negatedLiteralIsI64Min(expr: ast.Expr) bool {
+pub fn negatedLiteralIsI64Min(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .int_literal => |literal| literalMagnitudeIsI64Min(literal),
         .grouped => |inner| negatedLiteralIsI64Min(inner.*),
@@ -225,7 +225,7 @@ pub fn negatedLiteralIsI64Min(expr: ast.Expr) bool {
     };
 }
 
-pub fn negatedI128MinLiteral(expr: ast.Expr) ?[]const u8 {
+pub fn negatedI128MinLiteral(expr: ast_bridge.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .int_literal => |literal| if ((numeric.parseIntegerLiteral(literal) orelse return null) == (@as(u128, 1) << 127)) literal else null,
         .grouped => |inner| negatedI128MinLiteral(inner.*),
@@ -233,7 +233,7 @@ pub fn negatedI128MinLiteral(expr: ast.Expr) ?[]const u8 {
     };
 }
 
-pub fn isIntegerLiteralExpr(expr: ast.Expr) bool {
+pub fn isIntegerLiteralExpr(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .int_literal => true,
         .grouped => |inner| isIntegerLiteralExpr(inner.*),
@@ -254,7 +254,7 @@ fn literalMagnitudeIsI64Min(literal: []const u8) bool {
     return value == (@as(u128, 1) << 63);
 }
 
-pub fn switchCaseValueSupported(expr: ast.Expr) bool {
+pub fn switchCaseValueSupported(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .int_literal, .char_literal => true,
         .grouped => |inner| switchCaseValueSupported(inner.*),
@@ -263,7 +263,7 @@ pub fn switchCaseValueSupported(expr: ast.Expr) bool {
     };
 }
 
-pub fn switchCaseUnsignedValue(expr: ast.Expr) bool {
+pub fn switchCaseUnsignedValue(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .int_literal, .char_literal => true,
         .grouped => |inner| switchCaseUnsignedValue(inner.*),
@@ -271,7 +271,7 @@ pub fn switchCaseUnsignedValue(expr: ast.Expr) bool {
     };
 }
 
-pub fn constIntValue(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?i128 {
+pub fn constIntValue(expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?i128 {
     return switch (expr.kind) {
         .int_literal => |literal| parseI128Literal(literal),
         .grouped => |inner| constIntValue(inner.*, locals),
@@ -313,6 +313,6 @@ pub fn constBinaryProvenNoOverflow(node: anytype, target_name: []const u8, local
     return result >= @as(i256, range.min) and result <= @as(i256, range.max);
 }
 
-pub fn constArrayLenValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
+pub fn constArrayLenValue(expr: ast_bridge.Expr, funcs: ?*const std.StringHashMap(ast_bridge.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
     return array_len.parseArrayLenWithReflect(expr, funcs, globals, reflect, reflect_ctx);
 }

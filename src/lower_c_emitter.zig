@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const backend_cleanup = @import("backend_cleanup.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
@@ -136,7 +136,7 @@ const contractName = syntax_bridge.contractName;
 const calleeIdentName = syntax_bridge.calleeIdentName;
 const callExpr = syntax_bridge.callExpr;
 
-fn hasNamedAttr(attrs: []const ast.Attr, name: []const u8) bool {
+fn hasNamedAttr(attrs: []const ast_bridge.Attr, name: []const u8) bool {
     for (attrs) |attr| {
         switch (attr.kind) {
             .named => |id| if (std.mem.eql(u8, id.text, name)) return true,
@@ -147,7 +147,7 @@ fn hasNamedAttr(attrs: []const ast.Attr, name: []const u8) bool {
 }
 
 const MirSubjectType = struct {
-    target_ty: ast.TypeExpr,
+    target_ty: ast_bridge.TypeExpr,
     nullable_representation: ?NullableRepresentation = null,
 };
 const indexExpr = syntax_bridge.indexExpr;
@@ -160,11 +160,11 @@ const dynCalleeMethodName = syntax_bridge.dynCalleeMethodName;
 const FunctionDeclArtifact = mir_ownership_authority.FunctionDeclArtifact;
 
 const AggregateDeclArtifact = union(enum) {
-    struct_decl: ast.StructDecl,
-    tagged_union: ast.UnionDecl,
+    struct_decl: ast_bridge.StructDecl,
+    tagged_union: ast_bridge.UnionDecl,
 };
 
-pub fn appendLayoutAsserts(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), struct_names: []const []const u8) anyerror!void {
+pub fn appendLayoutAsserts(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), struct_names: []const []const u8) anyerror!void {
     var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = false });
     defer typed_mir.deinit();
 
@@ -185,7 +185,7 @@ pub fn appendLayoutAsserts(allocator: std.mem.Allocator, module: ast.Module, out
     try emitter.appendLayoutAssertsFor(struct_names);
 }
 
-pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), struct_names: []const []const u8) anyerror!void {
+pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), struct_names: []const []const u8) anyerror!void {
     var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = false });
     defer typed_mir.deinit();
 
@@ -220,7 +220,7 @@ pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast.Module, out: 
 
 pub fn appendModule(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    module: ast_bridge.Module,
     out: *std.ArrayList(u8),
     optimize: bool,
     source_path: ?[]const u8,
@@ -263,9 +263,9 @@ pub const CEmitter = struct {
     out: *std.ArrayList(u8),
     scratch: std.heap.ArenaAllocator,
     globals: std.StringHashMap(GlobalInfo),
-    global_decl_artifacts: std.ArrayList(ast.GlobalDecl) = .empty,
-    static_initializers: std.StringHashMap(ast.Expr),
-    type_aliases: std.StringHashMap(ast.TypeExpr),
+    global_decl_artifacts: std.ArrayList(ast_bridge.GlobalDecl) = .empty,
+    static_initializers: std.StringHashMap(ast_bridge.Expr),
+    type_aliases: std.StringHashMap(ast_bridge.TypeExpr),
     functions: std.StringHashMap(FnInfo),
     function_decl_artifacts: std.ArrayList(FunctionDeclArtifact) = .empty,
     // Source function name -> overridden object/backend symbol (`#[backend_name("Y")]`).
@@ -275,20 +275,20 @@ pub const CEmitter = struct {
     // `const fn` bodies and folded `const` global values, for folding comptime
     // const-fn calls / named constants in fixed-array lengths (section 22
     // comptime↔type feedback).
-    const_fns: std.StringHashMap(ast.FnDecl),
+    const_fns: std.StringHashMap(ast_bridge.FnDecl),
     const_globals: std.StringHashMap(eval.ComptimeValue),
     const_global_widths: std.StringHashMap(u16),
     const_global_domains: std.StringHashMap(eval.DomainWidth),
     owned_comptime_declarations: early_declaration_metadata.ComptimeDeclarationArtifacts = .empty,
     comptime_declarations: ?eval.ComptimeDeclarations = null,
-    structs: std.StringHashMap(ast.StructDecl),
+    structs: std.StringHashMap(ast_bridge.StructDecl),
     aggregate_decl_artifacts: std.ArrayList(AggregateDeclArtifact) = .empty,
     mmio_structs: std.StringHashMap(MmioStruct),
-    mmio_struct_decl_artifacts: std.ArrayList(ast.StructDecl) = .empty,
+    mmio_struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
     packed_bits: std.StringHashMap(PackedBitsInfo),
     overlay_unions: std.StringHashMap(OverlayUnionInfo),
-    tagged_unions: std.StringHashMap(ast.UnionDecl),
-    enums: std.StringHashMap(ast.EnumDecl),
+    tagged_unions: std.StringHashMap(ast_bridge.UnionDecl),
+    enums: std.StringHashMap(ast_bridge.EnumDecl),
     array_types: std.StringHashMap(ArrayInfo),
     slice_types: std.StringHashMap(SliceInfo),
     result_types: std.StringHashMap(ResultInfo),
@@ -297,8 +297,8 @@ pub const CEmitter = struct {
     // Function-pointer signatures encountered, each emitted as a `typedef RET
     // (*name)(params);` so the name-in-the-middle C declarator works anywhere a
     // plain type name does.
-    fn_ptr_types: std.StringHashMap(ast.TypeExpr),
-    closure_types: std.StringHashMap(ast.TypeExpr),
+    fn_ptr_types: std.StringHashMap(ast_bridge.TypeExpr),
+    closure_types: std.StringHashMap(ast_bridge.TypeExpr),
     // `bind(scalar, f)` closures: the env is a non-pointer scalar that must be
     // widened through `uintptr_t` to fit the closure's `void *` env slot. Calling
     // `f` directly through the `(void *, ...)` code-pointer cast would be an ABI
@@ -310,8 +310,8 @@ pub const CEmitter = struct {
     // `*dyn Trait` knows its vtable layout and a dispatch resolves the slot. `impl_methods`:
     // (Trait,Type) → the mangled `Type__m` function names, in trait-method order, so the
     // rodata vtable initializer lists the right function pointers.
-    trait_decls: std.StringHashMap(ast.TraitDecl),
-    impl_methods: std.StringHashMap([]const ast.ImplTraitMethod),
+    trait_decls: std.StringHashMap(ast_bridge.TraitDecl),
+    impl_methods: std.StringHashMap([]const ast_bridge.ImplTraitMethod),
     mir_module: *const mir.Module,
     source_path: ?[]const u8,
     reporter: ?*diagnostics.Reporter = null,
@@ -331,7 +331,7 @@ pub const CEmitter = struct {
     // hook is not spliced into a context where the result must remain assignable.
     suppress_load_hook: bool = false,
     current_function: ?[]const u8 = null,
-    current_function_body: ?ast.Block = null,
+    current_function_body: ?ast_bridge.Block = null,
     // Proven storage class per pointer-typed local, sourced from live MIR
     // pointer-provenance facts: .global_storage routes derefs through the
     // mc_race helpers; .local_storage is the positive locality proof that keeps
@@ -359,29 +359,29 @@ pub const CEmitter = struct {
             .out = out,
             .scratch = std.heap.ArenaAllocator.init(allocator),
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
-            .static_initializers = std.StringHashMap(ast.Expr).init(allocator),
-            .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
+            .static_initializers = std.StringHashMap(ast_bridge.Expr).init(allocator),
+            .type_aliases = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
             .functions = std.StringHashMap(FnInfo).init(allocator),
             .backend_names = std.StringHashMap([]const u8).init(allocator),
-            .const_fns = std.StringHashMap(ast.FnDecl).init(allocator),
+            .const_fns = std.StringHashMap(ast_bridge.FnDecl).init(allocator),
             .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
             .const_global_widths = std.StringHashMap(u16).init(allocator),
             .const_global_domains = std.StringHashMap(eval.DomainWidth).init(allocator),
-            .structs = std.StringHashMap(ast.StructDecl).init(allocator),
+            .structs = std.StringHashMap(ast_bridge.StructDecl).init(allocator),
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
             .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
             .overlay_unions = std.StringHashMap(OverlayUnionInfo).init(allocator),
-            .tagged_unions = std.StringHashMap(ast.UnionDecl).init(allocator),
-            .enums = std.StringHashMap(ast.EnumDecl).init(allocator),
+            .tagged_unions = std.StringHashMap(ast_bridge.UnionDecl).init(allocator),
+            .enums = std.StringHashMap(ast_bridge.EnumDecl).init(allocator),
             .array_types = std.StringHashMap(ArrayInfo).init(allocator),
             .slice_types = std.StringHashMap(SliceInfo).init(allocator),
             .result_types = std.StringHashMap(ResultInfo).init(allocator),
             .opt_types = std.StringHashMap(lower_c_model.OptInfo).init(allocator),
-            .fn_ptr_types = std.StringHashMap(ast.TypeExpr).init(allocator),
-            .closure_types = std.StringHashMap(ast.TypeExpr).init(allocator),
+            .fn_ptr_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
+            .closure_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
             .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
-            .trait_decls = std.StringHashMap(ast.TraitDecl).init(allocator),
-            .impl_methods = std.StringHashMap([]const ast.ImplTraitMethod).init(allocator),
+            .trait_decls = std.StringHashMap(ast_bridge.TraitDecl).init(allocator),
+            .impl_methods = std.StringHashMap([]const ast_bridge.ImplTraitMethod).init(allocator),
             .mir_module = mir_module,
             .source_path = source_path,
             .reporter = reporter,
@@ -533,7 +533,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn collectGlobalDeclArtifact(self: *CEmitter, global: ast.GlobalDecl) !void {
+    fn collectGlobalDeclArtifact(self: *CEmitter, global: ast_bridge.GlobalDecl) !void {
         try self.global_decl_artifacts.append(self.allocator, global);
         if (global.ty) |ty| {
             var info = try self.globalInfoFromType(ty);
@@ -543,7 +543,7 @@ pub const CEmitter = struct {
         if (global.ty) |ty| try self.collectTypeArtifacts(ty);
     }
 
-    fn collectStructDeclArtifact(self: *CEmitter, struct_decl: ast.StructDecl) !void {
+    fn collectStructDeclArtifact(self: *CEmitter, struct_decl: ast_bridge.StructDecl) !void {
         if (isMmioStructAbi(struct_decl)) {
             try self.mmio_struct_decl_artifacts.append(self.allocator, struct_decl);
             try self.collectMmioStruct(struct_decl);
@@ -554,7 +554,7 @@ pub const CEmitter = struct {
         try self.aggregate_decl_artifacts.append(self.allocator, .{ .struct_decl = struct_decl });
     }
 
-    fn collectFnDeclArtifact(self: *CEmitter, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) !void {
+    fn collectFnDeclArtifact(self: *CEmitter, fn_decl: ast_bridge.FnDecl, attrs: []const ast_bridge.Attr, is_extern: bool) !void {
         try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = is_extern, .is_variadic = fn_decl.is_variadic, .error_from = error_from.hasAttr(attrs) });
         if (!is_extern and hasNamedAttr(attrs, "drop")) {
             if (type_bridge.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
@@ -571,7 +571,7 @@ pub const CEmitter = struct {
         if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(self.mir_module, self.function_decl_artifacts.items)) return error.UnsupportedCEmission;
     }
 
-    fn collectImplTraitArtifact(self: *CEmitter, impl_trait: ast.ImplTrait) !void {
+    fn collectImplTraitArtifact(self: *CEmitter, impl_trait: ast_bridge.ImplTrait) !void {
         const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.trait_name.text, impl_trait.type_name.text });
         try self.impl_methods.put(key, impl_trait.methods);
     }
@@ -676,7 +676,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitGlobal(self: *CEmitter, global: ast.GlobalDecl) !void {
+    fn emitGlobal(self: *CEmitter, global: ast_bridge.GlobalDecl) !void {
         const previous_function = self.current_function;
         self.current_function = global.name.text;
         defer self.current_function = previous_function;
@@ -684,7 +684,7 @@ pub const CEmitter = struct {
     }
 
     // Fold a `const` global initializer to its C constant text (section 22).
-    fn constGlobalCValue(self: *CEmitter, expr: ast.Expr, ty: ?ast.TypeExpr) !?[]const u8 {
+    fn constGlobalCValue(self: *CEmitter, expr: ast_bridge.Expr, ty: ?ast_bridge.TypeExpr) !?[]const u8 {
         const value = self.foldConstGlobalValue(expr, ty) orelse return null;
         return switch (value) {
             // Values above the signed-64 range need an unsigned suffix, or C
@@ -710,7 +710,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitConstGlobalInitializer(self: *CEmitter, ty: ast.TypeExpr, expr: ast.Expr) !bool {
+    fn emitConstGlobalInitializer(self: *CEmitter, ty: ast_bridge.TypeExpr, expr: ast_bridge.Expr) !bool {
         if (syntax_bridge.callExpr(expr)) |call| {
             if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
                 try self.out.appendSlice(self.allocator, " = ");
@@ -724,7 +724,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn foldConstGlobalValue(self: *CEmitter, expr: ast.Expr, expected_ty: ?ast.TypeExpr) ?eval.ComptimeValue {
+    fn foldConstGlobalValue(self: *CEmitter, expr: ast_bridge.Expr, expected_ty: ?ast_bridge.TypeExpr) ?eval.ComptimeValue {
         var fb_arena: ?std.heap.ArenaAllocator = null;
         defer if (fb_arena) |*a| a.deinit();
         const fold_alloc = eval.tryFoldScratch() orelse blk: {
@@ -787,17 +787,17 @@ pub const CEmitter = struct {
         };
     }
 
-    fn cTypeForReflect(ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn cTypeForReflect(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.cTypeFor(ty, .typedef_name);
     }
 
-    fn comptimeSizeOf(self: *CEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
+    fn comptimeSizeOf(self: *CEmitter, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
         var env = self.reflectEnv();
         return lower_c_reflect.comptimeSizeOf(&env, ty, depth);
     }
 
-    fn emitComptimeValueInitializer(self: *CEmitter, value: eval.ComptimeValue, target_ty: ast.TypeExpr) anyerror!void {
+    fn emitComptimeValueInitializer(self: *CEmitter, value: eval.ComptimeValue, target_ty: ast_bridge.TypeExpr) anyerror!void {
         const resolved = self.resolveAliasType(target_ty);
         switch (value) {
             .int => |n| try self.emitComptimeIntInitializer(n),
@@ -818,7 +818,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitComptimeArrayInitializer(self: *CEmitter, items: []const eval.ComptimeValue, resolved: ast.TypeExpr) anyerror!void {
+    fn emitComptimeArrayInitializer(self: *CEmitter, items: []const eval.ComptimeValue, resolved: ast_bridge.TypeExpr) anyerror!void {
         const child_ty = resolvedArrayChildType(resolved) orelse return error.UnsupportedCEmission;
         try self.out.appendSlice(self.allocator, "{ .elems = { ");
         for (items, 0..) |item, i| {
@@ -828,7 +828,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, " } }");
     }
 
-    fn emitComptimeStructInitializer(self: *CEmitter, fields: []const eval.ComptimeStructField, resolved: ast.TypeExpr) anyerror!void {
+    fn emitComptimeStructInitializer(self: *CEmitter, fields: []const eval.ComptimeStructField, resolved: ast_bridge.TypeExpr) anyerror!void {
         const struct_decl = self.structDeclForResolvedTarget(resolved) orelse return error.UnsupportedCEmission;
         try self.out.appendSlice(self.allocator, "{ ");
         for (fields, 0..) |field, i| {
@@ -850,7 +850,7 @@ pub const CEmitter = struct {
         return temp_name;
     }
 
-    fn isAggregateGlobalType(self: *CEmitter, ty: ast.TypeExpr) bool {
+    fn isAggregateGlobalType(self: *CEmitter, ty: ast_bridge.TypeExpr) bool {
         return lower_c_info.isAggregateGlobalType(self.infoContext(), ty);
     }
 
@@ -858,7 +858,7 @@ pub const CEmitter = struct {
         try lower_c_defs.emitEnums(self.defsContext(), &self.enums);
     }
 
-    fn emitEnumType(self: *CEmitter, enum_decl: ast.EnumDecl) !void {
+    fn emitEnumType(self: *CEmitter, enum_decl: ast_bridge.EnumDecl) !void {
         try lower_c_defs.emitEnumType(self.defsContext(), enum_decl);
     }
 
@@ -874,11 +874,11 @@ pub const CEmitter = struct {
         try lower_c_defs.emitOverlayUnionType(self.defsContext(), name, info);
     }
 
-    fn emitTaggedUnionType(self: *CEmitter, union_decl: ast.UnionDecl) !void {
+    fn emitTaggedUnionType(self: *CEmitter, union_decl: ast_bridge.UnionDecl) !void {
         try lower_c_defs.emitTaggedUnionType(self.defsContext(), union_decl);
     }
 
-    fn emitEnumCaseValue(self: *CEmitter, value: ast.Expr) !void {
+    fn emitEnumCaseValue(self: *CEmitter, value: ast_bridge.Expr) !void {
         switch (value.kind) {
             .int_literal => |literal| try appendCIntLiteral(self.allocator, self.out, literal),
             .char_literal => |literal| try self.out.appendSlice(self.allocator, literal),
@@ -893,7 +893,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn unsupportedEnumValue(self: *CEmitter, value: ast.Expr) !void {
+    fn unsupportedEnumValue(self: *CEmitter, value: ast_bridge.Expr) !void {
         try self.out.print(self.allocator, "/* unsupported enum value: {s} */0", .{@tagName(value.kind)});
         return error.UnsupportedCEmission;
     }
@@ -1112,12 +1112,12 @@ pub const CEmitter = struct {
         };
     }
 
-    fn aggregateDepNameForType(ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn aggregateDepNameForType(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.cTypeFor(ty, .typedef_name);
     }
 
-    fn emitStruct(self: *CEmitter, struct_decl: ast.StructDecl) !void {
+    fn emitStruct(self: *CEmitter, struct_decl: ast_bridge.StructDecl) !void {
         try lower_c_defs.emitStruct(self.defsContext(), struct_decl);
     }
 
@@ -1128,7 +1128,7 @@ pub const CEmitter = struct {
     // C has no `void` struct member, so a `Result<void, E>` (or `Result<T, void>`)
     // payload uses a 1-byte placeholder. The unit value `()` lowers to `0`, so
     // `.payload.ok = 0` stays well-formed.
-    fn resultPayloadCType(self: *CEmitter, ty: ast.TypeExpr) ![]const u8 {
+    fn resultPayloadCType(self: *CEmitter, ty: ast_bridge.TypeExpr) ![]const u8 {
         if (isVoidType(self.resolveAliasType(ty))) return "unsigned char";
         return try self.cTypeFor(ty, .typedef_name);
     }
@@ -1141,7 +1141,7 @@ pub const CEmitter = struct {
         try lower_c_defs.emitArrayType(self.defsContext(), array);
     }
 
-    fn emitFunctionPrototype(self: *CEmitter, fn_decl: ast.FnDecl) !void {
+    fn emitFunctionPrototype(self: *CEmitter, fn_decl: ast_bridge.FnDecl) !void {
         try self.emitFunctionSignature(fn_decl, false, true);
         try self.out.appendSlice(self.allocator, ";\n\n");
     }
@@ -1149,16 +1149,16 @@ pub const CEmitter = struct {
     // Forward declaration for a *defined* function, matching the definition's
     // storage class (non-exported functions are `static`) so the prototype and
     // body agree.
-    fn emitFunctionForwardDecl(self: *CEmitter, fn_decl: ast.FnDecl) !void {
+    fn emitFunctionForwardDecl(self: *CEmitter, fn_decl: ast_bridge.FnDecl) !void {
         try self.emitFunctionSignature(fn_decl, !fn_decl.exported, true);
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
-    fn emitExternFunction(self: *CEmitter, fn_decl: ast.FnDecl) !void {
+    fn emitExternFunction(self: *CEmitter, fn_decl: ast_bridge.FnDecl) !void {
         try self.emitFunctionPrototype(fn_decl);
     }
 
-    fn emitFunction(self: *CEmitter, fn_decl: ast.FnDecl, body: ast.Block, attrs: []const ast.Attr) anyerror!void {
+    fn emitFunction(self: *CEmitter, fn_decl: ast_bridge.FnDecl, body: ast_bridge.Block, attrs: []const ast_bridge.Attr) anyerror!void {
         try self.writeLineDirective(fn_decl.name.span);
         try attr_syntax.emitCFunctionAttrs(self.allocator, self.out, attrs);
         if (hasNakedAttr(attrs)) {
@@ -1168,14 +1168,14 @@ pub const CEmitter = struct {
         try self.emitFunctionBody(fn_decl, body);
     }
 
-    fn emitNakedFunction(self: *CEmitter, fn_decl: ast.FnDecl, body: ast.Block) !void {
+    fn emitNakedFunction(self: *CEmitter, fn_decl: ast_bridge.FnDecl, body: ast_bridge.Block) !void {
         try self.emitFunctionSignature(fn_decl, !fn_decl.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
         try self.emitNakedAsmBody(body);
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn emitFunctionBody(self: *CEmitter, fn_decl: ast.FnDecl, body: ast.Block) anyerror!void {
+    fn emitFunctionBody(self: *CEmitter, fn_decl: ast_bridge.FnDecl, body: ast_bridge.Block) anyerror!void {
         try self.emitFunctionSignature(fn_decl, !fn_decl.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
 
@@ -1200,19 +1200,19 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn functionVariadicLastParam(fn_decl: ast.FnDecl) ?[]const u8 {
+    fn functionVariadicLastParam(fn_decl: ast_bridge.FnDecl) ?[]const u8 {
         if (!fn_decl.is_variadic or fn_decl.params.len == 0) return null;
         return fn_decl.params[fn_decl.params.len - 1].name.text;
     }
 
-    fn functionParamLocals(self: *CEmitter, params: []const ast.Param) !std.StringHashMap(LocalInfo) {
+    fn functionParamLocals(self: *CEmitter, params: []const ast_bridge.Param) !std.StringHashMap(LocalInfo) {
         var locals = std.StringHashMap(LocalInfo).init(self.allocator);
         errdefer locals.deinit();
         for (params) |param| try locals.put(param.name.text, try self.localInfoFromType(param.ty));
         return locals;
     }
 
-    fn emitIndentedFunctionBlock(self: *CEmitter, body: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitIndentedFunctionBlock(self: *CEmitter, body: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         self.indent += 1;
         defer self.indent -= 1;
         try self.emitBlockItems(body, locals, return_ty);
@@ -1222,7 +1222,7 @@ pub const CEmitter = struct {
     // operands or clobber list — those are ill-formed inside a naked function). The
     // template strings carry the hand-written machine code that does the ABI-correct
     // jump/return itself.
-    fn emitNakedAsmBody(self: *CEmitter, body: ast.Block) !void {
+    fn emitNakedAsmBody(self: *CEmitter, body: ast_bridge.Block) !void {
         const asm_stmt = syntax_bridge.nakedAsmStmt(body) orelse return error.UnsupportedCEmission;
         self.indent += 1;
         try self.writeIndent();
@@ -1240,15 +1240,15 @@ pub const CEmitter = struct {
         self.indent -= 1;
     }
 
-    fn emitFunctionSignature(self: *CEmitter, fn_decl: ast.FnDecl, is_static: bool, with_asm_label: bool) !void {
+    fn emitFunctionSignature(self: *CEmitter, fn_decl: ast_bridge.FnDecl, is_static: bool, with_asm_label: bool) !void {
         try lower_c_defs.emitFunctionSignature(self.defsContext(), fn_decl, is_static, with_asm_label);
     }
 
-    fn emitParamDecl(self: *CEmitter, ty: ast.TypeExpr, name: []const u8) !void {
+    fn emitParamDecl(self: *CEmitter, ty: ast_bridge.TypeExpr, name: []const u8) !void {
         try lower_c_defs.emitParamDecl(self.defsContext(), ty, name);
     }
 
-    fn emitDeclarator(self: *CEmitter, ty: ast.TypeExpr, name: []const u8) !void {
+    fn emitDeclarator(self: *CEmitter, ty: ast_bridge.TypeExpr, name: []const u8) !void {
         try self.emitDeclaratorWithStyle(ty, name, .typedef_name);
     }
 
@@ -1258,11 +1258,11 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitStructFieldDeclarator(self: *CEmitter, ty: ast.TypeExpr, name: []const u8) !void {
+    fn emitStructFieldDeclarator(self: *CEmitter, ty: ast_bridge.TypeExpr, name: []const u8) !void {
         try self.emitDeclaratorWithStyle(ty, name, .struct_tag);
     }
 
-    fn emitDeclaratorWithStyle(self: *CEmitter, ty: ast.TypeExpr, name: []const u8, style: StructTypeStyle) !void {
+    fn emitDeclaratorWithStyle(self: *CEmitter, ty: ast_bridge.TypeExpr, name: []const u8, style: StructTypeStyle) !void {
         try self.out.print(self.allocator, "{s} {s}", .{ try self.cTypeFor(ty, style), try self.cIdent(name) });
     }
 
@@ -1275,29 +1275,29 @@ pub const CEmitter = struct {
         return name;
     }
 
-    fn cTypeFor(self: *CEmitter, ty: ast.TypeExpr, style: StructTypeStyle) ![]const u8 {
+    fn cTypeFor(self: *CEmitter, ty: ast_bridge.TypeExpr, style: StructTypeStyle) ![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         try self.appendType(&out, ty, style);
         return out.toOwnedSlice(self.scratch.allocator());
     }
 
-    fn emitVaStartLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr) !bool {
+    fn emitVaStartLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr) !bool {
         return lower_c_call.emitVaStartLocalInit(self.callLocalInitContext(), name, decl_ty, initializer);
     }
 
-    fn emitVaListCopyLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr) !bool {
+    fn emitVaListCopyLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr) !bool {
         return lower_c_call.emitVaListCopyLocalInit(self.callLocalInitContext(), name, decl_ty, initializer);
     }
 
-    fn appendType(self: *CEmitter, out: *std.ArrayList(u8), ty: ast.TypeExpr, style: StructTypeStyle) anyerror!void {
+    fn appendType(self: *CEmitter, out: *std.ArrayList(u8), ty: ast_bridge.TypeExpr, style: StructTypeStyle) anyerror!void {
         try lower_c_type.appendType(self.typeEmitContext(), out, ty, style);
     }
 
-    fn resolveAliasType(self: *CEmitter, ty: ast.TypeExpr) ast.TypeExpr {
+    fn resolveAliasType(self: *CEmitter, ty: ast_bridge.TypeExpr) ast_bridge.TypeExpr {
         return type_bridge.resolveAliasType(&self.type_aliases, ty);
     }
 
-    fn aliasTargetType(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn aliasTargetType(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         return type_bridge.aliasTargetType(&self.type_aliases, ty);
     }
 
@@ -1371,7 +1371,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn globalInfoFromTypeForGlobal(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!GlobalInfo {
+    fn globalInfoFromTypeForGlobal(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!GlobalInfo {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.globalInfoFromType(ty);
     }
@@ -1413,42 +1413,42 @@ pub const CEmitter = struct {
         };
     }
 
-    fn arrayLenTextForNames(ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8 {
+    fn arrayLenTextForNames(ctx: *anyopaque, expr: ast_bridge.Expr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.arrayLenTextForExpr(expr);
     }
 
-    fn writeLineDirectiveForGlobal(ctx: *anyopaque, span: ast.Span) anyerror!void {
+    fn writeLineDirectiveForGlobal(ctx: *anyopaque, span: ast_bridge.Span) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.writeLineDirective(span);
     }
 
-    fn emitDeclaratorForGlobal(ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void {
+    fn emitDeclaratorForGlobal(ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitDeclarator(ty, name);
     }
 
-    fn constGlobalCValueForGlobal(ctx: *anyopaque, expr: ast.Expr, ty: ?ast.TypeExpr) anyerror!?[]const u8 {
+    fn constGlobalCValueForGlobal(ctx: *anyopaque, expr: ast_bridge.Expr, ty: ?ast_bridge.TypeExpr) anyerror!?[]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.constGlobalCValue(expr, ty);
     }
 
-    fn emitExprForGlobal(ctx: *anyopaque, expr: ast.Expr) anyerror!void {
+    fn emitExprForGlobal(ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitExpr(expr, null);
     }
 
-    fn emitExprWithTargetForGlobal(ctx: *anyopaque, expr: ast.Expr, target_ty: ast.TypeExpr) anyerror!void {
+    fn emitExprWithTargetForGlobal(ctx: *anyopaque, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitExprWithTarget(expr, null, target_ty);
     }
 
-    fn emitConstGlobalInitializerForGlobal(ctx: *anyopaque, ty: ast.TypeExpr, expr: ast.Expr) anyerror!bool {
+    fn emitConstGlobalInitializerForGlobal(ctx: *anyopaque, ty: ast_bridge.TypeExpr, expr: ast_bridge.Expr) anyerror!bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.emitConstGlobalInitializer(ty, expr);
     }
 
-    fn isAggregateGlobalTypeForGlobal(ctx: *anyopaque, ty: ast.TypeExpr) bool {
+    fn isAggregateGlobalTypeForGlobal(ctx: *anyopaque, ty: ast_bridge.TypeExpr) bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.isAggregateGlobalType(ty);
     }
@@ -1458,22 +1458,22 @@ pub const CEmitter = struct {
         try self.writeIndent();
     }
 
-    fn cTypeForOverlay(ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn cTypeForOverlay(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.cTypeFor(ty, .typedef_name);
     }
 
-    fn emitExprForOverlay(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitExprForOverlay(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitExpr(expr, locals);
     }
 
-    fn emitExprWithTargetForOverlay(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
+    fn emitExprWithTargetForOverlay(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitExprWithTarget(expr, locals, target_ty);
     }
 
-    fn overlayFieldLayoutSizeForOverlay(ctx: *anyopaque, ty: ast.TypeExpr) usize {
+    fn overlayFieldLayoutSizeForOverlay(ctx: *anyopaque, ty: ast_bridge.TypeExpr) usize {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.overlayFieldLayoutSize(ty);
     }
@@ -1493,7 +1493,7 @@ pub const CEmitter = struct {
         return self.cIdent(name);
     }
 
-    fn emitExprWithTargetForAsm(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
+    fn emitExprWithTargetForAsm(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitExprWithTarget(expr, locals, target_ty);
     }
@@ -1880,7 +1880,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn isValueOptionalForExpr(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn isValueOptionalForExpr(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         const ty = self.nullableTypeForExpr(expr, locals) orelse return false;
         return self.valueOptionalPayloadFromCandidate(ty) != null;
@@ -1951,17 +1951,17 @@ pub const CEmitter = struct {
         };
     }
 
-    fn numericExprTypeForConvert(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn numericExprTypeForConvert(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.numericExprTypeForEmission(expr, locals);
     }
 
-    fn unaryResultTypeForExpr(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn unaryResultTypeForExpr(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.unaryResultTypeForEmission(expr, locals);
     }
 
-    fn unaryResultTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn unaryResultTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const node = switch (expr.kind) {
             .unary => |node| node,
             else => return null,
@@ -1987,37 +1987,37 @@ pub const CEmitter = struct {
         return fact_ty;
     }
 
-    fn underlyingIntTypeNameForConvert(ctx: *anyopaque, ty: ast.TypeExpr) ?[]const u8 {
+    fn underlyingIntTypeNameForConvert(ctx: *anyopaque, ty: ast_bridge.TypeExpr) ?[]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.underlyingIntTypeName(ty);
     }
 
-    fn resultTypeNameForConvert(ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8 {
+    fn resultTypeNameForConvert(ctx: *anyopaque, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.resultTypeName(ok_ty, err_ty);
     }
 
-    fn optTypeNameForType(ctx: *anyopaque, payload_ty: ast.TypeExpr) anyerror![]const u8 {
+    fn optTypeNameForType(ctx: *anyopaque, payload_ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return lower_c_names.optTypeName(self.typeNameContext(), self.resolveAliasType(payload_ty));
     }
 
-    fn sliceTypeNameForType(ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8 {
+    fn sliceTypeNameForType(ctx: *anyopaque, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.sliceTypeName(child, mutability);
     }
 
-    fn arrayTypeNameForType(ctx: *anyopaque, child: ast.TypeExpr, len_expr: ast.Expr) anyerror![]const u8 {
+    fn arrayTypeNameForType(ctx: *anyopaque, child: ast_bridge.TypeExpr, len_expr: ast_bridge.Expr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.arrayTypeName(child, len_expr);
     }
 
-    fn fnPtrTypeNameForType(ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn fnPtrTypeNameForType(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.fnPtrTypeName(ty.kind.fn_pointer);
     }
 
-    fn closureTypeNameForType(ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn closureTypeNameForType(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.closureTypeName(ty.kind.closure_type);
     }
@@ -2027,27 +2027,27 @@ pub const CEmitter = struct {
         return self.dynTypeName(trait_name);
     }
 
-    fn operandEmitTypeForAtomic(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn operandEmitTypeForAtomic(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.operandEmitType(expr, locals);
     }
 
-    fn exprIsPointerForAtomic(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn exprIsPointerForAtomic(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.exprIsPointer(expr, locals);
     }
 
-    fn emitExprForCall(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitExprForCall(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitExpr(expr, locals);
     }
 
-    fn emitExprWithTargetForArith(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitExprWithTargetForArith(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitExprWithTarget(expr, locals, target_ty);
     }
 
-    fn emitCheckedUnaryExprForExpr(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitCheckedUnaryExprForExpr(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         const node = switch (expr.kind) {
             .unary => |node| node,
@@ -2056,7 +2056,7 @@ pub const CEmitter = struct {
         return lower_c_arith.emitCheckedUnaryWithTarget(self.arithContext(), node, locals, target_ty);
     }
 
-    fn emitCheckedBinaryExprForExpr(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitCheckedBinaryExprForExpr(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         const node = switch (expr.kind) {
             .binary => |node| node,
@@ -2065,141 +2065,141 @@ pub const CEmitter = struct {
         return lower_c_arith.emitCheckedBinaryWithTarget(self.arithContext(), node, locals, target_ty);
     }
 
-    fn countMmioReadsForExpr(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) usize {
+    fn countMmioReadsForExpr(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) usize {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return lower_c_mmio.countReads(self.mmioEmitContext(), expr, locals);
     }
 
-    fn exprResolvesToFloatForExpr(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn exprResolvesToFloatForExpr(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.exprResolvesToFloat(expr, locals);
     }
 
-    fn emitBlockItemsForFlow(ctx: *anyopaque, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitBlockItemsForFlow(ctx: *anyopaque, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitBlockItemsWithDeferStackSnapshot(block, locals, return_ty);
     }
 
-    fn emitBlockItemsForMmio(ctx: *anyopaque, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitBlockItemsForMmio(ctx: *anyopaque, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitBlockItems(block, locals, return_ty);
     }
 
-    fn emitSwitchBodyForSwitch(ctx: *anyopaque, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitSwitchBodyForSwitch(ctx: *anyopaque, body: ast_bridge.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitSwitchBody(body, locals, return_ty);
     }
 
-    fn emitMmioReadExprWithReplacementsForSwitch(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const MmioReadReplacement) anyerror!void {
+    fn emitMmioReadExprWithReplacementsForSwitch(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr, replacements: []const MmioReadReplacement) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try lower_c_mmio.emitReadExprWithReplacements(self.mmioReplacementEmitContext(), expr, locals, target_ty, replacements);
     }
 
-    fn localInfoFromTypeForSwitch(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo {
+    fn localInfoFromTypeForSwitch(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!LocalInfo {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.localInfoFromType(ty);
     }
 
-    fn taggedUnionTypeForSwitch(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn taggedUnionTypeForSwitch(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.taggedUnionTypeForExpr(expr, locals);
     }
 
-    fn nullableInnerCTypeForSwitch(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8 {
+    fn nullableInnerCTypeForSwitch(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!?[]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.nullableInnerCTypeForType(ty);
     }
 
-    fn localInfoFromTypeForFlow(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo {
+    fn localInfoFromTypeForFlow(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!LocalInfo {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.localInfoFromType(ty);
     }
 
-    fn arrayLenTextForFlow(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8 {
+    fn arrayLenTextForFlow(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!?[]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.arrayLenText(ty);
     }
 
-    fn conditionOperandTypeForFlow(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn conditionOperandTypeForFlow(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.conditionOperandTypeForEmission(expr, locals);
     }
 
-    fn emitLoopForFlow(ctx: *anyopaque, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitLoopForFlow(ctx: *anyopaque, loop: ast_bridge.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitForLoop(loop, locals, return_ty);
     }
 
-    fn emitSequencedArgTempForCall(ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+    fn emitSequencedArgTempForCall(ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.emitSequencedCallArgTemp(arg, locals, target_ty);
     }
 
-    fn emitAddressSequencedArgTempForCall(ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitAddressSequencedArgTempForCall(ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.emitAddressSequencedCallArgTemp(arg, locals, target_ty);
     }
 
-    fn emitIndexSequencedArgTempForCall(ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitIndexSequencedArgTempForCall(ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.emitIndexSequencedCallArgTemp(arg, locals, target_ty);
     }
 
-    fn emitBinarySequencedArgTempForCall(ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitBinarySequencedArgTempForCall(ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.emitBinarySequencedCallArgTemp(arg, locals, target_ty);
     }
 
-    fn emitDerefSequencedArgTempForCall(ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitDerefSequencedArgTempForCall(ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return lower_c_access.emitRawManyOffsetDerefValueTemp(self.accessEmitContext(), arg, locals, target_ty);
     }
 
-    fn emitAggregateSequencedArgTempForCall(ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitAggregateSequencedArgTempForCall(ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         const mir_target_ty = (try self.mirAggregateTargetTypeForExpr(arg)) orelse target_ty;
         return lower_c_aggregate.emitUncheckedAddAggregateCallArgTemp(self.aggregateEmitContext(), arg, locals, mir_target_ty);
     }
 
-    fn emitSequencedValueTempForAggregate(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
+    fn emitSequencedValueTempForAggregate(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         if (expr.kind == .uninit_literal) return null;
         if (try self.emitUncheckedAddValueTemp(expr, locals, target_ty, range_target)) |temp| return temp;
         return try self.emitSequencedCallArgTemp(expr, locals, target_ty);
     }
 
-    fn operandEmitTypeForAggregate(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn operandEmitTypeForAggregate(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.operandEmitType(expr, locals);
     }
 
-    fn globalAssignmentTargetForAggregate(ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
+    fn globalAssignmentTargetForAggregate(ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.globalAssignmentTarget(target, locals);
     }
 
-    fn emitAssignTargetForAggregate(ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitAssignTargetForAggregate(ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitAssignTarget(target, locals);
     }
 
-    fn emitCastSequencedArgTempForCall(ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitCastSequencedArgTempForCall(ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         if (try self.emitAtomicCastSequencedCallArgTemp(arg, locals, target_ty)) |temp| return temp;
         return self.emitUncheckedAddValueTemp(arg, locals, target_ty, "call_arg");
     }
 
-    fn emitCallSequencedArgTempForCall(ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitCallSequencedArgTempForCall(ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.emitCallSequencedCallArgTemp(arg, locals, target_ty);
     }
 
-    fn cTypeForCall(ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn cTypeForCall(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.cTypeFor(ty, .typedef_name);
     }
 
-    fn emitDeclaratorForCall(ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void {
+    fn emitDeclaratorForCall(ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitDeclarator(ty, name);
     }
@@ -2209,148 +2209,148 @@ pub const CEmitter = struct {
         return self.cIdent(name);
     }
 
-    fn mirCheckElidedForArith(ctx: *anyopaque, span: ast.Span) bool {
+    fn mirCheckElidedForArith(ctx: *anyopaque, span: ast_bridge.Span) bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.mirCheckElided(span);
     }
 
-    fn hasMirNoOverflowRangeFactForArith(ctx: *anyopaque, target: []const u8, op: []const u8, span: ast.Span) bool {
+    fn hasMirNoOverflowRangeFactForArith(ctx: *anyopaque, target: []const u8, op: []const u8, span: ast_bridge.Span) bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.hasMirNoOverflowRangeFact(target, op, span);
     }
 
-    fn mirCallTargetKindForLowering(ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind {
+    fn mirCallTargetKindForLowering(ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.mirCallTargetKindAt(span);
     }
 
-    fn mirTargetTypeForLowering(ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr {
+    fn mirTargetTypeForLowering(ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return if (self.mirTargetTypeFactAt(kind, span)) |fact| fact.target_ty else null;
     }
 
-    fn mirOwnedTargetTypeForLowering(ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?ast.TypeExpr {
+    fn mirOwnedTargetTypeForLowering(ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return if (self.mirTargetTypeFactAtOwned(kind, span, target_owner, target_index)) |fact| fact.target_ty else null;
     }
 
-    fn mirConstGetIndexForLowering(ctx: *anyopaque, span: ast.Span) ?usize {
+    fn mirConstGetIndexForLowering(ctx: *anyopaque, span: ast_bridge.Span) ?usize {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.mirConstGetIndexAt(span);
     }
 
-    fn localInfoFromTypeForArith(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo {
+    fn localInfoFromTypeForArith(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!LocalInfo {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.localInfoFromType(ty);
     }
 
-    fn operandEmitTypeForArith(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn operandEmitTypeForArith(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.operandEmitType(expr, locals);
     }
 
-    fn globalAssignmentTargetForArith(ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
+    fn globalAssignmentTargetForArith(ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.globalAssignmentTarget(target, locals);
     }
 
-    fn emitAssignTargetForArith(ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitAssignTargetForArith(ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitAssignTarget(target, locals);
     }
 
-    fn emitSequencedBinaryOperandTempForArith(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+    fn emitSequencedBinaryOperandTempForArith(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         if (try self.emitUncheckedAddValueTemp(expr, locals, target_ty, "binary_operand")) |temp| return temp;
         return try self.emitSequencedCallArgTemp(expr, locals, target_ty);
     }
 
-    fn operandEmitTypeForTry(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn operandEmitTypeForTry(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.operandEmitType(expr, locals);
     }
 
-    fn globalAssignmentTargetForTry(ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
+    fn globalAssignmentTargetForTry(ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.globalAssignmentTarget(target, locals);
     }
 
-    fn emitAssignTargetForTry(ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitAssignTargetForTry(ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitAssignTarget(target, locals);
     }
 
-    fn emitResultTrySequencedBinaryValueTempForTry(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!?SequencedArgTemp {
+    fn emitResultTrySequencedBinaryValueTempForTry(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, return_ty: ?ast_bridge.TypeExpr, mode: ResultTrySequenceMode) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return try lower_c_try.emitResultTrySequencedBinaryValueTemp(self.tryDirectEmitContext(), expr, locals, target_ty, return_ty, mode);
     }
 
-    fn emitNullableTrySequencedBinaryValueTempForTry(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitNullableTrySequencedBinaryValueTempForTry(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return try lower_c_try.emitNullableTrySequencedBinaryValueTemp(self.tryDirectEmitContext(), expr, locals, target_ty);
     }
 
-    fn exprContainsResultTryForTry(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn exprContainsResultTryForTry(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.exprContainsResultTry(expr, locals);
     }
 
-    fn callArgsContainResultTryForTry(ctx: *anyopaque, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn callArgsContainResultTryForTry(ctx: *anyopaque, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.callArgsContainResultTry(args, locals);
     }
 
-    fn callArgsContainNullableTryForTry(ctx: *anyopaque, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
+    fn callArgsContainNullableTryForTry(ctx: *anyopaque, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return try self.callArgsContainNullableTry(args, locals);
     }
 
-    fn collectResultTryHoistsForStmtForTry(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, replacements: *std.ArrayList(TryReplacement)) anyerror!bool {
+    fn collectResultTryHoistsForStmtForTry(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, replacements: *std.ArrayList(TryReplacement)) anyerror!bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return try lower_c_try.collectResultTryHoistsForStmt(self.tryDirectEmitContext(), expr, locals, return_ty, replacements);
     }
 
-    fn collectResultTryHoistsForLocalInitForTry(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast.TypeExpr, replacements: *std.ArrayList(TryReplacement)) anyerror!bool {
+    fn collectResultTryHoistsForLocalInitForTry(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast_bridge.TypeExpr, replacements: *std.ArrayList(TryReplacement)) anyerror!bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return try lower_c_try.collectResultTryHoistsForLocalInit(self.tryDirectEmitContext(), expr, locals, enclosing_return_ty, replacements);
     }
 
-    fn collectNullableTryHoistsForReturnForTry(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(TryReplacement)) anyerror!bool {
+    fn collectNullableTryHoistsForReturnForTry(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(TryReplacement)) anyerror!bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return try lower_c_try.collectNullableTryHoistsForReturn(self.tryDirectEmitContext(), expr, locals, replacements);
     }
 
-    fn emitDeferredCleanupsForTry(ctx: *anyopaque, locals: *std.StringHashMap(LocalInfo), return_ty: ast.TypeExpr) anyerror!void {
+    fn emitDeferredCleanupsForTry(ctx: *anyopaque, locals: *std.StringHashMap(LocalInfo), return_ty: ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitCleanupEdge(.error_exit, locals, return_ty, null, null);
     }
 
-    fn operandEmitTypeForAccess(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn operandEmitTypeForAccess(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.operandEmitType(expr, locals);
     }
 
-    fn globalAssignmentTargetForAccess(ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
+    fn globalAssignmentTargetForAccess(ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.globalAssignmentTarget(target, locals);
     }
 
-    fn emitAssignTargetForAccess(ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitAssignTargetForAccess(ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitAssignTarget(target, locals);
     }
 
-    fn localInfoFromTypeForAccess(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo {
+    fn localInfoFromTypeForAccess(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!LocalInfo {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.localInfoFromType(ty);
     }
 
-    fn arrayLenTextForAccess(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8 {
+    fn arrayLenTextForAccess(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!?[]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return try self.arrayLenText(ty);
     }
 
-    fn sliceTypeNameForMemory(ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8 {
+    fn sliceTypeNameForMemory(ctx: *anyopaque, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.sliceTypeName(child, mutability);
     }
@@ -2360,12 +2360,12 @@ pub const CEmitter = struct {
         return self.cIdent(name);
     }
 
-    fn emitExprWithTargetForMemory(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
+    fn emitExprWithTargetForMemory(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitExprWithTarget(expr, locals, target_ty);
     }
 
-    fn mmioAccessForMmio(ctx: *anyopaque, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
+    fn mmioAccessForMmio(ctx: *anyopaque, callee: ast_bridge.Expr, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.mmioAccess(callee, args, locals);
     }
@@ -2375,27 +2375,27 @@ pub const CEmitter = struct {
         return self.cTypeForMmioValue(value_type);
     }
 
-    fn operandEmitTypeForMmio(ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn operandEmitTypeForMmio(ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.operandEmitType(expr, locals);
     }
 
-    fn globalAssignmentTargetForMmio(ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
+    fn globalAssignmentTargetForMmio(ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.globalAssignmentTarget(target, locals);
     }
 
-    fn emitAssignTargetForMmio(ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitAssignTargetForMmio(ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.emitAssignTarget(target, locals);
     }
 
-    fn emitMmioReadSequencedBinaryValueTempForMmio(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitMmioReadSequencedBinaryValueTempForMmio(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return try lower_c_mmio.emitReadSequencedBinaryValueTemp(self.mmioCallEmitContext(), expr, locals, target_ty);
     }
 
-    fn cTypeForDefs(ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn cTypeForDefs(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.cTypeFor(ty, .typedef_name);
     }
@@ -2405,36 +2405,36 @@ pub const CEmitter = struct {
         return self.cIdent(name);
     }
 
-    fn declaratorForDefs(ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void {
+    fn declaratorForDefs(ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.emitDeclarator(ty, name);
     }
 
-    fn fieldDeclaratorForDefs(ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void {
+    fn fieldDeclaratorForDefs(ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.emitStructFieldDeclarator(ty, name);
     }
 
-    fn enumCaseValueForDefs(ctx: *anyopaque, value: ast.Expr) anyerror!void {
+    fn enumCaseValueForDefs(ctx: *anyopaque, value: ast_bridge.Expr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.emitEnumCaseValue(value);
     }
 
-    fn resultPayloadCTypeForDefs(ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn resultPayloadCTypeForDefs(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.resultPayloadCType(ty);
     }
 
-    fn isVoidTypeForDispatch(ctx: *anyopaque, ty: ast.TypeExpr) bool {
+    fn isVoidTypeForDispatch(ctx: *anyopaque, ty: ast_bridge.TypeExpr) bool {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return isVoidType(self.resolveAliasType(ty));
     }
 
-    fn collectPackedBits(self: *CEmitter, packed_bits: ast.PackedBitsDecl) !void {
+    fn collectPackedBits(self: *CEmitter, packed_bits: ast_bridge.PackedBitsDecl) !void {
         try lower_c_collect.collectPackedBits(self.allocator, &self.packed_bits, packed_bits, try self.cTypeFor(packed_bits.repr, .typedef_name));
     }
 
-    fn collectOverlayUnion(self: *CEmitter, overlay_union: ast.OverlayUnionDecl) !void {
+    fn collectOverlayUnion(self: *CEmitter, overlay_union: ast_bridge.OverlayUnionDecl) !void {
         var size: usize = 1;
         var alignment: usize = 1;
         var fields = std.StringHashMap(OverlayFieldInfo).init(self.allocator);
@@ -2453,7 +2453,7 @@ pub const CEmitter = struct {
         try self.overlay_unions.put(overlay_union.name.text, .{ .size = size, .alignment = alignment, .fields = fields });
     }
 
-    fn collectTaggedUnion(self: *CEmitter, union_decl: ast.UnionDecl) !void {
+    fn collectTaggedUnion(self: *CEmitter, union_decl: ast_bridge.UnionDecl) !void {
         for (union_decl.cases) |case| {
             if (case.ty) |ty| try self.collectTypeArtifacts(ty);
         }
@@ -2461,12 +2461,12 @@ pub const CEmitter = struct {
         try self.aggregate_decl_artifacts.append(self.allocator, .{ .tagged_union = union_decl });
     }
 
-    fn overlayFieldLayout(self: *CEmitter, ty: ast.TypeExpr) ?OverlayLayout {
+    fn overlayFieldLayout(self: *CEmitter, ty: ast_bridge.TypeExpr) ?OverlayLayout {
         var reflect_env = self.reflectEnv();
         return overlayFieldLayoutForType(ty, &self.const_fns, &self.const_globals, &reflect_env);
     }
 
-    fn overlayByteArrayLen(self: *CEmitter, ty: ast.TypeExpr) !?[]const u8 {
+    fn overlayByteArrayLen(self: *CEmitter, ty: ast_bridge.TypeExpr) !?[]const u8 {
         return switch (ty.kind) {
             .array => |node| {
                 const child_name = typeName(node.child.*) orelse return null;
@@ -2478,26 +2478,26 @@ pub const CEmitter = struct {
         };
     }
 
-    fn collectMmioStruct(self: *CEmitter, struct_decl: ast.StructDecl) !void {
+    fn collectMmioStruct(self: *CEmitter, struct_decl: ast_bridge.StructDecl) !void {
         try lower_c_collect.collectMmioStruct(self.allocator, &self.mmio_structs, struct_decl);
     }
 
-    fn appendPointerType(self: *CEmitter, out: *std.ArrayList(u8), child: ast.TypeExpr, mutability: ast.Mutability, style: StructTypeStyle) anyerror!void {
+    fn appendPointerType(self: *CEmitter, out: *std.ArrayList(u8), child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability, style: StructTypeStyle) anyerror!void {
         try lower_c_type.appendPointerType(self.typeEmitContext(), out, child, mutability, style);
     }
 
-    fn collectFunctionSliceTypes(self: *CEmitter, fn_decl: ast.FnDecl) !void {
+    fn collectFunctionSliceTypes(self: *CEmitter, fn_decl: ast_bridge.FnDecl) !void {
         const previous_function = self.current_function;
         self.current_function = fn_decl.name.text;
         defer self.current_function = previous_function;
         try lower_c_collect.collectFunctionTypeArtifacts(self.typeArtifactContext(), fn_decl);
     }
 
-    fn collectBlockSliceTypes(self: *CEmitter, block: ast.Block) anyerror!void {
+    fn collectBlockSliceTypes(self: *CEmitter, block: ast_bridge.Block) anyerror!void {
         try lower_c_collect.collectBlockTypeArtifacts(self.typeArtifactContext(), block);
     }
 
-    fn collectTypeArtifacts(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
+    fn collectTypeArtifacts(self: *CEmitter, ty: ast_bridge.TypeExpr) anyerror!void {
         const resolved_ty = self.resolveAliasType(ty);
         try lower_c_collect.collectArrayType(self.arrayArtifactContext(), resolved_ty);
         try lower_c_collect.collectSliceType(self.sliceArtifactContext(), resolved_ty);
@@ -2508,7 +2508,7 @@ pub const CEmitter = struct {
 
     // Register any value optional `?T` (tagged repr) reachable through `ty` so its
     // `mc_opt_<T>` typedef is emitted. Mirrors collectSliceType's per-type dedup.
-    fn collectOptTypes(self: *CEmitter, ty: ast.TypeExpr) anyerror!void {
+    fn collectOptTypes(self: *CEmitter, ty: ast_bridge.TypeExpr) anyerror!void {
         const resolved = self.resolveAliasType(ty);
         switch (resolved.kind) {
             .pointer => |node| try self.collectOptTypes(node.child.*),
@@ -2534,7 +2534,7 @@ pub const CEmitter = struct {
 
     // A `?T` payload uses the tagged repr iff T is a sized VALUE type (not a pointer,
     // slice, fn-pointer, or `*dyn` — those keep the null-sentinel repr).
-    fn nullablePayloadIsValueOptional(self: *CEmitter, child: ast.TypeExpr) bool {
+    fn nullablePayloadIsValueOptional(self: *CEmitter, child: ast_bridge.TypeExpr) bool {
         const resolved = self.resolveAliasType(child);
         return switch (resolved.kind) {
             // A named payload — a scalar (u32/…), address class (PAddr), struct, enum,
@@ -2555,7 +2555,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn collectTypeArtifactsForCollect(ctx: *anyopaque, ty: ast.TypeExpr) anyerror!void {
+    fn collectTypeArtifactsForCollect(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.collectTypeArtifacts(ty);
     }
@@ -2571,17 +2571,17 @@ pub const CEmitter = struct {
         };
     }
 
-    fn arrayTypeNameForCollect(ctx: *anyopaque, child: ast.TypeExpr, len_expr: ast.Expr) anyerror![]const u8 {
+    fn arrayTypeNameForCollect(ctx: *anyopaque, child: ast_bridge.TypeExpr, len_expr: ast_bridge.Expr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.arrayTypeName(child, len_expr);
     }
 
-    fn arrayLenTextForCollect(ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8 {
+    fn arrayLenTextForCollect(ctx: *anyopaque, expr: ast_bridge.Expr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.arrayLenTextForExpr(expr);
     }
 
-    fn cTypeForTypedefForCollect(ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn cTypeForTypedefForCollect(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.cTypeFor(ty, .typedef_name);
     }
@@ -2595,7 +2595,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn resultTypeNameForCollect(ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8 {
+    fn resultTypeNameForCollect(ctx: *anyopaque, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.resultTypeName(ok_ty, err_ty);
     }
@@ -2609,12 +2609,12 @@ pub const CEmitter = struct {
         };
     }
 
-    fn sliceTypeNameForCollect(ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8 {
+    fn sliceTypeNameForCollect(ctx: *anyopaque, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.sliceTypeName(child, mutability);
     }
 
-    fn pointerTypeForSliceElementForCollect(ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8 {
+    fn pointerTypeForSliceElementForCollect(ctx: *anyopaque, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.pointerTypeForSliceElement(child, mutability);
     }
@@ -2629,12 +2629,12 @@ pub const CEmitter = struct {
         };
     }
 
-    fn fnPtrTypeNameForCollect(ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn fnPtrTypeNameForCollect(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.fnPtrTypeName(ty.kind.fn_pointer);
     }
 
-    fn closureTypeNameForCollect(ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn closureTypeNameForCollect(ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.closureTypeName(ty.kind.closure_type);
     }
@@ -2675,7 +2675,7 @@ pub const CEmitter = struct {
 
     // Checked MIR owns the complete indirect callee signature. The legacy
     // parser-only C entry point still accepts modules that have no such fact.
-    fn closureCalleeType(self: *CEmitter, callee: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn closureCalleeType(self: *CEmitter, callee: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const ty = if (self.mirTargetTypeFactAt(.indirect_call_callee, callee.span)) |fact|
             fact.target_ty
         else
@@ -2692,11 +2692,11 @@ pub const CEmitter = struct {
     // `bind(&obj, f)` form) are ABI-identical to `void *`; everything else (a
     // `u32`, an enum, …) is a scalar that must be widened through `uintptr_t`
     // and routed via a generated thunk.
-    fn bindEnvIsPointerLike(self: *CEmitter, ty: ast.TypeExpr) bool {
+    fn bindEnvIsPointerLike(self: *CEmitter, ty: ast_bridge.TypeExpr) bool {
         return lower_c_collect.bindEnvIsPointerLike(&self.type_aliases, ty);
     }
 
-    fn collectBlockBindThunks(self: *CEmitter, block: ast.Block, mir_function: *const mir.Function) anyerror!void {
+    fn collectBlockBindThunks(self: *CEmitter, block: ast_bridge.Block, mir_function: *const mir.Function) anyerror!void {
         try lower_c_collect.collectBlockBindThunks(.{
             .name_allocator = self.scratch.allocator(),
             .type_aliases = &self.type_aliases,
@@ -2708,7 +2708,7 @@ pub const CEmitter = struct {
 
     // Emit `bind(&env, f)` as a closure compound literal. `f` names a function whose
     // first parameter is the (typed) env; the closure drops it to void*.
-    fn emitBind(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !void {
+    fn emitBind(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) !void {
         const plan = try self.bindEmitPlan(node, target_ty);
         if (!self.bindEnvIsPointerLike(plan.info.params[0].ty)) {
             try lower_c_dispatch.emitScalarEnvBind(self.dispatchContext(), node, locals, plan);
@@ -2717,7 +2717,7 @@ pub const CEmitter = struct {
         try lower_c_dispatch.emitPointerEnvBind(self.dispatchContext(), node, locals, plan);
     }
 
-    fn bindEmitPlan(self: *CEmitter, node: anytype, target_ty: ast.TypeExpr) !lower_c_dispatch.BindEmitPlan {
+    fn bindEmitPlan(self: *CEmitter, node: anytype, target_ty: ast_bridge.TypeExpr) !lower_c_dispatch.BindEmitPlan {
         const fname = calleeIdentName(node.args[1]) orelse return error.UnsupportedCEmission;
         const info = self.functions.get(fname) orelse return error.UnsupportedCEmission;
         if (info.params.len == 0) return error.UnsupportedCEmission; // need the env param
@@ -2733,11 +2733,11 @@ pub const CEmitter = struct {
     }
 
     const ClosureTypeNode = struct {
-        params: []ast.TypeExpr,
-        ret: *ast.TypeExpr,
+        params: []ast_bridge.TypeExpr,
+        ret: *ast_bridge.TypeExpr,
     };
 
-    fn closureNodeFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?ClosureTypeNode {
+    fn closureNodeFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ClosureTypeNode {
         return switch (self.resolveAliasType(ty).kind) {
             .closure_type => |node| .{ .params = node.params, .ret = node.ret },
             else => null,
@@ -2746,7 +2746,7 @@ pub const CEmitter = struct {
 
     // If `callee` is `d.method` where `d` has a `*dyn Trait` type, return the trait name;
     // such a call dispatches through the vtable. Null otherwise.
-    fn dynCalleeTrait(self: *CEmitter, callee: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+    fn dynCalleeTrait(self: *CEmitter, callee: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
         const member = memberExpr(callee) orelse return null;
         const base_ty = self.memberBaseTypeForEmission(member.base.*, locals) orelse return null;
         return self.dynDispatchTraitNameFromCandidate(base_ty);
@@ -2754,35 +2754,35 @@ pub const CEmitter = struct {
 
     // `d.method(args)` -> `({ mc_dyn_T t = d; t.vtable->method(t.data, args); })`.
     // The `d` value is spilled to a temp so its `.data`/`.vtable` are read once.
-    fn sliceTypeName(self: *CEmitter, child: ast.TypeExpr, mutability: ast.Mutability) ![]const u8 {
+    fn sliceTypeName(self: *CEmitter, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) ![]const u8 {
         return lower_c_names.sliceTypeName(self.typeNameContext(), child, mutability);
     }
 
-    fn pointerTypeForSliceElement(self: *CEmitter, child: ast.TypeExpr, mutability: ast.Mutability) ![]const u8 {
+    fn pointerTypeForSliceElement(self: *CEmitter, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) ![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         try self.appendPointerType(&out, child, if (mutability == .mut) .mut else .@"const", .typedef_name);
         return out.toOwnedSlice(self.scratch.allocator());
     }
 
-    fn pointerTypeFor(self: *CEmitter, child: ast.TypeExpr, mutability: ast.Mutability, style: StructTypeStyle) ![]const u8 {
+    fn pointerTypeFor(self: *CEmitter, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability, style: StructTypeStyle) ![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         try self.appendPointerType(&out, child, mutability, style);
         return out.toOwnedSlice(self.scratch.allocator());
     }
 
-    fn arrayTypeName(self: *CEmitter, child: ast.TypeExpr, len_expr: ast.Expr) ![]const u8 {
+    fn arrayTypeName(self: *CEmitter, child: ast_bridge.TypeExpr, len_expr: ast_bridge.Expr) ![]const u8 {
         return lower_c_names.arrayTypeName(self.typeNameContext(), child, len_expr);
     }
 
-    fn typeSuffix(self: *CEmitter, ty: ast.TypeExpr) ![]const u8 {
+    fn typeSuffix(self: *CEmitter, ty: ast_bridge.TypeExpr) ![]const u8 {
         return lower_c_names.typeSuffix(self.typeNameContext(), ty);
     }
 
-    fn resultTypeName(self: *CEmitter, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) ![]const u8 {
+    fn resultTypeName(self: *CEmitter, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) ![]const u8 {
         return lower_c_names.resultTypeName(self.typeNameContext(), ok_ty, err_ty);
     }
 
-    fn emitStmt(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitStmt(self: *CEmitter, stmt: ast_bridge.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         try self.writeLineDirective(stmt.span);
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
@@ -2824,7 +2824,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitLocalDeclStmt(self: *CEmitter, local: ast.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitLocalDeclStmt(self: *CEmitter, local: ast_bridge.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         for (local.names) |name| {
             // A declaration (re)binds the name: a stale provenance entry from a
             // disjoint sibling scope must never leak into the new binding (a
@@ -2841,7 +2841,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn localDeclInfo(self: *CEmitter, local: ast.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo)) !LocalInfo {
+    fn localDeclInfo(self: *CEmitter, local: ast_bridge.LocalDecl, is_let: bool, locals: *std.StringHashMap(LocalInfo)) !LocalInfo {
         var info = if (local.ty) |decl_ty| try self.localInfoFromType(decl_ty) else LocalInfo{};
         info.is_mutable = !is_let;
         if (is_let and local.names.len == 1) {
@@ -2854,7 +2854,7 @@ pub const CEmitter = struct {
         return info;
     }
 
-    fn emitSpecialLocalDecl(self: *CEmitter, name: []const u8, local: ast.LocalDecl, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitSpecialLocalDecl(self: *CEmitter, name: []const u8, local: ast_bridge.LocalDecl, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         if (local.names.len != 1) return false;
         if (local.ty) |decl_ty| {
             const initializer = local.init orelse return false;
@@ -2867,10 +2867,10 @@ pub const CEmitter = struct {
     fn emitSpecialTypedLocalInit(
         self: *CEmitter,
         name: []const u8,
-        decl_ty: ast.TypeExpr,
-        initializer: ast.Expr,
+        decl_ty: ast_bridge.TypeExpr,
+        initializer: ast_bridge.Expr,
         locals: *std.StringHashMap(LocalInfo),
-        return_ty: ?ast.TypeExpr,
+        return_ty: ?ast_bridge.TypeExpr,
     ) anyerror!bool {
         if (try self.emitVarargsTypedLocalInit(name, decl_ty, initializer)) return true;
         if (try lower_c_special.emitTypedLocalInit(self.tryMmioContext(), name, decl_ty, initializer, locals, return_ty)) return true;
@@ -2879,13 +2879,13 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn emitVarargsTypedLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr) anyerror!bool {
+    fn emitVarargsTypedLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr) anyerror!bool {
         if (try self.emitVaStartLocalInit(name, decl_ty, initializer)) return true;
         if (try self.emitVaListCopyLocalInit(name, decl_ty, initializer)) return true;
         return false;
     }
 
-    fn emitAccessTypedLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
+    fn emitAccessTypedLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
         if (try lower_c_access.emitDirectCallSliceIndexLocalInit(self.accessEmitContext(), name, decl_ty, initializer, locals)) return true;
         if (try lower_c_access.emitDirectCallArrayIndexLocalInit(self.accessEmitContext(), name, decl_ty, initializer, locals)) return true;
         if (try lower_c_access.emitRawManyOffsetDerefAddressLocalInit(self.accessEmitContext(), name, decl_ty, initializer, locals)) return true;
@@ -2894,7 +2894,7 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn emitConversionTypedLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
+    fn emitConversionTypedLocalInit(self: *CEmitter, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
         if (try lower_c_access.emitRawManyOffsetDerefLocalInit(self.accessEmitContext(), name, decl_ty, initializer, locals)) return true;
         if (try lower_c_access.emitRawManyOffsetLocalInit(self.accessEmitContext(), name, decl_ty, initializer, locals)) return true;
         if (try lower_c_call.emitBitcastLocalInit(self.sequencedArgContext(), name, decl_ty, initializer, locals)) return true;
@@ -2908,7 +2908,7 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn emitSpecialInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitSpecialInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         if (try self.emitAddressOfInferredLocalInit(name, initializer, locals)) return true;
         if (try self.tryPayloadTypeForInferredLocal(initializer)) |known_ty| {
             const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse return error.UnsupportedCEmission;
@@ -2940,7 +2940,7 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn emitAddressOfInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitAddressOfInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const operand = switch (initializer.kind) {
             .address_of => |inner| inner.*,
             .grouped => |inner| return try self.emitAddressOfInferredLocalInit(name, inner.*, locals),
@@ -2962,11 +2962,11 @@ pub const CEmitter = struct {
     }
 
     const DirectAddressPlace = struct {
-        ty: ast.TypeExpr,
-        mutability: ast.Mutability,
+        ty: ast_bridge.TypeExpr,
+        mutability: ast_bridge.Mutability,
     };
 
-    fn directAddressPlaceInfo(self: *CEmitter, operand: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?DirectAddressPlace {
+    fn directAddressPlaceInfo(self: *CEmitter, operand: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?DirectAddressPlace {
         return switch (operand.kind) {
             .ident => |ident| blk: {
                 if (locals.get(ident.text)) |info| {
@@ -2999,7 +2999,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn directAddressOfLocalPointerType(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn directAddressOfLocalPointerType(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .ident => self.operandEmitType(expr, locals),
             .grouped => |inner| self.directAddressOfLocalPointerType(inner.*, locals),
@@ -3010,7 +3010,7 @@ pub const CEmitter = struct {
     // A direct `source?` initializer is already typed by the MIR-owned operand
     // fact. Use that payload only to validate the owned inferred-local fact;
     // the typed try emitter still owns control-flow lowering.
-    fn tryPayloadTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) !?ast.TypeExpr {
+    fn tryPayloadTypeForInferredLocal(self: *CEmitter, initializer: ast_bridge.Expr) !?ast_bridge.TypeExpr {
         return switch (initializer.kind) {
             .grouped => |inner| try self.tryPayloadTypeForInferredLocal(inner.*),
             .try_expr => |node| blk: {
@@ -3032,7 +3032,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitCastInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitCastInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         if (!inferredLocalCastInitializer(initializer)) return false;
         const known_ty = self.operandEmitType(initializer, locals);
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse return error.UnsupportedCEmission;
@@ -3044,7 +3044,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitLiteralInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitLiteralInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const expected_ty = (try self.literalExpressionResultType(initializer)) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, expected_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
@@ -3055,7 +3055,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitDefaultLocalDecl(self: *CEmitter, name: []const u8, maybe_ty: ?ast.TypeExpr, maybe_init: ?ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitDefaultLocalDecl(self: *CEmitter, name: []const u8, maybe_ty: ?ast_bridge.TypeExpr, maybe_init: ?ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
         try self.writeIndent();
         try self.emitIgnoredLocalPrefix(name);
         try self.emitLocalDeclarator(name, maybe_ty);
@@ -3063,7 +3063,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
-    fn emitLocalDeclarator(self: *CEmitter, name: []const u8, maybe_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitLocalDeclarator(self: *CEmitter, name: []const u8, maybe_ty: ?ast_bridge.TypeExpr) anyerror!void {
         if (maybe_ty) |decl_ty| {
             try self.emitDeclarator(decl_ty, name);
         } else {
@@ -3071,7 +3071,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitDefaultLocalInitializer(self: *CEmitter, maybe_ty: ?ast.TypeExpr, maybe_init: ?ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitDefaultLocalInitializer(self: *CEmitter, maybe_ty: ?ast_bridge.TypeExpr, maybe_init: ?ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
         if (maybe_init) |initializer| {
             try self.emitExplicitLocalInitializer(maybe_ty, initializer, locals);
         } else if (maybe_ty != null and self.arrayTypeFromType(maybe_ty.?) != null) {
@@ -3081,7 +3081,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitExplicitLocalInitializer(self: *CEmitter, maybe_ty: ?ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitExplicitLocalInitializer(self: *CEmitter, maybe_ty: ?ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
         if (isUninitLiteral(initializer)) {
             if (maybe_ty) |decl_ty| try self.emitMaterializedUninitInitializer(decl_ty);
             return;
@@ -3094,7 +3094,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitAssignmentStmt(self: *CEmitter, assignment: anytype, span: ast.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitAssignmentStmt(self: *CEmitter, assignment: anytype, span: ast_bridge.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         try self.applyMirPointerProvenanceForAssignment(assignment.target, assignment.value, span, locals);
         try self.applyMirPointerProvenanceForIndexAssignment(assignment.target, assignment.value, span, locals);
         if (try self.emitRaceTolerantDerefStoreStmt(assignment.target, assignment.value, locals)) return;
@@ -3109,7 +3109,7 @@ pub const CEmitter = struct {
         try self.emitDefaultAssignmentStmt(assignment, locals);
     }
 
-    fn emitSpecialAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitSpecialAssignmentStmt(self: *CEmitter, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         if (try self.emitAggregateSpecialAssignmentStmt(assignment, locals)) return true;
         if (try lower_c_special.emitAssignmentStmt(self.tryMmioContext(), assignment, locals, return_ty)) return true;
         if (try self.emitAccessSpecialAssignmentStmt(assignment, locals)) return true;
@@ -3168,7 +3168,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitReturnStmt(self: *CEmitter, maybe: ?ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitReturnStmt(self: *CEmitter, maybe: ?ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         if (maybe) |expr| {
             if (try self.emitSpecialReturnStmt(expr, locals, return_ty)) return;
             try self.emitDefaultValueReturnStmt(expr, locals, return_ty);
@@ -3177,14 +3177,14 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitSpecialReturnStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitSpecialReturnStmt(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         if (try self.emitSimpleSpecialReturn(expr, locals, return_ty)) return true;
         if (try self.emitAccessSpecialReturn(expr, locals, return_ty)) return true;
         if (try lower_c_special.emitReturn(self.tryMmioContext(), expr, locals, return_ty)) return true;
         return try self.emitConversionSpecialReturn(expr, locals, return_ty);
     }
 
-    fn emitSimpleSpecialReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitSimpleSpecialReturn(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         if (try self.emitNeverExprStmt(expr, locals)) return true;
         if (return_ty) |target_ty| {
             if (isVoidType(target_ty) and isVoidLiteralExpr(expr)) {
@@ -3195,7 +3195,7 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn emitAccessSpecialReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitAccessSpecialReturn(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         if (try lower_c_access.emitDirectCallSliceIndexReturn(self.accessEmitContext(), expr, locals)) return true;
         if (try lower_c_access.emitDirectCallArrayIndexReturn(self.accessEmitContext(), expr, locals)) return true;
         if (try lower_c_access.emitRawManyOffsetDerefAddressReturn(self.accessEmitContext(), expr, locals, return_ty)) return true;
@@ -3206,7 +3206,7 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn emitConversionSpecialReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitConversionSpecialReturn(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         if (try lower_c_access.emitRawManyOffsetDerefReturn(self.accessEmitContext(), expr, locals, return_ty)) return true;
         if (try lower_c_access.emitRawManyOffsetReturn(self.accessEmitContext(), expr, locals, return_ty)) return true;
         if (try lower_c_call.emitBitcastReturn(self.sequencedArgContext(), expr, locals, return_ty)) return true;
@@ -3220,7 +3220,7 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn emitDefaultValueReturnStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitDefaultValueReturnStmt(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "return ");
         if (return_ty) |target_ty| {
@@ -3236,7 +3236,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "return;\n");
     }
 
-    fn emitExpressionStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitExpressionStmt(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         if (try self.emitNeverExprStmt(expr, locals)) return;
         if (try lower_c_memory.emitMaybeUninitWriteStmt(self.memoryContext(), expr, locals)) return;
         if (try lower_c_mmio.emitWriteStmt(self.mmioEmitContext(), expr, locals)) return;
@@ -3255,7 +3255,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
-    fn emitAssertStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitAssertStmt(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
         const condition_ty = try self.requireMirBoolTargetTypeForEmission(.assert_condition, expr);
         if (try lower_c_mmio.emitReadAssert(self.mmioCallEmitContext(), expr, locals)) return;
         if (try lower_c_flow.emitSequencedConditionAssert(self.flowEmitContext(), expr, locals)) return;
@@ -3265,19 +3265,19 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
     }
 
-    fn emitBreakStmt(self: *CEmitter, target: ?ast.Ident) anyerror!void {
+    fn emitBreakStmt(self: *CEmitter, target: ?ast_bridge.Ident) anyerror!void {
         try lower_c_flow.emitBreakStmt(self.flowEmitContext(), target);
     }
 
-    fn emitContinueStmt(self: *CEmitter, target: ?ast.Ident) anyerror!void {
+    fn emitContinueStmt(self: *CEmitter, target: ?ast_bridge.Ident) anyerror!void {
         try lower_c_flow.emitContinueStmt(self.flowEmitContext(), target);
     }
 
-    fn emitScopedBlockStmt(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitScopedBlockStmt(self: *CEmitter, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         try self.emitBracedBlockBody(block, locals, return_ty);
     }
 
-    fn emitContractBlockStmt(self: *CEmitter, contract: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitContractBlockStmt(self: *CEmitter, contract: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         try self.writeIndent();
         try self.out.print(self.allocator, "/* MC_CONTRACT_BEGIN {s} */\n", .{contractName(contract.attr)});
         try self.emitBracedBlockBody(contract.block, locals, return_ty);
@@ -3285,11 +3285,11 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "/* MC_CONTRACT_END {s} */\n", .{contractName(contract.attr)});
     }
 
-    fn emitBracedBlockBody(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitBracedBlockBody(self: *CEmitter, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         try self.emitBracedBlockBodyWithCleanup(block, locals, return_ty, true);
     }
 
-    fn emitBracedBlockBodyWithCleanup(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, emit_scope_cleanup: bool) anyerror!void {
+    fn emitBracedBlockBodyWithCleanup(self: *CEmitter, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, emit_scope_cleanup: bool) anyerror!void {
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "{\n");
         var nested = try cloneLocals(self.allocator, locals.*);
@@ -3301,7 +3301,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "}\n");
     }
 
-    fn emitLoopStmt(self: *CEmitter, stmt: ast.Stmt, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitLoopStmt(self: *CEmitter, stmt: ast_bridge.Stmt, loop: ast_bridge.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         // The for-binding (re)binds its name; see clearMirPointerProvenanceForPattern.
         if (loop.label) |binding| _ = self.mir_pointer_local_provenance.remove(binding.text);
         if (loop.kind == .@"while") {
@@ -3317,17 +3317,17 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitPlainWhileLoop(self: *CEmitter, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitPlainWhileLoop(self: *CEmitter, loop: ast_bridge.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         try lower_c_flow.emitPlainWhileLoop(self.flowEmitContext(), loop, locals, return_ty);
     }
 
-    fn requireMirBoolTargetTypeForEmission(self: *CEmitter, kind: mir.TargetTypeKind, expr: ast.Expr) !ast.TypeExpr {
+    fn requireMirBoolTargetTypeForEmission(self: *CEmitter, kind: mir.TargetTypeKind, expr: ast_bridge.Expr) !ast_bridge.TypeExpr {
         const ty = try self.requireMirTargetTypeForEmission(kind, expr, null);
         if (!isBoolType(ty)) return error.UnsupportedCEmission;
         return ty;
     }
 
-    fn requireMirTargetTypeForEmission(self: *CEmitter, kind: mir.TargetTypeKind, expr: ast.Expr, known_ty: ?ast.TypeExpr) !ast.TypeExpr {
+    fn requireMirTargetTypeForEmission(self: *CEmitter, kind: mir.TargetTypeKind, expr: ast_bridge.Expr, known_ty: ?ast_bridge.TypeExpr) !ast_bridge.TypeExpr {
         const fact_ty = (self.mirTargetTypeFactAt(kind, expr.span) orelse return error.UnsupportedCEmission).target_ty;
         if (known_ty) |ty| {
             if (!type_bridge.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
@@ -3335,11 +3335,11 @@ pub const CEmitter = struct {
         return fact_ty;
     }
 
-    fn mirTryOperandTypeForQuery(self: *CEmitter, operand: ast.Expr) ?ast.TypeExpr {
+    fn mirTryOperandTypeForQuery(self: *CEmitter, operand: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         return self.requireMirTargetTypeForEmission(.try_operand, operand, null) catch null;
     }
 
-    fn emitAsmStmt(self: *CEmitter, asm_stmt: ast.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
+    fn emitAsmStmt(self: *CEmitter, asm_stmt: ast_bridge.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
         try lower_c_asm.emitAsmStmt(self.asmEmitContext(), asm_stmt, locals);
     }
 
@@ -3347,15 +3347,15 @@ pub const CEmitter = struct {
         try lower_c_asm.emitAsmTemplate(self.allocator, self.out, templates);
     }
 
-    fn emitPreciseAsmStmt(self: *CEmitter, asm_stmt: ast.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
+    fn emitPreciseAsmStmt(self: *CEmitter, asm_stmt: ast_bridge.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
         try lower_c_asm.emitPreciseAsmStmt(self.asmEmitContext(), asm_stmt, locals);
     }
 
-    fn emitBlockItems(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitBlockItems(self: *CEmitter, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         try self.emitBlockItemsWithScopeCleanup(block, locals, return_ty, true);
     }
 
-    fn emitBlockItemsWithScopeCleanup(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, emit_scope_cleanup: bool) anyerror!void {
+    fn emitBlockItemsWithScopeCleanup(self: *CEmitter, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, emit_scope_cleanup: bool) anyerror!void {
         for (block.items) |stmt| {
             switch (try self.emitBlockControlItem(stmt, locals, return_ty)) {
                 .skip_stmt => continue,
@@ -3368,7 +3368,7 @@ pub const CEmitter = struct {
         if (emit_scope_cleanup) try self.emitCleanupEdge(.scope_exit, locals, return_ty, block.span, null);
     }
 
-    fn emitBlockItemsWithDeferStackSnapshot(self: *CEmitter, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitBlockItemsWithDeferStackSnapshot(self: *CEmitter, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         try self.emitBlockItems(block, locals, return_ty);
     }
 
@@ -3378,7 +3378,7 @@ pub const CEmitter = struct {
         exit_block,
     };
 
-    fn emitBlockControlItem(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!BlockItemAction {
+    fn emitBlockControlItem(self: *CEmitter, stmt: ast_bridge.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!BlockItemAction {
         switch (stmt.kind) {
             .@"defer" => |expr| {
                 try self.emitBlockDeferItem(expr, stmt.span);
@@ -3396,7 +3396,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitBlockDeferItem(self: *CEmitter, expr: ast.Expr, stmt_span: ast.Span) !void {
+    fn emitBlockDeferItem(self: *CEmitter, expr: ast_bridge.Expr, stmt_span: ast_bridge.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         const deferred_drop = backend_cleanup.registerDeferredExplicitDropCleanup(self.mir_module, function, self.currentOwnershipCleanupPlan(), expr);
         switch (deferred_drop) {
@@ -3433,7 +3433,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitBlockExitItem(self: *CEmitter, stmt: ast.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitBlockExitItem(self: *CEmitter, stmt: ast_bridge.Stmt, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         if (stmt.kind == .@"return") {
             try self.emitReturnExitItem(stmt.kind.@"return", stmt.span, locals, return_ty);
             return;
@@ -3447,7 +3447,7 @@ pub const CEmitter = struct {
         try self.emitStmt(stmt, locals, return_ty);
     }
 
-    fn emitReturnExitItem(self: *CEmitter, maybe_expr: ?ast.Expr, stmt_span: ast.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitReturnExitItem(self: *CEmitter, maybe_expr: ?ast_bridge.Expr, stmt_span: ast_bridge.Span, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         const expr = maybe_expr orelse {
             try self.emitCleanupEdge(.return_exit, locals, return_ty, null, stmt_span);
             try self.writeLineDirective(stmt_span);
@@ -3483,7 +3483,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "return {s};\n", .{tmp_name});
     }
 
-    fn cleanupEdgeIsEmpty(self: *CEmitter, kind: backend_cleanup.CleanupEdgeKind, scope_span: ?ast.Span, before_span: ?ast.Span) !bool {
+    fn cleanupEdgeIsEmpty(self: *CEmitter, kind: backend_cleanup.CleanupEdgeKind, scope_span: ?ast_bridge.Span, before_span: ?ast_bridge.Span) !bool {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), kind, sourcePointFromOptionalSpan(scope_span), sourcePointFromOptionalSpan(before_span))) orelse return error.UnsupportedCEmission;
         defer plan.deinit(self.allocator);
@@ -3493,7 +3493,7 @@ pub const CEmitter = struct {
     // Emit the MIR-admitted active cleanup range from `start`, in reverse
     // (innermost first). Exit edges such as `?` that do not pop the scope leave
     // the active cleanup state intact.
-    fn emitCleanupEdge(self: *CEmitter, kind: backend_cleanup.CleanupEdgeKind, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, scope_span: ?ast.Span, before_span: ?ast.Span) anyerror!void {
+    fn emitCleanupEdge(self: *CEmitter, kind: backend_cleanup.CleanupEdgeKind, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, scope_span: ?ast_bridge.Span, before_span: ?ast_bridge.Span) anyerror!void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), kind, sourcePointFromOptionalSpan(scope_span), sourcePointFromOptionalSpan(before_span))) orelse return error.UnsupportedCEmission;
         defer plan.deinit(self.allocator);
@@ -3513,7 +3513,7 @@ pub const CEmitter = struct {
         if (!backend_cleanup.validateFunctionCleanupAuthority(self.mir_module, function, cleanup_plan, cleanup_cfg)) return error.UnsupportedCEmission;
     }
 
-    fn emitCleanupRef(self: *CEmitter, ref: backend_cleanup.CleanupRef, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitCleanupRef(self: *CEmitter, ref: backend_cleanup.CleanupRef, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         switch (ref) {
             .defer_ref => |defer_ref| {
                 const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
@@ -3549,14 +3549,14 @@ pub const CEmitter = struct {
         }
     }
 
-    fn deferExprForRef(self: *CEmitter, ref: mir.DeferCleanupRef) ?ast.Expr {
+    fn deferExprForRef(self: *CEmitter, ref: mir.DeferCleanupRef) ?ast_bridge.Expr {
         const function = self.currentMirFunction() orelse return null;
         if (!mir.deferCleanupRefValid(function.*, ref)) return null;
         const body = self.current_function_body orelse return null;
         return deferExprForRefInBlock(body, ref);
     }
 
-    fn ordinaryDeferDirectCallCleanup(self: *CEmitter, function: *const mir.Function, expr: ast.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedCEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
+    fn ordinaryDeferDirectCallCleanup(self: *CEmitter, function: *const mir.Function, expr: ast_bridge.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedCEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
         const call = callExpr(expr) orelse return null;
         if (call.type_args.len != 0) return null;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
@@ -3566,7 +3566,7 @@ pub const CEmitter = struct {
         return .{ .defer_ref = defer_ref, .fn_name = fn_name, .span = expr.span, .callee_span = call.callee.*.span, .args = call.args };
     }
 
-    fn ordinaryDeferCallTargetCleanup(self: *CEmitter, function: *const mir.Function, expr: ast.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedCEmission}!?backend_cleanup.CallTargetDeferCleanup {
+    fn ordinaryDeferCallTargetCleanup(self: *CEmitter, function: *const mir.Function, expr: ast_bridge.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedCEmission}!?backend_cleanup.CallTargetDeferCleanup {
         const call = callExpr(expr) orelse return null;
         const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         switch (kind) {
@@ -3616,7 +3616,7 @@ pub const CEmitter = struct {
         }
         if (cleanup.kind == .dma_cache_clean or cleanup.kind == .dma_cache_invalidate) {
             var callee_storage = cleanup.callee;
-            const empty_type_args: []const ast.TypeExpr = &.{};
+            const empty_type_args: []const ast_bridge.TypeExpr = &.{};
             const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = cleanup.args };
             try self.writeIndent();
             if (!try lower_c_memory.emitDmaCall(self.memoryContext(), call, locals)) return error.UnsupportedCEmission;
@@ -3629,7 +3629,7 @@ pub const CEmitter = struct {
         }
         if (cleanup.kind == .atomic_store) {
             var callee_storage = cleanup.callee;
-            const empty_type_args: []const ast.TypeExpr = &.{};
+            const empty_type_args: []const ast_bridge.TypeExpr = &.{};
             const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = cleanup.args };
             try self.writeIndent();
             if (!try lower_c_atomic.emitAtomicCall(self.atomicEmitContext(), call, locals)) return error.UnsupportedCEmission;
@@ -3638,7 +3638,7 @@ pub const CEmitter = struct {
         }
         if (cleanup.kind == .va_end) {
             var callee_storage = cleanup.callee;
-            const empty_type_args: []const ast.TypeExpr = &.{};
+            const empty_type_args: []const ast_bridge.TypeExpr = &.{};
             const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = cleanup.args };
             try self.writeIndent();
             if (!try lower_c_call.emitVaCall(self.callContext(), call, locals)) return error.UnsupportedCEmission;
@@ -3656,7 +3656,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "{s}();\n", .{statement});
     }
 
-    fn emitOrdinaryDeferDirectCallCleanup(self: *CEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !void {
+    fn emitOrdinaryDeferDirectCallCleanup(self: *CEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !void {
         _ = return_ty;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         if (!mir_source_bridge.directDeferCallCleanupForSpans(function.*, cleanup.defer_ref, cleanup.span, cleanup.callee_span, cleanup.fn_name, cleanup.args)) return error.UnsupportedCEmission;
@@ -3700,17 +3700,17 @@ pub const CEmitter = struct {
         for (0..self.indent) |_| try self.out.appendSlice(self.allocator, "    ");
     }
 
-    fn writeLineDirective(self: *CEmitter, span: ast.Span) !void {
+    fn writeLineDirective(self: *CEmitter, span: ast_bridge.Span) !void {
         try appendLineDirective(self.allocator, self.out, self.source_path, span);
     }
 
-    fn reportUnsupported(self: *CEmitter, span: ast.Span, construct: []const u8) void {
+    fn reportUnsupported(self: *CEmitter, span: ast_bridge.Span, construct: []const u8) void {
         if (self.reporter) |reporter| {
             reporter.err(span, "E_BACKEND_UNSUPPORTED: C backend does not yet support {s}", .{construct});
         }
     }
 
-    fn writeUnsupportedStmt(self: *CEmitter, stmt: ast.Stmt) !void {
+    fn writeUnsupportedStmt(self: *CEmitter, stmt: ast_bridge.Stmt) !void {
         self.reportUnsupported(stmt.span, @tagName(stmt.kind));
         try self.writeIndent();
         try self.out.print(
@@ -3721,7 +3721,7 @@ pub const CEmitter = struct {
         return error.UnsupportedCEmission;
     }
 
-    fn emitMaterializedUninitInitializer(self: *CEmitter, ty: ast.TypeExpr) !void {
+    fn emitMaterializedUninitInitializer(self: *CEmitter, ty: ast_bridge.TypeExpr) !void {
         try self.out.appendSlice(self.allocator, " = ");
         if (self.isAggregateGlobalType(ty)) {
             try self.out.appendSlice(self.allocator, "{0}");
@@ -3736,7 +3736,7 @@ pub const CEmitter = struct {
     // let the binding's derefs lower PLAIN unsoundly (the leaked .global analog
     // was merely conservative). Removal-only — after the arm the name stays
     // unknown, which is the conservative default.
-    fn clearMirPointerProvenanceForPattern(self: *CEmitter, pattern: ast.Pattern) void {
+    fn clearMirPointerProvenanceForPattern(self: *CEmitter, pattern: ast_bridge.Pattern) void {
         switch (pattern.kind) {
             .bind => |ident| _ = self.mir_pointer_local_provenance.remove(ident.text),
             .tag_bind => |tag_bind| _ = self.mir_pointer_local_provenance.remove(tag_bind.binding.text),
@@ -3744,7 +3744,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitSwitch(self: *CEmitter, node: ast_bridge.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         const subject_info = try self.requireMirSwitchSubjectType(node.subject, locals);
         const subject_ty = subject_info.target_ty;
         for (node.arms) |arm| {
@@ -3770,19 +3770,19 @@ pub const CEmitter = struct {
         try self.emitGenericSwitchWithMmioSubjectHoists(node, locals, return_ty, subject_ty);
     }
 
-    fn emitEnumCallSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, enum_ty: ast.TypeExpr) anyerror!bool {
+    fn emitEnumCallSwitch(self: *CEmitter, node: ast_bridge.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, enum_ty: ast_bridge.TypeExpr) anyerror!bool {
         _ = callExpr(node.subject) orelse return false;
         const temp = try self.emitSequencedCallArgTemp(node.subject, locals, enum_ty);
 
         var switch_locals = try cloneLocals(self.allocator, locals.*);
         defer switch_locals.deinit();
         try switch_locals.put(temp.name, try self.localInfoFromType(enum_ty));
-        const temp_subject = ast.Expr{ .kind = .{ .ident = .{ .text = temp.name, .span = node.subject.span } }, .span = node.subject.span };
+        const temp_subject = ast_bridge.Expr{ .kind = .{ .ident = .{ .text = temp.name, .span = node.subject.span } }, .span = node.subject.span };
         try self.emitGenericSwitch(.{ .subject = temp_subject, .arms = node.arms }, &switch_locals, return_ty, enum_ty, &[_]MmioReadReplacement{});
         return true;
     }
 
-    fn emitGenericSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_ty: ast.TypeExpr, subject_replacements: []const MmioReadReplacement) anyerror!void {
+    fn emitGenericSwitch(self: *CEmitter, node: ast_bridge.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject_ty: ast_bridge.TypeExpr, subject_replacements: []const MmioReadReplacement) anyerror!void {
         const resolved_subject_ty = self.resolveAliasType(subject_ty);
         const subject_enum_name = self.enumNameFromCandidate(subject_ty);
         const subject_is_bool = isBoolType(resolved_subject_ty);
@@ -3796,7 +3796,7 @@ pub const CEmitter = struct {
         });
     }
 
-    fn emitGenericSwitchWithMmioSubjectHoists(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_ty: ast.TypeExpr) anyerror!void {
+    fn emitGenericSwitchWithMmioSubjectHoists(self: *CEmitter, node: ast_bridge.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject_ty: ast_bridge.TypeExpr) anyerror!void {
         const resolved_subject_ty = self.resolveAliasType(subject_ty);
         const subject_enum_name = self.enumNameFromCandidate(subject_ty);
         const subject_is_bool = isBoolType(resolved_subject_ty);
@@ -3810,7 +3810,7 @@ pub const CEmitter = struct {
         });
     }
 
-    fn requireMirSwitchSubjectType(self: *CEmitter, subject: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !MirSubjectType {
+    fn requireMirSwitchSubjectType(self: *CEmitter, subject: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !MirSubjectType {
         const known_ty = self.operandEmitType(subject, locals) orelse self.taggedUnionTypeForExpr(subject, locals);
         const fact = if (known_ty) |ty|
             self.mirTargetTypeFactMatchingType(.switch_subject, subject.span, ty)
@@ -3827,12 +3827,12 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitResultSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_ty: ast.TypeExpr) anyerror!bool {
+    fn emitResultSwitch(self: *CEmitter, node: ast_bridge.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject_ty: ast_bridge.TypeExpr) anyerror!bool {
         const subject = (try lower_c_switch.resultSubjectForValueExprWithType(self.switchEmitContext(), node.subject, locals, subject_ty)) orelse return false;
         return lower_c_switch.emitResultSwitch(self.switchEmitContext(), node, locals, return_ty, subject);
     }
 
-    fn emitNullableSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_ty: ast.TypeExpr, representation: NullableRepresentation) anyerror!bool {
+    fn emitNullableSwitch(self: *CEmitter, node: ast_bridge.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject_ty: ast_bridge.TypeExpr, representation: NullableRepresentation) anyerror!bool {
         const subject = if (try lower_c_switch.nullableSubjectForExprWithType(self.switchEmitContext(), node.subject, locals, subject_ty, representation)) |subject|
             subject
         else
@@ -3841,19 +3841,19 @@ pub const CEmitter = struct {
         return lower_c_switch.emitNullableSwitch(self.switchEmitContext(), node, locals, return_ty, subject);
     }
 
-    fn emitTaggedUnionSwitch(self: *CEmitter, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitTaggedUnionSwitch(self: *CEmitter, node: ast_bridge.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         const subject = (try lower_c_switch.taggedUnionSubjectForValueExpr(self.switchEmitContext(), node.subject, locals)) orelse return false;
         return lower_c_switch.emitTaggedUnionSwitch(self.switchEmitContext(), node, locals, return_ty, subject);
     }
 
-    fn emitSwitchBody(self: *CEmitter, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitSwitchBody(self: *CEmitter, body: ast_bridge.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         switch (body) {
             .block => |block| try self.emitBlockItems(block, locals, return_ty),
             .expr => |expr| try self.emitExpressionStmt(expr, locals, return_ty),
         }
     }
 
-    fn nullableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn nullableTypeForExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .call => blk: {
                 const ty = self.callResultTypeForEmission(expr, locals) orelse break :blk null;
@@ -3871,14 +3871,14 @@ pub const CEmitter = struct {
         };
     }
 
-    fn nullableExpressionResultTypeOrGenerated(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn nullableExpressionResultTypeOrGenerated(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| {
             return self.nullableTypeFromCandidate(fact.target_ty);
         }
         return self.generatedNullableExpressionTypeForEmission(expr, locals);
     }
 
-    fn generatedNullableExpressionTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn generatedNullableExpressionTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         // Source nullable expressions have MIR expression_result rows. The
         // declaration/local fallback is generated-only.
         if (isSourceSpan(expr.span)) return null;
@@ -3890,23 +3890,23 @@ pub const CEmitter = struct {
         return self.nullableTypeFromCandidate(inferred);
     }
 
-    fn nullableTypeFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn nullableTypeFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         return if (self.resolveAliasType(ty).kind == .nullable) ty else null;
     }
 
-    fn nullablePayloadFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn nullablePayloadFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         return switch (self.resolveAliasType(ty).kind) {
             .nullable => |child| child.*,
             else => null,
         };
     }
 
-    fn valueOptionalPayloadFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn valueOptionalPayloadFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const child = self.nullablePayloadFromCandidate(ty) orelse return null;
         return if (lower_c_type.nullablePayloadIsValueType(&self.type_aliases, child)) child else null;
     }
 
-    fn generatedNullableLocalTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn generatedNullableLocalTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (isSourceSpan(expr.span)) return null;
         const local_set = locals orelse return null;
         const name = directLocalName(expr) orelse return null;
@@ -3915,7 +3915,7 @@ pub const CEmitter = struct {
         return self.nullableTypeFromCandidate(ty);
     }
 
-    fn taggedUnionTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn taggedUnionTypeForExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const ty = switch (expr.kind) {
             .call => self.taggedUnionCallCandidateTypeForEmission(expr, locals) orelse return null,
             .cast => self.castResultTypeForEmission(expr) orelse return null,
@@ -3928,7 +3928,7 @@ pub const CEmitter = struct {
         return self.taggedUnionTypeFromType(ty);
     }
 
-    fn taggedUnionCallCandidateTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn taggedUnionCallCandidateTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         // A qualified constructor `Union.variant(...)` is self-typed to its
         // owner, so an untyped `let t = Token.number(9)` infers `Token`.
         if (self.mirTargetTypeFactAt(.qualified_union_result, expr.span)) |fact| return fact.target_ty;
@@ -3936,12 +3936,12 @@ pub const CEmitter = struct {
         return self.taggedUnionTypeFromType(ret_ty);
     }
 
-    fn taggedUnionTypeFromType(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn taggedUnionTypeFromType(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const type_name = typeName(self.resolveAliasType(ty)) orelse return null;
         return if (self.tagged_unions.contains(type_name)) ty else null;
     }
 
-    fn emitForLoop(self: *CEmitter, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitForLoop(self: *CEmitter, loop: ast_bridge.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         const header = try lower_c_flow.forLoopHeader(self.flowEmitContext(), loop);
         const binding = header.binding;
         const iterable = header.iterable;
@@ -3952,7 +3952,7 @@ pub const CEmitter = struct {
         try lower_c_flow.emitForLoopWithElementPlan(self.flowEmitContext(), loop, binding, iterable, locals, return_ty, element);
     }
 
-    fn requireMirForLoopTypes(self: *CEmitter, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !struct { iterable: ast.TypeExpr, element: ast.TypeExpr } {
+    fn requireMirForLoopTypes(self: *CEmitter, iterable: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !struct { iterable: ast_bridge.TypeExpr, element: ast_bridge.TypeExpr } {
         const iterable_ty = try self.requireMirForIterableTypeForEmission(iterable, locals);
         const element_ty = try self.requireMirForElementTypeForEmission(iterable);
         const expected_element = self.arrayOrSliceElementTypeFromCandidate(iterable_ty) orelse return error.UnsupportedCEmission;
@@ -3960,15 +3960,15 @@ pub const CEmitter = struct {
         return .{ .iterable = iterable_ty, .element = element_ty };
     }
 
-    fn requireMirForIterableTypeForEmission(self: *CEmitter, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !ast.TypeExpr {
+    fn requireMirForIterableTypeForEmission(self: *CEmitter, iterable: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !ast_bridge.TypeExpr {
         return self.requireMirTargetTypeForEmission(.for_iterable, iterable, self.iterableTypeForExpr(iterable, locals));
     }
 
-    fn requireMirForElementTypeForEmission(self: *CEmitter, iterable: ast.Expr) !ast.TypeExpr {
+    fn requireMirForElementTypeForEmission(self: *CEmitter, iterable: ast_bridge.Expr) !ast_bridge.TypeExpr {
         return self.requireMirTargetTypeForEmission(.for_element, iterable, null);
     }
 
-    fn iterableTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn iterableTypeForExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const ty = self.arrayOrSliceBaseTypeForEmission(expr, locals) orelse return null;
         const resolved = self.resolveAliasType(ty);
         return switch (resolved.kind) {
@@ -3977,7 +3977,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitIfLet(self: *CEmitter, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitIfLet(self: *CEmitter, node: ast_bridge.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
         self.clearMirPointerProvenanceForPattern(node.pattern);
         const subject_info = try self.requireMirIfLetSubjectType(node.value, locals);
         const subject_ty = subject_info.target_ty;
@@ -4003,7 +4003,7 @@ pub const CEmitter = struct {
         try lower_c_switch.emitNullableIfLet(self.switchEmitContext(), node, locals, return_ty, subject);
     }
 
-    fn requireMirIfLetSubjectType(self: *CEmitter, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !MirSubjectType {
+    fn requireMirIfLetSubjectType(self: *CEmitter, value: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !MirSubjectType {
         const fact = self.mirTargetTypeFactAt(.if_let_subject, value.span) orelse return error.UnsupportedCEmission;
         const fact_ty = fact.target_ty;
         const known_ty = self.operandEmitType(value, locals);
@@ -4028,14 +4028,14 @@ pub const CEmitter = struct {
         return from_fact;
     }
 
-    fn nullableRepresentationForTargetType(self: *CEmitter, ty: ast.TypeExpr) ?NullableRepresentation {
+    fn nullableRepresentationForTargetType(self: *CEmitter, ty: ast_bridge.TypeExpr) ?NullableRepresentation {
         const child = self.nullablePayloadFromCandidate(ty) orelse return null;
         if (self.dynTraitNameFromCandidate(child) != null) return .dyn_trait;
         if (self.valueOptionalPayloadFromCandidate(ty) != null) return .value;
         return .pointer;
     }
 
-    fn emitNeverExprStmt(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+    fn emitNeverExprStmt(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
         switch (expr.kind) {
             .unreachable_expr => {
                 try self.writeIndent();
@@ -4060,7 +4060,7 @@ pub const CEmitter = struct {
         return mir.explicitTrapHelperForTarget(kind);
     }
 
-    fn emitRawStoreStmt(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitRawStoreStmt(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const call = callExpr(expr) orelse return false;
         const call_span = call.callee.*.span;
         const call_kind = self.mirCallTargetKindAt(call_span);
@@ -4070,7 +4070,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitRawStorePayload(self: *CEmitter, call_span: ast.Span, type_args: []const ast.TypeExpr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn emitRawStorePayload(self: *CEmitter, call_span: ast_bridge.Span, type_args: []const ast_bridge.TypeExpr, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         if (type_args.len != 1 or args.len != 2) return error.UnsupportedCEmission;
         const address_ty = (self.mirTargetTypeFactAt(.raw_address, call_span) orelse return error.UnsupportedCEmission).target_ty;
         const payload_ty = (self.mirTargetTypeFactAt(.raw_payload, call_span) orelse return error.UnsupportedCEmission).target_ty;
@@ -4089,7 +4089,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "*({s} *){s} = {s};\n", .{ try self.cTypeFor(payload_ty, .typedef_name), addr_temp.name, value_temp.name });
     }
 
-    fn emitCpuPauseStmt(self: *CEmitter, expr: ast.Expr) !bool {
+    fn emitCpuPauseStmt(self: *CEmitter, expr: ast_bridge.Expr) !bool {
         const call = callExpr(expr) orelse return false;
         const call_span = call.callee.*.span;
         const call_kind = self.mirCallTargetKindAt(call_span);
@@ -4104,7 +4104,7 @@ pub const CEmitter = struct {
     // target-aware `__atomic_thread_fence` helpers (riscv `fence`, x86 `mfence`,
     // arm `dmb`), so explicit memory barriers are real CPU fences, not just
     // compiler barriers.
-    fn emitFenceStmt(self: *CEmitter, expr: ast.Expr) !bool {
+    fn emitFenceStmt(self: *CEmitter, expr: ast_bridge.Expr) !bool {
         const call = callExpr(expr) orelse return false;
         const call_span = call.callee.*.span;
         const call_kind = self.mirCallTargetKindAt(call_span);
@@ -4137,7 +4137,7 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn emitOrdinaryHookedAssignmentStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+    fn emitOrdinaryHookedAssignmentStmt(self: *CEmitter, target: ast_bridge.Expr, value: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
         const hook = self.ordinaryStorePreHookName() orelse return false;
         if (!ordinaryStoreHookTarget(target)) return false;
         const target_ty = self.operandEmitType(target, locals) orelse return false;
@@ -4157,7 +4157,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn ordinaryStoreHookTarget(target: ast.Expr) bool {
+    fn ordinaryStoreHookTarget(target: ast_bridge.Expr) bool {
         return switch (target.kind) {
             .member, .index => true,
             .grouped => |inner| ordinaryStoreHookTarget(inner.*),
@@ -4169,14 +4169,14 @@ pub const CEmitter = struct {
     // field-LOAD shadow hook suppressed: wrapping an lvalue in a `(hook(...), lv)` comma
     // expression would make it non-assignable. Store hooks for member/index lvalues are emitted
     // through a temporary pointer by emitOrdinaryHookedAssignmentStmt.
-    fn emitAssignTarget(self: *CEmitter, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitAssignTarget(self: *CEmitter, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const prev = self.suppress_load_hook;
         self.suppress_load_hook = true;
         defer self.suppress_load_hook = prev;
         try self.emitExpr(target, locals);
     }
 
-    fn emitExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         self.emitExprInner(expr, locals) catch |err| switch (err) {
             error.UnsupportedCEmission => {
                 self.reportUnsupportedIfNone(expr.span, @tagName(expr.kind));
@@ -4186,7 +4186,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitExprInner(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitExprInner(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         switch (expr.kind) {
             .ident => |ident| try self.emitIdentExpr(ident, locals),
             .int_literal, .float_literal, .char_literal, .bool_literal, .null_literal, .void_literal => try self.emitScalarLiteralExpr(expr),
@@ -4211,29 +4211,29 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitUnsupportedTargetlessAggregateExpr(self: *CEmitter, expr: ast.Expr, kind: []const u8) !void {
+    fn emitUnsupportedTargetlessAggregateExpr(self: *CEmitter, expr: ast_bridge.Expr, kind: []const u8) !void {
         self.reportUnsupported(expr.span, kind);
         try self.out.print(self.allocator, "/* unsupported targetless {s} literal */0", .{kind});
         return error.UnsupportedCEmission;
     }
 
-    fn emitCallExpr(self: *CEmitter, expr: ast.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitCallExpr(self: *CEmitter, expr: ast_bridge.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         self.applyMirPointerProvenanceInvalidationsAtCall(expr.span, locals);
         if (try self.emitSpecialCallExpr(node, locals)) return;
         try self.emitDefaultCallExpr(node, locals);
     }
 
-    fn emitMemberExprOrFallback(self: *CEmitter, node: anytype, member_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitMemberExprOrFallback(self: *CEmitter, node: anytype, member_span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         if (try self.emitMemberExpr(node, member_span, locals)) return;
     }
 
-    fn emitUnsupportedExpr(self: *CEmitter, expr: ast.Expr) !void {
+    fn emitUnsupportedExpr(self: *CEmitter, expr: ast_bridge.Expr) !void {
         self.reportUnsupported(expr.span, @tagName(expr.kind));
         try self.out.print(self.allocator, "/* unsupported expr: {s} */0", .{@tagName(expr.kind)});
         return error.UnsupportedCEmission;
     }
 
-    fn reportUnsupportedIfNone(self: *CEmitter, span: ast.Span, construct: []const u8) void {
+    fn reportUnsupportedIfNone(self: *CEmitter, span: ast_bridge.Span, construct: []const u8) void {
         if (self.reporter) |reporter| {
             if (!reporter.has_errors) {
                 reporter.err(span, "E_BACKEND_UNSUPPORTED: C backend does not yet support {s}", .{construct});
@@ -4241,7 +4241,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitIdentExpr(self: *CEmitter, ident: ast.Ident, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitIdentExpr(self: *CEmitter, ident: ast_bridge.Ident, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         if (locals) |local_set| {
             if (!local_set.contains(ident.text)) {
                 if (self.globals.get(ident.text)) |global| {
@@ -4253,7 +4253,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, try self.cIdent(ident.text));
     }
 
-    fn emitScalarLiteralExpr(self: *CEmitter, expr: ast.Expr) !void {
+    fn emitScalarLiteralExpr(self: *CEmitter, expr: ast_bridge.Expr) !void {
         switch (expr.kind) {
             .int_literal => |literal| try appendCIntLiteral(self.allocator, self.out, literal),
             .float_literal => |literal| try appendCFloatLiteral(self.allocator, self.out, literal, false),
@@ -4265,18 +4265,18 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitGroupedExpr(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitGroupedExpr(self: *CEmitter, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         try self.out.appendSlice(self.allocator, "(");
         try self.emitExpr(inner, locals);
         try self.out.appendSlice(self.allocator, ")");
     }
 
-    fn emitAddressOfExpr(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitAddressOfExpr(self: *CEmitter, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         try self.out.appendSlice(self.allocator, "&");
         try self.emitAddressOperand(inner, locals);
     }
 
-    fn emitDerefExpr(self: *CEmitter, inner: ast.Expr, deref_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitDerefExpr(self: *CEmitter, inner: ast_bridge.Expr, deref_span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const inferred_pointee_ty = self.derefPointeeType(inner, locals) orelse return error.UnsupportedCEmission;
         const pointee_ty = (self.mirTargetTypeFactAt(.expression_result, deref_span) orelse return error.UnsupportedCEmission).target_ty;
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(pointee_ty), self.resolveAliasType(inferred_pointee_ty))) return error.UnsupportedCEmission;
@@ -4298,12 +4298,12 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitRaceLoadTempForAccess(ctx: *anyopaque, ptr_name: []const u8, target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitRaceLoadTempForAccess(ctx: *anyopaque, ptr_name: []const u8, target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.emitRaceLoadTempFromPointerTemp(ptr_name, target_ty);
     }
 
-    fn emitRaceLoadTempFromPointerTemp(self: *CEmitter, ptr_name: []const u8, target_ty: ast.TypeExpr) !?SequencedArgTemp {
+    fn emitRaceLoadTempFromPointerTemp(self: *CEmitter, ptr_name: []const u8, target_ty: ast_bridge.TypeExpr) !?SequencedArgTemp {
         const info = self.globalInfoFromType(target_ty) catch return null;
         const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
         self.temp_index += 1;
@@ -4332,7 +4332,7 @@ pub const CEmitter = struct {
         return .{ .name = temp_name, .ty = target_ty };
     }
 
-    fn emitCastExpr(self: *CEmitter, span: ast.Span, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitCastExpr(self: *CEmitter, span: ast_bridge.Span, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const source_fact = self.mirTargetTypeFactAt(.explicit_cast_source, span) orelse return error.UnsupportedCEmission;
         const target_fact = self.mirTargetTypeFactAt(.explicit_cast_target, span) orelse return error.UnsupportedCEmission;
         try self.out.print(self.allocator, "(({s})", .{try self.cTypeFor(target_fact.target_ty, .typedef_name)});
@@ -4340,7 +4340,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ")");
     }
 
-    fn emitIndexExpr(self: *CEmitter, node: anytype, index_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitIndexExpr(self: *CEmitter, node: anytype, index_span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         if (locals) |local_set| {
             if (self.overlayIndexResultType(node, local_set)) |inferred_element_ty| {
                 const element_ty = (self.mirTargetTypeFactAt(.expression_result, index_span) orelse return error.UnsupportedCEmission).target_ty;
@@ -4384,7 +4384,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, ".{s})]", .{slice.len_field});
     }
 
-    fn emitArrayIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast.TypeExpr) anyerror!void {
+    fn emitArrayIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast_bridge.TypeExpr) anyerror!void {
         try self.emitArrayIndexBase(node.base.*, locals);
         if (self.mirCheckElided(node.index.span)) {
             try self.out.appendSlice(self.allocator, ".elems[");
@@ -4401,7 +4401,7 @@ pub const CEmitter = struct {
 
     // A deref base (`pa.*[i]`) must parenthesize so `.elems` binds to the deref
     // result: `(*pa).elems[...]`, not `*pa.elems[...]`.
-    fn emitArrayIndexBase(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitArrayIndexBase(self: *CEmitter, base: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         if (base.kind == .deref) {
             try self.out.appendSlice(self.allocator, "(");
             try self.emitExpr(base, locals);
@@ -4411,7 +4411,7 @@ pub const CEmitter = struct {
         try self.emitExpr(base, locals);
     }
 
-    fn emitMemberExpr(self: *CEmitter, node: anytype, member_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
+    fn emitMemberExpr(self: *CEmitter, node: anytype, member_span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) anyerror!bool {
         if (try self.emitEnumVariantPath(node, locals)) return true;
         if (self.sliceAccessForBase(node.base.*, locals)) |slice| {
             const base_ty = self.arrayOrSliceBaseTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
@@ -4453,17 +4453,17 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn memberResultTypeOrGenerated(self: *CEmitter, member_span: ast.Span, inferred: ast.TypeExpr) ?ast.TypeExpr {
+    fn memberResultTypeOrGenerated(self: *CEmitter, member_span: ast_bridge.Span, inferred: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         if (self.mirTargetTypeFactAt(.expression_result, member_span)) |fact| return fact.target_ty;
         return generatedMemberResultTypeForEmission(member_span, inferred);
     }
 
-    fn generatedMemberResultTypeForEmission(member_span: ast.Span, inferred: ast.TypeExpr) ?ast.TypeExpr {
+    fn generatedMemberResultTypeForEmission(member_span: ast_bridge.Span, inferred: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         if (isSourceSpan(member_span)) return null;
         return inferred;
     }
 
-    fn overlayMemberResultType(self: *CEmitter, node: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn overlayMemberResultType(self: *CEmitter, node: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const overlay_name = lower_c_access.overlayUnionNameForExpr(node.base.*, locals) orelse return null;
         const info = self.overlay_unions.get(overlay_name) orelse return null;
         const field = info.fields.get(node.name.text) orelse return null;
@@ -4471,7 +4471,7 @@ pub const CEmitter = struct {
         return field.ty;
     }
 
-    fn overlayIndexResultType(self: *CEmitter, node: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn overlayIndexResultType(self: *CEmitter, node: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const member = syntax_bridge.overlayMemberFromIndexBase(node.base.*) orelse return null;
         const overlay_name = lower_c_access.overlayUnionNameForExpr(member.base.*, locals) orelse return null;
         const info = self.overlay_unions.get(overlay_name) orelse return null;
@@ -4533,11 +4533,11 @@ pub const CEmitter = struct {
     }
 
     const PointerMemberPath = struct {
-        root: ast.Expr,
+        root: ast_bridge.Expr,
         fields: []const []const u8,
     };
 
-    fn collectPointerMemberPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), fields: *std.ArrayList([]const u8)) !?ast.Expr {
+    fn collectPointerMemberPath(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), fields: *std.ArrayList([]const u8)) !?ast_bridge.Expr {
         switch (expr.kind) {
             .member => |node| {
                 const root = try self.collectPointerMemberPath(node.base.*, locals, fields) orelse return null;
@@ -4549,19 +4549,19 @@ pub const CEmitter = struct {
         }
     }
 
-    fn pointerMemberPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), fields: *std.ArrayList([]const u8)) !?PointerMemberPath {
+    fn pointerMemberPath(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), fields: *std.ArrayList([]const u8)) !?PointerMemberPath {
         const root = try self.collectPointerMemberPath(expr, locals, fields) orelse return null;
         if (fields.items.len <= 1) return null;
         return .{ .root = root, .fields = fields.items };
     }
 
-    fn pointerMemberPathFinalType(self: *CEmitter, root: ast.Expr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn pointerMemberPathFinalType(self: *CEmitter, root: ast_bridge.Expr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         var current = self.memberBaseTypeForEmission(root, locals) orelse return null;
         for (fields) |field_name| current = self.memberFieldTypeFromAggregate(current, field_name) orelse return null;
         return current;
     }
 
-    fn emitPointerMemberPathAddressExpr(self: *CEmitter, root: ast.Expr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitPointerMemberPathAddressExpr(self: *CEmitter, root: ast_bridge.Expr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         try self.emitExpr(root, locals);
         if (fields.len == 0) return;
         try self.out.print(self.allocator, "->{s}", .{try self.cIdent(fields[0])});
@@ -4624,7 +4624,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn collectIndexedMemberPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), fields: *std.ArrayList([]const u8)) !?syntax_bridge.IndexExpr {
+    fn collectIndexedMemberPath(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), fields: *std.ArrayList([]const u8)) !?syntax_bridge.IndexExpr {
         switch (expr.kind) {
             .member => |node| {
                 const index = try self.collectIndexedMemberPath(node.base.*, locals, fields) orelse return null;
@@ -4636,12 +4636,12 @@ pub const CEmitter = struct {
         }
     }
 
-    fn indexedElementType(self: *CEmitter, index: syntax_bridge.IndexExpr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn indexedElementType(self: *CEmitter, index: syntax_bridge.IndexExpr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const base_ty = self.arrayOrSliceBaseTypeForEmission(index.base.*, locals) orelse return null;
         return self.arrayOrSliceElementTypeFromCandidate(base_ty);
     }
 
-    fn indexedMemberPathFinalType(self: *CEmitter, index: syntax_bridge.IndexExpr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn indexedMemberPathFinalType(self: *CEmitter, index: syntax_bridge.IndexExpr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         var current = self.indexedElementType(index, locals) orelse return null;
         for (fields) |field_name| current = self.memberFieldTypeFromAggregate(current, field_name) orelse return null;
         return current;
@@ -4660,7 +4660,7 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn memberChainHasRaceTolerantIndexedBase(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn memberChainHasRaceTolerantIndexedBase(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         switch (expr.kind) {
             .member => |node| return self.memberChainHasRaceTolerantIndexedBase(node.base.*, locals),
             .grouped => |wrapped| return self.memberChainHasRaceTolerantIndexedBase(wrapped.*, locals),
@@ -4792,7 +4792,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ")");
     }
 
-    fn emitAddressOperand(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitAddressOperand(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         switch (expr.kind) {
             .ident => |ident| {
                 if (locals) |local_set| {
@@ -4836,7 +4836,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, ".{s})]", .{slice.len_field});
     }
 
-    fn emitArrayIndexAddressOperand(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast.TypeExpr) anyerror!void {
+    fn emitArrayIndexAddressOperand(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast_bridge.TypeExpr) anyerror!void {
         // Mirrors the value-read path so `&arr[i]` and `arr[i]` agree.
         if (node.base.*.kind == .deref) {
             // `&pa.*[i]` — parenthesize the deref so `.elems` binds to its result.
@@ -4865,11 +4865,11 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "{s}{s}", .{ op, try self.cIdent(node.name.text) });
     }
 
-    fn underlyingIntTypeName(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
+    fn underlyingIntTypeName(self: *CEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
         return lower_c_info.underlyingIntTypeName(self.infoContext(), ty);
     }
 
-    fn emitExprWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitExprWithTarget(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void {
         self.emitExprWithTargetInner(expr, locals, target_ty) catch |err| switch (err) {
             error.UnsupportedCEmission => {
                 self.reportUnsupportedIfNone(expr.span, @tagName(expr.kind));
@@ -4879,7 +4879,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitExprWithTargetInner(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitExprWithTargetInner(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void {
         const semantic_target_ty = if (expr.kind == .null_literal)
             self.nullLiteralTargetTypeForEmission(expr, target_ty) orelse return error.UnsupportedCEmission
         else
@@ -4911,7 +4911,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn nullLiteralTargetTypeForEmission(self: *CEmitter, expr: ast.Expr, target_ty: ?ast.TypeExpr) ?ast.TypeExpr {
+    fn nullLiteralTargetTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, target_ty: ?ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         if (self.mirTargetTypeFactAt(.null_literal, expr.span)) |fact| return fact.target_ty;
         const ty = target_ty orelse return null;
         return self.nullableTypeFromCandidate(ty);
@@ -4920,7 +4920,7 @@ pub const CEmitter = struct {
     // Coerce a `null` (absent) or a payload value (present) into a value optional `?T`'s
     // tagged aggregate. A source that already yields `?T` (another optional local / a call
     // returning `?T`) is left to the normal path (pass-through, no double-wrap).
-    fn emitValueOptionalCoercion(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitValueOptionalCoercion(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         const ty = target_ty orelse return false;
         var resolved = self.resolveAliasType(ty);
         _ = self.valueOptionalPayloadFromCandidate(ty) orelse return false;
@@ -4943,7 +4943,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitPointerToPAddrTargetCast(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitPointerToPAddrTargetCast(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         const ty = target_ty orelse return false;
         if (!lower_c_type.isPAddrType(ty)) return false;
         const source_ty = self.paddrCoercionSourceTypeForEmission(expr, locals) orelse return false;
@@ -4954,20 +4954,20 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn paddrCoercionSourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn paddrCoercionSourceTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (self.mirTargetTypeFactAt(.paddr_coercion_source, expr.span)) |fact| return fact.target_ty;
         if (expr.kind == .cast) return (self.mirTargetTypeFactAt(.explicit_cast_source, expr.span) orelse return null).target_ty;
         return self.generatedPaddrCoercionSourceTypeForEmission(expr, locals);
     }
 
-    fn generatedPaddrCoercionSourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn generatedPaddrCoercionSourceTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (isSourceSpan(expr.span)) return null;
         if (self.operandEmitType(expr, locals)) |ty| return ty;
         if (self.callResultTypeForEmission(expr, locals)) |ty| return ty;
         return self.generatedExprSourceTypeForEmission(expr, locals);
     }
 
-    fn emitAggregateLiteralWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitAggregateLiteralWithTarget(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         const kind: mir.TargetTypeKind = if (expr.kind == .array_literal) .array_literal else .struct_literal;
         const fact = self.mirTargetTypeFactAt(kind, expr.span) orelse return error.UnsupportedCEmission;
         const target = fact.target_ty;
@@ -4984,7 +4984,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitArithmeticExprWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitArithmeticExprWithTarget(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void {
         switch (expr.kind) {
             .binary => |node| {
                 if (try lower_c_arith.emitWrapBinaryWithTarget(self.arithContext(), node, locals, target_ty)) return;
@@ -5000,13 +5000,13 @@ pub const CEmitter = struct {
         try self.emitExpr(expr, locals);
     }
 
-    fn emitGroupedExprWithTarget(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitGroupedExprWithTarget(self: *CEmitter, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void {
         try self.out.appendSlice(self.allocator, "(");
         try self.emitExprWithTarget(inner, locals, target_ty);
         try self.out.appendSlice(self.allocator, ")");
     }
 
-    fn emitAddressOfExprWithTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void {
+    fn emitAddressOfExprWithTarget(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void {
         // `&x` / `&mut x` coerced to `*dyn Trait`: build the fat pointer
         // `(mc_dyn_Trait){ .data = (void*)&x, .vtable = &__vt_Type_Trait }`.
         if (target_ty) |ty| {
@@ -5015,7 +5015,7 @@ pub const CEmitter = struct {
         try self.emitExpr(expr, locals);
     }
 
-    fn emitTargetCallExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, expr: ast.Expr) anyerror!void {
+    fn emitTargetCallExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr, expr: ast_bridge.Expr) anyerror!void {
         if (self.mirHasCallTargetKindAt(.atomic_init, expr.span)) {
             const expected_result_ty = target_ty orelse return error.UnsupportedCEmission;
             const payload_ty = self.atomicInitPayloadTypeAt(expr.span, expected_result_ty) orelse return error.UnsupportedCEmission;
@@ -5038,7 +5038,7 @@ pub const CEmitter = struct {
         try self.emitExpr(expr, locals);
     }
 
-    fn emitTargetPreludeExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!bool {
+    fn emitTargetPreludeExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!bool {
         const ty = target_ty orelse return false;
         // f32 target: compute the float expression in `float`, not `double`. A bare C decimal
         // literal is `double`, so `1.7 * 2.3` would multiply in double and round twice when
@@ -5066,7 +5066,7 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn emitSliceConstNarrowCoercion(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!bool {
+    fn emitSliceConstNarrowCoercion(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!bool {
         const fact_source_ty = if (expr.kind == .cast)
             (self.mirTargetTypeFactAt(.explicit_cast_source, expr.span) orelse return error.UnsupportedCEmission).target_ty
         else blk: {
@@ -5109,7 +5109,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitEnumLiteralWithTarget(self: *CEmitter, literal: ast.Ident, span: ast.Span) anyerror!void {
+    fn emitEnumLiteralWithTarget(self: *CEmitter, literal: ast_bridge.Ident, span: ast_bridge.Span) anyerror!void {
         const fact = self.mirTargetTypeFactAt(.enum_literal, span) orelse return error.UnsupportedCEmission;
         const enum_name = self.enumNameForType(fact.target_ty);
         if (enum_name) |name| {
@@ -5120,14 +5120,14 @@ pub const CEmitter = struct {
         return error.UnsupportedCEmission;
     }
 
-    fn emitFloatLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast.Span) anyerror!void {
+    fn emitFloatLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast_bridge.Span) anyerror!void {
         const fact = self.mirTargetTypeFactAt(.float_literal, span) orelse return error.UnsupportedCEmission;
         const name = typeName(self.resolveAliasType(fact.target_ty)) orelse return error.UnsupportedCEmission;
         if (!std.mem.eql(u8, name, "f32") and !std.mem.eql(u8, name, "f64")) return error.UnsupportedCEmission;
         try appendCFloatLiteral(self.allocator, self.out, literal, std.mem.eql(u8, name, "f32"));
     }
 
-    fn emitCharLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast.Span, expected_ty: ?ast.TypeExpr) !void {
+    fn emitCharLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast_bridge.Span, expected_ty: ?ast_bridge.TypeExpr) !void {
         const fact = self.mirTargetTypeFactAt(.char_literal, span) orelse return error.UnsupportedCEmission;
         const expected = expected_ty orelse return error.UnsupportedCEmission;
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected))) return error.UnsupportedCEmission;
@@ -5135,7 +5135,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "(({s}){d})", .{ try self.cTypeFor(fact.target_ty, .typedef_name), value });
     }
 
-    fn emitStringLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast.Span) anyerror!void {
+    fn emitStringLiteralWithTarget(self: *CEmitter, literal: []const u8, span: ast_bridge.Span) anyerror!void {
         // String literals require a target type (sema rejects targetless
         // ones). They lower to a C string literal cast to the target
         // pointer type, e.g. `*const u8` -> `(uint8_t const *)"…"`.
@@ -5214,11 +5214,11 @@ pub const CEmitter = struct {
     // An existing `*dyn Trait` value passes through (returns false → normal emit). Sema
     // verified conformance + forge-safety. Returns false when not applicable.
     // True when `ty` is `*dyn Trait` or `?*dyn Trait` — both route through emitDynCoercion.
-    fn targetIsDynOrNullableDyn(self: *CEmitter, ty: ast.TypeExpr) bool {
+    fn targetIsDynOrNullableDyn(self: *CEmitter, ty: ast_bridge.TypeExpr) bool {
         return self.dynTraitNameFromCandidate(ty) != null;
     }
 
-    fn emitDynCoercion(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+    fn emitDynCoercion(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) !bool {
         if (self.dynTargetTraitName(target_ty) == null) return false;
         // `?*dyn Trait = null`: `none` is the zero fat pointer (data == NULL).
         if (expr.kind == .null_literal) {
@@ -5237,7 +5237,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn dynSourceIsPassThrough(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn dynSourceIsPassThrough(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.dynSourceIsPassThrough(inner.*, locals),
             else => if (self.dynPassThroughTypeForEmission(expr, locals)) |source_ty|
@@ -5247,11 +5247,11 @@ pub const CEmitter = struct {
         };
     }
 
-    fn dynTargetTraitName(self: *CEmitter, target_ty: ast.TypeExpr) ?[]const u8 {
+    fn dynTargetTraitName(self: *CEmitter, target_ty: ast_bridge.TypeExpr) ?[]const u8 {
         return self.dynTraitNameFromCandidate(target_ty);
     }
 
-    fn dynTraitNameFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
+    fn dynTraitNameFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
         return switch (self.resolveAliasType(ty).kind) {
             .dyn_trait => |d| d.trait_name.text,
             .nullable => |child| switch (self.resolveAliasType(child.*).kind) {
@@ -5262,7 +5262,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn dynDispatchTraitNameFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
+    fn dynDispatchTraitNameFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
         return switch (self.resolveAliasType(ty).kind) {
             .dyn_trait => |d| d.trait_name.text,
             .pointer => |p| switch (self.resolveAliasType(p.child.*).kind) {
@@ -5277,7 +5277,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "({s}){{0}}", .{try self.dynTypeName(trait_name)});
     }
 
-    fn emitDynCoercionWithSource(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), trait_name: []const u8, source_ty: ast.TypeExpr) !bool {
+    fn emitDynCoercionWithSource(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), trait_name: []const u8, source_ty: ast_bridge.TypeExpr) !bool {
         return switch (expr.kind) {
             .grouped => |inner| try self.emitDynCoercionWithSource(inner.*, locals, trait_name, source_ty),
             .address_of => |inner| try self.emitAddressOfDynCoercion(inner.*, locals, trait_name, source_ty),
@@ -5285,7 +5285,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitAddressOfDynCoercion(self: *CEmitter, operand: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), trait_name: []const u8, source_ty: ast.TypeExpr) !bool {
+    fn emitAddressOfDynCoercion(self: *CEmitter, operand: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), trait_name: []const u8, source_ty: ast_bridge.TypeExpr) !bool {
         // `&x` -> .data = (void*)&x, vtable keyed on typeof(x).
         const type_name = typeName(self.resolveAliasType(source_ty)) orelse return false;
         try self.out.print(self.allocator, "({s}){{ .data = (void *)&", .{try self.dynTypeName(trait_name)});
@@ -5294,7 +5294,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitPointerValueDynCoercion(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), trait_name: []const u8, source_ty: ast.TypeExpr) !bool {
+    fn emitPointerValueDynCoercion(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), trait_name: []const u8, source_ty: ast_bridge.TypeExpr) !bool {
         // A `*T` value: .data = (void*)<the pointer>, vtable keyed on the pointee T.
         const pointee = self.dynPointerSourcePointeeFromCandidate(source_ty) orelse return false;
         const type_name = typeName(self.resolveAliasType(pointee)) orelse return false;
@@ -5304,33 +5304,33 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn dynPointerSourcePointeeFromCandidate(self: *CEmitter, source_ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn dynPointerSourcePointeeFromCandidate(self: *CEmitter, source_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         // An existing `*dyn Trait` value passes through (no re-wrap).
         if (self.dynTraitNameFromCandidate(source_ty) != null) return null;
         const pointer = self.pointerNodeFromCandidate(source_ty) orelse return null;
         return pointer.child.*;
     }
 
-    fn dynPassThroughTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn dynPassThroughTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (self.operandEmitType(expr, locals)) |ty| return ty;
         if (self.callResultTypeForEmission(expr, locals)) |ty| return ty;
         return self.generatedExprSourceTypeForEmission(expr, locals);
     }
 
-    fn emitF32Expr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    fn emitF32Expr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
         try lower_c_arith.emitF32Expr(self.arithContext(), expr, locals);
     }
 
-    fn structDeclForResolvedTarget(self: *CEmitter, target_ty: ast.TypeExpr) ?ast.StructDecl {
+    fn structDeclForResolvedTarget(self: *CEmitter, target_ty: ast_bridge.TypeExpr) ?ast_bridge.StructDecl {
         const struct_name = typeName(target_ty) orelse return null;
         return self.structs.get(struct_name);
     }
 
-    fn enumNameForType(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
+    fn enumNameForType(self: *CEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
         return self.enumNameFromCandidate(ty);
     }
 
-    fn emitPackedBitsMember(self: *CEmitter, node: anytype, member_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    fn emitPackedBitsMember(self: *CEmitter, node: anytype, member_span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const base_ty = packedBitsNameForExpr(node.base.*, locals, &self.globals) orelse return false;
         const info = self.packed_bits.get(base_ty) orelse return false;
         const field = info.fields.get(node.name.text) orelse return false;
@@ -5340,7 +5340,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitPackedBitsMaskTest(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), info: PackedBitsInfo, bit_index: usize) !void {
+    fn emitPackedBitsMaskTest(self: *CEmitter, base: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), info: PackedBitsInfo, bit_index: usize) !void {
         try self.out.appendSlice(self.allocator, "((");
         try self.emitExpr(base, locals);
         try self.out.print(self.allocator, " & {s}) != 0)", .{try packedBitsMaskLiteral(self.scratch.allocator(), info, bit_index)});
@@ -5361,7 +5361,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitPackedBitsGlobalFieldWrite(self: *CEmitter, base_ty: []const u8, info: PackedBitsInfo, global_name: []const u8, mask: []const u8, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn emitPackedBitsGlobalFieldWrite(self: *CEmitter, base_ty: []const u8, info: PackedBitsInfo, global_name: []const u8, mask: []const u8, value: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         const value_temp = try self.emitSequencedCallArgTemp(value, locals, simpleNameType("bool", value.span));
         const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
         self.temp_index += 1;
@@ -5373,7 +5373,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "mc_race_store_{s}(&{s}, ({s}){s});\n", .{ info.repr_name, global_name, info.repr_c_type, temp_name });
     }
 
-    fn emitPackedBitsLocalFieldWrite(self: *CEmitter, base: ast.Expr, base_ty: []const u8, mask: []const u8, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn emitPackedBitsLocalFieldWrite(self: *CEmitter, base: ast_bridge.Expr, base_ty: []const u8, mask: []const u8, value: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         const value_temp = try self.emitSequencedCallArgTemp(value, locals, simpleNameType("bool", value.span));
         try self.writeIndent();
         try self.emitExpr(base, locals);
@@ -5382,7 +5382,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, " & ({s})~{s}) | ({s} ? {s} : ({s})0));\n", .{ base_ty, mask, value_temp.name, mask, base_ty });
     }
 
-    fn globalAssignmentTarget(self: *CEmitter, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
+    fn globalAssignmentTarget(self: *CEmitter, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
         return lower_c_global.globalAssignmentTarget(self.globalAccessContext(), target, locals);
     }
 
@@ -5421,7 +5421,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn globalArrayElementMemberField(self: *CEmitter, access: GlobalArrayElementAccess, member_name: []const u8) ?ast.Field {
+    fn globalArrayElementMemberField(self: *CEmitter, access: GlobalArrayElementAccess, member_name: []const u8) ?ast_bridge.Field {
         const element_ty = self.resolveAliasType(access.element_info.source_ty);
         const element_name = typeName(element_ty) orelse return null;
         const struct_decl = self.structs.get(element_name) orelse return null;
@@ -5431,7 +5431,7 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn exprIsBoolForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn exprIsBoolForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             // User-source boolean-producing expressions have complete MIR
             // result facts. Syntax identifies the operation, but it must not
@@ -5451,22 +5451,22 @@ pub const CEmitter = struct {
         };
     }
 
-    fn boolLiteralIsBoolForEmission(self: *CEmitter, expr: ast.Expr) bool {
+    fn boolLiteralIsBoolForEmission(self: *CEmitter, expr: ast_bridge.Expr) bool {
         if (!isSourceSpan(expr.span)) return true;
         return self.expressionResultIsBoolForEmission(expr);
     }
 
-    fn storageExprIsBoolForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn storageExprIsBoolForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         const ty = self.storageOrExpressionResultTypeForEmission(expr, locals) orelse return false;
         return isBoolType(self.resolveAliasType(ty));
     }
 
-    fn groupedExprIsBoolForEmission(self: *CEmitter, expr: ast.Expr, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn groupedExprIsBoolForEmission(self: *CEmitter, expr: ast_bridge.Expr, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         if (!isSourceSpan(expr.span)) return self.exprIsBoolForEmission(inner, locals);
         return self.expressionResultIsBoolForEmission(expr);
     }
 
-    fn binaryExprIsBoolForEmission(self: *CEmitter, expr: ast.Expr, node: anytype) bool {
+    fn binaryExprIsBoolForEmission(self: *CEmitter, expr: ast_bridge.Expr, node: anytype) bool {
         if (!isSourceSpan(expr.span)) {
             return switch (node.op) {
                 .eq, .ne, .lt, .le, .gt, .ge, .logical_and, .logical_or => true,
@@ -5476,17 +5476,17 @@ pub const CEmitter = struct {
         return self.expressionResultIsBoolForEmission(expr);
     }
 
-    fn unaryExprIsBoolForEmission(self: *CEmitter, expr: ast.Expr, node: anytype) bool {
+    fn unaryExprIsBoolForEmission(self: *CEmitter, expr: ast_bridge.Expr, node: anytype) bool {
         if (!isSourceSpan(expr.span)) return node.op == .logical_not;
         return self.expressionResultIsBoolForEmission(expr);
     }
 
-    fn expressionResultIsBoolForEmission(self: *CEmitter, expr: ast.Expr) bool {
+    fn expressionResultIsBoolForEmission(self: *CEmitter, expr: ast_bridge.Expr) bool {
         const ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return false).target_ty;
         return isBoolType(self.resolveAliasType(ty));
     }
 
-    fn enumNameForValueExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+    fn enumNameForValueExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
         if (self.operandEmitType(expr, locals)) |ty| return self.enumNameForType(ty);
         return switch (expr.kind) {
             .call => blk: {
@@ -5509,18 +5509,18 @@ pub const CEmitter = struct {
         };
     }
 
-    fn groupedEnumNameForValueExpr(self: *CEmitter, expr: ast.Expr, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+    fn groupedEnumNameForValueExpr(self: *CEmitter, expr: ast_bridge.Expr, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
         if (!isSourceSpan(expr.span)) return self.enumNameForValueExpr(inner, locals);
         const ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
         return self.enumNameForType(ty);
     }
 
-    fn emitOverlayFieldReadReturn(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+    fn emitOverlayFieldReadReturn(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
         try self.requireOverlayReturnExpressionResult(expr, locals);
         return lower_c_overlay.emitOverlayFieldReadReturn(self.overlayEmitContext(), expr, locals, return_ty);
     }
 
-    fn requireOverlayReturnExpressionResult(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn requireOverlayReturnExpressionResult(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         switch (expr.kind) {
             .grouped => |inner| return self.requireOverlayReturnExpressionResult(inner.*, locals),
             .member => |node| if (self.overlayMemberResultType(node, locals)) |inferred_field_ty| {
@@ -5547,11 +5547,11 @@ pub const CEmitter = struct {
         return lower_c_overlay.emitOverlayIndexReadExpr(self.overlayEmitContext(), node, locals);
     }
 
-    fn overlayFieldLayoutSize(self: *CEmitter, ty: ast.TypeExpr) usize {
+    fn overlayFieldLayoutSize(self: *CEmitter, ty: ast_bridge.TypeExpr) usize {
         return (self.overlayFieldLayout(ty) orelse OverlayLayout{ .size = 1, .alignment = 1 }).size;
     }
 
-    fn emitSliceExpr(self: *CEmitter, node: anytype, slice_span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !void {
+    fn emitSliceExpr(self: *CEmitter, node: anytype, slice_span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) !void {
         const base_ty = self.arrayOrSliceBaseTypeForEmission(node.base.*, locals) orelse return error.UnsupportedCEmission;
         const inferred_slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedCEmission;
         const slice_ty = (self.mirTargetTypeFactAt(.expression_result, slice_span) orelse return error.UnsupportedCEmission).target_ty;
@@ -5567,7 +5567,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, " + mc_start{d}, .len = mc_end{d} - mc_start{d} }}; }})", .{ n, n, n });
     }
 
-    fn arrayOrSliceBaseTypeForEmission(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn arrayOrSliceBaseTypeForEmission(self: *CEmitter, base: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (syntheticDestructureBase(base)) return self.arrayOrSliceBaseTypeForEmissionRecovered(base, locals);
         if (isSourceSpan(base.span)) {
             const base_fact_ty = (self.mirTargetTypeFactAt(.expression_result, base.span) orelse return null).target_ty;
@@ -5579,14 +5579,14 @@ pub const CEmitter = struct {
             self.generatedExprSourceTypeForEmission(base, locals);
     }
 
-    fn arrayOrSliceBaseTypeForEmissionRecovered(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn arrayOrSliceBaseTypeForEmissionRecovered(self: *CEmitter, base: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (self.arrayTypeForExpr(base, locals)) |ty| return ty;
         if (self.sliceReturnTypeForExpr(base, locals)) |ty| return ty;
         if (self.operandEmitType(base, locals)) |ty| return ty;
         return null;
     }
 
-    fn emitSliceRangePrelude(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), resolved_base_ty: ast.TypeExpr, temp_id: usize) !void {
+    fn emitSliceRangePrelude(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), resolved_base_ty: ast_bridge.TypeExpr, temp_id: usize) !void {
         try self.out.print(self.allocator, "({{ uintptr_t mc_start{d} = (", .{temp_id});
         try self.emitExpr(node.start.*, locals);
         try self.out.print(self.allocator, "); uintptr_t mc_end{d} = (", .{temp_id});
@@ -5595,7 +5595,7 @@ pub const CEmitter = struct {
         try self.emitSliceBaseLen(node.base.*, locals, resolved_base_ty);
     }
 
-    fn emitSliceBaseLen(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), resolved_base_ty: ast.TypeExpr) !void {
+    fn emitSliceBaseLen(self: *CEmitter, base: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), resolved_base_ty: ast_bridge.TypeExpr) !void {
         switch (resolved_base_ty.kind) {
             .slice => {
                 try self.out.appendSlice(self.allocator, "(");
@@ -5607,7 +5607,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitSliceBoundsGuard(self: *CEmitter, slice_span: ast.Span, temp_id: usize, slice_name: []const u8) !void {
+    fn emitSliceBoundsGuard(self: *CEmitter, slice_span: ast_bridge.Span, temp_id: usize, slice_name: []const u8) !void {
         // OPT (annex E): when the optimized MIR proved this constant range in bounds, the
         // `start <= end <= len` guard is elided (the `mc_len` binding above is still emitted but
         // unused, which is harmless).
@@ -5619,7 +5619,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitSliceBasePtr(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), resolved_base_ty: ast.TypeExpr) !void {
+    fn emitSliceBasePtr(self: *CEmitter, base: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), resolved_base_ty: ast_bridge.TypeExpr) !void {
         switch (resolved_base_ty.kind) {
             .slice => {
                 try self.out.appendSlice(self.allocator, "(");
@@ -5635,7 +5635,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitArrayCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitArrayCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const array_ty = self.callReturnTypeForInferredLocal(initializer, locals, isArrayCallReturnType) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, array_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
@@ -5643,11 +5643,11 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn isArrayCallReturnType(self: *CEmitter, ty: ast.TypeExpr) bool {
+    fn isArrayCallReturnType(self: *CEmitter, ty: ast_bridge.TypeExpr) bool {
         return self.arrayTypeFromType(ty) != null;
     }
 
-    fn emitSliceCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitSliceCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const slice_ty = self.callReturnTypeForInferredLocal(initializer, locals, isSliceCallReturnType) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, slice_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
@@ -5655,11 +5655,11 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn isSliceCallReturnType(self: *CEmitter, ty: ast.TypeExpr) bool {
+    fn isSliceCallReturnType(self: *CEmitter, ty: ast_bridge.TypeExpr) bool {
         return self.sliceTypeFromCandidate(ty) != null;
     }
 
-    fn emitEnumCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitEnumCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const enum_ty = self.callReturnTypeForInferredLocal(initializer, locals, isEnumCallReturnType) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, enum_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
@@ -5667,24 +5667,24 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn isEnumCallReturnType(self: *CEmitter, ty: ast.TypeExpr) bool {
+    fn isEnumCallReturnType(self: *CEmitter, ty: ast_bridge.TypeExpr) bool {
         return self.enumTypeFromCandidate(ty) != null;
     }
 
-    fn sliceTypeFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn sliceTypeFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         return if (self.resolveAliasType(ty).kind == .slice) ty else null;
     }
 
-    fn enumTypeFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn enumTypeFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         return if (self.enumNameFromCandidate(ty) != null) ty else null;
     }
 
-    fn enumNameFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
+    fn enumNameFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
         const enum_name = type_bridge.typeName(self.resolveAliasType(ty)) orelse return null;
         return if (self.enums.contains(enum_name)) enum_name else null;
     }
 
-    fn emitTaggedUnionCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitTaggedUnionCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const union_ty = self.qualifiedUnionResultTypeForInferredLocal(initializer) orelse
             self.callReturnTypeForInferredLocal(initializer, locals, isTaggedUnionCallReturnType) orelse
             return false;
@@ -5694,7 +5694,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn qualifiedUnionResultTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr) ?ast.TypeExpr {
+    fn qualifiedUnionResultTypeForInferredLocal(self: *CEmitter, initializer: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         return switch (initializer.kind) {
             .grouped => |inner| self.qualifiedUnionResultTypeForInferredLocal(inner.*),
             .call => if (self.mirTargetTypeFactAt(.qualified_union_result, initializer.span)) |fact| fact.target_ty else null,
@@ -5702,11 +5702,11 @@ pub const CEmitter = struct {
         };
     }
 
-    fn isTaggedUnionCallReturnType(self: *CEmitter, ty: ast.TypeExpr) bool {
+    fn isTaggedUnionCallReturnType(self: *CEmitter, ty: ast_bridge.TypeExpr) bool {
         return self.taggedUnionTypeFromType(ty) != null;
     }
 
-    fn emitResultCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitResultCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const result_ty = self.callReturnTypeForInferredLocal(initializer, locals, isResultMirCallResultType) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, result_ty)) orelse result_ty;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
@@ -5714,11 +5714,11 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn isResultMirCallResultType(self: *CEmitter, ty: ast.TypeExpr) bool {
+    fn isResultMirCallResultType(self: *CEmitter, ty: ast_bridge.TypeExpr) bool {
         return self.resultTypeFromCandidate(ty) != null;
     }
 
-    fn resultTypeFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn resultTypeFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const resolved = self.resolveAliasType(ty);
         return switch (resolved.kind) {
             .generic => |generic| if (std.mem.eql(u8, generic.base.text, "Result")) ty else null,
@@ -5726,7 +5726,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitNullableCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitNullableCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const nullable_ty = self.callReturnTypeForInferredLocal(initializer, locals, isNullableMirCallResultType) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, nullable_ty)) orelse nullable_ty;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
@@ -5734,16 +5734,16 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn isNullableMirCallResultType(self: *CEmitter, ty: ast.TypeExpr) bool {
+    fn isNullableMirCallResultType(self: *CEmitter, ty: ast_bridge.TypeExpr) bool {
         return self.nullableTypeFromCandidate(ty) != null;
     }
 
-    fn callReturnTypeForInferredLocal(self: *CEmitter, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), comptime matches: fn (*CEmitter, ast.TypeExpr) bool) ?ast.TypeExpr {
+    fn callReturnTypeForInferredLocal(self: *CEmitter, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), comptime matches: fn (*CEmitter, ast_bridge.TypeExpr) bool) ?ast_bridge.TypeExpr {
         const ty = self.callResultTypeForEmission(initializer, locals) orelse return null;
         return if (matches(self, ty)) ty else null;
     }
 
-    fn emitInferredCallLocalInitValue(self: *CEmitter, name: []const u8, inferred_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn emitInferredCallLocalInitValue(self: *CEmitter, name: []const u8, inferred_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         if (try lower_c_call.emitSequencedCallLocalInit(self.sequencedArgContext(), &self.functions, name, inferred_ty, initializer, locals)) return;
 
         try self.writeIndent();
@@ -5752,7 +5752,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
-    fn emitLocalCopyInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitLocalCopyInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const known_ty = self.operandEmitType(initializer, locals) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
@@ -5766,7 +5766,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitBooleanInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitBooleanInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         if (!inferredLocalBooleanInitializer(initializer)) return false;
         const bool_ty = type_bridge.simpleNameType("bool", initializer.span);
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, bool_ty)) orelse return error.UnsupportedCEmission;
@@ -5782,7 +5782,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn inferredLocalBooleanInitializer(initializer: ast.Expr) bool {
+    fn inferredLocalBooleanInitializer(initializer: ast_bridge.Expr) bool {
         return switch (initializer.kind) {
             .unary => |node| node.op == .logical_not,
             .binary => |node| node.op == .logical_and or node.op == .logical_or or lower_c_expr.comparisonExpr(initializer),
@@ -5791,7 +5791,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn inferredLocalCastInitializer(initializer: ast.Expr) bool {
+    fn inferredLocalCastInitializer(initializer: ast_bridge.Expr) bool {
         return switch (initializer.kind) {
             .cast => true,
             .grouped => |inner| inferredLocalCastInitializer(inner.*),
@@ -5799,7 +5799,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn literalExpressionResultType(self: *CEmitter, initializer: ast.Expr) !?ast.TypeExpr {
+    fn literalExpressionResultType(self: *CEmitter, initializer: ast_bridge.Expr) !?ast_bridge.TypeExpr {
         return switch (initializer.kind) {
             .int_literal, .bool_literal => (self.mirTargetTypeFactAt(.expression_result, initializer.span) orelse return error.UnsupportedCEmission).target_ty,
             .grouped => |inner| try self.literalExpressionResultType(inner.*),
@@ -5807,7 +5807,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitNumericInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitNumericInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const known_ty = self.numericExprTypeForEmission(initializer, locals) orelse return false;
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, known_ty)) orelse return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
@@ -5821,7 +5821,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn numericExprTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn numericExprTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (expr.kind == .binary) {
             const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
             const resolved_fact = self.resolveAliasType(fact.target_ty);
@@ -5850,7 +5850,7 @@ pub const CEmitter = struct {
         return fact.target_ty;
     }
 
-    fn numericExprTypeForEmissionInferred(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn numericExprTypeForEmissionInferred(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .ident => blk: {
                 const source_ty = self.operandEmitType(expr, locals) orelse break :blk null;
@@ -5915,7 +5915,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn numericExpressionResultType(self: *CEmitter, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
+    fn numericExpressionResultType(self: *CEmitter, expr: ast_bridge.Expr, inferred: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse {
             // Source numeric value expressions have MIR-owned result types.
             // Generated zero-span nodes can still use their syntactic operand
@@ -5928,7 +5928,7 @@ pub const CEmitter = struct {
         return fact.target_ty;
     }
 
-    fn conditionOperandTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn conditionOperandTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .ident => self.operandEmitType(expr, locals),
             // Source literal result types are MIR-owned. In particular, a
@@ -5953,7 +5953,7 @@ pub const CEmitter = struct {
 
     // Floating-point arithmetic lowers to plain C operators: IEEE semantics
     // never raise a language trap, so no overflow/divide checks are emitted.
-    fn exprResolvesToFloat(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn exprResolvesToFloat(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .ident, .member => self.operandResolvesToFloat(expr, locals),
             .deref => |inner| self.derefResolvesToFloat(inner.*, locals),
@@ -5968,12 +5968,12 @@ pub const CEmitter = struct {
         };
     }
 
-    fn operandResolvesToFloat(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn operandResolvesToFloat(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         const ty = self.operandEmitType(expr, locals) orelse return false;
         return floatCTypeName(ty) != null;
     }
 
-    fn derefResolvesToFloat(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn derefResolvesToFloat(self: *CEmitter, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         const ty = self.derefPointeeType(inner, locals) orelse return false;
         return floatCTypeName(ty) != null;
     }
@@ -5985,7 +5985,7 @@ pub const CEmitter = struct {
         return floatCTypeName(elem) != null;
     }
 
-    fn callResolvesToFloat(self: *CEmitter, expr: ast.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn callResolvesToFloat(self: *CEmitter, expr: ast_bridge.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) bool {
         if (self.mirHasCallTargetKindAt(.raw_load, node.callee.*.span) and node.type_args.len == 1) {
             const result_ty = (self.mirTargetTypeFactAt(.raw_result, node.callee.*.span) orelse return false).target_ty;
             return floatCTypeName(result_ty) != null;
@@ -5994,7 +5994,7 @@ pub const CEmitter = struct {
         return floatCTypeName(return_ty) != null;
     }
 
-    fn emitCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitCallInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const known_return_ty = self.callResultTypeForEmission(initializer, locals) orelse return false;
         const return_ty = (try self.mirInferredLocalType(name, initializer, known_return_ty)) orelse return error.UnsupportedCEmission;
         if (isCVoidType(return_ty)) return false;
@@ -6010,7 +6010,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn mirInferredLocalType(self: *CEmitter, name: []const u8, initializer: ast.Expr, known_ty: ?ast.TypeExpr) !?ast.TypeExpr {
+    fn mirInferredLocalType(self: *CEmitter, name: []const u8, initializer: ast_bridge.Expr, known_ty: ?ast_bridge.TypeExpr) !?ast_bridge.TypeExpr {
         const fact_ty = (self.mirTargetTypeFactAtOwned(.inferred_local, initializer.span, name, null) orelse return null).target_ty;
         if (known_ty) |ty| {
             if (!type_bridge.sameTypeSyntax(self.resolveAliasType(fact_ty), self.resolveAliasType(ty))) return error.UnsupportedCEmission;
@@ -6022,36 +6022,36 @@ pub const CEmitter = struct {
         return lower_c_call.collectSequencedArgTemps(self.sequencedArgContext(), call, locals, fn_info);
     }
 
-    fn emitSequencedCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+    fn emitSequencedCallArgTemp(self: *CEmitter, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
         if (arg.kind == .grouped) return try self.emitSequencedCallArgTemp(arg.kind.grouped.*, locals, target_ty);
         if (try self.emitSpecialSequencedCallArgTemp(arg, locals, target_ty)) |temp| return temp;
         return lower_c_call.emitPlainSequencedArgTemp(self.sequencedArgContext(), arg, locals, target_ty);
     }
 
-    fn emitSpecialSequencedCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitSpecialSequencedCallArgTemp(self: *CEmitter, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         return lower_c_call.emitSpecialSequencedArgTemp(self.specialSequencedArgContext(), arg, locals, target_ty);
     }
 
-    fn emitAddressSequencedCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitAddressSequencedCallArgTemp(self: *CEmitter, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         if (try lower_c_access.emitRawManyOffsetDerefAddressValueTemp(self.accessEmitContext(), arg, locals, target_ty)) |temp| return temp;
         if (try lower_c_access.emitLocalIndexAddressValueTemp(self.accessEmitContext(), arg, locals, target_ty)) |temp| return temp;
         return null;
     }
 
-    fn emitIndexSequencedCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitIndexSequencedCallArgTemp(self: *CEmitter, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         if (try lower_c_access.emitDirectCallSliceIndexExprValueTemp(self.accessEmitContext(), arg, locals, target_ty)) |temp| return temp;
         if (try lower_c_access.emitDirectCallArrayIndexExprValueTemp(self.accessEmitContext(), arg, locals, target_ty)) |temp| return temp;
         if (try lower_c_access.emitLocalIndexValueTemp(self.accessEmitContext(), arg, locals, target_ty)) |temp| return temp;
         return null;
     }
 
-    fn emitBinarySequencedCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitBinarySequencedCallArgTemp(self: *CEmitter, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         if (try lower_c_flow.emitSequencedConditionValueTemp(self.flowEmitContext(), arg, locals)) |temp| return temp;
         if (try lower_c_arith.emitSequencedBinaryValueTemp(self.sequencedBinaryContext(), arg, locals, target_ty)) |temp| return temp;
         return null;
     }
 
-    fn emitCallSequencedCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitCallSequencedCallArgTemp(self: *CEmitter, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const call = callExpr(arg) orelse return null;
         if (try self.emitAtomicResultValueTempFromCall(call, locals)) |temp| return temp;
         if (try lower_c_call.emitBitcastValueTempFromCall(self.sequencedArgContext(), call, locals)) |temp| return temp;
@@ -6062,7 +6062,7 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn emitAtomicCastSequencedCallArgTemp(self: *CEmitter, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+    fn emitAtomicCastSequencedCallArgTemp(self: *CEmitter, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
         const cast = switch (arg.kind) {
             .cast => |node| node,
             .grouped => |inner| return try self.emitAtomicCastSequencedCallArgTemp(inner.*, locals, target_ty),
@@ -6114,15 +6114,15 @@ pub const CEmitter = struct {
         return .{ .name = temp_name, .ty = return_ty };
     }
 
-    fn emitUncheckedAddValueTemp(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
+    fn emitUncheckedAddValueTemp(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
         return lower_c_arith.emitUncheckedAddValueTemp(self.arithContext(), expr, locals, target_ty, range_target);
     }
 
-    fn emitUncheckedAddValueTempFromCall(self: *CEmitter, call: anytype, call_span: ast.Span, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
+    fn emitUncheckedAddValueTempFromCall(self: *CEmitter, call: anytype, call_span: ast_bridge.Span, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
         return lower_c_arith.emitUncheckedAddValueTempFromCall(self.arithContext(), call, call_span, locals, target_ty, range_target);
     }
 
-    fn hasMirNoOverflowRangeFact(self: *CEmitter, target: []const u8, op: []const u8, span: ast.Span) bool {
+    fn hasMirNoOverflowRangeFact(self: *CEmitter, target: []const u8, op: []const u8, span: ast_bridge.Span) bool {
         const function_name = self.current_function orelse return false;
         for (self.mir_module.functions) |function| {
             if (!std.mem.eql(u8, function.name, function_name)) continue;
@@ -6141,7 +6141,7 @@ pub const CEmitter = struct {
     // DivideByZero check) and recorded it in the optimized MIR's `elided_bounds`. Without
     // `--optimize` the list is empty, so this is always false and the check is emitted — the
     // backend consumes the optimized MIR rather than re-deriving the proof.
-    fn mirCheckElided(self: *CEmitter, span: ast.Span) bool {
+    fn mirCheckElided(self: *CEmitter, span: ast_bridge.Span) bool {
         const function_name = self.current_function orelse return false;
         for (self.mir_module.functions) |function| {
             if (!std.mem.eql(u8, function.name, function_name)) continue;
@@ -6152,7 +6152,7 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn requireMirBoundsFact(self: *CEmitter, kind: mir.BoundsFactKind, span: ast.Span) !void {
+    fn requireMirBoundsFact(self: *CEmitter, kind: mir.BoundsFactKind, span: ast_bridge.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
         for (function.bounds_facts) |fact| {
             if (fact.kind == kind and fact.source.line == span.line and fact.source.column == span.column) return;
@@ -6201,36 +6201,36 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn mirCallTargetKindAt(self: *CEmitter, span: ast.Span) ?mir.CallTargetKind {
+    fn mirCallTargetKindAt(self: *CEmitter, span: ast_bridge.Span) ?mir.CallTargetKind {
         return mir_source_bridge.firstCallTargetKindAt(self.mir_module, self.currentMirFunction(), span);
     }
 
-    fn mirHasCallTargetKindAt(self: *CEmitter, kind: mir.CallTargetKind, span: ast.Span) bool {
+    fn mirHasCallTargetKindAt(self: *CEmitter, kind: mir.CallTargetKind, span: ast_bridge.Span) bool {
         return mir_source_bridge.hasCallTargetKindAt(self.mir_module, self.currentMirFunction(), kind, span, false);
     }
 
-    fn atomicInitPayloadTypeAt(self: *CEmitter, span: ast.Span, expected_result_ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn atomicInitPayloadTypeAt(self: *CEmitter, span: ast_bridge.Span, expected_result_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const expected_payload_ty = lower_c_shape.atomicPayloadOfType(self.resolveAliasType(expected_result_ty)) orelse return null;
         return mir_source_bridge.atomicInitPayloadTypeAt(self.mir_module, self.currentMirFunction(), &self.type_aliases, span, expected_result_ty, expected_payload_ty);
     }
 
-    fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
+    fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
         return mir_source_bridge.targetTypeFactAtWithModuleFallback(self.mir_module, self.currentMirFunction(), kind, span);
     }
 
-    fn mirTargetTypeFactMatchingType(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, expected_ty: ast.TypeExpr) ?mir.TargetTypeFact {
+    fn mirTargetTypeFactMatchingType(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, expected_ty: ast_bridge.TypeExpr) ?mir.TargetTypeFact {
         return mir_source_bridge.targetTypeFactMatchingType(self.mir_module, self.currentMirFunction(), &self.type_aliases, kind, span, expected_ty);
     }
 
-    fn mirTargetTypeFactAtOwned(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
+    fn mirTargetTypeFactAtOwned(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
         return mir_source_bridge.targetTypeFactAtOwnedWithModuleFallback(self.mir_module, self.currentMirFunction(), kind, span, target_owner, target_index);
     }
 
-    fn mirConstGetIndexAt(self: *CEmitter, span: ast.Span) ?usize {
+    fn mirConstGetIndexAt(self: *CEmitter, span: ast_bridge.Span) ?usize {
         return mir_source_bridge.uniqueConstGetIndexAt(self.mir_module, self.currentMirFunction(), span);
     }
 
-    fn mirAggregateTargetTypeForExpr(self: *CEmitter, expr: ast.Expr) !?ast.TypeExpr {
+    fn mirAggregateTargetTypeForExpr(self: *CEmitter, expr: ast_bridge.Expr) !?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .grouped => |inner| self.mirAggregateTargetTypeForExpr(inner.*),
             .array_literal => if (self.mirTargetTypeFactAt(.array_literal, expr.span)) |fact| fact.target_ty else error.UnsupportedCEmission,
@@ -6256,7 +6256,7 @@ pub const CEmitter = struct {
         return construction;
     }
 
-    fn mirFloatLiteralTargetForExpr(self: *CEmitter, expr: ast.Expr) !?ast.TypeExpr {
+    fn mirFloatLiteralTargetForExpr(self: *CEmitter, expr: ast_bridge.Expr) !?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .float_literal => if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact| fact.target_ty else error.UnsupportedCEmission,
             .grouped => |inner| self.mirFloatLiteralTargetForExpr(inner.*),
@@ -6352,7 +6352,7 @@ pub const CEmitter = struct {
         return self.mir_pointer_array_elements.get(lookup_key);
     }
 
-    fn fixedLocalPointerArrayElementType(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn fixedLocalPointerArrayElementType(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const resolved_ty = self.resolveAliasType(ty);
         const array = switch (resolved_ty.kind) {
             .array => |array| array,
@@ -6364,7 +6364,7 @@ pub const CEmitter = struct {
         return array.child.*;
     }
 
-    fn arrayLiteralItems(expr: ast.Expr) ?[]const ast.Expr {
+    fn arrayLiteralItems(expr: ast_bridge.Expr) ?[]const ast_bridge.Expr {
         return switch (expr.kind) {
             .array_literal => |items| items,
             .grouped => |inner| arrayLiteralItems(inner.*),
@@ -6445,7 +6445,7 @@ pub const CEmitter = struct {
         return try std.fmt.allocPrint(self.scratch.allocator(), "{s}[{d}]", .{ array_path, index });
     }
 
-    fn directLocalAggregateMemberPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?AggregatePointerFieldPath {
+    fn directLocalAggregateMemberPath(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?AggregatePointerFieldPath {
         return switch (expr.kind) {
             .grouped => |inner| self.directLocalAggregateMemberPath(inner.*, locals),
             .member => |node| blk: {
@@ -6470,7 +6470,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn directLocalAggregateArrayElementPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?AggregatePointerFieldPath {
+    fn directLocalAggregateArrayElementPath(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?AggregatePointerFieldPath {
         return switch (expr.kind) {
             .grouped => |inner| self.directLocalAggregateArrayElementPath(inner.*, locals),
             .index => |node| blk: {
@@ -6487,7 +6487,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn directLocalPointerArrayBaseName(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?[]const u8 {
+    fn directLocalPointerArrayBaseName(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?[]const u8 {
         return switch (expr.kind) {
             .ident => |ident| blk: {
                 const ty = self.identTypeForEmissionRecovered(ident.text, expr.span, locals) orelse break :blk null;
@@ -6499,13 +6499,13 @@ pub const CEmitter = struct {
         };
     }
 
-    fn localArrayConstIndexValue(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?u64 {
+    fn localArrayConstIndexValue(expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?u64 {
         const value = constIntValue(expr, locals) orelse return null;
         if (value < 0) return null;
         return std.math.cast(u64, value);
     }
 
-    fn directLocalArrayElementPath(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?LocalArrayElementPath {
+    fn directLocalArrayElementPath(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?LocalArrayElementPath {
         return switch (expr.kind) {
             .index => |node| blk: {
                 const local_name = self.directLocalPointerArrayBaseName(node.base.*, locals) orelse break :blk null;
@@ -6517,11 +6517,11 @@ pub const CEmitter = struct {
         };
     }
 
-    fn isKnownStructType(self: *CEmitter, ty: ast.TypeExpr) bool {
+    fn isKnownStructType(self: *CEmitter, ty: ast_bridge.TypeExpr) bool {
         return self.structNameFromCandidate(ty) != null;
     }
 
-    fn mirPointerFactSubjectRecoveredType(fact: mir.PointerProvenanceFact, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn mirPointerFactSubjectRecoveredType(fact: mir.PointerProvenanceFact, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const local_set = locals orelse return null;
         const info = local_set.get(fact.subject) orelse return null;
         return info.source_ty;
@@ -6613,7 +6613,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn applyMirPointerProvenanceFactsAtSource(self: *CEmitter, subject: []const u8, element_index: ?usize, span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    fn applyMirPointerProvenanceFactsAtSource(self: *CEmitter, subject: []const u8, element_index: ?usize, span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
@@ -6624,7 +6624,7 @@ pub const CEmitter = struct {
         return matched;
     }
 
-    fn applyMirPointerProvenanceInvalidationsAtCall(self: *CEmitter, span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) void {
+    fn applyMirPointerProvenanceInvalidationsAtCall(self: *CEmitter, span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) void {
         const function = self.currentMirFunction() orelse return;
         for (function.pointer_provenance_facts) |fact| {
             if (!mir_source_bridge.pointerFactIsCallInvalidationAt(self.mir_module, fact, span)) continue;
@@ -6647,7 +6647,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn applyMirAggregatePointerFieldFactsAtSource(self: *CEmitter, subject: []const u8, field_path: []const u8, element_index: ?usize, span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    fn applyMirAggregatePointerFieldFactsAtSource(self: *CEmitter, subject: []const u8, field_path: []const u8, element_index: ?usize, span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
@@ -6658,7 +6658,7 @@ pub const CEmitter = struct {
         return matched;
     }
 
-    fn applyMirAggregatePointerFieldFactsForSubjectAtSource(self: *CEmitter, subject: []const u8, span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    fn applyMirAggregatePointerFieldFactsForSubjectAtSource(self: *CEmitter, subject: []const u8, span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
@@ -6669,7 +6669,7 @@ pub const CEmitter = struct {
         return matched;
     }
 
-    fn structLiteralFields(expr: ast.Expr) ?[]const ast.StructLiteralField {
+    fn structLiteralFields(expr: ast_bridge.Expr) ?[]const ast_bridge.StructLiteralField {
         return switch (expr.kind) {
             .struct_literal => |fields| fields,
             .grouped => |inner| structLiteralFields(inner.*),
@@ -6677,7 +6677,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn applyMirAggregatePointerFieldFactsFromStructLiteral(self: *CEmitter, subject: []const u8, aggregate_ty: ast.TypeExpr, literal: ast.Expr, path_prefix: ?[]const u8, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn applyMirAggregatePointerFieldFactsFromStructLiteral(self: *CEmitter, subject: []const u8, aggregate_ty: ast_bridge.TypeExpr, literal: ast_bridge.Expr, path_prefix: ?[]const u8, locals: *std.StringHashMap(LocalInfo)) !bool {
         const fields = structLiteralFields(literal) orelse return false;
         var matched = false;
         for (fields) |field| {
@@ -6714,7 +6714,7 @@ pub const CEmitter = struct {
         return matched;
     }
 
-    fn directMirAddressProvenanceExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn directMirAddressProvenanceExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAddressProvenanceExpr(inner.*, locals),
             .cast => |node| self.directMirAddressProvenanceExpr(node.value.*, locals),
@@ -6725,7 +6725,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn directMirAddressProvenanceTarget(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn directMirAddressProvenanceTarget(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAddressProvenanceTarget(inner.*, locals),
             .ident => |ident| blk: {
@@ -6744,7 +6744,7 @@ pub const CEmitter = struct {
             self.mirHasCallTargetKindAt(.assume_noalias, call.callee.*.span);
     }
 
-    fn directMirRawManyZeroOffsetExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn directMirRawManyZeroOffsetExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirRawManyZeroOffsetExpr(inner.*, locals),
             .cast => |node| self.directMirRawManyZeroOffsetExpr(node.value.*, locals),
@@ -6763,7 +6763,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn directRawManyLocalName(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?[]const u8 {
+    fn directRawManyLocalName(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?[]const u8 {
         return switch (expr.kind) {
             .grouped => |inner| self.directRawManyLocalName(inner.*, locals),
             .ident => |ident| blk: {
@@ -6775,11 +6775,11 @@ pub const CEmitter = struct {
         };
     }
 
-    fn rawManyPointerTypeFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn rawManyPointerTypeFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         return if (self.resolveAliasType(ty).kind == .raw_many_pointer) ty else null;
     }
 
-    fn directMirPointerLocalCopyExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn directMirPointerLocalCopyExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirPointerLocalCopyExpr(inner.*, locals),
             .cast => |node| self.directMirPointerLocalCopyExpr(node.value.*, locals),
@@ -6793,7 +6793,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn directMirFixedPointerArrayElementExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn directMirFixedPointerArrayElementExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirFixedPointerArrayElementExpr(inner.*, locals),
             .cast => |node| self.directMirFixedPointerArrayElementExpr(node.value.*, locals),
@@ -6803,7 +6803,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn directMirAggregatePointerFieldExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn directMirAggregatePointerFieldExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAggregatePointerFieldExpr(inner.*, locals),
             .cast => |node| self.directMirAggregatePointerFieldExpr(node.value.*, locals),
@@ -6813,7 +6813,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn directMirAggregatePointerArrayElementExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn directMirAggregatePointerArrayElementExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAggregatePointerArrayElementExpr(inner.*, locals),
             .cast => |node| self.directMirAggregatePointerArrayElementExpr(node.value.*, locals),
@@ -6823,7 +6823,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn directMirPointerContainerValueExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn directMirPointerContainerValueExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         switch (expr.kind) {
             .call => |call| {
                 if (self.isMirAssumeNoaliasCall(call)) {
@@ -6840,7 +6840,7 @@ pub const CEmitter = struct {
             self.directMirAggregatePointerArrayElementExpr(expr, locals);
     }
 
-    fn updatePointerProvenanceFromMir(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn updatePointerProvenanceFromMir(self: *CEmitter, name: []const u8, ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         if (!isPointerLikeGlobalType(self.resolveAliasType(ty))) {
             _ = self.mir_pointer_local_provenance.remove(name);
             return;
@@ -6850,7 +6850,7 @@ pub const CEmitter = struct {
         _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, initializer.span, locals);
     }
 
-    fn updatePointerProvenanceAssignmentFromMir(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, value: ast.Expr, span: ast.Span, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn updatePointerProvenanceAssignmentFromMir(self: *CEmitter, name: []const u8, ty: ast_bridge.TypeExpr, value: ast_bridge.Expr, span: ast_bridge.Span, locals: *std.StringHashMap(LocalInfo)) !void {
         if (!isPointerLikeGlobalType(self.resolveAliasType(ty))) {
             _ = self.mir_pointer_local_provenance.remove(name);
             return;
@@ -6861,7 +6861,7 @@ pub const CEmitter = struct {
         _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span, locals);
     }
 
-    fn applyMirAggregateReturnPointerFacts(self: *CEmitter, dest_name: []const u8, dest_ty: ast.TypeExpr, initializer: ast.Expr) !bool {
+    fn applyMirAggregateReturnPointerFacts(self: *CEmitter, dest_name: []const u8, dest_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr) !bool {
         const call = switch (initializer.kind) {
             .call => |call| call,
             .grouped => |inner| return self.applyMirAggregateReturnPointerFacts(dest_name, dest_ty, inner.*),
@@ -6903,7 +6903,7 @@ pub const CEmitter = struct {
         );
     }
 
-    fn applyMirPointerProvenanceForLocalInitializer(self: *CEmitter, name: []const u8, ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn applyMirPointerProvenanceForLocalInitializer(self: *CEmitter, name: []const u8, ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !void {
         if (isPointerLikeGlobalType(self.resolveAliasType(ty))) {
             try self.updatePointerProvenanceFromMir(name, ty, initializer, locals);
             return;
@@ -6928,7 +6928,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn directLocalName(expr: ast.Expr) ?[]const u8 {
+    fn directLocalName(expr: ast_bridge.Expr) ?[]const u8 {
         return switch (expr.kind) {
             .ident => |ident| ident.text,
             .grouped => |inner| directLocalName(inner.*),
@@ -6936,21 +6936,21 @@ pub const CEmitter = struct {
         };
     }
 
-    fn directStructTypeName(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
+    fn directStructTypeName(self: *CEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
         return self.structNameFromCandidate(ty);
     }
 
-    fn structNameFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
+    fn structNameFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
         const name = typeName(self.resolveAliasType(ty)) orelse return null;
         return if (self.structs.contains(name)) name else null;
     }
 
-    fn directAggregateCopySourceExpr(self: *CEmitter, expr: ast.Expr, target_ty: ast.TypeExpr, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn directAggregateCopySourceExpr(self: *CEmitter, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr, locals: *std.StringHashMap(LocalInfo)) bool {
         const target_struct_name = self.directStructTypeName(target_ty) orelse return false;
         return self.directAggregateCopySourceExprForStruct(expr, target_struct_name, locals);
     }
 
-    fn directAggregateCopySourceExprForStruct(self: *CEmitter, expr: ast.Expr, target_struct_name: []const u8, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn directAggregateCopySourceExprForStruct(self: *CEmitter, expr: ast_bridge.Expr, target_struct_name: []const u8, locals: *std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directAggregateCopySourceExprForStruct(inner.*, target_struct_name, locals),
             .cast => |node| self.directAggregateCopySourceExprForStruct(node.value.*, target_struct_name, locals),
@@ -6970,22 +6970,22 @@ pub const CEmitter = struct {
         };
     }
 
-    fn generatedAggregateMemberCopySourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn generatedAggregateMemberCopySourceTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| return fact.target_ty;
         return self.generatedAggregateMemberCopyFallbackTypeForEmission(expr, locals);
     }
 
-    fn generatedAggregateMemberCopyFallbackTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn generatedAggregateMemberCopyFallbackTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (isSourceSpan(expr.span)) return null;
         return self.generatedAggregateMemberCopyStorageOrSourceType(expr, locals);
     }
 
-    fn generatedAggregateMemberCopyStorageOrSourceType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn generatedAggregateMemberCopyStorageOrSourceType(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (self.operandEmitType(expr, locals)) |ty| return ty;
         return self.generatedExprSourceTypeForEmission(expr, locals);
     }
 
-    fn applyMirPointerProvenanceForAssignment(self: *CEmitter, target: ast.Expr, value: ast.Expr, span: ast.Span, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn applyMirPointerProvenanceForAssignment(self: *CEmitter, target: ast_bridge.Expr, value: ast_bridge.Expr, span: ast_bridge.Span, locals: *std.StringHashMap(LocalInfo)) !void {
         switch (target.kind) {
             .grouped => |inner| return self.applyMirPointerProvenanceForAssignment(inner.*, value, span, locals),
             .member => |member| {
@@ -7040,7 +7040,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn applyMirPointerProvenanceForIndexAssignment(self: *CEmitter, target: ast.Expr, value: ast.Expr, span: ast.Span, locals: *std.StringHashMap(LocalInfo)) !void {
+    fn applyMirPointerProvenanceForIndexAssignment(self: *CEmitter, target: ast_bridge.Expr, value: ast_bridge.Expr, span: ast_bridge.Span, locals: *std.StringHashMap(LocalInfo)) !void {
         if (self.directLocalAggregateArrayElementPath(target, locals)) |aggregate_path| {
             const index_node = switch (target.kind) {
                 .index => |node| node,
@@ -7086,14 +7086,14 @@ pub const CEmitter = struct {
     const RaceAggregateKind = union(enum) {
         scalar: GlobalInfo,
         pointer: GlobalInfo,
-        slice: ast.TypeExpr,
-        @"struct": ast.StructDecl,
-        array: ast.TypeExpr,
+        slice: ast_bridge.TypeExpr,
+        @"struct": ast_bridge.StructDecl,
+        array: ast_bridge.TypeExpr,
         dyn_trait: []const u8,
         closure: []const u8,
-        value_optional: ast.TypeExpr,
-        result: struct { ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr },
-        tagged_union: ast.UnionDecl,
+        value_optional: ast_bridge.TypeExpr,
+        result: struct { ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr },
+        tagged_union: ast_bridge.UnionDecl,
     };
 
     // Positive locality proof for the bare pointer-deref access class (spec I.13):
@@ -7101,7 +7101,7 @@ pub const CEmitter = struct {
     // current function's own storage — a live MIR local_storage fact for the
     // pointer local, or a syntactic address-of a named local (through grouped/
     // cast). Everything else lowers race-tolerantly.
-    fn derefPointerHasProvenLocalStorage(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn derefPointerHasProvenLocalStorage(self: *CEmitter, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         if (locals) |local_set| {
             if (self.directLocalArrayElementPath(inner, local_set)) |path| {
                 if (self.localArrayElementPointerProvenance(path.local_name, path.index)) |provenance| return provenance == .local_storage;
@@ -7129,7 +7129,7 @@ pub const CEmitter = struct {
 
     // Only a bare named local counts: member/index roots may reach through a
     // pointer-typed base (auto-deref), which does NOT prove the storage is local.
-    fn directLocalStorageTarget(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn directLocalStorageTarget(expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .grouped => |wrapped| directLocalStorageTarget(wrapped.*, locals),
             .ident => |ident| if (locals) |local_set| local_set.contains(ident.text) else false,
@@ -7145,12 +7145,12 @@ pub const CEmitter = struct {
     // dedicated access-class handling; aggregate value-copy/store contexts fail
     // closed before they reach plain C aggregate copying. Scalars with no sound
     // race-tolerant lowering (u128/i128) fail emission closed.
-    fn derefAccessLowering(self: *CEmitter, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !DerefAccessLowering {
+    fn derefAccessLowering(self: *CEmitter, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) !DerefAccessLowering {
         const pointee_ty = self.derefPointeeType(inner, locals) orelse return .plain;
         return self.derefAccessLoweringForPointee(inner, pointee_ty, locals);
     }
 
-    fn derefAccessLoweringForPointee(self: *CEmitter, inner: ast.Expr, pointee_ty: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !DerefAccessLowering {
+    fn derefAccessLoweringForPointee(self: *CEmitter, inner: ast_bridge.Expr, pointee_ty: ast_bridge.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !DerefAccessLowering {
         if (self.derefPointerHasProvenLocalStorage(inner, locals)) return .plain;
         const info = self.globalInfoFromType(pointee_ty) catch return .plain;
         if (info.aggregate) return .plain;
@@ -7159,7 +7159,7 @@ pub const CEmitter = struct {
         return .{ .race_scalar = info };
     }
 
-    fn emitRaceTolerantDerefStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitRaceTolerantDerefStoreStmt(self: *CEmitter, target: ast_bridge.Expr, value: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const inner = switch (target.kind) {
             .deref => |ptr| ptr.*,
             .grouped => |wrapped| return try self.emitRaceTolerantDerefStoreStmt(wrapped.*, value, locals),
@@ -7207,7 +7207,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitRaceTolerantAggregateDerefExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+    fn emitRaceTolerantAggregateDerefExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) !bool {
         const inner = switch (expr.kind) {
             .deref => |ptr| ptr.*,
             .grouped => |wrapped| return try self.emitRaceTolerantAggregateDerefExpr(wrapped.*, locals, target_ty),
@@ -7229,7 +7229,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn raceAggregateKind(self: *CEmitter, ty: ast.TypeExpr) !RaceAggregateKind {
+    fn raceAggregateKind(self: *CEmitter, ty: ast_bridge.TypeExpr) !RaceAggregateKind {
         const info = try self.globalInfoFromType(ty);
         if (!info.aggregate) {
             if (info.pointer_like) return .{ .pointer = info };
@@ -7264,7 +7264,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitRaceTolerantAggregateLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr) anyerror!void {
+    fn emitRaceTolerantAggregateLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast_bridge.TypeExpr) anyerror!void {
         switch (try self.raceAggregateKind(ty)) {
             .scalar => |info| try self.out.print(self.allocator, "(({s})mc_race_load_{s}({s}))", .{ info.c_type, info.race_type_name, ptr_expr }),
             .pointer => |info| try self.out.print(self.allocator, "(({s})__atomic_load_n({s}, __ATOMIC_RELAXED))", .{ info.c_type, ptr_expr }),
@@ -7311,7 +7311,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitRaceTolerantAggregateStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr, value_expr: []const u8) anyerror!void {
+    fn emitRaceTolerantAggregateStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast_bridge.TypeExpr, value_expr: []const u8) anyerror!void {
         switch (try self.raceAggregateKind(ty)) {
             .scalar => |info| {
                 try self.writeIndent();
@@ -7366,7 +7366,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "__atomic_store_n(&(({s})->code), {s}.code, __ATOMIC_RELAXED);\n", .{ ptr_expr, value_expr });
     }
 
-    fn emitRaceTolerantValueOptionalLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr, child: ast.TypeExpr) anyerror!void {
+    fn emitRaceTolerantValueOptionalLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast_bridge.TypeExpr, child: ast_bridge.TypeExpr) anyerror!void {
         const optional_ty = try self.cTypeFor(ty, .typedef_name);
         const value_name = try self.nextTempName();
         const tag_name = try self.nextTempName();
@@ -7386,7 +7386,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "; }} {s}; }})", .{value_name});
     }
 
-    fn emitRaceTolerantValueOptionalStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, value_expr: []const u8, child: ast.TypeExpr) anyerror!void {
+    fn emitRaceTolerantValueOptionalStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, value_expr: []const u8, child: ast_bridge.TypeExpr) anyerror!void {
         const payload_ptr = try std.fmt.allocPrint(self.scratch.allocator(), "&(({s})->value)", .{ptr_expr});
         const payload_value = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.value", .{value_expr});
         try self.emitRaceTolerantAggregateStoreFromPtr(payload_ptr, child, payload_value);
@@ -7394,7 +7394,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "mc_race_store_bool(&(({s})->present), (bool){s}.present);\n", .{ ptr_expr, value_expr });
     }
 
-    fn emitRaceTolerantResultLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror!void {
+    fn emitRaceTolerantResultLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast_bridge.TypeExpr, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) anyerror!void {
         const result_ty = try self.cTypeFor(ty, .typedef_name);
         const value_name = try self.nextTempName();
         const tag_name = try self.nextTempName();
@@ -7417,7 +7417,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "; }} {s}; }})", .{value_name});
     }
 
-    fn emitRaceTolerantResultStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, value_expr: []const u8, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror!void {
+    fn emitRaceTolerantResultStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, value_expr: []const u8, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) anyerror!void {
         try self.writeIndent();
         try self.out.print(self.allocator, "if ({s}.is_ok) {{\n", .{value_expr});
         self.indent += 1;
@@ -7438,7 +7438,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "mc_race_store_bool(&(({s})->is_ok), (bool){s}.is_ok);\n", .{ ptr_expr, value_expr });
     }
 
-    fn emitRaceTolerantTaggedUnionLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast.TypeExpr, union_decl: ast.UnionDecl) anyerror!void {
+    fn emitRaceTolerantTaggedUnionLoadFromPtr(self: *CEmitter, ptr_expr: []const u8, ty: ast_bridge.TypeExpr, union_decl: ast_bridge.UnionDecl) anyerror!void {
         const union_ty = try self.cTypeFor(ty, .typedef_name);
         const union_name = union_decl.name.text;
         const value_name = try self.nextTempName();
@@ -7469,7 +7469,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "default: break; }} {s}; }})", .{value_name});
     }
 
-    fn emitRaceTolerantTaggedUnionStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, union_decl: ast.UnionDecl, value_expr: []const u8) anyerror!void {
+    fn emitRaceTolerantTaggedUnionStoreFromPtr(self: *CEmitter, ptr_expr: []const u8, union_decl: ast_bridge.UnionDecl, value_expr: []const u8) anyerror!void {
         const union_name = union_decl.name.text;
         for (union_decl.cases) |case| {
             const payload_ty = case.ty orelse continue;
@@ -7488,7 +7488,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, "__atomic_store_n(&(({s})->tag), {s}.tag, __ATOMIC_RELAXED);\n", .{ ptr_expr, value_expr });
     }
 
-    fn constArrayLen(self: *CEmitter, expr: ast.Expr) ?usize {
+    fn constArrayLen(self: *CEmitter, expr: ast_bridge.Expr) ?usize {
         var reflect_env = lower_c_reflect.ReflectEnv{
             .structs = &self.structs,
             .packed_bits = &self.packed_bits,
@@ -7503,7 +7503,7 @@ pub const CEmitter = struct {
         return std.math.cast(usize, len);
     }
 
-    fn emitRaceTolerantPointerMemberStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitRaceTolerantPointerMemberStoreStmt(self: *CEmitter, target: ast_bridge.Expr, value: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const member = switch (target.kind) {
             .member => |node| node,
             .grouped => |wrapped| return try self.emitRaceTolerantPointerMemberStoreStmt(wrapped.*, value, locals),
@@ -7544,7 +7544,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitRaceTolerantPointerMemberAggregateExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+    fn emitRaceTolerantPointerMemberAggregateExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) !bool {
         const member = switch (expr.kind) {
             .member => |node| node,
             .grouped => |wrapped| return try self.emitRaceTolerantPointerMemberAggregateExpr(wrapped.*, locals, target_ty),
@@ -7570,7 +7570,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitRaceTolerantNestedPointerMemberAggregateExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+    fn emitRaceTolerantNestedPointerMemberAggregateExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) !bool {
         var fields: std.ArrayList([]const u8) = .empty;
         defer fields.deinit(self.allocator);
         const path = try self.pointerMemberPath(expr, locals, &fields) orelse return false;
@@ -7592,7 +7592,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitRaceTolerantIndexedMemberAggregateExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+    fn emitRaceTolerantIndexedMemberAggregateExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) !bool {
         var fields: std.ArrayList([]const u8) = .empty;
         defer fields.deinit(self.allocator);
         const index = try self.collectIndexedMemberPath(expr, locals, &fields) orelse return false;
@@ -7620,7 +7620,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn ambiguousPointerMemberAggregateValueCopy(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    fn ambiguousPointerMemberAggregateValueCopy(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const member = switch (expr.kind) {
             .member => |node| node,
             .grouped => |wrapped| return try self.ambiguousPointerMemberAggregateValueCopy(wrapped.*, locals),
@@ -7633,7 +7633,7 @@ pub const CEmitter = struct {
         return info.aggregate;
     }
 
-    fn ambiguousIndexedMemberAggregateValueCopy(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    fn ambiguousIndexedMemberAggregateValueCopy(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const member = switch (expr.kind) {
             .member => |node| node,
             .grouped => |wrapped| return try self.ambiguousIndexedMemberAggregateValueCopy(wrapped.*, locals),
@@ -7646,7 +7646,7 @@ pub const CEmitter = struct {
         return info.aggregate;
     }
 
-    fn ambiguousAggregateDerefValueCopy(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !bool {
+    fn ambiguousAggregateDerefValueCopy(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) !bool {
         const inner = switch (expr.kind) {
             .deref => |ptr| ptr.*,
             .grouped => |wrapped| return try self.ambiguousAggregateDerefValueCopy(wrapped.*, locals),
@@ -7658,7 +7658,7 @@ pub const CEmitter = struct {
         return info.aggregate;
     }
 
-    fn emitRaceTolerantSliceIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), slice: SliceAccess, element_ty: ast.TypeExpr) anyerror!bool {
+    fn emitRaceTolerantSliceIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), slice: SliceAccess, element_ty: ast_bridge.TypeExpr) anyerror!bool {
         const info = self.globalInfoFromType(element_ty) catch return false;
         if (info.aggregate) {
             const usize_ty = simpleNameType("usize", node.index.*.span);
@@ -7692,7 +7692,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitRaceTolerantSliceIndexStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitRaceTolerantSliceIndexStoreStmt(self: *CEmitter, target: ast_bridge.Expr, value: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const index = switch (target.kind) {
             .index => |node| node,
             .grouped => |wrapped| return try self.emitRaceTolerantSliceIndexStoreStmt(wrapped.*, value, locals),
@@ -7737,7 +7737,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn pointerArrayDerefInner(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.Expr {
+    fn pointerArrayDerefInner(self: *CEmitter, base: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.Expr {
         return switch (base.kind) {
             .deref => |inner| if (self.derefPointerHasProvenLocalStorage(inner.*, locals)) null else inner.*,
             .grouped => |inner| self.pointerArrayDerefInner(inner.*, locals),
@@ -7745,7 +7745,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitPointerArrayIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast.TypeExpr, index_temp: ?[]const u8) anyerror!void {
+    fn emitPointerArrayIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast_bridge.TypeExpr, index_temp: ?[]const u8) anyerror!void {
         try self.emitArrayIndexBase(node.base.*, locals);
         if (index_temp == null and self.mirCheckElided(node.index.span)) {
             try self.out.appendSlice(self.allocator, ".elems[");
@@ -7763,7 +7763,7 @@ pub const CEmitter = struct {
         try self.out.print(self.allocator, ", {s})]", .{len});
     }
 
-    fn emitRaceTolerantPointerArrayIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast.TypeExpr) anyerror!bool {
+    fn emitRaceTolerantPointerArrayIndexExpr(self: *CEmitter, node: anytype, locals: ?*std.StringHashMap(LocalInfo), base_arr: ast_bridge.TypeExpr) anyerror!bool {
         _ = self.pointerArrayDerefInner(node.base.*, locals) orelse return false;
         const element_ty = base_arr.kind.array.child.*;
         const info = self.globalInfoFromType(element_ty) catch return false;
@@ -7797,7 +7797,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitRaceTolerantPointerArrayIndexStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitRaceTolerantPointerArrayIndexStoreStmt(self: *CEmitter, target: ast_bridge.Expr, value: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const index = switch (target.kind) {
             .index => |node| node,
             .grouped => |wrapped| return try self.emitRaceTolerantPointerArrayIndexStoreStmt(wrapped.*, value, locals),
@@ -7837,7 +7837,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitRaceTolerantIndexedMemberStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitRaceTolerantIndexedMemberStoreStmt(self: *CEmitter, target: ast_bridge.Expr, value: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         const member = switch (target.kind) {
             .member => |node| node,
             .grouped => |wrapped| return try self.emitRaceTolerantIndexedMemberStoreStmt(wrapped.*, value, locals),
@@ -7878,7 +7878,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitRaceTolerantNestedIndexedMemberStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitRaceTolerantNestedIndexedMemberStoreStmt(self: *CEmitter, target: ast_bridge.Expr, value: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         var fields: std.ArrayList([]const u8) = .empty;
         defer fields.deinit(self.allocator);
         const index = try self.collectIndexedMemberPath(target, locals, &fields) orelse return false;
@@ -7916,7 +7916,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitRaceTolerantNestedPointerMemberStoreStmt(self: *CEmitter, target: ast.Expr, value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn emitRaceTolerantNestedPointerMemberStoreStmt(self: *CEmitter, target: ast_bridge.Expr, value: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         var fields: std.ArrayList([]const u8) = .empty;
         defer fields.deinit(self.allocator);
         const path = try self.pointerMemberPath(target, locals, &fields) orelse return false;
@@ -7954,7 +7954,7 @@ pub const CEmitter = struct {
 
     // The constant value of an integer local initializer, but only when it fits
     // the declared type (so the local genuinely holds that constant at runtime).
-    fn constLocalValue(self: *CEmitter, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?i128 {
+    fn constLocalValue(self: *CEmitter, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?i128 {
         const resolved = self.resolveAliasType(decl_ty);
         const tn = typeName(resolved) orelse return null;
         const range = intTypeRange(tn) orelse return null;
@@ -7968,21 +7968,21 @@ pub const CEmitter = struct {
         locals: *std.StringHashMap(LocalInfo),
     };
 
-    fn resultTryOperandIsResult(ctx_ptr: *anyopaque, operand: ast.Expr) bool {
+    fn resultTryOperandIsResult(ctx_ptr: *anyopaque, operand: ast_bridge.Expr) bool {
         const ctx: *TryScanContext = @ptrCast(@alignCast(ctx_ptr));
         _ = ctx.locals;
         const operand_ty = ctx.emitter.mirTryOperandTypeForQuery(operand) orelse return false;
         return lower_c_shape.resultPayloadTypeForTag(operand_ty, "ok") != null and lower_c_shape.resultPayloadTypeForTag(operand_ty, "err") != null;
     }
 
-    fn nullableTryOperandIsNullable(ctx_ptr: *anyopaque, operand: ast.Expr) anyerror!bool {
+    fn nullableTryOperandIsNullable(ctx_ptr: *anyopaque, operand: ast_bridge.Expr) anyerror!bool {
         const ctx: *TryScanContext = @ptrCast(@alignCast(ctx_ptr));
         _ = ctx.locals;
         const operand_ty = ctx.emitter.mirTryOperandTypeForQuery(operand) orelse return false;
         return ctx.emitter.nullableTypeFromCandidate(operand_ty) != null;
     }
 
-    fn sliceReturnTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn sliceReturnTypeForExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .call => blk: {
                 const return_ty = self.callResultTypeForEmission(expr, locals) orelse break :blk null;
@@ -8006,7 +8006,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn sliceBaseTypeForZeroSpanSlice(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn sliceBaseTypeForZeroSpanSlice(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .call => self.callResultTypeForEmission(expr, locals),
             .grouped => |inner| blk: {
@@ -8017,23 +8017,23 @@ pub const CEmitter = struct {
         };
     }
 
-    fn requireExpressionResultTypeForInference(self: *CEmitter, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
+    fn requireExpressionResultTypeForInference(self: *CEmitter, expr: ast_bridge.Expr, inferred: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
         if (!lower_c_type.sameCStorageType(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) return null;
         return fact.target_ty;
     }
 
-    fn checkedStorageExpressionResultTypeForEmission(self: *CEmitter, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
+    fn checkedStorageExpressionResultTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, inferred: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         if (!isSourceSpan(expr.span)) return inferred;
         return self.requireExpressionResultTypeForInference(expr, inferred);
     }
 
-    fn storageOrExpressionResultTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn storageOrExpressionResultTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (!isSourceSpan(expr.span)) return self.operandEmitType(expr, locals);
         return (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
     }
 
-    fn castResultTypeForEmission(self: *CEmitter, expr: ast.Expr) ?ast.TypeExpr {
+    fn castResultTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         const node = switch (expr.kind) {
             .cast => |node| node,
             else => return null,
@@ -8041,7 +8041,7 @@ pub const CEmitter = struct {
         return self.checkedCastResultTypeForEmission(expr, node.ty.*);
     }
 
-    fn checkedCastResultTypeForEmission(self: *CEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn checkedCastResultTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, expected_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         if (!isSourceSpan(expr.span)) return expected_ty;
         const target_ty = (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span) orelse return null).target_ty;
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(target_ty), self.resolveAliasType(expected_ty))) return null;
@@ -8050,7 +8050,7 @@ pub const CEmitter = struct {
         return fact_ty;
     }
 
-    fn sliceTypeForBase(self: *CEmitter, ty: ast.TypeExpr, span: ast.Span) ?ast.TypeExpr {
+    fn sliceTypeForBase(self: *CEmitter, ty: ast_bridge.TypeExpr, span: ast_bridge.Span) ?ast_bridge.TypeExpr {
         const resolved = self.resolveAliasType(ty);
         return switch (resolved.kind) {
             .slice => resolved,
@@ -8059,7 +8059,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn arrayLenText(self: *CEmitter, ty: ast.TypeExpr) !?[]const u8 {
+    fn arrayLenText(self: *CEmitter, ty: ast_bridge.TypeExpr) !?[]const u8 {
         return switch (ty.kind) {
             .array => |node| try self.arrayLenTextForExpr(node.len),
             .qualified => |node| try self.arrayLenText(node.child.*),
@@ -8067,7 +8067,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn arrayLenTextForExpr(self: *CEmitter, expr: ast.Expr) ![]const u8 {
+    fn arrayLenTextForExpr(self: *CEmitter, expr: ast_bridge.Expr) ![]const u8 {
         var reflect_env = self.reflectEnv();
         const value = constArrayLenValue(expr, &self.const_fns, &self.const_globals, lower_c_reflect.comptimeReflectThunk, &reflect_env) orelse return error.UnsupportedCEmission;
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
@@ -8076,7 +8076,7 @@ pub const CEmitter = struct {
     // The declared type of a value expression (a local, global, call result,
     // struct field, or array/slice element) — enough to keep inferred locals and
     // enum-literal comparison operands typed.
-    fn operandEmitType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn operandEmitType(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .cast => self.castResultTypeForEmission(expr),
             .ident => |ident| self.identTypeForEmissionRecovered(ident.text, expr.span, locals),
@@ -8126,8 +8126,8 @@ pub const CEmitter = struct {
         };
     }
 
-    fn identTypeForEmissionRecovered(self: *CEmitter, name: []const u8, span: ast.Span, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const declared_ty: ast.TypeExpr = blk: {
+    fn identTypeForEmissionRecovered(self: *CEmitter, name: []const u8, span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
+        const declared_ty: ast_bridge.TypeExpr = blk: {
             if (locals) |local_set| {
                 if (local_set.get(name)) |info| {
                     if (info.source_ty) |ty| break :blk ty;
@@ -8149,12 +8149,12 @@ pub const CEmitter = struct {
         return fact_ty;
     }
 
-    fn exprHasPointerType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn exprHasPointerType(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         const ty = self.memberBaseTypeForEmission(expr, locals) orelse return false;
         return self.pointerTypeFromCandidate(ty) != null;
     }
 
-    fn memberFieldType(self: *CEmitter, base: ast.Expr, field_name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn memberFieldType(self: *CEmitter, base: ast_bridge.Expr, field_name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (indexExpr(base)) |index| {
             const base_ty = self.arrayOrSliceBaseTypeForEmission(index.base.*, locals) orelse return null;
             const element_ty = self.arrayOrSliceElementTypeFromCandidate(base_ty) orelse return null;
@@ -8164,7 +8164,7 @@ pub const CEmitter = struct {
         return self.memberFieldTypeFromAggregate(base_ty, field_name);
     }
 
-    fn memberBaseTypeForEmission(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn memberBaseTypeForEmission(self: *CEmitter, base: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (syntheticDestructureBase(base)) return self.memberBaseTypeForEmissionRecovered(base, locals);
         if (isSourceSpan(base.span)) {
             const fact_ty = (self.mirTargetTypeFactAt(.expression_result, base.span) orelse return null).target_ty;
@@ -8176,13 +8176,13 @@ pub const CEmitter = struct {
             self.generatedExprSourceTypeForEmission(base, locals);
     }
 
-    fn memberBaseTypeForEmissionRecovered(self: *CEmitter, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn memberBaseTypeForEmissionRecovered(self: *CEmitter, base: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (self.operandEmitType(base, locals)) |ty| return ty;
         if (self.callResultTypeForEmission(base, locals)) |ty| return ty;
         return null;
     }
 
-    fn syntheticDestructureBase(base: ast.Expr) bool {
+    fn syntheticDestructureBase(base: ast_bridge.Expr) bool {
         return switch (base.kind) {
             .ident => |ident| std.mem.startsWith(u8, ident.text, "__destr"),
             .grouped => |inner| syntheticDestructureBase(inner.*),
@@ -8190,7 +8190,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn memberFieldTypeFromAggregate(self: *CEmitter, aggregate_ty: ast.TypeExpr, field_name: []const u8) ?ast.TypeExpr {
+    fn memberFieldTypeFromAggregate(self: *CEmitter, aggregate_ty: ast_bridge.TypeExpr, field_name: []const u8) ?ast_bridge.TypeExpr {
         const struct_name = self.structTypeNameFromType(aggregate_ty) orelse return null;
         const struct_decl = self.structs.get(struct_name) orelse return null;
         for (struct_decl.fields) |field| {
@@ -8203,7 +8203,7 @@ pub const CEmitter = struct {
     // (fast path via LocalInfo) and a struct-field base (`sp.s` where `s: []T`),
     // whose slice-ness is recovered from the field's declared type. The C slice
     // struct always names its fields `ptr`/`len` (see lower_c_info).
-    fn sliceAccessForBase(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?SliceAccess {
+    fn sliceAccessForBase(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?SliceAccess {
         if (sliceAccessForExpr(expr, locals)) |slice| return slice;
         const ty = self.operandEmitType(expr, locals) orelse return null;
         return if (self.sliceTypeFromCandidate(ty) != null) .{ .ptr_field = "ptr", .len_field = "len" } else null;
@@ -8212,7 +8212,7 @@ pub const CEmitter = struct {
     // The array type of `expr`, if it is an array — including the element of an
     // outer array access (`m[i]` over `[N][M]T` yields `[M]T`), which enables
     // nested indexing `m[i][j]`. Returns null for non-array expressions.
-    fn arrayTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn arrayTypeForExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .call => blk: {
                 const return_ty = self.callResultTypeForEmission(expr, locals) orelse break :blk null;
@@ -8244,12 +8244,12 @@ pub const CEmitter = struct {
         };
     }
 
-    fn arrayTypeFromType(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn arrayTypeFromType(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const resolved = self.resolveAliasType(ty);
         return if (resolved.kind == .array) resolved else null;
     }
 
-    fn arrayOrSliceElementTypeFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn arrayOrSliceElementTypeFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         return switch (self.resolveAliasType(ty).kind) {
             .array => |array| array.child.*,
             .slice => |slice| slice.child.*,
@@ -8257,7 +8257,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn arrayDerefResultTypeForEmission(self: *CEmitter, expr: ast.Expr, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn arrayDerefResultTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const pointee = self.derefPointeeType(inner, locals) orelse return null;
         if (!isSourceSpan(expr.span)) return pointee;
         const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
@@ -8268,7 +8268,7 @@ pub const CEmitter = struct {
     // Whether an expression has a pointer type, so member access lowers as `->`.
     // MMIO/slice/array accesses take dedicated paths before reaching here, so this
     // covers ordinary `*T` struct pointers (e.g. a borrowed `move` handle).
-    fn exprIsPointer(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn exprIsPointer(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         return switch (expr.kind) {
             .ident => |id| blk: {
                 const ty = self.identTypeForEmissionRecovered(id.text, expr.span, locals) orelse break :blk false;
@@ -8283,22 +8283,22 @@ pub const CEmitter = struct {
         };
     }
 
-    fn groupedExprIsPointer(self: *CEmitter, expr: ast.Expr, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn groupedExprIsPointer(self: *CEmitter, expr: ast_bridge.Expr, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         if (!isSourceSpan(expr.span)) return self.exprIsPointer(inner, locals);
         const ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return false).target_ty;
         return self.pointerTypeFromCandidate(ty) != null;
     }
 
-    fn pointerTypeFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn pointerTypeFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         return if (self.resolveAliasType(ty).kind == .pointer) ty else null;
     }
 
     const PointerTypeNode = struct {
-        mutability: ast.Mutability,
-        child: *ast.TypeExpr,
+        mutability: ast_bridge.Mutability,
+        child: *ast_bridge.TypeExpr,
     };
 
-    fn pointerNodeFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?PointerTypeNode {
+    fn pointerNodeFromCandidate(self: *CEmitter, ty: ast_bridge.TypeExpr) ?PointerTypeNode {
         return switch (self.resolveAliasType(ty).kind) {
             .pointer => |node| .{ .mutability = node.mutability, .child = node.child },
             else => null,
@@ -8306,7 +8306,7 @@ pub const CEmitter = struct {
     }
 
     // The pointee type of a pointer-typed expression (`p` where `p: *T` → `T`).
-    fn derefPointeeType(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn derefPointeeType(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .ident => blk: {
                 const ty = self.operandEmitType(expr, locals) orelse break :blk null;
@@ -8336,13 +8336,13 @@ pub const CEmitter = struct {
         };
     }
 
-    fn groupedDerefPointeeType(self: *CEmitter, expr: ast.Expr, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn groupedDerefPointeeType(self: *CEmitter, expr: ast_bridge.Expr, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (!isSourceSpan(expr.span)) return self.derefPointeeType(inner, locals);
         const ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
         return self.pointerPointeeTypeFromType(ty);
     }
 
-    fn pointerPointeeTypeFromType(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn pointerPointeeTypeFromType(self: *CEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         return switch (self.resolveAliasType(ty).kind) {
             .pointer => |p| p.child.*,
             .raw_many_pointer => |p| p.child.*,
@@ -8350,7 +8350,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn structTypeNameForExpr(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+    fn structTypeNameForExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
         return switch (expr.kind) {
             .ident => blk: {
                 const ty = self.operandEmitType(expr, locals) orelse break :blk null;
@@ -8372,13 +8372,13 @@ pub const CEmitter = struct {
         };
     }
 
-    fn groupedStructTypeNameForExpr(self: *CEmitter, expr: ast.Expr, inner: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+    fn groupedStructTypeNameForExpr(self: *CEmitter, expr: ast_bridge.Expr, inner: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
         if (!isSourceSpan(expr.span)) return self.structTypeNameForExpr(inner, locals);
         const ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
         return self.structTypeNameFromType(ty);
     }
 
-    fn structTypeNameFromType(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
+    fn structTypeNameFromType(self: *CEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
         return switch (self.resolveAliasType(ty).kind) {
             .name => |n| n.text,
             .pointer => |p| switch (self.resolveAliasType(p.child.*).kind) {
@@ -8389,7 +8389,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn callResultTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn callResultTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .call => |node| blk: {
                 // Source call expressions have complete MIR result facts. The
@@ -8407,18 +8407,18 @@ pub const CEmitter = struct {
         };
     }
 
-    fn callExpressionResultTypeForEmission(self: *CEmitter, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
+    fn callExpressionResultTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, inferred: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         return self.checkedExpressionResultTypeForEmission(expr, inferred);
     }
 
-    fn checkedExpressionResultTypeForEmission(self: *CEmitter, expr: ast.Expr, inferred: ast.TypeExpr) ?ast.TypeExpr {
+    fn checkedExpressionResultTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, inferred: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         if (!isSourceSpan(expr.span)) return inferred;
         const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(inferred))) return null;
         return fact.target_ty;
     }
 
-    fn callReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn callReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const call_span = call.callee.*.span;
         const call_kind = self.mirCallTargetKindAt(call_span);
         if (self.simpleMirResultReturnTypeForCall(call, .reflection_result)) |ty| return ty;
@@ -8448,17 +8448,17 @@ pub const CEmitter = struct {
         return self.directCallReturnTypeForCall(call);
     }
 
-    fn indirectCallCalleeType(self: *CEmitter, callee: ast.Expr) ?ast.TypeExpr {
+    fn indirectCallCalleeType(self: *CEmitter, callee: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         const ty = (self.mirTargetTypeFactAt(.indirect_call_callee, callee.span) orelse return null).target_ty;
         return self.resolveAliasType(ty);
     }
 
-    fn closureCallReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn closureCallReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const closure_ty = self.closureCalleeType(call.callee.*, locals) orelse return null;
         return closure_ty.kind.closure_type.ret.*;
     }
 
-    fn indirectCallReturnTypeForCall(self: *CEmitter, call: anytype) ?ast.TypeExpr {
+    fn indirectCallReturnTypeForCall(self: *CEmitter, call: anytype) ?ast_bridge.TypeExpr {
         const callee_ty = self.indirectCallCalleeType(call.callee.*) orelse return null;
         return switch (callee_ty.kind) {
             .fn_pointer => |signature| signature.ret.*,
@@ -8469,7 +8469,7 @@ pub const CEmitter = struct {
 
     // Ordinary direct calls require the MIR-owned result row to match the
     // declared function return type before inferred-local typing can consume it.
-    fn directCallReturnTypeForCall(self: *CEmitter, call: anytype) ?ast.TypeExpr {
+    fn directCallReturnTypeForCall(self: *CEmitter, call: anytype) ?ast_bridge.TypeExpr {
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
         const fact_ty = if (self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, fn_name, null)) |fact| fact.target_ty else return null;
@@ -8482,11 +8482,11 @@ pub const CEmitter = struct {
     // Simple builtin call-result queries consume an already-produced MIR
     // target row at the callee span. The helper names this as result admission
     // instead of leaving each fact as an inline inferred-local type shortcut.
-    fn simpleMirResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.TargetTypeKind) ?ast.TypeExpr {
+    fn simpleMirResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.TargetTypeKind) ?ast_bridge.TypeExpr {
         return (self.mirTargetTypeFactAt(kind, call.callee.*.span) orelse return null).target_ty;
     }
 
-    fn dynDispatchReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn dynDispatchReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const trait_name = self.dynCalleeTrait(call.callee.*, locals) orelse return null;
         const trait = self.trait_decls.get(trait_name) orelse return null;
         const method_name = dynCalleeMethodName(call.callee.*) orelse return null;
@@ -8500,7 +8500,7 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn dynDispatchMethodIndex(self: *CEmitter, callee: ast.Expr, trait_name: []const u8) ?usize {
+    fn dynDispatchMethodIndex(self: *CEmitter, callee: ast_bridge.Expr, trait_name: []const u8) ?usize {
         const trait = self.trait_decls.get(trait_name) orelse return null;
         const method_name = dynCalleeMethodName(callee) orelse return null;
         for (trait.methods, 0..) |method, index| {
@@ -8509,7 +8509,7 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn requireDynDispatchArgument(self: *CEmitter, span: ast.Span, trait_name: []const u8, method_index: usize, argument_index: usize) !void {
+    fn requireDynDispatchArgument(self: *CEmitter, span: ast_bridge.Span, trait_name: []const u8, method_index: usize, argument_index: usize) !void {
         const trait = self.trait_decls.get(trait_name) orelse return error.UnsupportedCEmission;
         if (method_index >= trait.methods.len) return error.UnsupportedCEmission;
         const method = trait.methods[method_index];
@@ -8519,12 +8519,12 @@ pub const CEmitter = struct {
         if (!std.meta.eql(fact_ty, declared_ty)) return error.UnsupportedCEmission;
     }
 
-    fn requireDynDispatchArgumentForDispatch(ctx: *anyopaque, span: ast.Span, trait_name: []const u8, method_index: usize, argument_index: usize) anyerror!void {
+    fn requireDynDispatchArgumentForDispatch(ctx: *anyopaque, span: ast_bridge.Span, trait_name: []const u8, method_index: usize, argument_index: usize) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.requireDynDispatchArgument(span, trait_name, method_index, argument_index);
     }
 
-    fn requireDynDispatchResult(self: *CEmitter, span: ast.Span, trait_name: []const u8, method_index: usize) !void {
+    fn requireDynDispatchResult(self: *CEmitter, span: ast_bridge.Span, trait_name: []const u8, method_index: usize) !void {
         const trait = self.trait_decls.get(trait_name) orelse return error.UnsupportedCEmission;
         if (method_index >= trait.methods.len) return error.UnsupportedCEmission;
         const declared_ty = trait.methods[method_index].return_type orelse return;
@@ -8533,7 +8533,7 @@ pub const CEmitter = struct {
         if (!std.meta.eql(fact_ty, declared_ty)) return error.UnsupportedCEmission;
     }
 
-    fn requireDynDispatchResultForDispatch(ctx: *anyopaque, span: ast.Span, trait_name: []const u8, method_index: usize) anyerror!void {
+    fn requireDynDispatchResultForDispatch(ctx: *anyopaque, span: ast_bridge.Span, trait_name: []const u8, method_index: usize) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         try self.requireDynDispatchResult(span, trait_name, method_index);
     }
@@ -8541,7 +8541,7 @@ pub const CEmitter = struct {
     // Atomic value-producing calls return the atomic payload type
     // (`atomic<u64>.fetch_add` -> `u64`), so inferred locals and compound
     // operands do not fall back to the C emitter's default `uint32_t`.
-    fn atomicResultReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn atomicResultReturnTypeForCall(self: *CEmitter, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         _ = locals;
         return lower_c_atomic.atomicResultPayload(self.atomicEmitContext(), call);
     }
@@ -8549,7 +8549,7 @@ pub const CEmitter = struct {
     // MaybeUninit extraction returns its MIR-owned payload type. The emitted
     // value is the backing storage itself, so an inferred local must use this
     // type before it is added to the C local environment.
-    fn maybeUninitResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast.TypeExpr {
+    fn maybeUninitResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast_bridge.TypeExpr {
         if (kind != .maybe_uninit_assume_init) return null;
         return (self.mirTargetTypeFactAt(.maybe_uninit_payload, call.callee.*.span) orelse return null).target_ty;
     }
@@ -8557,7 +8557,7 @@ pub const CEmitter = struct {
     // Raw loads and raw pointer construction have a distinct `raw_result`
     // fact. Do not recover their type from the call's type argument while
     // allocating an inferred local.
-    fn rawResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast.TypeExpr {
+    fn rawResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast_bridge.TypeExpr {
         if (kind != .raw_load and kind != .raw_ptr) return null;
         return (self.mirTargetTypeFactAt(.raw_result, call.callee.*.span) orelse return null).target_ty;
     }
@@ -8565,7 +8565,7 @@ pub const CEmitter = struct {
     // Arithmetic-domain call results are admitted by the MIR domain identity
     // and its `domain_result` row. Do not rebuild wrap/Duration/Result shapes
     // from the AST while allocating inferred locals.
-    fn domainResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast.TypeExpr {
+    fn domainResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast_bridge.TypeExpr {
         _ = mir.domainCallFactInfo(kind) orelse return null;
         return (self.mirTargetTypeFactAt(.domain_result, call.callee.*.span) orelse return null).target_ty;
     }
@@ -8573,21 +8573,21 @@ pub const CEmitter = struct {
     // DMA helper calls return their MIR-owned result row. Keep inferred-local
     // result typing tied to the call identity instead of deriving DMA address
     // or slice results from the receiver/type spelling.
-    fn dmaResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast.TypeExpr {
+    fn dmaResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast_bridge.TypeExpr {
         _ = mir.dmaCallFactInfo(kind) orelse return null;
         return (self.mirTargetTypeFactAt(.dma_result, call.callee.*.span) orelse return null).target_ty;
     }
 
     // Enum raw reads expose the MIR-owned representation result type. Keep
     // inferred locals from deriving the representation through enum lookup.
-    fn enumRawResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast.TypeExpr {
+    fn enumRawResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast_bridge.TypeExpr {
         if (kind != .enum_raw) return null;
         return (self.mirTargetTypeFactAt(.enum_raw_result, call.callee.*.span) orelse return null).target_ty;
     }
 
     // const_get result typing is admitted by the MIR call identity plus the
     // fixed-index result row; array shape checks stay in const_get validation.
-    fn constGetResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast.TypeExpr {
+    fn constGetResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast_bridge.TypeExpr {
         if (kind != .const_get) return null;
         return (self.mirTargetTypeFactAt(.const_get_result, call.callee.*.span) orelse return null).target_ty;
     }
@@ -8595,24 +8595,24 @@ pub const CEmitter = struct {
     // Semantic escapes are admitted by explicit MIR call identities and result
     // rows. Keep inferred locals from accepting these capability-sensitive
     // results through ordinary call or pointer spelling inference.
-    fn declassifyResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast.TypeExpr {
+    fn declassifyResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast_bridge.TypeExpr {
         if (kind != .declassify) return null;
         return (self.mirTargetTypeFactAt(.declassify_result, call.callee.*.span) orelse return null).target_ty;
     }
 
-    fn assumeNoaliasResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast.TypeExpr {
+    fn assumeNoaliasResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast_bridge.TypeExpr {
         if (kind != .assume_noalias) return null;
         return (self.mirTargetTypeFactAt(.assume_noalias_result, call.callee.*.span) orelse return null).target_ty;
     }
 
     // raw-many offsets return the MIR-owned pointer result. Inferred locals
     // must not recover this type from receiver spelling or alias resolution.
-    fn rawManyOffsetResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast.TypeExpr {
+    fn rawManyOffsetResultReturnTypeForCall(self: *CEmitter, call: anytype, kind: mir.CallTargetKind) ?ast_bridge.TypeExpr {
         if (kind != .raw_many_offset) return null;
         return (self.mirTargetTypeFactAt(.raw_many_offset_result, call.callee.*.span) orelse return null).target_ty;
     }
 
-    fn exprSourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn exprSourceTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .ident => |ident| self.identTypeForEmissionRecovered(ident.text, expr.span, locals),
             .call => self.callResultTypeForEmission(expr, locals),
@@ -8660,12 +8660,12 @@ pub const CEmitter = struct {
         };
     }
 
-    fn generatedExprSourceTypeForEmission(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn generatedExprSourceTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         if (isSourceSpan(expr.span)) return null;
         return self.exprSourceTypeForEmission(expr, locals);
     }
 
-    fn binarySourceTypeForEmission(self: *CEmitter, expr: ast.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn binarySourceTypeForEmission(self: *CEmitter, expr: ast_bridge.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
         const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
         const inferred = switch (node.op) {
             .eq, .ne, .lt, .le, .gt, .ge, .logical_and, .logical_or => type_bridge.simpleNameType("bool", expr.span),
@@ -8678,30 +8678,30 @@ pub const CEmitter = struct {
         return fact.target_ty;
     }
 
-    fn nullableInnerCTypeForExpr(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?[]const u8 {
+    fn nullableInnerCTypeForExpr(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !?[]const u8 {
         return lower_c_info.nullableInnerCTypeForExpr(self.infoContext(), expr, locals);
     }
 
-    fn nullableInnerCTypeForType(self: *CEmitter, ty: ast.TypeExpr) !?[]const u8 {
+    fn nullableInnerCTypeForType(self: *CEmitter, ty: ast_bridge.TypeExpr) !?[]const u8 {
         return lower_c_info.nullableInnerCTypeForType(self.infoContext(), ty);
     }
 
-    fn exprContainsResultTry(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn exprContainsResultTry(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         var ctx = TryScanContext{ .emitter = self, .locals = locals };
         return lower_c_try.exprContainsTry(&ctx, expr, resultTryOperandIsResult);
     }
 
-    fn callArgsContainResultTry(self: *CEmitter, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+    fn callArgsContainResultTry(self: *CEmitter, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
         var ctx = TryScanContext{ .emitter = self, .locals = locals };
         return lower_c_try.argsContainTry(&ctx, args, resultTryOperandIsResult);
     }
 
-    fn exprContainsNullableTry(self: *CEmitter, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn exprContainsNullableTry(self: *CEmitter, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         var ctx = TryScanContext{ .emitter = self, .locals = locals };
         return lower_c_try.exprContainsTryError(&ctx, expr, nullableTryOperandIsNullable);
     }
 
-    fn callArgsContainNullableTry(self: *CEmitter, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+    fn callArgsContainNullableTry(self: *CEmitter, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         var ctx = TryScanContext{ .emitter = self, .locals = locals };
         return lower_c_try.argsContainTryError(&ctx, args, nullableTryOperandIsNullable);
     }
@@ -8711,7 +8711,7 @@ pub const CEmitter = struct {
     // more reads in one operand would be combined by non-sequencing C operators (function-call
     // arguments, arithmetic, comparison) whose evaluation order is unspecified — which would
     // silently reorder device reads.
-    fn mmioAccess(self: *CEmitter, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
+    fn mmioAccess(self: *CEmitter, callee: ast_bridge.Expr, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
         return lower_c_mmio.classifyAccess(self.mmioAccessContext(), callee, args, locals);
     }
 
@@ -8719,19 +8719,19 @@ pub const CEmitter = struct {
         return lower_c_mmio.valueCType(self.mmioAccessContext(), value_type);
     }
 
-    fn localInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !LocalInfo {
+    fn localInfoFromType(self: *CEmitter, ty: ast_bridge.TypeExpr) !LocalInfo {
         return lower_c_info.localInfoFromType(self.infoContext(), ty);
     }
 
-    fn globalInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !GlobalInfo {
+    fn globalInfoFromType(self: *CEmitter, ty: ast_bridge.TypeExpr) !GlobalInfo {
         return lower_c_info.globalInfoFromType(self.infoContext(), ty);
     }
 
-    fn globalElementInfoFromType(self: *CEmitter, ty: ast.TypeExpr) !GlobalElementInfo {
+    fn globalElementInfoFromType(self: *CEmitter, ty: ast_bridge.TypeExpr) !GlobalElementInfo {
         return lower_c_info.globalElementInfoFromType(self.infoContext(), ty);
     }
 
-    fn nullableInnerCType(self: *CEmitter, ty: ast.TypeExpr) !?[]const u8 {
+    fn nullableInnerCType(self: *CEmitter, ty: ast_bridge.TypeExpr) !?[]const u8 {
         return lower_c_info.nullableInnerCType(self.infoContext(), ty);
     }
 
@@ -8752,18 +8752,18 @@ pub const CEmitter = struct {
         };
     }
 
-    fn cTypeForInfo(ctx: *anyopaque, ty: ast.TypeExpr, style: StructTypeStyle) anyerror![]const u8 {
+    fn cTypeForInfo(ctx: *anyopaque, ty: ast_bridge.TypeExpr, style: StructTypeStyle) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.cTypeFor(ty, style);
     }
 
-    fn arrayLenTextForInfo(ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8 {
+    fn arrayLenTextForInfo(ctx: *anyopaque, expr: ast_bridge.Expr) anyerror![]const u8 {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
         return self.arrayLenTextForExpr(expr);
     }
 };
 
-fn deferExprForRefInBlock(block: ast.Block, ref: mir.DeferCleanupRef) ?ast.Expr {
+fn deferExprForRefInBlock(block: ast_bridge.Block, ref: mir.DeferCleanupRef) ?ast_bridge.Expr {
     for (block.items) |stmt| {
         if (stmt.kind == .@"defer" and sourcePointMatchesSpan(ref.source, stmt.span)) return stmt.kind.@"defer";
         switch (stmt.kind) {
@@ -8794,7 +8794,7 @@ fn deferExprForRefInBlock(block: ast.Block, ref: mir.DeferCleanupRef) ?ast.Expr 
     return null;
 }
 
-fn spanFromSourcePoint(source: mir.SourcePoint) ast.Span {
+fn spanFromSourcePoint(source: mir.SourcePoint) ast_bridge.Span {
     return .{
         .offset = source.offset,
         .len = source.len,

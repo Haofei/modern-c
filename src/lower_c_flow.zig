@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
@@ -26,18 +26,18 @@ const sameCStorageType = lower_c_type.sameCStorageType;
 const sequencedConditionCandidate = lower_c_expr.sequencedConditionCandidate;
 const simpleNameType = type_bridge.simpleNameType;
 
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;
-pub const EmitBlockItemsFn = *const fn (ctx: *anyopaque, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void;
-pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo;
-pub const ArrayLenTextFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8;
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
-pub const ExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
-pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
-pub const EmitLoopFn = *const fn (ctx: *anyopaque, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void;
-pub const ConditionOperandTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
-pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
-pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void;
+pub const EmitBlockItemsFn = *const fn (ctx: *anyopaque, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void;
+pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!LocalInfo;
+pub const ArrayLenTextFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!?[]const u8;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const ExprTypeFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr;
+pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp;
+pub const EmitLoopFn = *const fn (ctx: *anyopaque, loop: ast_bridge.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void;
+pub const ConditionOperandTypeFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr;
+pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
+pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
@@ -67,25 +67,25 @@ pub const EmitContext = struct {
 };
 
 pub const ForLoopHeader = struct {
-    binding: ast.Ident,
-    iterable: ast.Expr,
+    binding: ast_bridge.Ident,
+    iterable: ast_bridge.Expr,
 };
 
 pub const ForLoopCore = struct {
-    loop: ast.Loop,
-    binding: ast.Ident,
-    iterable: ast.Expr,
+    loop: ast_bridge.Loop,
+    binding: ast_bridge.Ident,
+    iterable: ast_bridge.Expr,
     locals: *std.StringHashMap(LocalInfo),
-    return_ty: ?ast.TypeExpr,
-    iterable_array_ty: ?ast.TypeExpr,
-    element_ty: ?ast.TypeExpr,
+    return_ty: ?ast_bridge.TypeExpr,
+    iterable_array_ty: ?ast_bridge.TypeExpr,
+    element_ty: ?ast_bridge.TypeExpr,
     element_c_type: []const u8,
     index_name: []const u8,
 };
 
 pub const ForLoopElementPlan = struct {
-    iterable_array_ty: ?ast.TypeExpr,
-    element_ty: ?ast.TypeExpr,
+    iterable_array_ty: ?ast_bridge.TypeExpr,
+    element_ty: ?ast_bridge.TypeExpr,
     element_c_type: []const u8,
 };
 
@@ -94,7 +94,7 @@ pub const ForLoopElementPlan = struct {
 // target picks the innermost loop. Returns null only when there is no loop
 // (sema rejects labeled jumps to unknown labels, so a labeled target always
 // resolves here when the program type-checked).
-fn resolveLoopIndex(ctx: EmitContext, target: ?ast.Ident) ?usize {
+fn resolveLoopIndex(ctx: EmitContext, target: ?ast_bridge.Ident) ?usize {
     if (ctx.loop_ids.items.len == 0) return null;
     if (target) |t| {
         var i = ctx.loop_labels.items.len;
@@ -109,7 +109,7 @@ fn resolveLoopIndex(ctx: EmitContext, target: ?ast.Ident) ?usize {
     return ctx.loop_ids.items.len - 1;
 }
 
-pub fn emitBreakStmt(ctx: EmitContext, target: ?ast.Ident) anyerror!void {
+pub fn emitBreakStmt(ctx: EmitContext, target: ?ast_bridge.Ident) anyerror!void {
     try writeIndent(ctx);
     if (resolveLoopIndex(ctx, target)) |idx| {
         try ctx.out.print(ctx.allocator, "goto mc_break_{d};\n", .{ctx.loop_ids.items[idx]});
@@ -118,7 +118,7 @@ pub fn emitBreakStmt(ctx: EmitContext, target: ?ast.Ident) anyerror!void {
     }
 }
 
-pub fn emitContinueStmt(ctx: EmitContext, target: ?ast.Ident) anyerror!void {
+pub fn emitContinueStmt(ctx: EmitContext, target: ?ast_bridge.Ident) anyerror!void {
     try writeIndent(ctx);
     if (resolveLoopIndex(ctx, target)) |idx| {
         try ctx.out.print(ctx.allocator, "goto mc_continue_{d};\n", .{ctx.loop_ids.items[idx]});
@@ -127,7 +127,7 @@ pub fn emitContinueStmt(ctx: EmitContext, target: ?ast.Ident) anyerror!void {
     }
 }
 
-pub fn emitPlainWhileLoop(ctx: EmitContext, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+pub fn emitPlainWhileLoop(ctx: EmitContext, loop: ast_bridge.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
     const id = ctx.next_loop_id.*;
     ctx.next_loop_id.* += 1;
     const label: ?[]const u8 = if (loop.loop_label) |l| l.text else null;
@@ -141,7 +141,7 @@ pub fn emitPlainWhileLoop(ctx: EmitContext, loop: ast.Loop, locals: *std.StringH
     try emitPlainWhileFooter(ctx, id, jumps.brk);
 }
 
-pub fn forLoopHeader(ctx: EmitContext, loop: ast.Loop) !ForLoopHeader {
+pub fn forLoopHeader(ctx: EmitContext, loop: ast_bridge.Loop) !ForLoopHeader {
     const binding = loop.label orelse {
         try writeUnsupportedForLoop(ctx, "unsupported for loop without binding");
         return error.UnsupportedCEmission;
@@ -158,7 +158,7 @@ pub fn writeUnsupportedForLoop(ctx: EmitContext, message: []const u8) !void {
     try ctx.out.print(ctx.allocator, "/* {s} */\n", .{message});
 }
 
-pub fn forLoopElementPlan(ctx: EmitContext, iterable_array_ty: ?ast.TypeExpr, element_ty: ast.TypeExpr) !ForLoopElementPlan {
+pub fn forLoopElementPlan(ctx: EmitContext, iterable_array_ty: ?ast_bridge.TypeExpr, element_ty: ast_bridge.TypeExpr) !ForLoopElementPlan {
     const element_c_type = try ctx.c_type(ctx.emit_ctx, element_ty);
     return .{
         .iterable_array_ty = iterable_array_ty,
@@ -167,7 +167,7 @@ pub fn forLoopElementPlan(ctx: EmitContext, iterable_array_ty: ?ast.TypeExpr, el
     };
 }
 
-pub fn emitForLoopWithElementPlan(ctx: EmitContext, loop: ast.Loop, binding: ast.Ident, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, element: ForLoopElementPlan) anyerror!void {
+pub fn emitForLoopWithElementPlan(ctx: EmitContext, loop: ast_bridge.Loop, binding: ast_bridge.Ident, iterable: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, element: ForLoopElementPlan) anyerror!void {
     const index_name = try std.fmt.allocPrint(ctx.scratch, "mc_i{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
 
@@ -184,13 +184,13 @@ pub fn emitForLoopWithElementPlan(ctx: EmitContext, loop: ast.Loop, binding: ast
     });
 }
 
-pub fn emitForLoopSequencedIterable(ctx: EmitContext, loop: ast.Loop, iterable: ast.Expr, iterable_ty: ast.TypeExpr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitForLoopSequencedIterable(ctx: EmitContext, loop: ast_bridge.Loop, iterable: ast_bridge.Expr, iterable_ty: ast_bridge.TypeExpr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     if (!exprContainsCall(iterable)) return false;
     try emitForLoopWithMaterializedIterable(ctx, loop, iterable, locals, return_ty, iterable_ty);
     return true;
 }
 
-pub fn emitForLoopWithMaterializedIterable(ctx: EmitContext, loop: ast.Loop, iterable: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, iterable_ty: ast.TypeExpr) !void {
+pub fn emitForLoopWithMaterializedIterable(ctx: EmitContext, loop: ast_bridge.Loop, iterable: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, iterable_ty: ast_bridge.TypeExpr) !void {
     const temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, iterable, locals, iterable_ty);
 
     var loop_locals = try lower_c_access.cloneLocals(ctx.allocator, locals.*);
@@ -198,18 +198,18 @@ pub fn emitForLoopWithMaterializedIterable(ctx: EmitContext, loop: ast.Loop, ite
     try loop_locals.put(temp.name, try ctx.local_info_from_type(ctx.emit_ctx, iterable_ty));
 
     var rewritten = loop;
-    rewritten.iterable = ast.Expr{ .span = iterable.span, .kind = .{ .ident = .{ .span = iterable.span, .text = temp.name } } };
+    rewritten.iterable = ast_bridge.Expr{ .span = iterable.span, .kind = .{ .ident = .{ .span = iterable.span, .text = temp.name } } };
     try ctx.emit_loop(ctx.emit_ctx, rewritten, &loop_locals, return_ty);
 }
 
-pub fn emitSequencedConditionAssert(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitSequencedConditionAssert(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const condition = (try emitSequencedConditionValueTemp(ctx, expr, locals)) orelse return false;
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "if (!{s}) mc_trap_Assert();\n", .{condition.name});
     return true;
 }
 
-pub fn emitSequencedConditionWhileLoop(ctx: EmitContext, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitSequencedConditionWhileLoop(ctx: EmitContext, loop: ast_bridge.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const condition = loop.iterable orelse return false;
     if (!sequencedConditionCandidate(condition)) return false;
 
@@ -229,7 +229,7 @@ pub fn emitSequencedConditionWhileLoop(ctx: EmitContext, loop: ast.Loop, locals:
     return true;
 }
 
-pub fn emitSequencedConditionValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
+pub fn emitSequencedConditionValueTemp(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
     const node = switch (expr.kind) {
         .grouped => |inner| return try emitSequencedConditionValueTemp(ctx, inner.*, locals),
         .binary => |node| node,
@@ -242,7 +242,7 @@ pub fn emitSequencedConditionValueTemp(ctx: EmitContext, expr: ast.Expr, locals:
     return try emitSequencedComparisonTemp(ctx, expr.span, node, locals, operand_types.left, operand_types.right);
 }
 
-pub fn emitSequencedComparisonReturn(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitSequencedComparisonReturn(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const target_ty = return_ty orelse return false;
     if (!isBoolType(target_ty)) return false;
     const temp = (try emitSequencedConditionValueTemp(ctx, expr, locals)) orelse return false;
@@ -251,7 +251,7 @@ pub fn emitSequencedComparisonReturn(ctx: EmitContext, expr: ast.Expr, locals: *
     return true;
 }
 
-pub fn emitSequencedComparisonLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitSequencedComparisonLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     if (!isBoolType(decl_ty)) return false;
     const temp = (try emitSequencedConditionValueTemp(ctx, initializer, locals)) orelse return false;
     try writeIndent(ctx);
@@ -259,7 +259,7 @@ pub fn emitSequencedComparisonLocalInit(ctx: EmitContext, name: []const u8, decl
     return true;
 }
 
-pub fn emitBoolInferredLocalInit(ctx: EmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitBoolInferredLocalInit(ctx: EmitContext, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     if (!comparisonExpr(initializer)) return false;
     const bool_ty = simpleNameType("bool", initializer.span);
     try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, bool_ty));
@@ -351,7 +351,7 @@ pub fn emitForLoopCore(ctx: EmitContext, spec: ForLoopCore) anyerror!void {
     if (jumps.brk) try ctx.out.print(ctx.allocator, "    mc_break_{d}:;\n", .{id});
 }
 
-fn emitPlainWhileHeader(ctx: EmitContext, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
+fn emitPlainWhileHeader(ctx: EmitContext, loop: ast_bridge.Loop, locals: *std.StringHashMap(LocalInfo)) anyerror!void {
     try writeIndent(ctx);
     try ctx.out.appendSlice(ctx.allocator, "while (");
     if (loop.iterable) |condition| {
@@ -377,7 +377,7 @@ fn emitSequencedConditionWhileFooter(ctx: EmitContext) !void {
     try ctx.out.appendSlice(ctx.allocator, "}\n");
 }
 
-fn sequencedConditionOperandTypes(ctx: EmitContext, node: anytype, locals: *std.StringHashMap(LocalInfo)) !struct { left: ast.TypeExpr, right: ast.TypeExpr } {
+fn sequencedConditionOperandTypes(ctx: EmitContext, node: anytype, locals: *std.StringHashMap(LocalInfo)) !struct { left: ast_bridge.TypeExpr, right: ast_bridge.TypeExpr } {
     var left_ty = ctx.condition_operand_type(ctx.emit_ctx, node.left.*, locals);
     var right_ty = ctx.condition_operand_type(ctx.emit_ctx, node.right.*, locals);
     // A bare numeric literal adopts the other operand's storage type, so
@@ -391,7 +391,7 @@ fn sequencedConditionOperandTypes(ctx: EmitContext, node: anytype, locals: *std.
     return .{ .left = lt, .right = rt };
 }
 
-fn emitSequencedComparisonTemp(ctx: EmitContext, span: ast.Span, node: anytype, locals: *std.StringHashMap(LocalInfo), left_ty: ast.TypeExpr, right_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+fn emitSequencedComparisonTemp(ctx: EmitContext, span: ast_bridge.Span, node: anytype, locals: *std.StringHashMap(LocalInfo), left_ty: ast_bridge.TypeExpr, right_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
     const left_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, node.left.*, locals, left_ty);
     const right_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, node.right.*, locals, right_ty);
     const bool_ty = simpleNameType("bool", span);
@@ -403,7 +403,7 @@ fn emitSequencedComparisonTemp(ctx: EmitContext, span: ast.Span, node: anytype, 
     return .{ .name = condition_temp, .ty = bool_ty };
 }
 
-fn emitPlainWhileBody(ctx: EmitContext, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, id: u32, has_continue: bool) anyerror!void {
+fn emitPlainWhileBody(ctx: EmitContext, loop: ast_bridge.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, id: u32, has_continue: bool) anyerror!void {
     var nested = try lower_c_access.cloneLocals(ctx.allocator, locals.*);
     defer nested.deinit();
     ctx.indent.* += 1;
@@ -418,7 +418,7 @@ fn emitPlainWhileFooter(ctx: EmitContext, id: u32, has_break: bool) !void {
     if (has_break) try ctx.out.print(ctx.allocator, "    mc_break_{d}:;\n", .{id});
 }
 
-pub fn loopBodyHasOwnBreakContinue(block: ast.Block) LoopJumps {
+pub fn loopBodyHasOwnBreakContinue(block: ast_bridge.Block) LoopJumps {
     return loopBodyJumps(block, null);
 }
 
@@ -427,7 +427,7 @@ pub fn loopBodyHasOwnBreakContinue(block: ast.Block) LoopJumps {
 // a bare jump at this loop's own level (innermost target) OR a labeled jump
 // naming `label`, wherever it appears — including inside nested loops, since a
 // `break :outer` deep inside still targets this loop.
-pub fn loopBodyJumps(block: ast.Block, label: ?[]const u8) LoopJumps {
+pub fn loopBodyJumps(block: ast_bridge.Block, label: ?[]const u8) LoopJumps {
     var out = LoopJumps{};
     for (block.items) |stmt| {
         const j = stmtJumps(stmt, label, true);
@@ -441,7 +441,7 @@ fn writeIndent(ctx: EmitContext) !void {
     for (0..ctx.indent.*) |_| try ctx.out.appendSlice(ctx.allocator, "    ");
 }
 
-fn labelHits(target: ?ast.Ident, label: ?[]const u8) bool {
+fn labelHits(target: ?ast_bridge.Ident, label: ?[]const u8) bool {
     const t = target orelse return false;
     const l = label orelse return false;
     return std.mem.eql(u8, t.text, l);
@@ -451,7 +451,7 @@ fn labelHits(target: ?ast.Ident, label: ?[]const u8) bool {
 // loop's body (bare jumps target it). Descending into a nested loop clears
 // `own`, so bare jumps there belong to the nested loop and only labeled jumps
 // matching `label` still count.
-fn stmtJumps(stmt: ast.Stmt, label: ?[]const u8, own: bool) LoopJumps {
+fn stmtJumps(stmt: ast_bridge.Stmt, label: ?[]const u8, own: bool) LoopJumps {
     return switch (stmt.kind) {
         .@"break" => |target| .{ .brk = (own and target == null) or labelHits(target, label) },
         .@"continue" => |target| .{ .cont = (own and target == null) or labelHits(target, label) },
@@ -487,7 +487,7 @@ fn stmtJumps(stmt: ast.Stmt, label: ?[]const u8, own: bool) LoopJumps {
     };
 }
 
-fn blockJumps(block: ast.Block, label: ?[]const u8, own: bool) LoopJumps {
+fn blockJumps(block: ast_bridge.Block, label: ?[]const u8, own: bool) LoopJumps {
     var out = LoopJumps{};
     for (block.items) |stmt| {
         const j = stmtJumps(stmt, label, own);

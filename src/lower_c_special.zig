@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const lower_c_mmio = @import("lower_c_mmio.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_try = @import("lower_c_try.zig");
@@ -25,10 +25,10 @@ pub const TryMmioContext = struct {
 pub fn emitTypedLocalInit(
     ctx: TryMmioContext,
     name: []const u8,
-    decl_ty: ast.TypeExpr,
-    initializer: ast.Expr,
+    decl_ty: ast_bridge.TypeExpr,
+    initializer: ast_bridge.Expr,
     locals: *std.StringHashMap(LocalInfo),
-    return_ty: ?ast.TypeExpr,
+    return_ty: ?ast_bridge.TypeExpr,
 ) anyerror!bool {
     if (try lower_c_try.emitResultTryExprLocalInit(ctx.try_stmt, name, decl_ty, initializer, locals, return_ty)) return true;
     if (try lower_c_try.emitNullableTryExprLocalInit(ctx.try_stmt, name, decl_ty, initializer, locals)) return true;
@@ -38,7 +38,7 @@ pub fn emitTypedLocalInit(
     return false;
 }
 
-pub fn emitAssignmentStmt(ctx: TryMmioContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+pub fn emitAssignmentStmt(ctx: TryMmioContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!bool {
     if (try lower_c_try.emitResultTryAssignmentStmt(ctx.try_stmt, assignment, locals, return_ty)) return true;
     if (try lower_c_try.emitNullableTryAssignmentStmt(ctx.try_stmt, assignment, locals)) return true;
     if (try lower_c_mmio.emitDirectReadAssignment(ctx.mmio_emit, ctx.mmio_replacement, assignment, locals)) return true;
@@ -46,7 +46,7 @@ pub fn emitAssignmentStmt(ctx: TryMmioContext, assignment: anytype, locals: *std
     return false;
 }
 
-pub fn emitReturn(ctx: TryMmioContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!bool {
+pub fn emitReturn(ctx: TryMmioContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!bool {
     if (try lower_c_try.emitResultTryCallReturn(ctx.try_call, expr, locals)) return true;
     if (try lower_c_try.emitResultTryConstructorReturn(ctx.try_call, expr, locals, return_ty)) return true;
     if (try lower_c_try.emitNullableTryCallReturn(ctx.try_call, expr, locals)) return true;

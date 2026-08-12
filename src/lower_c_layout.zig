@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const lower_c_reflect = @import("lower_c_reflect.zig");
 
 const ReflectEnv = lower_c_reflect.ReflectEnv;
@@ -10,7 +10,7 @@ const ReflectEnv = lower_c_reflect.ReflectEnv;
 pub const AssertContext = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
-    structs: *const std.StringHashMap(ast.StructDecl),
+    structs: *const std.StringHashMap(ast_bridge.StructDecl),
     reflect_env: ReflectEnv,
 };
 

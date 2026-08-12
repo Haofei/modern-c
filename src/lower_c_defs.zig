@@ -6,7 +6,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
@@ -21,12 +21,12 @@ const SliceInfo = lower_c_model.SliceInfo;
 const cTraitIsObjectSafe = lower_c_shape.cTraitIsObjectSafe;
 const cPayloadFieldName = lower_c_type.cPayloadFieldName;
 
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
-pub const DeclaratorFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void;
-pub const FieldDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void;
-pub const EnumCaseValueFn = *const fn (ctx: *anyopaque, value: ast.Expr) anyerror!void;
-pub const ResultPayloadCTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
+pub const DeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
+pub const FieldDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
+pub const EnumCaseValueFn = *const fn (ctx: *anyopaque, value: ast_bridge.Expr) anyerror!void;
+pub const ResultPayloadCTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -43,12 +43,12 @@ pub const Context = struct {
     result_payload_c_type: ResultPayloadCTypeFn,
 };
 
-pub fn emitEnums(ctx: Context, enums: *std.StringHashMap(ast.EnumDecl)) !void {
+pub fn emitEnums(ctx: Context, enums: *std.StringHashMap(ast_bridge.EnumDecl)) !void {
     var it = enums.valueIterator();
     while (it.next()) |enum_decl| try emitEnumType(ctx, enum_decl.*);
 }
 
-pub fn emitEnumType(ctx: Context, enum_decl: ast.EnumDecl) !void {
+pub fn emitEnumType(ctx: Context, enum_decl: ast_bridge.EnumDecl) !void {
     const repr = if (enum_decl.repr) |repr_ty| try ctx.c_type(ctx.emit_ctx, repr_ty) else "intptr_t";
     try ctx.out.print(ctx.allocator, "typedef {s} {s};\n", .{ repr, enum_decl.name.text });
     try ctx.out.appendSlice(ctx.allocator, "enum {\n");
@@ -89,7 +89,7 @@ pub fn emitOverlayUnionType(ctx: Context, name: []const u8, info: OverlayUnionIn
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{name});
 }
 
-pub fn emitTaggedUnionType(ctx: Context, union_decl: ast.UnionDecl) !void {
+pub fn emitTaggedUnionType(ctx: Context, union_decl: ast_bridge.UnionDecl) !void {
     try ctx.out.print(ctx.allocator, "typedef enum {s}Tag {{\n", .{union_decl.name.text});
     ctx.indent.* += 1;
     for (union_decl.cases, 0..) |case, i| {
@@ -125,7 +125,7 @@ pub fn emitTaggedUnionType(ctx: Context, union_decl: ast.UnionDecl) !void {
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{union_decl.name.text});
 }
 
-pub fn emitFunctionSignature(ctx: Context, fn_decl: ast.FnDecl, is_static: bool, with_asm_label: bool) !void {
+pub fn emitFunctionSignature(ctx: Context, fn_decl: ast_bridge.FnDecl, is_static: bool, with_asm_label: bool) !void {
     const ret = if (fn_decl.return_type) |ret_ty| try ctx.c_type(ctx.emit_ctx, ret_ty) else "void";
     const cname = try ctx.c_ident(ctx.emit_ctx, fn_decl.name.text);
     try emitFunctionSignaturePrefix(ctx, ret, cname, is_static);
@@ -142,7 +142,7 @@ fn emitFunctionSignaturePrefix(ctx: Context, ret: []const u8, cname: []const u8,
     }
 }
 
-fn emitFunctionSignatureParams(ctx: Context, fn_decl: ast.FnDecl) !void {
+fn emitFunctionSignatureParams(ctx: Context, fn_decl: ast_bridge.FnDecl) !void {
     if (fn_decl.params.len == 0) {
         try ctx.out.appendSlice(ctx.allocator, if (fn_decl.is_variadic) "" else "void");
     } else {
@@ -156,7 +156,7 @@ fn emitFunctionSignatureParams(ctx: Context, fn_decl: ast.FnDecl) !void {
     }
 }
 
-fn emitFunctionBackendAsmLabel(ctx: Context, fn_decl: ast.FnDecl, with_asm_label: bool) !void {
+fn emitFunctionBackendAsmLabel(ctx: Context, fn_decl: ast_bridge.FnDecl, with_asm_label: bool) !void {
     if (!with_asm_label) return;
     const backend = ctx.backend_names.get(fn_decl.name.text) orelse return;
     try ctx.out.appendSlice(ctx.allocator, " __asm__(\"");
@@ -164,12 +164,12 @@ fn emitFunctionBackendAsmLabel(ctx: Context, fn_decl: ast.FnDecl, with_asm_label
     try ctx.out.appendSlice(ctx.allocator, "\")");
 }
 
-pub fn emitParamDecl(ctx: Context, ty: ast.TypeExpr, name: []const u8) !void {
+pub fn emitParamDecl(ctx: Context, ty: ast_bridge.TypeExpr, name: []const u8) !void {
     try emitIgnoredLocalPrefix(ctx, name);
     try ctx.declarator(ctx.emit_ctx, ty, name);
 }
 
-pub fn emitStruct(ctx: Context, struct_decl: ast.StructDecl) !void {
+pub fn emitStruct(ctx: Context, struct_decl: ast_bridge.StructDecl) !void {
     // A `#[c_union]` lowers to a real C `union`: identical member declarations, but union
     // layout (all fields at offset 0, size = largest arm) and alias-safe `&u.field` access.
     const keyword: []const u8 = if (struct_decl.is_c_union) "union" else "struct";
@@ -239,7 +239,7 @@ pub fn emitArrayType(ctx: Context, array: ArrayInfo) !void {
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{array.name});
 }
 
-pub fn emitFnPtrTypes(ctx: Context, fn_ptr_types: *std.StringHashMap(ast.TypeExpr)) !void {
+pub fn emitFnPtrTypes(ctx: Context, fn_ptr_types: *std.StringHashMap(ast_bridge.TypeExpr)) !void {
     var it = fn_ptr_types.iterator();
     while (it.next()) |entry| {
         const node = entry.value_ptr.kind.fn_pointer;
@@ -258,7 +258,7 @@ pub fn emitFnPtrTypes(ctx: Context, fn_ptr_types: *std.StringHashMap(ast.TypeExp
     }
 }
 
-pub fn emitClosureTypes(ctx: Context, closure_types: *std.StringHashMap(ast.TypeExpr)) !void {
+pub fn emitClosureTypes(ctx: Context, closure_types: *std.StringHashMap(ast_bridge.TypeExpr)) !void {
     var it = closure_types.iterator();
     while (it.next()) |entry| {
         const node = entry.value_ptr.kind.closure_type;
@@ -273,7 +273,7 @@ pub fn emitClosureTypes(ctx: Context, closure_types: *std.StringHashMap(ast.Type
     }
 }
 
-pub fn emitDynTraitTypes(ctx: Context, trait_decls: *std.StringHashMap(ast.TraitDecl)) !void {
+pub fn emitDynTraitTypes(ctx: Context, trait_decls: *std.StringHashMap(ast_bridge.TraitDecl)) !void {
     var it = trait_decls.iterator();
     while (it.next()) |entry| {
         const trait = entry.value_ptr.*;
@@ -288,8 +288,8 @@ pub fn emitDynTraitTypes(ctx: Context, trait_decls: *std.StringHashMap(ast.Trait
     }
 }
 
-fn appendVtableSlotType(ctx: Context, trait: ast.TraitDecl, method: ast.TraitMethodSig) !void {
-    const ret_ty: ast.TypeExpr = method.return_type orelse ast.TypeExpr{ .span = trait.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.name.span } } };
+fn appendVtableSlotType(ctx: Context, trait: ast_bridge.TraitDecl, method: ast_bridge.TraitMethodSig) !void {
+    const ret_ty: ast_bridge.TypeExpr = method.return_type orelse ast_bridge.TypeExpr{ .span = trait.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.name.span } } };
     try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, ret_ty));
     try ctx.out.appendSlice(ctx.allocator, " (*");
     try ctx.out.appendSlice(ctx.allocator, method.name.text);
@@ -311,7 +311,7 @@ fn writeIndent(ctx: Context) !void {
     for (0..ctx.indent.*) |_| try ctx.out.appendSlice(ctx.allocator, "    ");
 }
 
-fn taggedUnionHasPayload(union_decl: ast.UnionDecl) bool {
+fn taggedUnionHasPayload(union_decl: ast_bridge.UnionDecl) bool {
     for (union_decl.cases) |case| {
         if (case.ty != null) return true;
     }

@@ -6,7 +6,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const builtin_syntax = @import("builtin_syntax.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const mir = @import("mir.zig");
@@ -14,7 +14,7 @@ const mir = @import("mir.zig");
 const CheckedHelperParts = lower_c_op.CheckedHelperParts;
 
 pub const LocalInfo = struct {
-    source_ty: ?ast.TypeExpr = null,
+    source_ty: ?ast_bridge.TypeExpr = null,
     is_mutable: bool = false,
     c_type: ?[]const u8 = null,
     source_type_name: ?[]const u8 = null,
@@ -27,7 +27,7 @@ pub const LocalInfo = struct {
     slice_len_field: ?[]const u8 = null,
     iterable_element_c_type: ?[]const u8 = null,
     nullable_inner_c_type: ?[]const u8 = null,
-    result_ty: ?ast.TypeExpr = null,
+    result_ty: ?ast_bridge.TypeExpr = null,
     result_ok_c_type: ?[]const u8 = null,
     result_err_c_type: ?[]const u8 = null,
     mmio_pointee: ?[]const u8 = null,
@@ -35,7 +35,7 @@ pub const LocalInfo = struct {
 
 pub const ArrayInfo = struct {
     name: []const u8,
-    element_ty: ast.TypeExpr,
+    element_ty: ast_bridge.TypeExpr,
     element_c_type: []const u8,
     len: []const u8,
 };
@@ -43,17 +43,17 @@ pub const ArrayInfo = struct {
 // A by-value aggregate typedef emitted in dependency order (see
 // `emitOrderedAggregates`).
 pub const AggregateEmitUnit = union(enum) {
-    struct_decl: ast.StructDecl,
+    struct_decl: ast_bridge.StructDecl,
     array: ArrayInfo,
     result: ResultInfo,
-    tagged_union: ast.UnionDecl,
+    tagged_union: ast_bridge.UnionDecl,
     opt: OptInfo,
 };
 
 pub const RawManyOffsetInfo = struct {
-    base: ast.Expr,
-    ty: ast.TypeExpr,
-    element_ty: ast.TypeExpr,
+    base: ast_bridge.Expr,
+    ty: ast_bridge.TypeExpr,
+    element_ty: ast_bridge.TypeExpr,
 };
 
 // Which of `break`/`continue` does this loop body use targeting *this* loop
@@ -65,8 +65,8 @@ pub const LoopJumps = struct {
 };
 
 pub const FnInfo = struct {
-    params: []const ast.Param,
-    return_type: ?ast.TypeExpr,
+    params: []const ast_bridge.Param,
+    return_type: ?ast_bridge.TypeExpr,
     is_extern: bool,
     is_variadic: bool = false,
     // G8: `#[error_from]` conversion `fn(E1) -> E2`, invoked by `?` on the error
@@ -80,7 +80,7 @@ pub const FnInfo = struct {
 
 pub const SequencedArgTemp = struct {
     name: []const u8,
-    ty: ast.TypeExpr,
+    ty: ast_bridge.TypeExpr,
 };
 
 pub const ResultTrySequenceMode = enum { local_init, stmt };
@@ -120,8 +120,8 @@ pub const SliceAccess = struct {
 pub const SliceInfo = struct {
     name: []const u8,
     ptr_type: []const u8,
-    element_ty: ast.TypeExpr,
-    mutability: ast.Mutability,
+    element_ty: ast_bridge.TypeExpr,
+    mutability: ast_bridge.Mutability,
 };
 
 pub const PackedBitsInfo = struct {
@@ -141,13 +141,13 @@ pub const OverlayUnionInfo = struct {
 };
 
 pub const OverlayFieldInfo = struct {
-    ty: ast.TypeExpr,
+    ty: ast_bridge.TypeExpr,
     layout: OverlayLayout,
     byte_array_len: ?[]const u8,
 };
 
 pub const OverlayFieldAccess = struct {
-    base: ast.Expr,
+    base: ast_bridge.Expr,
     field: OverlayFieldInfo,
 };
 
@@ -160,14 +160,14 @@ pub const ReflectionCallKind = builtin_syntax.ReflectionCallKind;
 
 pub const ResultInfo = struct {
     name: []const u8,
-    ok_ty: ast.TypeExpr,
-    err_ty: ast.TypeExpr,
+    ok_ty: ast_bridge.TypeExpr,
+    err_ty: ast_bridge.TypeExpr,
 };
 
 // A value optional `?T`: the tagged aggregate `{ bool present; T value; }`.
 pub const OptInfo = struct {
     name: []const u8,
-    payload_ty: ast.TypeExpr,
+    payload_ty: ast_bridge.TypeExpr,
 };
 
 pub const ResultSwitchSubject = struct {
@@ -176,8 +176,8 @@ pub const ResultSwitchSubject = struct {
     err_c_type: []const u8,
     // The MC payload types (Result<T,E>'s T and E), so an arm binding can be registered with
     // full type info — e.g. a nested `switch e { .Variant => … }` on an enum err payload.
-    ok_source_ty: ?ast.TypeExpr = null,
-    err_source_ty: ?ast.TypeExpr = null,
+    ok_source_ty: ?ast_bridge.TypeExpr = null,
+    err_source_ty: ?ast_bridge.TypeExpr = null,
 };
 
 pub const ResultSwitchBranch = struct {
@@ -193,7 +193,7 @@ pub const NullableSwitchSubject = struct {
     inner_c_type: []const u8,
     // The narrowed inner type (`*dyn Trait`), so the some-binding carries enough type
     // information for trait dispatch (`d.m()` -> `d.vtable->m(d.data, …)`).
-    inner_ty: ?ast.TypeExpr = null,
+    inner_ty: ?ast_bridge.TypeExpr = null,
     // MIR-owned nullable representation. The switch/if-let helper may use
     // syntax spelling to emit fields, but it must not infer whether `?T` is
     // pointer-niche, dyn-trait-niche, or tagged-value from AST shape.
@@ -242,7 +242,7 @@ pub const NullableSwitchBranch = struct {
 pub const TaggedUnionSwitchSubject = struct {
     name: []const u8,
     type_name: []const u8,
-    decl: ast.UnionDecl,
+    decl: ast_bridge.UnionDecl,
 };
 
 pub const TaggedUnionSwitchBranch = struct {
@@ -250,7 +250,7 @@ pub const TaggedUnionSwitchBranch = struct {
     is_wildcard: bool = false,
     binding_name: ?[]const u8 = null,
     binding_type: ?[]const u8 = null,
-    binding_source_ty: ?ast.TypeExpr = null,
+    binding_source_ty: ?ast_bridge.TypeExpr = null,
     payload_field: ?[]const u8 = null,
 };
 
@@ -309,13 +309,13 @@ pub const GlobalInfo = struct {
     // load/store lower to a plain C struct copy rather than mc_race_load/store_<T>.
     aggregate: bool = false,
     is_const: bool = false,
-    source_ty: ?ast.TypeExpr = null,
+    source_ty: ?ast_bridge.TypeExpr = null,
     array_element_info: ?GlobalElementInfo = null,
     array_len: ?[]const u8 = null,
 };
 
 pub const GlobalElementInfo = struct {
-    source_ty: ast.TypeExpr,
+    source_ty: ast_bridge.TypeExpr,
     c_type: []const u8,
     race_type_name: []const u8,
     race_c_type: []const u8,
@@ -331,12 +331,12 @@ pub const GlobalAccess = struct {
 
 pub const GlobalArrayElementAccess = struct {
     base_name: []const u8,
-    index: ast.Expr,
+    index: ast_bridge.Expr,
     len: []const u8,
     element_info: GlobalElementInfo,
 };
 
 pub const ConstGetCallInfo = struct {
-    base: *ast.Expr,
+    base: *ast_bridge.Expr,
     index: usize,
 };

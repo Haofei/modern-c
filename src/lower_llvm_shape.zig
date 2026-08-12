@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const lower_llvm_model = @import("lower_llvm_model.zig");
 const lower_llvm_type = @import("lower_llvm_type.zig");
 const type_bridge = @import("type_bridge.zig");
@@ -12,7 +12,7 @@ const isPayloadDomainGenericName = lower_llvm_type.isPayloadDomainGenericName;
 const isPointerWidthIntegerTypeName = lower_llvm_type.isPointerWidthIntegerTypeName;
 const isOpaqueAddressTypeName = type_bridge.isOpaqueAddressTypeName;
 
-pub fn isPointerLikeType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
+pub fn isPointerLikeType(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) bool {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .pointer, .raw_many_pointer => true,
@@ -21,11 +21,11 @@ pub fn isPointerLikeType(type_aliases: *const std.StringHashMap(ast.TypeExpr), t
     };
 }
 
-pub fn isFloatTypeOf(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
+pub fn isFloatTypeOf(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) bool {
     return lower_llvm_type.isFloatType(type_bridge.resolveAliasType(type_aliases, ty));
 }
 
-pub fn isF32TypeOf(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
+pub fn isF32TypeOf(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) bool {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .name => |name| std.mem.eql(u8, name.text, "f32"),
@@ -38,7 +38,7 @@ pub fn isF32TypeOf(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast
 // audited unsafe boundary mints it from a pointer-width integer / opaque address
 // (a probed MMIO base) and extracts it back to an integer; both are pointer
 // <-> address coercions, lowered as inttoptr/ptrtoint by the emitter.
-pub fn isMmioPtrType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
+pub fn isMmioPtrType(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) bool {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .generic => |node| std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1,
@@ -47,7 +47,7 @@ pub fn isMmioPtrType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: a
     };
 }
 
-pub fn pointerAddressCoercion(type_aliases: *const std.StringHashMap(ast.TypeExpr), source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) bool {
+pub fn pointerAddressCoercion(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), source_ty: ast_bridge.TypeExpr, target_ty: ast_bridge.TypeExpr) bool {
     const source = type_bridge.resolveAliasType(type_aliases, source_ty);
     const target = type_bridge.resolveAliasType(type_aliases, target_ty);
     // MmioPtr<T> <-> pointer-width integer / opaque address (the device-register
@@ -82,7 +82,7 @@ pub fn pointerAddressCoercion(type_aliases: *const std.StringHashMap(ast.TypeExp
     };
 }
 
-pub fn nullableInnerType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn nullableInnerType(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .nullable => |child| child.*,
@@ -90,7 +90,7 @@ pub fn nullableInnerType(type_aliases: *const std.StringHashMap(ast.TypeExpr), t
     };
 }
 
-pub fn atomicPayloadType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn atomicPayloadType(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .generic => |node| {
@@ -102,7 +102,7 @@ pub fn atomicPayloadType(type_aliases: *const std.StringHashMap(ast.TypeExpr), t
     };
 }
 
-pub fn maybeUninitPayloadType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn maybeUninitPayloadType(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .generic => |node| {
@@ -114,7 +114,7 @@ pub fn maybeUninitPayloadType(type_aliases: *const std.StringHashMap(ast.TypeExp
     };
 }
 
-pub fn resultInfo(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) ?ResultTypeInfo {
+pub fn resultInfo(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) ?ResultTypeInfo {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .generic => |node| {
@@ -126,7 +126,7 @@ pub fn resultInfo(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.
     };
 }
 
-pub fn domainPayloadType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn domainPayloadType(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .generic => |node| {
@@ -138,7 +138,7 @@ pub fn domainPayloadType(type_aliases: *const std.StringHashMap(ast.TypeExpr), t
     };
 }
 
-pub fn isWrapDomainType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
+pub fn isWrapDomainType(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) bool {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .generic => |node| std.mem.eql(u8, node.base.text, "wrap") and node.args.len == 1,
@@ -147,7 +147,7 @@ pub fn isWrapDomainType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty
     };
 }
 
-pub fn isSatDomainType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
+pub fn isSatDomainType(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) bool {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .generic => |node| std.mem.eql(u8, node.base.text, "sat") and node.args.len == 1,

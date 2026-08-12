@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_model = @import("lower_c_model.zig");
@@ -19,10 +19,10 @@ const overlayMemberFromIndexBase = syntax_bridge.overlayMemberFromIndexBase;
 const overlayUnionNameForExpr = lower_c_access.overlayUnionNameForExpr;
 
 pub const WriteIndentFn = *const fn (ctx: *anyopaque) anyerror!void;
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void;
-pub const OverlayFieldLayoutSizeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) usize;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!void;
+pub const OverlayFieldLayoutSizeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) usize;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
@@ -38,7 +38,7 @@ pub const EmitContext = struct {
     overlay_field_layout_size: OverlayFieldLayoutSizeFn,
 };
 
-pub fn emitOverlayFieldReadReturn(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitOverlayFieldReadReturn(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     switch (expr.kind) {
         .grouped => |inner| return try emitOverlayFieldReadReturn(ctx, inner.*, locals, return_ty),
         .member => |node| {

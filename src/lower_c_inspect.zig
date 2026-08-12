@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const builtin_syntax = @import("builtin_syntax.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_atomic = @import("lower_c_atomic.zig");
@@ -57,7 +57,7 @@ const mmioPointee = type_bridge.mmioPointee;
 const ordinaryGlobalTarget = lower_c_target.ordinaryGlobalTarget;
 const typeName = type_bridge.typeName;
 
-pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
+pub fn appendInspection(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8)) anyerror!void {
     var inspector = Inspector.init(allocator, out);
     try inspector.inspectModule(module);
 }
@@ -66,7 +66,7 @@ const Inspector = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     mmio_structs: std.StringHashMap(MmioStruct),
-    structs: std.StringHashMap(ast.StructDecl),
+    structs: std.StringHashMap(ast_bridge.StructDecl),
     globals: std.StringHashMap(GlobalInfo),
 
     fn init(allocator: std.mem.Allocator, out: *std.ArrayList(u8)) Inspector {
@@ -74,7 +74,7 @@ const Inspector = struct {
             .allocator = allocator,
             .out = out,
             .mmio_structs = std.StringHashMap(MmioStruct).init(allocator),
-            .structs = std.StringHashMap(ast.StructDecl).init(allocator),
+            .structs = std.StringHashMap(ast_bridge.StructDecl).init(allocator),
             .globals = std.StringHashMap(GlobalInfo).init(allocator),
         };
     }
@@ -87,7 +87,7 @@ const Inspector = struct {
         self.globals.deinit();
     }
 
-    fn inspectModule(self: *Inspector, module: ast.Module) anyerror!void {
+    fn inspectModule(self: *Inspector, module: ast_bridge.Module) anyerror!void {
         defer self.deinit();
         try self.collectDeclFacts(module);
         for (module.decls) |decl| {
@@ -98,7 +98,7 @@ const Inspector = struct {
         }
     }
 
-    fn collectDeclFacts(self: *Inspector, module: ast.Module) !void {
+    fn collectDeclFacts(self: *Inspector, module: ast_bridge.Module) !void {
         for (module.decls) |decl| {
             switch (decl.kind) {
                 .struct_decl => |struct_decl| {
@@ -118,7 +118,7 @@ const Inspector = struct {
         }
     }
 
-    fn writePackedBitsLowering(self: *Inspector, packed_bits: ast.PackedBitsDecl) !void {
+    fn writePackedBitsLowering(self: *Inspector, packed_bits: ast_bridge.PackedBitsDecl) !void {
         try self.out.print(
             self.allocator,
             "lower packed_bits name={s} repr={s} strategy=mask_shift c_bitfields=false semantic_source=mc_bits\n",
@@ -126,7 +126,7 @@ const Inspector = struct {
         );
     }
 
-    fn writeOverlayUnionLowering(self: *Inspector, overlay_union: ast.OverlayUnionDecl) !void {
+    fn writeOverlayUnionLowering(self: *Inspector, overlay_union: ast_bridge.OverlayUnionDecl) !void {
         try self.out.print(
             self.allocator,
             "lower overlay_union name={s} strategy=byte_storage c_union=false semantic_source=mc_bytes\n",
@@ -134,7 +134,7 @@ const Inspector = struct {
         );
     }
 
-    fn collectMmioStruct(self: *Inspector, struct_decl: ast.StructDecl) !void {
+    fn collectMmioStruct(self: *Inspector, struct_decl: ast_bridge.StructDecl) !void {
         var fields = std.StringHashMap(MmioField).init(self.allocator);
         errdefer fields.deinit();
         for (struct_decl.fields) |field| {
@@ -145,7 +145,7 @@ const Inspector = struct {
         try self.mmio_structs.put(struct_decl.name.text, .{ .fields = fields });
     }
 
-    fn inspectFn(self: *Inspector, fn_decl: ast.FnDecl, body: ast.Block) anyerror!void {
+    fn inspectFn(self: *Inspector, fn_decl: ast_bridge.FnDecl, body: ast_bridge.Block) anyerror!void {
         var ctx = FnContext.init(self.allocator, fn_decl.name.text);
         defer ctx.deinit();
 
@@ -164,11 +164,11 @@ const Inspector = struct {
         try self.inspectBlock(body, &ctx);
     }
 
-    fn inspectBlock(self: *Inspector, block: ast.Block, ctx: *FnContext) anyerror!void {
+    fn inspectBlock(self: *Inspector, block: ast_bridge.Block, ctx: *FnContext) anyerror!void {
         for (block.items) |stmt| try self.inspectStmt(stmt, ctx);
     }
 
-    fn inspectStmt(self: *Inspector, stmt: ast.Stmt, ctx: *FnContext) anyerror!void {
+    fn inspectStmt(self: *Inspector, stmt: ast_bridge.Stmt, ctx: *FnContext) anyerror!void {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| {
                 for (local.names) |name| {
@@ -237,7 +237,7 @@ const Inspector = struct {
         }
     }
 
-    fn inspectExpr(self: *Inspector, expr: ast.Expr, ctx: *FnContext) anyerror!void {
+    fn inspectExpr(self: *Inspector, expr: ast_bridge.Expr, ctx: *FnContext) anyerror!void {
         switch (expr.kind) {
             // The async transform eliminates every `await_expr` pre-sema.
             .await_expr => unreachable,
@@ -443,7 +443,7 @@ const Inspector = struct {
         }
     }
 
-    fn writeArithmeticDomainLowering(self: *Inspector, ctx: *FnContext, domain: []const u8, op: ast.BinaryOp) !void {
+    fn writeArithmeticDomainLowering(self: *Inspector, ctx: *FnContext, domain: []const u8, op: ast_bridge.BinaryOp) !void {
         const op_name = arithmeticDomainOpName(op);
         const strategy = if (std.mem.eql(u8, domain, "sat")) "saturating_helper" else if (op == .shl or op == .shr) "shift_helper" else "plain_unsigned";
         try self.out.print(
@@ -506,7 +506,7 @@ const Inspector = struct {
         );
     }
 
-    fn writeContractCallMetadata(self: *Inspector, callee: ast.Expr, ctx: *FnContext) !void {
+    fn writeContractCallMetadata(self: *Inspector, callee: ast_bridge.Expr, ctx: *FnContext) !void {
         const name = knownContractCalleeName(callee) orelse return;
         if (ctx.active_contract) |contract| {
             if (contractMatchesCallee(contract, name)) {
@@ -527,7 +527,7 @@ const Inspector = struct {
         }
     }
 
-    fn writeRaceCallMetadata(self: *Inspector, callee: ast.Expr, ctx: *FnContext) !void {
+    fn writeRaceCallMetadata(self: *Inspector, callee: ast_bridge.Expr, ctx: *FnContext) !void {
         if (isIdentNamed(callee, "possibly_racing_store") and std.mem.eql(u8, ctx.name, "racing_increment_is_not_atomic")) {
             try self.out.print(
                 self.allocator,
@@ -537,7 +537,7 @@ const Inspector = struct {
         }
     }
 
-    fn writeAtomicCallMetadata(self: *Inspector, callee: ast.Expr, args: []const ast.Expr, ctx: *FnContext) !void {
+    fn writeAtomicCallMetadata(self: *Inspector, callee: ast_bridge.Expr, args: []const ast_bridge.Expr, ctx: *FnContext) !void {
         const access = atomicAccess(callee, args, ctx.*) orelse return;
         const order_const = atomicOrderCConstant(access.ordering) orelse "UNKNOWN";
         const builtin = if (std.mem.eql(u8, access.op, "load"))
@@ -560,7 +560,7 @@ const Inspector = struct {
         );
     }
 
-    fn writeDmaCallMetadata(self: *Inspector, callee: ast.Expr, args: []const ast.Expr, ctx: *FnContext) !void {
+    fn writeDmaCallMetadata(self: *Inspector, callee: ast_bridge.Expr, args: []const ast_bridge.Expr, ctx: *FnContext) !void {
         const op = dmaOperation(callee, args, ctx.*) orelse return;
         if (std.mem.eql(u8, op.kind, "dma_addr")) {
             try self.out.print(
@@ -617,7 +617,7 @@ const Inspector = struct {
         );
     }
 
-    fn writeAsmMetadata(self: *Inspector, fn_name: []const u8, asm_stmt: ast.AsmStmt) !void {
+    fn writeAsmMetadata(self: *Inspector, fn_name: []const u8, asm_stmt: ast_bridge.AsmStmt) !void {
         if (asm_stmt.form != .@"opaque") return;
         try self.out.print(
             self.allocator,
@@ -626,7 +626,7 @@ const Inspector = struct {
         );
     }
 
-    fn mmioAccess(self: *Inspector, callee: ast.Expr, args: []ast.Expr, ctx: *FnContext) !?MmioAccess {
+    fn mmioAccess(self: *Inspector, callee: ast_bridge.Expr, args: []ast_bridge.Expr, ctx: *FnContext) !?MmioAccess {
         const member = memberExpr(callee) orelse return null;
         const kind: []const u8 = if (std.mem.eql(u8, member.name.text, "read"))
             "read"
@@ -687,7 +687,7 @@ const FnContext = struct {
         self.mmio_params.deinit();
     }
 
-    fn recordLocalType(self: *FnContext, name: []const u8, ty: ast.TypeExpr) !void {
+    fn recordLocalType(self: *FnContext, name: []const u8, ty: ast_bridge.TypeExpr) !void {
         if (genericChildType(ty, "wrap")) |inner| {
             try self.local_domains.put(name, "wrap");
             if (typeName(inner)) |inner_name| try self.local_types.put(name, inner_name);

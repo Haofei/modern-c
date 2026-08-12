@@ -2,14 +2,14 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 
 pub const WriteIndentFn = *const fn (ctx: *anyopaque) anyerror!void;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!void;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
@@ -21,7 +21,7 @@ pub const EmitContext = struct {
     emit_expr_with_target: EmitExprWithTargetFn,
 };
 
-pub fn emitAsmStmt(ctx: EmitContext, asm_stmt: ast.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
+pub fn emitAsmStmt(ctx: EmitContext, asm_stmt: ast_bridge.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
     if (asm_stmt.form == .precise) return emitPreciseAsmStmt(ctx, asm_stmt, locals);
     // `--stub-asm` (host-native logic tests): opaque asm is a barrier/operand-less
     // instruction sequence whose effect is irrelevant to the portable logic under test.
@@ -69,7 +69,7 @@ pub fn emitAsmTemplate(allocator: std.mem.Allocator, out: *std.ArrayList(u8), te
 /// Precise asm (§23.2): the compiler trusts the declared inputs, outputs, and
 /// clobbers. Lowers to GCC/Clang extended asm with the operands wired in
 /// declared order; outputs are numbered first, then inputs.
-pub fn emitPreciseAsmStmt(ctx: EmitContext, asm_stmt: ast.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
+pub fn emitPreciseAsmStmt(ctx: EmitContext, asm_stmt: ast_bridge.AsmStmt, locals: ?*std.StringHashMap(LocalInfo)) !void {
     // `--stub-asm` (host-native logic tests): replace the arch instruction with a neutral
     // stub the host compiler can build — consume each input (so `-Werror` sees it used) and
     // zero each output (so it is defined). The portable logic under test must not depend on

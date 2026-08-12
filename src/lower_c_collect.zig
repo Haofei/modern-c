@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
@@ -22,14 +22,14 @@ const memberCallee = syntax_bridge.memberCallee;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
 const typeName = type_bridge.typeName;
 
-pub const TypeArtifactFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!void;
-pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
-pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
-pub const TypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
-pub const ArrayTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, len_expr: ast.Expr) anyerror![]const u8;
-pub const ExprTextFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8;
-pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8;
-pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8;
+pub const TypeArtifactFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!void;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
+pub const TypeNameFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const ArrayTypeNameFn = *const fn (ctx: *anyopaque, child: ast_bridge.TypeExpr, len_expr: ast_bridge.Expr) anyerror![]const u8;
+pub const ExprTextFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror![]const u8;
+pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) anyerror![]const u8;
 
 pub const TypeArtifactContext = struct {
     emit_ctx: *anyopaque,
@@ -42,8 +42,8 @@ pub const FnPtrArtifactContext = struct {
     emit_ctx: *anyopaque,
     fn_ptr_type_name: TypeNameFn,
     closure_type_name: TypeNameFn,
-    fn_ptr_types: *std.StringHashMap(ast.TypeExpr),
-    closure_types: *std.StringHashMap(ast.TypeExpr),
+    fn_ptr_types: *std.StringHashMap(ast_bridge.TypeExpr),
+    closure_types: *std.StringHashMap(ast_bridge.TypeExpr),
 };
 
 pub const ArrayArtifactContext = struct {
@@ -71,7 +71,7 @@ pub const SliceArtifactContext = struct {
 
 pub const BindThunkContext = struct {
     name_allocator: std.mem.Allocator,
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
     functions: *const std.StringHashMap(FnInfo),
     bind_thunks: *std.StringHashMap(BindThunk),
     mir_function: *const mir.Function,
@@ -80,7 +80,7 @@ pub const BindThunkContext = struct {
 pub fn collectPackedBits(
     allocator: std.mem.Allocator,
     packed_bits_map: *std.StringHashMap(PackedBitsInfo),
-    packed_bits: ast.PackedBitsDecl,
+    packed_bits: ast_bridge.PackedBitsDecl,
     repr_c_type: []const u8,
 ) !void {
     var fields = std.StringHashMap(PackedBitsField).init(allocator);
@@ -98,7 +98,7 @@ pub fn collectPackedBits(
 pub fn collectMmioStruct(
     allocator: std.mem.Allocator,
     mmio_structs: *std.StringHashMap(MmioStruct),
-    struct_decl: ast.StructDecl,
+    struct_decl: ast_bridge.StructDecl,
 ) !void {
     var fields = std.StringHashMap(lower_c_model.MmioField).init(allocator);
     errdefer fields.deinit();
@@ -108,13 +108,13 @@ pub fn collectMmioStruct(
     try mmio_structs.put(struct_decl.name.text, .{ .fields = fields });
 }
 
-pub fn collectFunctionTypeArtifacts(ctx: TypeArtifactContext, fn_decl: ast.FnDecl) anyerror!void {
+pub fn collectFunctionTypeArtifacts(ctx: TypeArtifactContext, fn_decl: ast_bridge.FnDecl) anyerror!void {
     for (fn_decl.params) |param| try ctx.collect_type_artifacts(ctx.emit_ctx, param.ty);
     if (fn_decl.return_type) |ret| try ctx.collect_type_artifacts(ctx.emit_ctx, ret);
     if (fn_decl.body) |body| try collectBlockTypeArtifacts(ctx, body);
 }
 
-pub fn collectBlockTypeArtifacts(ctx: TypeArtifactContext, block: ast.Block) anyerror!void {
+pub fn collectBlockTypeArtifacts(ctx: TypeArtifactContext, block: ast_bridge.Block) anyerror!void {
     for (block.items) |stmt| switch (stmt.kind) {
         .let_decl, .var_decl => |local| {
             if (local.ty) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
@@ -145,7 +145,7 @@ pub fn collectBlockTypeArtifacts(ctx: TypeArtifactContext, block: ast.Block) any
     };
 }
 
-fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast.Expr) anyerror!void {
+fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast_bridge.Expr) anyerror!void {
     switch (expr.kind) {
         .call => |node| {
             if (byteViewCallResultType(ctx, node)) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
@@ -176,20 +176,20 @@ fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast.Expr) anyerror!v
     }
 }
 
-fn byteViewCallResultType(ctx: TypeArtifactContext, call: anytype) ?ast.TypeExpr {
+fn byteViewCallResultType(ctx: TypeArtifactContext, call: anytype) ?ast_bridge.TypeExpr {
     const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
     if (kind != .byte_view_as_bytes and kind != .byte_view_equal) return null;
     return ctx.mir_target_type(ctx.emit_ctx, .byte_view_result, call.callee.*.span);
 }
 
-fn reduceCallSourceType(ctx: TypeArtifactContext, call: anytype) ?ast.TypeExpr {
+fn reduceCallSourceType(ctx: TypeArtifactContext, call: anytype) ?ast_bridge.TypeExpr {
     if (call.type_args.len != 1 or call.args.len != 1) return null;
     const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
     if (kind != .reduce_sum_checked and kind != .reduce_sum_left and kind != .reduce_sum_fast) return null;
     return ctx.mir_target_type(ctx.emit_ctx, .reduce_source, call.args[0].span);
 }
 
-pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast.TypeExpr) anyerror!void {
+pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast_bridge.TypeExpr) anyerror!void {
     switch (ty.kind) {
         .fn_pointer => |node| {
             try collectFnPtrType(ctx, node.ret.*);
@@ -219,7 +219,7 @@ pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast.TypeExpr) anyerror!vo
     }
 }
 
-pub fn collectArrayType(ctx: ArrayArtifactContext, ty: ast.TypeExpr) anyerror!void {
+pub fn collectArrayType(ctx: ArrayArtifactContext, ty: ast_bridge.TypeExpr) anyerror!void {
     switch (ty.kind) {
         .array => |node| {
             try collectArrayType(ctx, node.child.*);
@@ -249,7 +249,7 @@ pub fn collectArrayType(ctx: ArrayArtifactContext, ty: ast.TypeExpr) anyerror!vo
     }
 }
 
-pub fn collectResultType(ctx: ResultArtifactContext, ty: ast.TypeExpr) anyerror!void {
+pub fn collectResultType(ctx: ResultArtifactContext, ty: ast_bridge.TypeExpr) anyerror!void {
     switch (ty.kind) {
         .pointer => |node| try collectResultType(ctx, node.child.*),
         .raw_many_pointer => |node| try collectResultType(ctx, node.child.*),
@@ -273,7 +273,7 @@ pub fn collectResultType(ctx: ResultArtifactContext, ty: ast.TypeExpr) anyerror!
     }
 }
 
-pub fn collectSliceType(ctx: SliceArtifactContext, ty: ast.TypeExpr) anyerror!void {
+pub fn collectSliceType(ctx: SliceArtifactContext, ty: ast_bridge.TypeExpr) anyerror!void {
     switch (ty.kind) {
         .slice => |node| {
             try collectSliceType(ctx, node.child.*);
@@ -300,7 +300,7 @@ pub fn collectSliceType(ctx: SliceArtifactContext, ty: ast.TypeExpr) anyerror!vo
     }
 }
 
-fn putSliceType(ctx: SliceArtifactContext, child: ast.TypeExpr, mutability: ast.Mutability) !void {
+fn putSliceType(ctx: SliceArtifactContext, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) !void {
     const name = try ctx.slice_type_name(ctx.emit_ctx, child, mutability);
     const ptr_type = try ctx.pointer_type_for_slice_element(ctx.emit_ctx, child, mutability);
     if (ctx.slice_types.get(name)) |existing| {
@@ -310,7 +310,7 @@ fn putSliceType(ctx: SliceArtifactContext, child: ast.TypeExpr, mutability: ast.
     }
 }
 
-pub fn bindEnvIsPointerLike(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
+pub fn bindEnvIsPointerLike(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) bool {
     return switch (type_bridge.resolveAliasType(type_aliases, ty).kind) {
         .pointer, .raw_many_pointer, .fn_pointer, .slice => true,
         .nullable => |child| bindEnvIsPointerLike(type_aliases, child.*),
@@ -319,7 +319,7 @@ pub fn bindEnvIsPointerLike(type_aliases: *const std.StringHashMap(ast.TypeExpr)
     };
 }
 
-pub fn collectBlockBindThunks(ctx: BindThunkContext, block: ast.Block) anyerror!void {
+pub fn collectBlockBindThunks(ctx: BindThunkContext, block: ast_bridge.Block) anyerror!void {
     for (block.items) |stmt| switch (stmt.kind) {
         .let_decl, .var_decl => |local| {
             if (local.init) |initializer| try collectExprBindThunks(ctx, initializer);
@@ -352,7 +352,7 @@ pub fn collectBlockBindThunks(ctx: BindThunkContext, block: ast.Block) anyerror!
     };
 }
 
-fn collectExprBindThunks(ctx: BindThunkContext, expr: ast.Expr) anyerror!void {
+fn collectExprBindThunks(ctx: BindThunkContext, expr: ast_bridge.Expr) anyerror!void {
     switch (expr.kind) {
         .call => |node| {
             if (hasCallTargetFact(ctx.mir_function.*, .bind, expr.span)) try collectBindThunk(ctx, node);
@@ -389,7 +389,7 @@ fn collectBindThunk(ctx: BindThunkContext, node: anytype) !void {
     if (!ctx.bind_thunks.contains(name)) try ctx.bind_thunks.put(name, .{ .fname = fname, .info = info });
 }
 
-fn hasCallTargetFact(function: mir.Function, kind: mir.CallTargetKind, span: ast.Span) bool {
+fn hasCallTargetFact(function: mir.Function, kind: mir.CallTargetKind, span: ast_bridge.Span) bool {
     for (function.call_target_facts) |fact| {
         if (fact.kind == kind and fact.source.line == span.line and fact.source.column == span.column) return true;
     }

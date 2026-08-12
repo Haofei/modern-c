@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_arith = @import("lower_c_arith.zig");
@@ -44,22 +44,22 @@ pub const Context = struct {
     indent: *usize,
 };
 
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
-pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void;
-pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
-pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
-pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitReadSequencedBinaryValueTempFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp;
-pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
-pub const MmioAccessFn = *const fn (ctx: *anyopaque, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
+pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr;
+pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
+pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitReadSequencedBinaryValueTempFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp;
+pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp;
+pub const MmioAccessFn = *const fn (ctx: *anyopaque, callee: ast_bridge.Expr, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess;
 pub const ValueCTypeFn = *const fn (ctx: *anyopaque, value_type: []const u8) []const u8;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
-pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
-pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
-pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?ast.TypeExpr;
-pub const EmitBlockItemsFn = *const fn (ctx: *anyopaque, block: ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
+pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?ast_bridge.TypeExpr;
+pub const EmitBlockItemsFn = *const fn (ctx: *anyopaque, block: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void;
 
 pub const AccessContext = struct {
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
@@ -97,7 +97,7 @@ pub const ReplacementEmitContext = struct {
     scratch: std.mem.Allocator,
     out: *std.ArrayList(u8),
     temp_index: *usize,
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
     functions: *const std.StringHashMap(FnInfo),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     emit_ctx: *anyopaque,
@@ -143,9 +143,9 @@ pub const DirectReadAccess = struct {
 
 pub fn emitReadExprWithReplacements(
     ctx: ReplacementEmitContext,
-    expr: ast.Expr,
+    expr: ast_bridge.Expr,
     locals: ?*std.StringHashMap(LocalInfo),
-    target_ty: ?ast.TypeExpr,
+    target_ty: ?ast_bridge.TypeExpr,
     replacements: []const MmioReadReplacement,
 ) anyerror!void {
     if (!lower_c_access.exprHasMmioReadReplacement(expr, replacements)) return ctx.emit_expr_with_target(ctx.emit_ctx, expr, locals, target_ty);
@@ -223,7 +223,7 @@ pub fn emitReadExprWithReplacements(
     }
 }
 
-pub fn classifyAccess(ctx: AccessContext, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
+pub fn classifyAccess(ctx: AccessContext, callee: ast_bridge.Expr, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?MmioAccess {
     _ = locals;
     const member = memberExpr(callee) orelse return null;
     const kind = accessKind(member.name.text) orelse return null;
@@ -254,7 +254,7 @@ pub fn valueCType(ctx: AccessContext, value_type: []const u8) []const u8 {
     return primitiveCTypeName(value_type) orelse "uint8_t";
 }
 
-pub fn emitStruct(ctx: StructEmitContext, struct_decl: ast.StructDecl) !void {
+pub fn emitStruct(ctx: StructEmitContext, struct_decl: ast_bridge.StructDecl) !void {
     try ctx.context.out.print(ctx.context.allocator, "typedef struct {s} {{\n", .{struct_decl.name.text});
     ctx.context.indent.* += 1;
     var running: u64 = 0;
@@ -272,7 +272,7 @@ fn accessKind(name: []const u8) ?[]const u8 {
     return null;
 }
 
-fn emitStructField(ctx: StructEmitContext, field: ast.Field, running: *u64, pad_n: *usize) !void {
+fn emitStructField(ctx: StructEmitContext, field: ast_bridge.Field, running: *u64, pad_n: *usize) !void {
     const info = mmioFieldFromType(field.ty) orelse {
         try writeIndent(ctx.context);
         try ctx.context.out.print(ctx.context.allocator, "/* unsupported MMIO field: {s} */\n", .{field.name.text});
@@ -284,7 +284,7 @@ fn emitStructField(ctx: StructEmitContext, field: ast.Field, running: *u64, pad_
     running.* += mmioFieldWidthBytes(info.width);
 }
 
-fn emitFieldPadding(ctx: Context, field: ast.Field, running: *u64, pad_n: *usize) !void {
+fn emitFieldPadding(ctx: Context, field: ast_bridge.Field, running: *u64, pad_n: *usize) !void {
     const offset = field.offset orelse return;
     if (offset < running.*) return error.UnsupportedCEmission;
     if (offset == running.*) return;
@@ -294,7 +294,7 @@ fn emitFieldPadding(ctx: Context, field: ast.Field, running: *u64, pad_n: *usize
     running.* = offset;
 }
 
-fn emitCheckedUnaryReadReplacement(ctx: ReplacementEmitContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const MmioReadReplacement) anyerror!bool {
+fn emitCheckedUnaryReadReplacement(ctx: ReplacementEmitContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr, replacements: []const MmioReadReplacement) anyerror!bool {
     if (node.op != .neg) return false;
     const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
     if (type_bridge.isWrapType(target) or type_bridge.isSatType(target)) return false;
@@ -307,7 +307,7 @@ fn emitCheckedUnaryReadReplacement(ctx: ReplacementEmitContext, node: anytype, l
     return true;
 }
 
-fn emitPackedBitsMaskTestWithReplacements(ctx: ReplacementEmitContext, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), info: PackedBitsInfo, bit_index: usize, replacements: []const MmioReadReplacement) !void {
+fn emitPackedBitsMaskTestWithReplacements(ctx: ReplacementEmitContext, base: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), info: PackedBitsInfo, bit_index: usize, replacements: []const MmioReadReplacement) !void {
     try ctx.out.appendSlice(ctx.allocator, "((");
     try emitReadExprWithReplacements(ctx, base, locals, null, replacements);
     try ctx.out.print(ctx.allocator, " & {s}) != 0)", .{try lower_c_access.packedBitsMaskLiteral(ctx.scratch, info, bit_index)});
@@ -332,12 +332,12 @@ pub fn emitInlineReadCall(ctx: EmitContext, call: anytype, locals_opt: ?*std.Str
     return true;
 }
 
-pub fn emitWriteStmt(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitWriteStmt(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = syntax_bridge.callExpr(expr) orelse return false;
     return emitWriteCall(ctx, call.callee.*, call.args, locals);
 }
 
-pub fn emitWriteCall(ctx: EmitContext, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitWriteCall(ctx: EmitContext, callee: ast_bridge.Expr, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const access = ctx.mmio_access(ctx.emit_ctx, callee, args, locals) orelse return false;
     if (!std.mem.eql(u8, access.kind, "write")) return false;
     if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
@@ -354,7 +354,7 @@ pub fn emitWriteCall(ctx: EmitContext, callee: ast.Expr, args: []const ast.Expr,
     return true;
 }
 
-pub fn emitReadCallStmt(ctx: EmitContext, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitReadCallStmt(ctx: EmitContext, callee: ast_bridge.Expr, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const access = ctx.mmio_access(ctx.emit_ctx, callee, args, locals) orelse return false;
     if (!std.mem.eql(u8, access.kind, "read")) return false;
     if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
@@ -383,12 +383,12 @@ pub fn emitDirectReadReturn(ctx: EmitContext, call: anytype, locals: *std.String
     return true;
 }
 
-pub fn emitDirectReadReturnExpr(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitDirectReadReturnExpr(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = syntax_bridge.callExpr(expr) orelse return false;
     return emitDirectReadReturn(ctx, call, locals);
 }
 
-pub fn emitDirectReadLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, call: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitDirectReadLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, call: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
     const read = (try directReadAccess(ctx, call, locals)) orelse return false;
 
     try writeIndent(ctx.context);
@@ -399,7 +399,7 @@ pub fn emitDirectReadLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.
     return true;
 }
 
-pub fn emitDirectReadLocalInitExpr(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitDirectReadLocalInitExpr(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = syntax_bridge.callExpr(initializer) orelse return false;
     return emitDirectReadLocalInit(ctx, name, decl_ty, call, locals);
 }
@@ -416,7 +416,7 @@ pub fn emitDirectReadAssignment(ctx: EmitContext, replacement_ctx: ReplacementEm
     return true;
 }
 
-pub fn emitDirectReadInferredLocalInit(ctx: EmitContext, name: []const u8, initializer_span: ast.Span, call: anytype, locals: *std.StringHashMap(LocalInfo)) !?LocalInfo {
+pub fn emitDirectReadInferredLocalInit(ctx: EmitContext, name: []const u8, initializer_span: ast_bridge.Span, call: anytype, locals: *std.StringHashMap(LocalInfo)) !?LocalInfo {
     const read = (try directReadAccess(ctx, call, locals)) orelse return null;
     const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer_span, name, null) orelse return error.UnsupportedCEmission;
     const inferred_c_type = try ctx.c_type(ctx.emit_ctx, inferred_ty);
@@ -431,7 +431,7 @@ pub fn emitDirectReadInferredLocalInit(ctx: EmitContext, name: []const u8, initi
     };
 }
 
-pub fn emitDirectReadInferredLocalInitExpr(ctx: EmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitDirectReadInferredLocalInitExpr(ctx: EmitContext, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = syntax_bridge.callExpr(initializer) orelse return false;
     const info = (try emitDirectReadInferredLocalInit(ctx, name, initializer.span, call, locals)) orelse return false;
     try locals.put(name, info);
@@ -448,27 +448,27 @@ pub fn directReadAccess(ctx: EmitContext, call: anytype, locals: *std.StringHash
     };
 }
 
-pub fn exprContainsRead(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+pub fn exprContainsRead(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
     var scan_ctx = ReadScanContext{ .ctx = ctx, .locals = locals };
     return lower_c_try.exprContainsCall(&scan_ctx, expr, scanReadCall);
 }
 
-pub fn argsContainRead(ctx: EmitContext, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
+pub fn argsContainRead(ctx: EmitContext, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool {
     var scan_ctx = ReadScanContext{ .ctx = ctx, .locals = locals };
     return lower_c_try.argsContainCall(&scan_ctx, args, scanReadCall);
 }
 
-pub fn countReads(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) usize {
+pub fn countReads(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) usize {
     var scan_ctx = ReadScanContext{ .ctx = ctx, .locals = locals };
     return lower_c_try.countCalls(&scan_ctx, expr, scanReadCall);
 }
 
-pub fn collectReadHoistsForExpr(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(MmioReadReplacement)) !bool {
+pub fn collectReadHoistsForExpr(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(MmioReadReplacement)) !bool {
     var hoist_ctx = ReadHoistContext{ .ctx = ctx, .locals = locals, .replacements = replacements };
     return lower_c_try.collectCallHoists(&hoist_ctx, expr, collectReadCall, guardLogicalBinary);
 }
 
-fn scanReadCall(ctx_ptr: *anyopaque, expr: ast.Expr) lower_c_try.CallScanResult {
+fn scanReadCall(ctx_ptr: *anyopaque, expr: ast_bridge.Expr) lower_c_try.CallScanResult {
     const ctx: *ReadScanContext = @ptrCast(@alignCast(ctx_ptr));
     const node = switch (expr.kind) {
         .call => |call| call,
@@ -478,7 +478,7 @@ fn scanReadCall(ctx_ptr: *anyopaque, expr: ast.Expr) lower_c_try.CallScanResult 
     return if (std.mem.eql(u8, access.kind, "read")) .found else .ignored;
 }
 
-fn collectReadCall(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!lower_c_try.CallHoistResult {
+fn collectReadCall(ctx_ptr: *anyopaque, expr: ast_bridge.Expr) anyerror!lower_c_try.CallHoistResult {
     const ctx: *ReadHoistContext = @ptrCast(@alignCast(ctx_ptr));
     const node = switch (expr.kind) {
         .call => |call| call,
@@ -504,7 +504,7 @@ fn appendReadReplacement(ctx: *ReadHoistContext, source: mir.SourcePoint, access
     });
 }
 
-fn guardLogicalBinary(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!?bool {
+fn guardLogicalBinary(ctx_ptr: *anyopaque, expr: ast_bridge.Expr) anyerror!?bool {
     const ctx: *ReadHoistContext = @ptrCast(@alignCast(ctx_ptr));
     const node = switch (expr.kind) {
         .binary => |binary| binary,
@@ -517,7 +517,7 @@ fn guardLogicalBinary(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!?bool {
     return null;
 }
 
-fn isLogicalBinaryOp(op: ast.BinaryOp) bool {
+fn isLogicalBinaryOp(op: ast_bridge.BinaryOp) bool {
     return op == .logical_and or op == .logical_or;
 }
 
@@ -555,7 +555,7 @@ pub fn emitReadReplacementFrame(ctx: Context, locals: std.StringHashMap(LocalInf
     return try readReplacementNestedLocals(ctx.allocator, locals, replacements);
 }
 
-pub fn emitReadAssertWithReplacements(ctx: Context, replacement_ctx: ReplacementEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {
+pub fn emitReadAssertWithReplacements(ctx: Context, replacement_ctx: ReplacementEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {
     var nested = try emitReadReplacementFrame(ctx, locals.*, replacements);
     defer nested.deinit();
 
@@ -565,7 +565,7 @@ pub fn emitReadAssertWithReplacements(ctx: Context, replacement_ctx: Replacement
     try ctx.out.appendSlice(ctx.allocator, ")) mc_trap_Assert();\n");
 }
 
-pub fn emitReadAssert(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitReadAssert(ctx: CallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     var replacements: std.ArrayList(MmioReadReplacement) = .empty;
     defer replacements.deinit(ctx.emit.scratch);
     if (!try collectReadHoistsForExpr(ctx.emit, expr, locals, &replacements)) return false;
@@ -574,7 +574,7 @@ pub fn emitReadAssert(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringH
     return true;
 }
 
-pub fn emitReadWhileLoop(ctx: WhileEmitContext, loop: ast.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitReadWhileLoop(ctx: WhileEmitContext, loop: ast_bridge.Loop, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const condition = loop.iterable orelse return false;
     var replacements: std.ArrayList(MmioReadReplacement) = .empty;
     defer replacements.deinit(ctx.emit.scratch);
@@ -593,14 +593,14 @@ pub fn emitReadWhileLoop(ctx: WhileEmitContext, loop: ast.Loop, locals: *std.Str
     return true;
 }
 
-fn emitReadWhileGuard(ctx: Context, replacement_ctx: ReplacementEmitContext, condition: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {
+fn emitReadWhileGuard(ctx: Context, replacement_ctx: ReplacementEmitContext, condition: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {
     try writeIndent(ctx);
     try ctx.out.appendSlice(ctx.allocator, "if (!(");
     try emitReadExprWithReplacements(replacement_ctx, condition, locals, null, replacements);
     try ctx.out.appendSlice(ctx.allocator, ")) break;\n");
 }
 
-pub fn emitReadExprStmtWithReplacements(ctx: Context, replacement_ctx: ReplacementEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {
+pub fn emitReadExprStmtWithReplacements(ctx: Context, replacement_ctx: ReplacementEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {
     var nested = try emitReadReplacementFrame(ctx, locals.*, replacements);
     defer nested.deinit();
 
@@ -613,7 +613,7 @@ pub fn emitReadExprStmtWithReplacements(ctx: Context, replacement_ctx: Replaceme
     }
 }
 
-pub fn emitReadExprStmt(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitReadExprStmt(ctx: CallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     if (try emitReadCallExprStmt(ctx, expr, locals)) return true;
 
     var replacements: std.ArrayList(MmioReadReplacement) = .empty;
@@ -624,7 +624,7 @@ pub fn emitReadExprStmt(ctx: CallEmitContext, expr: ast.Expr, locals: *std.Strin
     return true;
 }
 
-pub fn emitReadReturnWithReplacements(ctx: Context, replacement_ctx: ReplacementEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, replacements: []const MmioReadReplacement) !void {
+pub fn emitReadReturnWithReplacements(ctx: Context, replacement_ctx: ReplacementEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, replacements: []const MmioReadReplacement) !void {
     var nested = try emitReadReplacementFrame(ctx, locals.*, replacements);
     defer nested.deinit();
 
@@ -634,7 +634,7 @@ pub fn emitReadReturnWithReplacements(ctx: Context, replacement_ctx: Replacement
     try ctx.out.appendSlice(ctx.allocator, ";\n");
 }
 
-pub fn emitReadExprReturn(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitReadExprReturn(ctx: CallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     if (return_ty) |target_ty| {
         if (try emitReadSequencedBinaryReturn(ctx.emit.context, ctx.replacement, expr, locals, target_ty)) return true;
     }
@@ -647,7 +647,7 @@ pub fn emitReadExprReturn(ctx: CallEmitContext, expr: ast.Expr, locals: *std.Str
     return true;
 }
 
-pub fn emitReadCallReturn(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitReadCallReturn(ctx: CallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = syntax_bridge.callExpr(expr) orelse return false;
     if (call.args.len == 0) return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
@@ -662,7 +662,7 @@ pub fn emitReadCallReturn(ctx: CallEmitContext, expr: ast.Expr, locals: *std.Str
     return true;
 }
 
-pub fn emitReadLocalInitWithReplacements(ctx: Context, replacement_ctx: ReplacementEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {
+pub fn emitReadLocalInitWithReplacements(ctx: Context, replacement_ctx: ReplacementEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {
     var nested = try emitReadReplacementFrame(ctx, locals.*, replacements);
     defer nested.deinit();
 
@@ -673,7 +673,7 @@ pub fn emitReadLocalInitWithReplacements(ctx: Context, replacement_ctx: Replacem
     try ctx.out.appendSlice(ctx.allocator, ";\n");
 }
 
-pub fn emitReadExprLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitReadExprLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     if (try emitReadSequencedBinaryLocalInit(ctx.emit.context, ctx.replacement, name, decl_ty, initializer, locals)) return true;
     if (try emitReadCallLocalInit(ctx, name, decl_ty, initializer, locals)) return true;
 
@@ -685,7 +685,7 @@ pub fn emitReadExprLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: as
     return true;
 }
 
-pub fn emitReadCallLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitReadCallLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = syntax_bridge.callExpr(initializer) orelse return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
@@ -713,7 +713,7 @@ pub fn emitReadCallAssignment(ctx: CallEmitContext, assignment: anytype, locals:
     return true;
 }
 
-pub fn emitReadCallExprStmt(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitReadCallExprStmt(ctx: CallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = syntax_bridge.callExpr(expr) orelse return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
@@ -746,14 +746,14 @@ pub fn emitReadExprAssignment(ctx: CallEmitContext, assignment: anytype, locals:
     return true;
 }
 
-pub fn emitReadSequencedBinaryReturn(ctx: Context, replacement_ctx: ReplacementEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+pub fn emitReadSequencedBinaryReturn(ctx: Context, replacement_ctx: ReplacementEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) !bool {
     const temp = (try replacement_ctx.emit_read_sequenced_binary_value_temp(replacement_ctx.emit_ctx, expr, locals, target_ty)) orelse return false;
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "return {s};\n", .{temp.name});
     return true;
 }
 
-pub fn emitReadSequencedBinaryLocalInit(ctx: Context, replacement_ctx: ReplacementEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitReadSequencedBinaryLocalInit(ctx: Context, replacement_ctx: ReplacementEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const temp = (try replacement_ctx.emit_read_sequenced_binary_value_temp(replacement_ctx.emit_ctx, initializer, locals, decl_ty)) orelse return false;
     try writeIndent(ctx);
     try replacement_ctx.emit_declarator(replacement_ctx.emit_ctx, decl_ty, name);
@@ -768,7 +768,7 @@ pub fn emitReadSequencedBinaryAssignment(ctx: Context, replacement_ctx: Replacem
     return true;
 }
 
-pub fn emitReadOperandTempWithReplacements(ctx: EmitContext, replacement_ctx: ReplacementEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, replacements: []const MmioReadReplacement) !SequencedArgTemp {
+pub fn emitReadOperandTempWithReplacements(ctx: EmitContext, replacement_ctx: ReplacementEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, replacements: []const MmioReadReplacement) !SequencedArgTemp {
     var nested = try emitReadReplacementFrame(ctx.context, locals.*, replacements);
     defer nested.deinit();
 
@@ -781,7 +781,7 @@ pub fn emitReadOperandTempWithReplacements(ctx: EmitContext, replacement_ctx: Re
     return .{ .name = temp_name, .ty = target_ty };
 }
 
-pub fn emitReadOperandTemp(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !SequencedArgTemp {
+pub fn emitReadOperandTemp(ctx: CallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) !SequencedArgTemp {
     var replacements: std.ArrayList(MmioReadReplacement) = .empty;
     defer replacements.deinit(ctx.emit.scratch);
     _ = try collectReadHoistsForExpr(ctx.emit, expr, locals, &replacements);
@@ -789,7 +789,7 @@ pub fn emitReadOperandTemp(ctx: CallEmitContext, expr: ast.Expr, locals: *std.St
     return emitReadOperandTempWithReplacements(ctx.emit, ctx.replacement, expr, locals, target_ty, replacements.items);
 }
 
-pub fn emitReadSequencedBinaryValueTemp(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitReadSequencedBinaryValueTemp(ctx: CallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     var seq_ctx = ctx;
     return lower_c_arith.emitSequencedBinaryValueTemp(.{
         .arith = ctx.arith,
@@ -799,24 +799,24 @@ pub fn emitReadSequencedBinaryValueTemp(ctx: CallEmitContext, expr: ast.Expr, lo
     }, expr, locals, target_ty);
 }
 
-fn readExprNeedsSequencedBinary(ctx_ptr: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
+fn readExprNeedsSequencedBinary(ctx_ptr: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
     const ctx: *CallEmitContext = @ptrCast(@alignCast(ctx_ptr));
     return exprContainsRead(ctx.emit, expr, locals);
 }
 
-fn emitReadSequencedBinaryOperandTemp(ctx_ptr: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+fn emitReadSequencedBinaryOperandTemp(ctx_ptr: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
     const ctx: *CallEmitContext = @ptrCast(@alignCast(ctx_ptr));
     return emitReadOperandTemp(ctx.*, expr, locals, target_ty);
 }
 
-fn assignmentTargetType(ctx: ReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+fn assignmentTargetType(ctx: ReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
     return ctx.operand_emit_type(ctx.emit_ctx, assignment.target, locals) orelse blk: {
         const target = ctx.global_assignment_target(ctx.emit_ctx, assignment.target, locals) orelse return null;
         break :blk type_bridge.simpleNameType(target.info.type_name, assignment.value.span);
     };
 }
 
-fn emitReadCallArgTemp(ctx: CallEmitContext, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+fn emitReadCallArgTemp(ctx: CallEmitContext, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
     if (!exprContainsRead(ctx.emit, arg, locals)) {
         return try ctx.emit.emit_sequenced_arg_temp(ctx.emit.emit_ctx, arg, locals, target_ty);
     }
@@ -838,7 +838,7 @@ fn emitReadCallArgTemps(ctx: CallEmitContext, call: anytype, locals: *std.String
     return temps;
 }
 
-fn emitAssignmentFromTemp(ctx: Context, replacement_ctx: ReplacementEmitContext, target: ast.Expr, locals: *std.StringHashMap(LocalInfo), temp_name: []const u8) !void {
+fn emitAssignmentFromTemp(ctx: Context, replacement_ctx: ReplacementEmitContext, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), temp_name: []const u8) !void {
     try writeIndent(ctx);
     if (replacement_ctx.global_assignment_target(replacement_ctx.emit_ctx, target, locals)) |global_target| {
         try appendGlobalStoreValue(ctx.allocator, ctx.out, global_target, temp_name);
@@ -848,7 +848,7 @@ fn emitAssignmentFromTemp(ctx: Context, replacement_ctx: ReplacementEmitContext,
     }
 }
 
-fn emitInlineReadAssignment(ctx: Context, replacement_ctx: ReplacementEmitContext, target: ast.Expr, locals: *std.StringHashMap(LocalInfo), value_c_type: []const u8, access: MmioAccess) !void {
+fn emitInlineReadAssignment(ctx: Context, replacement_ctx: ReplacementEmitContext, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), value_c_type: []const u8, access: MmioAccess) !void {
     try writeIndent(ctx);
     try replacement_ctx.emit_assign_target(replacement_ctx.emit_ctx, target, locals);
     try ctx.out.appendSlice(ctx.allocator, " = ");
@@ -856,7 +856,7 @@ fn emitInlineReadAssignment(ctx: Context, replacement_ctx: ReplacementEmitContex
     try ctx.out.appendSlice(ctx.allocator, ";\n");
 }
 
-fn emitReadReplacementAssignment(ctx: Context, replacement_ctx: ReplacementEmitContext, target_expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nested: *std.StringHashMap(LocalInfo), value: ast.Expr, replacements: []const MmioReadReplacement) !void {
+fn emitReadReplacementAssignment(ctx: Context, replacement_ctx: ReplacementEmitContext, target_expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), nested: *std.StringHashMap(LocalInfo), value: ast_bridge.Expr, replacements: []const MmioReadReplacement) !void {
     const target_ty = assignmentTargetType(replacement_ctx, .{ .target = target_expr, .value = value }, locals) orelse return error.UnsupportedCEmission;
     const temp_name = try std.fmt.allocPrint(replacement_ctx.scratch, "mc_tmp{d}", .{replacement_ctx.temp_index.*});
     replacement_ctx.temp_index.* += 1;
@@ -867,7 +867,7 @@ fn emitReadReplacementAssignment(ctx: Context, replacement_ctx: ReplacementEmitC
     try emitAssignmentFromTemp(ctx, replacement_ctx, target_expr, locals, temp_name);
 }
 
-pub fn emitReadInferredLocalInitWithReplacements(ctx: Context, replacement_ctx: ReplacementEmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {
+pub fn emitReadInferredLocalInitWithReplacements(ctx: Context, replacement_ctx: ReplacementEmitContext, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const MmioReadReplacement) !void {
     var nested = try emitReadReplacementFrame(ctx, locals.*, replacements);
     defer nested.deinit();
 
@@ -883,7 +883,7 @@ pub fn emitReadInferredLocalInitWithReplacements(ctx: Context, replacement_ctx: 
     try ctx.out.appendSlice(ctx.allocator, ";\n");
 }
 
-pub fn emitReadExprInferredLocalInit(ctx: CallEmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitReadExprInferredLocalInit(ctx: CallEmitContext, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     var replacements: std.ArrayList(MmioReadReplacement) = .empty;
     defer replacements.deinit(ctx.emit.scratch);
     if (!try collectReadHoistsForExpr(ctx.emit, initializer, locals, &replacements)) return false;

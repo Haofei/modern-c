@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const error_from = @import("error_from.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_access = @import("lower_c_access.zig");
@@ -33,32 +33,32 @@ const calleeIdentName = syntax_bridge.calleeIdentName;
 const callExpr = syntax_bridge.callExpr;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
 
-pub const TryPredicateFn = *const fn (ctx: *anyopaque, operand: ast.Expr) bool;
-pub const TryPredicateErrorFn = *const fn (ctx: *anyopaque, operand: ast.Expr) anyerror!bool;
-pub const TryHoistFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror!bool;
+pub const TryPredicateFn = *const fn (ctx: *anyopaque, operand: ast_bridge.Expr) bool;
+pub const TryPredicateErrorFn = *const fn (ctx: *anyopaque, operand: ast_bridge.Expr) anyerror!bool;
+pub const TryHoistFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!bool;
 pub const CallScanResult = enum { found, ignored, descend };
 pub const CallHoistResult = enum { hoisted, ignored, descend };
-pub const CallScanFn = *const fn (ctx: *anyopaque, expr: ast.Expr) CallScanResult;
-pub const CallHoistFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror!CallHoistResult;
-pub const BinaryGuardFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror!?bool;
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(lower_c_model.LocalInfo)) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(lower_c_model.LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
-pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void;
-pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
-pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
-pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitResultTrySequencedBinaryValueTempFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!?SequencedArgTemp;
-pub const EmitNullableTrySequencedBinaryValueTempFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp;
-pub const ExprContainsResultTryFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool;
-pub const CallArgsContainResultTryFn = *const fn (ctx: *anyopaque, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) bool;
-pub const CallArgsContainNullableTryFn = *const fn (ctx: *anyopaque, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool;
-pub const CollectResultTryHoistsForStmtFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, replacements: *std.ArrayList(lower_c_model.TryReplacement)) anyerror!bool;
-pub const CollectResultTryHoistsForLocalInitFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast.TypeExpr, replacements: *std.ArrayList(lower_c_model.TryReplacement)) anyerror!bool;
-pub const CollectNullableTryHoistsForReturnFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(lower_c_model.TryReplacement)) anyerror!bool;
-pub const ResultTypeForExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
-pub const NullableInnerCTypeForExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?[]const u8;
-pub const EmitDeferredCleanupsFn = *const fn (ctx: *anyopaque, locals: *std.StringHashMap(LocalInfo), return_ty: ast.TypeExpr) anyerror!void;
+pub const CallScanFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) CallScanResult;
+pub const CallHoistFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!CallHoistResult;
+pub const BinaryGuardFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!?bool;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(lower_c_model.LocalInfo)) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(lower_c_model.LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
+pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr;
+pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
+pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitResultTrySequencedBinaryValueTempFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, return_ty: ?ast_bridge.TypeExpr, mode: ResultTrySequenceMode) anyerror!?SequencedArgTemp;
+pub const EmitNullableTrySequencedBinaryValueTempFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp;
+pub const ExprContainsResultTryFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool;
+pub const CallArgsContainResultTryFn = *const fn (ctx: *anyopaque, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) bool;
+pub const CallArgsContainNullableTryFn = *const fn (ctx: *anyopaque, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool;
+pub const CollectResultTryHoistsForStmtFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, replacements: *std.ArrayList(lower_c_model.TryReplacement)) anyerror!bool;
+pub const CollectResultTryHoistsForLocalInitFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast_bridge.TypeExpr, replacements: *std.ArrayList(lower_c_model.TryReplacement)) anyerror!bool;
+pub const CollectNullableTryHoistsForReturnFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(lower_c_model.TryReplacement)) anyerror!bool;
+pub const ResultTypeForExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr;
+pub const NullableInnerCTypeForExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?[]const u8;
+pub const EmitDeferredCleanupsFn = *const fn (ctx: *anyopaque, locals: *std.StringHashMap(LocalInfo), return_ty: ast_bridge.TypeExpr) anyerror!void;
 
 pub const TryReplacementMode = enum { result, nullable };
 
@@ -68,7 +68,7 @@ pub const TryReplacementEmitContext = struct {
     out: *std.ArrayList(u8),
     indent: *usize,
     temp_index: *usize,
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
     functions: *const std.StringHashMap(lower_c_model.FnInfo),
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
@@ -108,20 +108,20 @@ pub const TryStmtEmitContext = struct {
 };
 
 const ResultTryOperand = struct {
-    expr: ast.Expr,
-    mapped: ?*ast.Expr,
+    expr: ast_bridge.Expr,
+    mapped: ?*ast_bridge.Expr,
 };
 
 const DirectTryHoistContext = struct {
     ctx: TryDirectEmitContext,
     locals: *std.StringHashMap(LocalInfo),
     replacements: *std.ArrayList(lower_c_model.TryReplacement),
-    enclosing_return_ty: ?ast.TypeExpr = null,
+    enclosing_return_ty: ?ast_bridge.TypeExpr = null,
 };
 
 const ResultTrySequencedBinaryContext = struct {
     ctx: TryDirectEmitContext,
-    return_ty: ?ast.TypeExpr,
+    return_ty: ?ast_bridge.TypeExpr,
     mode: ResultTrySequenceMode,
 };
 
@@ -137,9 +137,9 @@ const DirectTryScanContext = struct {
 pub fn emitTryExprWithReplacements(
     ctx: TryReplacementEmitContext,
     mode: TryReplacementMode,
-    expr: ast.Expr,
+    expr: ast_bridge.Expr,
     locals: ?*std.StringHashMap(lower_c_model.LocalInfo),
-    target_ty: ?ast.TypeExpr,
+    target_ty: ?ast_bridge.TypeExpr,
     replacements: []const lower_c_model.TryReplacement,
 ) anyerror!void {
     if (!lower_c_access.exprHasTryReplacement(expr, replacements)) return ctx.emit_expr_with_target(ctx.emit_ctx, expr, locals, target_ty);
@@ -211,7 +211,7 @@ pub fn emitTryExprWithReplacements(
     }
 }
 
-pub fn emitTryLocalInitWithReplacements(ctx: TryReplacementEmitContext, mode: TryReplacementMode, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const lower_c_model.TryReplacement) !void {
+pub fn emitTryLocalInitWithReplacements(ctx: TryReplacementEmitContext, mode: TryReplacementMode, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const lower_c_model.TryReplacement) !void {
     try writeIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
     try ctx.out.appendSlice(ctx.allocator, " = ");
@@ -219,7 +219,7 @@ pub fn emitTryLocalInitWithReplacements(ctx: TryReplacementEmitContext, mode: Tr
     try ctx.out.appendSlice(ctx.allocator, ";\n");
 }
 
-pub fn emitTryOperandTempWithReplacements(ctx: TryReplacementEmitContext, mode: TryReplacementMode, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, replacements: []const lower_c_model.TryReplacement) !SequencedArgTemp {
+pub fn emitTryOperandTempWithReplacements(ctx: TryReplacementEmitContext, mode: TryReplacementMode, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, replacements: []const lower_c_model.TryReplacement) !SequencedArgTemp {
     const temp_name = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
     try writeIndent(ctx);
@@ -229,7 +229,7 @@ pub fn emitTryOperandTempWithReplacements(ctx: TryReplacementEmitContext, mode: 
     return .{ .name = temp_name, .ty = target_ty };
 }
 
-pub fn emitTryExprStmtWithReplacements(ctx: TryReplacementEmitContext, mode: TryReplacementMode, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const lower_c_model.TryReplacement) !void {
+pub fn emitTryExprStmtWithReplacements(ctx: TryReplacementEmitContext, mode: TryReplacementMode, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: []const lower_c_model.TryReplacement) !void {
     try writeIndent(ctx);
     try emitTryExprWithReplacements(ctx, mode, expr, locals, null, replacements);
     try ctx.out.appendSlice(ctx.allocator, ";\n");
@@ -247,7 +247,7 @@ pub fn emitTryAssignmentWithReplacements(ctx: TryReplacementEmitContext, mode: T
     try emitAssignmentFromTemp(ctx, assignment.target, locals, temp_name);
 }
 
-pub fn emitResultTrySequencedBinaryReturn(ctx: TryReplacementEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitResultTrySequencedBinaryReturn(ctx: TryReplacementEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const target_ty = return_ty orelse return false;
     const temp = (try ctx.emit_result_try_sequenced_binary_value_temp(ctx.emit_ctx, expr, locals, target_ty, return_ty, .stmt)) orelse return false;
     try writeIndent(ctx);
@@ -255,7 +255,7 @@ pub fn emitResultTrySequencedBinaryReturn(ctx: TryReplacementEmitContext, expr: 
     return true;
 }
 
-pub fn emitNullableTrySequencedBinaryReturn(ctx: TryReplacementEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitNullableTrySequencedBinaryReturn(ctx: TryReplacementEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const target_ty = return_ty orelse return false;
     const temp = (try ctx.emit_nullable_try_sequenced_binary_value_temp(ctx.emit_ctx, expr, locals, target_ty)) orelse return false;
     try writeIndent(ctx);
@@ -263,7 +263,7 @@ pub fn emitNullableTrySequencedBinaryReturn(ctx: TryReplacementEmitContext, expr
     return true;
 }
 
-pub fn emitResultTrySequencedBinaryLocalInit(ctx: TryReplacementEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast.TypeExpr) !bool {
+pub fn emitResultTrySequencedBinaryLocalInit(ctx: TryReplacementEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast_bridge.TypeExpr) !bool {
     const temp = (try ctx.emit_result_try_sequenced_binary_value_temp(ctx.emit_ctx, initializer, locals, decl_ty, enclosing_return_ty, .local_init)) orelse return false;
     try writeIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
@@ -271,7 +271,7 @@ pub fn emitResultTrySequencedBinaryLocalInit(ctx: TryReplacementEmitContext, nam
     return true;
 }
 
-pub fn emitNullableTrySequencedBinaryLocalInit(ctx: TryReplacementEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitNullableTrySequencedBinaryLocalInit(ctx: TryReplacementEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const temp = (try ctx.emit_nullable_try_sequenced_binary_value_temp(ctx.emit_ctx, initializer, locals, decl_ty)) orelse return false;
     try writeIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
@@ -279,7 +279,7 @@ pub fn emitNullableTrySequencedBinaryLocalInit(ctx: TryReplacementEmitContext, n
     return true;
 }
 
-pub fn emitResultTrySequencedBinaryAssignment(ctx: TryReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitResultTrySequencedBinaryAssignment(ctx: TryReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const target_ty = assignmentTargetType(ctx, assignment, locals) orelse return false;
     const temp = (try ctx.emit_result_try_sequenced_binary_value_temp(ctx.emit_ctx, assignment.value, locals, target_ty, return_ty, .stmt)) orelse return false;
     try emitAssignmentFromTemp(ctx, assignment.target, locals, temp.name);
@@ -293,7 +293,7 @@ pub fn emitNullableTrySequencedBinaryAssignment(ctx: TryReplacementEmitContext, 
     return true;
 }
 
-pub fn emitResultTryCallLocalInit(ctx: TryCallEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast.TypeExpr) !bool {
+pub fn emitResultTryCallLocalInit(ctx: TryCallEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast_bridge.TypeExpr) !bool {
     const call = callExpr(initializer) orelse return false;
     if (!ctx.call_args_contain_result_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
@@ -306,7 +306,7 @@ pub fn emitResultTryCallLocalInit(ctx: TryCallEmitContext, name: []const u8, dec
     return true;
 }
 
-pub fn emitNullableTryCallLocalInit(ctx: TryCallEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitNullableTryCallLocalInit(ctx: TryCallEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(initializer) orelse return false;
     if (!try ctx.call_args_contain_nullable_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
@@ -319,7 +319,7 @@ pub fn emitNullableTryCallLocalInit(ctx: TryCallEmitContext, name: []const u8, d
     return true;
 }
 
-pub fn emitResultTryCallAssignment(ctx: TryCallEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitResultTryCallAssignment(ctx: TryCallEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const call = callExpr(assignment.value) orelse return false;
     if (!ctx.call_args_contain_result_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
@@ -349,7 +349,7 @@ pub fn emitNullableTryCallAssignment(ctx: TryCallEmitContext, assignment: anytyp
     return true;
 }
 
-pub fn emitResultTryCallExprStmt(ctx: TryCallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitResultTryCallExprStmt(ctx: TryCallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const call = callExpr(expr) orelse return false;
     if (!ctx.call_args_contain_result_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
@@ -362,7 +362,7 @@ pub fn emitResultTryCallExprStmt(ctx: TryCallEmitContext, expr: ast.Expr, locals
     return true;
 }
 
-pub fn emitNullableTryCallExprStmt(ctx: TryCallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitNullableTryCallExprStmt(ctx: TryCallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(expr) orelse return false;
     if (!try ctx.call_args_contain_nullable_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
@@ -375,7 +375,7 @@ pub fn emitNullableTryCallExprStmt(ctx: TryCallEmitContext, expr: ast.Expr, loca
     return true;
 }
 
-pub fn emitResultTryCallReturn(ctx: TryCallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitResultTryCallReturn(ctx: TryCallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(expr) orelse return false;
     if (!ctx.call_args_contain_result_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
 
@@ -389,7 +389,7 @@ pub fn emitResultTryCallReturn(ctx: TryCallEmitContext, expr: ast.Expr, locals: 
     return true;
 }
 
-pub fn emitNullableTryCallReturn(ctx: TryCallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitNullableTryCallReturn(ctx: TryCallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(expr) orelse return false;
     if (!try ctx.call_args_contain_nullable_try(ctx.replacement.emit_ctx, call.args, locals)) return false;
 
@@ -403,7 +403,7 @@ pub fn emitNullableTryCallReturn(ctx: TryCallEmitContext, expr: ast.Expr, locals
     return true;
 }
 
-pub fn emitResultTryConstructorReturn(ctx: TryCallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitResultTryConstructorReturn(ctx: TryCallEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const enclosing_return_ty = return_ty orelse return false;
     const call = callExpr(expr) orelse return false;
     if (call.type_args.len != 0 or call.args.len != 1) return false;
@@ -425,7 +425,7 @@ pub fn emitResultTryConstructorReturn(ctx: TryCallEmitContext, expr: ast.Expr, l
     return true;
 }
 
-pub fn emitResultTryLocalInit(ctx: TryDirectEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitResultTryLocalInit(ctx: TryDirectEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const operand = switch (initializer.kind) {
         .try_expr => tryOperandForExpr(initializer).?,
         .grouped => |inner| return try emitResultTryLocalInit(ctx, name, decl_ty, inner.*, locals, return_ty),
@@ -444,7 +444,7 @@ pub fn emitResultTryLocalInit(ctx: TryDirectEmitContext, name: []const u8, decl_
     return true;
 }
 
-pub fn emitResultTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitResultTryReturn(ctx: TryDirectEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const operand = switch (expr.kind) {
         .try_expr => |inner| inner.operand.*,
         .grouped => |inner| return try emitResultTryReturn(ctx, inner.*, locals, return_ty),
@@ -460,7 +460,7 @@ pub fn emitResultTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *s
     return true;
 }
 
-pub fn emitNullableTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitNullableTryReturn(ctx: TryDirectEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const operand = switch (expr.kind) {
         .try_expr => |inner| inner.operand.*,
         .grouped => |inner| return try emitNullableTryReturn(ctx, inner.*, locals),
@@ -495,7 +495,7 @@ pub fn emitNullableTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: 
 }
 
 // If `operand` has a value-optional `?T` type, returns its `mc_opt_<T>` C type name.
-fn valueOptionalCType(ctx: TryDirectEmitContext, operand: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?[]const u8 {
+fn valueOptionalCType(ctx: TryDirectEmitContext, operand: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !?[]const u8 {
     _ = locals;
     const ty = tryOperandType(ctx, operand) orelse return null;
     const resolved = type_bridge.resolveAliasType(ctx.replacement.type_aliases, ty);
@@ -504,11 +504,11 @@ fn valueOptionalCType(ctx: TryDirectEmitContext, operand: ast.Expr, locals: *std
     return try ctx.replacement.c_type(ctx.replacement.emit_ctx, resolved);
 }
 
-fn tryOperandType(ctx: TryDirectEmitContext, operand: ast.Expr) ?ast.TypeExpr {
+fn tryOperandType(ctx: TryDirectEmitContext, operand: ast_bridge.Expr) ?ast_bridge.TypeExpr {
     return ctx.replacement.mir_target_type(ctx.replacement.emit_ctx, .try_operand, operand.span);
 }
 
-fn tryExpressionResultType(ctx: TryDirectEmitContext, expr: ast.Expr) !?ast.TypeExpr {
+fn tryExpressionResultType(ctx: TryDirectEmitContext, expr: ast_bridge.Expr) !?ast_bridge.TypeExpr {
     return switch (expr.kind) {
         .grouped => |inner| try tryExpressionResultType(ctx, inner.*),
         .try_expr => |node| blk: {
@@ -528,14 +528,14 @@ fn tryExpressionResultType(ctx: TryDirectEmitContext, expr: ast.Expr) !?ast.Type
     };
 }
 
-fn resultTryOperandType(ctx: TryDirectEmitContext, operand: ast.Expr) ?ast.TypeExpr {
+fn resultTryOperandType(ctx: TryDirectEmitContext, operand: ast_bridge.Expr) ?ast_bridge.TypeExpr {
     const ty = tryOperandType(ctx, operand) orelse return null;
     _ = resultPayloadTypeForTag(ty, "ok") orelse return null;
     _ = resultPayloadTypeForTag(ty, "err") orelse return null;
     return ty;
 }
 
-fn nullableTryOperandCType(ctx: TryDirectEmitContext, operand: ast.Expr) !?[]const u8 {
+fn nullableTryOperandCType(ctx: TryDirectEmitContext, operand: ast_bridge.Expr) !?[]const u8 {
     const ty = tryOperandType(ctx, operand) orelse return null;
     const resolved = type_bridge.resolveAliasType(ctx.replacement.type_aliases, ty);
     const child = switch (resolved.kind) {
@@ -551,12 +551,12 @@ fn nullableTryOperandCType(ctx: TryDirectEmitContext, operand: ast.Expr) !?[]con
     };
 }
 
-pub fn collectResultTryHoistsForReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(lower_c_model.TryReplacement)) !bool {
+pub fn collectResultTryHoistsForReturn(ctx: TryDirectEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(lower_c_model.TryReplacement)) !bool {
     var hoist_ctx = DirectTryHoistContext{ .ctx = ctx, .locals = locals, .replacements = replacements };
     return collectTryHoists(&hoist_ctx, expr, emitResultTryTrapHoist);
 }
 
-pub fn collectResultTryHoistsForStmt(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, replacements: *std.ArrayList(lower_c_model.TryReplacement)) !bool {
+pub fn collectResultTryHoistsForStmt(ctx: TryDirectEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, replacements: *std.ArrayList(lower_c_model.TryReplacement)) !bool {
     if (return_ty) |ty| {
         if (resultPayloadTypeForTag(ty, "err") != null) {
             return try collectResultTryHoistsForLocalInit(ctx, expr, locals, ty, replacements);
@@ -565,17 +565,17 @@ pub fn collectResultTryHoistsForStmt(ctx: TryDirectEmitContext, expr: ast.Expr, 
     return try collectResultTryHoistsForReturn(ctx, expr, locals, replacements);
 }
 
-pub fn collectResultTryHoistsForLocalInit(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast.TypeExpr, replacements: *std.ArrayList(lower_c_model.TryReplacement)) !bool {
+pub fn collectResultTryHoistsForLocalInit(ctx: TryDirectEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), enclosing_return_ty: ast_bridge.TypeExpr, replacements: *std.ArrayList(lower_c_model.TryReplacement)) !bool {
     var hoist_ctx = DirectTryHoistContext{ .ctx = ctx, .locals = locals, .replacements = replacements, .enclosing_return_ty = enclosing_return_ty };
     return collectTryHoists(&hoist_ctx, expr, emitResultTryPropagateHoist);
 }
 
-pub fn collectNullableTryHoistsForReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(lower_c_model.TryReplacement)) !bool {
+pub fn collectNullableTryHoistsForReturn(ctx: TryDirectEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), replacements: *std.ArrayList(lower_c_model.TryReplacement)) !bool {
     var hoist_ctx = DirectTryHoistContext{ .ctx = ctx, .locals = locals, .replacements = replacements };
     return collectTryHoists(&hoist_ctx, expr, emitNullableTryTrapHoist);
 }
 
-pub fn emitResultTryExprLocalInit(ctx: TryStmtEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitResultTryExprLocalInit(ctx: TryStmtEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const propagates = resultTryLocalInitPropagates(return_ty);
 
     if (propagates) {
@@ -591,7 +591,7 @@ pub fn emitResultTryExprLocalInit(ctx: TryStmtEmitContext, name: []const u8, dec
     return true;
 }
 
-pub fn emitNullableTryExprLocalInit(ctx: TryStmtEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitNullableTryExprLocalInit(ctx: TryStmtEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     if (try emitNullableTrySequencedBinaryLocalInit(ctx.direct.replacement, name, decl_ty, initializer, locals)) return true;
     if (try emitNullableTryCallLocalInit(ctx.call, name, decl_ty, initializer, locals)) return true;
 
@@ -603,7 +603,7 @@ pub fn emitNullableTryExprLocalInit(ctx: TryStmtEmitContext, name: []const u8, d
     return true;
 }
 
-pub fn emitResultTryAssignmentStmt(ctx: TryStmtEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitResultTryAssignmentStmt(ctx: TryStmtEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     if (try emitResultTrySequencedBinaryAssignment(ctx.direct.replacement, assignment, locals, return_ty)) return true;
     if (try emitResultTryCallAssignment(ctx.call, assignment, locals, return_ty)) return true;
 
@@ -627,7 +627,7 @@ pub fn emitNullableTryAssignmentStmt(ctx: TryStmtEmitContext, assignment: anytyp
     return true;
 }
 
-pub fn emitResultTryOperandTemp(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!SequencedArgTemp {
+pub fn emitResultTryOperandTemp(ctx: TryDirectEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, return_ty: ?ast_bridge.TypeExpr, mode: ResultTrySequenceMode) anyerror!SequencedArgTemp {
     var replacements: std.ArrayList(TryReplacement) = .empty;
     defer replacements.deinit(ctx.replacement.scratch);
     const found = switch (mode) {
@@ -641,7 +641,7 @@ pub fn emitResultTryOperandTemp(ctx: TryDirectEmitContext, expr: ast.Expr, local
     return emitTryOperandTempWithReplacements(ctx.replacement, .result, expr, locals, target_ty, replacements.items);
 }
 
-pub fn emitNullableTryOperandTemp(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+pub fn emitNullableTryOperandTemp(ctx: TryDirectEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
     var replacements: std.ArrayList(TryReplacement) = .empty;
     defer replacements.deinit(ctx.replacement.scratch);
     _ = try collectNullableTryHoistsForReturn(ctx, expr, locals, &replacements);
@@ -649,7 +649,7 @@ pub fn emitNullableTryOperandTemp(ctx: TryDirectEmitContext, expr: ast.Expr, loc
     return emitTryOperandTempWithReplacements(ctx.replacement, .nullable, expr, locals, target_ty, replacements.items);
 }
 
-pub fn emitResultTrySequencedBinaryValueTemp(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!?SequencedArgTemp {
+pub fn emitResultTrySequencedBinaryValueTemp(ctx: TryDirectEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, return_ty: ?ast_bridge.TypeExpr, mode: ResultTrySequenceMode) anyerror!?SequencedArgTemp {
     var seq_ctx = ResultTrySequencedBinaryContext{ .ctx = ctx, .return_ty = return_ty, .mode = mode };
     return lower_c_arith.emitSequencedBinaryValueTemp(.{
         .arith = ctx.arith,
@@ -659,7 +659,7 @@ pub fn emitResultTrySequencedBinaryValueTemp(ctx: TryDirectEmitContext, expr: as
     }, expr, locals, target_ty);
 }
 
-pub fn emitNullableTrySequencedBinaryValueTemp(ctx: TryDirectEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitNullableTrySequencedBinaryValueTemp(ctx: TryDirectEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     var seq_ctx = NullableTrySequencedBinaryContext{ .ctx = ctx };
     return lower_c_arith.emitSequencedBinaryValueTemp(.{
         .arith = ctx.arith,
@@ -669,7 +669,7 @@ pub fn emitNullableTrySequencedBinaryValueTemp(ctx: TryDirectEmitContext, expr: 
     }, expr, locals, target_ty);
 }
 
-pub fn emitResultTryExprStmt(ctx: TryStmtEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitResultTryExprStmt(ctx: TryStmtEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     if (try emitResultTryCallExprStmt(ctx.call, expr, locals, return_ty)) return true;
 
     var replacements: std.ArrayList(TryReplacement) = .empty;
@@ -681,7 +681,7 @@ pub fn emitResultTryExprStmt(ctx: TryStmtEmitContext, expr: ast.Expr, locals: *s
     return true;
 }
 
-pub fn emitNullableTryExprStmt(ctx: TryStmtEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitNullableTryExprStmt(ctx: TryStmtEmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     if (try emitNullableTryCallExprStmt(ctx.call, expr, locals)) return true;
 
     var replacements: std.ArrayList(TryReplacement) = .empty;
@@ -693,16 +693,16 @@ pub fn emitNullableTryExprStmt(ctx: TryStmtEmitContext, expr: ast.Expr, locals: 
     return true;
 }
 
-fn resultTryLocalInitPropagates(return_ty: ?ast.TypeExpr) bool {
+fn resultTryLocalInitPropagates(return_ty: ?ast_bridge.TypeExpr) bool {
     const ty = return_ty orelse return false;
     return resultPayloadTypeForTag(ty, "err") != null;
 }
 
 fn collectResultTryLocalInitHoists(
     ctx: TryDirectEmitContext,
-    initializer: ast.Expr,
+    initializer: ast_bridge.Expr,
     locals: *std.StringHashMap(LocalInfo),
-    return_ty: ?ast.TypeExpr,
+    return_ty: ?ast_bridge.TypeExpr,
     propagates: bool,
     replacements: *std.ArrayList(TryReplacement),
 ) !bool {
@@ -712,40 +712,40 @@ fn collectResultTryLocalInitHoists(
         try collectResultTryHoistsForReturn(ctx, initializer, locals, replacements);
 }
 
-fn resultTryExprNeedsSequencedBinary(ctx_ptr: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
+fn resultTryExprNeedsSequencedBinary(ctx_ptr: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
     const ctx: *ResultTrySequencedBinaryContext = @ptrCast(@alignCast(ctx_ptr));
     var scan_ctx = DirectTryScanContext{ .ctx = ctx.ctx, .locals = locals };
     return exprContainsTry(&scan_ctx, expr, directResultTryOperandIsResult);
 }
 
-fn nullableTryExprNeedsSequencedBinary(ctx_ptr: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
+fn nullableTryExprNeedsSequencedBinary(ctx_ptr: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
     const ctx: *NullableTrySequencedBinaryContext = @ptrCast(@alignCast(ctx_ptr));
     var scan_ctx = DirectTryScanContext{ .ctx = ctx.ctx, .locals = locals };
     return try exprContainsTryError(&scan_ctx, expr, directNullableTryOperandIsNullable);
 }
 
-fn emitResultTrySequencedBinaryOperandTemp(ctx_ptr: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+fn emitResultTrySequencedBinaryOperandTemp(ctx_ptr: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
     const ctx: *ResultTrySequencedBinaryContext = @ptrCast(@alignCast(ctx_ptr));
     return emitResultTryOperandTemp(ctx.ctx, expr, locals, target_ty, ctx.return_ty, ctx.mode);
 }
 
-fn emitNullableTrySequencedBinaryOperandTemp(ctx_ptr: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+fn emitNullableTrySequencedBinaryOperandTemp(ctx_ptr: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
     const ctx: *NullableTrySequencedBinaryContext = @ptrCast(@alignCast(ctx_ptr));
     return emitNullableTryOperandTemp(ctx.ctx, expr, locals, target_ty);
 }
 
-fn directResultTryOperandIsResult(ctx_ptr: *anyopaque, operand: ast.Expr) bool {
+fn directResultTryOperandIsResult(ctx_ptr: *anyopaque, operand: ast_bridge.Expr) bool {
     const ctx: *DirectTryScanContext = @ptrCast(@alignCast(ctx_ptr));
     return resultTryOperandType(ctx.ctx, operand) != null;
 }
 
-fn directNullableTryOperandIsNullable(ctx_ptr: *anyopaque, operand: ast.Expr) anyerror!bool {
+fn directNullableTryOperandIsNullable(ctx_ptr: *anyopaque, operand: ast_bridge.Expr) anyerror!bool {
     const ctx: *DirectTryScanContext = @ptrCast(@alignCast(ctx_ptr));
     _ = ctx.locals;
     return (try nullableTryOperandCType(ctx.ctx, operand)) != null;
 }
 
-fn emitResultTryCallArgTemps(ctx: TryCallEmitContext, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!std.ArrayList(SequencedArgTemp) {
+fn emitResultTryCallArgTemps(ctx: TryCallEmitContext, call: anytype, locals: *std.StringHashMap(LocalInfo), fn_info: FnInfo, return_ty: ?ast_bridge.TypeExpr, mode: ResultTrySequenceMode) anyerror!std.ArrayList(SequencedArgTemp) {
     var temps: std.ArrayList(SequencedArgTemp) = .empty;
     errdefer temps.deinit(ctx.replacement.scratch);
     const target_owner = calleeIdentName(call.callee.*) orelse return error.UnsupportedCEmission;
@@ -759,7 +759,7 @@ fn emitResultTryCallArgTemps(ctx: TryCallEmitContext, call: anytype, locals: *st
     return temps;
 }
 
-fn emitResultTryCallArgTempWithMode(ctx: TryCallEmitContext, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, return_ty: ?ast.TypeExpr, mode: ResultTrySequenceMode) anyerror!SequencedArgTemp {
+fn emitResultTryCallArgTempWithMode(ctx: TryCallEmitContext, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, return_ty: ?ast_bridge.TypeExpr, mode: ResultTrySequenceMode) anyerror!SequencedArgTemp {
     var replacements: std.ArrayList(lower_c_model.TryReplacement) = .empty;
     defer replacements.deinit(ctx.replacement.scratch);
     const found_try = switch (mode) {
@@ -776,7 +776,7 @@ fn emitResultTryCallArgTempWithMode(ctx: TryCallEmitContext, arg: ast.Expr, loca
     return emitTryOperandTempWithReplacements(ctx.replacement, .result, arg, locals, target_ty, replacements.items);
 }
 
-fn emitNullableTryCallArgTemp(ctx: TryCallEmitContext, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+fn emitNullableTryCallArgTemp(ctx: TryCallEmitContext, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
     var replacements: std.ArrayList(lower_c_model.TryReplacement) = .empty;
     defer replacements.deinit(ctx.replacement.scratch);
     if (!try ctx.collect_nullable_try_hoists_for_return(ctx.replacement.emit_ctx, arg, locals, &replacements)) {
@@ -800,14 +800,14 @@ fn emitNullableTryCallArgTemps(ctx: TryCallEmitContext, call: anytype, locals: *
     return temps;
 }
 
-fn tryOperandForExpr(expr: ast.Expr) ?ResultTryOperand {
+fn tryOperandForExpr(expr: ast_bridge.Expr) ?ResultTryOperand {
     return switch (expr.kind) {
         .try_expr => |inner| .{ .expr = inner.operand.*, .mapped = inner.mapped },
         else => null,
     };
 }
 
-fn emitTryErrReturn(ctx: TryDirectEmitContext, enclosing_return_ty: ast.TypeExpr, temp_name: []const u8, mapped: ?*ast.Expr, operand_result_ty: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !void {
+fn emitTryErrReturn(ctx: TryDirectEmitContext, enclosing_return_ty: ast_bridge.TypeExpr, temp_name: []const u8, mapped: ?*ast_bridge.Expr, operand_result_ty: ast_bridge.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !void {
     if (locals) |l| try ctx.emit_deferred_cleanups(ctx.replacement.emit_ctx, l, enclosing_return_ty);
     try writeIndent(ctx.replacement);
     const ret_c = try ctx.replacement.c_type(ctx.replacement.emit_ctx, enclosing_return_ty);
@@ -818,7 +818,7 @@ fn emitTryErrReturn(ctx: TryDirectEmitContext, enclosing_return_ty: ast.TypeExpr
     }
 }
 
-fn emitMappedTryErrReturn(ctx: TryDirectEmitContext, enclosing_return_ty: ast.TypeExpr, ret_c: []const u8, mapped: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !void {
+fn emitMappedTryErrReturn(ctx: TryDirectEmitContext, enclosing_return_ty: ast_bridge.TypeExpr, ret_c: []const u8, mapped: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) !void {
     try ctx.replacement.out.print(ctx.replacement.allocator, "return (({s}){{ .is_ok = false, .payload.err = ", .{ret_c});
     if (resultPayloadTypeForTag(enclosing_return_ty, "err")) |err_ty| {
         try ctx.replacement.emit_expr_with_target(ctx.replacement.emit_ctx, mapped, locals, err_ty);
@@ -828,7 +828,7 @@ fn emitMappedTryErrReturn(ctx: TryDirectEmitContext, enclosing_return_ty: ast.Ty
     try ctx.replacement.out.appendSlice(ctx.replacement.allocator, " });\n");
 }
 
-fn emitPropagatedTryErrReturn(ctx: TryDirectEmitContext, ret_c: []const u8, temp_name: []const u8, enclosing_return_ty: ast.TypeExpr, operand_result_ty: ast.TypeExpr) !void {
+fn emitPropagatedTryErrReturn(ctx: TryDirectEmitContext, ret_c: []const u8, temp_name: []const u8, enclosing_return_ty: ast_bridge.TypeExpr, operand_result_ty: ast_bridge.TypeExpr) !void {
     // G8: when the operand's error type (E1) differs from the function's error type
     // (E2), invoke the resolved `#[error_from]` conversion on the propagated error.
     // When E1 == E2 no conversion resolves and this is byte-identical to before.
@@ -839,13 +839,13 @@ fn emitPropagatedTryErrReturn(ctx: TryDirectEmitContext, ret_c: []const u8, temp
     try ctx.replacement.out.print(ctx.replacement.allocator, "return (({s}){{ .is_ok = false, .payload.err = {s}.payload.err }});\n", .{ ret_c, temp_name });
 }
 
-fn errorConversionFn(ctx: TryDirectEmitContext, enclosing_return_ty: ast.TypeExpr, operand_result_ty: ast.TypeExpr) ?[]const u8 {
+fn errorConversionFn(ctx: TryDirectEmitContext, enclosing_return_ty: ast_bridge.TypeExpr, operand_result_ty: ast_bridge.TypeExpr) ?[]const u8 {
     const e1 = resultPayloadTypeForTag(operand_result_ty, "err") orelse return null;
     const e2 = resultPayloadTypeForTag(enclosing_return_ty, "err") orelse return null;
     return error_from.resolveTypes(ctx.replacement.functions, e1, e2);
 }
 
-fn emitResultTryLocalOperandTemp(ctx: TryDirectEmitContext, operand: ast.Expr, locals: *std.StringHashMap(LocalInfo), operand_result_ty: ast.TypeExpr) ![]const u8 {
+fn emitResultTryLocalOperandTemp(ctx: TryDirectEmitContext, operand: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), operand_result_ty: ast_bridge.TypeExpr) ![]const u8 {
     const temp_name = try nextTempName(ctx.replacement);
     try writeIndent(ctx.replacement);
     try ctx.replacement.out.print(ctx.replacement.allocator, "{s} {s} = ", .{ try ctx.replacement.c_type(ctx.replacement.emit_ctx, operand_result_ty), temp_name });
@@ -854,7 +854,7 @@ fn emitResultTryLocalOperandTemp(ctx: TryDirectEmitContext, operand: ast.Expr, l
     return temp_name;
 }
 
-fn emitResultTryErrGuard(ctx: TryDirectEmitContext, enclosing_return_ty: ast.TypeExpr, temp_name: []const u8, mapped: ?*ast.Expr, operand_result_ty: ast.TypeExpr, locals: *std.StringHashMap(LocalInfo)) !void {
+fn emitResultTryErrGuard(ctx: TryDirectEmitContext, enclosing_return_ty: ast_bridge.TypeExpr, temp_name: []const u8, mapped: ?*ast_bridge.Expr, operand_result_ty: ast_bridge.TypeExpr, locals: *std.StringHashMap(LocalInfo)) !void {
     try writeIndent(ctx.replacement);
     try ctx.replacement.out.print(ctx.replacement.allocator, "if (!{s}.is_ok) {{\n", .{temp_name});
     ctx.replacement.indent.* += 1;
@@ -864,7 +864,7 @@ fn emitResultTryErrGuard(ctx: TryDirectEmitContext, enclosing_return_ty: ast.Typ
     try ctx.replacement.out.appendSlice(ctx.replacement.allocator, "}\n");
 }
 
-fn emitResultTryOkLocal(ctx: TryDirectEmitContext, name: []const u8, decl_ty: ast.TypeExpr, temp_name: []const u8) !void {
+fn emitResultTryOkLocal(ctx: TryDirectEmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, temp_name: []const u8) !void {
     try writeIndent(ctx.replacement);
     try ctx.replacement.emit_declarator(ctx.replacement.emit_ctx, decl_ty, name);
     try ctx.replacement.out.print(ctx.replacement.allocator, " = {s}.payload.ok;\n", .{temp_name});
@@ -885,7 +885,7 @@ fn emitNullableTryTrapGuard(ctx: TryDirectEmitContext, temp_name: []const u8, in
     try ctx.replacement.out.print(ctx.replacement.allocator, "if ({s}{s} == NULL) mc_trap_NullUnwrap();\n", .{ temp_name, if (lower_c_type.isDynCTypeName(inner_c_type)) ".data" else "" });
 }
 
-fn emitResultTryTrapHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!bool {
+fn emitResultTryTrapHoist(ctx_ptr: *anyopaque, expr: ast_bridge.Expr) anyerror!bool {
     const ctx: *DirectTryHoistContext = @ptrCast(@alignCast(ctx_ptr));
     const inner = switch (expr.kind) {
         .try_expr => |node| node,
@@ -898,7 +898,7 @@ fn emitResultTryTrapHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!bool {
     return true;
 }
 
-fn emitResultTryPropagateHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!bool {
+fn emitResultTryPropagateHoist(ctx_ptr: *anyopaque, expr: ast_bridge.Expr) anyerror!bool {
     const ctx: *DirectTryHoistContext = @ptrCast(@alignCast(ctx_ptr));
     const enclosing_return_ty = ctx.enclosing_return_ty orelse return false;
     const inner = switch (expr.kind) {
@@ -919,7 +919,7 @@ fn emitResultTryPropagateHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!boo
     return true;
 }
 
-fn emitResultTryHoistTemp(ctx: *DirectTryHoistContext, span: ast.Span, operand: ast.Expr) anyerror!?[]const u8 {
+fn emitResultTryHoistTemp(ctx: *DirectTryHoistContext, span: ast_bridge.Span, operand: ast_bridge.Expr) anyerror!?[]const u8 {
     const operand_result_ty = resultTryOperandType(ctx.ctx, operand) orelse return null;
     _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return null;
     _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return null;
@@ -933,7 +933,7 @@ fn emitResultTryHoistTemp(ctx: *DirectTryHoistContext, span: ast.Span, operand: 
     return temp_name;
 }
 
-fn emitNullableTryTrapHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!bool {
+fn emitNullableTryTrapHoist(ctx_ptr: *anyopaque, expr: ast_bridge.Expr) anyerror!bool {
     const ctx: *DirectTryHoistContext = @ptrCast(@alignCast(ctx_ptr));
     const inner = switch (expr.kind) {
         .try_expr => |node| node,
@@ -953,14 +953,14 @@ fn emitNullableTryTrapHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!bool {
     return true;
 }
 
-fn assignmentTargetType(ctx: TryReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+fn assignmentTargetType(ctx: TryReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
     return ctx.operand_emit_type(ctx.emit_ctx, assignment.target, locals) orelse blk: {
         const target = ctx.global_assignment_target(ctx.emit_ctx, assignment.target, locals) orelse return null;
         break :blk type_bridge.simpleNameType(target.info.type_name, assignment.value.span);
     };
 }
 
-fn emitAssignmentFromTemp(ctx: TryReplacementEmitContext, target: ast.Expr, locals: *std.StringHashMap(LocalInfo), temp_name: []const u8) !void {
+fn emitAssignmentFromTemp(ctx: TryReplacementEmitContext, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), temp_name: []const u8) !void {
     try writeIndent(ctx);
     if (ctx.global_assignment_target(ctx.emit_ctx, target, locals)) |global_target| {
         try appendGlobalStoreValue(ctx.allocator, ctx.out, global_target, temp_name);
@@ -970,7 +970,7 @@ fn emitAssignmentFromTemp(ctx: TryReplacementEmitContext, target: ast.Expr, loca
     }
 }
 
-fn emitCheckedUnaryTryReplacement(ctx: TryReplacementEmitContext, mode: TryReplacementMode, node: anytype, locals: ?*std.StringHashMap(lower_c_model.LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const lower_c_model.TryReplacement) anyerror!bool {
+fn emitCheckedUnaryTryReplacement(ctx: TryReplacementEmitContext, mode: TryReplacementMode, node: anytype, locals: ?*std.StringHashMap(lower_c_model.LocalInfo), target_ty: ?ast_bridge.TypeExpr, replacements: []const lower_c_model.TryReplacement) anyerror!bool {
     if (node.op != .neg) return false;
     const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
     if (type_bridge.isWrapType(target) or type_bridge.isSatType(target)) return false;
@@ -993,7 +993,7 @@ fn nextTempName(ctx: TryReplacementEmitContext) ![]const u8 {
     return temp_name;
 }
 
-pub fn exprContainsTry(ctx: *anyopaque, expr: ast.Expr, predicate: TryPredicateFn) bool {
+pub fn exprContainsTry(ctx: *anyopaque, expr: ast_bridge.Expr, predicate: TryPredicateFn) bool {
     return switch (expr.kind) {
         .try_expr => |inner| predicate(ctx, inner.operand.*),
         .grouped, .address_of, .deref => |inner| exprContainsTry(ctx, inner.*, predicate),
@@ -1007,14 +1007,14 @@ pub fn exprContainsTry(ctx: *anyopaque, expr: ast.Expr, predicate: TryPredicateF
     };
 }
 
-pub fn argsContainTry(ctx: *anyopaque, args: []const ast.Expr, predicate: TryPredicateFn) bool {
+pub fn argsContainTry(ctx: *anyopaque, args: []const ast_bridge.Expr, predicate: TryPredicateFn) bool {
     for (args) |arg| {
         if (exprContainsTry(ctx, arg, predicate)) return true;
     }
     return false;
 }
 
-pub fn exprContainsTryError(ctx: *anyopaque, expr: ast.Expr, predicate: TryPredicateErrorFn) anyerror!bool {
+pub fn exprContainsTryError(ctx: *anyopaque, expr: ast_bridge.Expr, predicate: TryPredicateErrorFn) anyerror!bool {
     return switch (expr.kind) {
         .try_expr => |inner| try predicate(ctx, inner.operand.*),
         .grouped, .address_of, .deref => |inner| try exprContainsTryError(ctx, inner.*, predicate),
@@ -1028,14 +1028,14 @@ pub fn exprContainsTryError(ctx: *anyopaque, expr: ast.Expr, predicate: TryPredi
     };
 }
 
-pub fn argsContainTryError(ctx: *anyopaque, args: []const ast.Expr, predicate: TryPredicateErrorFn) anyerror!bool {
+pub fn argsContainTryError(ctx: *anyopaque, args: []const ast_bridge.Expr, predicate: TryPredicateErrorFn) anyerror!bool {
     for (args) |arg| {
         if (try exprContainsTryError(ctx, arg, predicate)) return true;
     }
     return false;
 }
 
-pub fn collectTryHoists(ctx: *anyopaque, expr: ast.Expr, hoist: TryHoistFn) anyerror!bool {
+pub fn collectTryHoists(ctx: *anyopaque, expr: ast_bridge.Expr, hoist: TryHoistFn) anyerror!bool {
     switch (expr.kind) {
         .try_expr => return try hoist(ctx, expr),
         .grouped => |inner| return try collectTryHoists(ctx, inner.*, hoist),
@@ -1063,7 +1063,7 @@ pub fn collectTryHoists(ctx: *anyopaque, expr: ast.Expr, hoist: TryHoistFn) anye
     }
 }
 
-pub fn exprContainsCall(ctx: *anyopaque, expr: ast.Expr, scan: CallScanFn) bool {
+pub fn exprContainsCall(ctx: *anyopaque, expr: ast_bridge.Expr, scan: CallScanFn) bool {
     return switch (expr.kind) {
         .call => |node| switch (scan(ctx, expr)) {
             .found => true,
@@ -1080,14 +1080,14 @@ pub fn exprContainsCall(ctx: *anyopaque, expr: ast.Expr, scan: CallScanFn) bool 
     };
 }
 
-pub fn argsContainCall(ctx: *anyopaque, args: []const ast.Expr, scan: CallScanFn) bool {
+pub fn argsContainCall(ctx: *anyopaque, args: []const ast_bridge.Expr, scan: CallScanFn) bool {
     for (args) |arg| {
         if (exprContainsCall(ctx, arg, scan)) return true;
     }
     return false;
 }
 
-pub fn countCalls(ctx: *anyopaque, expr: ast.Expr, scan: CallScanFn) usize {
+pub fn countCalls(ctx: *anyopaque, expr: ast_bridge.Expr, scan: CallScanFn) usize {
     return switch (expr.kind) {
         .call => |node| switch (scan(ctx, expr)) {
             .found => 1,
@@ -1104,13 +1104,13 @@ pub fn countCalls(ctx: *anyopaque, expr: ast.Expr, scan: CallScanFn) usize {
     };
 }
 
-pub fn countArgs(ctx: *anyopaque, args: []const ast.Expr, scan: CallScanFn) usize {
+pub fn countArgs(ctx: *anyopaque, args: []const ast_bridge.Expr, scan: CallScanFn) usize {
     var n: usize = 0;
     for (args) |arg| n += countCalls(ctx, arg, scan);
     return n;
 }
 
-pub fn collectCallHoists(ctx: *anyopaque, expr: ast.Expr, hoist: CallHoistFn, binary_guard: BinaryGuardFn) anyerror!bool {
+pub fn collectCallHoists(ctx: *anyopaque, expr: ast_bridge.Expr, hoist: CallHoistFn, binary_guard: BinaryGuardFn) anyerror!bool {
     switch (expr.kind) {
         .call => |node| switch (try hoist(ctx, expr)) {
             .hoisted => return true,

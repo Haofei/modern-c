@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const backend_cleanup = @import("backend_cleanup.zig");
 const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
@@ -98,11 +98,11 @@ const NullableRepresentation = enum {
 };
 
 const MirSubjectType = struct {
-    target_ty: ast.TypeExpr,
+    target_ty: ast_bridge.TypeExpr,
     nullable_representation: ?NullableRepresentation = null,
 };
 
-fn hasNamedAttr(attrs: []const ast.Attr, name: []const u8) bool {
+fn hasNamedAttr(attrs: []const ast_bridge.Attr, name: []const u8) bool {
     for (attrs) |attr| {
         switch (attr.kind) {
             .named => |id| if (std.mem.eql(u8, id.text, name)) return true,
@@ -172,8 +172,8 @@ const LoopLabels = lower_llvm_model.LoopLabels;
 const RawManyOffsetInfo = lower_llvm_model.RawManyOffsetInfo;
 const EnumRawCallInfo = lower_llvm_model.EnumRawCallInfo;
 const ReduceTypes = struct {
-    source_ty: ast.TypeExpr,
-    element_ty: ast.TypeExpr,
+    source_ty: ast_bridge.TypeExpr,
+    element_ty: ast_bridge.TypeExpr,
 };
 const DomainResidueCallInfo = lower_llvm_model.DomainResidueCallInfo;
 const DomainOpCallInfo = lower_llvm_model.DomainOpCallInfo;
@@ -185,42 +185,42 @@ const AtomicCallInfo = lower_llvm_model.AtomicCallInfo;
 const MaybeUninitCallInfo = lower_llvm_model.MaybeUninitCallInfo;
 const ResultTypeInfo = lower_llvm_model.ResultTypeInfo;
 const EnumRawTypes = struct {
-    enum_ty: ast.TypeExpr,
-    repr_ty: ast.TypeExpr,
+    enum_ty: ast_bridge.TypeExpr,
+    repr_ty: ast_bridge.TypeExpr,
 };
 const DomainTypes = struct {
-    domain_ty: ast.TypeExpr,
-    payload_ty: ast.TypeExpr,
-    result_ty: ast.TypeExpr,
-    interval_ty: ?ast.TypeExpr = null,
+    domain_ty: ast_bridge.TypeExpr,
+    payload_ty: ast_bridge.TypeExpr,
+    result_ty: ast_bridge.TypeExpr,
+    interval_ty: ?ast_bridge.TypeExpr = null,
 };
 const BitcastTypes = struct {
-    source_ty: ast.TypeExpr,
-    target_ty: ast.TypeExpr,
+    source_ty: ast_bridge.TypeExpr,
+    target_ty: ast_bridge.TypeExpr,
 };
 const SemanticEscapeTypes = struct {
-    source_ty: ast.TypeExpr,
-    result_ty: ast.TypeExpr,
+    source_ty: ast_bridge.TypeExpr,
+    result_ty: ast_bridge.TypeExpr,
 };
 
 const ArithmeticCallTypes = struct {
-    left_ty: ast.TypeExpr,
-    right_ty: ast.TypeExpr,
-    result_ty: ast.TypeExpr,
+    left_ty: ast_bridge.TypeExpr,
+    right_ty: ast_bridge.TypeExpr,
+    result_ty: ast_bridge.TypeExpr,
 };
 
 const UncheckedCallInfo = struct {
     op: []const u8,
-    left_ty: ast.TypeExpr,
-    right_ty: ast.TypeExpr,
-    result_ty: ast.TypeExpr,
+    left_ty: ast_bridge.TypeExpr,
+    right_ty: ast_bridge.TypeExpr,
+    result_ty: ast_bridge.TypeExpr,
 };
 
 const WrappingCallInfo = struct {
     op: []const u8,
-    left_ty: ast.TypeExpr,
-    right_ty: ast.TypeExpr,
-    result_ty: ast.TypeExpr,
+    left_ty: ast_bridge.TypeExpr,
+    right_ty: ast_bridge.TypeExpr,
+    result_ty: ast_bridge.TypeExpr,
 };
 
 const DebugBasicType = struct {
@@ -255,7 +255,7 @@ const LocalSliceAggregatePointerArrayBase = struct {
     range: LocalSlicePointerArrayRange,
 };
 
-fn directCallFactMatchesDeclared(fact_ty: ast.TypeExpr, declared_ty: ast.TypeExpr) bool {
+fn directCallFactMatchesDeclared(fact_ty: ast_bridge.TypeExpr, declared_ty: ast_bridge.TypeExpr) bool {
     if (std.meta.eql(fact_ty, declared_ty)) return true;
     if (type_bridge.sameTypeSyntax(fact_ty, declared_ty)) return true;
     return (typeNameEql(fact_ty, "void") and typeNameEql(declared_ty, "void")) or
@@ -283,30 +283,30 @@ fn backendLower(
     return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, request.early_declaration_metadata, request.program.typed_mir, request.program.source_spelling, request.out, request.opts.source_path orelse "input.mc", request.opts.checks, request.opts.stub_asm, request.opts.target_arch, request.opts.linux_kernel, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
-pub fn appendLlvm(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
+pub fn appendLlvm(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8)) !void {
     try appendLlvmWithSourcePath(allocator, module, out, "input.mc", false);
 }
 
-pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool) !void {
+pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool) !void {
     try appendLlvmChecked(allocator, module, out, source_path, .{ .optimize = optimize }, false, .riscv64);
 }
 
-pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch) !void {
+pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch) !void {
     try appendLlvmCheckedReport(allocator, module, out, source_path, checks, stub_asm, target_arch, null);
 }
 
-fn appendLlvmCheckedReport(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
+fn appendLlvmCheckedReport(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
     const optimize = checks.optimize;
     var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
     defer module_mir.deinit();
     try appendLlvmCheckedMir(allocator, module, &module_mir, out, source_path, checks, stub_asm, target_arch, reporter);
 }
 
-pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
+pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast_bridge.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
     try appendLlvmCheckedMirProfile(allocator, module, module_mir, out, source_path, checks, stub_asm, target_arch, false, reporter);
 }
 
-pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
+pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast_bridge.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
     var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, early_metadata, module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
@@ -360,28 +360,28 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .need_sadd = std.StringHashMap(void).init(allocator),
         .need_ssub = std.StringHashMap(void).init(allocator),
         .need_smul = std.StringHashMap(void).init(allocator),
-        .const_fns = std.StringHashMap(ast.FnDecl).init(allocator),
+        .const_fns = std.StringHashMap(ast_bridge.FnDecl).init(allocator),
         .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
         .const_global_widths = std.StringHashMap(u16).init(allocator),
         .const_global_domains = std.StringHashMap(eval.DomainWidth).init(allocator),
         .comptime_declarations = comptime_declarations,
-        .type_aliases = std.StringHashMap(ast.TypeExpr).init(allocator),
-        .enum_types = std.StringHashMap(ast.EnumDecl).init(allocator),
+        .type_aliases = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
+        .enum_types = std.StringHashMap(ast_bridge.EnumDecl).init(allocator),
         .packed_bits = std.StringHashMap(PackedBitsInfo).init(allocator),
         .overlay_unions = std.StringHashMap(OverlayUnionInfo).init(allocator),
-        .tagged_unions = std.StringHashMap(ast.UnionDecl).init(allocator),
-        .struct_types = std.StringHashMap(ast.StructDecl).init(allocator),
+        .tagged_unions = std.StringHashMap(ast_bridge.UnionDecl).init(allocator),
+        .struct_types = std.StringHashMap(ast_bridge.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
-        .trait_decls = std.StringHashMap(ast.TraitDecl).init(allocator),
-        .impl_methods = std.StringHashMap([]const ast.ImplTraitMethod).init(allocator),
+        .trait_decls = std.StringHashMap(ast_bridge.TraitDecl).init(allocator),
+        .impl_methods = std.StringHashMap([]const ast_bridge.ImplTraitMethod).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
         .callable_value_artifacts = early_metadata.callable_value_artifacts,
         .type_artifacts = early_metadata.type_artifacts,
-        .global_types = std.StringHashMap(ast.TypeExpr).init(allocator),
+        .global_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
         .global_is_const = std.StringHashMap(bool).init(allocator),
-        .global_initializers = std.StringHashMap(ast.Expr).init(allocator),
-        .local_types = std.StringHashMap(ast.TypeExpr).init(allocator),
+        .global_initializers = std.StringHashMap(ast_bridge.Expr).init(allocator),
+        .local_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
         .local_slots = std.StringHashMap(LocalSlot).init(allocator),
         .pointer_local_provenance = std.StringHashMap(mir.PointerProvenance).init(allocator),
         .local_function_pointer_aliases = std.StringHashMap([]const u8).init(allocator),
@@ -449,23 +449,23 @@ const LlvmEmitter = struct {
     need_sadd: std.StringHashMap(void) = undefined,
     need_ssub: std.StringHashMap(void) = undefined,
     need_smul: std.StringHashMap(void) = undefined,
-    const_fns: std.StringHashMap(ast.FnDecl) = undefined,
+    const_fns: std.StringHashMap(ast_bridge.FnDecl) = undefined,
     const_globals: std.StringHashMap(eval.ComptimeValue) = undefined,
     const_global_widths: std.StringHashMap(u16) = undefined,
     const_global_domains: std.StringHashMap(eval.DomainWidth) = undefined,
     comptime_declarations: eval.ComptimeDeclarations,
-    type_aliases: std.StringHashMap(ast.TypeExpr) = undefined,
-    enum_types: std.StringHashMap(ast.EnumDecl) = undefined,
+    type_aliases: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
+    enum_types: std.StringHashMap(ast_bridge.EnumDecl) = undefined,
     packed_bits: std.StringHashMap(PackedBitsInfo) = undefined,
     overlay_unions: std.StringHashMap(OverlayUnionInfo) = undefined,
-    tagged_unions: std.StringHashMap(ast.UnionDecl) = undefined,
-    struct_types: std.StringHashMap(ast.StructDecl) = undefined,
+    tagged_unions: std.StringHashMap(ast_bridge.UnionDecl) = undefined,
+    struct_types: std.StringHashMap(ast_bridge.StructDecl) = undefined,
     fn_sigs: std.StringHashMap(FnSig) = undefined,
     // Tier 2 trait objects (traits-design §8): every `trait` by name (vtable layout +
     // dispatch slot resolution) and each `impl Trait for Type`'s mangled methods (the
     // rodata vtable's function-pointer list).
-    trait_decls: std.StringHashMap(ast.TraitDecl) = undefined,
-    impl_methods: std.StringHashMap([]const ast.ImplTraitMethod) = undefined,
+    trait_decls: std.StringHashMap(ast_bridge.TraitDecl) = undefined,
+    impl_methods: std.StringHashMap([]const ast_bridge.ImplTraitMethod) = undefined,
     // `bind(scalar, f)` closures whose env is a non-pointer integer scalar. The
     // closure's env slot is `ptr`, so the scalar is widened via `inttoptr` and the
     // code pointer points at a generated thunk that narrows it back with `ptrtoint`
@@ -477,13 +477,13 @@ const LlvmEmitter = struct {
     backend_names: std.StringHashMap([]const u8) = undefined,
     callable_value_artifacts: []const early_declaration_metadata.CallableValueArtifact = &.{},
     type_artifacts: []const early_declaration_metadata.TypeArtifact = &.{},
-    struct_decl_artifacts: std.ArrayList(ast.StructDecl) = .empty,
+    struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
     function_decl_artifacts: std.ArrayList(LlvmFunctionDeclArtifact) = .empty,
-    global_decl_artifacts: std.ArrayList(ast.GlobalDecl) = .empty,
-    global_types: std.StringHashMap(ast.TypeExpr) = undefined,
+    global_decl_artifacts: std.ArrayList(ast_bridge.GlobalDecl) = .empty,
+    global_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
-    global_initializers: std.StringHashMap(ast.Expr) = undefined,
-    local_types: std.StringHashMap(ast.TypeExpr) = undefined,
+    global_initializers: std.StringHashMap(ast_bridge.Expr) = undefined,
+    local_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     local_slots: std.StringHashMap(LocalSlot) = undefined,
     // Proven storage class per pointer-typed local: .global_storage entries feed
     // the visible-global provenance ladders; .local_storage entries are the
@@ -516,11 +516,11 @@ const LlvmEmitter = struct {
     need_dbg_declare: bool = false,
     need_dbg_value: bool = false,
     current_debug_scope: ?usize = null,
-    current_debug_span: ?ast.Span = null,
-    current_return_ty: ?ast.TypeExpr = null,
+    current_debug_span: ?ast_bridge.Span = null,
+    current_return_ty: ?ast_bridge.TypeExpr = null,
     current_function: ?[]const u8 = null,
-    current_params: ?[]const ast.Param = null,
-    current_function_body: ?ast.Block = null,
+    current_params: ?[]const ast_bridge.Param = null,
+    current_function_body: ?ast_bridge.Block = null,
     current_mir_range_target: ?[]const u8 = null,
     source_path: []const u8,
     target_arch: backend_mod.TargetArch,
@@ -629,7 +629,7 @@ const LlvmEmitter = struct {
         for (self.struct_decl_artifacts.items) |struct_decl| try self.collectStruct(struct_decl);
     }
 
-    fn collectStruct(self: *LlvmEmitter, struct_decl: ast.StructDecl) !void {
+    fn collectStruct(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl) !void {
         if (struct_decl.type_params.len != 0) return;
         if (struct_decl.abi) |abi| {
             if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
@@ -644,7 +644,7 @@ const LlvmEmitter = struct {
         try self.struct_types.put(struct_decl.name.text, struct_decl);
     }
 
-    fn collectTypeAlias(self: *LlvmEmitter, alias: ast.TypeAlias) !void {
+    fn collectTypeAlias(self: *LlvmEmitter, alias: ast_bridge.TypeAlias) !void {
         _ = try self.llvmType(alias.ty);
         try self.type_aliases.put(alias.name.text, alias.ty);
     }
@@ -662,14 +662,14 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn collectEnum(self: *LlvmEmitter, enum_decl: ast.EnumDecl) !void {
+    fn collectEnum(self: *LlvmEmitter, enum_decl: ast_bridge.EnumDecl) !void {
         const repr = enumReprType(enum_decl);
         if (self.integerBitsOf(repr) == null) return error.UnsupportedLlvmEmission;
         for (enum_decl.cases) |case| _ = try self.enumCaseValue(enum_decl, case);
         try self.enum_types.put(enum_decl.name.text, enum_decl);
     }
 
-    fn collectPackedBits(self: *LlvmEmitter, packed_bits: ast.PackedBitsDecl) !void {
+    fn collectPackedBits(self: *LlvmEmitter, packed_bits: ast_bridge.PackedBitsDecl) !void {
         if (self.integerBitsOf(packed_bits.repr) == null) return error.UnsupportedLlvmEmission;
         try self.packed_bits.put(packed_bits.name.text, .{
             .repr = packed_bits.repr,
@@ -677,7 +677,7 @@ const LlvmEmitter = struct {
         });
     }
 
-    fn collectOverlayUnion(self: *LlvmEmitter, overlay_union: ast.OverlayUnionDecl) !void {
+    fn collectOverlayUnion(self: *LlvmEmitter, overlay_union: ast_bridge.OverlayUnionDecl) !void {
         var size: u64 = 1;
         var alignment: u64 = 1;
         for (overlay_union.fields) |field| {
@@ -692,14 +692,14 @@ const LlvmEmitter = struct {
         });
     }
 
-    fn collectTaggedUnion(self: *LlvmEmitter, union_decl: ast.UnionDecl) !void {
+    fn collectTaggedUnion(self: *LlvmEmitter, union_decl: ast_bridge.UnionDecl) !void {
         for (union_decl.cases) |case| {
             if (case.ty) |ty| _ = try self.llvmType(ty);
         }
         try self.tagged_unions.put(union_decl.name.text, union_decl);
     }
 
-    fn collectFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl, attrs: []const ast.Attr) !void {
+    fn collectFunction(self: *LlvmEmitter, fn_decl: ast_bridge.FnDecl, attrs: []const ast_bridge.Attr) !void {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         _ = try self.llvmType(ret_ty);
         for (fn_decl.params) |param| _ = try self.llvmType(param.ty);
@@ -752,7 +752,7 @@ const LlvmEmitter = struct {
         if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(&self.mir_module, self.function_decl_artifacts.items)) return error.UnsupportedLlvmEmission;
     }
 
-    fn collectGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
+    fn collectGlobal(self: *LlvmEmitter, global: ast_bridge.GlobalDecl) !void {
         const ty = global.ty orelse return error.UnsupportedLlvmEmission;
         _ = try self.llvmType(ty);
         try self.global_decl_artifacts.append(self.allocator, global);
@@ -815,7 +815,7 @@ const LlvmEmitter = struct {
         self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
     }
 
-    fn emitGlobal(self: *LlvmEmitter, global: ast.GlobalDecl) !void {
+    fn emitGlobal(self: *LlvmEmitter, global: ast_bridge.GlobalDecl) !void {
         const previous_function = self.current_function;
         self.current_function = global.name.text;
         defer self.current_function = previous_function;
@@ -850,7 +850,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
+    fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast_bridge.Expr, ty: ast_bridge.TypeExpr) ![]const u8 {
         const view_narrow_target = self.mirTargetTypeFactAt(.view_const_narrow_target, expr.span);
         if (view_narrow_target) |fact| {
             _ = self.mirTargetTypeFactAt(.view_const_narrow_source, expr.span) orelse return error.UnsupportedLlvmEmission;
@@ -1003,7 +1003,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn globalAddressInitializer(self: *LlvmEmitter, expr: ast.Expr) anyerror![]const u8 {
+    fn globalAddressInitializer(self: *LlvmEmitter, expr: ast_bridge.Expr) anyerror![]const u8 {
         return switch (expr.kind) {
             .ident => |ident| if (self.global_types.contains(ident.text))
                 try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{ident.text})
@@ -1044,7 +1044,7 @@ const LlvmEmitter = struct {
         );
     }
 
-    fn globalConstIndexValue(self: *LlvmEmitter, expr: ast.Expr) ?u64 {
+    fn globalConstIndexValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ?u64 {
         if (self.foldConstGlobalValue(expr, null)) |value| {
             return switch (value) {
                 .int => |n| if (n >= 0 and n <= std.math.maxInt(u64)) @intCast(n) else null,
@@ -1061,7 +1061,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn foldConstGlobalValue(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ?ast.TypeExpr) ?eval.ComptimeValue {
+    fn foldConstGlobalValue(self: *LlvmEmitter, expr: ast_bridge.Expr, expected_ty: ?ast_bridge.TypeExpr) ?eval.ComptimeValue {
         var fb_arena: ?std.heap.ArenaAllocator = null;
         defer if (fb_arena) |*a| a.deinit();
         const fold_alloc = eval.tryFoldScratch() orelse blk: {
@@ -1104,7 +1104,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn comptimeValueInitializer(self: *LlvmEmitter, value: eval.ComptimeValue, target_ty: ast.TypeExpr) anyerror![]const u8 {
+    fn comptimeValueInitializer(self: *LlvmEmitter, value: eval.ComptimeValue, target_ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const resolved = self.resolveAliasType(target_ty);
         return switch (value) {
             .int => |n| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{n}),
@@ -1160,7 +1160,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn zeroInitializer(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
+    fn zeroInitializer(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ![]const u8 {
         const resolved_ty = self.resolveAliasType(ty);
         if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.zeroInitializer(payload_ty);
         if (lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.zeroInitializer(payload_ty);
@@ -1229,7 +1229,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn cAbiExtension(self: *LlvmEmitter, ty: ast.TypeExpr) []const u8 {
+    fn cAbiExtension(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) []const u8 {
         if (typeNameEql(self.resolveAliasType(ty), "bool")) return if (self.target_arch == .aarch64) "" else "zeroext ";
         const bits = self.integerBitsOf(ty) orelse return "";
         if (bits > 32) return "";
@@ -1238,7 +1238,7 @@ const LlvmEmitter = struct {
         return if (self.isSignedIntegerType(ty)) "signext " else "zeroext ";
     }
 
-    fn promoteCVariadicArgument(self: *LlvmEmitter, ty: ast.TypeExpr, value: []const u8) !ArgValue {
+    fn promoteCVariadicArgument(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, value: []const u8) !ArgValue {
         const resolved = self.resolveAliasType(ty);
         if (typeNameEql(resolved, "f32")) {
             const promoted = simpleType(ty.span, "f64");
@@ -1259,7 +1259,7 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl, body: ast.Block, attrs: []const ast.Attr) !void {
+    fn emitFunction(self: *LlvmEmitter, fn_decl: ast_bridge.FnDecl, body: ast_bridge.Block, attrs: []const ast_bridge.Attr) !void {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
         const fn_sig = self.fn_sigs.get(fn_decl.name.text) orelse return error.UnsupportedLlvmEmission;
@@ -1443,7 +1443,7 @@ const LlvmEmitter = struct {
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn emitExternFunction(self: *LlvmEmitter, fn_decl: ast.FnDecl) !void {
+    fn emitExternFunction(self: *LlvmEmitter, fn_decl: ast_bridge.FnDecl) !void {
         // The KASAN shadow hooks (D2.1) get weak no-op `define`s in emitTrapDecl so every
         // build links; skip the `declare` here to avoid an LLVM declare-vs-define clash.
         if (isKsanHook(fn_decl.name.text)) return;
@@ -1464,13 +1464,13 @@ const LlvmEmitter = struct {
         try self.out.appendSlice(self.allocator, ")\n\n");
     }
 
-    fn reportUnsupported(self: *LlvmEmitter, span: ast.Span, construct: []const u8) void {
+    fn reportUnsupported(self: *LlvmEmitter, span: ast_bridge.Span, construct: []const u8) void {
         if (self.reporter) |reporter| {
             reporter.err(self.diagnosticSpan(span), "E_BACKEND_UNSUPPORTED: LLVM backend does not yet support {s}", .{construct});
         }
     }
 
-    fn reportUnsupportedIfNone(self: *LlvmEmitter, span: ast.Span, construct: []const u8) void {
+    fn reportUnsupportedIfNone(self: *LlvmEmitter, span: ast_bridge.Span, construct: []const u8) void {
         if (self.reporter) |reporter| {
             if (!reporter.has_errors) {
                 reporter.err(self.diagnosticSpan(span), "E_BACKEND_UNSUPPORTED: LLVM backend does not yet support {s}", .{construct});
@@ -1478,7 +1478,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn diagnosticSpan(self: *LlvmEmitter, span: ast.Span) ast.Span {
+    fn diagnosticSpan(self: *LlvmEmitter, span: ast_bridge.Span) ast_bridge.Span {
         if (isSourceSpan(span)) return span;
         if (self.current_debug_span) |current| {
             if (isSourceSpan(current)) return current;
@@ -1486,12 +1486,12 @@ const LlvmEmitter = struct {
         return span;
     }
 
-    fn unsupportedExprValue(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+    fn unsupportedExprValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ![]const u8 {
         self.reportUnsupported(expr.span, @tagName(expr.kind));
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitExpr(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) anyerror![]const u8 {
+    fn emitExpr(self: *LlvmEmitter, expr: ast_bridge.Expr, expected_ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         return self.emitExprInner(expr, expected_ty) catch |err| switch (err) {
             error.UnsupportedLlvmEmission => {
                 self.reportUnsupportedIfNone(expr.span, @tagName(expr.kind));
@@ -1501,14 +1501,14 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitExprWithMirRangeTarget(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr, target: []const u8) anyerror![]const u8 {
+    fn emitExprWithMirRangeTarget(self: *LlvmEmitter, expr: ast_bridge.Expr, expected_ty: ast_bridge.TypeExpr, target: []const u8) anyerror![]const u8 {
         const previous = self.current_mir_range_target;
         self.current_mir_range_target = target;
         defer self.current_mir_range_target = previous;
         return self.emitExpr(expr, expected_ty);
     }
 
-    fn emitExprInner(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) anyerror![]const u8 {
+    fn emitExprInner(self: *LlvmEmitter, expr: ast_bridge.Expr, expected_ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const semantic_expected_ty = if (expr.kind == .null_literal)
             if (!isSourceSpan(expr.span))
                 expected_ty
@@ -1595,7 +1595,7 @@ const LlvmEmitter = struct {
         return try self.coerceExprValue(value, expr, expected_ty);
     }
 
-    fn emitBlockExprValue(self: *LlvmEmitter, block: ast.Block, expected_ty: ast.TypeExpr) ![]const u8 {
+    fn emitBlockExprValue(self: *LlvmEmitter, block: ast_bridge.Block, expected_ty: ast_bridge.TypeExpr) ![]const u8 {
         if (block.items.len == 0) return error.UnsupportedLlvmEmission;
         for (block.items[0 .. block.items.len - 1]) |stmt| {
             switch (stmt.kind) {
@@ -1611,7 +1611,7 @@ const LlvmEmitter = struct {
         return self.emitExpr(value, expected_ty);
     }
 
-    fn coerceExprValue(self: *LlvmEmitter, value: []const u8, expr: ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
+    fn coerceExprValue(self: *LlvmEmitter, value: []const u8, expr: ast_bridge.Expr, expected_ty: ast_bridge.TypeExpr) ![]const u8 {
         if (self.mirTargetTypeFactAt(.view_const_narrow_target, expr.span)) |target_fact| {
             const source_fact = self.mirTargetTypeFactAt(.view_const_narrow_source, expr.span) orelse return error.UnsupportedLlvmEmission;
             if (type_bridge.sameTypeSyntax(self.resolveAliasType(target_fact.target_ty), self.resolveAliasType(expected_ty))) {
@@ -1632,7 +1632,7 @@ const LlvmEmitter = struct {
         return value;
     }
 
-    fn emitIdent(self: *LlvmEmitter, ident: ast.Ident) ![]const u8 {
+    fn emitIdent(self: *LlvmEmitter, ident: ast_bridge.Ident) ![]const u8 {
         if (self.local_slots.get(ident.text)) |slot| {
             if (self.isVaListType(slot.ty)) return try self.emitVaListValueFromSlot(slot);
             const result = try self.nextTemp();
@@ -1659,7 +1659,7 @@ const LlvmEmitter = struct {
         return try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{ident.text});
     }
 
-    fn isVaListType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+    fn isVaListType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) bool {
         const resolved = self.resolveAliasType(ty);
         return switch (resolved.kind) {
             .name => |name| std.mem.eql(u8, name.text, "va_list"),
@@ -1716,7 +1716,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitVaListCursorForCopySource(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+    fn emitVaListCursorForCopySource(self: *LlvmEmitter, expr: ast_bridge.Expr) ![]const u8 {
         if (expr.kind == .ident) {
             const ident = expr.kind.ident;
             if (self.local_slots.get(ident.text)) |slot| {
@@ -1735,7 +1735,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitVaListCursorArg(self: *LlvmEmitter, expr: ast.Expr, cursor_ty: ast.TypeExpr) ![]const u8 {
+    fn emitVaListCursorArg(self: *LlvmEmitter, expr: ast_bridge.Expr, cursor_ty: ast_bridge.TypeExpr) ![]const u8 {
         return switch (expr.kind) {
             .address_of => |inner| try self.emitAddressOf(inner.*),
             .borrow_expr => |node| try self.emitAddressOf(node.value.*),
@@ -1744,7 +1744,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitVaArg(self: *LlvmEmitter, ap_ptr: []const u8, ty: ast.TypeExpr) ![]const u8 {
+    fn emitVaArg(self: *LlvmEmitter, ap_ptr: []const u8, ty: ast_bridge.TypeExpr) ![]const u8 {
         if (self.target_arch == .aarch64) return try self.emitAarch64VaArg(ap_ptr, ty);
 
         const result = try self.nextTemp();
@@ -1752,7 +1752,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitAarch64VaArg(self: *LlvmEmitter, ap_ptr: []const u8, ty: ast.TypeExpr) ![]const u8 {
+    fn emitAarch64VaArg(self: *LlvmEmitter, ap_ptr: []const u8, ty: ast_bridge.TypeExpr) ![]const u8 {
         const result_ty = try self.llvmType(ty);
         if (!std.mem.eql(u8, result_ty, "ptr")) {
             const bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
@@ -1814,11 +1814,11 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) anyerror!bool {
+    fn emitBlock(self: *LlvmEmitter, block: ast_bridge.Block, ret_ty: ast_bridge.TypeExpr) anyerror!bool {
         return try self.emitBlockWithScopeCleanup(block, ret_ty, true);
     }
 
-    fn emitBlockWithScopeCleanup(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr, emit_scope_cleanup: bool) anyerror!bool {
+    fn emitBlockWithScopeCleanup(self: *LlvmEmitter, block: ast_bridge.Block, ret_ty: ast_bridge.TypeExpr, emit_scope_cleanup: bool) anyerror!bool {
         for (block.items) |stmt| {
             const old_debug_span = self.current_debug_span;
             if (isSourceSpan(stmt.span)) self.current_debug_span = stmt.span;
@@ -1837,7 +1837,7 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn emitStmt(self: *LlvmEmitter, stmt: ast.Stmt, ret_ty: ast.TypeExpr) anyerror!bool {
+    fn emitStmt(self: *LlvmEmitter, stmt: ast_bridge.Stmt, ret_ty: ast_bridge.TypeExpr) anyerror!bool {
         switch (stmt.kind) {
             .let_decl => |local| try self.emitLocalDecl(local, false),
             .var_decl => |local| try self.emitLocalDecl(local, true),
@@ -1970,7 +1970,7 @@ const LlvmEmitter = struct {
     // target searches outward for the matching source label; a bare target picks
     // the innermost loop. Sema rejects labels not in scope, so a labeled target
     // resolves whenever the program type-checked.
-    fn resolveLoopLabels(self: *LlvmEmitter, target: ?ast.Ident) ?LoopLabels {
+    fn resolveLoopLabels(self: *LlvmEmitter, target: ?ast_bridge.Ident) ?LoopLabels {
         if (target) |t| {
             var i = self.loop_stack.items.len;
             while (i > 0) {
@@ -1984,7 +1984,7 @@ const LlvmEmitter = struct {
         return self.loop_stack.getLastOrNull();
     }
 
-    fn emitCleanupEdge(self: *LlvmEmitter, kind: backend_cleanup.CleanupEdgeKind, ret_ty: ast.TypeExpr, scope_span: ?ast.Span, before_span: ?ast.Span) !void {
+    fn emitCleanupEdge(self: *LlvmEmitter, kind: backend_cleanup.CleanupEdgeKind, ret_ty: ast_bridge.TypeExpr, scope_span: ?ast_bridge.Span, before_span: ?ast_bridge.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), kind, sourcePointFromOptionalSpan(scope_span), sourcePointFromOptionalSpan(before_span))) orelse return error.UnsupportedLlvmEmission;
         defer plan.deinit(self.allocator);
@@ -2004,7 +2004,7 @@ const LlvmEmitter = struct {
         if (!backend_cleanup.validateFunctionCleanupAuthority(&self.mir_module, function, cleanup_plan, cleanup_cfg)) return error.UnsupportedLlvmEmission;
     }
 
-    fn emitCleanupRef(self: *LlvmEmitter, ref: backend_cleanup.CleanupRef, ret_ty: ast.TypeExpr) !void {
+    fn emitCleanupRef(self: *LlvmEmitter, ref: backend_cleanup.CleanupRef, ret_ty: ast_bridge.TypeExpr) !void {
         switch (ref) {
             .defer_ref => |defer_ref| {
                 const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
@@ -2033,14 +2033,14 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn deferExprForRef(self: *LlvmEmitter, ref: mir.DeferCleanupRef) ?ast.Expr {
+    fn deferExprForRef(self: *LlvmEmitter, ref: mir.DeferCleanupRef) ?ast_bridge.Expr {
         const function = self.currentMirFunction() orelse return null;
         if (!mir.deferCleanupRefValid(function.*, ref)) return null;
         const body = self.current_function_body orelse return null;
         return deferExprForRefInBlock(body, ref);
     }
 
-    fn ordinaryDeferDirectCallCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
+    fn ordinaryDeferDirectCallCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast_bridge.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
         const call = syntax_bridge.callExpr(expr) orelse return null;
         if (call.type_args.len != 0) return null;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
@@ -2050,7 +2050,7 @@ const LlvmEmitter = struct {
         return .{ .defer_ref = defer_ref, .fn_name = fn_name, .span = expr.span, .callee_span = call.callee.*.span, .args = call.args };
     }
 
-    fn ordinaryDeferCallTargetCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.CallTargetDeferCleanup {
+    fn ordinaryDeferCallTargetCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast_bridge.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.CallTargetDeferCleanup {
         const call = syntax_bridge.callExpr(expr) orelse return null;
         const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         switch (kind) {
@@ -2116,13 +2116,13 @@ const LlvmEmitter = struct {
             try self.emitVoidDirectCall(cleanup.fn_name, cleanup.args, cleanup.callee_span);
             return;
         }
-        var callee_expr: ast.Expr = .{
+        var callee_expr: ast_bridge.Expr = .{
             .span = cleanup.callee_span,
             .kind = .{ .ident = .{ .text = cleanup.fn_name, .span = cleanup.callee_span } },
         };
         const call = struct {
-            callee: *ast.Expr,
-            args: []const ast.Expr,
+            callee: *ast_bridge.Expr,
+            args: []const ast_bridge.Expr,
         }{ .callee = &callee_expr, .args = cleanup.args };
         _ = try self.emitDirectCall(cleanup.fn_name, call, sig.ret);
     }
@@ -2143,12 +2143,12 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  call void @{s}(ptr {s})\n", .{ cleanup.fn_name, slot.ptr });
     }
 
-    fn emitScopedBlock(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) !bool {
+    fn emitScopedBlock(self: *LlvmEmitter, block: ast_bridge.Block, ret_ty: ast_bridge.TypeExpr) !bool {
         return try self.emitScopedBlockWithCleanup(block, ret_ty, true);
     }
 
-    fn emitScopedBlockWithCleanup(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr, emit_scope_cleanup: bool) !bool {
-        var saved_types = std.StringHashMap(ast.TypeExpr).init(self.allocator);
+    fn emitScopedBlockWithCleanup(self: *LlvmEmitter, block: ast_bridge.Block, ret_ty: ast_bridge.TypeExpr, emit_scope_cleanup: bool) !bool {
+        var saved_types = std.StringHashMap(ast_bridge.TypeExpr).init(self.allocator);
         var restore_installed = false;
         errdefer if (!restore_installed) saved_types.deinit();
         var type_it = self.local_types.iterator();
@@ -2226,7 +2226,7 @@ const LlvmEmitter = struct {
 
     fn preserveOuterPointerLocalProvenanceAfterScope(
         self: *LlvmEmitter,
-        saved_types: *const std.StringHashMap(ast.TypeExpr),
+        saved_types: *const std.StringHashMap(ast_bridge.TypeExpr),
         saved_pointer_local_provenance: *std.StringHashMap(mir.PointerProvenance),
     ) !void {
         var it = saved_types.keyIterator();
@@ -2241,7 +2241,7 @@ const LlvmEmitter = struct {
 
     fn preserveOuterAggregatePointerFieldProvenanceAfterScope(
         self: *LlvmEmitter,
-        saved_types: *const std.StringHashMap(ast.TypeExpr),
+        saved_types: *const std.StringHashMap(ast_bridge.TypeExpr),
         saved_aggregate_global_pointer_fields: *std.StringHashMap(mir.PointerProvenance),
     ) !void {
         var local_it = saved_types.keyIterator();
@@ -2260,7 +2260,7 @@ const LlvmEmitter = struct {
 
     fn preserveOuterLocalArrayPointerElementProvenanceAfterScope(
         self: *LlvmEmitter,
-        saved_types: *const std.StringHashMap(ast.TypeExpr),
+        saved_types: *const std.StringHashMap(ast_bridge.TypeExpr),
         saved_local_array_global_pointer_elements: *std.StringHashMap(mir.PointerProvenance),
     ) !void {
         var local_it = saved_types.keyIterator();
@@ -2313,7 +2313,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitAsmStmt(self: *LlvmEmitter, asm_stmt: ast.AsmStmt) !void {
+    fn emitAsmStmt(self: *LlvmEmitter, asm_stmt: ast_bridge.AsmStmt) !void {
         if (asm_stmt.form == .precise) return self.emitPreciseAsmStmt(asm_stmt);
         if (asm_stmt.form != .@"opaque" or asm_stmt.inputs.len != 0 or asm_stmt.outputs.len != 0) return error.UnsupportedLlvmEmission;
         // `--stub-asm` (host-native logic test): opaque asm is operand-less; preserve only the
@@ -2330,7 +2330,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  call void asm{s} \"{s}\", \"{s}\"(){s}\n", .{ sideeffect, template, constraints, try self.debugCallSuffix() });
     }
 
-    fn emitPreciseAsmStmt(self: *LlvmEmitter, asm_stmt: ast.AsmStmt) !void {
+    fn emitPreciseAsmStmt(self: *LlvmEmitter, asm_stmt: ast_bridge.AsmStmt) !void {
         // `--stub-asm` (host-native logic test): replace the arch instruction with a neutral
         // stub — evaluate each input (preserving any side effect) and define each output as
         // zero. The portable logic under test must not depend on the instruction's effect.
@@ -2379,7 +2379,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn preciseAsmReturnType(self: *LlvmEmitter, outputs: []const ast.AsmOutput) ![]const u8 {
+    fn preciseAsmReturnType(self: *LlvmEmitter, outputs: []const ast_bridge.AsmOutput) ![]const u8 {
         if (outputs.len == 0) return "void";
         if (outputs.len == 1) return try self.llvmType(outputs[0].ty);
         var text: std.ArrayList(u8) = .empty;
@@ -2392,7 +2392,7 @@ const LlvmEmitter = struct {
         return text.toOwnedSlice(self.scratch.allocator());
     }
 
-    fn emitExprStatement(self: *LlvmEmitter, expr: ast.Expr) anyerror!void {
+    fn emitExprStatement(self: *LlvmEmitter, expr: ast_bridge.Expr) anyerror!void {
         self.emitExprStatementInner(expr) catch |err| switch (err) {
             error.UnsupportedLlvmEmission => {
                 self.reportUnsupportedIfNone(expr.span, @tagName(expr.kind));
@@ -2402,7 +2402,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitExprStatementInner(self: *LlvmEmitter, expr: ast.Expr) anyerror!void {
+    fn emitExprStatementInner(self: *LlvmEmitter, expr: ast_bridge.Expr) anyerror!void {
         switch (expr.kind) {
             .unreachable_expr => {
                 _ = try self.emitNeverExpr(expr);
@@ -2493,12 +2493,12 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ ty, value, ptr, try self.debugCallSuffix() });
     }
 
-    fn emitAllocaConcreteStore(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, value: []const u8) !void {
+    fn emitAllocaConcreteStore(self: *LlvmEmitter, ptr: []const u8, ty: ast_bridge.TypeExpr, value: []const u8) !void {
         try self.emitAlloca(ptr, try self.llvmType(ty));
         try self.emitConcreteObjectStore(ptr, ty, value);
     }
 
-    fn emitZeroObjectBytes(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr) !void {
+    fn emitZeroObjectBytes(self: *LlvmEmitter, ptr: []const u8, ty: ast_bridge.TypeExpr) !void {
         const size = std.math.cast(u64, self.comptimeSizeOf(ty, 0) orelse return error.UnsupportedLlvmEmission) orelse return error.UnsupportedLlvmEmission;
         const alignment = std.math.cast(u64, self.comptimeAlignOf(ty, 0) orelse return error.UnsupportedLlvmEmission) orelse return error.UnsupportedLlvmEmission;
         if (alignment == 0) return error.UnsupportedLlvmEmission;
@@ -2506,7 +2506,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  call void @llvm.memset.p0.i64(ptr align {d} {s}, i8 0, i64 {d}, i1 false){s}\n", .{ alignment, ptr, size, try self.debugCallSuffix() });
     }
 
-    fn emitPaddingPreservingStore(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, value: []const u8) !void {
+    fn emitPaddingPreservingStore(self: *LlvmEmitter, ptr: []const u8, ty: ast_bridge.TypeExpr, value: []const u8) !void {
         const resolved = self.resolveAliasType(ty);
         if (lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, resolved)) |payload_ty| {
             try self.emitPaddingPreservingStore(ptr, payload_ty, value);
@@ -2568,7 +2568,7 @@ const LlvmEmitter = struct {
                     try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ tag, result_llvm, value });
                     try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr {s}, i64 0, i32 0\n", .{ tag_ptr, result_llvm, ptr });
                     try self.out.print(self.allocator, "  store i1 {s}, ptr {s}{s}\n", .{ tag, tag_ptr, try self.debugCallSuffix() });
-                    const payloads = [_]struct { ty: ast.TypeExpr, index: u8 }{
+                    const payloads = [_]struct { ty: ast_bridge.TypeExpr, index: u8 }{
                         .{ .ty = info.ok_ty, .index = 1 },
                         .{ .ty = info.err_ty, .index = 2 },
                     };
@@ -2596,7 +2596,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(resolved), value, ptr, try self.debugCallSuffix() });
     }
 
-    fn emitConcreteObjectStore(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, value: []const u8) !void {
+    fn emitConcreteObjectStore(self: *LlvmEmitter, ptr: []const u8, ty: ast_bridge.TypeExpr, value: []const u8) !void {
         if (!self.isAggregateType(ty)) {
             try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(ty), value, ptr, try self.debugCallSuffix() });
             return;
@@ -2622,7 +2622,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n  call void @mc_trap_{s}(){s}\n  unreachable\n{s}:\n", .{ cond, label1, label2, try self.debugCallSuffix(), block_label, trap_fn, try self.debugCallSuffix(), after_label });
     }
 
-    fn emitAssert(self: *LlvmEmitter, expr: ast.Expr) !void {
+    fn emitAssert(self: *LlvmEmitter, expr: ast_bridge.Expr) !void {
         const ty = try self.requireMirBoolTargetTypeForEmission(.assert_condition, expr);
         const condition = try self.emitExpr(expr, ty);
         const cont = try self.nextLabel("assert_ok");
@@ -2630,7 +2630,7 @@ const LlvmEmitter = struct {
         try self.emitTrapBranch(condition, cont, trap, trap, cont, "Assert");
     }
 
-    fn emitTryExpr(self: *LlvmEmitter, operand: ast.Expr, mapped: ?*ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
+    fn emitTryExpr(self: *LlvmEmitter, operand: ast_bridge.Expr, mapped: ?*ast_bridge.Expr, expected_ty: ast_bridge.TypeExpr) ![]const u8 {
         const operand_ty = try self.requireMirTryOperandType(operand);
         _ = try self.llvmType(expected_ty);
         if (lower_llvm_shape.resultInfo(&self.type_aliases, operand_ty)) |info| {
@@ -2666,7 +2666,7 @@ const LlvmEmitter = struct {
         return value;
     }
 
-    fn emitResultPropagationCheck(self: *LlvmEmitter, value: []const u8, operand_ty: ast.TypeExpr, info: ResultTypeInfo, mapped: ?*ast.Expr, span: ast.Span) !bool {
+    fn emitResultPropagationCheck(self: *LlvmEmitter, value: []const u8, operand_ty: ast_bridge.TypeExpr, info: ResultTypeInfo, mapped: ?*ast_bridge.Expr, span: ast_bridge.Span) !bool {
         const return_ty = self.current_return_ty orelse return false;
         const return_info = lower_llvm_shape.resultInfo(&self.type_aliases, return_ty) orelse return false;
         // G8: when the operand error (E1) differs from the function error (E2), a
@@ -2709,7 +2709,7 @@ const LlvmEmitter = struct {
         return true;
     }
 
-    fn emitResultUnwrapCheck(self: *LlvmEmitter, value: []const u8, result_ty: ast.TypeExpr) !void {
+    fn emitResultUnwrapCheck(self: *LlvmEmitter, value: []const u8, result_ty: ast_bridge.TypeExpr) !void {
         const is_ok = try self.nextTemp();
         const trap = try self.nextLabel("trap_result");
         const cont = try self.nextLabel("result_ok");
@@ -2719,19 +2719,19 @@ const LlvmEmitter = struct {
 
     // The pointer word a nullable niche-tests against: a thin `?*T` value IS the pointer;
     // a `?*dyn Trait` fat pointer's niche is its data word (`extractvalue … , 0`).
-    fn nullableDataWord(self: *LlvmEmitter, value: []const u8, inner_ty: ast.TypeExpr) ![]const u8 {
+    fn nullableDataWord(self: *LlvmEmitter, value: []const u8, inner_ty: ast_bridge.TypeExpr) ![]const u8 {
         if (!isDynTraitLlvmType(self.resolveAliasType(inner_ty))) return value;
         const data = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = extractvalue {{ ptr, ptr }} {s}, 0\n", .{ data, value });
         return data;
     }
 
-    fn emitNullableSomeTest(self: *LlvmEmitter, dest: []const u8, value: []const u8, inner_ty: ast.TypeExpr) !void {
+    fn emitNullableSomeTest(self: *LlvmEmitter, dest: []const u8, value: []const u8, inner_ty: ast_bridge.TypeExpr) !void {
         const word = try self.nullableDataWord(value, inner_ty);
         try self.out.print(self.allocator, "  {s} = icmp ne ptr {s}, null\n", .{ dest, word });
     }
 
-    fn emitNullUnwrapCheck(self: *LlvmEmitter, value: []const u8, inner_ty: ast.TypeExpr) !void {
+    fn emitNullUnwrapCheck(self: *LlvmEmitter, value: []const u8, inner_ty: ast_bridge.TypeExpr) !void {
         const word = try self.nullableDataWord(value, inner_ty);
         const is_null = try self.nextTemp();
         const trap = try self.nextLabel("trap_null");
@@ -2740,7 +2740,7 @@ const LlvmEmitter = struct {
         try self.emitTrapBranch(is_null, trap, cont, trap, cont, "NullUnwrap");
     }
 
-    fn emitNullableIfLet(self: *LlvmEmitter, node: ast.IfLet, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr, representation: ?NullableRepresentation) !bool {
+    fn emitNullableIfLet(self: *LlvmEmitter, node: ast_bridge.IfLet, ret_ty: ast_bridge.TypeExpr, subject_ty: ast_bridge.TypeExpr, representation: ?NullableRepresentation) !bool {
         const binding = switch (node.pattern.kind) {
             .bind => |ident| ident,
             else => return false,
@@ -2810,7 +2810,7 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn emitResultIfLet(self: *LlvmEmitter, node: ast.IfLet, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !bool {
+    fn emitResultIfLet(self: *LlvmEmitter, node: ast_bridge.IfLet, ret_ty: ast_bridge.TypeExpr, subject_ty: ast_bridge.TypeExpr) !bool {
         const tag_bind = switch (node.pattern.kind) {
             .tag_bind => |tag_bind| tag_bind,
             else => return false,
@@ -2886,7 +2886,7 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn emitNeverExpr(self: *LlvmEmitter, expr: ast.Expr) !bool {
+    fn emitNeverExpr(self: *LlvmEmitter, expr: ast_bridge.Expr) !bool {
         switch (expr.kind) {
             .unreachable_expr => {
                 try self.out.print(self.allocator, "  call void @mc_trap_Unreachable(){s}\n  unreachable\n", .{try self.debugCallSuffix()});
@@ -2908,7 +2908,7 @@ const LlvmEmitter = struct {
     // or a `trap(...)`. Such a statement terminates its block, so even in a value-returning
     // function the block ends there with no fall-through. (A `-> never` call is NOT included: it
     // lowers as an ordinary call and the enclosing block falls through to its normal terminator.)
-    fn exprStatementDiverges(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn exprStatementDiverges(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .unreachable_expr => true,
             .call => |call| blk: {
@@ -2925,7 +2925,7 @@ const LlvmEmitter = struct {
         return mir.explicitTrapHelperForTarget(kind);
     }
 
-    fn emitLocalDecl(self: *LlvmEmitter, local: ast.LocalDecl, is_mutable: bool) !void {
+    fn emitLocalDecl(self: *LlvmEmitter, local: ast_bridge.LocalDecl, is_mutable: bool) !void {
         if (local.names.len != 1) return error.UnsupportedLlvmEmission;
         const init = local.init orelse return error.UnsupportedLlvmEmission;
         const ty = if (local.ty) |decl_ty|
@@ -3022,7 +3022,7 @@ const LlvmEmitter = struct {
         try self.emitConcreteObjectStore(ptr, ty, value);
     }
 
-    fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast.Expr) !ast.TypeExpr {
+    fn requireMirInferredLocalType(self: *LlvmEmitter, name: []const u8, initializer: ast_bridge.Expr) !ast_bridge.TypeExpr {
         const fact_ty = (self.mirTargetTypeFactAtOwned(.inferred_local, initializer.span, name, null) orelse return error.UnsupportedLlvmEmission).target_ty;
         if (self.directAddressOfLocalPlace(initializer)) |place| {
             const pointer = switch (self.resolveAliasType(fact_ty).kind) {
@@ -3047,7 +3047,7 @@ const LlvmEmitter = struct {
         return fact_ty;
     }
 
-    fn requireMirTryExpressionResultType(self: *LlvmEmitter, initializer: ast.Expr) !?ast.TypeExpr {
+    fn requireMirTryExpressionResultType(self: *LlvmEmitter, initializer: ast_bridge.Expr) !?ast_bridge.TypeExpr {
         return switch (initializer.kind) {
             .grouped => |inner| try self.requireMirTryExpressionResultType(inner.*),
             .try_expr => |node| blk: {
@@ -3064,7 +3064,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn requireMirBinaryExpressionResultType(self: *LlvmEmitter, initializer: ast.Expr) !?ast.TypeExpr {
+    fn requireMirBinaryExpressionResultType(self: *LlvmEmitter, initializer: ast_bridge.Expr) !?ast_bridge.TypeExpr {
         return switch (initializer.kind) {
             .grouped => |inner| try self.requireMirBinaryExpressionResultType(inner.*),
             .binary => |node| blk: {
@@ -3081,13 +3081,13 @@ const LlvmEmitter = struct {
     }
 
     const DirectAddressPlace = struct {
-        ty: ast.TypeExpr,
-        mutability: ast.Mutability,
+        ty: ast_bridge.TypeExpr,
+        mutability: ast_bridge.Mutability,
     };
 
     // The MIR fact owns the address result. The backend checks the direct source
     // place only to reject stale pointee or pointer-qualification facts.
-    fn directAddressOfLocalPlace(self: *LlvmEmitter, initializer: ast.Expr) ?DirectAddressPlace {
+    fn directAddressOfLocalPlace(self: *LlvmEmitter, initializer: ast_bridge.Expr) ?DirectAddressPlace {
         return switch (initializer.kind) {
             .address_of => |inner| self.directAddressOfLocalPlaceInfo(inner.*),
             .grouped => |inner| self.directAddressOfLocalPlace(inner.*),
@@ -3095,7 +3095,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directAddressOfLocalPlaceInfo(self: *LlvmEmitter, operand: ast.Expr) ?DirectAddressPlace {
+    fn directAddressOfLocalPlaceInfo(self: *LlvmEmitter, operand: ast_bridge.Expr) ?DirectAddressPlace {
         return switch (operand.kind) {
             .ident => |ident| blk: {
                 if (self.local_slots.get(ident.text)) |slot| {
@@ -3132,7 +3132,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directAddressOfLocalPointerType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+    fn directAddressOfLocalPointerType(self: *LlvmEmitter, expr: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .ident => |ident| self.identifierExpressionType(expr, ident.text),
             .grouped => |inner| self.directAddressOfLocalPointerType(inner.*),
@@ -3140,7 +3140,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr, span: ast.Span) !void {
+    fn emitAssignment(self: *LlvmEmitter, target: ast_bridge.Expr, value_expr: ast_bridge.Expr, span: ast_bridge.Span) !void {
         if (try self.emitIndexAssignment(target, value_expr, span)) return;
         if (try self.emitMemberAssignment(target, value_expr)) return;
         if (assignmentIdent(target)) |ident| {
@@ -3206,7 +3206,7 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitIndexAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr, span: ast.Span) !bool {
+    fn emitIndexAssignment(self: *LlvmEmitter, target: ast_bridge.Expr, value_expr: ast_bridge.Expr, span: ast_bridge.Span) !bool {
         return switch (target.kind) {
             .index => |node| blk: {
                 if (overlayMemberFromIndexBase(node.base.*)) |member| {
@@ -3305,7 +3305,7 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn emitRawStorePayload(self: *LlvmEmitter, callee_span: ast.Span, type_args: []const ast.TypeExpr, args: []const ast.Expr) !void {
+    fn emitRawStorePayload(self: *LlvmEmitter, callee_span: ast_bridge.Span, type_args: []const ast_bridge.TypeExpr, args: []const ast_bridge.Expr) !void {
         if (type_args.len != 1 or args.len != 2) return error.UnsupportedLlvmEmission;
         const info = RawCallInfo{
             .kind = .raw_store,
@@ -3343,17 +3343,17 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, ptr, try self.debugCallSuffix() });
     }
 
-    fn emitMmioWritePayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr) !void {
+    fn emitMmioWritePayload(self: *LlvmEmitter, callee: ast_bridge.Expr, args: []const ast_bridge.Expr) !void {
         if (args.len != 2) return error.UnsupportedLlvmEmission;
         var callee_storage = callee;
-        const empty_type_args: []const ast.TypeExpr = &.{};
+        const empty_type_args: []const ast_bridge.TypeExpr = &.{};
         const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
         const info = self.mmioAccessInfo(call, .mmio_write) orelse return error.UnsupportedLlvmEmission;
         if (!std.mem.eql(u8, info.op, "write")) return error.UnsupportedLlvmEmission;
         try self.emitMmioWriteInfo(info, args);
     }
 
-    fn emitMmioWriteInfo(self: *LlvmEmitter, info: MmioAccessInfo, args: []const ast.Expr) !void {
+    fn emitMmioWriteInfo(self: *LlvmEmitter, info: MmioAccessInfo, args: []const ast_bridge.Expr) !void {
         if (args.len != 2) return error.UnsupportedLlvmEmission;
         const ordering = orderingArg(args[1]) orelse return error.UnsupportedLlvmEmission;
         const raw_value = try self.emitExpr(args[0], info.value_ty);
@@ -3366,17 +3366,17 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  store volatile {s} {s}, ptr {s}{s}\n", .{ try self.llvmType(info.storage_ty), value, ptr, try self.debugCallSuffix() });
     }
 
-    fn emitMmioReadPayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr) ![]const u8 {
+    fn emitMmioReadPayload(self: *LlvmEmitter, callee: ast_bridge.Expr, args: []const ast_bridge.Expr) ![]const u8 {
         if (args.len != 1) return error.UnsupportedLlvmEmission;
         var callee_storage = callee;
-        const empty_type_args: []const ast.TypeExpr = &.{};
+        const empty_type_args: []const ast_bridge.TypeExpr = &.{};
         const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
         const info = self.mmioAccessInfo(call, .mmio_read) orelse return error.UnsupportedLlvmEmission;
         if (!std.mem.eql(u8, info.op, "read")) return error.UnsupportedLlvmEmission;
         return try self.emitMmioReadInfo(info, args);
     }
 
-    fn emitMmioReadInfo(self: *LlvmEmitter, info: MmioAccessInfo, args: []const ast.Expr) ![]const u8 {
+    fn emitMmioReadInfo(self: *LlvmEmitter, info: MmioAccessInfo, args: []const ast_bridge.Expr) ![]const u8 {
         if (args.len != 1) return error.UnsupportedLlvmEmission;
         const ordering = orderingArg(args[0]) orelse return error.UnsupportedLlvmEmission;
         const ptr = try self.emitMmioRegisterAddress(info);
@@ -3387,16 +3387,16 @@ const LlvmEmitter = struct {
         return try self.castValue(result, info.storage_ty, info.value_ty);
     }
 
-    fn emitDmaCachePayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr, kind: mir.CallTargetKind) !void {
+    fn emitDmaCachePayload(self: *LlvmEmitter, callee: ast_bridge.Expr, args: []const ast_bridge.Expr, kind: mir.CallTargetKind) !void {
         if (args.len != 1) return error.UnsupportedLlvmEmission;
         var callee_storage = callee;
-        const empty_type_args: []const ast.TypeExpr = &.{};
+        const empty_type_args: []const ast_bridge.TypeExpr = &.{};
         const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
         const info = self.dmaCacheCallInfo(call, kind) orelse return error.UnsupportedLlvmEmission;
         try self.emitDmaCacheInfo(info, args);
     }
 
-    fn emitDmaCacheInfo(self: *LlvmEmitter, info: DmaCacheCallInfo, args: []const ast.Expr) !void {
+    fn emitDmaCacheInfo(self: *LlvmEmitter, info: DmaCacheCallInfo, args: []const ast_bridge.Expr) !void {
         if (args.len != 1) return error.UnsupportedLlvmEmission;
         _ = try self.emitExpr(args[0], info.dma_ty);
         if (std.mem.eql(u8, info.op, "clean")) {
@@ -3408,34 +3408,34 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitMaybeUninitWritePayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr) !void {
+    fn emitMaybeUninitWritePayload(self: *LlvmEmitter, callee: ast_bridge.Expr, args: []const ast_bridge.Expr) !void {
         if (args.len != 1) return error.UnsupportedLlvmEmission;
         var callee_storage = callee;
-        const empty_type_args: []const ast.TypeExpr = &.{};
+        const empty_type_args: []const ast_bridge.TypeExpr = &.{};
         const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
         const info = self.maybeUninitCallInfo(call, .maybe_uninit_write) orelse return error.UnsupportedLlvmEmission;
         if (!std.mem.eql(u8, info.op, "write")) return error.UnsupportedLlvmEmission;
         try self.emitMaybeUninitWriteInfo(info, args);
     }
 
-    fn emitMaybeUninitWriteInfo(self: *LlvmEmitter, info: MaybeUninitCallInfo, args: []const ast.Expr) !void {
+    fn emitMaybeUninitWriteInfo(self: *LlvmEmitter, info: MaybeUninitCallInfo, args: []const ast_bridge.Expr) !void {
         if (args.len != 1) return error.UnsupportedLlvmEmission;
         const ptr = try self.storageBaseAddress(info.base);
         const value = try self.emitExpr(args[0], info.payload_ty);
         try self.emitConcreteObjectStore(ptr, info.payload_ty, value);
     }
 
-    fn emitAtomicStorePayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr) !void {
+    fn emitAtomicStorePayload(self: *LlvmEmitter, callee: ast_bridge.Expr, args: []const ast_bridge.Expr) !void {
         if (args.len != 2) return error.UnsupportedLlvmEmission;
         var callee_storage = callee;
-        const empty_type_args: []const ast.TypeExpr = &.{};
+        const empty_type_args: []const ast_bridge.TypeExpr = &.{};
         const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
         const info = self.atomicCallInfo(call, .atomic_store) orelse return error.UnsupportedLlvmEmission;
         if (!std.mem.eql(u8, info.op, "store")) return error.UnsupportedLlvmEmission;
         try self.emitAtomicStoreInfo(info, args);
     }
 
-    fn emitAtomicStoreInfo(self: *LlvmEmitter, info: AtomicCallInfo, args: []const ast.Expr) !void {
+    fn emitAtomicStoreInfo(self: *LlvmEmitter, info: AtomicCallInfo, args: []const ast_bridge.Expr) !void {
         if (args.len != 2) return error.UnsupportedLlvmEmission;
         const ordering = atomicOrderingArg(args, 1) orelse return error.UnsupportedLlvmEmission;
         const llvm_order = atomicLlvmOrdering(ordering, .store) orelse return error.UnsupportedLlvmEmission;
@@ -3444,10 +3444,10 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  store atomic {s} {s}, ptr {s} {s}, align {d}{s}\n", .{ try self.atomicStorageLlvmType(info.payload_ty), value, ptr, llvm_order, self.llvmAlignOf(info.payload_ty), try self.debugCallSuffix() });
     }
 
-    fn emitVaEndPayload(self: *LlvmEmitter, callee: ast.Expr, args: []const ast.Expr) !void {
+    fn emitVaEndPayload(self: *LlvmEmitter, callee: ast_bridge.Expr, args: []const ast_bridge.Expr) !void {
         if (args.len != 1) return error.UnsupportedLlvmEmission;
         var callee_storage = callee;
-        const empty_type_args: []const ast.TypeExpr = &.{};
+        const empty_type_args: []const ast_bridge.TypeExpr = &.{};
         const call = .{ .callee = &callee_storage, .type_args = empty_type_args, .args = args };
         const info = self.vaCallInfo(call, .va_end) orelse return error.UnsupportedLlvmEmission;
         const cursor_ty = info.cursor_ty orelse return error.UnsupportedLlvmEmission;
@@ -3455,7 +3455,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  call void @llvm.va_end(ptr {s})\n", .{ap_ptr});
     }
 
-    fn emitMemberAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr) !bool {
+    fn emitMemberAssignment(self: *LlvmEmitter, target: ast_bridge.Expr, value_expr: ast_bridge.Expr) !bool {
         return switch (target.kind) {
             .member => |node| blk: {
                 const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
@@ -3523,14 +3523,14 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitLoop(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
+    fn emitLoop(self: *LlvmEmitter, loop: ast_bridge.Loop, ret_ty: ast_bridge.TypeExpr) !bool {
         return switch (loop.kind) {
             .@"while" => try self.emitWhile(loop, ret_ty),
             .@"for" => try self.emitFor(loop, ret_ty),
         };
     }
 
-    fn emitWhile(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
+    fn emitWhile(self: *LlvmEmitter, loop: ast_bridge.Loop, ret_ty: ast_bridge.TypeExpr) !bool {
         if (loop.kind != .@"while") return error.UnsupportedLlvmEmission;
         const condition_expr = loop.iterable orelse return error.UnsupportedLlvmEmission;
         const condition_ty = try self.requireMirBoolTargetTypeForEmission(.loop_condition, condition_expr);
@@ -3550,15 +3550,15 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn requireMirSwitchSubjectType(self: *LlvmEmitter, subject: ast.Expr) !MirSubjectType {
+    fn requireMirSwitchSubjectType(self: *LlvmEmitter, subject: ast_bridge.Expr) !MirSubjectType {
         return self.requireMirSubjectType(.switch_subject, subject);
     }
 
-    fn requireMirIfLetSubjectType(self: *LlvmEmitter, value: ast.Expr) !MirSubjectType {
+    fn requireMirIfLetSubjectType(self: *LlvmEmitter, value: ast_bridge.Expr) !MirSubjectType {
         return self.requireMirSubjectType(.if_let_subject, value);
     }
 
-    fn requireMirSubjectType(self: *LlvmEmitter, kind: mir.TargetTypeKind, subject: ast.Expr) !MirSubjectType {
+    fn requireMirSubjectType(self: *LlvmEmitter, kind: mir.TargetTypeKind, subject: ast_bridge.Expr) !MirSubjectType {
         if (!isSourceSpan(subject.span)) return .{ .target_ty = self.exprType(subject) orelse return error.UnsupportedLlvmEmission };
         const fact = self.mirTargetTypeFactAt(kind, subject.span) orelse return error.UnsupportedLlvmEmission;
         const fact_ty = fact.target_ty;
@@ -3572,7 +3572,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn mirTargetTypeForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, expr: ast.Expr) ?ast.TypeExpr {
+    fn mirTargetTypeForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, expr: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         if (!isSourceSpan(expr.span)) return self.exprType(expr);
         const fact_ty = (self.mirTargetTypeFactAt(kind, expr.span) orelse return null).target_ty;
         if (self.exprType(expr)) |known_ty| {
@@ -3581,15 +3581,15 @@ const LlvmEmitter = struct {
         return fact_ty;
     }
 
-    fn requireMirTargetTypeForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, expr: ast.Expr) !ast.TypeExpr {
+    fn requireMirTargetTypeForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, expr: ast_bridge.Expr) !ast_bridge.TypeExpr {
         return self.mirTargetTypeForEmission(kind, expr) orelse error.UnsupportedLlvmEmission;
     }
 
-    fn requireMirTargetTypeAtForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span) !ast.TypeExpr {
+    fn requireMirTargetTypeAtForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span) !ast_bridge.TypeExpr {
         return (self.mirTargetTypeFactAt(kind, span) orelse return error.UnsupportedLlvmEmission).target_ty;
     }
 
-    fn requireMirBoolTargetTypeForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, expr: ast.Expr) !ast.TypeExpr {
+    fn requireMirBoolTargetTypeForEmission(self: *LlvmEmitter, kind: mir.TargetTypeKind, expr: ast_bridge.Expr) !ast_bridge.TypeExpr {
         const ty = try self.requireMirTargetTypeForEmission(kind, expr);
         if (!typeNameEql(ty, "bool")) return error.UnsupportedLlvmEmission;
         return ty;
@@ -3607,7 +3607,7 @@ const LlvmEmitter = struct {
         return from_fact;
     }
 
-    fn nullableRepresentationForTargetType(self: *LlvmEmitter, ty: ast.TypeExpr) ?NullableRepresentation {
+    fn nullableRepresentationForTargetType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?NullableRepresentation {
         const resolved = self.resolveAliasType(ty);
         if (resolved.kind != .nullable) return null;
         const child = resolved.kind.nullable.*;
@@ -3617,19 +3617,19 @@ const LlvmEmitter = struct {
         return .pointer;
     }
 
-    fn requireMirTryOperandType(self: *LlvmEmitter, operand: ast.Expr) !ast.TypeExpr {
+    fn requireMirTryOperandType(self: *LlvmEmitter, operand: ast_bridge.Expr) !ast_bridge.TypeExpr {
         return self.requireMirTargetTypeForEmission(.try_operand, operand);
     }
 
-    fn mirTryOperandTypeForQuery(self: *LlvmEmitter, operand: ast.Expr) ?ast.TypeExpr {
+    fn mirTryOperandTypeForQuery(self: *LlvmEmitter, operand: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         return self.requireMirTryOperandType(operand) catch null;
     }
 
-    fn requireMirDiscardArgumentTypeForEmission(self: *LlvmEmitter, argument: ast.Expr) !ast.TypeExpr {
+    fn requireMirDiscardArgumentTypeForEmission(self: *LlvmEmitter, argument: ast_bridge.Expr) !ast_bridge.TypeExpr {
         return self.requireMirTargetTypeForEmission(.discard_argument, argument);
     }
 
-    fn requireMirForLoopTypes(self: *LlvmEmitter, iterable: ast.Expr) !struct { iterable: ast.TypeExpr, element: ast.TypeExpr } {
+    fn requireMirForLoopTypes(self: *LlvmEmitter, iterable: ast_bridge.Expr) !struct { iterable: ast_bridge.TypeExpr, element: ast_bridge.TypeExpr } {
         const iterable_ty = try self.requireMirTargetTypeForEmission(.for_iterable, iterable);
         const element_ty = try self.requireMirForElementTypeForEmission(iterable);
         const expected_element = switch (self.resolveAliasType(iterable_ty).kind) {
@@ -3641,11 +3641,11 @@ const LlvmEmitter = struct {
         return .{ .iterable = iterable_ty, .element = element_ty };
     }
 
-    fn requireMirForElementTypeForEmission(self: *LlvmEmitter, iterable: ast.Expr) !ast.TypeExpr {
+    fn requireMirForElementTypeForEmission(self: *LlvmEmitter, iterable: ast_bridge.Expr) !ast_bridge.TypeExpr {
         return self.requireMirTargetTypeAtForEmission(.for_element, iterable.span);
     }
 
-    fn emitFor(self: *LlvmEmitter, loop: ast.Loop, ret_ty: ast.TypeExpr) !bool {
+    fn emitFor(self: *LlvmEmitter, loop: ast_bridge.Loop, ret_ty: ast_bridge.TypeExpr) !bool {
         const binding = loop.label orelse return error.UnsupportedLlvmEmission;
         const iterable = loop.iterable orelse return error.UnsupportedLlvmEmission;
         const types = try self.requireMirForLoopTypes(iterable);
@@ -3731,7 +3731,7 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn emitIterableLen(self: *LlvmEmitter, iterable: ast.Expr, iterable_ty: ast.TypeExpr, iterable_slot: ?LocalSlot) ![]const u8 {
+    fn emitIterableLen(self: *LlvmEmitter, iterable: ast_bridge.Expr, iterable_ty: ast_bridge.TypeExpr, iterable_slot: ?LocalSlot) ![]const u8 {
         return switch (iterable_ty.kind) {
             .array => |array| try std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission}),
             .slice => blk: {
@@ -3747,7 +3747,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitForElementPtr(self: *LlvmEmitter, iterable: ast.Expr, iterable_ty: ast.TypeExpr, iterable_ptr: ?[]const u8, index: []const u8) ![]const u8 {
+    fn emitForElementPtr(self: *LlvmEmitter, iterable: ast_bridge.Expr, iterable_ty: ast_bridge.TypeExpr, iterable_ptr: ?[]const u8, index: []const u8) ![]const u8 {
         return switch (iterable_ty.kind) {
             .array => blk: {
                 const base_ptr = iterable_ptr orelse try self.arrayBasePointer(iterable);
@@ -3769,7 +3769,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitNullableSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr, representation: ?NullableRepresentation) !?bool {
+    fn emitNullableSwitch(self: *LlvmEmitter, node: ast_bridge.Switch, ret_ty: ast_bridge.TypeExpr, subject_ty: ast_bridge.TypeExpr, representation: ?NullableRepresentation) !?bool {
         const inner_ty = lower_llvm_shape.nullableInnerType(&self.type_aliases, subject_ty) orelse return null;
         const nullable_representation = representation orelse return error.UnsupportedLlvmEmission;
         if (node.arms.len == 0) return error.UnsupportedLlvmEmission;
@@ -3852,14 +3852,14 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn emitResultSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !?bool {
+    fn emitResultSwitch(self: *LlvmEmitter, node: ast_bridge.Switch, ret_ty: ast_bridge.TypeExpr, subject_ty: ast_bridge.TypeExpr) !?bool {
         const info = lower_llvm_shape.resultInfo(&self.type_aliases, subject_ty) orelse return null;
         if (node.arms.len != 2) return error.UnsupportedLlvmEmission;
 
         var ok_index: ?usize = null;
-        var ok_binding: ?ast.Ident = null;
+        var ok_binding: ?ast_bridge.Ident = null;
         var err_index: ?usize = null;
-        var err_binding: ?ast.Ident = null;
+        var err_binding: ?ast_bridge.Ident = null;
         var wildcard_index: ?usize = null;
         for (node.arms, 0..) |arm, i| {
             if (arm.patterns.len != 1) return null;
@@ -3913,7 +3913,7 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn emitResultSwitchArm(self: *LlvmEmitter, arm: ast.SwitchArm, ret_ty: ast.TypeExpr, subject: []const u8, subject_ty: ast.TypeExpr, payload_ty: ast.TypeExpr, payload_index: u8, binding: ?ast.Ident) !bool {
+    fn emitResultSwitchArm(self: *LlvmEmitter, arm: ast_bridge.SwitchArm, ret_ty: ast_bridge.TypeExpr, subject: []const u8, subject_ty: ast_bridge.TypeExpr, payload_ty: ast_bridge.TypeExpr, payload_index: u8, binding: ?ast_bridge.Ident) !bool {
         if (binding) |bind| {
             const old_type = self.local_types.fetchRemove(bind.text);
             const old_slot = self.local_slots.fetchRemove(bind.text);
@@ -3947,7 +3947,7 @@ const LlvmEmitter = struct {
         return try self.emitSwitchBody(arm.body, ret_ty);
     }
 
-    fn emitTaggedUnionSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !?bool {
+    fn emitTaggedUnionSwitch(self: *LlvmEmitter, node: ast_bridge.Switch, ret_ty: ast_bridge.TypeExpr, subject_ty: ast_bridge.TypeExpr) !?bool {
         const union_decl = self.taggedUnionForType(subject_ty) orelse return null;
         const subject = try self.emitExpr(node.subject, subject_ty);
         const subject_ptr = try self.nextTemp();
@@ -3996,7 +3996,7 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn emitTaggedUnionSwitchArm(self: *LlvmEmitter, arm: ast.SwitchArm, ret_ty: ast.TypeExpr, subject_ptr: []const u8, subject_ty: ast.TypeExpr, union_decl: ast.UnionDecl) !bool {
+    fn emitTaggedUnionSwitchArm(self: *LlvmEmitter, arm: ast_bridge.SwitchArm, ret_ty: ast_bridge.TypeExpr, subject_ptr: []const u8, subject_ty: ast_bridge.TypeExpr, union_decl: ast_bridge.UnionDecl) !bool {
         if (taggedUnionBindingPattern(arm)) |binding| {
             const case = taggedUnionCase(union_decl, binding.tag) orelse return error.UnsupportedLlvmEmission;
             const payload_ty = case.ty orelse return error.UnsupportedLlvmEmission;
@@ -4031,7 +4031,7 @@ const LlvmEmitter = struct {
         return try self.emitSwitchBody(arm.body, ret_ty);
     }
 
-    fn emitScalarSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !?bool {
+    fn emitScalarSwitch(self: *LlvmEmitter, node: ast_bridge.Switch, ret_ty: ast_bridge.TypeExpr, subject_ty: ast_bridge.TypeExpr) !?bool {
         if (!typeNameEql(self.resolveAliasType(subject_ty), "bool") and self.integerBitsOf(subject_ty) == null and self.enumDeclForType(subject_ty) == null) return null;
 
         const subject = try self.emitExpr(node.subject, subject_ty);
@@ -4077,7 +4077,7 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn switchPatternValue(self: *LlvmEmitter, pattern: ast.Pattern, subject_ty: ast.TypeExpr) ![]const u8 {
+    fn switchPatternValue(self: *LlvmEmitter, pattern: ast_bridge.Pattern, subject_ty: ast_bridge.TypeExpr) ![]const u8 {
         const expr = switch (pattern.kind) {
             .literal => |expr| expr,
             .tag => |tag| {
@@ -4096,7 +4096,7 @@ const LlvmEmitter = struct {
         return self.switchLiteralValue(expr, subject_ty);
     }
 
-    fn switchLiteralValue(self: *LlvmEmitter, expr: ast.Expr, subject_ty: ast.TypeExpr) ![]const u8 {
+    fn switchLiteralValue(self: *LlvmEmitter, expr: ast_bridge.Expr, subject_ty: ast_bridge.TypeExpr) ![]const u8 {
         return switch (expr.kind) {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
@@ -4121,7 +4121,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitSwitchBody(self: *LlvmEmitter, body: ast.SwitchBody, ret_ty: ast.TypeExpr) !bool {
+    fn emitSwitchBody(self: *LlvmEmitter, body: ast_bridge.SwitchBody, ret_ty: ast_bridge.TypeExpr) !bool {
         return switch (body) {
             .block => |block| try self.emitBlock(block, ret_ty),
             .expr => |expr| blk: {
@@ -4136,11 +4136,11 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitBlockWithDeferStackSnapshot(self: *LlvmEmitter, block: ast.Block, ret_ty: ast.TypeExpr) !bool {
+    fn emitBlockWithDeferStackSnapshot(self: *LlvmEmitter, block: ast_bridge.Block, ret_ty: ast_bridge.TypeExpr) !bool {
         return self.emitBlock(block, ret_ty);
     }
 
-    fn emitReturnVoid(self: *LlvmEmitter, span: ast.Span) !void {
+    fn emitReturnVoid(self: *LlvmEmitter, span: ast_bridge.Span) !void {
         if (try self.debugLocation(span)) |dbg| {
             try self.out.print(self.allocator, "  ret void, !dbg !{d}\n", .{dbg});
         } else {
@@ -4148,7 +4148,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitReturnValue(self: *LlvmEmitter, ret_ty: ast.TypeExpr, value: []const u8, span: ast.Span) !void {
+    fn emitReturnValue(self: *LlvmEmitter, ret_ty: ast_bridge.TypeExpr, value: []const u8, span: ast_bridge.Span) !void {
         if (try self.debugLocation(span)) |dbg| {
             try self.out.print(self.allocator, "  ret {s} {s}, !dbg !{d}\n", .{ try self.llvmType(ret_ty), value, dbg });
         } else {
@@ -4164,7 +4164,7 @@ const LlvmEmitter = struct {
     // An existing `*dyn Trait` value (pass-through, same trait) returns null so it emits
     // normally. Returns null when not applicable. Sema verified conformance + forge-safety.
     // True when `ty` is `*dyn Trait` or `?*dyn Trait` — both route through emitDynCoercion.
-    fn targetIsDynOrNullableDyn(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+    fn targetIsDynOrNullableDyn(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) bool {
         return switch (self.resolveAliasType(ty).kind) {
             .dyn_trait => true,
             .nullable => |child| self.resolveAliasType(child.*).kind == .dyn_trait,
@@ -4174,7 +4174,7 @@ const LlvmEmitter = struct {
 
     // A `?T` payload T uses the tagged `{ i1, T }` repr iff T is a sized VALUE type (named
     // scalar/struct/enum/address, not a pointer, slice, fn-pointer, or `*dyn`).
-    fn nullablePayloadIsValueType(self: *LlvmEmitter, child: ast.TypeExpr) bool {
+    fn nullablePayloadIsValueType(self: *LlvmEmitter, child: ast_bridge.TypeExpr) bool {
         const resolved = self.resolveAliasType(child);
         return switch (resolved.kind) {
             .name => |n| !std.mem.eql(u8, n.text, "c_void"),
@@ -4183,14 +4183,14 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn targetIsValueOptional(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+    fn targetIsValueOptional(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) bool {
         const resolved = self.resolveAliasType(ty);
         return resolved.kind == .nullable and self.nullablePayloadIsValueType(resolved.kind.nullable.*);
     }
 
     // Coerce a `null` (absent) or a payload value (present) into a value optional `?T`'s
     // tagged `{ i1, T }` aggregate. A source already yielding `?T` returns null (pass-through).
-    fn emitValueOptionalCoercion(self: *LlvmEmitter, expr: ast.Expr, expected_ty: ast.TypeExpr) !?[]const u8 {
+    fn emitValueOptionalCoercion(self: *LlvmEmitter, expr: ast_bridge.Expr, expected_ty: ast_bridge.TypeExpr) !?[]const u8 {
         var resolved = self.resolveAliasType(expected_ty);
         // `null` -> absent: `{ i1 false, T zero }` == zeroinitializer.
         if (expr.kind == .null_literal) return "zeroinitializer";
@@ -4213,7 +4213,7 @@ const LlvmEmitter = struct {
         return with_value;
     }
 
-    fn emitDynCoercion(self: *LlvmEmitter, expr: ast.Expr, _: ast.TypeExpr) !?[]const u8 {
+    fn emitDynCoercion(self: *LlvmEmitter, expr: ast_bridge.Expr, _: ast_bridge.TypeExpr) !?[]const u8 {
         if (expr.kind == .null_literal) return "zeroinitializer";
         if (self.exprType(expr)) |source_ty| {
             if (self.targetIsDynOrNullableDyn(source_ty)) return null;
@@ -4263,7 +4263,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitAddressOf(self: *LlvmEmitter, target: ast.Expr) ![]const u8 {
+    fn emitAddressOf(self: *LlvmEmitter, target: ast_bridge.Expr) ![]const u8 {
         switch (target.kind) {
             .ident => |ident| {
                 if (self.local_slots.get(ident.text)) |slot| {
@@ -4284,7 +4284,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitDeref(self: *LlvmEmitter, ptr_expr: ast.Expr, deref_span: ast.Span) ![]const u8 {
+    fn emitDeref(self: *LlvmEmitter, ptr_expr: ast_bridge.Expr, deref_span: ast_bridge.Span) ![]const u8 {
         const inferred_pointee_ty = self.derefPointeeType(ptr_expr) orelse return error.UnsupportedLlvmEmission;
         const pointee_ty = self.expressionResultTypeAt(deref_span, inferred_pointee_ty) orelse return error.UnsupportedLlvmEmission;
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(pointee_ty), self.resolveAliasType(inferred_pointee_ty))) return error.UnsupportedLlvmEmission;
@@ -4297,7 +4297,7 @@ const LlvmEmitter = struct {
         return try self.emitOrdinaryLoad(pointee_ty, ptr, use_atomic);
     }
 
-    fn emitMemberLoad(self: *LlvmEmitter, node: anytype, member_span: ast.Span) ![]const u8 {
+    fn emitMemberLoad(self: *LlvmEmitter, node: anytype, member_span: ast_bridge.Span) ![]const u8 {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         if (base_ty.kind == .slice and std.mem.eql(u8, node.name.text, "len")) {
             const usize_ty = simpleType(member_span, "usize");
@@ -4404,7 +4404,7 @@ const LlvmEmitter = struct {
     //     (emitRawLoad/emitRawStore) sets a csan watchpoint. Mirrors the C backend fix.
     // `phase` is .load_pre, .store_pre, or .store_post. MSAN uses store_pre for init-marking
     // because mc_ksan_store also rejects poison/freed bytes before the actual write.
-    fn emitOrdinaryShadowHook(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, phase: enum { load_pre, store_pre, store_post }) !void {
+    fn emitOrdinaryShadowHook(self: *LlvmEmitter, ptr: []const u8, ty: ast_bridge.TypeExpr, phase: enum { load_pre, store_pre, store_post }) !void {
         if (!self.ksan and !self.msan and !self.csan) return;
         const size = self.llvmAlignOf(ty);
         const hook: ?[]const u8 = switch (phase) {
@@ -4418,7 +4418,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  call void @{s}(i64 {s}, i64 {d})\n", .{ name, addr, size });
     }
 
-    fn emitOrdinaryLoad(self: *LlvmEmitter, ty: ast.TypeExpr, ptr: []const u8, use_atomic: bool) ![]const u8 {
+    fn emitOrdinaryLoad(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, ptr: []const u8, use_atomic: bool) ![]const u8 {
         const result = try self.nextTemp();
         const llvm_ty = try self.llvmType(ty);
         if (use_atomic and self.canUseOrdinaryAtomicAccess(ty)) {
@@ -4436,7 +4436,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitOrdinaryStore(self: *LlvmEmitter, ty: ast.TypeExpr, llvm_ty: []const u8, value: []const u8, ptr: []const u8, use_atomic: bool) !void {
+    fn emitOrdinaryStore(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, llvm_ty: []const u8, value: []const u8, ptr: []const u8, use_atomic: bool) !void {
         if (use_atomic and self.canUseOrdinaryAtomicAccess(ty)) {
             if (self.ordinaryAtomicScalarTooWide(ty)) return error.UnsupportedLlvmEmission;
             if (typeNameEql(self.resolveAliasType(ty), "bool")) {
@@ -4455,7 +4455,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn canUseOrdinaryAtomicAccess(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+    fn canUseOrdinaryAtomicAccess(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) bool {
         return !self.isAggregateType(ty);
     }
 
@@ -4464,7 +4464,7 @@ const LlvmEmitter = struct {
     // `__atomic_load_16`/`__atomic_store_16` libcall that the freestanding kernel
     // image cannot link. Spec §I.13: with no sound race-tolerant lowering, the
     // backend must fail emission rather than guess.
-    fn ordinaryAtomicScalarTooWide(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+    fn ordinaryAtomicScalarTooWide(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) bool {
         const bits = self.integerBitsOf(ty) orelse return false;
         return bits > 64;
     }
@@ -4660,7 +4660,7 @@ const LlvmEmitter = struct {
         self.clearLocalPointerArrayAliasesBackedByArray(array_name);
     }
 
-    fn directLocalSliceBaseName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+    fn directLocalSliceBaseName(self: *LlvmEmitter, expr: ast_bridge.Expr) ?[]const u8 {
         return switch (expr.kind) {
             .ident => |ident| blk: {
                 const slot = self.local_slots.get(ident.text) orelse break :blk null;
@@ -4672,7 +4672,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn provenLocalSliceBaseName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+    fn provenLocalSliceBaseName(self: *LlvmEmitter, expr: ast_bridge.Expr) ?[]const u8 {
         const slice_name = self.directLocalSliceBaseName(expr) orelse return null;
         if (!self.local_slice_global_pointer_arrays.contains(slice_name)) return null;
         return slice_name;
@@ -5012,7 +5012,7 @@ const LlvmEmitter = struct {
         return true;
     }
 
-    fn directLocalAggregateBaseName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+    fn directLocalAggregateBaseName(self: *LlvmEmitter, expr: ast_bridge.Expr) ?[]const u8 {
         return switch (expr.kind) {
             .ident => |ident| if (self.local_slots.contains(ident.text)) ident.text else null,
             .grouped => |inner| self.directLocalAggregateBaseName(inner.*),
@@ -5025,28 +5025,28 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directStructTypeName(self: *LlvmEmitter, ty: ast.TypeExpr) ?[]const u8 {
+    fn directStructTypeName(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
         const name = typeName(self.resolveAliasType(ty)) orelse return null;
         if (!self.struct_types.contains(name)) return null;
         return name;
     }
 
-    fn directAggregateCopySourceExpr(self: *LlvmEmitter, expr: ast.Expr, target_ty: ast.TypeExpr) bool {
+    fn directAggregateCopySourceExpr(self: *LlvmEmitter, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) bool {
         const target_struct_name = self.directStructTypeName(target_ty) orelse return false;
         return self.directAggregateCopySourceExprForStruct(expr, target_struct_name);
     }
 
-    fn directAggregateCopySourceBaseName(self: *LlvmEmitter, expr: ast.Expr, target_ty: ast.TypeExpr) ?[]const u8 {
+    fn directAggregateCopySourceBaseName(self: *LlvmEmitter, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) ?[]const u8 {
         const target_struct_name = self.directStructTypeName(target_ty) orelse return null;
         return self.directAggregateCopySourceBaseNameForStruct(expr, target_struct_name);
     }
 
-    fn directAggregateCopySourceExprForStruct(self: *LlvmEmitter, expr: ast.Expr, target_struct_name: []const u8) bool {
+    fn directAggregateCopySourceExprForStruct(self: *LlvmEmitter, expr: ast_bridge.Expr, target_struct_name: []const u8) bool {
         return self.directAggregateCopySourceBaseNameForStruct(expr, target_struct_name) != null or
             self.directAggregateCopySourceMemberForStruct(expr, target_struct_name);
     }
 
-    fn directAggregateCopySourceBaseNameForStruct(self: *LlvmEmitter, expr: ast.Expr, target_struct_name: []const u8) ?[]const u8 {
+    fn directAggregateCopySourceBaseNameForStruct(self: *LlvmEmitter, expr: ast_bridge.Expr, target_struct_name: []const u8) ?[]const u8 {
         return switch (expr.kind) {
             .grouped => |inner| self.directAggregateCopySourceBaseNameForStruct(inner.*, target_struct_name),
             .cast => |node| self.directAggregateCopySourceBaseNameForStruct(node.value.*, target_struct_name),
@@ -5065,7 +5065,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directAggregateCopySourceMemberForStruct(self: *LlvmEmitter, expr: ast.Expr, target_struct_name: []const u8) bool {
+    fn directAggregateCopySourceMemberForStruct(self: *LlvmEmitter, expr: ast_bridge.Expr, target_struct_name: []const u8) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directAggregateCopySourceMemberForStruct(inner.*, target_struct_name),
             .cast => |node| self.directAggregateCopySourceMemberForStruct(node.value.*, target_struct_name),
@@ -5081,13 +5081,13 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn aggregateCopyMemberSourceTypeForEmission(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+    fn aggregateCopyMemberSourceTypeForEmission(self: *LlvmEmitter, expr: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| return fact.target_ty;
         if (isSourceSpan(expr.span)) return null;
         return self.exprType(expr);
     }
 
-    fn localAggregatePointerAliasBaseName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+    fn localAggregatePointerAliasBaseName(self: *LlvmEmitter, expr: ast_bridge.Expr) ?[]const u8 {
         return switch (expr.kind) {
             .ident => |ident| self.local_aggregate_pointer_aliases.get(ident.text),
             .grouped => |inner| self.localAggregatePointerAliasBaseName(inner.*),
@@ -5103,7 +5103,7 @@ const LlvmEmitter = struct {
         return try std.fmt.allocPrint(self.scratch.allocator(), "{s}[{d}]", .{ array_path, index });
     }
 
-    fn directLocalAggregateMemberPath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
+    fn directLocalAggregateMemberPath(self: *LlvmEmitter, expr: ast_bridge.Expr) ?AggregatePointerFieldPath {
         return switch (expr.kind) {
             .grouped => |inner| self.directLocalAggregateMemberPath(inner.*),
             .member => |node| blk: {
@@ -5125,7 +5125,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directLocalAggregateArrayElementPath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
+    fn directLocalAggregateArrayElementPath(self: *LlvmEmitter, expr: ast_bridge.Expr) ?AggregatePointerFieldPath {
         return switch (expr.kind) {
             .grouped => |inner| self.directLocalAggregateArrayElementPath(inner.*),
             .index => |node| blk: {
@@ -5151,7 +5151,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directLocalAggregateArrayBasePath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
+    fn directLocalAggregateArrayBasePath(self: *LlvmEmitter, expr: ast_bridge.Expr) ?AggregatePointerFieldPath {
         const path = self.directLocalAggregateMemberPath(expr) orelse return null;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return null);
         const array = switch (base_ty.kind) {
@@ -5162,7 +5162,7 @@ const LlvmEmitter = struct {
         return path;
     }
 
-    fn directLocalAggregateArrayBaseHasCompleteGlobalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directLocalAggregateArrayBaseHasCompleteGlobalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const path = self.directLocalAggregateArrayBasePath(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5173,7 +5173,7 @@ const LlvmEmitter = struct {
         return self.localAggregateArrayAllElementsHaveGlobalPointerProvenance(path.local_name, path.field_path, len);
     }
 
-    fn directLocalAggregateArrayBaseHasAnyGlobalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directLocalAggregateArrayBaseHasAnyGlobalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const path = self.directLocalAggregateArrayBasePath(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5184,7 +5184,7 @@ const LlvmEmitter = struct {
         return self.localAggregateArrayAnyElementHasGlobalPointerProvenance(path.local_name, path.field_path, len);
     }
 
-    fn directLocalAggregateArrayBaseHasAllLocalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directLocalAggregateArrayBaseHasAllLocalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const path = self.directLocalAggregateArrayBasePath(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5195,7 +5195,7 @@ const LlvmEmitter = struct {
         return self.localAggregateArrayAllElementsHaveLocalPointerProvenance(path.local_name, path.field_path, len);
     }
 
-    fn aggregatePointerAliasMemberPath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
+    fn aggregatePointerAliasMemberPath(self: *LlvmEmitter, expr: ast_bridge.Expr) ?AggregatePointerFieldPath {
         return switch (expr.kind) {
             .grouped => |inner| self.aggregatePointerAliasMemberPath(inner.*),
             .member => |node| blk: {
@@ -5215,7 +5215,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn aggregatePointerAliasArrayElementPath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
+    fn aggregatePointerAliasArrayElementPath(self: *LlvmEmitter, expr: ast_bridge.Expr) ?AggregatePointerFieldPath {
         return switch (expr.kind) {
             .grouped => |inner| self.aggregatePointerAliasArrayElementPath(inner.*),
             .index => |node| blk: {
@@ -5238,7 +5238,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn aggregatePointerAliasArrayBasePath(self: *LlvmEmitter, expr: ast.Expr) ?AggregatePointerFieldPath {
+    fn aggregatePointerAliasArrayBasePath(self: *LlvmEmitter, expr: ast_bridge.Expr) ?AggregatePointerFieldPath {
         const path = self.aggregatePointerAliasMemberPath(expr) orelse return null;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return null);
         const array = switch (base_ty.kind) {
@@ -5249,7 +5249,7 @@ const LlvmEmitter = struct {
         return path;
     }
 
-    fn aggregatePointerAliasArrayBaseHasCompleteGlobalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn aggregatePointerAliasArrayBaseHasCompleteGlobalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const path = self.aggregatePointerAliasArrayBasePath(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5260,7 +5260,7 @@ const LlvmEmitter = struct {
         return self.localAggregateArrayAllElementsHaveGlobalPointerProvenance(path.local_name, path.field_path, len);
     }
 
-    fn aggregatePointerAliasArrayBaseHasAnyGlobalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn aggregatePointerAliasArrayBaseHasAnyGlobalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const path = self.aggregatePointerAliasArrayBasePath(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5271,7 +5271,7 @@ const LlvmEmitter = struct {
         return self.localAggregateArrayAnyElementHasGlobalPointerProvenance(path.local_name, path.field_path, len);
     }
 
-    fn aggregatePointerAliasArrayBaseHasAllLocalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn aggregatePointerAliasArrayBaseHasAllLocalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const path = self.aggregatePointerAliasArrayBasePath(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5282,7 +5282,7 @@ const LlvmEmitter = struct {
         return self.localAggregateArrayAllElementsHaveLocalPointerProvenance(path.local_name, path.field_path, len);
     }
 
-    fn directLocalAggregateAssignmentPath(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) !?AggregatePointerFieldPath {
+    fn directLocalAggregateAssignmentPath(self: *LlvmEmitter, base: ast_bridge.Expr, field_name: []const u8) !?AggregatePointerFieldPath {
         const base_ty = self.exprType(base) orelse return null;
         if (self.resolveAliasType(base_ty).kind == .pointer) return null;
         if (self.directLocalAggregateBaseName(base)) |local_name| {
@@ -5295,7 +5295,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn aggregatePointerAliasAssignmentPath(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) !?AggregatePointerFieldPath {
+    fn aggregatePointerAliasAssignmentPath(self: *LlvmEmitter, base: ast_bridge.Expr, field_name: []const u8) !?AggregatePointerFieldPath {
         const base_ty = self.exprType(base) orelse return null;
         if (self.resolveAliasType(base_ty).kind == .pointer) {
             const local_name = self.localAggregatePointerAliasBaseName(base) orelse return null;
@@ -5308,7 +5308,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn localArrayConstIndexValue(self: *LlvmEmitter, expr: ast.Expr) ?u64 {
+    fn localArrayConstIndexValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ?u64 {
         if (self.globalConstIndexValue(expr)) |index| return index;
         return switch (expr.kind) {
             .int_literal => |literal| parseU64Literal(literal),
@@ -5317,7 +5317,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directLocalArrayBaseName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+    fn directLocalArrayBaseName(self: *LlvmEmitter, expr: ast_bridge.Expr) ?[]const u8 {
         return switch (expr.kind) {
             .ident => |ident| blk: {
                 const slot = self.local_slots.get(ident.text) orelse break :blk null;
@@ -5329,7 +5329,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directLocalArrayElementPath(self: *LlvmEmitter, expr: ast.Expr) ?LocalArrayPointerElementPath {
+    fn directLocalArrayElementPath(self: *LlvmEmitter, expr: ast_bridge.Expr) ?LocalArrayPointerElementPath {
         return switch (expr.kind) {
             .grouped => |inner| self.directLocalArrayElementPath(inner.*),
             .index => |node| blk: {
@@ -5349,7 +5349,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directLocalArrayBaseHasCompleteGlobalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directLocalArrayBaseHasCompleteGlobalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const local_name = self.directLocalArrayBaseName(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5361,7 +5361,7 @@ const LlvmEmitter = struct {
         return self.localArrayAllElementsHaveGlobalPointerProvenance(local_name, len);
     }
 
-    fn directLocalArrayBaseHasAnyGlobalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directLocalArrayBaseHasAnyGlobalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const local_name = self.directLocalArrayBaseName(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5373,7 +5373,7 @@ const LlvmEmitter = struct {
         return self.localArrayAnyElementHasGlobalPointerProvenance(local_name, len);
     }
 
-    fn directLocalArrayBaseHasAllLocalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directLocalArrayBaseHasAllLocalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const local_name = self.directLocalArrayBaseName(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5385,7 +5385,7 @@ const LlvmEmitter = struct {
         return self.localArrayAllElementsHaveLocalPointerProvenance(local_name, len);
     }
 
-    fn directLocalPointerArrayAddressBaseName(self: *LlvmEmitter, ty: ast.TypeExpr, init: ast.Expr) ?[]const u8 {
+    fn directLocalPointerArrayAddressBaseName(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, init: ast_bridge.Expr) ?[]const u8 {
         const pointee_ty = switch (self.resolveAliasType(ty).kind) {
             .pointer => |pointer| self.resolveAliasType(pointer.child.*),
             else => return null,
@@ -5415,14 +5415,14 @@ const LlvmEmitter = struct {
         return array_name;
     }
 
-    fn updateLocalPointerArrayAliasProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+    fn updateLocalPointerArrayAliasProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast_bridge.TypeExpr, init: ast_bridge.Expr) !void {
         _ = self.local_pointer_array_aliases.remove(local_name);
         const array_name = self.directLocalPointerArrayAddressBaseName(ty, init) orelse return;
         if (std.mem.eql(u8, array_name, local_name)) return;
         try self.local_pointer_array_aliases.put(local_name, array_name);
     }
 
-    fn localPointerArrayAliasPointerName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+    fn localPointerArrayAliasPointerName(self: *LlvmEmitter, expr: ast_bridge.Expr) ?[]const u8 {
         return switch (expr.kind) {
             .ident => |ident| ident.text,
             .grouped => |inner| self.localPointerArrayAliasPointerName(inner.*),
@@ -5430,7 +5430,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn localPointerArrayAliasBaseName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+    fn localPointerArrayAliasBaseName(self: *LlvmEmitter, expr: ast_bridge.Expr) ?[]const u8 {
         return switch (expr.kind) {
             .grouped => |inner| self.localPointerArrayAliasBaseName(inner.*),
             .deref => |inner| if (self.localPointerArrayAliasPointerName(inner.*)) |name|
@@ -5441,7 +5441,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn localPointerArrayAliasBaseHasCompleteGlobalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn localPointerArrayAliasBaseHasCompleteGlobalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const array_name = self.localPointerArrayAliasBaseName(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5453,7 +5453,7 @@ const LlvmEmitter = struct {
         return self.localArrayAllElementsHaveGlobalPointerProvenance(array_name, len);
     }
 
-    fn localPointerArrayAliasBaseHasAnyGlobalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn localPointerArrayAliasBaseHasAnyGlobalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const array_name = self.localPointerArrayAliasBaseName(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5465,7 +5465,7 @@ const LlvmEmitter = struct {
         return self.localArrayAnyElementHasGlobalPointerProvenance(array_name, len);
     }
 
-    fn localPointerArrayAliasBaseHasAllLocalPointerProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn localPointerArrayAliasBaseHasAllLocalPointerProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         const array_name = self.localPointerArrayAliasBaseName(expr) orelse return false;
         const base_ty = self.resolveAliasType(self.exprType(expr) orelse return false);
         const array = switch (base_ty.kind) {
@@ -5486,7 +5486,7 @@ const LlvmEmitter = struct {
         try self.local_slice_aggregate_pointer_array_fields.put(slice_name, owned_path);
     }
 
-    fn directLocalArraySliceBase(self: *LlvmEmitter, ty: ast.TypeExpr, init: ast.Expr) ?LocalSlicePointerArrayBase {
+    fn directLocalArraySliceBase(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, init: ast_bridge.Expr) ?LocalSlicePointerArrayBase {
         const resolved_ty = self.resolveAliasType(ty);
         const slice_ty = switch (resolved_ty.kind) {
             .slice => |slice| slice,
@@ -5521,7 +5521,7 @@ const LlvmEmitter = struct {
         return .{ .name = array_name, .range = .{ .start = start, .end = end, .start_exact = start_exact } };
     }
 
-    fn directLocalAggregateArraySliceBase(self: *LlvmEmitter, ty: ast.TypeExpr, init: ast.Expr) ?LocalSliceAggregatePointerArrayBase {
+    fn directLocalAggregateArraySliceBase(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, init: ast_bridge.Expr) ?LocalSliceAggregatePointerArrayBase {
         const resolved_ty = self.resolveAliasType(ty);
         const slice_ty = switch (resolved_ty.kind) {
             .slice => |slice| slice,
@@ -5558,7 +5558,7 @@ const LlvmEmitter = struct {
         return .{ .path = path, .range = .{ .start = start, .end = end, .start_exact = start_exact } };
     }
 
-    fn updateLocalSlicePointerElementProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+    fn updateLocalSlicePointerElementProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast_bridge.TypeExpr, init: ast_bridge.Expr) !void {
         self.clearLocalSliceGlobalPointerArray(local_name);
         if (self.directLocalArraySliceBase(ty, init)) |base| {
             try self.local_slice_global_pointer_arrays.put(local_name, base.name);
@@ -5575,8 +5575,8 @@ const LlvmEmitter = struct {
     fn tryCopyAggregatePointerFieldProvenanceFromCall(
         self: *LlvmEmitter,
         dest_name: []const u8,
-        dest_struct_decl: ast.StructDecl,
-        init: ast.Expr,
+        dest_struct_decl: ast_bridge.StructDecl,
+        init: ast_bridge.Expr,
     ) !bool {
         const call = switch (init.kind) {
             .call => |call| call,
@@ -5635,13 +5635,13 @@ const LlvmEmitter = struct {
         );
     }
 
-    fn pointerExprStorageProvenance(self: *LlvmEmitter, expr: ast.Expr) mir.PointerProvenance {
+    fn pointerExprStorageProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) mir.PointerProvenance {
         if (self.pointerExprHasGlobalStorageProvenance(expr)) return .global_storage;
         if (self.pointerExprHasProvenLocalStorage(expr)) return .local_storage;
         return .unknown;
     }
 
-    fn updateAggregatePointerFieldProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+    fn updateAggregatePointerFieldProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast_bridge.TypeExpr, init: ast_bridge.Expr) !void {
         const struct_decl = self.structDeclForType(ty) orelse {
             self.clearAggregatePointerFieldsForLocal(local_name);
             return;
@@ -5664,7 +5664,7 @@ const LlvmEmitter = struct {
         try self.updateAggregatePointerFieldProvenanceFromStructLiteral(local_name, struct_decl, fields, null);
     }
 
-    fn structLiteralFields(self: *LlvmEmitter, expr: ast.Expr) ?[]const ast.StructLiteralField {
+    fn structLiteralFields(self: *LlvmEmitter, expr: ast_bridge.Expr) ?[]const ast_bridge.StructLiteralField {
         _ = self;
         return switch (expr.kind) {
             .struct_literal => |fields| fields,
@@ -5679,8 +5679,8 @@ const LlvmEmitter = struct {
     fn updateAggregatePointerFieldProvenanceFromStructLiteral(
         self: *LlvmEmitter,
         local_name: []const u8,
-        struct_decl: ast.StructDecl,
-        fields: []const ast.StructLiteralField,
+        struct_decl: ast_bridge.StructDecl,
+        fields: []const ast_bridge.StructLiteralField,
         path_prefix: ?[]const u8,
     ) !void {
         for (struct_decl.fields) |field| {
@@ -5710,8 +5710,8 @@ const LlvmEmitter = struct {
         self: *LlvmEmitter,
         local_name: []const u8,
         array_path: []const u8,
-        array_ty: ast.TypeExpr,
-        init: ast.Expr,
+        array_ty: ast_bridge.TypeExpr,
+        init: ast_bridge.Expr,
     ) !bool {
         const resolved_ty = self.resolveAliasType(array_ty);
         const array = switch (resolved_ty.kind) {
@@ -5738,10 +5738,10 @@ const LlvmEmitter = struct {
 
     fn updateAggregatePointerFieldProvenanceFromAssignment(
         self: *LlvmEmitter,
-        base: ast.Expr,
+        base: ast_bridge.Expr,
         field_name: []const u8,
-        field_ty: ast.TypeExpr,
-        value_expr: ast.Expr,
+        field_ty: ast_bridge.TypeExpr,
+        value_expr: ast_bridge.Expr,
     ) !void {
         const direct_target_path = try self.directLocalAggregateAssignmentPath(base, field_name);
         const target_path = direct_target_path orelse
@@ -5780,7 +5780,7 @@ const LlvmEmitter = struct {
         try self.updateAggregatePointerFieldProvenanceFromStructLiteral(target_path.local_name, struct_decl, fields, target_path.field_path);
     }
 
-    fn arrayLiteralItems(self: *LlvmEmitter, expr: ast.Expr) ?[]const ast.Expr {
+    fn arrayLiteralItems(self: *LlvmEmitter, expr: ast_bridge.Expr) ?[]const ast_bridge.Expr {
         _ = self;
         return switch (expr.kind) {
             .array_literal => |items| items,
@@ -5792,7 +5792,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn updateLocalArrayPointerElementProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+    fn updateLocalArrayPointerElementProvenanceFromInit(self: *LlvmEmitter, local_name: []const u8, ty: ast_bridge.TypeExpr, init: ast_bridge.Expr) !void {
         const resolved_ty = self.resolveAliasType(ty);
         const array = switch (resolved_ty.kind) {
             .array => |array| array,
@@ -5828,7 +5828,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn updateLocalArrayPointerElementProvenanceFromAssignment(self: *LlvmEmitter, target: ast.Expr, element_ty: ast.TypeExpr, value_expr: ast.Expr) !void {
+    fn updateLocalArrayPointerElementProvenanceFromAssignment(self: *LlvmEmitter, target: ast_bridge.Expr, element_ty: ast_bridge.TypeExpr, value_expr: ast_bridge.Expr) !void {
         const node = switch (target.kind) {
             .index => |node| node,
             .grouped => |inner| return self.updateLocalArrayPointerElementProvenanceFromAssignment(inner.*, element_ty, value_expr),
@@ -5864,7 +5864,7 @@ const LlvmEmitter = struct {
         try self.setLocalArrayPointerElementProvenance(path.local_name, index, provenance);
     }
 
-    fn invalidateLocalSlicePointerElementProvenanceFromAssignment(self: *LlvmEmitter, target: ast.Expr) void {
+    fn invalidateLocalSlicePointerElementProvenanceFromAssignment(self: *LlvmEmitter, target: ast_bridge.Expr) void {
         const node = switch (target.kind) {
             .index => |node| node,
             .grouped => |inner| return self.invalidateLocalSlicePointerElementProvenanceFromAssignment(inner.*),
@@ -5879,7 +5879,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn updateAggregateArrayPointerElementProvenanceFromAssignment(self: *LlvmEmitter, target: ast.Expr, element_ty: ast.TypeExpr, value_expr: ast.Expr) !void {
+    fn updateAggregateArrayPointerElementProvenanceFromAssignment(self: *LlvmEmitter, target: ast_bridge.Expr, element_ty: ast_bridge.TypeExpr, value_expr: ast_bridge.Expr) !void {
         const node = switch (target.kind) {
             .index => |node| node,
             .grouped => |inner| return self.updateAggregateArrayPointerElementProvenanceFromAssignment(inner.*, element_ty, value_expr),
@@ -5944,34 +5944,34 @@ const LlvmEmitter = struct {
         return null;
     }
 
-    fn mirCallTargetKindAt(self: *LlvmEmitter, span: ast.Span) ?mir.CallTargetKind {
+    fn mirCallTargetKindAt(self: *LlvmEmitter, span: ast_bridge.Span) ?mir.CallTargetKind {
         return mir_source_bridge.uniqueCallTargetKindAt(&self.mir_module, self.currentMirFunction(), span);
     }
 
-    fn mirHasCallTargetKindAt(self: *LlvmEmitter, kind: mir.CallTargetKind, span: ast.Span) bool {
+    fn mirHasCallTargetKindAt(self: *LlvmEmitter, kind: mir.CallTargetKind, span: ast_bridge.Span) bool {
         return mir_source_bridge.hasCallTargetKindAt(&self.mir_module, self.currentMirFunction(), kind, span, true);
     }
 
-    fn atomicInitPayloadTypeAt(self: *LlvmEmitter, span: ast.Span, expected_result_ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn atomicInitPayloadTypeAt(self: *LlvmEmitter, span: ast_bridge.Span, expected_result_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const expected_payload_ty = lower_llvm_shape.atomicPayloadType(&self.type_aliases, self.resolveAliasType(expected_result_ty)) orelse return null;
         return mir_source_bridge.atomicInitPayloadTypeAt(&self.mir_module, self.currentMirFunction(), &self.type_aliases, span, expected_result_ty, expected_payload_ty);
     }
 
-    fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
+    fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
         return mir_source_bridge.targetTypeFactAtWithModuleFallback(&self.mir_module, self.currentMirFunction(), kind, span);
     }
 
-    fn contextualTargetTypeAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, generated_ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn contextualTargetTypeAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, generated_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         if (!isSourceSpan(span)) return generated_ty;
         return if (self.mirTargetTypeFactAt(kind, span)) |fact| fact.target_ty else null;
     }
 
     const MirStructLiteralConstruction = struct {
-        target_ty: ast.TypeExpr,
+        target_ty: ast_bridge.TypeExpr,
         construction: mir.AggregateConstructionKind,
     };
 
-    fn requireMirStructLiteralConstruction(self: *LlvmEmitter, span: ast.Span, generated_ty: ast.TypeExpr) !MirStructLiteralConstruction {
+    fn requireMirStructLiteralConstruction(self: *LlvmEmitter, span: ast_bridge.Span, generated_ty: ast_bridge.TypeExpr) !MirStructLiteralConstruction {
         // Async lowering may create compiler-owned zero-span aggregate nodes.
         // They have no source-keyed fact; their generated declaration is the
         // only admitted fallback. Real source literals must carry the fact.
@@ -5993,11 +5993,11 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
+    fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
         return mir_source_bridge.targetTypeFactAtOwnedWithModuleFallback(&self.mir_module, self.currentMirFunction(), kind, span, target_owner, target_index);
     }
 
-    fn mirConstGetIndexAt(self: *LlvmEmitter, span: ast.Span) ?usize {
+    fn mirConstGetIndexAt(self: *LlvmEmitter, span: ast_bridge.Span) ?usize {
         return mir_source_bridge.uniqueConstGetIndexAt(&self.mir_module, self.currentMirFunction(), span);
     }
 
@@ -6007,7 +6007,7 @@ const LlvmEmitter = struct {
         return lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty) or self.fixedLocalPointerArrayElementType(ty) != null;
     }
 
-    fn fixedLocalPointerArrayElementType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn fixedLocalPointerArrayElementType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const resolved_ty = self.resolveAliasType(ty);
         const array = switch (resolved_ty.kind) {
             .array => |array| array,
@@ -6099,7 +6099,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn applyMirPointerProvenanceFactsAtSourceWithMode(self: *LlvmEmitter, subject: []const u8, element_index: ?usize, span: ast.Span, comment_mode: MirFactCommentMode) !bool {
+    fn applyMirPointerProvenanceFactsAtSourceWithMode(self: *LlvmEmitter, subject: []const u8, element_index: ?usize, span: ast_bridge.Span, comment_mode: MirFactCommentMode) !bool {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
@@ -6116,7 +6116,7 @@ const LlvmEmitter = struct {
         return matched;
     }
 
-    fn applyMirPointerProvenanceInvalidationsAtCall(self: *LlvmEmitter, span: ast.Span) void {
+    fn applyMirPointerProvenanceInvalidationsAtCall(self: *LlvmEmitter, span: ast_bridge.Span) void {
         const function = self.currentMirFunction() orelse return;
         for (function.pointer_provenance_facts) |fact| {
             if (!mir_source_bridge.pointerFactIsCallInvalidationAt(&self.mir_module, fact, span)) continue;
@@ -6135,11 +6135,11 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn applyMirPointerProvenanceFactsAtSource(self: *LlvmEmitter, subject: []const u8, element_index: ?usize, span: ast.Span) !bool {
+    fn applyMirPointerProvenanceFactsAtSource(self: *LlvmEmitter, subject: []const u8, element_index: ?usize, span: ast_bridge.Span) !bool {
         return self.applyMirPointerProvenanceFactsAtSourceWithMode(subject, element_index, span, .emit_comment);
     }
 
-    fn applyMirAggregatePointerFieldFactsAtSource(self: *LlvmEmitter, subject: []const u8, field_path: []const u8, element_index: ?usize, span: ast.Span) !bool {
+    fn applyMirAggregatePointerFieldFactsAtSource(self: *LlvmEmitter, subject: []const u8, field_path: []const u8, element_index: ?usize, span: ast_bridge.Span) !bool {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
@@ -6151,7 +6151,7 @@ const LlvmEmitter = struct {
         return matched;
     }
 
-    fn applyMirAggregatePointerFieldFactsForSubjectAtSource(self: *LlvmEmitter, subject: []const u8, span: ast.Span) !bool {
+    fn applyMirAggregatePointerFieldFactsForSubjectAtSource(self: *LlvmEmitter, subject: []const u8, span: ast_bridge.Span) !bool {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
@@ -6163,7 +6163,7 @@ const LlvmEmitter = struct {
         return matched;
     }
 
-    fn directMirAddressProvenanceExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directMirAddressProvenanceExpr(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAddressProvenanceExpr(inner.*),
             .cast => |node| self.directMirAddressProvenanceExpr(node.value.*),
@@ -6173,7 +6173,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directMirAddressProvenanceTarget(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directMirAddressProvenanceTarget(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAddressProvenanceTarget(inner.*),
             .ident => |ident| self.global_types.contains(ident.text) or self.local_types.contains(ident.text),
@@ -6187,11 +6187,11 @@ const LlvmEmitter = struct {
             self.mirHasCallTargetKindAt(.assume_noalias, call.callee.*.span);
     }
 
-    fn mirPointerProvenanceCoversDirectLocalUpdate(self: *LlvmEmitter, ty: ast.TypeExpr, expr: ast.Expr) bool {
+    fn mirPointerProvenanceCoversDirectLocalUpdate(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, expr: ast_bridge.Expr) bool {
         return lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty) and self.directMirPointerContainerValueExpr(expr);
     }
 
-    fn directMirRawManyZeroOffsetExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directMirRawManyZeroOffsetExpr(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirRawManyZeroOffsetExpr(inner.*),
             .cast => |node| self.directMirRawManyZeroOffsetExpr(node.value.*),
@@ -6211,7 +6211,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directRawManyLocalName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+    fn directRawManyLocalName(self: *LlvmEmitter, expr: ast_bridge.Expr) ?[]const u8 {
         return switch (expr.kind) {
             .grouped => |inner| self.directRawManyLocalName(inner.*),
             .ident => |ident| blk: {
@@ -6223,7 +6223,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directMirPointerLocalCopyExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directMirPointerLocalCopyExpr(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirPointerLocalCopyExpr(inner.*),
             .cast => |node| self.directMirPointerLocalCopyExpr(node.value.*),
@@ -6236,7 +6236,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directMirFixedPointerArrayElementExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directMirFixedPointerArrayElementExpr(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirFixedPointerArrayElementExpr(inner.*),
             .cast => |node| self.directMirFixedPointerArrayElementExpr(node.value.*),
@@ -6247,7 +6247,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directMirAggregatePointerFieldExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directMirAggregatePointerFieldExpr(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAggregatePointerFieldExpr(inner.*),
             .cast => |node| self.directMirAggregatePointerFieldExpr(node.value.*),
@@ -6257,7 +6257,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directMirAggregatePointerArrayElementExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directMirAggregatePointerArrayElementExpr(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directMirAggregatePointerArrayElementExpr(inner.*),
             .cast => |node| self.directMirAggregatePointerArrayElementExpr(node.value.*),
@@ -6267,7 +6267,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directMirPointerContainerValueExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directMirPointerContainerValueExpr(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         switch (expr.kind) {
             .call => |call| {
                 if (self.isMirAssumeNoaliasCall(call)) {
@@ -6284,7 +6284,7 @@ const LlvmEmitter = struct {
             self.directMirAggregatePointerArrayElementExpr(expr);
     }
 
-    fn applyMirPointerProvenanceForLocalInitializer(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+    fn applyMirPointerProvenanceForLocalInitializer(self: *LlvmEmitter, name: []const u8, ty: ast_bridge.TypeExpr, init: ast_bridge.Expr) !void {
         if (lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty)) {
             const matched = try self.applyMirPointerProvenanceFactsAtSource(name, null, init.span);
             if (!matched and self.directMirPointerContainerValueExpr(init)) _ = self.pointer_local_provenance.remove(name);
@@ -6300,7 +6300,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn applyMirPointerProvenanceForAssignment(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, value_expr: ast.Expr, span: ast.Span) !void {
+    fn applyMirPointerProvenanceForAssignment(self: *LlvmEmitter, name: []const u8, ty: ast_bridge.TypeExpr, value_expr: ast_bridge.Expr, span: ast_bridge.Span) !void {
         if (lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty)) {
             const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, null, value_expr.span);
             _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span);
@@ -6318,7 +6318,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn applyMirPointerProvenanceForIndexAssignment(self: *LlvmEmitter, target: ast.Expr, value_expr: ast.Expr, span: ast.Span) !void {
+    fn applyMirPointerProvenanceForIndexAssignment(self: *LlvmEmitter, target: ast_bridge.Expr, value_expr: ast_bridge.Expr, span: ast_bridge.Span) !void {
         const path = self.directLocalArrayElementPath(target) orelse {
             const node = switch (target.kind) {
                 .index => |node| node,
@@ -6338,7 +6338,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn directGlobalStorageRoot(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directGlobalStorageRoot(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .ident => |ident| !self.local_slots.contains(ident.text) and !self.local_types.contains(ident.text) and self.global_types.contains(ident.text),
             .grouped => |inner| self.directGlobalStorageRoot(inner.*),
@@ -6353,7 +6353,7 @@ const LlvmEmitter = struct {
         emit_comment,
     };
 
-    fn updatePointerProvenanceFromMirOrLocalProof(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr, comment_mode: MirFactCommentMode) !void {
+    fn updatePointerProvenanceFromMirOrLocalProof(self: *LlvmEmitter, name: []const u8, ty: ast_bridge.TypeExpr, init: ast_bridge.Expr, comment_mode: MirFactCommentMode) !void {
         if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty)) {
             _ = self.pointer_local_provenance.remove(name);
             return;
@@ -6366,7 +6366,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn updatePointerProvenanceAssignmentFromMirOrLocalProof(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, value_expr: ast.Expr, span: ast.Span) !void {
+    fn updatePointerProvenanceAssignmentFromMirOrLocalProof(self: *LlvmEmitter, name: []const u8, ty: ast_bridge.TypeExpr, value_expr: ast_bridge.Expr, span: ast_bridge.Span) !void {
         if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty)) {
             _ = self.pointer_local_provenance.remove(name);
             return;
@@ -6396,7 +6396,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn localAggregateAddressBaseName(self: *LlvmEmitter, expr: ast.Expr) ?[]const u8 {
+    fn localAggregateAddressBaseName(self: *LlvmEmitter, expr: ast_bridge.Expr) ?[]const u8 {
         return switch (expr.kind) {
             .address_of => |inner| blk: {
                 const local_name = self.directLocalAggregateBaseName(inner.*) orelse break :blk null;
@@ -6410,7 +6410,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn updateAggregatePointerAliasProvenance(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
+    fn updateAggregatePointerAliasProvenance(self: *LlvmEmitter, name: []const u8, ty: ast_bridge.TypeExpr, init: ast_bridge.Expr) !void {
         const resolved_ty = self.resolveAliasType(ty);
         const pointee_ty = switch (resolved_ty.kind) {
             .pointer => |node| node.child.*,
@@ -6438,13 +6438,13 @@ const LlvmEmitter = struct {
         try self.local_aggregate_pointer_aliases.put(name, base_name);
     }
 
-    fn invalidateAggregatePointerDerefAssignment(self: *LlvmEmitter, ptr_expr: ast.Expr) void {
+    fn invalidateAggregatePointerDerefAssignment(self: *LlvmEmitter, ptr_expr: ast_bridge.Expr) void {
         const local_name = self.localAggregatePointerAliasBaseName(ptr_expr) orelse return;
         self.clearAggregatePointerFieldsForLocal(local_name);
         self.clearLocalSlicesBackedByArray(local_name);
     }
 
-    fn pointerExprHasGlobalStorageProvenance(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn pointerExprHasGlobalStorageProvenance(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .ident => |ident| if (self.pointer_local_provenance.get(ident.text)) |provenance| provenance == .global_storage else false,
             .address_of => |inner| self.directGlobalStorageRoot(inner.*),
@@ -6491,7 +6491,7 @@ const LlvmEmitter = struct {
     // pointer local, or a syntactic address-of a named local (through grouped/
     // cast). Everything else (params, unknown calls, invalidated facts, member/
     // element-derived pointers without a fact) lowers race-tolerantly.
-    fn pointerExprHasProvenLocalStorage(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn pointerExprHasProvenLocalStorage(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .ident => |ident| if (self.pointer_local_provenance.get(ident.text)) |provenance| provenance == .local_storage else false,
             .address_of => |inner| self.directLocalStorageRoot(inner.*),
@@ -6526,7 +6526,7 @@ const LlvmEmitter = struct {
 
     // Only a bare named local counts: member/index roots may reach through a
     // pointer-typed base (auto-deref), which does NOT prove the storage is local.
-    fn directLocalStorageRoot(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn directLocalStorageRoot(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .grouped => |inner| self.directLocalStorageRoot(inner.*),
             .ident => |ident| self.local_slots.contains(ident.text) or self.local_types.contains(ident.text),
@@ -6538,12 +6538,12 @@ const LlvmEmitter = struct {
     // scalar derefs lower race-tolerantly (unordered atomic) unless positively
     // proven local. Unproven aggregate dereferences take the separate recursive
     // race-tolerant path in emitDeref; this helper covers scalar atomics only.
-    fn derefUsesRaceTolerantLowering(self: *LlvmEmitter, ptr_expr: ast.Expr, pointee_ty: ast.TypeExpr) bool {
+    fn derefUsesRaceTolerantLowering(self: *LlvmEmitter, ptr_expr: ast_bridge.Expr, pointee_ty: ast_bridge.TypeExpr) bool {
         if (self.isAggregateType(pointee_ty)) return false;
         return !self.pointerExprHasProvenLocalStorage(ptr_expr);
     }
 
-    fn emitRaceTolerantAggregateDerefLoad(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr) ![]const u8 {
+    fn emitRaceTolerantAggregateDerefLoad(self: *LlvmEmitter, ptr: []const u8, ty: ast_bridge.TypeExpr) ![]const u8 {
         const aggregate_ty = try self.llvmType(ty);
         var result: []const u8 = "zeroinitializer";
         const resolved_ty = self.resolveAliasType(ty);
@@ -6684,7 +6684,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitRaceTolerantAggregateDerefStore(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, value: []const u8) !void {
+    fn emitRaceTolerantAggregateDerefStore(self: *LlvmEmitter, ptr: []const u8, ty: ast_bridge.TypeExpr, value: []const u8) !void {
         const aggregate_ty = try self.llvmType(ty);
         const resolved_ty = self.resolveAliasType(ty);
         switch (resolved_ty.kind) {
@@ -6886,18 +6886,18 @@ const LlvmEmitter = struct {
         return self.directGlobalStorageRoot(node.base.*);
     }
 
-    fn scalarPointerMemberBaseUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast.Expr, field_ty: ast.TypeExpr) bool {
+    fn scalarPointerMemberBaseUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast_bridge.Expr, field_ty: ast_bridge.TypeExpr) bool {
         if (self.isAggregateType(field_ty)) return false;
         return self.pointerMemberBaseUsesRaceTolerantLowering(base_expr);
     }
 
-    fn pointerMemberBaseUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast.Expr) bool {
+    fn pointerMemberBaseUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast_bridge.Expr) bool {
         const base_ty = self.resolveAliasType(self.exprType(base_expr) orelse return false);
         const root = if (base_ty.kind == .pointer) base_expr else self.pointerMemberRoot(base_expr) orelse return false;
         return !self.pointerExprHasProvenLocalStorage(root);
     }
 
-    fn pointerMemberRoot(self: *LlvmEmitter, expr: ast.Expr) ?ast.Expr {
+    fn pointerMemberRoot(self: *LlvmEmitter, expr: ast_bridge.Expr) ?ast_bridge.Expr {
         return switch (expr.kind) {
             .grouped => |inner| self.pointerMemberRoot(inner.*),
             .member => |node| blk: {
@@ -6909,21 +6909,21 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn scalarIndexedMemberBaseUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast.Expr, field_ty: ast.TypeExpr) bool {
+    fn scalarIndexedMemberBaseUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast_bridge.Expr, field_ty: ast_bridge.TypeExpr) bool {
         if (self.isAggregateType(field_ty)) return false;
         const indexed = self.indexedMemberRoot(base_expr) orelse return false;
         const element_ty = self.indexElementType(indexed.base.*) orelse return false;
         return self.aggregateIndexUsesRaceTolerantLowering(indexed.base.*, element_ty);
     }
 
-    fn aggregateIndexedMemberBaseUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast.Expr, field_ty: ast.TypeExpr) bool {
+    fn aggregateIndexedMemberBaseUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast_bridge.Expr, field_ty: ast_bridge.TypeExpr) bool {
         if (!self.isAggregateType(field_ty)) return false;
         const indexed = self.indexedMemberRoot(base_expr) orelse return false;
         const element_ty = self.indexElementType(indexed.base.*) orelse return false;
         return self.aggregateIndexUsesRaceTolerantLowering(indexed.base.*, element_ty);
     }
 
-    fn indexedMemberRoot(self: *LlvmEmitter, expr: ast.Expr) ?syntax_bridge.IndexExpr {
+    fn indexedMemberRoot(self: *LlvmEmitter, expr: ast_bridge.Expr) ?syntax_bridge.IndexExpr {
         if (indexExpr(expr)) |indexed| return indexed;
         return switch (expr.kind) {
             .grouped => |inner| self.indexedMemberRoot(inner.*),
@@ -6932,7 +6932,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn scalarIndexUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast.Expr, element_ty: ast.TypeExpr) bool {
+    fn scalarIndexUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast_bridge.Expr, element_ty: ast_bridge.TypeExpr) bool {
         if (self.isAggregateType(element_ty)) return false;
         const base_ty = self.resolveAliasType(self.exprType(base_expr) orelse return false);
         if (base_ty.kind == .slice) return true;
@@ -6943,7 +6943,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn aggregateIndexUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast.Expr, element_ty: ast.TypeExpr) bool {
+    fn aggregateIndexUsesRaceTolerantLowering(self: *LlvmEmitter, base_expr: ast_bridge.Expr, element_ty: ast_bridge.TypeExpr) bool {
         if (!self.isAggregateType(element_ty)) return false;
         const base_ty = self.resolveAliasType(self.exprType(base_expr) orelse return false);
         if (base_ty.kind == .slice) return true;
@@ -6954,7 +6954,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitIndexLoad(self: *LlvmEmitter, node: anytype, index_span: ast.Span) ![]const u8 {
+    fn emitIndexLoad(self: *LlvmEmitter, node: anytype, index_span: ast_bridge.Span) ![]const u8 {
         if (overlayMemberFromIndexBase(node.base.*)) |member| {
             if (self.overlayField(member.base.*, member.name.text)) |field| {
                 // Any array-view element (byte or non-byte): the byte offset is
@@ -7038,11 +7038,11 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn arrayBasePointer(self: *LlvmEmitter, expr: ast.Expr) anyerror![]const u8 {
+    fn arrayBasePointer(self: *LlvmEmitter, expr: ast_bridge.Expr) anyerror![]const u8 {
         return self.aggregateBasePointer(expr);
     }
 
-    fn aggregateBasePointer(self: *LlvmEmitter, expr: ast.Expr) anyerror![]const u8 {
+    fn aggregateBasePointer(self: *LlvmEmitter, expr: ast_bridge.Expr) anyerror![]const u8 {
         return switch (expr.kind) {
             .ident => |ident| blk: {
                 if (self.local_slots.get(ident.text)) |slot| break :blk slot.ptr;
@@ -7058,7 +7058,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn materializeAggregateRvalue(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+    fn materializeAggregateRvalue(self: *LlvmEmitter, expr: ast_bridge.Expr) ![]const u8 {
         const ty = self.exprType(expr) orelse return error.UnsupportedLlvmEmission;
         if (!self.isAggregateType(ty)) return error.UnsupportedLlvmEmission;
         const value = try self.emitExpr(expr, ty);
@@ -7067,7 +7067,7 @@ const LlvmEmitter = struct {
         return ptr;
     }
 
-    fn isStableAggregateAddress(self: *LlvmEmitter, expr: ast.Expr) bool {
+    fn isStableAggregateAddress(self: *LlvmEmitter, expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .ident => |ident| self.local_slots.contains(ident.text) or self.global_types.contains(ident.text),
             .grouped => |inner| self.isStableAggregateAddress(inner.*),
@@ -7084,7 +7084,7 @@ const LlvmEmitter = struct {
     // function when sources are combined from multiple files. Without the flag the list is
     // empty and the check is emitted — the backend consumes the optimized MIR, not re-derived
     // proof.
-    fn mirCheckElided(self: *LlvmEmitter, span: ast.Span) bool {
+    fn mirCheckElided(self: *LlvmEmitter, span: ast_bridge.Span) bool {
         const function_name = self.current_function orelse return false;
         for (self.mir_module.functions) |function| {
             if (!std.mem.eql(u8, function.name, function_name)) continue;
@@ -7095,7 +7095,7 @@ const LlvmEmitter = struct {
         return false;
     }
 
-    fn requireMirBoundsFact(self: *LlvmEmitter, kind: mir.BoundsFactKind, span: ast.Span) !void {
+    fn requireMirBoundsFact(self: *LlvmEmitter, kind: mir.BoundsFactKind, span: ast_bridge.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         for (function.bounds_facts) |fact| {
             if (fact.kind == kind and fact.source.line == span.line and fact.source.column == span.column) return;
@@ -7103,7 +7103,7 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn requireMirNoOverflowRangeFact(self: *LlvmEmitter, op: []const u8, span: ast.Span) !void {
+    fn requireMirNoOverflowRangeFact(self: *LlvmEmitter, op: []const u8, span: ast_bridge.Span) !void {
         const function_name = self.current_function orelse return error.UnsupportedLlvmEmission;
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
         const expected_target = self.current_mir_range_target orelse "value";
@@ -7151,7 +7151,7 @@ const LlvmEmitter = struct {
         try self.emitTrapBranch(ok, cont, trap, trap, cont, "Bounds");
     }
 
-    fn emitSlice(self: *LlvmEmitter, node: anytype, slice_span: ast.Span) ![]const u8 {
+    fn emitSlice(self: *LlvmEmitter, node: anytype, slice_span: ast_bridge.Span) ![]const u8 {
         const base_ty = self.exprType(node.base.*) orelse return error.UnsupportedLlvmEmission;
         const inferred_slice_ty = self.sliceTypeForBase(base_ty, node.base.*.span) orelse return error.UnsupportedLlvmEmission;
         const slice_ty = (self.mirTargetTypeFactAt(.expression_result, slice_span) orelse return error.UnsupportedLlvmEmission).target_ty;
@@ -7203,7 +7203,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitArrayLiteralStores(self: *LlvmEmitter, array_ptr: []const u8, array_ty: ast.TypeExpr, items: []const ast.Expr) !void {
+    fn emitArrayLiteralStores(self: *LlvmEmitter, array_ptr: []const u8, array_ty: ast_bridge.TypeExpr, items: []const ast_bridge.Expr) !void {
         const resolved_array_ty = self.resolveAliasType(array_ty);
         const array = switch (resolved_array_ty.kind) {
             .array => |array| array,
@@ -7228,21 +7228,21 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitExprOrTargetTypedUninit(self: *LlvmEmitter, expr: ast.Expr, target_ty: ast.TypeExpr) ![]const u8 {
+    fn emitExprOrTargetTypedUninit(self: *LlvmEmitter, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) ![]const u8 {
         if (isUninitExpr(expr)) return try self.zeroInitializer(target_ty);
         return self.emitExpr(expr, target_ty);
     }
 
-    fn cUnionLiteralActiveField(self: *LlvmEmitter, fields: []const ast.StructLiteralField) ?ast.StructLiteralField {
+    fn cUnionLiteralActiveField(self: *LlvmEmitter, fields: []const ast_bridge.StructLiteralField) ?ast_bridge.StructLiteralField {
         _ = self;
-        var active: ?ast.StructLiteralField = null;
+        var active: ?ast_bridge.StructLiteralField = null;
         for (fields) |field| {
             if (!isUninitExpr(field.value)) active = field;
         }
         return active orelse if (fields.len > 0) fields[0] else null;
     }
 
-    fn structDeclField(self: *LlvmEmitter, struct_decl: ast.StructDecl, name: []const u8) ?ast.Field {
+    fn structDeclField(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl, name: []const u8) ?ast_bridge.Field {
         _ = self;
         for (struct_decl.fields) |field| {
             if (std.mem.eql(u8, field.name.text, name)) return field;
@@ -7250,7 +7250,7 @@ const LlvmEmitter = struct {
         return null;
     }
 
-    fn structDeclFieldIndex(self: *LlvmEmitter, struct_decl: ast.StructDecl, name: []const u8) ?usize {
+    fn structDeclFieldIndex(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl, name: []const u8) ?usize {
         _ = self;
         for (struct_decl.fields, 0..) |field, index| {
             if (std.mem.eql(u8, field.name.text, name)) return index;
@@ -7258,7 +7258,7 @@ const LlvmEmitter = struct {
         return null;
     }
 
-    fn emitStructLiteralStores(self: *LlvmEmitter, struct_ptr: []const u8, struct_ty: ast.TypeExpr, fields: []const ast.StructLiteralField) !void {
+    fn emitStructLiteralStores(self: *LlvmEmitter, struct_ptr: []const u8, struct_ty: ast_bridge.TypeExpr, fields: []const ast_bridge.StructLiteralField) !void {
         const struct_decl = self.structDeclForType(struct_ty) orelse return error.UnsupportedLlvmEmission;
         const struct_llvm = try self.llvmType(struct_ty);
         if (struct_decl.is_c_union) {
@@ -7293,7 +7293,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitArrayLiteralValue(self: *LlvmEmitter, array_ty: ast.TypeExpr, items: []const ast.Expr) ![]const u8 {
+    fn emitArrayLiteralValue(self: *LlvmEmitter, array_ty: ast_bridge.TypeExpr, items: []const ast_bridge.Expr) ![]const u8 {
         const resolved_array_ty = self.resolveAliasType(array_ty);
         if (resolved_array_ty.kind != .array) return error.UnsupportedLlvmEmission;
         const ptr = try self.nextTemp();
@@ -7304,7 +7304,7 @@ const LlvmEmitter = struct {
         return value;
     }
 
-    fn emitStructLiteralValue(self: *LlvmEmitter, struct_ty: ast.TypeExpr, fields: []const ast.StructLiteralField) ![]const u8 {
+    fn emitStructLiteralValue(self: *LlvmEmitter, struct_ty: ast_bridge.TypeExpr, fields: []const ast_bridge.StructLiteralField) ![]const u8 {
         if (self.structDeclForType(struct_ty) == null) return error.UnsupportedLlvmEmission;
         const ptr = try self.nextTemp();
         try self.emitAlloca(ptr, try self.llvmType(struct_ty));
@@ -7314,7 +7314,7 @@ const LlvmEmitter = struct {
         return value;
     }
 
-    fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr, span: ast.Span) ![]const u8 {
+    fn emitCall(self: *LlvmEmitter, call: anytype, expected_ty: ast_bridge.TypeExpr, span: ast_bridge.Span) ![]const u8 {
         defer self.applyMirPointerProvenanceInvalidationsAtCall(span);
         defer self.local_slice_global_pointer_arrays.clearRetainingCapacity();
         defer self.local_slice_pointer_array_ranges.clearRetainingCapacity();
@@ -7358,7 +7358,7 @@ const LlvmEmitter = struct {
         return try self.emitFnPointerCall(call.callee.*, call.args, fn_ty);
     }
 
-    fn emitBindValue(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+    fn emitBindValue(self: *LlvmEmitter, call: anytype, expected_ty: ast_bridge.TypeExpr) ![]const u8 {
         if (call.type_args.len != 0 or call.args.len != 2) return error.UnsupportedLlvmEmission;
         const closure_ty = self.resolveAliasType(expected_ty);
         if (closure_ty.kind != .closure_type) return error.UnsupportedLlvmEmission;
@@ -7398,7 +7398,7 @@ const LlvmEmitter = struct {
 
     // ----- Tier 2 trait objects (traits-design §8) ------------------------------
     // The LLVM struct type of a `*dyn Trait`'s vtable: one `ptr` per trait method.
-    fn dynVtableLlvmType(self: *LlvmEmitter, trait: ast.TraitDecl) ![]const u8 {
+    fn dynVtableLlvmType(self: *LlvmEmitter, trait: ast_bridge.TraitDecl) ![]const u8 {
         var buf: std.ArrayList(u8) = .empty;
         try buf.appendSlice(self.scratch.allocator(), "{ ");
         for (trait.methods, 0..) |_, i| {
@@ -7482,7 +7482,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitDirectCall(self: *LlvmEmitter, callee: []const u8, call: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+    fn emitDirectCall(self: *LlvmEmitter, callee: []const u8, call: anytype, expected_ty: ast_bridge.TypeExpr) ![]const u8 {
         _ = expected_ty;
         const sig = self.fn_sigs.get(callee) orelse return error.UnsupportedLlvmEmission;
         const ret_ast_ty = (self.mirTargetTypeFactAtOwned(.direct_call_result, call.callee.*.span, callee, null) orelse return error.UnsupportedLlvmEmission).target_ty;
@@ -7519,7 +7519,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitFnPointerCall(self: *LlvmEmitter, callee_expr: ast.Expr, args_expr: []const ast.Expr, fn_ty: ast.TypeExpr) ![]const u8 {
+    fn emitFnPointerCall(self: *LlvmEmitter, callee_expr: ast_bridge.Expr, args_expr: []const ast_bridge.Expr, fn_ty: ast_bridge.TypeExpr) ![]const u8 {
         const sig = fn_ty.kind.fn_pointer;
         if (typeNameEql(sig.ret.*, "void")) return error.UnsupportedLlvmEmission;
         if (args_expr.len != sig.params.len) return error.UnsupportedLlvmEmission;
@@ -7540,7 +7540,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitFnPointerVoidCall(self: *LlvmEmitter, callee_expr: ast.Expr, args_expr: []const ast.Expr, fn_ty: ast.TypeExpr) !void {
+    fn emitFnPointerVoidCall(self: *LlvmEmitter, callee_expr: ast_bridge.Expr, args_expr: []const ast_bridge.Expr, fn_ty: ast_bridge.TypeExpr) !void {
         const sig = fn_ty.kind.fn_pointer;
         if (!typeNameEql(sig.ret.*, "void")) return error.UnsupportedLlvmEmission;
         if (args_expr.len != sig.params.len) return error.UnsupportedLlvmEmission;
@@ -7560,7 +7560,7 @@ const LlvmEmitter = struct {
     }
 
     // If `callee` is `d.method` where `d` has a `*dyn Trait` type, return its TraitDecl.
-    fn dynDispatchTrait(self: *LlvmEmitter, callee: ast.Expr) ?ast.TraitDecl {
+    fn dynDispatchTrait(self: *LlvmEmitter, callee: ast_bridge.Expr) ?ast_bridge.TraitDecl {
         const member = memberExpr(callee) orelse return null;
         const base_ty = self.exprType(member.base.*) orelse return null;
         const trait_name = switch (self.resolveAliasType(base_ty).kind) {
@@ -7572,7 +7572,7 @@ const LlvmEmitter = struct {
 
     // `d.method(args)` -> load the method slot from `d.vtable`, call it with `d.data`
     // first. A genuine load-through-vtable indirect call (no devirtualization).
-    fn emitDynDispatch(self: *LlvmEmitter, call: anytype, trait: ast.TraitDecl) ![]const u8 {
+    fn emitDynDispatch(self: *LlvmEmitter, call: anytype, trait: ast_bridge.TraitDecl) ![]const u8 {
         const member = memberCallee(call) orelse return error.UnsupportedLlvmEmission;
         const slot = traitMethodIndex(trait, member.name.text) orelse return error.UnsupportedLlvmEmission;
         const msig = trait.methods[slot];
@@ -7599,7 +7599,7 @@ const LlvmEmitter = struct {
             if (!std.meta.eql(arg_ty, declared_ty)) return error.UnsupportedLlvmEmission;
             try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg") });
         }
-        const ret_ty: ast.TypeExpr = msig.return_type orelse simpleType(member.name.span, "void");
+        const ret_ty: ast_bridge.TypeExpr = msig.return_type orelse simpleType(member.name.span, "void");
         if (typeNameEql(ret_ty, "void")) {
             try self.out.print(self.allocator, "  call void {s}(ptr {s}", .{ code, data });
             for (args.items) |arg| try self.out.print(self.allocator, ", {s} {s}", .{ try self.llvmType(arg.ty), arg.value });
@@ -7615,7 +7615,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitClosureCall(self: *LlvmEmitter, callee_expr: ast.Expr, args_expr: []const ast.Expr, closure_ty: ast.TypeExpr) ![]const u8 {
+    fn emitClosureCall(self: *LlvmEmitter, callee_expr: ast_bridge.Expr, args_expr: []const ast_bridge.Expr, closure_ty: ast_bridge.TypeExpr) ![]const u8 {
         const sig = closure_ty.kind.closure_type;
         if (typeNameEql(sig.ret.*, "void")) return error.UnsupportedLlvmEmission;
         if (args_expr.len != sig.params.len) return error.UnsupportedLlvmEmission;
@@ -7639,7 +7639,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitClosureVoidCall(self: *LlvmEmitter, callee_expr: ast.Expr, args_expr: []const ast.Expr, closure_ty: ast.TypeExpr) !void {
+    fn emitClosureVoidCall(self: *LlvmEmitter, callee_expr: ast_bridge.Expr, args_expr: []const ast_bridge.Expr, closure_ty: ast_bridge.TypeExpr) !void {
         const sig = closure_ty.kind.closure_type;
         if (!typeNameEql(sig.ret.*, "void")) return error.UnsupportedLlvmEmission;
         if (args_expr.len != sig.params.len) return error.UnsupportedLlvmEmission;
@@ -7661,7 +7661,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
     }
 
-    fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr, span: ast.Span) !?[]const u8 {
+    fn emitBuiltinValueCall(self: *LlvmEmitter, call: anytype, expected_ty: ast_bridge.TypeExpr, span: ast_bridge.Span) !?[]const u8 {
         const call_span = call.callee.*.span;
         const call_kind = self.mirCallTargetKindAt(call_span);
         if (call_kind) |kind| {
@@ -7918,7 +7918,7 @@ const LlvmEmitter = struct {
         try self.emitVoidDirectCall(callee, call.args, call.callee.*.span);
     }
 
-    fn emitVoidDirectCall(self: *LlvmEmitter, callee: []const u8, args_source: []const ast.Expr, callee_span: ast.Span) !void {
+    fn emitVoidDirectCall(self: *LlvmEmitter, callee: []const u8, args_source: []const ast_bridge.Expr, callee_span: ast_bridge.Span) !void {
         const sig = self.fn_sigs.get(callee) orelse return error.UnsupportedLlvmEmission;
         // A `-> never` function lowers to a `void` LLVM declaration, so its call statement is a
         // plain `call void @fn(args)` (no result name) — handled here alongside `-> void`.
@@ -7952,7 +7952,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
     }
 
-    fn emitVoidStatementCall(self: *LlvmEmitter, call: anytype, span: ast.Span) !void {
+    fn emitVoidStatementCall(self: *LlvmEmitter, call: anytype, span: ast_bridge.Span) !void {
         defer self.applyMirPointerProvenanceInvalidationsAtCall(span);
         defer self.local_slice_global_pointer_arrays.clearRetainingCapacity();
         defer self.local_slice_pointer_array_ranges.clearRetainingCapacity();
@@ -7973,7 +7973,7 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitBinary(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr) ![]const u8 {
+    fn emitBinary(self: *LlvmEmitter, node: anytype, ty: ast_bridge.TypeExpr) ![]const u8 {
         if (binaryIsComparison(node.op)) return self.emitComparison(node, ty);
         if (node.op == .logical_and or node.op == .logical_or) return self.emitLogicalBinary(node, ty);
         const llvm_ty = try self.llvmType(ty);
@@ -8015,7 +8015,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitLogicalBinary(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr) ![]const u8 {
+    fn emitLogicalBinary(self: *LlvmEmitter, node: anytype, ty: ast_bridge.TypeExpr) ![]const u8 {
         if (!typeNameEql(ty, "bool")) return error.UnsupportedLlvmEmission;
         const left_ty = self.exprType(node.left.*) orelse return error.UnsupportedLlvmEmission;
         const right_ty = self.exprType(node.right.*) orelse return error.UnsupportedLlvmEmission;
@@ -8046,7 +8046,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitUnary(self: *LlvmEmitter, node: anytype, unary_span: ast.Span) ![]const u8 {
+    fn emitUnary(self: *LlvmEmitter, node: anytype, unary_span: ast_bridge.Span) ![]const u8 {
         const inferred_ty = if (node.op == .logical_not)
             simpleType(unary_span, "bool")
         else if (node.op == .neg and node.expr.kind == .int_literal)
@@ -8098,7 +8098,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn negativeIntegerLiteralValue(self: *LlvmEmitter, expr: ast.Expr) !?[]const u8 {
+    fn negativeIntegerLiteralValue(self: *LlvmEmitter, expr: ast_bridge.Expr) !?[]const u8 {
         return switch (expr.kind) {
             .int_literal => |literal| try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{try normalizedIntLiteral(self.scratch.allocator(), literal)}),
             .grouped => |inner| try self.negativeIntegerLiteralValue(inner.*),
@@ -8106,14 +8106,14 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn emitCast(self: *LlvmEmitter, span: ast.Span, value_expr: ast.Expr) ![]const u8 {
+    fn emitCast(self: *LlvmEmitter, span: ast_bridge.Span, value_expr: ast_bridge.Expr) ![]const u8 {
         const source_fact = self.mirTargetTypeFactAt(.explicit_cast_source, span) orelse return error.UnsupportedLlvmEmission;
         const target_fact = self.mirTargetTypeFactAt(.explicit_cast_target, span) orelse return error.UnsupportedLlvmEmission;
         const value = try self.emitExprNatural(value_expr, source_fact.target_ty);
         return try self.castValue(value, source_fact.target_ty, target_fact.target_ty);
     }
 
-    fn emitExprNatural(self: *LlvmEmitter, expr: ast.Expr, source_ty: ast.TypeExpr) anyerror![]const u8 {
+    fn emitExprNatural(self: *LlvmEmitter, expr: ast_bridge.Expr, source_ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         return switch (expr.kind) {
             .binary => |node| try self.emitBinary(node, source_ty),
             .grouped => |inner| try self.emitExprNatural(inner.*, source_ty),
@@ -8121,7 +8121,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn castValue(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+    fn castValue(self: *LlvmEmitter, value: []const u8, source_ty: ast_bridge.TypeExpr, target_ty: ast_bridge.TypeExpr) ![]const u8 {
         const source_llvm = try self.llvmType(source_ty);
         const target_llvm = try self.llvmType(target_ty);
         if (std.mem.eql(u8, source_llvm, target_llvm) and
@@ -8188,7 +8188,7 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitBitcastValue(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+    fn emitBitcastValue(self: *LlvmEmitter, value: []const u8, source_ty: ast_bridge.TypeExpr, target_ty: ast_bridge.TypeExpr) ![]const u8 {
         const source_bits = self.fixedLayoutBitsOf(source_ty) orelse return error.UnsupportedLlvmEmission;
         const target_bits = self.fixedLayoutBitsOf(target_ty) orelse return error.UnsupportedLlvmEmission;
         if (source_bits != target_bits) return error.UnsupportedLlvmEmission;
@@ -8209,7 +8209,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn castIntegerValue(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+    fn castIntegerValue(self: *LlvmEmitter, value: []const u8, source_ty: ast_bridge.TypeExpr, target_ty: ast_bridge.TypeExpr) ![]const u8 {
         const source_bits = self.integerBitsOf(source_ty) orelse return error.UnsupportedLlvmEmission;
         const target_bits = self.integerBitsOf(target_ty) orelse return error.UnsupportedLlvmEmission;
         if (source_bits == target_bits) return value;
@@ -8226,7 +8226,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitTrapConversion(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+    fn emitTrapConversion(self: *LlvmEmitter, value: []const u8, source_ty: ast_bridge.TypeExpr, target_ty: ast_bridge.TypeExpr) ![]const u8 {
         const check = try self.emitConversionOutOfRange(value, source_ty, target_ty);
         if (check) |out_of_range| {
             const trap = try self.nextLabel("trap_conversion");
@@ -8236,7 +8236,7 @@ const LlvmEmitter = struct {
         return try self.castValue(value, source_ty, target_ty);
     }
 
-    fn emitSaturatingConversion(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+    fn emitSaturatingConversion(self: *LlvmEmitter, value: []const u8, source_ty: ast_bridge.TypeExpr, target_ty: ast_bridge.TypeExpr) ![]const u8 {
         const src_range = self.intRangeOf(source_ty) orelse return error.UnsupportedLlvmEmission;
         const dst_range = self.intRangeOf(target_ty) orelse return error.UnsupportedLlvmEmission;
         const source_llvm = try self.llvmType(source_ty);
@@ -8342,7 +8342,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitTryConversion(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) ![]const u8 {
+    fn emitTryConversion(self: *LlvmEmitter, value: []const u8, source_ty: ast_bridge.TypeExpr, target_ty: ast_bridge.TypeExpr) ![]const u8 {
         const result_ty = try self.resultType(target_ty, simpleType(target_ty.span, "ConversionError"), target_ty.span);
         const converted = try self.castValue(value, source_ty, target_ty);
         const out_of_range = try self.emitConversionOutOfRange(value, source_ty, target_ty);
@@ -8357,7 +8357,7 @@ const LlvmEmitter = struct {
         return try self.emitResultValue(result_ty, "true", converted, "0");
     }
 
-    fn emitConversionOutOfRange(self: *LlvmEmitter, value: []const u8, source_ty: ast.TypeExpr, target_ty: ast.TypeExpr) !?[]const u8 {
+    fn emitConversionOutOfRange(self: *LlvmEmitter, value: []const u8, source_ty: ast_bridge.TypeExpr, target_ty: ast_bridge.TypeExpr) !?[]const u8 {
         const src_range = self.intRangeOf(source_ty) orelse return error.UnsupportedLlvmEmission;
         const dst_range = self.intRangeOf(target_ty) orelse return error.UnsupportedLlvmEmission;
         const source_llvm = try self.llvmType(source_ty);
@@ -8383,7 +8383,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn intRangeOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?IntRange {
+    fn intRangeOf(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?IntRange {
         const bits = self.integerBitsOf(ty) orelse return null;
         if (self.isSignedIntegerType(ty)) {
             const max = (@as(i128, 1) << @intCast(bits - 1)) - 1;
@@ -8393,7 +8393,7 @@ const LlvmEmitter = struct {
         return .{ .min = 0, .max = max };
     }
 
-    fn emitComparison(self: *LlvmEmitter, node: anytype, expected_ty: ast.TypeExpr) ![]const u8 {
+    fn emitComparison(self: *LlvmEmitter, node: anytype, expected_ty: ast_bridge.TypeExpr) ![]const u8 {
         // `opt == null` / `opt != null` for a value optional `?T` tests its present tag.
         if ((node.op == .eq or node.op == .ne)) {
             if (try self.valueOptionalNullCompare(node)) |result| return result;
@@ -8417,7 +8417,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn comparisonOperandType(self: *LlvmEmitter, node: anytype) ?ast.TypeExpr {
+    fn comparisonOperandType(self: *LlvmEmitter, node: anytype) ?ast_bridge.TypeExpr {
         const left_ty = self.comparisonOperandExprType(node.left.*);
         const right_ty = self.comparisonOperandExprType(node.right.*);
         const left_contextual = contextualIntegerLiteralExpr(node.left.*);
@@ -8428,7 +8428,7 @@ const LlvmEmitter = struct {
         return left_ty orelse right_ty;
     }
 
-    fn comparisonOperandExprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+    fn comparisonOperandExprType(self: *LlvmEmitter, expr: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .member, .index => if (!isSourceSpan(expr.span))
                 self.exprType(expr)
@@ -8440,7 +8440,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn contextualIntegerLiteralExpr(expr: ast.Expr) bool {
+    fn contextualIntegerLiteralExpr(expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .int_literal => |literal| blk: {
                 const parts = numeric.parseIntegerLiteralParts(literal) orelse break :blk false;
@@ -8452,7 +8452,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn nullLiteralExpr(expr: ast.Expr) bool {
+    fn nullLiteralExpr(expr: ast_bridge.Expr) bool {
         return switch (expr.kind) {
             .null_literal => true,
             .grouped => |inner| nullLiteralExpr(inner.*),
@@ -8478,7 +8478,7 @@ const LlvmEmitter = struct {
         return absent;
     }
 
-    fn emitCheckedArithmetic(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
+    fn emitCheckedArithmetic(self: *LlvmEmitter, node: anytype, ty: ast_bridge.TypeExpr, llvm_ty: []const u8) ![]const u8 {
         const bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         const signed = self.isSignedIntegerType(ty);
         const intrinsic = try self.overflowIntrinsic(node.op, signed, bits);
@@ -8497,7 +8497,7 @@ const LlvmEmitter = struct {
         return value;
     }
 
-    fn emitSaturatingArithmetic(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
+    fn emitSaturatingArithmetic(self: *LlvmEmitter, node: anytype, ty: ast_bridge.TypeExpr, llvm_ty: []const u8) ![]const u8 {
         if (self.isSignedIntegerType(ty)) return error.UnsupportedLlvmEmission;
         const bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         const intrinsic = try self.overflowIntrinsic(node.op, false, bits);
@@ -8517,7 +8517,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitCheckedDivRem(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
+    fn emitCheckedDivRem(self: *LlvmEmitter, node: anytype, ty: ast_bridge.TypeExpr, llvm_ty: []const u8) ![]const u8 {
         if (self.integerBitsOf(ty) == null) return error.UnsupportedLlvmEmission;
         const left = try self.emitBinaryOperand(node.left.*, ty);
         const right = try self.emitBinaryOperand(node.right.*, ty);
@@ -8556,7 +8556,7 @@ const LlvmEmitter = struct {
         return try self.emitPlainBinaryValues(op, llvm_ty, left, right);
     }
 
-    fn emitWrapShift(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
+    fn emitWrapShift(self: *LlvmEmitter, node: anytype, ty: ast_bridge.TypeExpr, llvm_ty: []const u8) ![]const u8 {
         const shifted_bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         const amount_ty = self.exprType(node.right.*) orelse ty;
         const amount_llvm = try self.llvmType(amount_ty);
@@ -8574,7 +8574,7 @@ const LlvmEmitter = struct {
         return try self.emitPlainBinaryValues(op, llvm_ty, left, amount);
     }
 
-    fn emitCheckedShift(self: *LlvmEmitter, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
+    fn emitCheckedShift(self: *LlvmEmitter, node: anytype, ty: ast_bridge.TypeExpr, llvm_ty: []const u8) ![]const u8 {
         const shifted_bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         const amount_ty = self.exprType(node.right.*) orelse ty;
         const amount_llvm = try self.llvmType(amount_ty);
@@ -8596,7 +8596,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitShiftCountCheck(self: *LlvmEmitter, amount: []const u8, amount_ty: ast.TypeExpr, amount_llvm: []const u8, shifted_bits: u16) !void {
+    fn emitShiftCountCheck(self: *LlvmEmitter, amount: []const u8, amount_ty: ast_bridge.TypeExpr, amount_llvm: []const u8, shifted_bits: u16) !void {
         if (self.integerBitsOf(amount_ty) == null) return error.UnsupportedLlvmEmission;
         if (self.isSignedIntegerType(amount_ty)) {
             const negative = try self.nextTemp();
@@ -8614,7 +8614,7 @@ const LlvmEmitter = struct {
         try self.emitTrapBranch(too_large, invalid, valid, invalid, valid, "InvalidShift");
     }
 
-    fn emitLeftShiftOverflowCheck(self: *LlvmEmitter, result: []const u8, left: []const u8, amount: []const u8, ty: ast.TypeExpr, llvm_ty: []const u8) !void {
+    fn emitLeftShiftOverflowCheck(self: *LlvmEmitter, result: []const u8, left: []const u8, amount: []const u8, ty: ast_bridge.TypeExpr, llvm_ty: []const u8) !void {
         const reverse_op: []const u8 = if (self.isSignedIntegerType(ty)) "ashr" else "lshr";
         const reversed = try self.emitPlainBinaryValues(reverse_op, llvm_ty, result, amount);
         const overflow = try self.nextTemp();
@@ -8624,13 +8624,13 @@ const LlvmEmitter = struct {
         try self.emitTrapBranch(overflow, overflow_trap, ok, overflow_trap, ok, "IntegerOverflow");
     }
 
-    fn emitPlainBinary(self: *LlvmEmitter, op: []const u8, node: anytype, ty: ast.TypeExpr, llvm_ty: []const u8) ![]const u8 {
+    fn emitPlainBinary(self: *LlvmEmitter, op: []const u8, node: anytype, ty: ast_bridge.TypeExpr, llvm_ty: []const u8) ![]const u8 {
         const left = try self.emitBinaryOperand(node.left.*, ty);
         const right = try self.emitBinaryOperand(node.right.*, ty);
         return try self.emitPlainBinaryValues(op, llvm_ty, left, right);
     }
 
-    fn emitBinaryOperand(self: *LlvmEmitter, expr: ast.Expr, target_ty: ast.TypeExpr) anyerror![]const u8 {
+    fn emitBinaryOperand(self: *LlvmEmitter, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         if (expr.kind == .int_literal) {
             const parts = numeric.parseIntegerLiteralParts(expr.kind.int_literal) orelse return error.UnsupportedLlvmEmission;
             if (parts.suffix == null) {
@@ -8648,7 +8648,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn emitResultConstructorValue(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr, tag: []const u8) ![]const u8 {
+    fn emitResultConstructorValue(self: *LlvmEmitter, call: anytype, expected_ty: ast_bridge.TypeExpr, tag: []const u8) ![]const u8 {
         if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
         const info = lower_llvm_shape.resultInfo(&self.type_aliases, expected_ty) orelse return error.UnsupportedLlvmEmission;
         const result_ty = try self.llvmType(expected_ty);
@@ -8676,7 +8676,7 @@ const LlvmEmitter = struct {
         return with_err;
     }
 
-    fn emitResultValue(self: *LlvmEmitter, result_ty: ast.TypeExpr, is_ok: []const u8, ok_value: []const u8, err_value: []const u8) ![]const u8 {
+    fn emitResultValue(self: *LlvmEmitter, result_ty: ast_bridge.TypeExpr, is_ok: []const u8, ok_value: []const u8, err_value: []const u8) ![]const u8 {
         const info = lower_llvm_shape.resultInfo(&self.type_aliases, result_ty) orelse return error.UnsupportedLlvmEmission;
         const result_llvm = try self.llvmType(result_ty);
         const tagged = try self.nextTemp();
@@ -8688,7 +8688,7 @@ const LlvmEmitter = struct {
         return with_err;
     }
 
-    fn emitTaggedUnionConstructor(self: *LlvmEmitter, call: anytype, target_ty: ast.TypeExpr) !?[]const u8 {
+    fn emitTaggedUnionConstructor(self: *LlvmEmitter, call: anytype, target_ty: ast_bridge.TypeExpr) !?[]const u8 {
         const tag = taggedUnionConstructorName(call.callee.*) orelse return null;
         const union_decl = self.taggedUnionForType(target_ty) orelse return null;
         const case_index = self.taggedUnionCaseIndex(union_decl, tag) orelse return null;
@@ -8716,7 +8716,7 @@ const LlvmEmitter = struct {
     // `Union.variant(...)` — qualified, self-typed tagged-union constructor. The union is
     // the callee owner (not a target type). Returns null when the owner is not a known
     // tagged union (an inherent/associated call, or an intrinsic).
-    fn emitQualifiedUnionConstructor(self: *LlvmEmitter, call: anytype, union_ty: ast.TypeExpr) !?[]const u8 {
+    fn emitQualifiedUnionConstructor(self: *LlvmEmitter, call: anytype, union_ty: ast_bridge.TypeExpr) !?[]const u8 {
         const q = syntax_bridge.qualifiedMemberCallee(call.callee.*) orelse return null;
         const union_name = typeName(self.resolveAliasType(union_ty)) orelse return null;
         if (!std.mem.eql(u8, union_name, q.owner)) return error.UnsupportedLlvmEmission;
@@ -8743,7 +8743,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn taggedUnionPayloadPtr(self: *LlvmEmitter, union_ptr: []const u8, union_ty: ast.TypeExpr, payload_ty: ast.TypeExpr) ![]const u8 {
+    fn taggedUnionPayloadPtr(self: *LlvmEmitter, union_ptr: []const u8, union_ty: ast_bridge.TypeExpr, payload_ty: ast_bridge.TypeExpr) ![]const u8 {
         const union_decl = self.taggedUnionForType(union_ty) orelse return error.UnsupportedLlvmEmission;
         const layout = self.taggedUnionLayout(union_decl, 0) orelse return error.UnsupportedLlvmEmission;
         const union_llvm = try self.llvmType(union_ty);
@@ -8753,25 +8753,25 @@ const LlvmEmitter = struct {
         return payload_ptr;
     }
 
-    fn taggedUnionLoadPayload(self: *LlvmEmitter, union_ptr: []const u8, union_ty: ast.TypeExpr, payload_ty: ast.TypeExpr) ![]const u8 {
+    fn taggedUnionLoadPayload(self: *LlvmEmitter, union_ptr: []const u8, union_ty: ast_bridge.TypeExpr, payload_ty: ast_bridge.TypeExpr) ![]const u8 {
         const payload_ptr = try self.taggedUnionPayloadPtr(union_ptr, union_ty, payload_ty);
         const payload = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = load {s}, ptr {s}\n", .{ payload, try self.llvmType(payload_ty), payload_ptr });
         return payload;
     }
 
-    fn emitResultPayloadExpr(self: *LlvmEmitter, expr: ast.Expr, ty: ast.TypeExpr) ![]const u8 {
+    fn emitResultPayloadExpr(self: *LlvmEmitter, expr: ast_bridge.Expr, ty: ast_bridge.TypeExpr) ![]const u8 {
         if (typeNameEql(self.resolveAliasType(ty), "void")) return "0";
         return try self.emitExpr(expr, ty);
     }
 
-    fn resultPayloadZero(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
+    fn resultPayloadZero(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ![]const u8 {
         if (typeNameEql(self.resolveAliasType(ty), "void")) return "0";
         return try self.zeroInitializer(ty);
     }
 
-    fn resultType(self: *LlvmEmitter, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr, span: ast.Span) !ast.TypeExpr {
-        const args = try self.scratch.allocator().alloc(ast.TypeExpr, 2);
+    fn resultType(self: *LlvmEmitter, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr, span: ast_bridge.Span) !ast_bridge.TypeExpr {
+        const args = try self.scratch.allocator().alloc(ast_bridge.TypeExpr, 2);
         args[0] = ok_ty;
         args[1] = err_ty;
         return .{ .span = span, .kind = .{ .generic = .{ .base = .{ .text = "Result", .span = span }, .args = args } } };
@@ -8834,7 +8834,7 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitReduceSumChecked(self: *LlvmEmitter, arg: ast.Expr, slice_ty: ast.TypeExpr, element_ty: ast.TypeExpr, return_ty: ast.TypeExpr) ![]const u8 {
+    fn emitReduceSumChecked(self: *LlvmEmitter, arg: ast_bridge.Expr, slice_ty: ast_bridge.TypeExpr, element_ty: ast_bridge.TypeExpr, return_ty: ast_bridge.TypeExpr) ![]const u8 {
         const range = self.intRangeOf(element_ty) orelse return error.UnsupportedLlvmEmission;
         const element_llvm = try self.llvmType(element_ty);
         const element_bits = self.integerBitsOf(element_ty) orelse return error.UnsupportedLlvmEmission;
@@ -8905,7 +8905,7 @@ const LlvmEmitter = struct {
         return try self.emitResultValue(return_ty, ok, selected_payload, "0");
     }
 
-    fn emitReduceFloat(self: *LlvmEmitter, arg: ast.Expr, slice_ty: ast.TypeExpr, element_ty: ast.TypeExpr, fast: bool) ![]const u8 {
+    fn emitReduceFloat(self: *LlvmEmitter, arg: ast_bridge.Expr, slice_ty: ast_bridge.TypeExpr, element_ty: ast_bridge.TypeExpr, fast: bool) ![]const u8 {
         if (!lower_llvm_shape.isFloatTypeOf(&self.type_aliases, element_ty)) return error.UnsupportedLlvmEmission;
         const element_llvm = try self.llvmType(element_ty);
         const slice_value = try self.emitExpr(arg, slice_ty);
@@ -8951,7 +8951,7 @@ const LlvmEmitter = struct {
         return result;
     }
 
-    fn overflowIntrinsic(self: *LlvmEmitter, op: ast.BinaryOp, signed: bool, bits: u16) ![]const u8 {
+    fn overflowIntrinsic(self: *LlvmEmitter, op: ast_bridge.BinaryOp, signed: bool, bits: u16) ![]const u8 {
         const prefix = if (signed) "s" else "u";
         const name = switch (op) {
             .add => try std.fmt.allocPrint(self.scratch.allocator(), "llvm.{s}add.with.overflow.i{d}", .{ prefix, bits }),
@@ -8988,7 +8988,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn emitStringLiteral(self: *LlvmEmitter, literal: []const u8, span: ast.Span) ![]const u8 {
+    fn emitStringLiteral(self: *LlvmEmitter, literal: []const u8, span: ast_bridge.Span) ![]const u8 {
         const fact = self.mirTargetTypeFactAt(.string_literal, span) orelse return error.UnsupportedLlvmEmission;
         const target_ty = fact.target_ty;
         const resolved = self.resolveAliasType(target_ty);
@@ -9117,7 +9117,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn debugLocation(self: *LlvmEmitter, span: ast.Span) !?usize {
+    fn debugLocation(self: *LlvmEmitter, span: ast_bridge.Span) !?usize {
         const scope = self.current_debug_scope orelse return null;
         const id = self.debug_next_id;
         self.debug_next_id += 1;
@@ -9136,7 +9136,7 @@ const LlvmEmitter = struct {
         return try std.fmt.allocPrint(self.scratch.allocator(), ", !dbg !{d}", .{location});
     }
 
-    fn emitDebugDeclare(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, ptr: []const u8, span: ast.Span, arg_index: ?usize) !void {
+    fn emitDebugDeclare(self: *LlvmEmitter, name: []const u8, ty: ast_bridge.TypeExpr, ptr: []const u8, span: ast_bridge.Span, arg_index: ?usize) !void {
         if (self.current_debug_scope == null or self.debugBasicType(ty) == null) return;
         const local_id = try self.reserveDebugLocal(name, ty, span, if (arg_index == null) .variable else .parameter, arg_index);
         const location = (try self.debugLocation(span)) orelse return;
@@ -9148,7 +9148,7 @@ const LlvmEmitter = struct {
         );
     }
 
-    fn emitDebugValue(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, value: []const u8, span: ast.Span, arg_index: usize) !void {
+    fn emitDebugValue(self: *LlvmEmitter, name: []const u8, ty: ast_bridge.TypeExpr, value: []const u8, span: ast_bridge.Span, arg_index: usize) !void {
         if (self.current_debug_scope == null or self.debugBasicType(ty) == null) return;
         const local_id = try self.reserveDebugLocal(name, ty, span, .parameter, arg_index);
         const location = (try self.debugLocation(span)) orelse return;
@@ -9160,7 +9160,7 @@ const LlvmEmitter = struct {
         );
     }
 
-    fn reserveDebugLocal(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, span: ast.Span, kind: DebugLocalKind, arg_index: ?usize) !usize {
+    fn reserveDebugLocal(self: *LlvmEmitter, name: []const u8, ty: ast_bridge.TypeExpr, span: ast_bridge.Span, kind: DebugLocalKind, arg_index: ?usize) !usize {
         const scope = self.current_debug_scope orelse return error.UnsupportedLlvmEmission;
         const id = self.debug_next_id;
         self.debug_next_id += 1;
@@ -9176,7 +9176,7 @@ const LlvmEmitter = struct {
         return id;
     }
 
-    fn debugBasicType(self: *LlvmEmitter, ty: ast.TypeExpr) ?DebugBasicType {
+    fn debugBasicType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?DebugBasicType {
         const resolved = self.resolveAliasType(ty);
         if (typeNameEql(resolved, "bool")) return .{ .name = "bool", .size_bits = 1, .encoding = "DW_ATE_boolean" };
         if (typeNameEql(resolved, "f32")) return .{ .name = "f32", .size_bits = 32, .encoding = "DW_ATE_float" };
@@ -9192,7 +9192,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn llvmType(self: *LlvmEmitter, ty: ast.TypeExpr) anyerror![]const u8 {
+    fn llvmType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
         const resolved_ty = self.resolveAliasType(ty);
         return switch (resolved_ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "void"))
@@ -9272,11 +9272,11 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn resultLlvmType(self: *LlvmEmitter, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) ![]const u8 {
+    fn resultLlvmType(self: *LlvmEmitter, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) ![]const u8 {
         return std.fmt.allocPrint(self.scratch.allocator(), "{{ i1, {s}, {s} }}", .{ try self.resultPayloadLlvmType(ok_ty), try self.resultPayloadLlvmType(err_ty) });
     }
 
-    fn resultPayloadLlvmType(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
+    fn resultPayloadLlvmType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ![]const u8 {
         if (typeNameEql(self.resolveAliasType(ty), "void")) return "i8";
         return try self.llvmType(ty);
     }
@@ -9322,7 +9322,7 @@ const LlvmEmitter = struct {
         }
     }
 
-    fn exprType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+    fn exprType(self: *LlvmEmitter, expr: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         return switch (expr.kind) {
             .ident => |ident| self.identifierExpressionType(expr, ident.text),
             .bool_literal => if (isSourceSpan(expr.span))
@@ -9433,7 +9433,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn exprStatementTypeForEmission(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+    fn exprStatementTypeForEmission(self: *LlvmEmitter, expr: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         if (!isSourceSpan(expr.span)) return self.exprType(expr);
         const fact = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
         const known = self.exprType(expr) orelse return null;
@@ -9441,23 +9441,23 @@ const LlvmEmitter = struct {
         return fact;
     }
 
-    fn identifierExpressionType(self: *LlvmEmitter, expr: ast.Expr, name: []const u8) ?ast.TypeExpr {
+    fn identifierExpressionType(self: *LlvmEmitter, expr: ast_bridge.Expr, name: []const u8) ?ast_bridge.TypeExpr {
         const inferred = self.local_types.get(name) orelse self.global_types.get(name) orelse self.fnPointerTypeForName(name) orelse return null;
         if (!isSourceSpan(expr.span)) return inferred;
         return self.expressionResultTypeAt(expr.span, inferred);
     }
 
-    fn requireExpressionResultType(self: *LlvmEmitter, expr: ast.Expr, inferred: ?ast.TypeExpr) ?ast.TypeExpr {
+    fn requireExpressionResultType(self: *LlvmEmitter, expr: ast_bridge.Expr, inferred: ?ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const expected = inferred orelse if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact| return fact.target_ty else return null;
         return self.expressionResultTypeAt(expr.span, expected);
     }
 
-    fn castResultType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+    fn castResultType(self: *LlvmEmitter, expr: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         const target_ty = (self.mirTargetTypeFactAt(.explicit_cast_target, expr.span) orelse return null).target_ty;
         return self.expressionResultTypeAt(expr.span, target_ty);
     }
 
-    fn callExpressionType(self: *LlvmEmitter, expr: ast.Expr, call: anytype) ?ast.TypeExpr {
+    fn callExpressionType(self: *LlvmEmitter, expr: ast_bridge.Expr, call: anytype) ?ast_bridge.TypeExpr {
         // Source call expressions have complete MIR result facts. The
         // call-specific fact identifies the callee/ABI or builtin path; the
         // expression_result row authorizes the value type at this source span.
@@ -9474,7 +9474,7 @@ const LlvmEmitter = struct {
         return self.expressionResultTypeAt(expr.span, inferred);
     }
 
-    fn expressionResultTypeAt(self: *LlvmEmitter, span: ast.Span, inferred: ast.TypeExpr) ?ast.TypeExpr {
+    fn expressionResultTypeAt(self: *LlvmEmitter, span: ast_bridge.Span, inferred: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         // Async lowering creates zero-span expressions whose construction site
         // already determines their type. Multiple generated nodes share that
         // sentinel span, so a span-keyed MIR lookup cannot identify one fact.
@@ -9484,13 +9484,13 @@ const LlvmEmitter = struct {
         return fact.target_ty;
     }
 
-    fn emitCharLiteralWithTarget(self: *LlvmEmitter, literal: []const u8, span: ast.Span, expected_ty: ast.TypeExpr) ![]const u8 {
+    fn emitCharLiteralWithTarget(self: *LlvmEmitter, literal: []const u8, span: ast_bridge.Span, expected_ty: ast_bridge.TypeExpr) ![]const u8 {
         const fact = self.mirTargetTypeFactAt(.char_literal, span) orelse return error.UnsupportedLlvmEmission;
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
         return charLiteralValue(self.scratch.allocator(), literal);
     }
 
-    fn derefPointeeType(self: *LlvmEmitter, expr: ast.Expr) ?ast.TypeExpr {
+    fn derefPointeeType(self: *LlvmEmitter, expr: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         const ty = self.resolveAliasType(self.exprType(expr) orelse return null);
         return switch (ty.kind) {
             .pointer => |node| node.child.*,
@@ -9499,7 +9499,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn tryExpressionResultType(self: *LlvmEmitter, expr: ast.Expr, operand: ast.Expr) ?ast.TypeExpr {
+    fn tryExpressionResultType(self: *LlvmEmitter, expr: ast_bridge.Expr, operand: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         const result_ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
         const operand_ty = self.mirTryOperandTypeForQuery(operand) orelse return null;
         const expected_ty = if (lower_llvm_shape.resultInfo(&self.type_aliases, operand_ty)) |info|
@@ -9510,8 +9510,8 @@ const LlvmEmitter = struct {
         return result_ty;
     }
 
-    fn pointerTypeFor(self: *LlvmEmitter, child: ast.TypeExpr) !ast.TypeExpr {
-        const child_ptr = try self.scratch.allocator().create(ast.TypeExpr);
+    fn pointerTypeFor(self: *LlvmEmitter, child: ast_bridge.TypeExpr) !ast_bridge.TypeExpr {
+        const child_ptr = try self.scratch.allocator().create(ast_bridge.TypeExpr);
         child_ptr.* = child;
         return .{
             .span = child.span,
@@ -9584,9 +9584,9 @@ const LlvmEmitter = struct {
     }
 
     fn rawAddressTypesForEmission(self: *LlvmEmitter, call: anytype) ?struct {
-        address_ty: ast.TypeExpr,
-        payload_ty: ast.TypeExpr,
-        result_ty: ast.TypeExpr,
+        address_ty: ast_bridge.TypeExpr,
+        payload_ty: ast_bridge.TypeExpr,
+        result_ty: ast_bridge.TypeExpr,
     } {
         const span = call.callee.*.span;
         return .{
@@ -9642,9 +9642,9 @@ const LlvmEmitter = struct {
     }
 
     fn vaCallTypesForEmission(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?struct {
-        cursor_ty: ?ast.TypeExpr,
-        payload_ty: ?ast.TypeExpr,
-        result_ty: ast.TypeExpr,
+        cursor_ty: ?ast_bridge.TypeExpr,
+        payload_ty: ?ast_bridge.TypeExpr,
+        result_ty: ast_bridge.TypeExpr,
     } {
         const span = call.callee.*.span;
         return .{
@@ -9684,18 +9684,18 @@ const LlvmEmitter = struct {
         if (fence) |kind| try self.out.print(self.allocator, "  fence {s}{s}\n", .{ kind, try self.debugCallSuffix() });
     }
 
-    fn mmioPointerType(self: *LlvmEmitter, child_ty: ast.TypeExpr, span: ast.Span) !ast.TypeExpr {
-        const args = try self.scratch.allocator().alloc(ast.TypeExpr, 1);
+    fn mmioPointerType(self: *LlvmEmitter, child_ty: ast_bridge.TypeExpr, span: ast_bridge.Span) !ast_bridge.TypeExpr {
+        const args = try self.scratch.allocator().alloc(ast_bridge.TypeExpr, 1);
         args[0] = child_ty;
         return .{ .span = span, .kind = .{ .generic = .{ .base = .{ .text = "MmioPtr", .span = span }, .args = args } } };
     }
 
-    fn atomicStorageLlvmType(self: *LlvmEmitter, payload_ty: ast.TypeExpr) ![]const u8 {
+    fn atomicStorageLlvmType(self: *LlvmEmitter, payload_ty: ast_bridge.TypeExpr) ![]const u8 {
         if (typeNameEql(self.resolveAliasType(payload_ty), "bool")) return "i8";
         return self.llvmType(payload_ty);
     }
 
-    fn emitAtomicValueForStorage(self: *LlvmEmitter, expr: ast.Expr, payload_ty: ast.TypeExpr) ![]const u8 {
+    fn emitAtomicValueForStorage(self: *LlvmEmitter, expr: ast_bridge.Expr, payload_ty: ast_bridge.TypeExpr) ![]const u8 {
         const value = try self.emitExpr(expr, payload_ty);
         if (!typeNameEql(self.resolveAliasType(payload_ty), "bool")) return value;
         if (std.mem.eql(u8, value, "0") or std.mem.eql(u8, value, "1")) return value;
@@ -9704,7 +9704,7 @@ const LlvmEmitter = struct {
         return widened;
     }
 
-    fn indexElementType(self: *LlvmEmitter, base: ast.Expr) ?ast.TypeExpr {
+    fn indexElementType(self: *LlvmEmitter, base: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         const ty = self.resolveAliasType(self.exprType(base) orelse return null);
         return switch (ty.kind) {
             .array => |array| array.child.*,
@@ -9713,7 +9713,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn sliceTypeForBase(self: *LlvmEmitter, ty: ast.TypeExpr, span: ast.Span) ?ast.TypeExpr {
+    fn sliceTypeForBase(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, span: ast_bridge.Span) ?ast_bridge.TypeExpr {
         const resolved_ty = self.resolveAliasType(ty);
         return switch (resolved_ty.kind) {
             .slice => ty,
@@ -9722,34 +9722,34 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn sliceTypeFor(self: *LlvmEmitter, child_ty: ast.TypeExpr, mutability: ast.Mutability, span: ast.Span) !ast.TypeExpr {
-        const child = try self.scratch.allocator().create(ast.TypeExpr);
+    fn sliceTypeFor(self: *LlvmEmitter, child_ty: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability, span: ast_bridge.Span) !ast_bridge.TypeExpr {
+        const child = try self.scratch.allocator().create(ast_bridge.TypeExpr);
         child.* = child_ty;
         return .{ .span = span, .kind = .{ .slice = .{ .mutability = mutability, .child = child } } };
     }
 
-    fn structDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.StructDecl {
+    fn structDeclForType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.StructDecl {
         return lower_llvm_lookup.structDeclForType(&self.type_aliases, &self.struct_types, ty);
     }
 
-    fn packedBitsInfoForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?PackedBitsInfo {
+    fn packedBitsInfoForType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?PackedBitsInfo {
         return lower_llvm_lookup.packedBitsInfoForType(&self.type_aliases, &self.packed_bits, ty);
     }
 
-    fn overlayInfoForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?OverlayUnionInfo {
+    fn overlayInfoForType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?OverlayUnionInfo {
         return lower_llvm_lookup.overlayInfoForType(&self.type_aliases, &self.overlay_unions, ty);
     }
 
-    fn taggedUnionForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.UnionDecl {
+    fn taggedUnionForType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.UnionDecl {
         return lower_llvm_lookup.taggedUnionForType(&self.type_aliases, &self.tagged_unions, ty);
     }
 
-    fn taggedUnionCaseIndex(self: *LlvmEmitter, union_decl: ast.UnionDecl, case_name: []const u8) ?usize {
+    fn taggedUnionCaseIndex(self: *LlvmEmitter, union_decl: ast_bridge.UnionDecl, case_name: []const u8) ?usize {
         _ = self;
         return lower_llvm_lookup.taggedUnionCaseIndex(union_decl, case_name);
     }
 
-    fn taggedUnionLlvmType(self: *LlvmEmitter, union_decl: ast.UnionDecl) ![]const u8 {
+    fn taggedUnionLlvmType(self: *LlvmEmitter, union_decl: ast_bridge.UnionDecl) ![]const u8 {
         const layout = self.taggedUnionLayout(union_decl, 0) orelse return error.UnsupportedLlvmEmission;
         const storage_ty = try self.taggedUnionPayloadStorageType(layout);
         if (layout.padding_size == 0) {
@@ -9758,7 +9758,7 @@ const LlvmEmitter = struct {
         return std.fmt.allocPrint(self.scratch.allocator(), "{{ i32, [{d} x i8], {s} }}", .{ layout.padding_size, storage_ty });
     }
 
-    fn taggedUnionLayout(self: *LlvmEmitter, union_decl: ast.UnionDecl, depth: usize) ?TaggedUnionLayout {
+    fn taggedUnionLayout(self: *LlvmEmitter, union_decl: ast_bridge.UnionDecl, depth: usize) ?TaggedUnionLayout {
         var env = self.reflectEnv();
         return lower_llvm_reflect.taggedUnionLayout(&env, union_decl, depth);
     }
@@ -9773,7 +9773,7 @@ const LlvmEmitter = struct {
         return lower_llvm_lookup.packedBitsFieldIndex(info, field_name);
     }
 
-    fn packedBitsBaseAddress(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+    fn packedBitsBaseAddress(self: *LlvmEmitter, expr: ast_bridge.Expr) ![]const u8 {
         return switch (expr.kind) {
             .ident => |ident| blk: {
                 if (self.local_slots.get(ident.text)) |slot| break :blk slot.ptr;
@@ -9785,7 +9785,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn enumDeclForType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.EnumDecl {
+    fn enumDeclForType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.EnumDecl {
         return lower_llvm_lookup.enumDeclForType(&self.type_aliases, &self.enum_types, ty);
     }
 
@@ -9797,26 +9797,26 @@ const LlvmEmitter = struct {
         return self.local_types.contains(base_ident.text) or self.global_types.contains(base_ident.text);
     }
 
-    fn memberBaseStructType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
+    fn memberBaseStructType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         return lower_llvm_lookup.memberBaseStructType(&self.type_aliases, ty);
     }
 
-    fn memberBaseStructDecl(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.StructDecl {
+    fn memberBaseStructDecl(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?ast_bridge.StructDecl {
         return lower_llvm_lookup.memberBaseStructDecl(&self.type_aliases, &self.struct_types, ty);
     }
 
-    fn enumReprType(enum_decl: ast.EnumDecl) ast.TypeExpr {
+    fn enumReprType(enum_decl: ast_bridge.EnumDecl) ast_bridge.TypeExpr {
         return enum_decl.repr orelse simpleType(enum_decl.name.span, "isize");
     }
 
-    fn enumCaseValueByName(self: *LlvmEmitter, enum_decl: ast.EnumDecl, case_name: []const u8) ![]const u8 {
+    fn enumCaseValueByName(self: *LlvmEmitter, enum_decl: ast_bridge.EnumDecl, case_name: []const u8) ![]const u8 {
         for (enum_decl.cases) |case| {
             if (std.mem.eql(u8, case.name.text, case_name)) return try self.enumCaseValue(enum_decl, case);
         }
         return error.UnsupportedLlvmEmission;
     }
 
-    fn enumCaseValue(self: *LlvmEmitter, enum_decl: ast.EnumDecl, case: ast.EnumCase) ![]const u8 {
+    fn enumCaseValue(self: *LlvmEmitter, enum_decl: ast_bridge.EnumDecl, case: ast_bridge.EnumCase) ![]const u8 {
         if (case.value) |value| return try self.enumLiteralValue(value);
         for (enum_decl.cases, 0..) |candidate, i| {
             if (std.mem.eql(u8, candidate.name.text, case.name.text)) {
@@ -9826,7 +9826,7 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn enumLiteralValue(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+    fn enumLiteralValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ![]const u8 {
         return switch (expr.kind) {
             .int_literal => |literal| try normalizedIntLiteral(self.scratch.allocator(), literal),
             .char_literal => |literal| try charLiteralValue(self.scratch.allocator(), literal),
@@ -9839,7 +9839,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn packedBitsLiteralValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const ast.StructLiteralField) ![]const u8 {
+    fn packedBitsLiteralValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const ast_bridge.StructLiteralField) ![]const u8 {
         var value: u64 = 0;
         for (fields) |field| {
             const bit_index = self.packedBitsFieldIndex(info, field.name.text) orelse return error.UnsupportedLlvmEmission;
@@ -9856,7 +9856,7 @@ const LlvmEmitter = struct {
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
     }
 
-    fn emitPackedBitsLiteralValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const ast.StructLiteralField) ![]const u8 {
+    fn emitPackedBitsLiteralValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const ast_bridge.StructLiteralField) ![]const u8 {
         if (self.staticPackedBitsLiteralValue(info, fields)) |value| return value;
         const llvm_ty = try self.llvmType(info.repr);
         var current: []const u8 = "0";
@@ -9877,7 +9877,7 @@ const LlvmEmitter = struct {
         return current;
     }
 
-    fn staticPackedBitsLiteralValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const ast.StructLiteralField) ?[]const u8 {
+    fn staticPackedBitsLiteralValue(self: *LlvmEmitter, info: PackedBitsInfo, fields: []const ast_bridge.StructLiteralField) ?[]const u8 {
         return self.packedBitsLiteralValue(info, fields) catch null;
     }
 
@@ -9894,11 +9894,11 @@ const LlvmEmitter = struct {
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
     }
 
-    fn resolveAliasType(self: *LlvmEmitter, ty: ast.TypeExpr) ast.TypeExpr {
+    fn resolveAliasType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ast_bridge.TypeExpr {
         return type_bridge.resolveAliasType(&self.type_aliases, ty);
     }
 
-    fn structLlvmType(self: *LlvmEmitter, struct_decl: ast.StructDecl) anyerror![]const u8 {
+    fn structLlvmType(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl) anyerror![]const u8 {
         if (struct_decl.is_c_union) return try self.cUnionLlvmType(struct_decl);
         var text: std.ArrayList(u8) = .empty;
         try text.appendSlice(self.scratch.allocator(), "{ ");
@@ -9923,14 +9923,14 @@ const LlvmEmitter = struct {
     // alignment-carrying idiom used for tagged-union payloads — so an alloca/field of this
     // type gets both the largest arm's size AND its alignment. All arms live at offset 0, so
     // member access needs no GEP (see emitMemberAddress); the pointer IS reinterpreted per arm.
-    fn cUnionLlvmType(self: *LlvmEmitter, struct_decl: ast.StructDecl) ![]const u8 {
+    fn cUnionLlvmType(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl) ![]const u8 {
         const layout = self.cUnionStorageLayout(struct_decl) orelse return error.UnsupportedLlvmEmission;
         return std.fmt.allocPrint(self.scratch.allocator(), "[{d} x i{d}]", .{ layout.count, layout.alignment * 8 });
     }
 
     const CUnionStorageLayout = struct { count: usize, alignment: usize };
 
-    fn cUnionStorageLayout(self: *LlvmEmitter, struct_decl: ast.StructDecl) ?CUnionStorageLayout {
+    fn cUnionStorageLayout(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl) ?CUnionStorageLayout {
         var max_size: i128 = 0;
         var max_align: i128 = 1;
         for (struct_decl.fields) |field| {
@@ -9949,7 +9949,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn overlayField(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) ?ast.Field {
+    fn overlayField(self: *LlvmEmitter, base: ast_bridge.Expr, field_name: []const u8) ?ast_bridge.Field {
         const base_ty = self.exprType(base) orelse return null;
         const info = self.overlayInfoForType(base_ty) orelse return null;
         for (info.fields) |field| {
@@ -9958,12 +9958,12 @@ const LlvmEmitter = struct {
         return null;
     }
 
-    fn emitOverlayFieldAddress(self: *LlvmEmitter, base: ast.Expr, field: ast.Field) ![]const u8 {
+    fn emitOverlayFieldAddress(self: *LlvmEmitter, base: ast_bridge.Expr, field: ast_bridge.Field) ![]const u8 {
         _ = field;
         return try self.aggregateBasePointer(base);
     }
 
-    fn memberField(self: *LlvmEmitter, base: ast.Expr, field_name: []const u8) ?ast.Field {
+    fn memberField(self: *LlvmEmitter, base: ast_bridge.Expr, field_name: []const u8) ?ast_bridge.Field {
         const base_ty = self.exprType(base) orelse return null;
         const struct_decl = self.memberBaseStructDecl(base_ty) orelse return null;
         for (struct_decl.fields) |field| {
@@ -9972,7 +9972,7 @@ const LlvmEmitter = struct {
         return null;
     }
 
-    fn mmioStructField(self: *LlvmEmitter, struct_decl: ast.StructDecl, field_name: []const u8) ?ast.Field {
+    fn mmioStructField(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl, field_name: []const u8) ?ast_bridge.Field {
         _ = self;
         for (struct_decl.fields) |field| {
             if (std.mem.eql(u8, field.name.text, field_name)) return field;
@@ -9980,7 +9980,7 @@ const LlvmEmitter = struct {
         return null;
     }
 
-    fn mmioFieldInfo(self: *LlvmEmitter, field: ast.Field) ?MmioFieldInfo {
+    fn mmioFieldInfo(self: *LlvmEmitter, field: ast_bridge.Field) ?MmioFieldInfo {
         _ = self;
         const generic = switch (field.ty.kind) {
             .generic => |node| node,
@@ -9997,7 +9997,7 @@ const LlvmEmitter = struct {
         return null;
     }
 
-    fn mmioFieldOffset(self: *LlvmEmitter, struct_decl: ast.StructDecl, field_name: []const u8) ?u64 {
+    fn mmioFieldOffset(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl, field_name: []const u8) ?u64 {
         var offset: i128 = 0;
         for (struct_decl.fields) |field| {
             const info = self.mmioFieldInfo(field) orelse return null;
@@ -10014,7 +10014,7 @@ const LlvmEmitter = struct {
         return null;
     }
 
-    fn overlayFieldLayout(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?OverlayLayout {
+    fn overlayFieldLayout(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, depth: usize) ?OverlayLayout {
         if (depth > 32) return null;
         return switch (ty.kind) {
             .array => |node| {
@@ -10031,12 +10031,12 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn directCallName(self: *LlvmEmitter, callee: ast.Expr) ?[]const u8 {
+    fn directCallName(self: *LlvmEmitter, callee: ast_bridge.Expr) ?[]const u8 {
         const name = calleeIdentName(callee) orelse return null;
         return if (self.fn_sigs.contains(name)) name else null;
     }
 
-    fn fnPointerCalleeType(self: *LlvmEmitter, callee: ast.Expr) ?ast.TypeExpr {
+    fn fnPointerCalleeType(self: *LlvmEmitter, callee: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         const ty = (self.mirTargetTypeFactAt(.indirect_call_callee, callee.span) orelse return null).target_ty;
         const resolved_ty = self.resolveAliasType(ty);
         return switch (resolved_ty.kind) {
@@ -10045,7 +10045,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn closureCalleeType(self: *LlvmEmitter, callee: ast.Expr) ?ast.TypeExpr {
+    fn closureCalleeType(self: *LlvmEmitter, callee: ast_bridge.Expr) ?ast_bridge.TypeExpr {
         const ty = (self.mirTargetTypeFactAt(.indirect_call_callee, callee.span) orelse return null).target_ty;
         const resolved_ty = self.resolveAliasType(ty);
         return switch (resolved_ty.kind) {
@@ -10054,11 +10054,11 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn fnPointerTypeForName(self: *LlvmEmitter, name: []const u8) ?ast.TypeExpr {
+    fn fnPointerTypeForName(self: *LlvmEmitter, name: []const u8) ?ast_bridge.TypeExpr {
         const sig = self.fn_sigs.get(name) orelse return null;
-        const params = self.scratch.allocator().alloc(ast.TypeExpr, sig.params.len) catch return null;
+        const params = self.scratch.allocator().alloc(ast_bridge.TypeExpr, sig.params.len) catch return null;
         for (sig.params, 0..) |param, i| params[i] = param.ty;
-        const ret = self.scratch.allocator().create(ast.TypeExpr) catch return null;
+        const ret = self.scratch.allocator().create(ast_bridge.TypeExpr) catch return null;
         ret.* = sig.ret;
         return .{
             .span = sig.ret.span,
@@ -10066,11 +10066,11 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn isFnPointerType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+    fn isFnPointerType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) bool {
         return self.resolveAliasType(ty).kind == .fn_pointer;
     }
 
-    fn callResultTypeForEmission(self: *LlvmEmitter, call: anytype) ?ast.TypeExpr {
+    fn callResultTypeForEmission(self: *LlvmEmitter, call: anytype) ?ast_bridge.TypeExpr {
         const call_span = call.callee.*.span;
         const call_kind = self.mirCallTargetKindAt(call_span);
         if (call_kind) |kind| {
@@ -10352,11 +10352,11 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn physResultTypeForEmission(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) !ast.TypeExpr {
+    fn physResultTypeForEmission(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) !ast_bridge.TypeExpr {
         return self.physResultTypeForQuery(call, kind) orelse error.UnsupportedLlvmEmission;
     }
 
-    fn physResultTypeForQuery(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?ast.TypeExpr {
+    fn physResultTypeForQuery(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?ast_bridge.TypeExpr {
         if (kind != .phys) return null;
         if (call.type_args.len != 0 or call.args.len != 1) return null;
         return if (self.mirTargetTypeFactAt(.phys_result, call.callee.*.span)) |fact| fact.target_ty else null;
@@ -10415,11 +10415,11 @@ const LlvmEmitter = struct {
         return .{ .base = member.base.*, .op = fact_info.op, .dma_ty = dma_ty, .result_ty = result_ty };
     }
 
-    fn atomicBaseAddress(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+    fn atomicBaseAddress(self: *LlvmEmitter, expr: ast_bridge.Expr) ![]const u8 {
         return self.storageBaseAddress(expr);
     }
 
-    fn storageBaseAddress(self: *LlvmEmitter, expr: ast.Expr) ![]const u8 {
+    fn storageBaseAddress(self: *LlvmEmitter, expr: ast_bridge.Expr) ![]const u8 {
         return switch (expr.kind) {
             .ident => |ident| if (self.local_slots.get(ident.text)) |slot|
                 slot.ptr
@@ -10433,7 +10433,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn llvmAlignOf(self: *LlvmEmitter, ty: ast.TypeExpr) u8 {
+    fn llvmAlignOf(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) u8 {
         if (self.enumDeclForType(ty)) |enum_decl| return self.llvmAlignOf(enumReprType(enum_decl));
         const resolved_ty = self.resolveAliasType(ty);
         if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
@@ -10459,7 +10459,7 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn arrayLenValue(self: *LlvmEmitter, expr: ast.Expr) ?u64 {
+    fn arrayLenValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ?u64 {
         var env = self.reflectEnv();
         return lower_llvm_reflect.arrayLenValue(&env, expr);
     }
@@ -10477,22 +10477,22 @@ const LlvmEmitter = struct {
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value}) catch null;
     }
 
-    fn comptimeSizeOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
+    fn comptimeSizeOf(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
         var env = self.reflectEnv();
         return lower_llvm_reflect.comptimeSizeOf(&env, ty, depth);
     }
 
-    fn comptimeAlignOf(self: *LlvmEmitter, ty: ast.TypeExpr, depth: usize) ?i128 {
+    fn comptimeAlignOf(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
         var env = self.reflectEnv();
         return lower_llvm_reflect.comptimeAlignOf(&env, ty, depth);
     }
 
-    fn comptimeFieldOffset(self: *LlvmEmitter, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
+    fn comptimeFieldOffset(self: *LlvmEmitter, ty: ast_bridge.TypeExpr, field: []const u8, depth: usize) ?i128 {
         var env = self.reflectEnv();
         return lower_llvm_reflect.comptimeFieldOffset(&env, ty, field, depth);
     }
 
-    fn integerBitsOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?u16 {
+    fn integerBitsOf(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?u16 {
         if (self.enumDeclForType(ty)) |enum_decl| return self.integerBitsOf(enumReprType(enum_decl));
         if (self.packedBitsInfoForType(ty)) |info| return self.integerBitsOf(info.repr);
         if (self.structDeclForType(ty) != null or self.taggedUnionForType(ty) != null or self.overlayInfoForType(ty) != null) return null;
@@ -10500,14 +10500,14 @@ const LlvmEmitter = struct {
         return integerBits(self.resolveAliasType(ty));
     }
 
-    fn isSignedIntegerType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+    fn isSignedIntegerType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) bool {
         if (self.enumDeclForType(ty)) |enum_decl| return self.isSignedIntegerType(enumReprType(enum_decl));
         if (self.packedBitsInfoForType(ty)) |info| return self.isSignedIntegerType(info.repr);
         if (lower_llvm_shape.domainPayloadType(&self.type_aliases, ty)) |payload_ty| return self.isSignedIntegerType(payload_ty);
         return isSignedInteger(self.resolveAliasType(ty));
     }
 
-    fn fixedLayoutBitsOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?u16 {
+    fn fixedLayoutBitsOf(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?u16 {
         if (self.integerBitsOf(ty)) |bits| return bits;
         const resolved = self.resolveAliasType(ty);
         return switch (resolved.kind) {
@@ -10524,12 +10524,12 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn signedMinLiteralOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?[]const u8 {
+    fn signedMinLiteralOf(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?[]const u8 {
         if (self.enumDeclForType(ty)) |enum_decl| return self.signedMinLiteralOf(enumReprType(enum_decl));
         return signedMinLiteral(self.resolveAliasType(ty));
     }
 
-    fn signedWindowMinLiteral(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
+    fn signedWindowMinLiteral(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ![]const u8 {
         const bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         const value = -(@as(i128, 1) << @intCast(bits - 1));
         return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value});
@@ -10546,7 +10546,7 @@ const LlvmEmitter = struct {
         return .{ .base = member.base.*, .base_ty = base_ty, .element_ty = element_ty, .result_ty = result_ty };
     }
 
-    fn isAggregateType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
+    fn isAggregateType(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) bool {
         const resolved_ty = self.resolveAliasType(ty);
         if (lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.isAggregateType(payload_ty);
         return switch (resolved_ty.kind) {
@@ -10567,7 +10567,7 @@ const LlvmEmitter = struct {
 const ResultSwitchPattern = switch_lower.ResultArmPattern;
 const TaggedUnionBinding = switch_lower.TaggedUnionArmBinding;
 
-fn deferExprForRefInBlock(block: ast.Block, ref: mir.DeferCleanupRef) ?ast.Expr {
+fn deferExprForRefInBlock(block: ast_bridge.Block, ref: mir.DeferCleanupRef) ?ast_bridge.Expr {
     for (block.items) |stmt| {
         if (stmt.kind == .@"defer" and sourcePointMatchesSpan(ref.source, stmt.span)) return stmt.kind.@"defer";
         switch (stmt.kind) {

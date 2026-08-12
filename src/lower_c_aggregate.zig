@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_global = @import("lower_c_global.zig");
@@ -31,21 +31,21 @@ const taggedUnionCase = syntax_bridge.taggedUnionCase;
 const typeName = type_bridge.typeName;
 const simpleNameType = type_bridge.simpleNameType;
 
-pub const DepNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
+pub const DepNameFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
 pub const EmitUnitFn = *const fn (ctx: *anyopaque, unit: AggregateEmitUnit) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
-pub const EmitUncheckedAddValueTempFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp;
-pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
-pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
-pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitUncheckedAddValueTempFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp;
+pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr;
+pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
+pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 
 pub const DepContext = struct {
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
-    structs: *const std.StringHashMap(ast.StructDecl),
-    tagged_unions: *const std.StringHashMap(ast.UnionDecl),
-    enums: *const std.StringHashMap(ast.EnumDecl),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
+    structs: *const std.StringHashMap(ast_bridge.StructDecl),
+    tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
+    enums: *const std.StringHashMap(ast_bridge.EnumDecl),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
     array_types: *const std.StringHashMap(ArrayInfo),
@@ -59,9 +59,9 @@ pub const EmitContext = struct {
     out: *std.ArrayList(u8),
     indent: *usize,
     temp_index: *usize,
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
-    structs: *const std.StringHashMap(ast.StructDecl),
-    tagged_unions: *const std.StringHashMap(ast.UnionDecl),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
+    structs: *const std.StringHashMap(ast_bridge.StructDecl),
+    tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     emit_ctx: *anyopaque,
     emit_expr_with_target: EmitExprWithTargetFn,
@@ -73,7 +73,7 @@ pub const EmitContext = struct {
     c_ident: CIdentFn,
 };
 
-pub fn emitArrayLiteral(ctx: EmitContext, items: []const ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
+pub fn emitArrayLiteral(ctx: EmitContext, items: []const ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!void {
     const resolved_target_ty = type_bridge.resolveAliasType(ctx.type_aliases, target_ty);
     const child_ty = resolvedArrayChildType(resolved_target_ty) orelse return error.UnsupportedCEmission;
     if (locals == null) {
@@ -103,12 +103,12 @@ pub fn emitArrayLiteral(ctx: EmitContext, items: []const ast.Expr, locals: ?*std
     try ctx.out.appendSlice(ctx.allocator, " } }; })");
 }
 
-pub fn emitStructLiteral(ctx: EmitContext, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
+pub fn emitStructLiteral(ctx: EmitContext, fields: []const ast_bridge.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!void {
     const resolved_target_ty = type_bridge.resolveAliasType(ctx.type_aliases, target_ty);
     const struct_decl = structDeclForResolvedTarget(ctx, resolved_target_ty) orelse return error.UnsupportedCEmission;
     if (locals == null) {
         if (struct_decl.is_c_union) {
-            var active: ?ast.StructLiteralField = null;
+            var active: ?ast_bridge.StructLiteralField = null;
             for (fields) |field| {
                 if (field.value.kind != .uninit_literal) active = field;
             }
@@ -130,7 +130,7 @@ pub fn emitStructLiteral(ctx: EmitContext, fields: []const ast.StructLiteralFiel
         return;
     }
     if (struct_decl.is_c_union) {
-        var active: ?ast.StructLiteralField = null;
+        var active: ?ast_bridge.StructLiteralField = null;
         for (fields) |field| {
             if (field.value.kind != .uninit_literal) active = field;
         }
@@ -162,7 +162,7 @@ pub fn emitStructLiteral(ctx: EmitContext, fields: []const ast.StructLiteralFiel
     try ctx.out.appendSlice(ctx.allocator, " }; })");
 }
 
-pub fn emitArrayLiteralWithTemps(ctx: EmitContext, items: []const ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, temps: []const ?SequencedArgTemp) anyerror!void {
+pub fn emitArrayLiteralWithTemps(ctx: EmitContext, items: []const ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, temps: []const ?SequencedArgTemp) anyerror!void {
     const resolved_target_ty = type_bridge.resolveAliasType(ctx.type_aliases, target_ty);
     const child_ty = resolvedArrayChildType(resolved_target_ty) orelse return error.UnsupportedCEmission;
     try ctx.out.print(ctx.allocator, "({s}){{ .elems = {{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
@@ -179,7 +179,7 @@ pub fn emitArrayLiteralWithTemps(ctx: EmitContext, items: []const ast.Expr, loca
     try ctx.out.appendSlice(ctx.allocator, " } }");
 }
 
-pub fn emitStructLiteralWithTemps(ctx: EmitContext, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, temps: []const ?SequencedArgTemp) anyerror!void {
+pub fn emitStructLiteralWithTemps(ctx: EmitContext, fields: []const ast_bridge.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, temps: []const ?SequencedArgTemp) anyerror!void {
     const resolved_target_ty = type_bridge.resolveAliasType(ctx.type_aliases, target_ty);
     const struct_decl = structDeclForResolvedTarget(ctx, resolved_target_ty) orelse return error.UnsupportedCEmission;
     try ctx.out.print(ctx.allocator, "({s}){{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
@@ -218,7 +218,7 @@ pub fn emitStructLiteralWithTemps(ctx: EmitContext, fields: []const ast.StructLi
     try ctx.out.appendSlice(ctx.allocator, " }");
 }
 
-fn emitExprOrTargetTypedUninit(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
+fn emitExprOrTargetTypedUninit(ctx: EmitContext, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!void {
     if (expr.kind == .uninit_literal) {
         try ctx.out.print(ctx.allocator, "({s}){{0}}", .{try ctx.c_type(ctx.emit_ctx, target_ty)});
         return;
@@ -226,8 +226,8 @@ fn emitExprOrTargetTypedUninit(ctx: EmitContext, expr: ast.Expr, locals: ?*std.S
     try ctx.emit_expr_with_target(ctx.emit_ctx, expr, locals, target_ty);
 }
 
-fn emitCUnionLiteralFields(ctx: EmitContext, struct_decl: ast.StructDecl, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
-    var active: ?ast.StructLiteralField = null;
+fn emitCUnionLiteralFields(ctx: EmitContext, struct_decl: ast_bridge.StructDecl, fields: []const ast_bridge.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+    var active: ?ast_bridge.StructLiteralField = null;
     for (fields) |field| {
         if (field.value.kind != .uninit_literal) active = field;
     }
@@ -237,15 +237,15 @@ fn emitCUnionLiteralFields(ctx: EmitContext, struct_decl: ast.StructDecl, fields
     try emitExprOrTargetTypedUninit(ctx, field.value, locals, field_ty);
 }
 
-pub fn arrayChildTypeForTarget(ctx: EmitContext, target_ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn arrayChildTypeForTarget(ctx: EmitContext, target_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     return resolvedArrayChildType(type_bridge.resolveAliasType(ctx.type_aliases, target_ty));
 }
 
-pub fn structDeclForTarget(ctx: EmitContext, target_ty: ast.TypeExpr) ?ast.StructDecl {
+pub fn structDeclForTarget(ctx: EmitContext, target_ty: ast_bridge.TypeExpr) ?ast_bridge.StructDecl {
     return structDeclForResolvedTarget(ctx, type_bridge.resolveAliasType(ctx.type_aliases, target_ty));
 }
 
-pub fn emitUncheckedAddAggregateCallArgTemp(ctx: EmitContext, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitUncheckedAddAggregateCallArgTemp(ctx: EmitContext, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     return switch (arg.kind) {
         .grouped => |inner| try emitUncheckedAddAggregateCallArgTemp(ctx, inner.*, locals, target_ty),
         .array_literal => |items| try emitUncheckedAddArrayAggregateCallArgTemp(ctx, items, locals, target_ty),
@@ -254,7 +254,7 @@ pub fn emitUncheckedAddAggregateCallArgTemp(ctx: EmitContext, arg: ast.Expr, loc
     };
 }
 
-pub fn emitUncheckedAddAggregateReturn(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitUncheckedAddAggregateReturn(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const target_ty = return_ty orelse return false;
     return switch (expr.kind) {
         .grouped => |inner| try emitUncheckedAddAggregateReturn(ctx, inner.*, locals, return_ty),
@@ -264,7 +264,7 @@ pub fn emitUncheckedAddAggregateReturn(ctx: EmitContext, expr: ast.Expr, locals:
     };
 }
 
-pub fn emitUncheckedAddAggregateLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitUncheckedAddAggregateLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     return switch (initializer.kind) {
         .grouped => |inner| try emitUncheckedAddAggregateLocalInit(ctx, name, decl_ty, inner.*, locals),
         .array_literal => |items| try emitUncheckedAddArrayAggregateLocalInit(ctx, name, decl_ty, items, locals),
@@ -273,7 +273,7 @@ pub fn emitUncheckedAddAggregateLocalInit(ctx: EmitContext, name: []const u8, de
     };
 }
 
-pub fn emitUncheckedAddAggregateAssignmentStmt(ctx: EmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo), target_ty_override: ?ast.TypeExpr) !bool {
+pub fn emitUncheckedAddAggregateAssignmentStmt(ctx: EmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo), target_ty_override: ?ast_bridge.TypeExpr) !bool {
     const target_ty = target_ty_override orelse if (ctx.operand_emit_type(ctx.emit_ctx, assignment.target, locals)) |ty| ty else blk: {
         const target = ctx.global_assignment_target(ctx.emit_ctx, assignment.target, locals) orelse return false;
         break :blk simpleNameType(target.info.type_name, assignment.value.span);
@@ -286,7 +286,7 @@ pub fn emitUncheckedAddAggregateAssignmentStmt(ctx: EmitContext, assignment: any
     };
 }
 
-fn emitUncheckedAddArrayAggregateReturn(ctx: EmitContext, items: []const ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+fn emitUncheckedAddArrayAggregateReturn(ctx: EmitContext, items: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) !bool {
     var temps: std.ArrayList(?SequencedArgTemp) = .empty;
     defer temps.deinit(ctx.scratch);
     if (!try collectUncheckedAddArrayLiteralTemps(ctx, items, locals, target_ty, &temps)) return false;
@@ -298,7 +298,7 @@ fn emitUncheckedAddArrayAggregateReturn(ctx: EmitContext, items: []const ast.Exp
     return true;
 }
 
-fn emitUncheckedAddStructAggregateReturn(ctx: EmitContext, fields: []const ast.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+fn emitUncheckedAddStructAggregateReturn(ctx: EmitContext, fields: []const ast_bridge.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) !bool {
     var temps: std.ArrayList(?SequencedArgTemp) = .empty;
     defer temps.deinit(ctx.scratch);
     if (!try collectUncheckedAddStructLiteralTemps(ctx, fields, locals, target_ty, &temps)) return false;
@@ -310,7 +310,7 @@ fn emitUncheckedAddStructAggregateReturn(ctx: EmitContext, fields: []const ast.S
     return true;
 }
 
-fn emitUncheckedAddArrayAggregateLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, items: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+fn emitUncheckedAddArrayAggregateLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, items: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     var temps: std.ArrayList(?SequencedArgTemp) = .empty;
     defer temps.deinit(ctx.scratch);
     if (!try collectUncheckedAddArrayLiteralTemps(ctx, items, locals, decl_ty, &temps)) return false;
@@ -322,7 +322,7 @@ fn emitUncheckedAddArrayAggregateLocalInit(ctx: EmitContext, name: []const u8, d
     return true;
 }
 
-fn emitUncheckedAddStructAggregateLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, fields: []const ast.StructLiteralField, locals: *std.StringHashMap(LocalInfo)) !bool {
+fn emitUncheckedAddStructAggregateLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, fields: []const ast_bridge.StructLiteralField, locals: *std.StringHashMap(LocalInfo)) !bool {
     var temps: std.ArrayList(?SequencedArgTemp) = .empty;
     defer temps.deinit(ctx.scratch);
     if (!try collectUncheckedAddStructLiteralTemps(ctx, fields, locals, decl_ty, &temps)) return false;
@@ -334,7 +334,7 @@ fn emitUncheckedAddStructAggregateLocalInit(ctx: EmitContext, name: []const u8, 
     return true;
 }
 
-fn emitUncheckedAddArrayAggregateCallArgTemp(ctx: EmitContext, items: []const ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+fn emitUncheckedAddArrayAggregateCallArgTemp(ctx: EmitContext, items: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     var temps: std.ArrayList(?SequencedArgTemp) = .empty;
     defer temps.deinit(ctx.scratch);
     if (!try collectUncheckedAddArrayLiteralTemps(ctx, items, locals, target_ty, &temps)) return null;
@@ -347,7 +347,7 @@ fn emitUncheckedAddArrayAggregateCallArgTemp(ctx: EmitContext, items: []const as
     return .{ .name = temp_name, .ty = target_ty };
 }
 
-fn emitUncheckedAddStructAggregateCallArgTemp(ctx: EmitContext, fields: []const ast.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+fn emitUncheckedAddStructAggregateCallArgTemp(ctx: EmitContext, fields: []const ast_bridge.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     var temps: std.ArrayList(?SequencedArgTemp) = .empty;
     defer temps.deinit(ctx.scratch);
     if (!try collectUncheckedAddStructLiteralTemps(ctx, fields, locals, target_ty, &temps)) return null;
@@ -360,7 +360,7 @@ fn emitUncheckedAddStructAggregateCallArgTemp(ctx: EmitContext, fields: []const 
     return .{ .name = temp_name, .ty = target_ty };
 }
 
-fn emitUncheckedAddArrayAggregateAssignmentStmt(ctx: EmitContext, target_expr: ast.Expr, items: []const ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+fn emitUncheckedAddArrayAggregateAssignmentStmt(ctx: EmitContext, target_expr: ast_bridge.Expr, items: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) !bool {
     var temps: std.ArrayList(?SequencedArgTemp) = .empty;
     defer temps.deinit(ctx.scratch);
     if (!try collectUncheckedAddArrayLiteralTemps(ctx, items, locals, target_ty, &temps)) return false;
@@ -379,7 +379,7 @@ fn emitUncheckedAddArrayAggregateAssignmentStmt(ctx: EmitContext, target_expr: a
     return true;
 }
 
-fn emitUncheckedAddStructAggregateAssignmentStmt(ctx: EmitContext, target_expr: ast.Expr, fields: []const ast.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+fn emitUncheckedAddStructAggregateAssignmentStmt(ctx: EmitContext, target_expr: ast_bridge.Expr, fields: []const ast_bridge.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) !bool {
     var temps: std.ArrayList(?SequencedArgTemp) = .empty;
     defer temps.deinit(ctx.scratch);
     if (!try collectUncheckedAddStructLiteralTemps(ctx, fields, locals, target_ty, &temps)) return false;
@@ -398,7 +398,7 @@ fn emitUncheckedAddStructAggregateAssignmentStmt(ctx: EmitContext, target_expr: 
     return true;
 }
 
-pub fn collectUncheckedAddArrayLiteralTemps(ctx: EmitContext, items: []const ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, temps: *std.ArrayList(?SequencedArgTemp)) !bool {
+pub fn collectUncheckedAddArrayLiteralTemps(ctx: EmitContext, items: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, temps: *std.ArrayList(?SequencedArgTemp)) !bool {
     const child_ty = arrayChildTypeForTarget(ctx, target_ty) orelse return false;
     var emitted = false;
     for (items) |item| {
@@ -409,7 +409,7 @@ pub fn collectUncheckedAddArrayLiteralTemps(ctx: EmitContext, items: []const ast
     return emitted;
 }
 
-pub fn collectUncheckedAddStructLiteralTemps(ctx: EmitContext, fields: []const ast.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, temps: *std.ArrayList(?SequencedArgTemp)) !bool {
+pub fn collectUncheckedAddStructLiteralTemps(ctx: EmitContext, fields: []const ast_bridge.StructLiteralField, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, temps: *std.ArrayList(?SequencedArgTemp)) !bool {
     const struct_decl = structDeclForTarget(ctx, target_ty) orelse return false;
     var emitted = false;
     for (fields) |field| {
@@ -421,7 +421,7 @@ pub fn collectUncheckedAddStructLiteralTemps(ctx: EmitContext, fields: []const a
     return emitted;
 }
 
-pub fn emitPackedBitsLiteral(ctx: EmitContext, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!bool {
+pub fn emitPackedBitsLiteral(ctx: EmitContext, fields: []const ast_bridge.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!bool {
     const resolved_target_ty = type_bridge.resolveAliasType(ctx.type_aliases, target_ty);
     const packed_name = typeName(resolved_target_ty) orelse return false;
     const info = ctx.packed_bits.get(packed_name) orelse return false;
@@ -458,7 +458,7 @@ pub fn emitPackedBitsLiteral(ctx: EmitContext, fields: []const ast.StructLiteral
     return true;
 }
 
-fn structDeclForResolvedTarget(ctx: EmitContext, target_ty: ast.TypeExpr) ?ast.StructDecl {
+fn structDeclForResolvedTarget(ctx: EmitContext, target_ty: ast_bridge.TypeExpr) ?ast_bridge.StructDecl {
     const struct_name = typeName(target_ty) orelse return null;
     return ctx.structs.get(struct_name);
 }
@@ -473,7 +473,7 @@ fn writeIndent(ctx: EmitContext) !void {
     for (0..ctx.indent.*) |_| try ctx.out.appendSlice(ctx.allocator, "    ");
 }
 
-pub fn emitResultConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, tag: []const u8) !bool {
+pub fn emitResultConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, tag: []const u8) !bool {
     if (call.type_args.len != 0 or call.args.len != 1) return false;
     const payload_ty = resultPayloadTypeForTag(target_ty, tag) orelse return false;
     const result_ty = try ctx.c_type(ctx.emit_ctx, target_ty);
@@ -485,7 +485,7 @@ pub fn emitResultConstructor(ctx: EmitContext, call: anytype, locals: ?*std.Stri
     return true;
 }
 
-pub fn emitTaggedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) !bool {
+pub fn emitTaggedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) !bool {
     const tag = calleeIdentName(call.callee.*) orelse return false;
     const union_name = typeName(target_ty) orelse return false;
     const union_decl = ctx.tagged_unions.get(union_name) orelse return false;
@@ -494,7 +494,7 @@ pub fn emitTaggedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std
 
 // `Union.variant(...)` — qualified, self-typed tagged-union constructor. The union is
 // the callee owner (not a target type), so this lowers the same in any position.
-pub fn emitQualifiedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), union_ty: ast.TypeExpr) !bool {
+pub fn emitQualifiedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), union_ty: ast_bridge.TypeExpr) !bool {
     const q = syntax_bridge.qualifiedMemberCallee(call.callee.*) orelse return false;
     const union_name = typeName(union_ty) orelse return false;
     if (!std.mem.eql(u8, union_name, q.owner)) return error.UnsupportedCEmission;
@@ -502,7 +502,7 @@ pub fn emitQualifiedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*
     return emitTaggedUnionCase(ctx, call, locals, union_decl, union_name, q.member.text, union_ty);
 }
 
-fn emitTaggedUnionCase(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), union_decl: ast.UnionDecl, union_name: []const u8, tag: []const u8, union_ty: ast.TypeExpr) !bool {
+fn emitTaggedUnionCase(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), union_decl: ast_bridge.UnionDecl, union_name: []const u8, tag: []const u8, union_ty: ast_bridge.TypeExpr) !bool {
     const case = taggedUnionCase(union_decl, tag) orelse return false;
     const c_union_ty = try ctx.c_type(ctx.emit_ctx, union_ty);
 
@@ -567,7 +567,7 @@ pub fn emitUnitsInDependencyOrder(
 pub fn collectStructClosure(
     ctx: DepContext,
     allocator: std.mem.Allocator,
-    struct_decl: ast.StructDecl,
+    struct_decl: ast_bridge.StructDecl,
     units: *std.ArrayList(AggregateEmitUnit),
     seen: *std.StringHashMap(void),
     scalar_deps: *std.ArrayList([]const u8),
@@ -583,7 +583,7 @@ pub fn collectStructClosure(
 pub fn collectTypeClosure(
     ctx: DepContext,
     allocator: std.mem.Allocator,
-    ty: ast.TypeExpr,
+    ty: ast_bridge.TypeExpr,
     units: *std.ArrayList(AggregateEmitUnit),
     seen: *std.StringHashMap(void),
     scalar_deps: *std.ArrayList([]const u8),
@@ -657,7 +657,7 @@ pub fn aggregateDepsSatisfied(ctx: DepContext, unit: AggregateEmitUnit, emitted:
 // this pass emits (struct, array, Result, tagged union). Slices, pointers,
 // and nullable pointers reference their pointee only through a pointer, so
 // they impose no ordering and return null; scalars and enums likewise.
-pub fn aggregateDepName(ctx: DepContext, ty: ast.TypeExpr) !?[]const u8 {
+pub fn aggregateDepName(ctx: DepContext, ty: ast_bridge.TypeExpr) !?[]const u8 {
     const resolved = type_bridge.resolveAliasType(ctx.type_aliases, ty);
     return switch (resolved.kind) {
         .array => try ctx.name_for_type(ctx.name_ctx, resolved),

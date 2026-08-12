@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
@@ -14,24 +14,24 @@ const mir_ownership_authority = @import("mir_ownership_authority.zig");
 pub const OrdinaryDeferCallCleanup = struct {
     defer_ref: mir.DeferCleanupRef,
     fn_name: []const u8,
-    span: ast.Span,
-    callee_span: ast.Span,
-    args: []const ast.Expr,
+    span: ast_bridge.Span,
+    callee_span: ast_bridge.Span,
+    args: []const ast_bridge.Expr,
 };
 
 pub const CallTargetDeferCleanup = struct {
     defer_ref: mir.DeferCleanupRef,
     kind: mir.CallTargetKind,
-    span: ast.Span,
-    callee: ast.Expr,
-    callee_span: ast.Span,
-    type_args: []const ast.TypeExpr,
-    args: []const ast.Expr,
+    span: ast_bridge.Span,
+    callee: ast_bridge.Expr,
+    callee_span: ast_bridge.Span,
+    type_args: []const ast_bridge.TypeExpr,
+    args: []const ast_bridge.Expr,
 };
 
 pub const DeferBlockCleanup = struct {
     defer_ref: mir.DeferCleanupRef,
-    block: ast.Block,
+    block: ast_bridge.Block,
 };
 
 pub const AutoDropStackDecision = enum {
@@ -97,7 +97,7 @@ pub fn registerDeferredExplicitDropCleanup(
     module: *const mir.Module,
     function: *const mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    expr: ast.Expr,
+    expr: ast_bridge.Expr,
 ) AutoDropStackDecision {
     const release = syntax_bridge.dropPointerLocalReleaseCall(expr) orelse return .ignored;
     if (!dropGlueReleaseFunctionExists(module, release.fn_name)) return .ignored;
@@ -347,7 +347,7 @@ fn explicitDropLocalCleanupFromMirAction(
     module: *const mir.Module,
     function: *const mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    expr: ast.Expr,
+    expr: ast_bridge.Expr,
 ) ?mir_ownership_authority.AutoDropLocalCleanup {
     const plan = cleanup_plan orelse return null;
     const release = syntax_bridge.dropPointerLocalReleaseCall(expr) orelse return null;
@@ -425,8 +425,8 @@ fn cleanupRefValidForEdge(
 }
 
 test "cleanup edge plan comes directly from MIR cleanup cfg" {
-    const span = ast.Span{ .offset = 10, .len = 1, .line = 1, .column = 10 };
-    const later_span = ast.Span{ .offset = 20, .len = 1, .line = 1, .column = 20 };
+    const span = ast_bridge.Span{ .offset = 10, .len = 1, .line = 1, .column = 10 };
+    const later_span = ast_bridge.Span{ .offset = 20, .len = 1, .line = 1, .column = 20 };
     var instructions = [_]mir.Instruction{
         .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = span.line, .column = span.column, .source_offset = span.offset, .source_len = span.len },
         .{ .kind = .defer_cleanup, .detail = "cleanup", .result_ty = .void, .line = later_span.line, .column = later_span.column, .source_offset = later_span.offset, .source_len = later_span.len },

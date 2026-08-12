@@ -7,7 +7,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const type_bridge = @import("type_bridge.zig");
@@ -20,23 +20,23 @@ const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
 const StructTypeStyle = lower_c_model.StructTypeStyle;
 
-pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8;
-pub const ArrayTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, len_expr: ast.Expr) anyerror![]const u8;
-pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8;
-pub const TypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
+pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) anyerror![]const u8;
+pub const ArrayTypeNameFn = *const fn (ctx: *anyopaque, child: ast_bridge.TypeExpr, len_expr: ast_bridge.Expr) anyerror![]const u8;
+pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const TypeNameFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
 pub const DynTypeNameFn = *const fn (ctx: *anyopaque, trait_name: []const u8) anyerror![]const u8;
 
 pub const TypeEmitContext = struct {
     scratch: std.mem.Allocator,
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
-    enums: *const std.StringHashMap(ast.EnumDecl),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
+    enums: *const std.StringHashMap(ast_bridge.EnumDecl),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
-    tagged_unions: *const std.StringHashMap(ast.UnionDecl),
-    structs: *const std.StringHashMap(ast.StructDecl),
+    tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
+    structs: *const std.StringHashMap(ast_bridge.StructDecl),
     mmio_structs: *const std.StringHashMap(MmioStruct),
-    fn_ptr_types: *std.StringHashMap(ast.TypeExpr),
-    closure_types: *std.StringHashMap(ast.TypeExpr),
+    fn_ptr_types: *std.StringHashMap(ast_bridge.TypeExpr),
+    closure_types: *std.StringHashMap(ast_bridge.TypeExpr),
     emit_ctx: *anyopaque,
     slice_type_name: SliceTypeNameFn,
     array_type_name: ArrayTypeNameFn,
@@ -50,7 +50,7 @@ pub const TypeEmitContext = struct {
 // A `?T` payload T uses the tagged `mc_opt_<T>` repr iff T is a sized VALUE type
 // (named scalar/struct/enum/address, not `c_void`). Pointers/slices/fn-pointers/`*dyn`
 // keep the null-sentinel repr and lower transparently to the inner type.
-pub fn nullablePayloadIsValueType(type_aliases: *const std.StringHashMap(ast.TypeExpr), child: ast.TypeExpr) bool {
+pub fn nullablePayloadIsValueType(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), child: ast_bridge.TypeExpr) bool {
     const resolved = if (type_bridge.aliasTargetType(type_aliases, child)) |t| t else child;
     return switch (resolved.kind) {
         .name => |n| !std.mem.eql(u8, n.text, "c_void"),
@@ -59,7 +59,7 @@ pub fn nullablePayloadIsValueType(type_aliases: *const std.StringHashMap(ast.Typ
     };
 }
 
-pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast.TypeExpr, style: StructTypeStyle) anyerror!void {
+pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast_bridge.TypeExpr, style: StructTypeStyle) anyerror!void {
     if (type_bridge.aliasTargetType(ctx.type_aliases, ty)) |target| return appendType(ctx, out, target, style);
     switch (ty.kind) {
         .pointer => |node| return appendPointerType(ctx, out, node.child.*, node.mutability, style),
@@ -146,7 +146,7 @@ pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast.TypeExp
     try out.appendSlice(ctx.scratch, cType(ty));
 }
 
-pub fn appendPointerType(ctx: TypeEmitContext, out: *std.ArrayList(u8), child: ast.TypeExpr, mutability: ast.Mutability, style: StructTypeStyle) anyerror!void {
+pub fn appendPointerType(ctx: TypeEmitContext, out: *std.ArrayList(u8), child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability, style: StructTypeStyle) anyerror!void {
     try appendType(ctx, out, child, style);
     if (mutability == .@"const") {
         try out.appendSlice(ctx.scratch, " const *");
@@ -155,7 +155,7 @@ pub fn appendPointerType(ctx: TypeEmitContext, out: *std.ArrayList(u8), child: a
     }
 }
 
-pub fn cType(ty: ast.TypeExpr) []const u8 {
+pub fn cType(ty: ast_bridge.TypeExpr) []const u8 {
     switch (ty.kind) {
         .pointer => |node| return ptrCType(node.child.*, node.mutability),
         .raw_many_pointer => |node| return ptrCType(node.child.*, node.mutability),
@@ -192,7 +192,7 @@ pub fn cType(ty: ast.TypeExpr) []const u8 {
 
 // Is `ty` the `va_list` named type? (Used to copy va_list temps with __builtin_va_copy rather
 // than `=`, which is ill-formed for x86-64's array-typed __builtin_va_list.)
-pub fn isVaListType(ty: ast.TypeExpr) bool {
+pub fn isVaListType(ty: ast_bridge.TypeExpr) bool {
     return switch (ty.kind) {
         .name => |n| std.mem.eql(u8, n.text, "va_list"),
         else => false,
@@ -318,7 +318,7 @@ pub fn isCReservedWord(name: []const u8) bool {
     return false;
 }
 
-pub fn floatCTypeName(ty: ast.TypeExpr) ?[]const u8 {
+pub fn floatCTypeName(ty: ast_bridge.TypeExpr) ?[]const u8 {
     const name = typeName(ty) orelse return null;
     if (std.mem.eql(u8, name, "f32")) return "float";
     if (std.mem.eql(u8, name, "f64")) return "double";
@@ -361,7 +361,7 @@ pub fn primitiveCTypeName(name: []const u8) ?[]const u8 {
     return null;
 }
 
-pub fn ptrCType(child: ast.TypeExpr, mutability: ast.Mutability) []const u8 {
+pub fn ptrCType(child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) []const u8 {
     const child_ty = cType(child);
     const is_const = mutability == .@"const";
     if (std.mem.eql(u8, child_ty, "uint8_t")) return if (is_const) "uint8_t const *" else "uint8_t *";
@@ -376,12 +376,12 @@ pub fn ptrCType(child: ast.TypeExpr, mutability: ast.Mutability) []const u8 {
     return "void *";
 }
 
-pub fn isCVoidType(ty: ast.TypeExpr) bool {
+pub fn isCVoidType(ty: ast_bridge.TypeExpr) bool {
     const name = typeName(ty) orelse return false;
     return std.mem.eql(u8, name, "void") or std.mem.eql(u8, name, "never");
 }
 
-pub fn isVoidType(ty: ast.TypeExpr) bool {
+pub fn isVoidType(ty: ast_bridge.TypeExpr) bool {
     const name = typeName(ty) orelse return false;
     return std.mem.eql(u8, name, "void");
 }
@@ -412,7 +412,7 @@ pub fn cPayloadFieldName(allocator: std.mem.Allocator, name: []const u8) ![]cons
     return std.fmt.allocPrint(allocator, "{s}_", .{name});
 }
 
-pub fn isNumericStorageType(ty: ast.TypeExpr) bool {
+pub fn isNumericStorageType(ty: ast_bridge.TypeExpr) bool {
     return switch (ty.kind) {
         .name => |ident| checkedTypeSuffix(ident.text) != null,
         .generic => |node| {
@@ -428,7 +428,7 @@ pub fn isNumericStorageType(ty: ast.TypeExpr) bool {
     };
 }
 
-pub fn sameCStorageType(left: ast.TypeExpr, right: ast.TypeExpr) bool {
+pub fn sameCStorageType(left: ast_bridge.TypeExpr, right: ast_bridge.TypeExpr) bool {
     return switch (left.kind) {
         .name => |left_name| switch (right.kind) {
             .name => |right_name| std.mem.eql(u8, left_name.text, right_name.text),
@@ -492,7 +492,7 @@ pub fn sameCStorageType(left: ast.TypeExpr, right: ast.TypeExpr) bool {
     };
 }
 
-fn sameCallableStorageType(left_params: []const ast.TypeExpr, left_ret: ast.TypeExpr, right_params: []const ast.TypeExpr, right_ret: ast.TypeExpr) bool {
+fn sameCallableStorageType(left_params: []const ast_bridge.TypeExpr, left_ret: ast_bridge.TypeExpr, right_params: []const ast_bridge.TypeExpr, right_ret: ast_bridge.TypeExpr) bool {
     if (left_params.len != right_params.len) return false;
     for (left_params, right_params) |left_param, right_param| {
         if (!sameCStorageType(left_param, right_param)) return false;
@@ -500,7 +500,7 @@ fn sameCallableStorageType(left_params: []const ast.TypeExpr, left_ret: ast.Type
     return sameCStorageType(left_ret, right_ret);
 }
 
-pub fn isNonNullPointerType(ty: ast.TypeExpr) bool {
+pub fn isNonNullPointerType(ty: ast_bridge.TypeExpr) bool {
     return switch (ty.kind) {
         .pointer, .raw_many_pointer => true,
         .qualified => |node| isNonNullPointerType(node.child.*),
@@ -508,7 +508,7 @@ pub fn isNonNullPointerType(ty: ast.TypeExpr) bool {
     };
 }
 
-pub fn rawManyElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn rawManyElementType(ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     return switch (ty.kind) {
         .raw_many_pointer => |node| node.child.*,
         .qualified => |node| rawManyElementType(node.child.*),
@@ -521,7 +521,7 @@ pub fn isDynCTypeName(name: []const u8) bool {
 }
 
 // The inner (non-null) type of a `?T` TypeExpr — e.g. `?*dyn Trait` -> `*dyn Trait`.
-pub fn nullableInnerTypeExpr(ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn nullableInnerTypeExpr(ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     return switch (ty.kind) {
         .nullable => |child| child.*,
         .qualified => |node| nullableInnerTypeExpr(node.child.*),
@@ -529,7 +529,7 @@ pub fn nullableInnerTypeExpr(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
-pub fn isBoolType(ty: ast.TypeExpr) bool {
+pub fn isBoolType(ty: ast_bridge.TypeExpr) bool {
     return switch (ty.kind) {
         .name => |name| std.mem.eql(u8, name.text, "bool"),
         .qualified => |node| isBoolType(node.child.*),
@@ -537,12 +537,12 @@ pub fn isBoolType(ty: ast.TypeExpr) bool {
     };
 }
 
-pub fn isPAddrType(ty: ast.TypeExpr) bool {
+pub fn isPAddrType(ty: ast_bridge.TypeExpr) bool {
     const name = typeName(ty) orelse return false;
     return std.mem.eql(u8, name, "PAddr");
 }
 
-pub fn isPointerLikeAddressType(ty: ast.TypeExpr) bool {
+pub fn isPointerLikeAddressType(ty: ast_bridge.TypeExpr) bool {
     return switch (ty.kind) {
         .pointer, .raw_many_pointer => true,
         .qualified => |node| isPointerLikeAddressType(node.child.*),

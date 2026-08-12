@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const array_len = @import("array_len.zig");
 const eval = @import("eval.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
@@ -36,24 +36,24 @@ fn castU64(value: i128) ?u64 {
 }
 
 pub const ReflectEnv = struct {
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
-    enum_types: *const std.StringHashMap(ast.EnumDecl),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
+    enum_types: *const std.StringHashMap(ast_bridge.EnumDecl),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
-    tagged_unions: *const std.StringHashMap(ast.UnionDecl),
-    struct_types: *const std.StringHashMap(ast.StructDecl),
-    const_fns: *const std.StringHashMap(ast.FnDecl),
+    tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
+    struct_types: *const std.StringHashMap(ast_bridge.StructDecl),
+    const_fns: *const std.StringHashMap(ast_bridge.FnDecl),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     const_global_widths: *const std.StringHashMap(u16),
     const_global_domains: *const std.StringHashMap(eval.DomainWidth),
 };
 
-pub fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
+pub fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast_bridge.Expr) ?i128 {
     const env: *const ReflectEnv = @ptrCast(@alignCast(ctx orelse return null));
     return comptimeReflect(env, call);
 }
 
-pub fn comptimeReflect(env: *const ReflectEnv, call: ast.Expr) ?i128 {
+pub fn comptimeReflect(env: *const ReflectEnv, call: ast_bridge.Expr) ?i128 {
     const node = switch (call.kind) {
         .call => |n| n,
         else => return null,
@@ -70,13 +70,13 @@ pub fn comptimeReflect(env: *const ReflectEnv, call: ast.Expr) ?i128 {
     };
 }
 
-pub fn reflectionTypeArg(node: anytype) ?ast.TypeExpr {
+pub fn reflectionTypeArg(node: anytype) ?ast_bridge.TypeExpr {
     if (node.type_args.len == 1) return node.type_args[0];
     if (node.type_args.len != 0 or node.args.len == 0) return null;
     return exprAsType(node.args[0]);
 }
 
-pub fn arrayLenValue(env: *const ReflectEnv, expr: ast.Expr) ?u64 {
+pub fn arrayLenValue(env: *const ReflectEnv, expr: ast_bridge.Expr) ?u64 {
     if (array_len.parseArrayLenWithReflect(expr, env.const_fns, env.const_globals, comptimeReflectThunk, @constCast(env))) |len| return @intCast(len);
     var fb_arena: ?std.heap.ArenaAllocator = null;
     defer if (fb_arena) |*a| a.deinit();
@@ -108,7 +108,7 @@ pub fn seedConstFoldScope(env: *const ReflectEnv, scope: *eval.ComptimeScope) bo
     return true;
 }
 
-pub fn comptimeBitOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []const u8) ?i128 {
+pub fn comptimeBitOffset(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, field: []const u8) ?i128 {
     if (packedBitsInfoForType(env, ty)) |info| {
         const index = packedBitsFieldIndex(info, field) orelse return null;
         return @intCast(index);
@@ -117,7 +117,7 @@ pub fn comptimeBitOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []cons
     return comptimeBitOffsetFromBytes(byte_offset);
 }
 
-pub fn comptimeReprOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
+pub fn comptimeReprOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
     if (depth > 32) return null;
     const resolved_ty = resolveAliasType(env, ty);
     return switch (resolved_ty.kind) {
@@ -131,7 +131,7 @@ pub fn comptimeReprOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i
     };
 }
 
-pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
+pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
     if (depth > 32) return null;
     return switch (ty.kind) {
         .name => |name| {
@@ -194,7 +194,7 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i
     };
 }
 
-pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
+pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
     if (depth > 32) return null;
     return switch (ty.kind) {
         .name => |name| {
@@ -241,27 +241,27 @@ pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?
     };
 }
 
-pub fn comptimeResultPayloadSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
+pub fn comptimeResultPayloadSizeOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
     if (typeNameEql(resolveAliasType(env, ty), "void")) return 1;
     return comptimeSizeOf(env, ty, depth + 1);
 }
 
-pub fn comptimeResultPayloadAlignOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
+pub fn comptimeResultPayloadAlignOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
     if (typeNameEql(resolveAliasType(env, ty), "void")) return 1;
     return comptimeAlignOf(env, ty, depth + 1);
 }
 
-pub fn comptimeStructSize(env: *const ReflectEnv, struct_decl: ast.StructDecl, depth: usize) ?i128 {
+pub fn comptimeStructSize(env: *const ReflectEnv, struct_decl: ast_bridge.StructDecl, depth: usize) ?i128 {
     const layout = comptimeStructLayout(env, struct_decl, null, depth + 1) orelse return null;
     return layout.size;
 }
 
-pub fn comptimeStructAlign(env: *const ReflectEnv, struct_decl: ast.StructDecl, depth: usize) ?i128 {
+pub fn comptimeStructAlign(env: *const ReflectEnv, struct_decl: ast_bridge.StructDecl, depth: usize) ?i128 {
     const layout = comptimeStructLayout(env, struct_decl, null, depth + 1) orelse return null;
     return layout.alignment;
 }
 
-pub fn comptimeFieldOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
+pub fn comptimeFieldOffset(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, field: []const u8, depth: usize) ?i128 {
     if (depth > 32) return null;
     const name = typeName(ty) orelse return null;
     if (env.type_aliases.get(name)) |aliased| return comptimeFieldOffset(env, aliased, field, depth + 1);
@@ -277,11 +277,11 @@ pub fn comptimeFieldOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []co
     return null;
 }
 
-pub fn comptimeStructLayout(env: *const ReflectEnv, struct_decl: ast.StructDecl, wanted_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
+pub fn comptimeStructLayout(env: *const ReflectEnv, struct_decl: ast_bridge.StructDecl, wanted_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
     return type_layout.comptimeStructLayout(*const ReflectEnv, env, struct_decl, wanted_field, depth, comptimeSizeOf, comptimeAlignOf);
 }
 
-pub fn taggedUnionLayout(env: *const ReflectEnv, union_decl: ast.UnionDecl, depth: usize) ?TaggedUnionLayout {
+pub fn taggedUnionLayout(env: *const ReflectEnv, union_decl: ast_bridge.UnionDecl, depth: usize) ?TaggedUnionLayout {
     const payload_size = taggedUnionPayloadSize(env, union_decl, depth + 1) orelse return null;
     const payload_align = taggedUnionPayloadAlignment(env, union_decl, depth + 1) orelse return null;
     if (payload_align != 1 and payload_align != 2 and payload_align != 4 and payload_align != 8) return null;
@@ -304,7 +304,7 @@ pub fn taggedUnionLayout(env: *const ReflectEnv, union_decl: ast.UnionDecl, dept
     };
 }
 
-fn taggedUnionPayloadSize(env: *const ReflectEnv, union_decl: ast.UnionDecl, depth: usize) ?u64 {
+fn taggedUnionPayloadSize(env: *const ReflectEnv, union_decl: ast_bridge.UnionDecl, depth: usize) ?u64 {
     if (depth > 32) return null;
     var size: u64 = 1;
     for (union_decl.cases) |case| {
@@ -315,7 +315,7 @@ fn taggedUnionPayloadSize(env: *const ReflectEnv, union_decl: ast.UnionDecl, dep
     return size;
 }
 
-fn taggedUnionPayloadAlignment(env: *const ReflectEnv, union_decl: ast.UnionDecl, depth: usize) ?u64 {
+fn taggedUnionPayloadAlignment(env: *const ReflectEnv, union_decl: ast_bridge.UnionDecl, depth: usize) ?u64 {
     if (depth > 32) return null;
     var alignment: u64 = 1;
     for (union_decl.cases) |case| {
@@ -326,7 +326,7 @@ fn taggedUnionPayloadAlignment(env: *const ReflectEnv, union_decl: ast.UnionDecl
     return alignment;
 }
 
-fn packedBitsInfoForType(env: *const ReflectEnv, ty: ast.TypeExpr) ?PackedBitsInfo {
+fn packedBitsInfoForType(env: *const ReflectEnv, ty: ast_bridge.TypeExpr) ?PackedBitsInfo {
     const name = typeName(ty) orelse return null;
     return env.packed_bits.get(name);
 }
@@ -338,11 +338,11 @@ fn packedBitsFieldIndex(info: PackedBitsInfo, field_name: []const u8) ?usize {
     return null;
 }
 
-pub fn resolveAliasType(env: *const ReflectEnv, ty: ast.TypeExpr) ast.TypeExpr {
+pub fn resolveAliasType(env: *const ReflectEnv, ty: ast_bridge.TypeExpr) ast_bridge.TypeExpr {
     return resolveAliasTypeDepth(env, ty, 0);
 }
 
-fn nullablePayloadIsValueType(env: *const ReflectEnv, child: ast.TypeExpr) bool {
+fn nullablePayloadIsValueType(env: *const ReflectEnv, child: ast_bridge.TypeExpr) bool {
     const resolved = resolveAliasType(env, child);
     return switch (resolved.kind) {
         .name => |name| !std.mem.eql(u8, name.text, "c_void"),
@@ -350,7 +350,7 @@ fn nullablePayloadIsValueType(env: *const ReflectEnv, child: ast.TypeExpr) bool 
     };
 }
 
-fn resolveAliasTypeDepth(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ast.TypeExpr {
+fn resolveAliasTypeDepth(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: usize) ast_bridge.TypeExpr {
     if (depth > 64) return ty;
     return switch (ty.kind) {
         .name => |name| if (env.type_aliases.get(name.text)) |aliased| resolveAliasTypeDepth(env, aliased, depth + 1) else ty,
@@ -359,6 +359,6 @@ fn resolveAliasTypeDepth(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize)
     };
 }
 
-fn enumReprType(enum_decl: ast.EnumDecl) ast.TypeExpr {
-    return enum_decl.repr orelse ast.TypeExpr{ .span = enum_decl.name.span, .kind = .{ .name = .{ .text = "isize", .span = enum_decl.name.span } } };
+fn enumReprType(enum_decl: ast_bridge.EnumDecl) ast_bridge.TypeExpr {
+    return enum_decl.repr orelse ast_bridge.TypeExpr{ .span = enum_decl.name.span, .kind = .{ .name = .{ .text = "isize", .span = enum_decl.name.span } } };
 }

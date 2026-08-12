@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
@@ -16,17 +16,17 @@ const unaryCOp = lower_c_op.unaryCOp;
 
 const LocalInfo = lower_c_model.LocalInfo;
 
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;
-pub const EmitCheckedExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!bool;
-pub const CountExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) usize;
-pub const ExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
-pub const ExprPredicateFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void;
+pub const EmitCheckedExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!bool;
+pub const CountExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) usize;
+pub const ExprTypeFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr;
+pub const ExprPredicateFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
     emit_expr_with_target: EmitExprWithTargetFn,
@@ -42,7 +42,7 @@ pub const EmitContext = struct {
     is_value_optional: ExprPredicateFn,
 };
 
-pub fn emitUnaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+pub fn emitUnaryExpr(ctx: EmitContext, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
     const node = switch (expr.kind) {
         .unary => |node| node,
         else => unreachable,
@@ -71,7 +71,7 @@ pub fn emitUnaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashM
     try ctx.out.appendSlice(ctx.allocator, ")");
 }
 
-pub fn emitBinaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+pub fn emitBinaryExpr(ctx: EmitContext, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
     const node = switch (expr.kind) {
         .binary => |node| node,
         else => unreachable,
@@ -131,7 +131,7 @@ pub fn emitBinaryExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHash
 
 // If `node` compares a value optional `?T` against `null`, returns the optional operand
 // (whose `.present` tag drives the comparison). Null literal on either side.
-fn valueOptionalNullCompareSubject(ctx: EmitContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.Expr {
+fn valueOptionalNullCompareSubject(ctx: EmitContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.Expr {
     const left_null = isNullLiteralExpr(node.left.*);
     const right_null = isNullLiteralExpr(node.right.*);
     if (left_null == right_null) return null; // need exactly one null side
@@ -140,7 +140,7 @@ fn valueOptionalNullCompareSubject(ctx: EmitContext, node: anytype, locals: ?*st
     return subject;
 }
 
-fn isNullLiteralExpr(expr: ast.Expr) bool {
+fn isNullLiteralExpr(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .null_literal => true,
         .grouped => |inner| isNullLiteralExpr(inner.*),
@@ -148,7 +148,7 @@ fn isNullLiteralExpr(expr: ast.Expr) bool {
     };
 }
 
-fn operandIsValueOptional(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+fn operandIsValueOptional(ctx: EmitContext, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool {
     return ctx.is_value_optional(ctx.emit_ctx, expr, locals);
 }
 
@@ -156,7 +156,7 @@ fn binaryResolvesToFloat(ctx: EmitContext, node: anytype, locals: ?*std.StringHa
     return ctx.expr_resolves_to_float(ctx.emit_ctx, node.left.*, locals) or ctx.expr_resolves_to_float(ctx.emit_ctx, node.right.*, locals);
 }
 
-pub fn exprIsNumericLiteral(expr: ast.Expr) bool {
+pub fn exprIsNumericLiteral(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         // A char literal is a byte value; in arithmetic it adopts its sibling
         // operand's integer storage type (e.g. `c - '0'` over a `u8`).
@@ -167,7 +167,7 @@ pub fn exprIsNumericLiteral(expr: ast.Expr) bool {
     };
 }
 
-pub fn isNumericValueBinaryOp(op: ast.BinaryOp) bool {
+pub fn isNumericValueBinaryOp(op: ast_bridge.BinaryOp) bool {
     return switch (op) {
         .add, .sub, .mul, .div, .mod, .shl, .shr, .bit_and, .bit_or, .bit_xor => true,
         else => false,
@@ -191,12 +191,12 @@ pub fn isBitcastCall(call: anytype) bool {
     return isBitcastCallee(call);
 }
 
-pub fn bitcastReturnTypeForCall(call: anytype) ?ast.TypeExpr {
+pub fn bitcastReturnTypeForCall(call: anytype) ?ast_bridge.TypeExpr {
     if (!isBitcastCall(call)) return null;
     return call.type_args[0];
 }
 
-pub fn intLiteralText(expr: ast.Expr) ?[]const u8 {
+pub fn intLiteralText(expr: ast_bridge.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .int_literal => |literal| literal,
         .grouped => |inner| intLiteralText(inner.*),
@@ -204,7 +204,7 @@ pub fn intLiteralText(expr: ast.Expr) ?[]const u8 {
     };
 }
 
-pub fn sequencedConditionCandidate(expr: ast.Expr) bool {
+pub fn sequencedConditionCandidate(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .grouped => |inner| sequencedConditionCandidate(inner.*),
         .binary => |node| isComparisonOp(node.op) and (exprContainsCall(node.left.*) or exprContainsCall(node.right.*)),
@@ -212,7 +212,7 @@ pub fn sequencedConditionCandidate(expr: ast.Expr) bool {
     };
 }
 
-pub fn exprContainsCall(expr: ast.Expr) bool {
+pub fn exprContainsCall(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .call => true,
         .grouped, .address_of, .deref => |inner| exprContainsCall(inner.*),
@@ -226,7 +226,7 @@ pub fn exprContainsCall(expr: ast.Expr) bool {
     };
 }
 
-pub fn comparisonExpr(expr: ast.Expr) bool {
+pub fn comparisonExpr(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .binary => |node| isComparisonOp(node.op),
         .grouped => |inner| comparisonExpr(inner.*),

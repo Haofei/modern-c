@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const lower_llvm_model = @import("lower_llvm_model.zig");
 const type_bridge = @import("type_bridge.zig");
 
@@ -10,10 +10,10 @@ const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_llvm_model.OverlayUnionInfo;
 
 pub fn structDeclForType(
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
-    struct_types: *const std.StringHashMap(ast.StructDecl),
-    ty: ast.TypeExpr,
-) ?ast.StructDecl {
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
+    struct_types: *const std.StringHashMap(ast_bridge.StructDecl),
+    ty: ast_bridge.TypeExpr,
+) ?ast_bridge.StructDecl {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .name => |name| struct_types.get(name.text),
@@ -22,9 +22,9 @@ pub fn structDeclForType(
 }
 
 pub fn packedBitsInfoForType(
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
-    ty: ast.TypeExpr,
+    ty: ast_bridge.TypeExpr,
 ) ?PackedBitsInfo {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
@@ -34,9 +34,9 @@ pub fn packedBitsInfoForType(
 }
 
 pub fn overlayInfoForType(
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
-    ty: ast.TypeExpr,
+    ty: ast_bridge.TypeExpr,
 ) ?OverlayUnionInfo {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
@@ -46,10 +46,10 @@ pub fn overlayInfoForType(
 }
 
 pub fn taggedUnionForType(
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
-    tagged_unions: *const std.StringHashMap(ast.UnionDecl),
-    ty: ast.TypeExpr,
-) ?ast.UnionDecl {
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
+    tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
+    ty: ast_bridge.TypeExpr,
+) ?ast_bridge.UnionDecl {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .name => |name| tagged_unions.get(name.text),
@@ -58,10 +58,10 @@ pub fn taggedUnionForType(
 }
 
 pub fn enumDeclForType(
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
-    enum_types: *const std.StringHashMap(ast.EnumDecl),
-    ty: ast.TypeExpr,
-) ?ast.EnumDecl {
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
+    enum_types: *const std.StringHashMap(ast_bridge.EnumDecl),
+    ty: ast_bridge.TypeExpr,
+) ?ast_bridge.EnumDecl {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .name => |name| enum_types.get(name.text),
@@ -69,7 +69,7 @@ pub fn enumDeclForType(
     };
 }
 
-pub fn memberBaseStructType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn memberBaseStructType(type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     const resolved_ty = type_bridge.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .pointer => |node| node.child.*,
@@ -79,15 +79,15 @@ pub fn memberBaseStructType(type_aliases: *const std.StringHashMap(ast.TypeExpr)
 }
 
 pub fn memberBaseStructDecl(
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
-    struct_types: *const std.StringHashMap(ast.StructDecl),
-    ty: ast.TypeExpr,
-) ?ast.StructDecl {
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
+    struct_types: *const std.StringHashMap(ast_bridge.StructDecl),
+    ty: ast_bridge.TypeExpr,
+) ?ast_bridge.StructDecl {
     const struct_ty = memberBaseStructType(type_aliases, ty) orelse return null;
     return structDeclForType(type_aliases, struct_types, struct_ty);
 }
 
-pub fn taggedUnionCaseIndex(union_decl: ast.UnionDecl, case_name: []const u8) ?usize {
+pub fn taggedUnionCaseIndex(union_decl: ast_bridge.UnionDecl, case_name: []const u8) ?usize {
     for (union_decl.cases, 0..) |case, i| {
         if (std.mem.eql(u8, case.name.text, case_name)) return i;
     }

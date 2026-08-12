@@ -10,18 +10,18 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const numeric = @import("numeric.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const type_bridge = @import("type_bridge.zig");
 
 const typeName = type_bridge.typeName;
 
-pub fn simpleType(span: ast.Span, name: []const u8) ast.TypeExpr {
+pub fn simpleType(span: ast_bridge.Span, name: []const u8) ast_bridge.TypeExpr {
     return .{ .span = span, .kind = .{ .name = .{ .span = span, .text = name } } };
 }
 
-pub fn exprAsType(expr: ast.Expr) ?ast.TypeExpr {
+pub fn exprAsType(expr: ast_bridge.Expr) ?ast_bridge.TypeExpr {
     return switch (expr.kind) {
         .ident => |ident| simpleType(ident.span, ident.text),
         .grouped => |inner| exprAsType(inner.*),
@@ -29,7 +29,7 @@ pub fn exprAsType(expr: ast.Expr) ?ast.TypeExpr {
     };
 }
 
-pub fn isPointerLikeType(ty: ast.TypeExpr) bool {
+pub fn isPointerLikeType(ty: ast_bridge.TypeExpr) bool {
     return switch (ty.kind) {
         .pointer, .raw_many_pointer => true,
         .qualified => |node| isPointerLikeType(node.child.*),
@@ -38,7 +38,7 @@ pub fn isPointerLikeType(ty: ast.TypeExpr) bool {
 }
 
 // True when `ty` is a `*dyn Trait` fat pointer (a two-word `{ data, vtable }` value).
-pub fn isDynTraitLlvmType(ty: ast.TypeExpr) bool {
+pub fn isDynTraitLlvmType(ty: ast_bridge.TypeExpr) bool {
     return switch (ty.kind) {
         .dyn_trait => true,
         .qualified => |node| isDynTraitLlvmType(node.child.*),
@@ -80,14 +80,14 @@ pub fn libraryScalarLlvmType(name: []const u8) ?[]const u8 {
     return if (scalar_repr.isLibraryInteger(name)) info.llvm_type else null;
 }
 
-pub fn typeNameEql(ty: ast.TypeExpr, expected: []const u8) bool {
+pub fn typeNameEql(ty: ast_bridge.TypeExpr, expected: []const u8) bool {
     return switch (ty.kind) {
         .name => |name| std.mem.eql(u8, name.text, expected),
         else => false,
     };
 }
 
-pub fn secretInnerType(ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn secretInnerType(ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     return switch (ty.kind) {
         .generic => |node| if (std.mem.eql(u8, node.base.text, "Secret") and node.args.len == 1) node.args[0] else null,
         .qualified => |node| secretInnerType(node.child.*),
@@ -95,7 +95,7 @@ pub fn secretInnerType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
-pub fn constGetIndexArg(ty: ast.TypeExpr) ?u64 {
+pub fn constGetIndexArg(ty: ast_bridge.TypeExpr) ?u64 {
     return switch (ty.kind) {
         .name => |name| parseU64Literal(name.text),
         .qualified => |node| constGetIndexArg(node.child.*),
@@ -103,7 +103,7 @@ pub fn constGetIndexArg(ty: ast.TypeExpr) ?u64 {
     };
 }
 
-pub fn rawScalarTypeName(ty: ast.TypeExpr) ?[]const u8 {
+pub fn rawScalarTypeName(ty: ast_bridge.TypeExpr) ?[]const u8 {
     const name = typeName(ty) orelse return null;
     if (std.mem.eql(u8, name, "u8")) return name;
     if (std.mem.eql(u8, name, "u16")) return name;
@@ -121,7 +121,7 @@ pub fn rawScalarTypeName(ty: ast.TypeExpr) ?[]const u8 {
     return null;
 }
 
-pub fn literalArrayLenValue(expr: ast.Expr) ?u64 {
+pub fn literalArrayLenValue(expr: ast_bridge.Expr) ?u64 {
     return switch (expr.kind) {
         .int_literal => |literal| parseU64Literal(literal),
         .grouped => |inner| literalArrayLenValue(inner.*),
@@ -133,7 +133,7 @@ pub fn parseU64Literal(literal: []const u8) ?u64 {
     return std.math.cast(u64, numeric.parseIntegerLiteral(literal) orelse return null);
 }
 
-pub fn integerBits(ty: ast.TypeExpr) ?u16 {
+pub fn integerBits(ty: ast_bridge.TypeExpr) ?u16 {
     const name = switch (ty.kind) {
         .name => |name| name.text,
         else => return null,
@@ -141,7 +141,7 @@ pub fn integerBits(ty: ast.TypeExpr) ?u16 {
     return if (scalar_repr.integer(name)) |info| info.bits else null;
 }
 
-pub fn isSignedInteger(ty: ast.TypeExpr) bool {
+pub fn isSignedInteger(ty: ast_bridge.TypeExpr) bool {
     const name = switch (ty.kind) {
         .name => |name| name.text,
         else => return false,
@@ -149,7 +149,7 @@ pub fn isSignedInteger(ty: ast.TypeExpr) bool {
     return if (scalar_repr.integer(name)) |info| info.signed else false;
 }
 
-pub fn isFloatType(ty: ast.TypeExpr) bool {
+pub fn isFloatType(ty: ast_bridge.TypeExpr) bool {
     const name = switch (ty.kind) {
         .name => |name| name.text,
         else => return false,
@@ -157,7 +157,7 @@ pub fn isFloatType(ty: ast.TypeExpr) bool {
     return std.mem.eql(u8, name, "f32") or std.mem.eql(u8, name, "f64");
 }
 
-pub fn signedMinLiteral(ty: ast.TypeExpr) ?[]const u8 {
+pub fn signedMinLiteral(ty: ast_bridge.TypeExpr) ?[]const u8 {
     const name = switch (ty.kind) {
         .name => |name| name.text,
         else => return null,

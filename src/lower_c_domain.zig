@@ -6,7 +6,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
@@ -17,11 +17,11 @@ const memberCallee = syntax_bridge.memberCallee;
 const signedCTypeForInner = lower_c_type.signedCTypeForInner;
 const signedMinMacroForInner = lower_c_type.signedMinMacroForInner;
 
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
-pub const UnderlyingIntTypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) ?[]const u8;
-pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
-pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const UnderlyingIntTypeNameFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) ?[]const u8;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -35,10 +35,10 @@ pub const Context = struct {
 };
 
 const DomainTypes = struct {
-    domain: ast.TypeExpr,
-    payload: ast.TypeExpr,
-    result: ast.TypeExpr,
-    interval: ?ast.TypeExpr = null,
+    domain: ast_bridge.TypeExpr,
+    payload: ast_bridge.TypeExpr,
+    result: ast_bridge.TypeExpr,
+    interval: ?ast_bridge.TypeExpr = null,
 };
 
 // Serial/counter domain operations. `serial<T>`/`counter<T>` lower to their
@@ -129,7 +129,7 @@ fn domainTypesForEmission(ctx: Context, call: anytype, needs_interval: bool) !Do
     };
 }
 
-fn emitSignedSerialDiff(ctx: Context, a: ast.Expr, b: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), signed_c: []const u8, unsigned_c: []const u8) !void {
+fn emitSignedSerialDiff(ctx: Context, a: ast_bridge.Expr, b: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), signed_c: []const u8, unsigned_c: []const u8) !void {
     try ctx.out.print(ctx.allocator, "({s})({s})(", .{ signed_c, unsigned_c });
     try ctx.emit_expr(ctx.emit_ctx, a, locals);
     try ctx.out.appendSlice(ctx.allocator, " - ");

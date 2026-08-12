@@ -7,7 +7,7 @@
 const std = @import("std");
 
 const artifact_model = @import("artifact_model.zig");
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const backend = @import("backend.zig");
 const source_map_rows = @import("source_map_rows.zig");
 const mir = @import("mir.zig");
@@ -56,7 +56,7 @@ pub fn appendLineDirective(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     source_path: ?[]const u8,
-    span: ast.Span,
+    span: ast_bridge.Span,
 ) !void {
     const path = source_path orelse return;
     if (span.line == 0) return;
@@ -368,7 +368,7 @@ const SourceMapEmitter = struct {
         self.visibility = "internal";
     }
 
-    fn emitBlock(self: *SourceMapEmitter, block: ast.Block) !void {
+    fn emitBlock(self: *SourceMapEmitter, block: ast_bridge.Block) !void {
         for (block.items) |stmt| {
             try self.emitStmt(stmt);
             switch (stmt.kind) {
@@ -395,7 +395,7 @@ const SourceMapEmitter = struct {
         }
     }
 
-    fn emitStmt(self: *SourceMapEmitter, stmt: ast.Stmt) !void {
+    fn emitStmt(self: *SourceMapEmitter, stmt: ast_bridge.Stmt) !void {
         const symbol = self.current_function orelse "-";
         const mir_block = try std.fmt.allocPrint(self.allocator, "mir:{s}:span:{d}:{d}", .{ symbol, stmt.span.line, stmt.span.column });
         defer self.allocator.free(mir_block);
@@ -403,7 +403,7 @@ const SourceMapEmitter = struct {
         try self.emitStmtExpressions(stmt);
     }
 
-    fn emitStmtExpressions(self: *SourceMapEmitter, stmt: ast.Stmt) !void {
+    fn emitStmtExpressions(self: *SourceMapEmitter, stmt: ast_bridge.Stmt) !void {
         switch (stmt.kind) {
             .let_decl, .var_decl => |local| if (local.init) |init| try self.emitExprTree("initializer_expr", init),
             .assignment => |node| {
@@ -424,19 +424,19 @@ const SourceMapEmitter = struct {
         }
     }
 
-    fn emitExprTree(self: *SourceMapEmitter, root_kind: []const u8, expr: ast.Expr) anyerror!void {
+    fn emitExprTree(self: *SourceMapEmitter, root_kind: []const u8, expr: ast_bridge.Expr) anyerror!void {
         try self.emitExprEntry(root_kind, expr.span);
         try self.emitExprChildren(expr);
     }
 
-    fn emitNestedExpr(self: *SourceMapEmitter, expr: ast.Expr) anyerror!void {
+    fn emitNestedExpr(self: *SourceMapEmitter, expr: ast_bridge.Expr) anyerror!void {
         const kind = try std.fmt.allocPrint(self.allocator, "expr_{s}", .{@tagName(expr.kind)});
         defer self.allocator.free(kind);
         try self.emitExprEntry(kind, expr.span);
         try self.emitExprChildren(expr);
     }
 
-    fn emitExprChildren(self: *SourceMapEmitter, expr: ast.Expr) anyerror!void {
+    fn emitExprChildren(self: *SourceMapEmitter, expr: ast_bridge.Expr) anyerror!void {
         switch (expr.kind) {
             .array_literal => |items| {
                 for (items) |item| try self.emitNestedExpr(item);
@@ -474,14 +474,14 @@ const SourceMapEmitter = struct {
         }
     }
 
-    fn emitExprEntry(self: *SourceMapEmitter, kind: []const u8, span: ast.Span) !void {
+    fn emitExprEntry(self: *SourceMapEmitter, kind: []const u8, span: ast_bridge.Span) !void {
         const symbol = self.current_function orelse "-";
         const mir_block = try std.fmt.allocPrint(self.allocator, "mir:{s}:expr:{d}:{d}", .{ symbol, span.line, span.column });
         defer self.allocator.free(mir_block);
         try self.emitEntry(kind, symbol, span, symbol, mir_block);
     }
 
-    fn emitEntry(self: *SourceMapEmitter, kind: []const u8, symbol: []const u8, span: ast.Span, object_symbol: []const u8, mir_block: []const u8) !void {
+    fn emitEntry(self: *SourceMapEmitter, kind: []const u8, symbol: []const u8, span: ast_bridge.Span, object_symbol: []const u8, mir_block: []const u8) !void {
         try self.out.appendSlice(self.allocator, "entry kind=");
         try appendMapString(self.out, self.allocator, kind);
         try self.out.appendSlice(self.allocator, " symbol=");
@@ -526,7 +526,7 @@ const SourceMapEmitter = struct {
         try self.out.appendSlice(self.allocator, "\n");
     }
 
-    fn mirLabelFor(self: *SourceMapEmitter, symbol: []const u8, span: ast.Span) !?[]const u8 {
+    fn mirLabelFor(self: *SourceMapEmitter, symbol: []const u8, span: ast_bridge.Span) !?[]const u8 {
         const function = self.mirFunctionByName(symbol) orelse return null;
         if (try self.mirLabelForMatch(function, span, true)) |label| return label;
         return try self.mirLabelForMatch(function, span, false);
@@ -539,7 +539,7 @@ const SourceMapEmitter = struct {
         return null;
     }
 
-    fn mirLabelForMatch(self: *SourceMapEmitter, function: mir.Function, span: ast.Span, exact_column: bool) !?[]const u8 {
+    fn mirLabelForMatch(self: *SourceMapEmitter, function: mir.Function, span: ast_bridge.Span, exact_column: bool) !?[]const u8 {
         for (function.blocks) |block| {
             for (block.instructions, 0..) |instruction, instruction_index| {
                 if (instruction.line != span.line) continue;

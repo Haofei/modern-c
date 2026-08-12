@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -46,23 +46,23 @@ const typeName = type_bridge.typeName;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
 const uncheckedNoOverflowOperator = lower_c_expr.uncheckedNoOverflowOperator;
 
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;
-pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void;
+pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
-pub const UnderlyingIntTypeNameFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) ?[]const u8;
-pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) anyerror![]const u8;
-pub const MirCheckElidedFn = *const fn (ctx: *anyopaque, span: ast.Span) bool;
-pub const MirNoOverflowRangeFactFn = *const fn (ctx: *anyopaque, target: []const u8, op: []const u8, span: ast.Span) bool;
-pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
-pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
-pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo;
-pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
-pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
-pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const ExprNeedsSequencedBinaryFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool;
-pub const EmitSequencedBinaryOperandTempFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
+pub const UnderlyingIntTypeNameFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) ?[]const u8;
+pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const MirCheckElidedFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) bool;
+pub const MirNoOverflowRangeFactFn = *const fn (ctx: *anyopaque, target: []const u8, op: []const u8, span: ast_bridge.Span) bool;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
+pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!LocalInfo;
+pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr;
+pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
+pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const ExprNeedsSequencedBinaryFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool;
+pub const EmitSequencedBinaryOperandTempFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -70,7 +70,7 @@ pub const Context = struct {
     out: *std.ArrayList(u8),
     indent: *usize,
     temp_index: *usize,
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
     emit_ctx: *anyopaque,
     emit_expr: EmitExprFn,
     emit_expr_with_target: EmitExprWithTargetFn,
@@ -98,26 +98,26 @@ pub const SequencedBinaryContext = struct {
 
 pub const UncheckedCallInfo = struct {
     op: []const u8,
-    left_ty: ast.TypeExpr,
-    right_ty: ast.TypeExpr,
-    result_ty: ast.TypeExpr,
+    left_ty: ast_bridge.TypeExpr,
+    right_ty: ast_bridge.TypeExpr,
+    result_ty: ast_bridge.TypeExpr,
 };
 
 const ReduceTypes = struct {
-    source: ast.TypeExpr,
-    element: ast.TypeExpr,
+    source: ast_bridge.TypeExpr,
+    element: ast_bridge.TypeExpr,
 };
 
 const DomainTypes = struct {
-    domain: ast.TypeExpr,
-    payload: ast.TypeExpr,
-    result: ast.TypeExpr,
+    domain: ast_bridge.TypeExpr,
+    payload: ast_bridge.TypeExpr,
+    result: ast_bridge.TypeExpr,
 };
 
 const ArithmeticCallTypes = struct {
-    left: ast.TypeExpr,
-    right: ast.TypeExpr,
-    result: ast.TypeExpr,
+    left: ast_bridge.TypeExpr,
+    right: ast_bridge.TypeExpr,
+    result: ast_bridge.TypeExpr,
 };
 
 pub fn uncheckedCallInfo(ctx: Context, call: anytype) ?UncheckedCallInfo {
@@ -129,9 +129,9 @@ pub fn uncheckedCallInfo(ctx: Context, call: anytype) ?UncheckedCallInfo {
 }
 
 const WrappingCallInfo = struct {
-    left_ty: ast.TypeExpr,
-    right_ty: ast.TypeExpr,
-    result_ty: ast.TypeExpr,
+    left_ty: ast_bridge.TypeExpr,
+    right_ty: ast_bridge.TypeExpr,
+    result_ty: ast_bridge.TypeExpr,
 };
 
 fn wrappingCallInfo(ctx: Context, call: anytype) ?WrappingCallInfo {
@@ -158,7 +158,7 @@ fn arithmeticCallTypesForEmission(ctx: Context, call: anytype, left_kind: mir.Ta
     };
 }
 
-pub fn exprNeedsDefaultSequencedBinary(ctx: *anyopaque, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
+pub fn exprNeedsDefaultSequencedBinary(ctx: *anyopaque, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!bool {
     const node = switch (expr.kind) {
         .grouped => |inner| return exprNeedsDefaultSequencedBinary(ctx, inner.*, locals),
         .binary => |node| node,
@@ -258,7 +258,7 @@ fn residueTypesForEmission(ctx: Context, call: anytype) !DomainTypes {
     };
 }
 
-pub fn sequencedBinaryPlan(ctx: Context, node: anytype, target_ty: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !?SequencedBinaryPlan {
+pub fn sequencedBinaryPlan(ctx: Context, node: anytype, target_ty: ast_bridge.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !?SequencedBinaryPlan {
     const op = node.op;
     const resolved_target_ty = type_bridge.resolveAliasType(ctx.type_aliases, target_ty);
     if (genericChildType(resolved_target_ty, "wrap")) |inner| {
@@ -272,7 +272,7 @@ pub fn sequencedBinaryPlan(ctx: Context, node: anytype, target_ty: ast.TypeExpr,
     return checkedSequencedBinaryPlan(ctx, node, op, target_name, locals);
 }
 
-pub fn emitSequencedBinaryPlanResultTemp(ctx: Context, plan: SequencedBinaryPlan, target_ty: ast.TypeExpr, left_name: []const u8, right_name: []const u8) anyerror!SequencedArgTemp {
+pub fn emitSequencedBinaryPlanResultTemp(ctx: Context, plan: SequencedBinaryPlan, target_ty: ast_bridge.TypeExpr, left_name: []const u8, right_name: []const u8) anyerror!SequencedArgTemp {
     const result_temp = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
 
@@ -289,7 +289,7 @@ pub fn emitSequencedBinaryPlanResultTemp(ctx: Context, plan: SequencedBinaryPlan
     return .{ .name = result_temp, .ty = target_ty };
 }
 
-pub fn emitSequencedBinaryValueTemp(ctx: SequencedBinaryContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitSequencedBinaryValueTemp(ctx: SequencedBinaryContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     if (!try ctx.expr_needs_sequenced_binary(ctx.emit_ctx, expr, locals)) return null;
     const node = switch (expr.kind) {
         .grouped => |inner| return try emitSequencedBinaryValueTemp(ctx, inner.*, locals, target_ty),
@@ -303,7 +303,7 @@ pub fn emitSequencedBinaryValueTemp(ctx: SequencedBinaryContext, expr: ast.Expr,
     return try emitSequencedBinaryPlanResultTemp(ctx.arith, plan, target_ty, left_temp.name, right_temp.name);
 }
 
-pub fn emitSequencedCheckedBinaryReturn(ctx: SequencedBinaryContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitSequencedCheckedBinaryReturn(ctx: SequencedBinaryContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const target_ty = return_ty orelse return false;
     const temp = (try emitSequencedBinaryValueTemp(ctx, expr, locals, target_ty)) orelse return false;
     try writeIndent(ctx.arith);
@@ -311,7 +311,7 @@ pub fn emitSequencedCheckedBinaryReturn(ctx: SequencedBinaryContext, expr: ast.E
     return true;
 }
 
-pub fn emitSequencedCheckedBinaryLocalInit(ctx: SequencedBinaryContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitSequencedCheckedBinaryLocalInit(ctx: SequencedBinaryContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const temp = (try emitSequencedBinaryValueTemp(ctx, initializer, locals, decl_ty)) orelse return false;
     try writeIndent(ctx.arith);
     try ctx.arith.out.print(ctx.arith.allocator, "{s} {s} = {s};\n", .{ try ctx.arith.c_type(ctx.arith.emit_ctx, decl_ty), try ctx.arith.c_ident(ctx.arith.emit_ctx, name), temp.name });
@@ -335,7 +335,7 @@ pub fn emitSequencedCheckedBinaryAssignmentStmt(ctx: SequencedBinaryContext, ass
     return true;
 }
 
-pub fn emitUncheckedAddValueTemp(ctx: Context, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
+pub fn emitUncheckedAddValueTemp(ctx: Context, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
     return switch (expr.kind) {
         .grouped => |inner| try emitUncheckedAddValueTemp(ctx, inner.*, locals, target_ty, range_target),
         .cast => |node| try emitUncheckedCastValueTemp(ctx, node, locals, target_ty, range_target),
@@ -344,7 +344,7 @@ pub fn emitUncheckedAddValueTemp(ctx: Context, expr: ast.Expr, locals: *std.Stri
     };
 }
 
-fn emitUncheckedCastValueTemp(ctx: Context, node: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
+fn emitUncheckedCastValueTemp(ctx: Context, node: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
     const cast_ty = node.ty.*;
     if (!sameCStorageType(cast_ty, target_ty)) return null;
     const source_ty = (try uncheckedInferredLocalType(ctx, node.value.*, locals, range_target)) orelse return null;
@@ -363,7 +363,7 @@ fn emitUncheckedCastValueTemp(ctx: Context, node: anytype, locals: *std.StringHa
     return .{ .name = result_temp, .ty = cast_ty };
 }
 
-pub fn emitUncheckedAddValueTempFromCall(ctx: Context, call: anytype, call_span: ast.Span, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
+pub fn emitUncheckedAddValueTempFromCall(ctx: Context, call: anytype, call_span: ast_bridge.Span, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, range_target: []const u8) anyerror!?SequencedArgTemp {
     const info = uncheckedCallInfo(ctx, call) orelse return null;
     if (!ctx.has_mir_no_overflow_range_fact(ctx.emit_ctx, range_target, info.op, call_span)) return null;
 
@@ -381,7 +381,7 @@ pub fn emitUncheckedAddValueTempFromCall(ctx: Context, call: anytype, call_span:
     return .{ .name = result_temp, .ty = info.result_ty };
 }
 
-fn emitUncheckedOperandTemp(ctx: Context, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+fn emitUncheckedOperandTemp(ctx: Context, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
     switch (expr.kind) {
         .grouped => |inner| return emitUncheckedOperandTemp(ctx, inner.*, locals, target_ty),
         .cast => |node| return emitUncheckedOperandTemp(ctx, node.value.*, locals, node.ty.*),
@@ -407,7 +407,7 @@ fn emitUncheckedOperandCallTemp(ctx: Context, call: anytype, locals: *std.String
     return .{ .name = result_temp, .ty = info.result_ty };
 }
 
-pub fn emitUncheckedAddReturn(ctx: Context, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitUncheckedAddReturn(ctx: Context, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const target_ty = return_ty orelse return false;
     const temp = (try emitUncheckedAddValueTemp(ctx, expr, locals, target_ty, "value")) orelse return false;
     try writeIndent(ctx);
@@ -415,14 +415,14 @@ pub fn emitUncheckedAddReturn(ctx: Context, expr: ast.Expr, locals: *std.StringH
     return true;
 }
 
-pub fn emitUncheckedAddLocalInit(ctx: Context, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitUncheckedAddLocalInit(ctx: Context, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const temp = (try emitUncheckedAddValueTemp(ctx, initializer, locals, decl_ty, name)) orelse return false;
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = {s};\n", .{ try ctx.c_type(ctx.emit_ctx, decl_ty), try ctx.c_ident(ctx.emit_ctx, name), temp.name });
     return true;
 }
 
-pub fn emitUncheckedAddInferredLocalInit(ctx: Context, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitUncheckedAddInferredLocalInit(ctx: Context, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const inferred_ty = (try uncheckedInferredLocalType(ctx, initializer, locals, name)) orelse return false;
     const temp = (try emitUncheckedAddValueTemp(ctx, initializer, locals, inferred_ty, name)) orelse return false;
     try locals.put(name, try ctx.local_info_from_type(ctx.emit_ctx, inferred_ty));
@@ -431,7 +431,7 @@ pub fn emitUncheckedAddInferredLocalInit(ctx: Context, name: []const u8, initial
     return true;
 }
 
-fn uncheckedInferredLocalType(ctx: Context, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo), range_target: []const u8) !?ast.TypeExpr {
+fn uncheckedInferredLocalType(ctx: Context, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), range_target: []const u8) !?ast_bridge.TypeExpr {
     return switch (initializer.kind) {
         .grouped => |inner| try uncheckedInferredLocalType(ctx, inner.*, locals, range_target),
         .call => |call| try uncheckedCallResultType(ctx, call, initializer.span, locals, range_target),
@@ -439,11 +439,11 @@ fn uncheckedInferredLocalType(ctx: Context, initializer: ast.Expr, locals: *std.
     };
 }
 
-fn sourceExpressionResultType(ctx: Context, initializer: ast.Expr) ?ast.TypeExpr {
+fn sourceExpressionResultType(ctx: Context, initializer: ast_bridge.Expr) ?ast_bridge.TypeExpr {
     return ctx.mir_target_type(ctx.emit_ctx, .expression_result, initializer.span);
 }
 
-fn uncheckedCallResultType(ctx: Context, call: anytype, call_span: ast.Span, locals: *std.StringHashMap(LocalInfo), range_target: []const u8) !?ast.TypeExpr {
+fn uncheckedCallResultType(ctx: Context, call: anytype, call_span: ast_bridge.Span, locals: *std.StringHashMap(LocalInfo), range_target: []const u8) !?ast_bridge.TypeExpr {
     _ = locals;
     const info = uncheckedCallInfo(ctx, call) orelse return null;
     if (!ctx.has_mir_no_overflow_range_fact(ctx.emit_ctx, range_target, info.op, call_span)) return null;
@@ -468,7 +468,7 @@ pub fn emitUncheckedAddAssignmentStmt(ctx: Context, assignment: anytype, locals:
     return true;
 }
 
-fn wrapSequencedBinaryPlan(ctx: Context, op: ast.BinaryOp, inner: ast.TypeExpr) !?SequencedBinaryPlan {
+fn wrapSequencedBinaryPlan(ctx: Context, op: ast_bridge.BinaryOp, inner: ast_bridge.TypeExpr) !?SequencedBinaryPlan {
     const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
     if (unsignedTypeSuffix(inner_name) == null) return error.UnsupportedCEmission;
     const narrow = std.mem.eql(u8, inner_name, "u8") or std.mem.eql(u8, inner_name, "u16");
@@ -484,12 +484,12 @@ fn wrapSequencedBinaryPlan(ctx: Context, op: ast.BinaryOp, inner: ast.TypeExpr) 
     };
 }
 
-fn satSequencedBinaryPlan(op: ast.BinaryOp, inner: ast.TypeExpr) !?SequencedBinaryPlan {
+fn satSequencedBinaryPlan(op: ast_bridge.BinaryOp, inner: ast_bridge.TypeExpr) !?SequencedBinaryPlan {
     const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
     return if (satHelperParts(op, inner_name)) |helper| .{ .helper = helper } else null;
 }
 
-fn checkedSequencedBinaryPlan(ctx: Context, node: anytype, op: ast.BinaryOp, target_name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) !?SequencedBinaryPlan {
+fn checkedSequencedBinaryPlan(ctx: Context, node: anytype, op: ast_bridge.BinaryOp, target_name: []const u8, locals: ?*std.StringHashMap(LocalInfo)) !?SequencedBinaryPlan {
     if (isNoTrapBitwiseInfixOp(op)) {
         if (unsignedTypeSuffix(target_name) == null) return error.UnsupportedCEmission;
         return .{ .infix = binaryCOp(op) };
@@ -500,7 +500,7 @@ fn checkedSequencedBinaryPlan(ctx: Context, node: anytype, op: ast.BinaryOp, tar
     return if (checkedHelperParts(op, target_name)) |helper| .{ .helper = helper } else null;
 }
 
-fn emitFloatReduceCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo), source_ty: ast.TypeExpr, element_ty: ast.TypeExpr, fast: bool) !bool {
+fn emitFloatReduceCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo), source_ty: ast_bridge.TypeExpr, element_ty: ast_bridge.TypeExpr, fast: bool) !bool {
     const t_cty = floatCTypeName(element_ty) orelse return error.UnsupportedCEmission;
     const n = ctx.temp_index.*;
     ctx.temp_index.* += 1;
@@ -532,7 +532,7 @@ fn writeIndent(ctx: Context) !void {
     for (0..ctx.indent.*) |_| try ctx.out.appendSlice(ctx.allocator, "    ");
 }
 
-pub fn emitWrapBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+pub fn emitWrapBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) !bool {
     const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return false;
     const inner = genericChildType(target, "wrap") orelse return false;
     const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
@@ -582,7 +582,7 @@ pub fn emitWrapBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.Strin
     }
 }
 
-pub fn emitSatBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+pub fn emitSatBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) !bool {
     const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return false;
     const inner = genericChildType(target, "sat") orelse return false;
     const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
@@ -592,7 +592,7 @@ pub fn emitSatBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.String
     return true;
 }
 
-pub fn emitCheckedBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+pub fn emitCheckedBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) !bool {
     if (!isCheckedBinaryOp(node.op)) return false;
     const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return false;
     if (isWrapType(target) or isSatType(target)) return false;
@@ -619,7 +619,7 @@ pub fn emitCheckedBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.St
     return true;
 }
 
-pub fn emitCheckedUnaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
+pub fn emitCheckedUnaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) !bool {
     if (node.op != .neg) return false;
     const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return false;
     if (isWrapType(target) or isSatType(target)) return false;
@@ -643,7 +643,7 @@ pub fn emitCheckedUnaryWithTarget(ctx: Context, node: anytype, locals: ?*std.Str
 // `f` suffix and arithmetic recurses with the same f32 target, so the whole
 // computation runs in `float`. Non-float-shaped leaves fall back to normal
 // expression emission.
-pub fn emitF32Expr(ctx: Context, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+pub fn emitF32Expr(ctx: Context, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
     switch (expr.kind) {
         .float_literal => |lit| try appendCFloatLiteral(ctx.allocator, ctx.out, lit, true),
         .grouped => |inner| {
@@ -669,7 +669,7 @@ pub fn emitF32Expr(ctx: Context, expr: ast.Expr, locals: ?*std.StringHashMap(Loc
     }
 }
 
-fn emitTargetBinaryInfix(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target: ast.TypeExpr, op: []const u8) !void {
+fn emitTargetBinaryInfix(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target: ast_bridge.TypeExpr, op: []const u8) !void {
     try ctx.out.appendSlice(ctx.allocator, "(");
     try ctx.emit_expr_with_target(ctx.emit_ctx, node.left.*, locals, target);
     try ctx.out.print(ctx.allocator, " {s} ", .{op});
@@ -677,7 +677,7 @@ fn emitTargetBinaryInfix(ctx: Context, node: anytype, locals: ?*std.StringHashMa
     try ctx.out.appendSlice(ctx.allocator, ")");
 }
 
-fn emitTargetBinaryHelper(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target: ast.TypeExpr, helper: lower_c_op.CheckedHelperParts) !void {
+fn emitTargetBinaryHelper(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target: ast_bridge.TypeExpr, helper: lower_c_op.CheckedHelperParts) !void {
     try ctx.out.print(ctx.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
     try ctx.emit_expr_with_target(ctx.emit_ctx, node.left.*, locals, target);
     try ctx.out.appendSlice(ctx.allocator, ", ");

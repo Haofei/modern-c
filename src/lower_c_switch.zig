@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_const = @import("lower_c_const.zig");
@@ -26,15 +26,15 @@ const cPayloadFieldName = lower_c_type.cPayloadFieldName;
 const nullableInnerTypeExpr = lower_c_type.nullableInnerTypeExpr;
 const taggedUnionCase = syntax_bridge.taggedUnionCase;
 
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitReadExprWithReplacementsFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const MmioReadReplacement) anyerror!void;
-pub const EmitSwitchBodyFn = *const fn (ctx: *anyopaque, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void;
-pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo;
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitReadExprWithReplacementsFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr, replacements: []const MmioReadReplacement) anyerror!void;
+pub const EmitSwitchBodyFn = *const fn (ctx: *anyopaque, body: ast_bridge.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void;
+pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!LocalInfo;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
-pub const ExprTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
-pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!lower_c_model.SequencedArgTemp;
-pub const NullableInnerCTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8;
+pub const ExprTypeFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr;
+pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!lower_c_model.SequencedArgTemp;
+pub const NullableInnerCTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!?[]const u8;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
@@ -51,13 +51,13 @@ pub const EmitContext = struct {
     tagged_union_type_for_expr: ExprTypeFn,
     nullable_inner_c_type_for_type: NullableInnerCTypeFn,
     emit_sequenced_arg_temp: EmitSequencedArgTempFn,
-    tagged_unions: *const std.StringHashMap(ast.UnionDecl),
+    tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
 };
 
 pub const GenericSwitchSpec = struct {
-    node: ast.Switch,
+    node: ast_bridge.Switch,
     locals: *std.StringHashMap(LocalInfo),
-    return_ty: ?ast.TypeExpr,
+    return_ty: ?ast_bridge.TypeExpr,
     subject_enum_name: ?[]const u8,
     subject_is_bool: bool,
     subject_replacements: []const MmioReadReplacement,
@@ -73,7 +73,7 @@ pub const ResultEmitState = struct {
     seen_err: bool = false,
 };
 
-pub fn emitSwitchPatternLabel(allocator: std.mem.Allocator, out: *std.ArrayList(u8), pattern: ast.Pattern, subject_enum_name: ?[]const u8) !void {
+pub fn emitSwitchPatternLabel(allocator: std.mem.Allocator, out: *std.ArrayList(u8), pattern: ast_bridge.Pattern, subject_enum_name: ?[]const u8) !void {
     switch (pattern.kind) {
         .literal => |expr| if (lower_c_const.switchCaseValueSupported(expr)) {
             try out.appendSlice(allocator, "case ");
@@ -176,7 +176,7 @@ pub fn emitGenericSwitchWithMmioSubjectHoists(ctx: EmitContext, mmio_ctx: lower_
     try emitGenericSwitch(ctx, plain_spec);
 }
 
-pub fn emitResultSwitch(ctx: EmitContext, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject: ResultSwitchSubject) anyerror!bool {
+pub fn emitResultSwitch(ctx: EmitContext, node: ast_bridge.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject: ResultSwitchSubject) anyerror!bool {
     var branch_state: ResultEmitState = .{};
     for (node.arms) |arm| {
         const branch = (try resultSwitchBranch(ctx.scratch, arm.patterns, subject)) orelse {
@@ -192,7 +192,7 @@ pub fn emitResultSwitch(ctx: EmitContext, node: ast.Switch, locals: *std.StringH
     return branch_state.emitted_any;
 }
 
-pub fn emitNullableSwitch(ctx: EmitContext, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject: NullableSwitchSubject) anyerror!bool {
+pub fn emitNullableSwitch(ctx: EmitContext, node: ast_bridge.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject: NullableSwitchSubject) anyerror!bool {
     var branch_state: ConditionalEmitState = .{};
     for (node.arms) |arm| {
         if (arm.patterns.len != 1) return false;
@@ -205,7 +205,7 @@ pub fn emitNullableSwitch(ctx: EmitContext, node: ast.Switch, locals: *std.Strin
     return branch_state.emitted_any;
 }
 
-pub fn emitTaggedUnionSwitch(ctx: EmitContext, node: ast.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject: TaggedUnionSwitchSubject) anyerror!bool {
+pub fn emitTaggedUnionSwitch(ctx: EmitContext, node: ast_bridge.Switch, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject: TaggedUnionSwitchSubject) anyerror!bool {
     var branch_state: ConditionalEmitState = .{};
     var has_wildcard = false;
     for (node.arms) |arm| {
@@ -236,7 +236,7 @@ pub fn emitTaggedUnionSwitchDefaultTrap(ctx: EmitContext, has_wildcard: bool) !v
     try ctx.out.appendSlice(ctx.allocator, "}\n");
 }
 
-pub fn emitNullableIfLet(ctx: EmitContext, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject: NullableSwitchSubject) anyerror!void {
+pub fn emitNullableIfLet(ctx: EmitContext, node: ast_bridge.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject: NullableSwitchSubject) anyerror!void {
     const binding = switch (node.pattern.kind) {
         .bind => |ident| ident,
         else => {
@@ -251,7 +251,7 @@ pub fn emitNullableIfLet(ctx: EmitContext, node: ast.IfLet, locals: *std.StringH
     try ctx.out.appendSlice(ctx.allocator, "\n");
 }
 
-pub fn emitResultIfLet(ctx: EmitContext, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject: ResultSwitchSubject) anyerror!void {
+pub fn emitResultIfLet(ctx: EmitContext, node: ast_bridge.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject: ResultSwitchSubject) anyerror!void {
     const tag_bind = switch (node.pattern.kind) {
         .tag_bind => |tag_bind| tag_bind,
         else => unreachable,
@@ -265,7 +265,7 @@ pub fn emitResultIfLet(ctx: EmitContext, node: ast.IfLet, locals: *std.StringHas
     try ctx.out.appendSlice(ctx.allocator, "\n");
 }
 
-pub fn emitResultSwitchBranchBody(ctx: EmitContext, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject: ResultSwitchSubject, branch: ResultSwitchBranch) anyerror!void {
+pub fn emitResultSwitchBranchBody(ctx: EmitContext, body: ast_bridge.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject: ResultSwitchSubject, branch: ResultSwitchBranch) anyerror!void {
     var nested = try lower_c_access.cloneLocals(ctx.allocator, locals.*);
     defer nested.deinit();
     ctx.indent.* += 1;
@@ -278,7 +278,7 @@ pub fn emitResultSwitchBranchBody(ctx: EmitContext, body: ast.SwitchBody, locals
     try ctx.out.appendSlice(ctx.allocator, "}\n");
 }
 
-pub fn emitNullableSwitchBranchBody(ctx: EmitContext, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject: NullableSwitchSubject, branch: NullableSwitchBranch) anyerror!void {
+pub fn emitNullableSwitchBranchBody(ctx: EmitContext, body: ast_bridge.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject: NullableSwitchSubject, branch: NullableSwitchBranch) anyerror!void {
     var nested = try lower_c_access.cloneLocals(ctx.allocator, locals.*);
     defer nested.deinit();
     ctx.indent.* += 1;
@@ -291,7 +291,7 @@ pub fn emitNullableSwitchBranchBody(ctx: EmitContext, body: ast.SwitchBody, loca
     try ctx.out.appendSlice(ctx.allocator, "}\n");
 }
 
-pub fn emitTaggedUnionSwitchBranchBody(ctx: EmitContext, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject: TaggedUnionSwitchSubject, branch: TaggedUnionSwitchBranch) anyerror!void {
+pub fn emitTaggedUnionSwitchBranchBody(ctx: EmitContext, body: ast_bridge.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject: TaggedUnionSwitchSubject, branch: TaggedUnionSwitchBranch) anyerror!void {
     var nested = try lower_c_access.cloneLocals(ctx.allocator, locals.*);
     defer nested.deinit();
     ctx.indent.* += 1;
@@ -304,7 +304,7 @@ pub fn emitTaggedUnionSwitchBranchBody(ctx: EmitContext, body: ast.SwitchBody, l
     try ctx.out.appendSlice(ctx.allocator, "}\n");
 }
 
-fn emitNullableIfLetThen(ctx: EmitContext, node: ast.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject: NullableSwitchSubject, binding: ast.Ident) anyerror!void {
+fn emitNullableIfLetThen(ctx: EmitContext, node: ast_bridge.IfLet, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject: NullableSwitchSubject, binding: ast_bridge.Ident) anyerror!void {
     try writeIndent(ctx);
     try ctx.out.appendSlice(ctx.allocator, "if (");
     try subject.appendSomeCond(ctx.allocator, ctx.out);
@@ -326,11 +326,11 @@ fn emitNullableIfLetThen(ctx: EmitContext, node: ast.IfLet, locals: *std.StringH
 
 fn emitResultIfLetThen(
     ctx: EmitContext,
-    node: ast.IfLet,
+    node: ast_bridge.IfLet,
     locals: *std.StringHashMap(LocalInfo),
-    return_ty: ?ast.TypeExpr,
+    return_ty: ?ast_bridge.TypeExpr,
     subject: ResultSwitchSubject,
-    binding: ast.Ident,
+    binding: ast_bridge.Ident,
     is_ok: bool,
     bind_ty: []const u8,
     payload_field: []const u8,
@@ -353,7 +353,7 @@ fn emitResultIfLetBinding(ctx: EmitContext, locals: *std.StringHashMap(LocalInfo
     try ctx.out.print(ctx.allocator, "MC_UNUSED {s} {s} = {s}.payload.{s};\n", .{ bind_ty, binding, subject_name, payload_field });
 }
 
-fn emitIfLetElse(ctx: EmitContext, maybe_else: ?ast.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+fn emitIfLetElse(ctx: EmitContext, maybe_else: ?ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
     if (maybe_else) |else_block| {
         try ctx.out.appendSlice(ctx.allocator, " else {\n");
         var else_locals = try lower_c_access.cloneLocals(ctx.allocator, locals.*);
@@ -366,7 +366,7 @@ fn emitIfLetElse(ctx: EmitContext, maybe_else: ?ast.Block, locals: *std.StringHa
     }
 }
 
-fn resultIfLetTagIsOk(ctx: EmitContext, tag: ast.Ident) !bool {
+fn resultIfLetTagIsOk(ctx: EmitContext, tag: ast_bridge.Ident) !bool {
     if (std.mem.eql(u8, tag.text, "ok")) return true;
     if (std.mem.eql(u8, tag.text, "err")) return false;
     try writeIndent(ctx);
@@ -404,7 +404,7 @@ fn emitTaggedUnionSwitchBinding(ctx: EmitContext, locals: *std.StringHashMap(Loc
     });
 }
 
-fn emitGenericSwitchSubject(ctx: EmitContext, subject: ast.Expr, locals: *std.StringHashMap(LocalInfo), subject_is_bool: bool, subject_replacements: []const MmioReadReplacement) anyerror!void {
+fn emitGenericSwitchSubject(ctx: EmitContext, subject: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), subject_is_bool: bool, subject_replacements: []const MmioReadReplacement) anyerror!void {
     if (subject_is_bool) try ctx.out.appendSlice(ctx.allocator, "(int)(");
     if (subject_replacements.len > 0) {
         try ctx.emit_read_expr_with_replacements(ctx.emit_ctx, subject, locals, null, subject_replacements);
@@ -414,7 +414,7 @@ fn emitGenericSwitchSubject(ctx: EmitContext, subject: ast.Expr, locals: *std.St
     if (subject_is_bool) try ctx.out.appendSlice(ctx.allocator, ")");
 }
 
-fn emitGenericSwitchArms(ctx: EmitContext, arms: []const ast.SwitchArm, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, subject_enum_name: ?[]const u8) anyerror!bool {
+fn emitGenericSwitchArms(ctx: EmitContext, arms: []const ast_bridge.SwitchArm, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr, subject_enum_name: ?[]const u8) anyerror!bool {
     var has_wildcard = false;
     for (arms) |arm| {
         for (arm.patterns) |pattern| {
@@ -427,7 +427,7 @@ fn emitGenericSwitchArms(ctx: EmitContext, arms: []const ast.SwitchArm, locals: 
     return has_wildcard;
 }
 
-fn emitGenericSwitchArmBody(ctx: EmitContext, body: ast.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) anyerror!void {
+fn emitGenericSwitchArmBody(ctx: EmitContext, body: ast_bridge.SwitchBody, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
     try writeIndent(ctx);
     try ctx.out.appendSlice(ctx.allocator, "{\n");
     var nested = try lower_c_access.cloneLocals(ctx.allocator, locals.*);
@@ -452,7 +452,7 @@ fn emitGenericSwitchDefaultTrap(ctx: EmitContext, subject_enum_name: ?[]const u8
     }
 }
 
-fn emitSwitchCaseValue(allocator: std.mem.Allocator, out: *std.ArrayList(u8), expr: ast.Expr) !void {
+fn emitSwitchCaseValue(allocator: std.mem.Allocator, out: *std.ArrayList(u8), expr: ast_bridge.Expr) !void {
     switch (expr.kind) {
         .int_literal => |literal| try lower_c_const.appendCIntLiteral(allocator, out, literal),
         .char_literal => |literal| try out.appendSlice(allocator, literal),
@@ -469,7 +469,7 @@ fn writeIndent(ctx: EmitContext) !void {
     for (0..ctx.indent.*) |_| try ctx.out.appendSlice(ctx.allocator, "    ");
 }
 
-pub fn nullableSwitchBranch(allocator: std.mem.Allocator, pattern: ast.Pattern, subject: NullableSwitchSubject) !?NullableSwitchBranch {
+pub fn nullableSwitchBranch(allocator: std.mem.Allocator, pattern: ast_bridge.Pattern, subject: NullableSwitchSubject) !?NullableSwitchBranch {
     return switch (pattern.kind) {
         .bind => |binding| NullableSwitchBranch{
             .condition = try subject.allocSomeCond(allocator),
@@ -480,13 +480,13 @@ pub fn nullableSwitchBranch(allocator: std.mem.Allocator, pattern: ast.Pattern, 
     };
 }
 
-pub fn resultSubjectForExpr(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ResultSwitchSubject {
+pub fn resultSubjectForExpr(expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?ResultSwitchSubject {
     const name = calleeIdentName(expr) orelse return null;
     const info = locals.get(name) orelse return null;
     const ok_ty = info.result_ok_c_type orelse return null;
     const err_ty = info.result_err_c_type orelse return null;
-    var ok_src: ?ast.TypeExpr = null;
-    var err_src: ?ast.TypeExpr = null;
+    var ok_src: ?ast_bridge.TypeExpr = null;
+    var err_src: ?ast_bridge.TypeExpr = null;
     if (info.result_ty) |rty| switch (rty.kind) {
         .generic => |g| if (g.args.len == 2) {
             ok_src = g.args[0];
@@ -497,14 +497,14 @@ pub fn resultSubjectForExpr(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo
     return .{ .name = name, .ok_c_type = ok_ty, .err_c_type = err_ty, .ok_source_ty = ok_src, .err_source_ty = err_src };
 }
 
-pub fn resultSubjectForValueExprWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), result_ty: ast.TypeExpr) !?ResultSwitchSubject {
+pub fn resultSubjectForValueExprWithType(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), result_ty: ast_bridge.TypeExpr) !?ResultSwitchSubject {
     if (resultSubjectForExpr(expr, locals)) |subject| return subject;
     const temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, expr, locals, result_ty);
     try locals.put(temp.name, try ctx.local_info_from_type(ctx.emit_ctx, result_ty));
     return resultSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp.name, .span = expr.span } }, .span = expr.span }, locals);
 }
 
-pub fn resultSwitchBranch(allocator: std.mem.Allocator, patterns: []const ast.Pattern, subject: ResultSwitchSubject) !?ResultSwitchBranch {
+pub fn resultSwitchBranch(allocator: std.mem.Allocator, patterns: []const ast_bridge.Pattern, subject: ResultSwitchSubject) !?ResultSwitchBranch {
     if (patterns.len == 0) return null;
     if (patterns.len == 1) {
         if (patterns[0].kind == .wildcard) return .{ .condition = null };
@@ -545,7 +545,7 @@ pub fn resultSwitchBranch(allocator: std.mem.Allocator, patterns: []const ast.Pa
     return .{ .condition = try condition.toOwnedSlice(allocator) };
 }
 
-pub fn taggedUnionSubjectForExpr(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), tagged_unions: anytype) ?TaggedUnionSwitchSubject {
+pub fn taggedUnionSubjectForExpr(expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), tagged_unions: anytype) ?TaggedUnionSwitchSubject {
     const name = calleeIdentName(expr) orelse return null;
     const info = locals.get(name) orelse return null;
     const type_name = info.source_type_name orelse return null;
@@ -553,7 +553,7 @@ pub fn taggedUnionSubjectForExpr(expr: ast.Expr, locals: *std.StringHashMap(Loca
     return .{ .name = name, .type_name = type_name, .decl = union_decl };
 }
 
-pub fn taggedUnionSubjectForValueExpr(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?TaggedUnionSwitchSubject {
+pub fn taggedUnionSubjectForValueExpr(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !?TaggedUnionSwitchSubject {
     if (taggedUnionSubjectForExpr(expr, locals, ctx.tagged_unions)) |subject| return subject;
     const union_ty = ctx.tagged_union_type_for_expr(ctx.emit_ctx, expr, locals) orelse return null;
     const temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, expr, locals, union_ty);
@@ -561,7 +561,7 @@ pub fn taggedUnionSubjectForValueExpr(ctx: EmitContext, expr: ast.Expr, locals: 
     return taggedUnionSubjectForExpr(.{ .kind = .{ .ident = .{ .text = temp.name, .span = expr.span } }, .span = expr.span }, locals, ctx.tagged_unions);
 }
 
-pub fn nullableSubjectForExprWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast.TypeExpr, representation: NullableRepresentation) !?NullableSwitchSubject {
+pub fn nullableSubjectForExprWithType(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast_bridge.TypeExpr, representation: NullableRepresentation) !?NullableSwitchSubject {
     if (nullableSourceName(expr)) |name| {
         if (nullableSubjectForLocalName(name, locals, representation)) |subject| return subject;
         if (locals.contains(name)) return null;
@@ -569,7 +569,7 @@ pub fn nullableSubjectForExprWithType(ctx: EmitContext, expr: ast.Expr, locals: 
     return try materializeNullableSubjectWithType(ctx, expr, locals, nullable_ty, representation);
 }
 
-fn nullableSourceName(expr: ast.Expr) ?[]const u8 {
+fn nullableSourceName(expr: ast_bridge.Expr) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| ident.text,
         .grouped => |inner| nullableSourceName(inner.*),
@@ -589,7 +589,7 @@ fn nullableSubjectForLocalName(name: []const u8, locals: *std.StringHashMap(Loca
     };
 }
 
-fn materializeNullableSubjectWithType(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast.TypeExpr, representation: NullableRepresentation) !?NullableSwitchSubject {
+fn materializeNullableSubjectWithType(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), nullable_ty: ast_bridge.TypeExpr, representation: NullableRepresentation) !?NullableSwitchSubject {
     const inner_c_type = try ctx.nullable_inner_c_type_for_type(ctx.emit_ctx, nullable_ty) orelse return null;
     const temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, expr, locals, nullable_ty);
     const temp_info = try ctx.local_info_from_type(ctx.emit_ctx, nullable_ty);
@@ -602,7 +602,7 @@ fn materializeNullableSubjectWithType(ctx: EmitContext, expr: ast.Expr, locals: 
     };
 }
 
-pub fn taggedUnionSwitchBranch(allocator: std.mem.Allocator, patterns: []const ast.Pattern, subject: TaggedUnionSwitchSubject) !?TaggedUnionSwitchBranch {
+pub fn taggedUnionSwitchBranch(allocator: std.mem.Allocator, patterns: []const ast_bridge.Pattern, subject: TaggedUnionSwitchSubject) !?TaggedUnionSwitchBranch {
     if (patterns.len == 0) return null;
     if (patterns.len == 1) {
         if (patterns[0].kind == .wildcard) return .{ .condition = null, .is_wildcard = true };

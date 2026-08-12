@@ -26,7 +26,7 @@ BACKEND_EXTRA_FILES = {
 }
 
 EXACT_BACKEND_COUNTS = {
-    '@import("ast.zig")': 41,
+    '@import("ast.zig")': 0,
     '@import("attr_syntax.zig")': 2,
     '@import("ast_query.zig")': 0,
     '@import("expr_syntax.zig")': 0,
@@ -207,6 +207,10 @@ REQUIRED_ANCHORS = {
     "src/type_bridge.zig": (
         "Transitional backend type-shape bridge.",
         "direct type-syntax helper access behind this narrow bridge",
+    ),
+    "src/ast_bridge.zig": (
+        "Transitional backend AST-shape bridge.",
+        "direct AST access behind this bridge",
     ),
     "src/type_syntax.zig": (
         "pub const ViewType = struct",

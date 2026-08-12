@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
@@ -32,20 +32,20 @@ const simpleNameType = type_bridge.simpleNameType;
 const sliceElementType = lower_c_shape.sliceElementType;
 const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;
 
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
-pub const ArrayLenTextFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!?[]const u8;
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
-pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void;
-pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo;
-pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr;
-pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
-pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitRaceLoadTempFn = *const fn (ctx: *anyopaque, ptr_name: []const u8, target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp;
-pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
-pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
-pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?ast.TypeExpr;
-pub const MirConstGetIndexFn = *const fn (ctx: *anyopaque, span: ast.Span) ?usize;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp;
+pub const ArrayLenTextFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!?[]const u8;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
+pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!LocalInfo;
+pub const OperandEmitTypeFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr;
+pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
+pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitRaceLoadTempFn = *const fn (ctx: *anyopaque, ptr_name: []const u8, target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
+pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?ast_bridge.TypeExpr;
+pub const MirConstGetIndexFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?usize;
 
 pub const DirectCallIndexTemps = struct {
     base: SequencedArgTemp,
@@ -92,7 +92,7 @@ pub fn addMmioReadReplacementLocals(locals: *std.StringHashMap(LocalInfo), repla
     }
 }
 
-pub fn arrayLenForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+pub fn arrayLenForExpr(expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
     const local_set = locals orelse return null;
     return switch (expr.kind) {
         .ident => |ident| if (local_set.get(ident.text)) |info| info.array_len else null,
@@ -101,7 +101,7 @@ pub fn arrayLenForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?
     };
 }
 
-pub fn arrayElemsFieldForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
+pub fn arrayElemsFieldForExpr(expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?[]const u8 {
     const local_set = locals orelse return null;
     return switch (expr.kind) {
         .ident => |ident| if (local_set.get(ident.text)) |info| info.array_elems_field else null,
@@ -154,7 +154,7 @@ pub fn rawManyOffsetCallInfo(ctx: EmitContext, call: anytype, locals: ?*std.Stri
     return .{ .base = member.base.*, .ty = result_ty, .element_ty = element_ty };
 }
 
-pub fn emitRawManyOffsetValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitRawManyOffsetValueTemp(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     return switch (expr.kind) {
         .grouped => |inner| try emitRawManyOffsetValueTemp(ctx, inner.*, locals, target_ty),
         .call => |call| try emitRawManyOffsetValueTempFromCallForce(ctx, call, locals, target_ty, false),
@@ -162,11 +162,11 @@ pub fn emitRawManyOffsetValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std
     };
 }
 
-pub fn emitRawManyOffsetValueTempFromCall(ctx: EmitContext, call: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitRawManyOffsetValueTempFromCall(ctx: EmitContext, call: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     return try emitRawManyOffsetValueTempFromCallForce(ctx, call, locals, target_ty, false);
 }
 
-pub fn emitRawManyOffsetValueTempFromCallForce(ctx: EmitContext, call: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, force: bool) anyerror!?SequencedArgTemp {
+pub fn emitRawManyOffsetValueTempFromCallForce(ctx: EmitContext, call: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, force: bool) anyerror!?SequencedArgTemp {
     const info = rawManyOffsetCallInfo(ctx, call, locals) orelse return null;
     if (!force and !exprContainsCall(info.base) and !exprContainsCall(call.args[0])) return null;
 
@@ -179,7 +179,7 @@ pub fn emitRawManyOffsetValueTempFromCallForce(ctx: EmitContext, call: anytype, 
     return .{ .name = result_temp, .ty = target_ty };
 }
 
-pub fn emitRawManyOffsetDerefAddressValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitRawManyOffsetDerefAddressValueTemp(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     if (expr.kind == .grouped) return try emitRawManyOffsetDerefAddressValueTemp(ctx, expr.kind.grouped.*, locals, target_ty);
     const call = rawManyOffsetAddressCall(expr) orelse return null;
     const ptr_ty = rawManyOffsetCallInfo(ctx, call, locals) orelse return null;
@@ -187,7 +187,7 @@ pub fn emitRawManyOffsetDerefAddressValueTemp(ctx: EmitContext, expr: ast.Expr, 
     return try emitRawManyOffsetAddressCastTemp(ctx, target_ty, ptr_temp.name);
 }
 
-fn rawManyOffsetAddressCall(expr: ast.Expr) ?@TypeOf(callExpr(expr).?) {
+fn rawManyOffsetAddressCall(expr: ast_bridge.Expr) ?@TypeOf(callExpr(expr).?) {
     const deref_expr = switch (expr.kind) {
         .address_of => |inner| inner.*,
         else => return null,
@@ -203,14 +203,14 @@ fn rawManyOffsetAddressCall(expr: ast.Expr) ?@TypeOf(callExpr(expr).?) {
     return callExpr(offset_expr);
 }
 
-fn emitRawManyOffsetAddressCastTemp(ctx: EmitContext, target_ty: ast.TypeExpr, ptr_temp_name: []const u8) !SequencedArgTemp {
+fn emitRawManyOffsetAddressCastTemp(ctx: EmitContext, target_ty: ast_bridge.TypeExpr, ptr_temp_name: []const u8) !SequencedArgTemp {
     const result_temp = try nextTempName(ctx);
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = {s};\n", .{ try ctx.c_type(ctx.emit_ctx, target_ty), result_temp, ptr_temp_name });
     return .{ .name = result_temp, .ty = target_ty };
 }
 
-pub fn emitRawManyOffsetDerefValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitRawManyOffsetDerefValueTemp(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     const inner = switch (expr.kind) {
         .grouped => |grouped| return try emitRawManyOffsetDerefValueTemp(ctx, grouped.*, locals, target_ty),
         .deref => |inner| inner.*,
@@ -226,7 +226,7 @@ pub fn emitRawManyOffsetDerefValueTemp(ctx: EmitContext, expr: ast.Expr, locals:
     return .{ .name = value_temp, .ty = target_ty };
 }
 
-pub fn emitRawManyOffsetDerefAddressReturn(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitRawManyOffsetDerefAddressReturn(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const target_ty = return_ty orelse return false;
     const temp = (try emitRawManyOffsetDerefAddressValueTemp(ctx, expr, locals, target_ty)) orelse return false;
     try writeIndent(ctx);
@@ -234,7 +234,7 @@ pub fn emitRawManyOffsetDerefAddressReturn(ctx: EmitContext, expr: ast.Expr, loc
     return true;
 }
 
-pub fn emitRawManyOffsetDerefAddressLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitRawManyOffsetDerefAddressLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const temp = (try emitRawManyOffsetDerefAddressValueTemp(ctx, initializer, locals, decl_ty)) orelse return false;
     try writeIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
@@ -249,7 +249,7 @@ pub fn emitRawManyOffsetDerefAddressAssignmentStmt(ctx: EmitContext, assignment:
     return true;
 }
 
-pub fn emitRawManyOffsetDerefReturn(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitRawManyOffsetDerefReturn(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const target_ty = return_ty orelse return false;
     const temp = (try emitRawManyOffsetDerefValueTemp(ctx, expr, locals, target_ty)) orelse return false;
     try writeIndent(ctx);
@@ -257,7 +257,7 @@ pub fn emitRawManyOffsetDerefReturn(ctx: EmitContext, expr: ast.Expr, locals: *s
     return true;
 }
 
-pub fn emitRawManyOffsetDerefLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitRawManyOffsetDerefLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const temp = (try emitRawManyOffsetDerefValueTemp(ctx, initializer, locals, decl_ty)) orelse return false;
     try writeIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
@@ -272,7 +272,7 @@ pub fn emitRawManyOffsetDerefAssignmentStmt(ctx: EmitContext, assignment: anytyp
     return true;
 }
 
-pub fn emitRawManyOffsetDerefInferredLocalInit(ctx: EmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitRawManyOffsetDerefInferredLocalInit(ctx: EmitContext, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const element_ty = rawManyOffsetDerefTypeForExpr(ctx, initializer, locals) orelse return false;
     const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer.span, name, null) orelse return error.UnsupportedCEmission;
     if (!std.meta.eql(inferred_ty, element_ty)) return error.UnsupportedCEmission;
@@ -308,7 +308,7 @@ pub fn emitRawManyOffsetDerefTargetAssignmentStmt(ctx: EmitContext, assignment: 
     return true;
 }
 
-pub fn emitRawManyOffsetReturn(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitRawManyOffsetReturn(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const target_ty = return_ty orelse return false;
     const temp = (try emitRawManyOffsetValueTemp(ctx, expr, locals, target_ty)) orelse return false;
     try writeIndent(ctx);
@@ -316,7 +316,7 @@ pub fn emitRawManyOffsetReturn(ctx: EmitContext, expr: ast.Expr, locals: *std.St
     return true;
 }
 
-pub fn emitRawManyOffsetLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitRawManyOffsetLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const temp = (try emitRawManyOffsetValueTemp(ctx, initializer, locals, decl_ty)) orelse return false;
     try writeIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
@@ -331,7 +331,7 @@ pub fn emitRawManyOffsetAssignmentStmt(ctx: EmitContext, assignment: anytype, lo
     return true;
 }
 
-pub fn emitRawManyOffsetInferredLocalInit(ctx: EmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitRawManyOffsetInferredLocalInit(ctx: EmitContext, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const raw_ty = rawManyOffsetTypeForExpr(ctx, initializer, locals) orelse return false;
     const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer.span, name, null) orelse return error.UnsupportedCEmission;
     if (!std.meta.eql(inferred_ty, raw_ty)) return error.UnsupportedCEmission;
@@ -346,14 +346,14 @@ pub fn emitRawManyOffsetInferredLocalInit(ctx: EmitContext, name: []const u8, in
     return true;
 }
 
-fn assignmentTargetType(ctx: EmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+fn assignmentTargetType(ctx: EmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
     return ctx.operand_emit_type(ctx.emit_ctx, assignment.target, locals) orelse blk: {
         const target = ctx.global_assignment_target(ctx.emit_ctx, assignment.target, locals) orelse return null;
         break :blk simpleNameType(target.info.type_name, assignment.value.span);
     };
 }
 
-fn emitAssignmentFromTemp(ctx: EmitContext, target_expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), temp_name: []const u8) !void {
+fn emitAssignmentFromTemp(ctx: EmitContext, target_expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), temp_name: []const u8) !void {
     try writeIndent(ctx);
     if (ctx.global_assignment_target(ctx.emit_ctx, target_expr, locals)) |target| {
         try appendGlobalStoreValue(ctx.allocator, ctx.out, target, temp_name);
@@ -363,7 +363,7 @@ fn emitAssignmentFromTemp(ctx: EmitContext, target_expr: ast.Expr, locals: *std.
     }
 }
 
-pub fn rawManyOffsetTypeForExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+pub fn rawManyOffsetTypeForExpr(ctx: EmitContext, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
     return switch (expr.kind) {
         .call => |call| if (rawManyOffsetCallInfo(ctx, call, locals)) |info| info.ty else null,
         .grouped => |inner| rawManyOffsetTypeForExpr(ctx, inner.*, locals),
@@ -371,7 +371,7 @@ pub fn rawManyOffsetTypeForExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.
     };
 }
 
-pub fn rawManyOffsetDerefTypeForExpr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+pub fn rawManyOffsetDerefTypeForExpr(ctx: EmitContext, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
     const inner = switch (expr.kind) {
         .grouped => |grouped| return rawManyOffsetDerefTypeForExpr(ctx, grouped.*, locals),
         .deref => |inner| inner.*,
@@ -381,7 +381,7 @@ pub fn rawManyOffsetDerefTypeForExpr(ctx: EmitContext, expr: ast.Expr, locals: ?
     return (rawManyOffsetCallInfo(ctx, call, locals) orelse return null).element_ty;
 }
 
-pub fn sliceAccessForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?SliceAccess {
+pub fn sliceAccessForExpr(expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) ?SliceAccess {
     const local_set = locals orelse return null;
     return switch (expr.kind) {
         .ident => |ident| if (local_set.get(ident.text)) |info|
@@ -396,7 +396,7 @@ pub fn sliceAccessForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)
     };
 }
 
-pub fn overlayUnionNameForExpr(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?[]const u8 {
+pub fn overlayUnionNameForExpr(expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| if (locals.get(ident.text)) |info| info.source_type_name else null,
         .grouped => |inner| overlayUnionNameForExpr(inner.*, locals),
@@ -404,7 +404,7 @@ pub fn overlayUnionNameForExpr(expr: ast.Expr, locals: *std.StringHashMap(LocalI
     };
 }
 
-pub fn packedBitsNameForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), globals: anytype) ?[]const u8 {
+pub fn packedBitsNameForExpr(expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), globals: anytype) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| if (locals) |local_set| blk: {
             if (local_set.get(ident.text)) |info| break :blk info.source_type_name;
@@ -416,7 +416,7 @@ pub fn packedBitsNameForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(LocalIn
     };
 }
 
-pub fn packedBitsGlobalBase(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), globals: anytype, base_ty: []const u8) ?[]const u8 {
+pub fn packedBitsGlobalBase(expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), globals: anytype, base_ty: []const u8) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| {
             if (locals.contains(ident.text)) return null;
@@ -451,7 +451,7 @@ pub fn globalArrayElementAccess(index: anytype, locals: ?*std.StringHashMap(Loca
     };
 }
 
-pub fn localIndexElementType(expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+pub fn localIndexElementType(expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?ast_bridge.TypeExpr {
     return switch (expr.kind) {
         .ident => |ident| {
             const info = locals.get(ident.text) orelse return null;
@@ -463,7 +463,7 @@ pub fn localIndexElementType(expr: ast.Expr, locals: *std.StringHashMap(LocalInf
     };
 }
 
-pub fn emitLocalSliceIndexValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), element_ty: ast.TypeExpr, slice: SliceAccess, index_temp: []const u8) anyerror!SequencedArgTemp {
+pub fn emitLocalSliceIndexValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), element_ty: ast_bridge.TypeExpr, slice: SliceAccess, index_temp: []const u8) anyerror!SequencedArgTemp {
     const value_temp = try nextTempName(ctx);
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = ", .{ try ctx.c_type(ctx.emit_ctx, element_ty), value_temp });
@@ -474,7 +474,7 @@ pub fn emitLocalSliceIndexValueTemp(ctx: EmitContext, index: anytype, locals: *s
     return .{ .name = value_temp, .ty = element_ty };
 }
 
-pub fn emitLocalArrayIndexValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), element_ty: ast.TypeExpr, len: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
+pub fn emitLocalArrayIndexValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), element_ty: ast_bridge.TypeExpr, len: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
     const value_temp = try nextTempName(ctx);
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = ", .{ try ctx.c_type(ctx.emit_ctx, element_ty), value_temp });
@@ -486,7 +486,7 @@ pub fn emitLocalArrayIndexValueTemp(ctx: EmitContext, index: anytype, locals: *s
     return .{ .name = value_temp, .ty = element_ty };
 }
 
-pub fn emitLocalSliceIndexAddressValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, slice: SliceAccess, index_temp: []const u8) anyerror!SequencedArgTemp {
+pub fn emitLocalSliceIndexAddressValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, slice: SliceAccess, index_temp: []const u8) anyerror!SequencedArgTemp {
     const value_temp = try nextTempName(ctx);
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = &", .{ try ctx.c_type(ctx.emit_ctx, target_ty), value_temp });
@@ -497,7 +497,7 @@ pub fn emitLocalSliceIndexAddressValueTemp(ctx: EmitContext, index: anytype, loc
     return .{ .name = value_temp, .ty = target_ty };
 }
 
-pub fn emitLocalArrayIndexAddressValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, len: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
+pub fn emitLocalArrayIndexAddressValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr, len: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
     const value_temp = try nextTempName(ctx);
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = &", .{ try ctx.c_type(ctx.emit_ctx, target_ty), value_temp });
@@ -524,14 +524,14 @@ pub fn emitLocalArrayIndexStore(ctx: EmitContext, index: anytype, locals: *std.S
     try ctx.out.print(ctx.allocator, "[mc_check_index_usize({s}, {s})] = {s};\n", .{ index_temp, len, value_temp });
 }
 
-pub fn emitLocalIndexReturn(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitLocalIndexReturn(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const value_temp = (try emitLocalIndexValueTemp(ctx, expr, locals, return_ty)) orelse return false;
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "return {s};\n", .{value_temp.name});
     return true;
 }
 
-pub fn emitLocalIndexLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitLocalIndexLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const value_temp = (try emitLocalIndexValueTemp(ctx, initializer, locals, decl_ty)) orelse return false;
     try writeIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
@@ -580,7 +580,7 @@ pub fn emitLocalIndexTargetAssignmentStmt(ctx: EmitContext, assignment: anytype,
     return false;
 }
 
-pub fn emitLocalBaseIndexAddressValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitLocalBaseIndexAddressValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     if (!exprContainsCall(index.index.*)) return null;
     if (localIndexElementType(index.base.*, locals) == null) return null;
 
@@ -597,7 +597,7 @@ pub fn emitLocalBaseIndexAddressValueTemp(ctx: EmitContext, index: anytype, loca
     return null;
 }
 
-pub fn emitLocalIndexValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitLocalIndexValueTemp(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     const index = indexExpr(expr) orelse return null;
     if (!exprContainsCall(index.index.*)) return null;
 
@@ -616,14 +616,14 @@ pub fn emitLocalIndexValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.St
     return null;
 }
 
-pub fn emitDirectCallSliceIndexReturn(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitDirectCallSliceIndexReturn(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const value_temp = (try emitDirectCallSliceIndexExprValueTemp(ctx, expr, locals, null)) orelse return false;
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "return {s};\n", .{value_temp.name});
     return true;
 }
 
-pub fn emitDirectCallSliceIndexLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitDirectCallSliceIndexLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const value_temp = (try emitDirectCallSliceIndexExprValueTemp(ctx, initializer, locals, decl_ty)) orelse return false;
     try writeIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
@@ -638,7 +638,7 @@ pub fn emitDirectCallSliceIndexAssignmentStmt(ctx: EmitContext, assignment: anyt
     return true;
 }
 
-pub fn emitDirectCallSliceIndexExprValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitDirectCallSliceIndexExprValueTemp(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     const index = indexExpr(expr) orelse return null;
     _ = callExpr(index.base.*) orelse return null;
     const slice_ty = directIndexBaseType(ctx, index.base.*) orelse return null;
@@ -648,14 +648,14 @@ pub fn emitDirectCallSliceIndexExprValueTemp(ctx: EmitContext, expr: ast.Expr, l
     return try emitDirectCallSliceIndexValueTemp(ctx, value_ty, temps.base.name, temps.index.name);
 }
 
-pub fn emitDirectCallArrayIndexReturn(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitDirectCallArrayIndexReturn(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const value_temp = (try emitDirectCallArrayIndexExprValueTemp(ctx, expr, locals, null)) orelse return false;
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "return {s};\n", .{value_temp.name});
     return true;
 }
 
-pub fn emitDirectCallArrayIndexLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitDirectCallArrayIndexLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const value_temp = (try emitDirectCallArrayIndexExprValueTemp(ctx, initializer, locals, decl_ty)) orelse return false;
     try writeIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
@@ -670,7 +670,7 @@ pub fn emitDirectCallArrayIndexAssignmentStmt(ctx: EmitContext, assignment: anyt
     return true;
 }
 
-pub fn emitDirectCallArrayIndexExprValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitDirectCallArrayIndexExprValueTemp(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     const index = indexExpr(expr) orelse return null;
     const array_ty = directIndexBaseType(ctx, index.base.*) orelse return null;
     const base_element_ty = arrayElementType(array_ty) orelse return null;
@@ -680,7 +680,7 @@ pub fn emitDirectCallArrayIndexExprValueTemp(ctx: EmitContext, expr: ast.Expr, l
     return try emitDirectCallArrayIndexValueTemp(ctx, element_ty, len, temps.base.name, temps.index.name);
 }
 
-pub fn emitLocalIndexAddressReturn(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitLocalIndexAddressReturn(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     const target_ty = return_ty orelse return false;
     const value_temp = (try emitLocalIndexAddressValueTemp(ctx, expr, locals, target_ty)) orelse return false;
     try writeIndent(ctx);
@@ -688,7 +688,7 @@ pub fn emitLocalIndexAddressReturn(ctx: EmitContext, expr: ast.Expr, locals: *st
     return true;
 }
 
-pub fn emitLocalIndexAddressLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitLocalIndexAddressLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const value_temp = (try emitLocalIndexAddressValueTemp(ctx, initializer, locals, decl_ty)) orelse return false;
     try writeIndent(ctx);
     try ctx.emit_declarator(ctx.emit_ctx, decl_ty, name);
@@ -703,7 +703,7 @@ pub fn emitLocalIndexAddressAssignmentStmt(ctx: EmitContext, assignment: anytype
     return true;
 }
 
-pub fn emitLocalIndexAddressValueTemp(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitLocalIndexAddressValueTemp(ctx: EmitContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     const operand = switch (expr.kind) {
         .address_of => |inner| inner.*,
         .grouped => |inner| return try emitLocalIndexAddressValueTemp(ctx, inner.*, locals, target_ty),
@@ -714,7 +714,7 @@ pub fn emitLocalIndexAddressValueTemp(ctx: EmitContext, expr: ast.Expr, locals: 
     return emitLocalBaseIndexAddressValueTemp(ctx, index, locals, target_ty);
 }
 
-pub fn emitDirectCallIndexAddressValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitDirectCallIndexAddressValueTemp(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     const base_ty = directIndexBaseType(ctx, index.base.*) orelse return null;
     if (callExpr(index.base.*) != null) {
         if (sliceElementType(base_ty) != null) {
@@ -729,7 +729,7 @@ pub fn emitDirectCallIndexAddressValueTemp(ctx: EmitContext, index: anytype, loc
     return try emitDirectCallArrayIndexAddressValueTemp(ctx, target_ty, len, temps.base.name, temps.index.name);
 }
 
-fn directIndexBaseType(ctx: EmitContext, base: ast.Expr) ?ast.TypeExpr {
+fn directIndexBaseType(ctx: EmitContext, base: ast_bridge.Expr) ?ast_bridge.TypeExpr {
     return switch (base.kind) {
         .grouped => |inner| directIndexBaseType(ctx, inner.*),
         .call => |call| blk: {
@@ -742,18 +742,18 @@ fn directIndexBaseType(ctx: EmitContext, base: ast.Expr) ?ast.TypeExpr {
     };
 }
 
-fn directIndexBaseExpressionResultType(ctx: EmitContext, base: ast.Expr) ?ast.TypeExpr {
+fn directIndexBaseExpressionResultType(ctx: EmitContext, base: ast_bridge.Expr) ?ast_bridge.TypeExpr {
     const base_ty = ctx.mir_target_type(ctx.emit_ctx, .expression_result, base.span) orelse return null;
     return directIndexBaseShape(base_ty);
 }
 
-fn directIndexBaseShape(base_ty: ast.TypeExpr) ?ast.TypeExpr {
+fn directIndexBaseShape(base_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     if (sliceElementType(base_ty) != null) return base_ty;
     if (arrayElementType(base_ty) != null) return base_ty;
     return null;
 }
 
-pub fn emitDirectCallSliceIndexValueTemp(ctx: EmitContext, value_ty: ast.TypeExpr, base_temp: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
+pub fn emitDirectCallSliceIndexValueTemp(ctx: EmitContext, value_ty: ast_bridge.TypeExpr, base_temp: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
     const ptr_expr = try std.fmt.allocPrint(ctx.scratch, "&{s}.ptr[mc_check_index_usize({s}, {s}.len)]", .{ base_temp, index_temp, base_temp });
     if (try ctx.emit_race_load_temp(ctx.emit_ctx, ptr_expr, value_ty)) |temp| return temp;
 
@@ -769,7 +769,7 @@ pub fn emitDirectCallSliceIndexValueTemp(ctx: EmitContext, value_ty: ast.TypeExp
     return .{ .name = value_temp, .ty = value_ty };
 }
 
-pub fn emitDirectCallArrayIndexValueTemp(ctx: EmitContext, element_ty: ast.TypeExpr, len: []const u8, base_temp: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
+pub fn emitDirectCallArrayIndexValueTemp(ctx: EmitContext, element_ty: ast_bridge.TypeExpr, len: []const u8, base_temp: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
     const value_temp = try nextTempName(ctx);
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = {s}.elems[mc_check_index_usize({s}, {s})];\n", .{
@@ -782,7 +782,7 @@ pub fn emitDirectCallArrayIndexValueTemp(ctx: EmitContext, element_ty: ast.TypeE
     return .{ .name = value_temp, .ty = element_ty };
 }
 
-pub fn emitDirectCallSliceIndexAddressValueTemp(ctx: EmitContext, target_ty: ast.TypeExpr, base_temp: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
+pub fn emitDirectCallSliceIndexAddressValueTemp(ctx: EmitContext, target_ty: ast_bridge.TypeExpr, base_temp: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
     const value_temp = try nextTempName(ctx);
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = &{s}.ptr[mc_check_index_usize({s}, {s}.len)];\n", .{
@@ -795,7 +795,7 @@ pub fn emitDirectCallSliceIndexAddressValueTemp(ctx: EmitContext, target_ty: ast
     return .{ .name = value_temp, .ty = target_ty };
 }
 
-pub fn emitDirectCallArrayIndexAddressValueTemp(ctx: EmitContext, target_ty: ast.TypeExpr, len: []const u8, base_temp: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
+pub fn emitDirectCallArrayIndexAddressValueTemp(ctx: EmitContext, target_ty: ast_bridge.TypeExpr, len: []const u8, base_temp: []const u8, index_temp: []const u8) anyerror!SequencedArgTemp {
     const value_temp = try nextTempName(ctx);
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = &{s}.elems[mc_check_index_usize({s}, {s})];\n", .{
@@ -808,7 +808,7 @@ pub fn emitDirectCallArrayIndexAddressValueTemp(ctx: EmitContext, target_ty: ast
     return .{ .name = value_temp, .ty = target_ty };
 }
 
-pub fn emitDirectCallIndexTemps(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), base_ty: ast.TypeExpr) anyerror!DirectCallIndexTemps {
+pub fn emitDirectCallIndexTemps(ctx: EmitContext, index: anytype, locals: *std.StringHashMap(LocalInfo), base_ty: ast_bridge.TypeExpr) anyerror!DirectCallIndexTemps {
     const usize_ty = simpleNameType("usize", index.index.span);
     return .{
         .base = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, index.base.*, locals, base_ty),
@@ -816,7 +816,7 @@ pub fn emitDirectCallIndexTemps(ctx: EmitContext, index: anytype, locals: *std.S
     };
 }
 
-pub fn resultTryOperand(expr: ast.Expr) ?ast.Expr {
+pub fn resultTryOperand(expr: ast_bridge.Expr) ?ast_bridge.Expr {
     return switch (expr.kind) {
         .try_expr => |inner| inner.operand.*,
         .grouped => |inner| resultTryOperand(inner.*),
@@ -824,15 +824,15 @@ pub fn resultTryOperand(expr: ast.Expr) ?ast.Expr {
     };
 }
 
-pub fn exprHasTryReplacement(expr: ast.Expr, replacements: []const TryReplacement) bool {
+pub fn exprHasTryReplacement(expr: ast_bridge.Expr, replacements: []const TryReplacement) bool {
     return exprHasReplacement(TryReplacement, expr, replacements);
 }
 
-pub fn exprHasMmioReadReplacement(expr: ast.Expr, replacements: []const MmioReadReplacement) bool {
+pub fn exprHasMmioReadReplacement(expr: ast_bridge.Expr, replacements: []const MmioReadReplacement) bool {
     return exprHasReplacement(MmioReadReplacement, expr, replacements);
 }
 
-fn exprHasReplacement(comptime Replacement: type, expr: ast.Expr, replacements: []const Replacement) bool {
+fn exprHasReplacement(comptime Replacement: type, expr: ast_bridge.Expr, replacements: []const Replacement) bool {
     if (replacementForSpan(Replacement, expr.span, replacements) != null) return true;
     return switch (expr.kind) {
         .grouped, .address_of, .deref => |inner| exprHasReplacement(Replacement, inner.*, replacements),
@@ -850,22 +850,22 @@ fn exprHasReplacement(comptime Replacement: type, expr: ast.Expr, replacements: 
     };
 }
 
-pub fn tryReplacementForSpan(span: ast.Span, replacements: []const TryReplacement) ?[]const u8 {
+pub fn tryReplacementForSpan(span: ast_bridge.Span, replacements: []const TryReplacement) ?[]const u8 {
     return if (replacementForSpan(TryReplacement, span, replacements)) |replacement| replacement.temp_name else null;
 }
 
-pub fn mmioReadReplacementForSpan(span: ast.Span, replacements: []const MmioReadReplacement) ?MmioReadReplacement {
+pub fn mmioReadReplacementForSpan(span: ast_bridge.Span, replacements: []const MmioReadReplacement) ?MmioReadReplacement {
     return replacementForSpan(MmioReadReplacement, span, replacements);
 }
 
-fn replacementForSpan(comptime Replacement: type, span: ast.Span, replacements: []const Replacement) ?Replacement {
+fn replacementForSpan(comptime Replacement: type, span: ast_bridge.Span, replacements: []const Replacement) ?Replacement {
     for (replacements) |replacement| {
         if (mir_source_bridge.replacementSourceMatchesSpan(replacement.source, span)) return replacement;
     }
     return null;
 }
 
-pub fn mmioReadReplacementValueTypeForExpr(expr: ast.Expr, replacements: []const MmioReadReplacement) ?[]const u8 {
+pub fn mmioReadReplacementValueTypeForExpr(expr: ast_bridge.Expr, replacements: []const MmioReadReplacement) ?[]const u8 {
     return switch (expr.kind) {
         .grouped => |inner| mmioReadReplacementValueTypeForExpr(inner.*, replacements),
         else => if (mmioReadReplacementForSpan(expr.span, replacements)) |replacement| replacement.source_type_name else null,

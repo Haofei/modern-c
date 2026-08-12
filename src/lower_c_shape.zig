@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const eval = @import("eval.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -24,7 +24,7 @@ const intLiteralText = lower_c_expr.intLiteralText;
 const typeName = type_bridge.typeName;
 const widthBits = lower_c_op.widthBits;
 
-pub fn globalInfoFromType(ty: ast.TypeExpr) GlobalInfo {
+pub fn globalInfoFromType(ty: ast_bridge.TypeExpr) GlobalInfo {
     const name = typeName(ty) orelse "unknown";
     if (globalArrayElementType(ty)) |element_ty| {
         const element_name = typeName(element_ty) orelse "unknown";
@@ -58,7 +58,7 @@ pub fn globalInfoFromType(ty: ast.TypeExpr) GlobalInfo {
     };
 }
 
-pub fn globalArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn globalArrayElementType(ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     return switch (ty.kind) {
         .array => |node| node.child.*,
         .qualified => |node| globalArrayElementType(node.child.*),
@@ -66,7 +66,7 @@ pub fn globalArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
-pub fn globalArrayLenText(ty: ast.TypeExpr) ?[]const u8 {
+pub fn globalArrayLenText(ty: ast_bridge.TypeExpr) ?[]const u8 {
     return switch (ty.kind) {
         .array => |node| intLiteralText(node.len),
         .qualified => |node| globalArrayLenText(node.child.*),
@@ -74,7 +74,7 @@ pub fn globalArrayLenText(ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
-pub fn arrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn arrayElementType(ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     return switch (ty.kind) {
         .array => |node| node.child.*,
         .qualified => |node| arrayElementType(node.child.*),
@@ -82,7 +82,7 @@ pub fn arrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
-pub fn resolvedArrayChildType(ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn resolvedArrayChildType(ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     return switch (ty.kind) {
         .array => |node| node.child.*,
         .qualified => |node| switch (node.child.kind) {
@@ -93,7 +93,7 @@ pub fn resolvedArrayChildType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
-pub fn sliceElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn sliceElementType(ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     return switch (ty.kind) {
         .slice => |node| node.child.*,
         .qualified => |node| sliceElementType(node.child.*),
@@ -101,7 +101,7 @@ pub fn sliceElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
-pub fn isPointerLikeGlobalType(ty: ast.TypeExpr) bool {
+pub fn isPointerLikeGlobalType(ty: ast_bridge.TypeExpr) bool {
     return switch (ty.kind) {
         .name => |name| std.mem.eql(u8, name.text, "cstr"),
         .pointer, .raw_many_pointer, .slice => true,
@@ -152,7 +152,7 @@ test "race scalar helper target policy is finite and fail closed" {
     try std.testing.expect(!raceScalarHelperExists("i128"));
 }
 
-pub fn mmioFieldFromType(ty: ast.TypeExpr) ?MmioField {
+pub fn mmioFieldFromType(ty: ast_bridge.TypeExpr) ?MmioField {
     const generic = switch (ty.kind) {
         .generic => |node| node,
         else => return null,
@@ -172,8 +172,8 @@ pub fn mmioFieldFromType(ty: ast.TypeExpr) ?MmioField {
 }
 
 pub fn overlayFieldLayout(
-    ty: ast.TypeExpr,
-    const_fns: *const std.StringHashMap(ast.FnDecl),
+    ty: ast_bridge.TypeExpr,
+    const_fns: *const std.StringHashMap(ast_bridge.FnDecl),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     reflect_env: *lower_c_reflect.ReflectEnv,
 ) ?OverlayLayout {
@@ -195,7 +195,7 @@ pub fn overlayFieldLayout(
     return null;
 }
 
-pub fn resultPayloadTypeForTag(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr {
+pub fn resultPayloadTypeForTag(ty: ast_bridge.TypeExpr, tag: []const u8) ?ast_bridge.TypeExpr {
     return switch (ty.kind) {
         .generic => |node| {
             if (!std.mem.eql(u8, node.base.text, "Result") or node.args.len != 2) return null;
@@ -208,14 +208,14 @@ pub fn resultPayloadTypeForTag(ty: ast.TypeExpr, tag: []const u8) ?ast.TypeExpr 
     };
 }
 
-pub fn structFieldType(struct_decl: ast.StructDecl, field_name: []const u8) ?ast.TypeExpr {
+pub fn structFieldType(struct_decl: ast_bridge.StructDecl, field_name: []const u8) ?ast_bridge.TypeExpr {
     for (struct_decl.fields) |field| {
         if (std.mem.eql(u8, field.name.text, field_name)) return field.ty;
     }
     return null;
 }
 
-pub fn genericChildType(ty: ast.TypeExpr, base_name: []const u8) ?ast.TypeExpr {
+pub fn genericChildType(ty: ast_bridge.TypeExpr, base_name: []const u8) ?ast_bridge.TypeExpr {
     return switch (ty.kind) {
         .generic => |node| {
             if (!std.mem.eql(u8, node.base.text, base_name) or node.args.len != 1) return null;
@@ -226,7 +226,7 @@ pub fn genericChildType(ty: ast.TypeExpr, base_name: []const u8) ?ast.TypeExpr {
     };
 }
 
-pub fn atomicPayloadOfType(ty: ast.TypeExpr) ?ast.TypeExpr {
+pub fn atomicPayloadOfType(ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
     return switch (ty.kind) {
         .pointer => |node| atomicPayloadOfType(node.child.*),
         .qualified => |node| atomicPayloadOfType(node.child.*),
@@ -234,7 +234,7 @@ pub fn atomicPayloadOfType(ty: ast.TypeExpr) ?ast.TypeExpr {
     };
 }
 
-pub fn isVoidLiteralExpr(expr: ast.Expr) bool {
+pub fn isVoidLiteralExpr(expr: ast_bridge.Expr) bool {
     return switch (expr.kind) {
         .void_literal => true,
         .grouped => |inner| isVoidLiteralExpr(inner.*),
@@ -242,7 +242,7 @@ pub fn isVoidLiteralExpr(expr: ast.Expr) bool {
     };
 }
 
-pub fn cTraitIsObjectSafe(t: ast.TraitDecl) bool {
+pub fn cTraitIsObjectSafe(t: ast_bridge.TraitDecl) bool {
     for (t.methods) |m| {
         switch (m.self_mode) {
             .by_ptr, .by_mut_ptr => {},
@@ -253,7 +253,7 @@ pub fn cTraitIsObjectSafe(t: ast.TraitDecl) bool {
     return true;
 }
 
-pub fn implMethodMangled(methods: []const ast.ImplTraitMethod, name: []const u8) ?[]const u8 {
+pub fn implMethodMangled(methods: []const ast_bridge.ImplTraitMethod, name: []const u8) ?[]const u8 {
     for (methods) |m| {
         if (std.mem.eql(u8, m.name.text, name)) return m.mangled;
     }

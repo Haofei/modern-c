@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const mir = @import("mir.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
@@ -12,12 +12,12 @@ const byteViewAddressTarget = syntax_bridge.byteViewAddressTarget;
 const isIdentNamed = syntax_bridge.isIdentNamed;
 const memberCallee = syntax_bridge.memberCallee;
 
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void;
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
-pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast.TypeExpr, mutability: ast.Mutability) anyerror![]const u8;
-pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
-pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!void;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) anyerror![]const u8;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -114,7 +114,7 @@ pub fn emitMaybeUninitAssumeInitCall(ctx: Context, call: anytype, locals: ?*std.
     return true;
 }
 
-pub fn emitMaybeUninitWriteStmt(ctx: Context, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitMaybeUninitWriteStmt(ctx: Context, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = switch (expr.kind) {
         .call => |call| call,
         else => return false,
@@ -123,7 +123,7 @@ pub fn emitMaybeUninitWriteStmt(ctx: Context, expr: ast.Expr, locals: *std.Strin
     return emitMaybeUninitWriteCall(ctx, call.callee.*, call.args, locals);
 }
 
-pub fn emitMaybeUninitWriteCall(ctx: Context, callee: ast.Expr, args: []const ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitMaybeUninitWriteCall(ctx: Context, callee: ast_bridge.Expr, args: []const ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     if (args.len != 1) return false;
     const member = memberCallee(callee) orelse return false;
     if (ctx.mir_call_target_kind(ctx.emit_ctx, callee.span) != .maybe_uninit_write) return false;

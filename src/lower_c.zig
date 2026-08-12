@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const early_declaration_metadata = @import("early_declaration_metadata.zig");
@@ -11,7 +11,7 @@ const lower_c_inspect = @import("lower_c_inspect.zig");
 const lower_c_map = @import("lower_c_map.zig");
 const lower_c_runtime = @import("lower_c_runtime.zig");
 
-pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
+pub fn appendInspection(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8)) anyerror!void {
     return lower_c_inspect.appendInspection(allocator, module, out);
 }
 
@@ -63,35 +63,35 @@ fn backendEmitMap(
     ) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
-pub fn appendC(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
+pub fn appendC(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8)) anyerror!void {
     return appendCProfile(allocator, module, out, .kernel);
 }
 
 /// Emit a generated C header asserting MC's authoritative layout for the named structs.
-pub fn appendLayoutAsserts(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), struct_names: []const []const u8) anyerror!void {
+pub fn appendLayoutAsserts(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), struct_names: []const []const u8) anyerror!void {
     return lower_c_emitter.appendLayoutAsserts(allocator, module, out, struct_names);
 }
 
 /// Emit the GENERATED C struct *definitions* for the named structs (A2: single source of truth).
-pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), struct_names: []const []const u8) anyerror!void {
+pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), struct_names: []const []const u8) anyerror!void {
     return lower_c_emitter.appendStructDecls(allocator, module, out, struct_names);
 }
 
-pub fn appendCProfile(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile) anyerror!void {
+pub fn appendCProfile(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), profile: Profile) anyerror!void {
     return appendCProfileWithSourcePath(allocator, module, out, profile, null, .{}, false);
 }
 
-pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool) anyerror!void {
+pub fn appendCProfileWithSourcePath(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool) anyerror!void {
     return appendCProfileWithOptions(allocator, module, out, profile, source_path, checks, stub_asm, null);
 }
 
-fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
+fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
     var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = checks.optimize });
     defer typed_mir.deinit();
     try appendCProfileWithMir(allocator, module, &typed_mir, out, profile, source_path, checks, stub_asm, reporter);
 }
 
-pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
+pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast_bridge.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
     var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     return appendCProfileWithMirSourceSpelling(allocator, early_metadata, typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
@@ -136,7 +136,7 @@ fn appendCProfileWithMirSourceSpelling(
     );
 }
 
-pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), profile: Profile, source_path: []const u8, generated_c_path: ?[]const u8) anyerror!void {
+pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), profile: Profile, source_path: []const u8, generated_c_path: ?[]const u8) anyerror!void {
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
     try appendCProfileWithSourcePath(allocator, module, &generated_c, profile, source_path, .{}, false);

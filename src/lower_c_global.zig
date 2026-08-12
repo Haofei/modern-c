@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
@@ -19,21 +19,21 @@ const isArrayLiteralExpr = lower_c_const.isArrayLiteralExpr;
 const isStructLiteralExpr = lower_c_const.isStructLiteralExpr;
 const staticCInitializer = lower_c_const.staticCInitializer;
 
-pub const WriteLineDirectiveFn = *const fn (ctx: *anyopaque, span: ast.Span) anyerror!void;
-pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void;
-pub const ConstGlobalCValueFn = *const fn (ctx: *anyopaque, expr: ast.Expr, ty: ?ast.TypeExpr) anyerror!?[]const u8;
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, target_ty: ast.TypeExpr) anyerror!void;
-pub const EmitExprWithLocalsFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitConstGlobalInitializerFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, expr: ast.Expr) anyerror!bool;
-pub const IsAggregateGlobalTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) bool;
-pub const GlobalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!GlobalInfo;
+pub const WriteLineDirectiveFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) anyerror!void;
+pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
+pub const ConstGlobalCValueFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, ty: ?ast_bridge.TypeExpr) anyerror!?[]const u8;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void;
+pub const EmitExprWithLocalsFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitConstGlobalInitializerFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, expr: ast_bridge.Expr) anyerror!bool;
+pub const IsAggregateGlobalTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) bool;
+pub const GlobalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!GlobalInfo;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
     scratch: std.mem.Allocator,
     out: *std.ArrayList(u8),
-    static_initializers: *std.StringHashMap(ast.Expr),
+    static_initializers: *std.StringHashMap(ast_bridge.Expr),
     functions: *std.StringHashMap(FnInfo),
     emit_ctx: *anyopaque,
     write_line_directive: WriteLineDirectiveFn,
@@ -55,12 +55,12 @@ pub const ArrayAccessEmitContext = struct {
 pub const AccessContext = struct {
     scratch: std.mem.Allocator,
     globals: *const std.StringHashMap(GlobalInfo),
-    structs: *const std.StringHashMap(ast.StructDecl),
+    structs: *const std.StringHashMap(ast_bridge.StructDecl),
     emit_ctx: *anyopaque,
     global_info_from_type: GlobalInfoFromTypeFn,
 };
 
-pub fn emitGlobal(ctx: EmitContext, global: ast.GlobalDecl) !void {
+pub fn emitGlobal(ctx: EmitContext, global: ast_bridge.GlobalDecl) !void {
     try ctx.write_line_directive(ctx.emit_ctx, global.name.span);
     // `extern global NAME: T;` — a declaration only (storage lives in another unit).
     if (global.is_extern) {
@@ -180,7 +180,7 @@ pub fn appendGlobalStoreValue(allocator: std.mem.Allocator, out: *std.ArrayList(
     try appendGlobalStoreSuffix(allocator, out, target);
 }
 
-pub fn globalAssignmentTarget(ctx: AccessContext, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
+pub fn globalAssignmentTarget(ctx: AccessContext, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess {
     return switch (target.kind) {
         .ident => |ident| if (!locals.contains(ident.text))
             if (ctx.globals.get(ident.text)) |global| .{ .name = ident.text, .info = global } else null

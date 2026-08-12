@@ -6,7 +6,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
@@ -28,19 +28,19 @@ const FnInfo = lower_c_model.FnInfo;
 const GlobalAccess = lower_c_model.GlobalAccess;
 const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;
-pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp;
-pub const EmitOptionalSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp;
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
-pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, name: []const u8) anyerror!void;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void;
+pub const EmitSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp;
+pub const EmitOptionalSequencedArgTempFn = *const fn (ctx: *anyopaque, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
 pub const CIdentFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror![]const u8;
-pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!LocalInfo;
-pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
-pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
-pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
-pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?ast.TypeExpr;
+pub const LocalInfoFromTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror!LocalInfo;
+pub const GlobalAssignmentTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) ?GlobalAccess;
+pub const EmitAssignTargetFn = *const fn (ctx: *anyopaque, target: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
+pub const MirOwnedTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?ast_bridge.TypeExpr;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
@@ -55,8 +55,8 @@ pub const Context = struct {
 
 const UncheckedCallInfo = struct {
     op: []const u8,
-    left_ty: ast.TypeExpr,
-    right_ty: ast.TypeExpr,
+    left_ty: ast_bridge.TypeExpr,
+    right_ty: ast_bridge.TypeExpr,
 };
 
 fn uncheckedCallInfo(ctx: Context, call: anytype) ?UncheckedCallInfo {
@@ -142,7 +142,7 @@ pub fn emitSequencedArgList(allocator: std.mem.Allocator, out: *std.ArrayList(u8
     try out.appendSlice(allocator, ")");
 }
 
-pub fn emitSequencedCallLocalInit(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitSequencedCallLocalInit(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(initializer) orelse return false;
     if (call.args.len == 0) return false;
 
@@ -156,7 +156,7 @@ pub fn emitSequencedCallLocalInit(ctx: TempContext, functions: *const std.String
     return true;
 }
 
-pub fn emitSequencedCallExprStmt(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitSequencedCallExprStmt(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(expr) orelse return false;
     if (call.args.len == 0) return false;
 
@@ -170,7 +170,7 @@ pub fn emitSequencedCallExprStmt(ctx: TempContext, functions: *const std.StringH
     return true;
 }
 
-pub fn emitSequencedCallReturn(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitSequencedCallReturn(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(expr) orelse return false;
     if (call.args.len == 0) return false;
 
@@ -184,7 +184,7 @@ pub fn emitSequencedCallReturn(ctx: TempContext, functions: *const std.StringHas
     return true;
 }
 
-pub fn emitSequencedCallAssignmentResultTemp(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), value: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?[]const u8 {
+pub fn emitSequencedCallAssignmentResultTemp(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), value: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !?[]const u8 {
     const call = callExpr(value) orelse return null;
     if (call.args.len == 0) return null;
 
@@ -213,7 +213,7 @@ pub fn emitSequencedCallAssignmentStmt(ctx: TempContext, functions: *const std.S
     return true;
 }
 
-pub fn emitBitcastValueTemp(ctx: TempContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
+pub fn emitBitcastValueTemp(ctx: TempContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
     const call = callExpr(expr) orelse return null;
     return try emitBitcastValueTempFromCall(ctx, call, locals);
 }
@@ -231,7 +231,7 @@ pub fn emitBitcastValueTempFromCall(ctx: TempContext, call: anytype, locals: *st
     return .{ .name = result_temp, .ty = types.target };
 }
 
-pub fn emitBitcastLocalInit(ctx: TempContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitBitcastLocalInit(ctx: TempContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(initializer) orelse return false;
     const types = (try bitcastTypesForEmission(ctx, call)) orelse return false;
     const source_temp = try ctx.emit_arg_temp(ctx.emit_ctx, call.args[0], locals, types.source);
@@ -243,7 +243,7 @@ pub fn emitBitcastLocalInit(ctx: TempContext, name: []const u8, decl_ty: ast.Typ
     return true;
 }
 
-pub fn emitBitcastInferredLocalInit(ctx: TempContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitBitcastInferredLocalInit(ctx: TempContext, name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const call = callExpr(initializer) orelse return false;
     const target_ty = if (try bitcastTypesForEmission(ctx, call)) |types| types.target else return false;
     const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer.span, name, null) orelse return error.UnsupportedCEmission;
@@ -253,8 +253,8 @@ pub fn emitBitcastInferredLocalInit(ctx: TempContext, name: []const u8, initiali
 }
 
 const BitcastTypes = struct {
-    source: ast.TypeExpr,
-    target: ast.TypeExpr,
+    source: ast_bridge.TypeExpr,
+    target: ast_bridge.TypeExpr,
 };
 
 fn bitcastTypesForEmission(ctx: TempContext, call: anytype) !?BitcastTypes {
@@ -267,7 +267,7 @@ fn bitcastTypesForEmission(ctx: TempContext, call: anytype) !?BitcastTypes {
     };
 }
 
-pub fn emitBitcastReturn(ctx: TempContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !bool {
+pub fn emitBitcastReturn(ctx: TempContext, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) !bool {
     _ = return_ty;
     const temp = (try emitBitcastValueTemp(ctx, expr, locals)) orelse return false;
     try writeIndent(ctx);
@@ -295,7 +295,7 @@ pub fn externNonNullReturnInfo(functions: *const std.StringHashMap(FnInfo), call
     return fn_info;
 }
 
-pub fn emitExternNonNullCallValueTemp(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
+pub fn emitExternNonNullCallValueTemp(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
     const call = callExpr(expr) orelse return null;
     const fn_info = externNonNullReturnInfo(functions, call) orelse return null;
     const target_owner = calleeIdentName(call.callee.*) orelse return error.UnsupportedCEmission;
@@ -317,14 +317,14 @@ pub fn emitExternNonNullCallValueTemp(ctx: TempContext, functions: *const std.St
     return .{ .name = temp_name, .ty = return_ty };
 }
 
-pub fn emitExternNonNullCallLocalInit(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitExternNonNullCallLocalInit(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const temp = (try emitExternNonNullCallValueTemp(ctx, functions, initializer, locals)) orelse return false;
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "{s} {s} = {s};\n", .{ try ctx.c_type(ctx.emit_ctx, decl_ty), try ctx.c_ident(ctx.emit_ctx, name), temp.name });
     return true;
 }
 
-pub fn emitExternNonNullCallInferredLocalInit(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitExternNonNullCallInferredLocalInit(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), name: []const u8, initializer: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const temp = (try emitExternNonNullCallValueTemp(ctx, functions, initializer, locals)) orelse return false;
     const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer.span, name, null) orelse return error.UnsupportedCEmission;
     if (!std.meta.eql(inferred_ty, temp.ty)) return error.UnsupportedCEmission;
@@ -334,7 +334,7 @@ pub fn emitExternNonNullCallInferredLocalInit(ctx: TempContext, functions: *cons
     return true;
 }
 
-pub fn emitExternNonNullCallReturn(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
+pub fn emitExternNonNullCallReturn(ctx: TempContext, functions: *const std.StringHashMap(FnInfo), expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
     const temp = (try emitExternNonNullCallValueTemp(ctx, functions, expr, locals)) orelse return false;
     try writeIndent(ctx);
     try ctx.out.print(ctx.allocator, "return {s};\n", .{temp.name});
@@ -361,7 +361,7 @@ pub fn emitSequencedCallReturnValue(ctx: TempContext, call: anytype, locals: *st
     try ctx.out.appendSlice(ctx.allocator, ";\n");
 }
 
-pub fn emitSequencedCallResultTemp(ctx: TempContext, call: anytype, return_ty: ast.TypeExpr, locals: *std.StringHashMap(LocalInfo), temps: []const SequencedArgTemp) ![]const u8 {
+pub fn emitSequencedCallResultTemp(ctx: TempContext, call: anytype, return_ty: ast_bridge.TypeExpr, locals: *std.StringHashMap(LocalInfo), temps: []const SequencedArgTemp) ![]const u8 {
     const result_temp = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
     try writeIndent(ctx);
@@ -372,7 +372,7 @@ pub fn emitSequencedCallResultTemp(ctx: TempContext, call: anytype, return_ty: a
     return result_temp;
 }
 
-pub fn emitSequencedCallLocalValue(ctx: TempContext, name: []const u8, decl_ty: ast.TypeExpr, call: anytype, locals: *std.StringHashMap(LocalInfo), temps: []const SequencedArgTemp, emit_ignored_prefix: bool) !void {
+pub fn emitSequencedCallLocalValue(ctx: TempContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, call: anytype, locals: *std.StringHashMap(LocalInfo), temps: []const SequencedArgTemp, emit_ignored_prefix: bool) !void {
     try writeIndent(ctx);
     if (emit_ignored_prefix) try emitIgnoredLocalPrefix(ctx, name);
     try ctx.out.print(ctx.allocator, "{s} {s} = ", .{ try ctx.c_type(ctx.emit_ctx, decl_ty), try ctx.c_ident(ctx.emit_ctx, name) });
@@ -388,7 +388,7 @@ pub fn emitSequencedCallExprStmtValue(ctx: TempContext, call: anytype, locals: *
     try ctx.out.appendSlice(ctx.allocator, ";\n");
 }
 
-pub fn emitPlainSequencedArgTemp(ctx: TempContext, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!SequencedArgTemp {
+pub fn emitPlainSequencedArgTemp(ctx: TempContext, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!SequencedArgTemp {
     // A va_list argument materialized into a temp must be COPIED with __builtin_va_copy, not
     // `=`: on x86-64 SysV __builtin_va_list is an array type, so `T t = arg;` is ill-formed.
     // This fires for e.g. vfprintf forwarding its `ap` to vprintf. __builtin_va_copy is also
@@ -416,7 +416,7 @@ pub fn emitPlainSequencedArgTemp(ctx: TempContext, arg: ast.Expr, locals: *std.S
     return .{ .name = temp_name, .ty = target_ty };
 }
 
-pub fn emitVaStartLocalInit(ctx: LocalInitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr) !bool {
+pub fn emitVaStartLocalInit(ctx: LocalInitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr) !bool {
     const node = switch (initializer.kind) {
         .call => |call| call,
         else => return false,
@@ -434,7 +434,7 @@ pub fn emitVaStartLocalInit(ctx: LocalInitContext, name: []const u8, decl_ty: as
     return true;
 }
 
-pub fn emitVaListCopyLocalInit(ctx: LocalInitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr) !bool {
+pub fn emitVaListCopyLocalInit(ctx: LocalInitContext, name: []const u8, decl_ty: ast_bridge.TypeExpr, initializer: ast_bridge.Expr) !bool {
     if (!isVaListType(decl_ty)) return false;
     const src_ident = switch (initializer.kind) {
         .ident => |ident| ident,
@@ -448,7 +448,7 @@ pub fn emitVaListCopyLocalInit(ctx: LocalInitContext, name: []const u8, decl_ty:
     return true;
 }
 
-pub fn emitSpecialSequencedArgTemp(ctx: SpecialTempContext, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
+pub fn emitSpecialSequencedArgTemp(ctx: SpecialTempContext, arg: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast_bridge.TypeExpr) anyerror!?SequencedArgTemp {
     switch (arg.kind) {
         .address_of => if (try ctx.address(ctx.emit_ctx, arg, locals, target_ty)) |temp| return temp,
         .index => if (try ctx.index(ctx.emit_ctx, arg, locals, target_ty)) |temp| return temp,
@@ -501,14 +501,14 @@ pub fn emitNamedDiscardCall(ctx: Context, call: anytype, locals: ?*std.StringHas
     return true;
 }
 
-fn discardArgumentTypeForEmission(ctx: Context, argument: ast.Expr) !ast.TypeExpr {
+fn discardArgumentTypeForEmission(ctx: Context, argument: ast_bridge.Expr) !ast_bridge.TypeExpr {
     return ctx.mir_target_type(ctx.emit_ctx, .discard_argument, argument.span) orelse error.UnsupportedCEmission;
 }
 
 const RawAddressTypes = struct {
-    address: ast.TypeExpr,
-    payload: ast.TypeExpr,
-    result: ast.TypeExpr,
+    address: ast_bridge.TypeExpr,
+    payload: ast_bridge.TypeExpr,
+    result: ast_bridge.TypeExpr,
 };
 
 fn rawAddressTypesForEmission(ctx: Context, call: anytype) !RawAddressTypes {
@@ -584,9 +584,9 @@ pub fn emitVaCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Local
 }
 
 const VaCallTypes = struct {
-    cursor: ast.TypeExpr,
-    payload: ?ast.TypeExpr,
-    result: ast.TypeExpr,
+    cursor: ast_bridge.TypeExpr,
+    payload: ?ast_bridge.TypeExpr,
+    result: ast_bridge.TypeExpr,
 };
 
 fn vaCallTypesForEmission(ctx: Context, call: anytype, needs_payload: bool) !VaCallTypes {
@@ -612,7 +612,7 @@ pub fn emitPhysCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(Loc
     return true;
 }
 
-fn physResultTypeForEmission(ctx: Context, call: anytype) !ast.TypeExpr {
+fn physResultTypeForEmission(ctx: Context, call: anytype) !ast_bridge.TypeExpr {
     return ctx.mir_target_type(ctx.emit_ctx, .phys_result, call.callee.*.span) orelse error.UnsupportedCEmission;
 }
 
@@ -637,8 +637,8 @@ pub fn emitAssumeNoaliasCall(ctx: Context, call: anytype, locals: ?*std.StringHa
 }
 
 const SemanticEscapeTypes = struct {
-    source: ast.TypeExpr,
-    result: ast.TypeExpr,
+    source: ast_bridge.TypeExpr,
+    result: ast_bridge.TypeExpr,
 };
 
 fn semanticEscapeTypesForEmission(ctx: Context, call: anytype, source_kind: mir.TargetTypeKind, result_kind: mir.TargetTypeKind) !SemanticEscapeTypes {

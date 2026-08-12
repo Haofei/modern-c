@@ -6,35 +6,35 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const type_bridge = @import("type_bridge.zig");
 
-pub const ArrayLenTextFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8;
+pub const ArrayLenTextFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror![]const u8;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
-    structs: *const std.StringHashMap(ast.StructDecl),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
+    structs: *const std.StringHashMap(ast_bridge.StructDecl),
     len_ctx: *anyopaque,
     array_len_text: ArrayLenTextFn,
 };
 
-pub fn sliceTypeName(ctx: Context, child: ast.TypeExpr, mutability: ast.Mutability) ![]const u8 {
+pub fn sliceTypeName(ctx: Context, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) ![]const u8 {
     const prefix = if (mutability == .mut) "mc_slice_mut_" else "mc_slice_const_";
     return std.fmt.allocPrint(ctx.allocator, "{s}{s}", .{ prefix, try typeSuffix(ctx, child) });
 }
 
-pub fn arrayTypeName(ctx: Context, child: ast.TypeExpr, len_expr: ast.Expr) ![]const u8 {
+pub fn arrayTypeName(ctx: Context, child: ast_bridge.TypeExpr, len_expr: ast_bridge.Expr) ![]const u8 {
     const len = try ctx.array_len_text(ctx.len_ctx, len_expr);
     return std.fmt.allocPrint(ctx.allocator, "mc_array_{s}_{s}", .{ try typeSuffix(ctx, child), len });
 }
 
-pub fn resultTypeName(ctx: Context, ok_ty: ast.TypeExpr, err_ty: ast.TypeExpr) ![]const u8 {
+pub fn resultTypeName(ctx: Context, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) ![]const u8 {
     return std.fmt.allocPrint(ctx.allocator, "mc_result_{s}_{s}", .{ try typeSuffix(ctx, ok_ty), try typeSuffix(ctx, err_ty) });
 }
 
 // Value optional `?T` (tagged repr `{ present, value }`) — one typedef per payload type.
-pub fn optTypeName(ctx: Context, payload: ast.TypeExpr) ![]const u8 {
+pub fn optTypeName(ctx: Context, payload: ast_bridge.TypeExpr) ![]const u8 {
     return std.fmt.allocPrint(ctx.allocator, "mc_opt_{s}", .{try typeSuffix(ctx, payload)});
 }
 
@@ -46,11 +46,11 @@ pub fn closureTypeName(ctx: Context, node: anytype) ![]const u8 {
     return closureTypeNameForTypes(ctx, node.ret.*, node.params);
 }
 
-pub fn closureTypeNameForTypes(ctx: Context, ret_ty: ast.TypeExpr, params: []const ast.TypeExpr) ![]const u8 {
+pub fn closureTypeNameForTypes(ctx: Context, ret_ty: ast_bridge.TypeExpr, params: []const ast_bridge.TypeExpr) ![]const u8 {
     return signatureTypeName(ctx, "mc_closure", ret_ty, params);
 }
 
-pub fn closureTypeNameForParams(ctx: Context, ret_ty: ast.TypeExpr, params: []const ast.Param) ![]const u8 {
+pub fn closureTypeNameForParams(ctx: Context, ret_ty: ast_bridge.TypeExpr, params: []const ast_bridge.Param) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
     try buf.appendSlice(ctx.allocator, "mc_closure");
     try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, ret_ty));
@@ -60,7 +60,7 @@ pub fn closureTypeNameForParams(ctx: Context, ret_ty: ast.TypeExpr, params: []co
     return buf.toOwnedSlice(ctx.allocator);
 }
 
-fn signatureTypeName(ctx: Context, prefix: []const u8, ret_ty: ast.TypeExpr, params: []const ast.TypeExpr) ![]const u8 {
+fn signatureTypeName(ctx: Context, prefix: []const u8, ret_ty: ast_bridge.TypeExpr, params: []const ast_bridge.TypeExpr) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
     try buf.appendSlice(ctx.allocator, prefix);
     try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, ret_ty));
@@ -70,7 +70,7 @@ fn signatureTypeName(ctx: Context, prefix: []const u8, ret_ty: ast.TypeExpr, par
     return buf.toOwnedSlice(ctx.allocator);
 }
 
-pub fn typeSuffix(ctx: Context, ty: ast.TypeExpr) ![]const u8 {
+pub fn typeSuffix(ctx: Context, ty: ast_bridge.TypeExpr) ![]const u8 {
     const resolved_ty = type_bridge.resolveAliasType(ctx.type_aliases, ty);
     return switch (resolved_ty.kind) {
         .name => |name| if (ctx.structs.contains(name.text))
@@ -121,14 +121,14 @@ fn fnPtrSuffix(ctx: Context, node: anytype) ![]const u8 {
     return buf.toOwnedSlice(ctx.allocator);
 }
 
-fn framedChild(ctx: Context, prefix: []const u8, child: ast.TypeExpr) ![]const u8 {
+fn framedChild(ctx: Context, prefix: []const u8, child: ast_bridge.TypeExpr) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
     try buf.appendSlice(ctx.allocator, prefix);
     try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, child));
     return buf.toOwnedSlice(ctx.allocator);
 }
 
-fn framedUnary(ctx: Context, prefix: []const u8, mutability: ast.Mutability, child: ast.TypeExpr) ![]const u8 {
+fn framedUnary(ctx: Context, prefix: []const u8, mutability: ast_bridge.Mutability, child: ast_bridge.TypeExpr) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
     try buf.print(ctx.allocator, "{s}_{s}", .{ prefix, mutabilityCode(mutability) });
     try appendFramed(ctx.allocator, &buf, try typeSuffix(ctx, child));
@@ -139,7 +139,7 @@ fn appendFramed(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), value: []
     try buf.print(allocator, "_{d}_{s}", .{ value.len, value });
 }
 
-fn mutabilityCode(mutability: ast.Mutability) []const u8 {
+fn mutabilityCode(mutability: ast_bridge.Mutability) []const u8 {
     return switch (mutability) {
         .none => "n",
         .mut => "m",

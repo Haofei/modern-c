@@ -6,7 +6,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const mir = @import("mir.zig");
@@ -17,11 +17,11 @@ const memberCallee = syntax_bridge.memberCallee;
 const typeName = type_bridge.typeName;
 const LocalInfo = lower_c_model.LocalInfo;
 
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;
-pub const ExprIsPointerFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool;
-pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
-pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast_bridge.TypeExpr) anyerror!void;
+pub const ExprIsPointerFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) bool;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
@@ -34,14 +34,14 @@ pub const EmitContext = struct {
     mir_target_type: MirTargetTypeFn,
 };
 
-pub fn orderingArg(args: []const ast.Expr) []const u8 {
+pub fn orderingArg(args: []const ast_bridge.Expr) []const u8 {
     for (args) |arg| {
         if (arg.kind == .enum_literal) return arg.kind.enum_literal.text;
     }
     return "none";
 }
 
-pub fn atomicOrderingArg(args: []const ast.Expr, index: usize) []const u8 {
+pub fn atomicOrderingArg(args: []const ast_bridge.Expr, index: usize) []const u8 {
     if (index >= args.len) return "none";
     return switch (args[index].kind) {
         .enum_literal => |literal| literal.text,
@@ -49,7 +49,7 @@ pub fn atomicOrderingArg(args: []const ast.Expr, index: usize) []const u8 {
     };
 }
 
-pub fn asmHasMemoryClobber(asm_stmt: ast.AsmStmt) bool {
+pub fn asmHasMemoryClobber(asm_stmt: ast_bridge.AsmStmt) bool {
     if (asm_stmt.clobbers.len == 0) return true;
     for (asm_stmt.clobbers) |clobber| {
         if (std.mem.indexOf(u8, clobber, "memory") != null) return true;
@@ -95,7 +95,7 @@ pub fn isAtomicIntegerPayload(name: []const u8) bool {
         std.mem.eql(u8, name, "isize");
 }
 
-pub fn emitAtomicInitCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), payload_ty: ast.TypeExpr) !bool {
+pub fn emitAtomicInitCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), payload_ty: ast_bridge.TypeExpr) !bool {
     if (call.type_args.len != 0 or call.args.len != 1) return false;
     try ctx.emit_expr_with_target(ctx.emit_ctx, call.args[0], locals, payload_ty);
     return true;
@@ -150,7 +150,7 @@ pub fn emitAtomicCall(ctx: EmitContext, call: anytype, locals: ?*std.StringHashM
     return false;
 }
 
-pub fn atomicResultPayload(ctx: EmitContext, call: anytype) ?ast.TypeExpr {
+pub fn atomicResultPayload(ctx: EmitContext, call: anytype) ?ast_bridge.TypeExpr {
     const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
     const op = switch (kind) {
         .atomic_load => "load",
@@ -170,7 +170,7 @@ pub fn atomicResultPayload(ctx: EmitContext, call: anytype) ?ast.TypeExpr {
     return payload_ty;
 }
 
-fn emitAtomicAddr(ctx: EmitContext, base: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) !void {
+fn emitAtomicAddr(ctx: EmitContext, base: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) !void {
     if (ctx.expr_is_pointer(ctx.emit_ctx, base, locals)) {
         try ctx.emit_expr(ctx.emit_ctx, base, locals);
     } else {
@@ -179,7 +179,7 @@ fn emitAtomicAddr(ctx: EmitContext, base: ast.Expr, locals: ?*std.StringHashMap(
     }
 }
 
-fn emitAtomicBaseAddr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
+fn emitAtomicBaseAddr(ctx: EmitContext, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void {
     switch (expr.kind) {
         .ident => |ident| try ctx.out.appendSlice(ctx.allocator, ident.text),
         .grouped => |inner| try emitAtomicBaseAddr(ctx, inner.*, locals),
@@ -192,7 +192,7 @@ fn emitAtomicBaseAddr(ctx: EmitContext, expr: ast.Expr, locals: ?*std.StringHash
     }
 }
 
-pub fn fenceHelperForCall(callee: ast.Expr) ?[]const u8 {
+pub fn fenceHelperForCall(callee: ast_bridge.Expr) ?[]const u8 {
     return switch (callee.kind) {
         .member => |node| blk: {
             if (!isIdentNamed(node.base.*, "fence")) break :blk null;

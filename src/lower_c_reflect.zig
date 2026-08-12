@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const builtin_syntax = @import("builtin_syntax.zig");
 const eval = @import("eval.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
@@ -28,27 +28,27 @@ const simpleNameType = type_bridge.simpleNameType;
 const typeName = type_bridge.typeName;
 
 pub const ReflectEnv = struct {
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
-    structs: *const std.StringHashMap(ast.StructDecl),
-    enums: *const std.StringHashMap(ast.EnumDecl),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
+    structs: *const std.StringHashMap(ast_bridge.StructDecl),
+    enums: *const std.StringHashMap(ast_bridge.EnumDecl),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
-    tagged_unions: *const std.StringHashMap(ast.UnionDecl),
-    const_fns: *const std.StringHashMap(ast.FnDecl),
+    tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
+    const_fns: *const std.StringHashMap(ast_bridge.FnDecl),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
 };
 
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
-pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
-pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
 
 pub const EmitContext = struct {
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
-    enums: *const std.StringHashMap(ast.EnumDecl),
+    enums: *const std.StringHashMap(ast_bridge.EnumDecl),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
-    tagged_unions: *const std.StringHashMap(ast.UnionDecl),
+    tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
     mmio_structs: *const std.StringHashMap(MmioStruct),
     type_ctx: *anyopaque,
     c_type: CTypeFn,
@@ -56,7 +56,7 @@ pub const EmitContext = struct {
     mir_target_type: MirTargetTypeFn,
 };
 
-pub fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast.Expr) ?i128 {
+pub fn comptimeReflectThunk(ctx: ?*anyopaque, call: ast_bridge.Expr) ?i128 {
     const env: *const ReflectEnv = @ptrCast(@alignCast(ctx orelse return null));
     return comptimeReflect(env, call);
 }
@@ -127,7 +127,7 @@ pub fn emitReflectionCall(ctx: EmitContext, call: anytype) !bool {
     }
 }
 
-fn reflectionCTypeFor(ctx: EmitContext, ty: ast.TypeExpr) ![]const u8 {
+fn reflectionCTypeFor(ctx: EmitContext, ty: ast_bridge.TypeExpr) ![]const u8 {
     if (typeName(ty)) |name| {
         if (ctx.mmio_structs.contains(name)) return name;
     }
@@ -138,7 +138,7 @@ fn reflectionCTypeFor(ctx: EmitContext, ty: ast.TypeExpr) ![]const u8 {
     return ctx.c_type(ctx.type_ctx, ty);
 }
 
-pub fn comptimeReflect(env: *const ReflectEnv, call: ast.Expr) ?i128 {
+pub fn comptimeReflect(env: *const ReflectEnv, call: ast_bridge.Expr) ?i128 {
     const node = switch (call.kind) {
         .call => |n| n,
         else => return null,
@@ -155,7 +155,7 @@ pub fn comptimeReflect(env: *const ReflectEnv, call: ast.Expr) ?i128 {
     };
 }
 
-pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
+pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
     if (depth > 32) return null;
     switch (ty.kind) {
         .name => |name| {
@@ -193,7 +193,7 @@ pub fn comptimeSizeOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i
     }
 }
 
-pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
+pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
     if (depth > 32) return null;
     switch (ty.kind) {
         .name => |name| {
@@ -225,7 +225,7 @@ pub fn comptimeAlignOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?
     }
 }
 
-fn comptimeNullableLayout(env: *const ReflectEnv, child: ast.TypeExpr, depth: usize) ?type_layout.ComptimeOptionalLayout {
+fn comptimeNullableLayout(env: *const ReflectEnv, child: ast_bridge.TypeExpr, depth: usize) ?type_layout.ComptimeOptionalLayout {
     const resolved = resolveReflectionAlias(env, child, 0);
     return switch (resolved.kind) {
         .pointer, .raw_many_pointer, .fn_pointer => .{ .size = 8, .alignment = 8, .payload_offset = 0 },
@@ -239,7 +239,7 @@ fn comptimeNullableLayout(env: *const ReflectEnv, child: ast.TypeExpr, depth: us
     };
 }
 
-fn resolveReflectionAlias(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ast.TypeExpr {
+fn resolveReflectionAlias(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: usize) ast_bridge.TypeExpr {
     if (depth > 64) return ty;
     return switch (ty.kind) {
         .name => |name| if (env.type_aliases.get(name.text)) |target| resolveReflectionAlias(env, target, depth + 1) else ty,
@@ -248,21 +248,21 @@ fn resolveReflectionAlias(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize
     };
 }
 
-pub fn comptimeStructSize(env: *const ReflectEnv, struct_decl: ast.StructDecl, depth: usize) ?i128 {
+pub fn comptimeStructSize(env: *const ReflectEnv, struct_decl: ast_bridge.StructDecl, depth: usize) ?i128 {
     const layout = comptimeStructLayout(env, struct_decl, null, depth + 1) orelse return null;
     return layout.size;
 }
 
-pub fn comptimeStructAlign(env: *const ReflectEnv, struct_decl: ast.StructDecl, depth: usize) ?i128 {
+pub fn comptimeStructAlign(env: *const ReflectEnv, struct_decl: ast_bridge.StructDecl, depth: usize) ?i128 {
     const layout = comptimeStructLayout(env, struct_decl, null, depth + 1) orelse return null;
     return layout.alignment;
 }
 
-pub fn comptimeStructLayout(env: *const ReflectEnv, struct_decl: ast.StructDecl, wanted_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
+pub fn comptimeStructLayout(env: *const ReflectEnv, struct_decl: ast_bridge.StructDecl, wanted_field: ?[]const u8, depth: usize) ?ComptimeStructLayout {
     return type_layout.comptimeStructLayout(*const ReflectEnv, env, struct_decl, wanted_field, depth, comptimeSizeOf, comptimeAlignOf);
 }
 
-pub fn comptimeFieldOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
+pub fn comptimeFieldOffset(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, field: []const u8, depth: usize) ?i128 {
     if (depth > 32) return null;
     const name = typeName(ty) orelse return null;
     if (env.type_aliases.get(name)) |aliased| return comptimeFieldOffset(env, aliased, field, depth + 1);
@@ -276,7 +276,7 @@ pub fn comptimeFieldOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []co
     return null;
 }
 
-pub fn comptimeBitOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []const u8, depth: usize) ?i128 {
+pub fn comptimeBitOffset(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, field: []const u8, depth: usize) ?i128 {
     if (depth > 32) return null;
     const name = typeName(ty) orelse return null;
     if (env.type_aliases.get(name)) |aliased| return comptimeBitOffset(env, aliased, field, depth + 1);
@@ -288,7 +288,7 @@ pub fn comptimeBitOffset(env: *const ReflectEnv, ty: ast.TypeExpr, field: []cons
     return comptimeBitOffsetFromBytes(byte_offset);
 }
 
-pub fn comptimeReprOf(env: *const ReflectEnv, ty: ast.TypeExpr, depth: usize) ?i128 {
+pub fn comptimeReprOf(env: *const ReflectEnv, ty: ast_bridge.TypeExpr, depth: usize) ?i128 {
     if (depth > 32) return null;
     switch (ty.kind) {
         .name => |name| {

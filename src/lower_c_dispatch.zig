@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
@@ -16,12 +16,12 @@ const cTraitIsObjectSafe = lower_c_shape.cTraitIsObjectSafe;
 const implMethodMangled = lower_c_shape.implMethodMangled;
 const memberCallee = syntax_bridge.memberCallee;
 
-pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror![]const u8;
+pub const CTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) anyerror![]const u8;
 pub const DynTypeNameFn = *const fn (ctx: *anyopaque, trait_name: []const u8) anyerror![]const u8;
-pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
-pub const IsVoidTypeFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) bool;
-pub const RequireDynDispatchArgumentFn = *const fn (ctx: *anyopaque, span: ast.Span, trait_name: []const u8, method_index: usize, argument_index: usize) anyerror!void;
-pub const RequireDynDispatchResultFn = *const fn (ctx: *anyopaque, span: ast.Span, trait_name: []const u8, method_index: usize) anyerror!void;
+pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
+pub const IsVoidTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) bool;
+pub const RequireDynDispatchArgumentFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span, trait_name: []const u8, method_index: usize, argument_index: usize) anyerror!void;
+pub const RequireDynDispatchResultFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span, trait_name: []const u8, method_index: usize) anyerror!void;
 
 const LocalInfo = lower_c_model.LocalInfo;
 
@@ -42,7 +42,7 @@ pub const Context = struct {
 pub const BindEmitPlan = struct {
     fname: []const u8,
     info: FnInfo,
-    ret_ty: ast.TypeExpr,
+    ret_ty: ast_bridge.TypeExpr,
     cname: []const u8,
 };
 
@@ -124,7 +124,7 @@ pub fn emitDynDispatch(ctx: Context, node: anytype, trait_name: []const u8, meth
     try ctx.out.appendSlice(ctx.allocator, "); })");
 }
 
-pub fn emitClosureCall(ctx: Context, node: anytype, clos: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !void {
+pub fn emitClosureCall(ctx: Context, node: anytype, clos: ast_bridge.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !void {
     const temp_name = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
     ctx.temp_index.* += 1;
     try ctx.out.print(ctx.allocator, "({{ {s} {s} = ", .{ try ctx.c_type(ctx.emit_ctx, clos), temp_name });
@@ -144,8 +144,8 @@ pub fn emitClosureCall(ctx: Context, node: anytype, clos: ast.TypeExpr, locals: 
 // concrete `*Type` self and the erased `void*` slot are ABI-identical).
 pub fn emitVtables(
     ctx: Context,
-    impl_methods: *std.StringHashMap([]const ast.ImplTraitMethod),
-    trait_decls: *std.StringHashMap(ast.TraitDecl),
+    impl_methods: *std.StringHashMap([]const ast_bridge.ImplTraitMethod),
+    trait_decls: *std.StringHashMap(ast_bridge.TraitDecl),
 ) !void {
     var it = impl_methods.iterator();
     while (it.next()) |entry| {
@@ -157,8 +157,8 @@ pub fn emitVtables(
 fn emitVtable(
     ctx: Context,
     key: []const u8,
-    methods: []const ast.ImplTraitMethod,
-    trait_decls: *std.StringHashMap(ast.TraitDecl),
+    methods: []const ast_bridge.ImplTraitMethod,
+    trait_decls: *std.StringHashMap(ast_bridge.TraitDecl),
 ) !void {
     const sep = std.mem.indexOfScalar(u8, key, 0) orelse return;
     const trait_name = key[0..sep];
@@ -170,7 +170,7 @@ fn emitVtable(
     try ctx.out.appendSlice(ctx.allocator, " };\n");
 }
 
-fn emitVtableSlots(ctx: Context, trait: ast.TraitDecl, methods: []const ast.ImplTraitMethod) !void {
+fn emitVtableSlots(ctx: Context, trait: ast_bridge.TraitDecl, methods: []const ast_bridge.ImplTraitMethod) !void {
     for (trait.methods, 0..) |method, i| {
         if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
         const mangled = implMethodMangled(methods, method.name.text) orelse return error.UnsupportedCEmission;
@@ -181,8 +181,8 @@ fn emitVtableSlots(ctx: Context, trait: ast.TraitDecl, methods: []const ast.Impl
 }
 
 // The cast type for a vtable slot: `RET (*)(void *, P...)`.
-fn appendVtableSlotCastType(ctx: Context, trait: ast.TraitDecl, method: ast.TraitMethodSig) !void {
-    const ret_ty: ast.TypeExpr = method.return_type orelse ast.TypeExpr{ .span = trait.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.name.span } } };
+fn appendVtableSlotCastType(ctx: Context, trait: ast_bridge.TraitDecl, method: ast_bridge.TraitMethodSig) !void {
+    const ret_ty: ast_bridge.TypeExpr = method.return_type orelse ast_bridge.TypeExpr{ .span = trait.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.name.span } } };
     try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, ret_ty));
     try ctx.out.appendSlice(ctx.allocator, " (*)(void *");
     for (method.params[1..]) |param| {

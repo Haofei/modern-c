@@ -7,7 +7,7 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
+const ast_bridge = @import("ast_bridge.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
@@ -33,19 +33,19 @@ const calleeIdentName = syntax_bridge.calleeIdentName;
 const typeName = type_bridge.typeName;
 const widthBits = lower_c_op.widthBits;
 
-pub const CTypeForFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, style: StructTypeStyle) anyerror![]const u8;
-pub const ArrayLenTextForExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8;
-pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
-pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast.Span) ?ast.TypeExpr;
+pub const CTypeForFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, style: StructTypeStyle) anyerror![]const u8;
+pub const ArrayLenTextForExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror![]const u8;
+pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) ?mir.CallTargetKind;
+pub const MirTargetTypeFn = *const fn (ctx: *anyopaque, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?ast_bridge.TypeExpr;
 
 pub const Context = struct {
-    type_aliases: *const std.StringHashMap(ast.TypeExpr),
+    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
     functions: *const std.StringHashMap(FnInfo),
-    structs: *const std.StringHashMap(ast.StructDecl),
+    structs: *const std.StringHashMap(ast_bridge.StructDecl),
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
-    tagged_unions: *const std.StringHashMap(ast.UnionDecl),
-    enums: *const std.StringHashMap(ast.EnumDecl),
+    tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
+    enums: *const std.StringHashMap(ast_bridge.EnumDecl),
     emit_ctx: *anyopaque,
     c_type_for: CTypeForFn,
     array_len_text_for_expr: ArrayLenTextForExprFn,
@@ -66,7 +66,7 @@ pub const AggregateGlobalCShape = enum {
     declared_aggregate,
 };
 
-pub fn localInfoFromType(ctx: Context, ty: ast.TypeExpr) anyerror!LocalInfo {
+pub fn localInfoFromType(ctx: Context, ty: ast_bridge.TypeExpr) anyerror!LocalInfo {
     const resolved_ty = resolveAliasType(ctx, ty);
     const source_type_name = typeName(resolved_ty);
     const mmio_pointee = mmioPointee(resolved_ty);
@@ -114,7 +114,7 @@ pub fn localInfoFromType(ctx: Context, ty: ast.TypeExpr) anyerror!LocalInfo {
     };
 }
 
-pub fn globalInfoFromType(ctx: Context, ty: ast.TypeExpr) anyerror!GlobalInfo {
+pub fn globalInfoFromType(ctx: Context, ty: ast_bridge.TypeExpr) anyerror!GlobalInfo {
     const resolved_ty = resolveAliasType(ctx, ty);
     const name = typeName(resolved_ty) orelse "unknown";
     const c_type = try cTypeFor(ctx, resolved_ty);
@@ -227,7 +227,7 @@ pub fn globalInfoFromType(ctx: Context, ty: ast.TypeExpr) anyerror!GlobalInfo {
     };
 }
 
-pub fn globalElementInfoFromType(ctx: Context, ty: ast.TypeExpr) anyerror!GlobalElementInfo {
+pub fn globalElementInfoFromType(ctx: Context, ty: ast_bridge.TypeExpr) anyerror!GlobalElementInfo {
     const resolved_ty = resolveAliasType(ctx, ty);
     const name = typeName(resolved_ty) orelse "unknown";
     const c_type = try cTypeFor(ctx, resolved_ty);
@@ -275,7 +275,7 @@ pub fn globalElementInfoFromType(ctx: Context, ty: ast.TypeExpr) anyerror!Global
     };
 }
 
-pub fn nullableInnerCType(ctx: Context, ty: ast.TypeExpr) anyerror!?[]const u8 {
+pub fn nullableInnerCType(ctx: Context, ty: ast_bridge.TypeExpr) anyerror!?[]const u8 {
     const resolved_ty = resolveAliasType(ctx, ty);
     return switch (resolved_ty.kind) {
         .pointer, .raw_many_pointer, .dyn_trait => try cTypeFor(ctx, ty),
@@ -287,7 +287,7 @@ pub fn nullableInnerCType(ctx: Context, ty: ast.TypeExpr) anyerror!?[]const u8 {
     };
 }
 
-pub fn nullableInnerCTypeForExpr(ctx: Context, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?[]const u8 {
+pub fn nullableInnerCTypeForExpr(ctx: Context, expr: ast_bridge.Expr, locals: *std.StringHashMap(LocalInfo)) anyerror!?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| blk: {
             const info = locals.get(ident.text) orelse break :blk null;
@@ -308,7 +308,7 @@ pub fn nullableInnerCTypeForExpr(ctx: Context, expr: ast.Expr, locals: *std.Stri
     };
 }
 
-pub fn nullableInnerCTypeForType(ctx: Context, ty: ast.TypeExpr) anyerror!?[]const u8 {
+pub fn nullableInnerCTypeForType(ctx: Context, ty: ast_bridge.TypeExpr) anyerror!?[]const u8 {
     const resolved_ty = resolveAliasType(ctx, ty);
     return switch (resolved_ty.kind) {
         .nullable => |child| try nullableInnerCType(ctx, child.*),
@@ -317,11 +317,11 @@ pub fn nullableInnerCTypeForType(ctx: Context, ty: ast.TypeExpr) anyerror!?[]con
     };
 }
 
-pub fn isAggregateGlobalType(ctx: Context, ty: ast.TypeExpr) bool {
+pub fn isAggregateGlobalType(ctx: Context, ty: ast_bridge.TypeExpr) bool {
     return aggregateGlobalCShape(ctx, ty) != null;
 }
 
-pub fn aggregateGlobalCShape(ctx: Context, ty: ast.TypeExpr) ?AggregateGlobalCShape {
+pub fn aggregateGlobalCShape(ctx: Context, ty: ast_bridge.TypeExpr) ?AggregateGlobalCShape {
     const resolved_ty = resolveAliasType(ctx, ty);
     return switch (resolved_ty.kind) {
         .array => .array,
@@ -345,7 +345,7 @@ pub fn aggregateGlobalCShape(ctx: Context, ty: ast.TypeExpr) ?AggregateGlobalCSh
     };
 }
 
-pub fn underlyingIntTypeName(ctx: Context, ty: ast.TypeExpr) ?[]const u8 {
+pub fn underlyingIntTypeName(ctx: Context, ty: ast_bridge.TypeExpr) ?[]const u8 {
     const resolved = resolveAliasType(ctx, ty);
     return switch (resolved.kind) {
         .name => |n| if (intTypeRange(n.text) != null) n.text else null,
@@ -359,7 +359,7 @@ pub fn underlyingIntTypeName(ctx: Context, ty: ast.TypeExpr) ?[]const u8 {
     };
 }
 
-fn arrayLenText(ctx: Context, ty: ast.TypeExpr) anyerror!?[]const u8 {
+fn arrayLenText(ctx: Context, ty: ast_bridge.TypeExpr) anyerror!?[]const u8 {
     return switch (ty.kind) {
         .array => |node| try ctx.array_len_text_for_expr(ctx.emit_ctx, node.len),
         .qualified => |node| try arrayLenText(ctx, node.child.*),
@@ -367,10 +367,10 @@ fn arrayLenText(ctx: Context, ty: ast.TypeExpr) anyerror!?[]const u8 {
     };
 }
 
-fn cTypeFor(ctx: Context, ty: ast.TypeExpr) anyerror![]const u8 {
+fn cTypeFor(ctx: Context, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
     return try ctx.c_type_for(ctx.emit_ctx, ty, .typedef_name);
 }
 
-fn resolveAliasType(ctx: Context, ty: ast.TypeExpr) ast.TypeExpr {
+fn resolveAliasType(ctx: Context, ty: ast_bridge.TypeExpr) ast_bridge.TypeExpr {
     return type_bridge.resolveAliasType(ctx.type_aliases, ty);
 }
