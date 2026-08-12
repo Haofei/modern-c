@@ -74,10 +74,6 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "pub const SourceMapRowsView = legacy_backend_syntax.SourceMapRowsView"): 0,
     ("src/backend.zig", "pub const LegacyDeclarationSlice = struct"): 0,
     ("src/backend.zig", "pub const SourceMapRowsView = struct"): 0,
-    ("src/early_declaration_metadata.zig", "[]const ast.Decl"): 0,
-    ("src/early_declaration_metadata.zig", "@import(\"declaration_artifacts.zig\")"): 1,
-    ("src/early_declaration_metadata.zig", "pub const EarlyDeclarationMetadataView = struct"): 0,
-    ("src/early_declaration_metadata.zig", "pub const EarlyDeclarationArtifacts = struct"): 0,
     ("src/declaration_artifacts.zig", "[]const ast.Decl"): 1,
     ("src/declaration_artifacts.zig", "pub const SyntaxDeclarationSlice = []const ast.Decl"): 1,
     ("src/declaration_artifacts.zig", "pub const EarlyDeclarationArtifacts = struct"): 1,
@@ -199,10 +195,6 @@ REQUIRED_ANCHORS = {
     "src/verified_program.zig": (
         "MIR verifier",
     ),
-    "src/early_declaration_metadata.zig": (
-        "Compatibility shim for the old early-declaration metadata module name.",
-        "The artifact definitions now live in `declaration_artifacts.zig`",
-    ),
     "src/loader.zig": (
         "MC has no",
         "separate module/object model",
@@ -271,6 +263,8 @@ FORBIDDEN_BACKEND_PATTERNS = {
 
 FORBIDDEN_GLOBAL_PATTERNS = {
     r"VerifiedProgram\.initFromDecls\(": "declaration-slice VerifiedProgram construction",
+    r"@import\(\"early_declaration_metadata\.zig\"\)": "retired early declaration metadata shim import",
+    r"@import\(\"source_map_rows\.zig\"\)": "retired source-map rows wrapper import",
 }
 
 
