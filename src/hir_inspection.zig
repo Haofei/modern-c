@@ -77,10 +77,6 @@ pub const Module = struct {
     }
 };
 
-pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
-    return buildFromDecls(allocator, module.decls);
-}
-
 pub fn buildFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !Module {
     var function_summaries = std.StringHashMap(bool).init(allocator);
     defer function_summaries.deinit();
@@ -123,8 +119,8 @@ pub fn buildFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !Mo
     return .{ .allocator = allocator, .functions = try functions.toOwnedSlice(allocator) };
 }
 
-pub fn appendDump(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    var hir = try build(allocator, module);
+pub fn appendDumpFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl, out: *std.ArrayList(u8)) !void {
+    var hir = try buildFromDecls(allocator, decls);
     defer hir.deinit();
 
     try out.appendSlice(allocator, inspection_only_header);
@@ -181,8 +177,8 @@ pub fn appendVerificationFactsFromDecls(allocator: std.mem.Allocator, decls: []c
     }
 }
 
-pub fn verify(allocator: std.mem.Allocator, module: ast.Module, reporter: *diagnostics.Reporter) !void {
-    var hir = try build(allocator, module);
+pub fn verifyFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl, reporter: *diagnostics.Reporter) !void {
+    var hir = try buildFromDecls(allocator, decls);
     defer hir.deinit();
 
     for (hir.functions) |function| {

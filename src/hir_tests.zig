@@ -4,10 +4,10 @@ const diagnostics = @import("diagnostics.zig");
 const hir = @import("hir_inspection.zig");
 const parser = @import("parser.zig");
 
-const appendDump = hir.appendDump;
+const appendDumpFromDecls = hir.appendDumpFromDecls;
 const appendVerificationFactsFromDecls = hir.appendVerificationFactsFromDecls;
-const build = hir.build;
-const verify = hir.verify;
+const buildFromDecls = hir.buildFromDecls;
+const verifyFromDecls = hir.verifyFromDecls;
 
 test "builds HIR CFG for branches and loops" {
     const source =
@@ -33,7 +33,7 @@ test "builds HIR CFG for branches and loops" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var module_hir = try build(std.testing.allocator, module);
+    var module_hir = try buildFromDecls(std.testing.allocator, module.decls);
     defer module_hir.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), module_hir.functions.len);
@@ -59,7 +59,7 @@ test "HIR dump and verification facts declare inspection-only contract" {
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try appendDump(std.testing.allocator, module, &dump);
+    try appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.startsWith(u8, dump.items, hir.inspection_only_header));
 
     var facts: std.ArrayList(u8) = .empty;
@@ -152,7 +152,7 @@ test "HIR verifier reports structured diagnostics" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    try verify(std.testing.allocator, module, &reporter);
+    try verifyFromDecls(std.testing.allocator, module.decls, &reporter);
 
     try std.testing.expect(reporter.has_errors);
     var found_missing_return = false;

@@ -406,7 +406,7 @@ fn runLowerHir(session: *CompilationSession, path: []const u8, source: []const u
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try hir.appendDump(allocator, module, &output);
+    try hir.appendDumpFromDecls(allocator, module.decls, &output);
     try session.writeStdout(output.items);
 }
 

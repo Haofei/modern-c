@@ -460,6 +460,7 @@ removing backend authority before adding new abstractions:
 | 272 | Delete module-shaped IR facts helpers. | Complete: `ir_inspection.appendFacts(...)` now accepts `[]const ast.Decl`, public/internal `writeFacts(...)` helpers were removed, and `ModuleFactCollector` no longer has module-shaped fact collection; `spec_tests` passes `module.decls` at its explicit compatibility edge. |
 | 273 | Delete module-shaped symbols emission. | Complete: `symbols.emitJson(allocator, ast.Module, ...)`, `collectModule(...)`, and `walkModule(...)` were removed after CLI symbols moved to `emitJsonFromResolvedSources(...)`; inventory gates keep the symbols module-shaped entrypoint and helpers at zero. |
 | 274 | Narrow HIR verification facts to declaration slices. | Complete: `hir_inspection.appendVerificationFacts(...)` was replaced by `appendVerificationFactsFromDecls(...)`, `buildFromDecls(...)` owns the shared HIR construction loop, and CLI/spec/HIR tests now pass `module.decls` at their explicit compatibility edge. |
+| 275 | Narrow HIR inspection APIs to declaration slices. | Complete: module-shaped `hir_inspection.build(...)`, `verify(...)`, and `appendDump(...)` were removed; CLI `lower-hir` and HIR tests now use `buildFromDecls(...)`, `verifyFromDecls(...)`, and `appendDumpFromDecls(...)`, with inventory gates keeping the old module-shaped HIR inspection entrypoints at zero. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 
