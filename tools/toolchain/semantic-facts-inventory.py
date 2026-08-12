@@ -2529,7 +2529,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "LegacyDeclarationSlice.forDecls(module.decls)": 0,
         "LegacyDeclarationSlice.forDecls(module.decls).earlyDeclarationMetadata()": 0,
         "EarlyDeclarationMetadataView.forDecls(module.decls)": 0,
-        "EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls)": 1,
+        "EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls)": 0,
         'const declaration_artifacts = @import("declaration_artifacts.zig")': 1,
         "declarations.syntaxForLegacyLowering()": 0,
         "declarations.syntaxForCEarlyDeclarationMetadata()": 0,

@@ -283,33 +283,19 @@ fn backendLower(
     return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, request.declaration_artifacts, request.program.typed_mir, request.program.source_spelling, request.out, request.opts.source_path orelse "input.mc", request.opts.checks, request.opts.stub_asm, request.opts.target_arch, request.opts.linux_kernel, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
-pub fn appendLlvm(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8)) !void {
-    try appendLlvmWithSourcePath(allocator, module, out, "input.mc", false);
-}
-
-pub fn appendLlvmWithSourcePath(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), source_path: []const u8, optimize: bool) !void {
-    try appendLlvmChecked(allocator, module, out, source_path, .{ .optimize = optimize }, false, .riscv64);
-}
-
-pub fn appendLlvmChecked(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch) !void {
-    try appendLlvmCheckedReport(allocator, module, out, source_path, checks, stub_asm, target_arch, null);
-}
-
-fn appendLlvmCheckedReport(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
-    const optimize = checks.optimize;
-    var module_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
-    defer module_mir.deinit();
-    try appendLlvmCheckedMir(allocator, module, &module_mir, out, source_path, checks, stub_asm, target_arch, reporter);
-}
-
-pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast_bridge.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, reporter: ?*diagnostics.Reporter) !void {
-    try appendLlvmCheckedMirProfile(allocator, module, module_mir, out, source_path, checks, stub_asm, target_arch, false, reporter);
-}
-
-pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast_bridge.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
-    defer early_metadata.deinit(allocator);
-    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, early_metadata, module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
+pub fn appendLlvmCheckedMirArtifacts(
+    allocator: std.mem.Allocator,
+    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
+    module_mir: *const mir.Module,
+    out: *std.ArrayList(u8),
+    source_path: []const u8,
+    checks: backend_mod.Checks,
+    stub_asm: bool,
+    target_arch: backend_mod.TargetArch,
+    linux_kernel: bool,
+    reporter: ?*diagnostics.Reporter,
+) !void {
+    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, artifacts, module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
 }
 
 fn appendLlvmCheckedMirProfileWithSourceSpelling(

@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -11,6 +12,14 @@ const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const parser = @import("parser.zig");
 const test_support = @import("test_support.zig");
+
+fn appendLlvmModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
+    var module_mir = try mir.buildOpt(allocator, module, .{});
+    defer module_mir.deinit();
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    defer artifacts.deinit(allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts, &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
+}
 
 test "lower-c grouped i128 minimum never reads an inactive AST union arm" {
     const source =
@@ -10162,7 +10171,7 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
 
     var llvm_output: std.ArrayList(u8) = .empty;
     defer llvm_output.deinit(std.testing.allocator);
-    try lower_llvm.appendLlvm(std.testing.allocator, parsed.module, &llvm_output);
+    try appendLlvmModuleTest(std.testing.allocator, parsed.module, &llvm_output);
     const c_source = try commentSourceText(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_load subject=gp provenance=global_storage reason=none source=");
     const llvm_comment = try std.fmt.allocPrint(
         std.testing.allocator,
@@ -10739,7 +10748,7 @@ test "lower-c consumes MIR pointer provenance facts for fixed pointer-array elem
 
     var llvm_output: std.ArrayList(u8) = .empty;
     defer llvm_output.deinit(std.testing.allocator);
-    try lower_llvm.appendLlvm(std.testing.allocator, parsed.module, &llvm_output);
+    try appendLlvmModuleTest(std.testing.allocator, parsed.module, &llvm_output);
     const c_source = try commentSourceText(output.items, "/* mir pointer_provenance consumed fn=c_array_global_pointer_element_load subject=ptrs element=0 provenance=global_storage reason=none source=");
     const llvm_comment = try std.fmt.allocPrint(
         std.testing.allocator,

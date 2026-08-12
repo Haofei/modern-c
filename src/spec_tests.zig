@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const generic_precheck = @import("generic_precheck.zig");
@@ -14,6 +15,14 @@ const monomorphize = @import("monomorphize.zig");
 const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
+
+fn appendLlvmModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
+    var module_mir = try mir.buildOpt(allocator, module, .{});
+    defer module_mir.deinit();
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    defer artifacts.deinit(allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts, &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
+}
 
 pub const MetadataRecord = struct {
     key: []const u8,
@@ -665,7 +674,7 @@ test "nullable trait object fixture lowers on both backends with the data-word n
     {
         const module = try parseSpecModule(source, a, &reporter);
         var out: std.ArrayList(u8) = .empty;
-        try lower_llvm.appendLlvm(a, module, &out);
+        try appendLlvmModuleTest(a, module, &out);
         try std.testing.expect(std.mem.indexOf(u8, out.items, "{ ptr, ptr }") != null);
         try std.testing.expect(std.mem.indexOf(u8, out.items, "extractvalue") != null);
     }
