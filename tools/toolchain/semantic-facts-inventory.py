@@ -1133,6 +1133,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source_spelling: backend.SourceSpellingView": 1,
     },
     "src/mir.zig": {
+        '@import("module_parser.zig")': 1,
+        "pub fn buildOptFromResolvedDecls(": 1,
+        "fn syntaxDeclsFromResolved(": 1,
         "appendTargetTypeFact(.assert_condition": 1,
         "appendTargetTypeFact(.loop_condition": 1,
         "appendTargetTypeFact(.switch_subject": 1,

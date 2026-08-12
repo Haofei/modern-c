@@ -118,7 +118,7 @@ def main() -> int:
         "monomorphize.transformDeclsReport(allocator, decls, diag)",
         "mangle_private.transformDecls(allocator, decls, visibility_mode, self.file_boundaries)",
         "checker.file_boundaries = self.file_boundaries;",
-        "module_mir.* = try mir.buildOptFromDecls(self.allocator, decls, .{ .optimize = optimize });",
+        "module_mir.* = try mir.buildOptFromResolvedDecls(self.allocator, resolved_decls, .{ .optimize = optimize });",
         "const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {",
         'test "CompilationSession keeps parse context request scoped"',
         'test "CompilationSession attaches per-file resolved module syntax"',
@@ -151,8 +151,10 @@ def main() -> int:
         fail("CompilationSession must not keep a naked ast.Module check helper")
     if main_text.count("var checker = sema.Checker.init") != 0:
         fail("main.zig must not construct sema checkers")
-    if session_text.count("mir.buildOptFromDecls(") != 2:
-        fail("MIR build must stay centralized in CompilationSession resolved/decl wrappers")
+    if session_text.count("mir.buildOptFromDecls(") != 1:
+        fail("legacy decl-slice MIR build must stay centralized in CompilationSession.buildVerifiedProgramFromDecls")
+    if session_text.count("mir.buildOptFromResolvedDecls(") != 2:
+        fail("resolved-decl MIR build must stay centralized in CompilationSession resolved wrappers")
     if session_text.count("mir.buildOpt(") != 0:
         fail("CompilationSession must not use the old module-shaped MIR build API")
     if main_text.count("mir.buildOpt(") != 0 or main_text.count("mir.buildOptFromDecls(") != 0:
@@ -178,8 +180,8 @@ def main() -> int:
             fail(f"main.zig must not import compiler pipeline stage {forbidden_import}")
     if (main_text + session_text).count("backend.VerifiedProgram.initFromDecls(") != 0:
         fail("VerifiedProgram declaration-slice construction must not be used")
-    if session_text.count("backend.VerifiedProgram.init(") != 1:
-        fail("VerifiedProgram construction must stay centralized in CompilationSession.buildVerifiedProgramFromDecls")
+    if session_text.count("backend.VerifiedProgram.init(") != 2:
+        fail("VerifiedProgram construction must stay centralized in CompilationSession decl/resolved wrappers")
     require_contains("src/driver_codegen_inputs.zig", "const program = try session.buildVerifiedProgramFromResolvedDecls(resolved_decls, diag, optimize, module_mir, failure_error);")
     if "module: ast.Module" in driver_codegen_inputs:
         fail("driver codegen inputs must not accept ast.Module")

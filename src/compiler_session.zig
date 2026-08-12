@@ -260,9 +260,14 @@ pub const CompilationSession = struct {
         module_mir: *mir.Module,
         failure_error: StageFailure,
     ) !backend.VerifiedProgram {
-        const decls = try syntaxDeclsFromResolved(self.allocator, resolved_decls);
-        defer self.allocator.free(decls);
-        return self.buildVerifiedProgramFromDecls(decls, diag, optimize, module_mir, failure_error);
+        module_mir.* = try mir.buildOptFromResolvedDecls(self.allocator, resolved_decls, .{ .optimize = optimize });
+        errdefer module_mir.deinit();
+        const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {
+            if (diag.has_errors) return failure_error;
+            return err;
+        };
+        if (diag.has_errors) return failure_error;
+        return program;
     }
 
     pub fn buildMirFromResolvedDecls(
@@ -271,17 +276,9 @@ pub const CompilationSession = struct {
         optimize: bool,
         module_mir: *mir.Module,
     ) !void {
-        const decls = try syntaxDeclsFromResolved(self.allocator, resolved_decls);
-        defer self.allocator.free(decls);
-        module_mir.* = try mir.buildOptFromDecls(self.allocator, decls, .{ .optimize = optimize });
+        module_mir.* = try mir.buildOptFromResolvedDecls(self.allocator, resolved_decls, .{ .optimize = optimize });
     }
 };
-
-fn syntaxDeclsFromResolved(allocator: std.mem.Allocator, resolved_decls: []const module_parser.ResolvedDecl) ![]ast.Decl {
-    const decls = try allocator.alloc(ast.Decl, resolved_decls.len);
-    for (resolved_decls, 0..) |item, i| decls[i] = item.decl;
-    return decls;
-}
 
 pub fn artifactMetadataPath(allocator: std.mem.Allocator, output_path: []const u8) ![]const u8 {
     return artifact_publisher.metadataPath(allocator, output_path);

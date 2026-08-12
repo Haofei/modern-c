@@ -5,6 +5,7 @@ const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
+const module_parser = @import("module_parser.zig");
 const numeric = @import("numeric.zig");
 const ownership_facts = @import("ownership_facts.zig");
 const parser = @import("parser.zig");
@@ -800,6 +801,18 @@ const isCheckedSignedType = mir_operator.isCheckedSignedType;
 
 pub fn buildFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl) !Module {
     return buildOptFromDecls(allocator, decls, .{});
+}
+
+pub fn buildOptFromResolvedDecls(allocator: std.mem.Allocator, resolved_decls: []const module_parser.ResolvedDecl, options: BuildOptions) !Module {
+    const decls = try syntaxDeclsFromResolved(allocator, resolved_decls);
+    defer allocator.free(decls);
+    return buildOptFromDecls(allocator, decls, options);
+}
+
+fn syntaxDeclsFromResolved(allocator: std.mem.Allocator, resolved_decls: []const module_parser.ResolvedDecl) ![]ast.Decl {
+    const decls = try allocator.alloc(ast.Decl, resolved_decls.len);
+    for (resolved_decls, 0..) |item, i| decls[i] = item.decl;
+    return decls;
 }
 
 pub fn buildOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, options: BuildOptions) !Module {
