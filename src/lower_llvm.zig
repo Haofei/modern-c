@@ -599,6 +599,7 @@ const LlvmEmitter = struct {
                 .repr = packed_bits.repr,
                 .fields = packed_bits.fields,
             }),
+            .overlay_union => {},
             .struct_decl => |struct_decl| {
                 if (struct_decl.type_params.len != 0) continue;
                 if (struct_decl.abi) |abi| {
@@ -607,7 +608,6 @@ const LlvmEmitter = struct {
                 try self.struct_decl_artifacts.append(self.allocator, struct_decl);
                 try self.struct_types.put(struct_decl.name.text, struct_decl);
             },
-            else => {},
         };
     }
 
@@ -643,7 +643,7 @@ const LlvmEmitter = struct {
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
                 .type_alias => |alias| try self.collectTypeAlias(alias),
                 .enum_decl => |enum_decl| try self.collectEnum(enum_decl),
-                .struct_decl, .opaque_decl => {},
+                .struct_decl => {},
             }
         }
     }

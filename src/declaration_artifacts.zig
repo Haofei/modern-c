@@ -66,8 +66,7 @@ pub const EarlyDeclarationArtifacts = struct {
                 try type_artifacts.append(allocator, .{ .overlay_union = overlay_union });
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
-            .opaque_decl => |name| {
-                try type_artifacts.append(allocator, .{ .opaque_decl = name });
+            .opaque_decl => {
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .trait_decl => |trait_decl| {
@@ -195,7 +194,6 @@ pub const TypeArtifact = union(enum) {
     union_decl: ast.UnionDecl,
     packed_bits: ast.PackedBitsDecl,
     overlay_union: ast.OverlayUnionDecl,
-    opaque_decl: ast.Ident,
 };
 
 pub const SourceMapArtifact = union(enum) {

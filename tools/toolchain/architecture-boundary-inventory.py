@@ -77,6 +77,7 @@ EXACT_FILE_COUNTS = {
     ("src/declaration_artifacts.zig", "[]const ast.Decl"): 1,
     ("src/declaration_artifacts.zig", "pub const SyntaxDeclarationSlice = []const ast.Decl"): 1,
     ("src/declaration_artifacts.zig", "pub const EarlyDeclarationArtifacts = struct"): 1,
+    ("src/declaration_artifacts.zig", "opaque_decl: ast.Ident"): 0,
     ("src/codegen_request.zig", '@import("source_map_rows.zig")'): 0,
     ("src/codegen_request.zig", "source_map_rows: source_map_rows.SourceMapRows"): 0,
     ("src/codegen_request.zig", "source_map_artifacts: []const declaration_artifacts.SourceMapArtifact"): 1,

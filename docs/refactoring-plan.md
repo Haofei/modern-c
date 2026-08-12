@@ -415,6 +415,7 @@ removing backend authority before adding new abstractions:
 | 227 | Delete generic declaration artifact collection wrapper. | Complete: tests and driver helpers now call `EarlyDeclarationArtifacts.collectFromSyntaxDecls(...)` explicitly, the old `collectFromDecls([]const ast.Decl)` wrapper was removed, and inventory gates keep the generic wrapper signature at zero. |
 | 228 | Delete the source-map rows wrapper module. | Complete: `EmitMapRequest` now carries `[]const declaration_artifacts.SourceMapArtifact` directly, `lower_c_map` consumes that slice without `SourceMapRows`, `source_map_rows.zig` was removed, and inventory gates keep the wrapper import/request shape at zero. |
 | 229 | Delete the early declaration metadata shim. | Complete: `early_declaration_metadata.zig` was removed after all callers moved to `declaration_artifacts.zig`; architecture inventory now forbids re-importing the retired shim. |
+| 230 | Remove no-op opaque type artifacts from backend prepasses. | Complete: `TypeArtifact` no longer carries `opaque_decl: ast.Ident`; opaque declarations remain represented only in source-map artifacts, while C/LLVM type prepasses no longer receive or ignore a no-op AST payload. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

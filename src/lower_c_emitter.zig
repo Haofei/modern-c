@@ -511,7 +511,6 @@ pub const CEmitter = struct {
             .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
             .packed_bits => |packed_bits| try self.collectPackedBits(packed_bits),
             .overlay_union => |overlay_union| try self.collectOverlayUnion(overlay_union),
-            .opaque_decl => {},
         };
     }
 

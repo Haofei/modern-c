@@ -1041,6 +1041,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub const SourceMapArtifact = union(enum)": 1,
         "pub const CallableValueArtifact = union(enum)": 1,
         "pub const TypeArtifact = union(enum)": 1,
+        "opaque_decl: ast.Ident": 0,
+        ".opaque_decl => {},": 0,
     },
     "src/driver_codegen_inputs.zig": {
         '@import("ast.zig")': 1,
