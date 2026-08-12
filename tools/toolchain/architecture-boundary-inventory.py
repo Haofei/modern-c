@@ -78,7 +78,7 @@ EXACT_FILE_COUNTS = {
     ("src/early_declaration_metadata.zig", "@import(\"declaration_artifacts.zig\")"): 1,
     ("src/early_declaration_metadata.zig", "pub const EarlyDeclarationMetadataView = struct"): 0,
     ("src/early_declaration_metadata.zig", "pub const EarlyDeclarationArtifacts = struct"): 0,
-    ("src/declaration_artifacts.zig", "[]const ast.Decl"): 2,
+    ("src/declaration_artifacts.zig", "[]const ast.Decl"): 1,
     ("src/declaration_artifacts.zig", "pub const SyntaxDeclarationSlice = []const ast.Decl"): 1,
     ("src/declaration_artifacts.zig", "pub const EarlyDeclarationArtifacts = struct"): 1,
     ("src/source_map_rows.zig", "[]const ast.Decl"): 0,

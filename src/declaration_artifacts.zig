@@ -94,10 +94,6 @@ pub const EarlyDeclarationArtifacts = struct {
         };
     }
 
-    pub fn collectFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !EarlyDeclarationArtifacts {
-        return collectFromSyntaxDecls(allocator, decls);
-    }
-
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
         allocator.free(self.callable_value_artifacts);
         allocator.free(self.type_artifacts);
