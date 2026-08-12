@@ -614,9 +614,9 @@ fn runListTests(session: *CompilationSession, path: []const u8, source: []const 
     if (session.resolved_sources) |resolved_sources| {
         var out: std.ArrayList(u8) = .empty;
         defer out.deinit(allocator);
-        for (resolved_sources.files) |file| {
-            try appendModuleTests(allocator, file.module, &out);
-        }
+        const decls = try resolved_sources.collectDecls(allocator);
+        defer allocator.free(decls);
+        try appendResolvedTests(allocator, decls, &out);
         try session.writeStdout(out.items);
         return;
     }
@@ -639,25 +639,33 @@ fn runListTests(session: *CompilationSession, path: []const u8, source: []const 
     try session.writeStdout(out.items);
 }
 
+fn appendResolvedTests(allocator: std.mem.Allocator, decls: []const module_parser.ResolvedDecl, out: *std.ArrayList(u8)) !void {
+    for (decls) |entry| try appendDeclTest(allocator, entry.decl, out);
+}
+
 fn appendModuleTests(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
     for (module.decls) |decl| {
-        var is_test = false;
-        for (decl.attrs) |attr| {
-            switch (attr.kind) {
-                .named => |n| if (std.mem.eql(u8, n.text, "test")) {
-                    is_test = true;
-                },
-                else => {},
-            }
-        }
-        if (!is_test) continue;
-        const name = switch (decl.kind) {
-            .fn_decl => |fd| fd.name.text,
-            else => continue,
-        };
-        try out.appendSlice(allocator, name);
-        try out.append(allocator, '\n');
+        try appendDeclTest(allocator, decl, out);
     }
+}
+
+fn appendDeclTest(allocator: std.mem.Allocator, decl: ast.Decl, out: *std.ArrayList(u8)) !void {
+    var is_test = false;
+    for (decl.attrs) |attr| {
+        switch (attr.kind) {
+            .named => |n| if (std.mem.eql(u8, n.text, "test")) {
+                is_test = true;
+            },
+            else => {},
+        }
+    }
+    if (!is_test) return;
+    const name = switch (decl.kind) {
+        .fn_decl => |fd| fd.name.text,
+        else => return,
+    };
+    try out.appendSlice(allocator, name);
+    try out.append(allocator, '\n');
 }
 
 fn runFacts(session: *CompilationSession, path: []const u8, source: []const u8) !void {

@@ -38,6 +38,11 @@ pub const ResolvedSourceFile = struct {
     module: ast.Module,
 };
 
+pub const ResolvedDecl = struct {
+    file_id: module_graph.FileId,
+    decl: ast.Decl,
+};
+
 /// ResolvedSourceDatabase is the per-file name-resolution boundary.
 ///
 /// It keeps qualified-symbol rewriting attached to each FileId instead of
@@ -52,6 +57,27 @@ pub const ResolvedSourceDatabase = struct {
             if (file.id == id) return file.module;
         }
         return null;
+    }
+
+    pub fn declCount(self: ResolvedSourceDatabase) usize {
+        var count: usize = 0;
+        for (self.files) |file| count += file.module.decls.len;
+        return count;
+    }
+
+    pub fn collectDecls(self: ResolvedSourceDatabase, allocator: std.mem.Allocator) ![]ResolvedDecl {
+        var decls: std.ArrayList(ResolvedDecl) = .empty;
+        errdefer decls.deinit(allocator);
+        try decls.ensureTotalCapacity(allocator, self.declCount());
+        for (self.files) |file| {
+            for (file.module.decls) |decl| {
+                decls.appendAssumeCapacity(.{
+                    .file_id = file.id,
+                    .decl = decl,
+                });
+            }
+        }
+        return decls.toOwnedSlice(allocator);
     }
 
     pub fn deinit(self: *ResolvedSourceDatabase, allocator: std.mem.Allocator) void {
@@ -217,4 +243,12 @@ test "ResolvedSourceDatabase runs per-file name resolution" {
     const answer = root_module.decls[1].kind.fn_decl;
     const return_expr = answer.body.?.items[0].kind.@"return".?.kind.call.callee.kind.ident;
     try std.testing.expectEqualStrings("Math__one", return_expr.text);
+
+    const decls = try resolved.collectDecls(std.testing.allocator);
+    defer std.testing.allocator.free(decls);
+    try std.testing.expectEqual(@as(usize, 2), decls.len);
+    try std.testing.expectEqual(@as(module_graph.FileId, @enumFromInt(0)), decls[0].file_id);
+    try std.testing.expectEqual(@as(module_graph.FileId, @enumFromInt(0)), decls[1].file_id);
+    const collected_answer = decls[1].decl.kind.fn_decl;
+    try std.testing.expectEqualStrings("answer", collected_answer.name.text);
 }

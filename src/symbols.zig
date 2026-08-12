@@ -544,11 +544,14 @@ pub fn emitJsonFromResolvedSources(
 
     var b = initBuilder(a);
 
-    for (sources.files) |file| {
-        try collectModule(&b, file.module, sourceStartForFile(graph, file.id));
+    const decls = try sources.collectDecls(a);
+    for (decls) |entry| {
+        b.span_offset = sourceStartForFile(graph, entry.file_id);
+        try collectDecl(&b, entry.decl);
     }
-    for (sources.files) |file| {
-        try walkModule(&b, file.module, sourceStartForFile(graph, file.id));
+    for (decls) |entry| {
+        b.span_offset = sourceStartForFile(graph, entry.file_id);
+        try walkDeclBody(&b, entry.decl);
     }
     try writeJson(allocator, &b, reporter, out);
 }

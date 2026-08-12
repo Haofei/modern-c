@@ -132,6 +132,36 @@ pub fn buildModuleIr(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr
     return .{ .allocator = allocator, .functions = try functions.toOwnedSlice(allocator) };
 }
 
+pub fn buildModuleIrFromDecls(allocator: std.mem.Allocator, decls: []const module_parser.ResolvedDecl) !ModuleIr {
+    var functions: std.ArrayList(FunctionIr) = .empty;
+    errdefer {
+        for (functions.items) |function| {
+            deinitFunctionIr(allocator, function);
+        }
+        functions.deinit(allocator);
+    }
+
+    for (decls) |entry| {
+        switch (entry.decl.kind) {
+            .fn_decl, .extern_fn => |fn_decl| {
+                if (fn_decl.body) |body| {
+                    const function_ir = blk: {
+                        var builder = try FunctionIrBuilder.init(allocator, fn_decl, hasNoLangTrap(entry.decl.attrs));
+                        errdefer builder.deinit();
+                        try builder.collectBlock(body);
+                        break :blk try builder.finish();
+                    };
+                    errdefer deinitFunctionIr(allocator, function_ir);
+                    try functions.append(allocator, function_ir);
+                }
+            },
+            .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
+        }
+    }
+
+    return .{ .allocator = allocator, .functions = try functions.toOwnedSlice(allocator) };
+}
+
 pub fn appendLowerIr(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
     var module_ir = try buildModuleIr(allocator, module);
     defer module_ir.deinit();
@@ -143,9 +173,11 @@ pub fn appendLowerIrFromResolvedSources(
     sources: module_parser.ResolvedSourceDatabase,
     out: *std.ArrayList(u8),
 ) !void {
-    for (sources.files) |file| {
-        try appendLowerIr(allocator, file.module, out);
-    }
+    const decls = try sources.collectDecls(allocator);
+    defer allocator.free(decls);
+    var module_ir = try buildModuleIrFromDecls(allocator, decls);
+    defer module_ir.deinit();
+    try appendModuleIrText(allocator, module_ir, out);
 }
 
 fn appendModuleIrText(allocator: std.mem.Allocator, module_ir: ModuleIr, out: *std.ArrayList(u8)) !void {
@@ -634,10 +666,10 @@ const ModuleFactCollector = struct {
     fn appendResolvedFacts(self: *ModuleFactCollector, sources: module_parser.ResolvedSourceDatabase, out: *std.ArrayList(u8)) anyerror!void {
         var writer: ListFactWriter = .{ .allocator = self.allocator, .out = out };
         defer self.deinit();
-        for (sources.files) |file| try self.collectDeclFacts(file.module);
-        for (sources.files) |file| {
-            for (file.module.decls) |decl| try self.writeDeclFacts(decl, &writer);
-        }
+        const decls = try sources.collectDecls(self.allocator);
+        defer self.allocator.free(decls);
+        try self.collectDeclFactsFromDecls(decls);
+        for (decls) |entry| try self.writeDeclFacts(entry.decl, &writer);
     }
 
     fn writeFacts(self: *ModuleFactCollector, module: ast.Module, writer: anytype) anyerror!void {
@@ -648,19 +680,29 @@ const ModuleFactCollector = struct {
 
     fn collectDeclFacts(self: *ModuleFactCollector, module: ast.Module) !void {
         for (module.decls) |decl| {
-            switch (decl.kind) {
-                .struct_decl => |struct_decl| {
-                    if (struct_decl.abi) |abi| {
-                        if (std.mem.eql(u8, abi, "mmio")) try self.collectMmioStruct(struct_decl);
-                    } else {
-                        try self.structs.put(struct_decl.name.text, struct_decl);
-                    }
-                },
-                .global_decl => |global| if (global.ty) |ty| {
-                    try self.globals.put(global.name.text, typeName(ty) orelse "unknown");
-                },
-                .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .trait_decl, .impl_trait => {},
-            }
+            try self.collectDeclFact(decl);
+        }
+    }
+
+    fn collectDeclFactsFromDecls(self: *ModuleFactCollector, decls: []const module_parser.ResolvedDecl) !void {
+        for (decls) |entry| {
+            try self.collectDeclFact(entry.decl);
+        }
+    }
+
+    fn collectDeclFact(self: *ModuleFactCollector, decl: ast.Decl) !void {
+        switch (decl.kind) {
+            .struct_decl => |struct_decl| {
+                if (struct_decl.abi) |abi| {
+                    if (std.mem.eql(u8, abi, "mmio")) try self.collectMmioStruct(struct_decl);
+                } else {
+                    try self.structs.put(struct_decl.name.text, struct_decl);
+                }
+            },
+            .global_decl => |global| if (global.ty) |ty| {
+                try self.globals.put(global.name.text, typeName(ty) orelse "unknown");
+            },
+            .fn_decl, .extern_fn, .type_alias, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .trait_decl, .impl_trait => {},
         }
     }
 
