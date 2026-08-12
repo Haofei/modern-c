@@ -599,7 +599,7 @@ const LlvmEmitter = struct {
 
     fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
         for (artifacts.function_artifacts) |function| {
-            const fn_decl = function.fn_decl;
+            const fn_decl = function.toDecl();
             if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
         }
         for (artifacts.type_alias_artifacts) |alias| try self.type_aliases.put(alias.name.text, alias.ty);
@@ -718,8 +718,9 @@ const LlvmEmitter = struct {
 
     fn collectFunctionGlobalAndTraitArtifacts(self: *LlvmEmitter) !void {
         for (self.function_artifacts) |function| {
-            try self.collectFunction(function.fn_decl, function.attrs);
-            try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = function.fn_decl, .attrs = function.attrs, .is_extern = function.is_extern });
+            const fn_decl = function.toDecl();
+            try self.collectFunction(fn_decl, function.attrs);
+            try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = fn_decl, .attrs = function.attrs, .is_extern = function.is_extern });
         }
         for (self.global_artifacts) |global| {
             try self.collectGlobal(global);

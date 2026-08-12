@@ -52,11 +52,11 @@ pub const EarlyDeclarationArtifacts = struct {
 
         for (decls) |decl| switch (decl.kind) {
             .fn_decl => |fn_decl| {
-                try function_artifacts.append(allocator, .{ .fn_decl = fn_decl, .attrs = decl.attrs, .is_extern = false });
+                try function_artifacts.append(allocator, FunctionArtifact.fromDecl(fn_decl, decl.attrs, false));
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .extern_fn => |fn_decl| {
-                try function_artifacts.append(allocator, .{ .fn_decl = fn_decl, .attrs = decl.attrs, .is_extern = true });
+                try function_artifacts.append(allocator, FunctionArtifact.fromDecl(fn_decl, decl.attrs, true));
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .global_decl => |global| {
@@ -225,9 +225,56 @@ fn declOrigin(decl: ast.Decl) []const u8 {
 }
 
 pub const FunctionArtifact = struct {
-    fn_decl: ast.FnDecl,
+    name: ast.Ident,
+    associated_owner: ?ast.Ident,
+    abi: ?[]const u8,
+    params: []ast.Param,
+    return_type: ?ast.TypeExpr,
+    return_borrow_source: ?ast.Ident,
+    body: ?ast.Block,
+    is_const: bool,
+    exported: bool,
+    is_variadic: bool,
+    bounds: []ast.TraitBound,
+    is_async: bool,
     attrs: []const ast.Attr,
     is_extern: bool,
+
+    pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
+        return .{
+            .name = fn_decl.name,
+            .associated_owner = fn_decl.associated_owner,
+            .abi = fn_decl.abi,
+            .params = fn_decl.params,
+            .return_type = fn_decl.return_type,
+            .return_borrow_source = fn_decl.return_borrow_source,
+            .body = fn_decl.body,
+            .is_const = fn_decl.is_const,
+            .exported = fn_decl.exported,
+            .is_variadic = fn_decl.is_variadic,
+            .bounds = fn_decl.bounds,
+            .is_async = fn_decl.is_async,
+            .attrs = attrs,
+            .is_extern = is_extern,
+        };
+    }
+
+    pub fn toDecl(self: FunctionArtifact) ast.FnDecl {
+        return .{
+            .name = self.name,
+            .associated_owner = self.associated_owner,
+            .abi = self.abi,
+            .params = self.params,
+            .return_type = self.return_type,
+            .return_borrow_source = self.return_borrow_source,
+            .body = self.body,
+            .is_const = self.is_const,
+            .exported = self.exported,
+            .is_variadic = self.is_variadic,
+            .bounds = self.bounds,
+            .is_async = self.is_async,
+        };
+    }
 };
 
 pub const GlobalArtifact = struct {

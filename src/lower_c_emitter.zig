@@ -456,7 +456,7 @@ pub const CEmitter = struct {
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
         for (artifacts.function_artifacts) |function| {
-            const fn_decl = function.fn_decl;
+            const fn_decl = function.toDecl();
             if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
         }
         const declarations = self.comptime_declarations orelse return error.UnsupportedCEmission;
@@ -490,7 +490,7 @@ pub const CEmitter = struct {
     }
 
     fn collectFunctionArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.FunctionArtifact) anyerror!void {
-        for (artifacts) |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, function.is_extern);
+        for (artifacts) |function| try self.collectFnDeclArtifact(function.toDecl(), function.attrs, function.is_extern);
     }
 
     fn collectGlobalArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.GlobalArtifact) anyerror!void {

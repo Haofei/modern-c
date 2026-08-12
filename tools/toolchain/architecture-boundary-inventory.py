@@ -88,6 +88,7 @@ EXACT_FILE_COUNTS = {
     ("src/declaration_artifacts.zig", "packed_bits_artifacts: []const ast.PackedBitsDecl"): 1,
     ("src/declaration_artifacts.zig", "overlay_union_artifacts: []const ast.OverlayUnionDecl"): 1,
     ("src/declaration_artifacts.zig", "pub const FunctionArtifact = struct"): 1,
+    ("src/declaration_artifacts.zig", "    fn_decl: ast.FnDecl,"): 0,
     ("src/declaration_artifacts.zig", "pub const GlobalArtifact = struct"): 1,
     ("src/declaration_artifacts.zig", "pub const TraitArtifact = union(enum)"): 1,
     ("src/declaration_artifacts.zig", "pub const TypeArtifact = union(enum)"): 0,
