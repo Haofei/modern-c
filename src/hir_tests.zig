@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
-const hir = @import("hir.zig");
+const hir = @import("hir_inspection.zig");
 const parser = @import("parser.zig");
 
 const appendDump = hir.appendDump;

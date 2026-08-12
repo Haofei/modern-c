@@ -54,7 +54,7 @@ RULES: tuple[Rule, ...] = (
         excludes=("src/*_tests.zig",),
     ),
     Rule(
-        ("src/mir*.zig", "src/ir.zig", "src/hir.zig", "src/eval.zig", "src/numeric.zig"),
+        ("src/mir*.zig", "src/ir_inspection.zig", "src/hir_inspection.zig", "src/eval.zig", "src/numeric.zig"),
         ("test", "c-test", "llvm-test", "diff-backend", "fuzz-reference"),
         "middle-end and evaluator changes can affect both backends and the reference oracle",
         excludes=("src/*_tests.zig",),
@@ -234,7 +234,7 @@ RULES: tuple[Rule, ...] = (
             "src/backend_cleanup.zig",
             "src/lower_c*.zig",
             "src/lower_llvm*.zig",
-            "src/hir.zig",
+            "src/hir_inspection.zig",
             "src/loader.zig",
             "src/mir_facts_view.zig",
             "src/type_syntax.zig",

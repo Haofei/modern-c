@@ -133,7 +133,7 @@ EXACT_FILE_COUNTS = {
     ("src/module_graph.zig", "pub const ModuleGraph = struct"): 1,
     ("src/module_graph.zig", "pub const LoadedProject = struct"): 1,
     ("src/module_graph.zig", "combined textual source"): 1,
-    ("src/hir.zig", "inspection_only_header"): 3,
+    ("src/hir_inspection.zig", "inspection_only_header"): 3,
     ("src/mir_facts_view.zig", "pub const MirFactsView = struct"): 1,
     ("src/type_syntax.zig", "pub fn sameTypeSyntax("): 1,
     ("src/type_syntax.zig", "pub fn viewType("): 1,
@@ -229,7 +229,7 @@ REQUIRED_ANCHORS = {
         "stable file/import identity model",
         "expanded byte offsets as semantic identity",
     ),
-    "src/hir.zig": (
+    "src/hir_inspection.zig": (
         'pub const inspection_only_header = "hir mode=inspection-only production_boundary=false\\n";',
     ),
     "src/mir_facts_view.zig": (

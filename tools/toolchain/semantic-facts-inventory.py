@@ -709,7 +709,7 @@ ANCHORS: dict[str, list[str]] = {
         "MIR switch subject type facts",
         "MIR `if let` subject type facts",
     ],
-    "src/ir.zig": [
+    "src/ir_inspection.zig": [
         "pub fn appendLowerIr",
         "pub fn appendFacts",
         "fn appendFacts(self: *ModuleFactCollector",

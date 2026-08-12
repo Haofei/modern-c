@@ -1,3 +1,9 @@
+//! Textual IR/facts inspection projection.
+//!
+//! This module emits report artifacts for tests and diagnostics. Backends must
+//! not consume or reparse this text; MIR and verified semantic facts remain the
+//! production authority.
+
 const std = @import("std");
 
 const ast = @import("ast.zig");

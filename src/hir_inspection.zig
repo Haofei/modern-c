@@ -1,3 +1,9 @@
+//! HIR inspection projection.
+//!
+//! This module is a diagnostics/debug surface, not a production compiler
+//! pipeline stage and not a backend input. MIR remains the semantic lowering
+//! and verification authority.
+
 const std = @import("std");
 
 const ast = @import("ast.zig");

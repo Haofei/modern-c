@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const diagnostics = @import("diagnostics.zig");
-const ir = @import("ir.zig");
+const ir = @import("ir_inspection.zig");
 const parser = @import("parser.zig");
 
 test "writes early inspection facts for parser AST" {
