@@ -6306,18 +6306,10 @@ pub const CEmitter = struct {
         };
     }
 
-    fn mirPointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {
-        return mir_facts_view.pointerFactIsLiveGlobal(fact);
-    }
-
     // A live local_storage fact is the positive locality proof that keeps a deref
     // PLAIN under the spec I.13 conservative default. Liveness is symmetric with
     // the global side: any call/indirect-call/address-escape/dynamic-index
     // invalidation drops the proof back to unknown (-> race-tolerant lowering).
-    fn mirPointerFactIsLiveLocal(fact: mir.PointerProvenanceFact) bool {
-        return mir_facts_view.pointerFactIsLiveLocal(fact);
-    }
-
     fn deinitOwnedStringVoidMap(self: *CEmitter, map: *std.StringHashMap(void)) void {
         var it = map.keyIterator();
         while (it.next()) |key| self.allocator.free(key.*);
@@ -6624,27 +6616,23 @@ pub const CEmitter = struct {
         }
     }
 
-    fn mirPointerFactState(fact: mir.PointerProvenanceFact) mir.PointerProvenance {
-        return mir_facts_view.pointerFactLiveState(fact);
-    }
-
     fn applyMirPointerProvenanceFact(self: *CEmitter, fact: mir.PointerProvenanceFact, locals: ?*std.StringHashMap(LocalInfo)) !void {
         if (!self.mirPointerFactSubjectSupportedNow(fact, locals)) return;
         try self.emitMirPointerProvenanceConsumedComment(fact);
         if (fact.field_path) |field_path| {
             if (fact.element_index) |index| {
                 const element_path = try self.aggregatePointerArrayElementPath(field_path, @intCast(index));
-                try self.setAggregatePointerFieldProvenance(fact.subject, element_path, mirPointerFactState(fact));
+                try self.setAggregatePointerFieldProvenance(fact.subject, element_path, mir_facts_view.pointerFactLiveState(fact));
             } else {
-                try self.setAggregatePointerFieldProvenance(fact.subject, field_path, mirPointerFactState(fact));
+                try self.setAggregatePointerFieldProvenance(fact.subject, field_path, mir_facts_view.pointerFactLiveState(fact));
             }
             return;
         }
         if (fact.element_index) |index| {
-            try self.setLocalArrayPointerElementProvenance(fact.subject, @intCast(index), mirPointerFactState(fact));
+            try self.setLocalArrayPointerElementProvenance(fact.subject, @intCast(index), mir_facts_view.pointerFactLiveState(fact));
             return;
         }
-        const live_global = mirPointerFactIsLiveGlobal(fact);
+        const live_global = mir_facts_view.pointerFactIsLiveGlobal(fact);
         const ty = mirPointerFactSubjectRecoveredType(fact, locals) orelse return;
         if (self.fixedLocalPointerArrayElementType(ty) != null) {
             self.clearLocalArrayPointerElementsForLocal(fact.subject);
@@ -6652,7 +6640,7 @@ pub const CEmitter = struct {
         }
         if (live_global) {
             try self.mir_pointer_local_provenance.put(fact.subject, .global_storage);
-        } else if (mirPointerFactIsLiveLocal(fact)) {
+        } else if (mir_facts_view.pointerFactIsLiveLocal(fact)) {
             try self.mir_pointer_local_provenance.put(fact.subject, .local_storage);
         } else {
             _ = self.mir_pointer_local_provenance.remove(fact.subject);
