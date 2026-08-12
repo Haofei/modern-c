@@ -466,10 +466,13 @@ pub const CEmitter = struct {
             const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
             try self.const_global_widths.put(global.name.text, bits);
         }
-        for (artifacts.type_alias_artifacts) |alias| try self.type_aliases.put(alias.name.text, alias.ty);
-        for (artifacts.struct_artifacts) |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl);
-        for (artifacts.enum_artifacts) |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl);
-        for (artifacts.union_artifacts) |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl);
+        for (artifacts.type_decl_artifacts) |artifact| switch (artifact) {
+            .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
+            .struct_decl => |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl),
+            .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
+            .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
+            else => {},
+        };
     }
 
     pub fn collectConstGlobals(self: *CEmitter) !void {
@@ -507,12 +510,14 @@ pub const CEmitter = struct {
     }
 
     fn collectTypeArtifactsFromArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
-        for (artifacts.type_alias_artifacts) |alias| try self.type_aliases.put(alias.name.text, alias.ty);
-        for (artifacts.struct_artifacts) |struct_decl| try self.collectStructDeclArtifact(struct_decl);
-        for (artifacts.enum_artifacts) |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl);
-        for (artifacts.union_artifacts) |union_decl| try self.collectTaggedUnion(union_decl);
-        for (artifacts.packed_bits_artifacts) |packed_bits| try self.collectPackedBits(packed_bits);
-        for (artifacts.overlay_union_artifacts) |overlay_union| try self.collectOverlayUnion(overlay_union);
+        for (artifacts.type_decl_artifacts) |artifact| switch (artifact) {
+            .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
+            .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
+            .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
+            .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
+            .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
+            .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
+        };
     }
 
     fn collectGlobalDeclArtifact(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {

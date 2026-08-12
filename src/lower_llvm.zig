@@ -366,12 +366,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .global_artifacts = early_metadata.global_artifacts,
         .trait_decl_artifacts = early_metadata.trait_decl_artifacts,
         .impl_trait_artifacts = early_metadata.impl_trait_artifacts,
-        .type_alias_artifacts = early_metadata.type_alias_artifacts,
-        .struct_artifacts = early_metadata.struct_artifacts,
-        .enum_artifacts = early_metadata.enum_artifacts,
-        .union_artifacts = early_metadata.union_artifacts,
-        .packed_bits_artifacts = early_metadata.packed_bits_artifacts,
-        .overlay_union_artifacts = early_metadata.overlay_union_artifacts,
+        .type_decl_artifacts = early_metadata.type_decl_artifacts,
         .global_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
         .global_is_const = std.StringHashMap(bool).init(allocator),
         .global_initializers = std.StringHashMap(ast_bridge.Expr).init(allocator),
@@ -473,12 +468,7 @@ const LlvmEmitter = struct {
     global_artifacts: []const declaration_artifacts.GlobalArtifact = &.{},
     trait_decl_artifacts: []const declaration_artifacts.TraitDeclArtifact = &.{},
     impl_trait_artifacts: []const declaration_artifacts.ImplTraitArtifact = &.{},
-    type_alias_artifacts: []const ast_bridge.TypeAlias = &.{},
-    struct_artifacts: []const ast_bridge.StructDecl = &.{},
-    enum_artifacts: []const ast_bridge.EnumDecl = &.{},
-    union_artifacts: []const ast_bridge.UnionDecl = &.{},
-    packed_bits_artifacts: []const ast_bridge.PackedBitsDecl = &.{},
-    overlay_union_artifacts: []const ast_bridge.OverlayUnionDecl = &.{},
+    type_decl_artifacts: []const declaration_artifacts.TypeDeclArtifact = &.{},
     struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
     function_decl_artifacts: std.ArrayList(LlvmFunctionDeclArtifact) = .empty,
     global_decl_artifacts: std.ArrayList(declaration_artifacts.GlobalArtifact) = .empty,
@@ -604,21 +594,24 @@ const LlvmEmitter = struct {
             const fn_decl = declaration_artifacts.comptimeFnDeclFromArtifact(function);
             if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
         }
-        for (artifacts.type_alias_artifacts) |alias| try self.type_aliases.put(alias.name.text, alias.ty);
-        for (artifacts.enum_artifacts) |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl);
-        for (artifacts.union_artifacts) |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl);
-        for (artifacts.packed_bits_artifacts) |packed_bits| try self.packed_bits.put(packed_bits.name.text, .{
-            .repr = packed_bits.repr,
-            .fields = packed_bits.fields,
-        });
-        for (artifacts.struct_artifacts) |struct_decl| {
-            if (struct_decl.type_params.len != 0) continue;
-            if (struct_decl.abi) |abi| {
-                if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
-            }
-            try self.struct_decl_artifacts.append(self.allocator, struct_decl);
-            try self.struct_types.put(struct_decl.name.text, struct_decl);
-        }
+        for (artifacts.type_decl_artifacts) |artifact| switch (artifact) {
+            .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
+            .enum_decl => |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl),
+            .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
+            .packed_bits_decl => |packed_bits| try self.packed_bits.put(packed_bits.name.text, .{
+                .repr = packed_bits.repr,
+                .fields = packed_bits.fields,
+            }),
+            .struct_decl => |struct_decl| {
+                if (struct_decl.type_params.len != 0) continue;
+                if (struct_decl.abi) |abi| {
+                    if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
+                }
+                try self.struct_decl_artifacts.append(self.allocator, struct_decl);
+                try self.struct_types.put(struct_decl.name.text, struct_decl);
+            },
+            .overlay_union_decl => {},
+        };
     }
 
     fn collectStructArtifacts(self: *LlvmEmitter) !void {
@@ -646,11 +639,14 @@ const LlvmEmitter = struct {
     }
 
     fn collectNonStructTypeArtifacts(self: *LlvmEmitter) !void {
-        for (self.packed_bits_artifacts) |packed_bits| try self.collectPackedBits(packed_bits);
-        for (self.overlay_union_artifacts) |overlay_union| try self.collectOverlayUnion(overlay_union);
-        for (self.union_artifacts) |union_decl| try self.collectTaggedUnion(union_decl);
-        for (self.type_alias_artifacts) |alias| try self.collectTypeAlias(alias);
-        for (self.enum_artifacts) |enum_decl| try self.collectEnum(enum_decl);
+        for (self.type_decl_artifacts) |artifact| switch (artifact) {
+            .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
+            .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
+            .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
+            .type_alias => |alias| try self.collectTypeAlias(alias),
+            .enum_decl => |enum_decl| try self.collectEnum(enum_decl),
+            .struct_decl => {},
+        };
     }
 
     fn collectEnum(self: *LlvmEmitter, enum_decl: ast_bridge.EnumDecl) !void {
