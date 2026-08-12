@@ -639,8 +639,8 @@ def require_absent_glob(pattern: str, description: str) -> None:
 
 def main() -> int:
     sources = backend_sources()
-    if len(sources) != 52:
-        fail(f"backend source inventory has {len(sources)} files, expected 52")
+    if len(sources) != 51:
+        fail(f"backend source inventory has {len(sources)} files, expected 51")
 
     for needle, expected in EXACT_BACKEND_COUNTS.items():
         require_exact_backend_count(needle, expected)

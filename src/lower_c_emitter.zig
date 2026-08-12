@@ -64,7 +64,6 @@ const lower_c_overlay = @import("lower_c_overlay.zig");
 const lower_c_asm = @import("lower_c_asm.zig");
 const lower_c_layout = @import("lower_c_layout.zig");
 const lower_c_dispatch = @import("lower_c_dispatch.zig");
-const lower_c_module = @import("lower_c_module.zig");
 const LocalInfo = lower_c_model.LocalInfo;
 const ArrayInfo = lower_c_model.ArrayInfo;
 const AggregateEmitUnit = lower_c_model.AggregateEmitUnit;
@@ -440,7 +439,12 @@ pub const CEmitter = struct {
     }
 
     fn collectModule(self: *CEmitter, early_metadata: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
-        try lower_c_module.collect(self, early_metadata);
+        try self.setComptimeDeclarationsFromArtifacts(early_metadata);
+        try self.collectEarlyDeclarationMetadata(early_metadata);
+        try self.collectConstGlobals();
+        try self.collectDeclArtifacts(early_metadata);
+        try self.validateDropGlueFactsAgainstDecls();
+        try self.collectBindThunks();
     }
 
     pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
@@ -583,7 +587,13 @@ pub const CEmitter = struct {
     }
 
     fn emitModule(self: *CEmitter, early_metadata: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
-        try lower_c_module.emit(self, early_metadata);
+        defer self.deinit();
+        try self.collectModule(early_metadata);
+        try self.emitTypePrelude();
+        try self.emitFunctionDeclarations();
+        try self.emitGeneratedDispatchArtifacts();
+        try self.emitGlobalDefinitions();
+        try self.emitFunctionDefinitions();
     }
 
     pub fn emitTypePrelude(self: *CEmitter) anyerror!void {
