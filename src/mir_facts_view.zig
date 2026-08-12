@@ -60,7 +60,7 @@ pub const MirFactsView = struct {
         if (query.current) |function| {
             if (self.targetTypeFactAt(function, query.fact.kind, query.fact.source)) |fact| return fact;
         }
-        if (query.fact.kind == .expression_result) return null;
+        if (!targetTypeKindAllowsModuleFallback(query.fact.kind)) return null;
         if (!isSourcePoint(query.fact.source)) return null;
         return uniqueModuleTargetTypeFact(self.module, query.fact);
     }
@@ -80,6 +80,7 @@ pub const MirFactsView = struct {
             if (self.targetTypeFactAtOwned(function, query.fact.kind, query.fact.source, query.fact.owner.?, query.fact.index)) |fact| return fact;
         }
         if (!isSourcePoint(query.fact.source)) return null;
+        if (!targetTypeKindAllowsModuleFallback(query.fact.kind)) return null;
         return uniqueModuleTargetTypeFact(self.module, query.fact);
     }
 
@@ -196,6 +197,35 @@ fn uniqueModuleTargetTypeFact(module: *const mir.Module, query: TargetTypeFactQu
         }
     }
     return matched;
+}
+
+fn targetTypeKindAllowsModuleFallback(kind: mir.TargetTypeKind) bool {
+    return switch (kind) {
+        .direct_call_result,
+        .direct_call_argument,
+        .dyn_dispatch_result,
+        .dyn_dispatch_argument,
+        .atomic_init_payload,
+        .atomic_init_result,
+        .indirect_call_callee,
+        .const_get_base,
+        .const_get_result,
+        .qualified_union_result,
+        .enum_variant_path_result,
+        .bind,
+        .result_ok,
+        .result_err,
+        .tagged_union,
+        .enum_literal,
+        .string_literal,
+        .array_literal,
+        .struct_literal,
+        .float_literal,
+        .char_literal,
+        .null_literal,
+        => true,
+        else => false,
+    };
 }
 
 fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {
