@@ -74,6 +74,59 @@ pub const MirFactsView = struct {
         _ = self;
         return targetTypeFactInFunctionById(current, key);
     }
+
+    pub fn firstCallTargetKindAt(self: MirFactsView, current: ?*const mir.Function, source: mir.SourcePoint) ?mir.CallTargetKind {
+        _ = self;
+        const function = current orelse return null;
+        for (function.call_target_facts) |fact| {
+            if (sourcePointLineColumnMatches(source, fact.source)) return fact.kind;
+        }
+        return null;
+    }
+
+    pub fn uniqueCallTargetKindAt(self: MirFactsView, current: ?*const mir.Function, source: mir.SourcePoint) ?mir.CallTargetKind {
+        _ = self;
+        const function = current orelse return null;
+        var matched: ?mir.CallTargetKind = null;
+        for (function.call_target_facts) |fact| {
+            if (!callTargetSourceMatches(source, fact.source)) continue;
+            if (matched) |kind| {
+                if (kind != fact.kind) return null;
+            } else {
+                matched = fact.kind;
+            }
+        }
+        return matched;
+    }
+
+    pub fn hasCallTargetKindAt(self: MirFactsView, current: ?*const mir.Function, kind: mir.CallTargetKind, source: mir.SourcePoint, strict_call_source: bool) bool {
+        _ = self;
+        const function = current orelse return false;
+        for (function.call_target_facts) |fact| {
+            if (fact.kind != kind) continue;
+            const matches = if (strict_call_source)
+                callTargetSourceMatches(source, fact.source)
+            else
+                sourcePointLineColumnMatches(source, fact.source);
+            if (matches) return true;
+        }
+        return false;
+    }
+
+    pub fn uniqueConstGetIndexAt(self: MirFactsView, current: ?*const mir.Function, source: mir.SourcePoint) ?usize {
+        _ = self;
+        const function = current orelse return null;
+        var matched: ?usize = null;
+        for (function.const_get_facts) |fact| {
+            if (!sourcePointLineColumnMatches(source, fact.source)) continue;
+            if (matched) |index| {
+                if (index != fact.index) return null;
+            } else {
+                matched = fact.index;
+            }
+        }
+        return matched;
+    }
 };
 
 fn uniqueModuleTargetTypeFact(module: *const mir.Module, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {

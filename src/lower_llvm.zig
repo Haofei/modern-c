@@ -5944,25 +5944,11 @@ const LlvmEmitter = struct {
     }
 
     fn mirCallTargetKindAt(self: *LlvmEmitter, span: ast.Span) ?mir.CallTargetKind {
-        const function = self.currentMirFunction() orelse return null;
-        var matched: ?mir.CallTargetKind = null;
-        for (function.call_target_facts) |fact| {
-            if (!mirCallTargetSourceMatches(span, fact.source)) continue;
-            if (matched) |kind| {
-                if (kind != fact.kind) return null;
-            } else {
-                matched = fact.kind;
-            }
-        }
-        return matched;
+        return mir_facts_view.MirFactsView.init(&self.mir_module).uniqueCallTargetKindAt(self.currentMirFunction(), mir.sourcePointFromSpan(span));
     }
 
     fn mirHasCallTargetKindAt(self: *LlvmEmitter, kind: mir.CallTargetKind, span: ast.Span) bool {
-        const function = self.currentMirFunction() orelse return false;
-        for (function.call_target_facts) |fact| {
-            if (fact.kind == kind and mirCallTargetSourceMatches(span, fact.source)) return true;
-        }
-        return false;
+        return mir_facts_view.MirFactsView.init(&self.mir_module).hasCallTargetKindAt(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span), true);
     }
 
     fn atomicInitPayloadTypeAt(self: *LlvmEmitter, span: ast.Span, expected_result_ty: ast.TypeExpr) ?ast.TypeExpr {
@@ -6037,17 +6023,7 @@ const LlvmEmitter = struct {
     }
 
     fn mirConstGetIndexAt(self: *LlvmEmitter, span: ast.Span) ?usize {
-        const function = self.currentMirFunction() orelse return null;
-        var matched: ?usize = null;
-        for (function.const_get_facts) |fact| {
-            if (!mirSourceMatches(span, fact.source)) continue;
-            if (matched) |index| {
-                if (index != fact.index) return null;
-            } else {
-                matched = fact.index;
-            }
-        }
-        return matched;
+        return mir_facts_view.MirFactsView.init(&self.mir_module).uniqueConstGetIndexAt(self.currentMirFunction(), mir.sourcePointFromSpan(span));
     }
 
     fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {

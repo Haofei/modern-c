@@ -6199,19 +6199,11 @@ pub const CEmitter = struct {
     }
 
     fn mirCallTargetKindAt(self: *CEmitter, span: ast.Span) ?mir.CallTargetKind {
-        const function = self.currentMirFunction() orelse return null;
-        for (function.call_target_facts) |fact| {
-            if (mirSourceMatches(span, fact.source)) return fact.kind;
-        }
-        return null;
+        return mir_facts_view.MirFactsView.init(self.mir_module).firstCallTargetKindAt(self.currentMirFunction(), mir.sourcePointFromSpan(span));
     }
 
     fn mirHasCallTargetKindAt(self: *CEmitter, kind: mir.CallTargetKind, span: ast.Span) bool {
-        const function = self.currentMirFunction() orelse return false;
-        for (function.call_target_facts) |fact| {
-            if (fact.kind == kind and mirSourceMatches(span, fact.source)) return true;
-        }
-        return false;
+        return mir_facts_view.MirFactsView.init(self.mir_module).hasCallTargetKindAt(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span), false);
     }
 
     fn atomicInitPayloadTypeAt(self: *CEmitter, span: ast.Span, expected_result_ty: ast.TypeExpr) ?ast.TypeExpr {
@@ -6264,17 +6256,7 @@ pub const CEmitter = struct {
     }
 
     fn mirConstGetIndexAt(self: *CEmitter, span: ast.Span) ?usize {
-        const function = self.currentMirFunction() orelse return null;
-        var matched: ?usize = null;
-        for (function.const_get_facts) |fact| {
-            if (!mirSourceMatches(span, fact.source)) continue;
-            if (matched) |index| {
-                if (index != fact.index) return null;
-            } else {
-                matched = fact.index;
-            }
-        }
-        return matched;
+        return mir_facts_view.MirFactsView.init(self.mir_module).uniqueConstGetIndexAt(self.currentMirFunction(), mir.sourcePointFromSpan(span));
     }
 
     fn mirAggregateTargetTypeForExpr(self: *CEmitter, expr: ast.Expr) !?ast.TypeExpr {
