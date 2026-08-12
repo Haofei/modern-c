@@ -49,9 +49,7 @@ fn appendCSourceMapTest(allocator: std.mem.Allocator, module: ast.Module, out: *
 
     var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromSyntaxDecls(allocator, module.decls);
     defer artifacts.deinit(allocator);
-    var source_rows = try @import("source_map_rows.zig").SourceMapRows.collectFromSourceArtifacts(allocator, artifacts.source_map_artifacts);
-    defer source_rows.deinit(allocator);
-    try lower_c.appendCSourceMapFromGenerated(allocator, source_rows, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
+    try lower_c.appendCSourceMapFromGenerated(allocator, artifacts.source_map_artifacts, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
         .profile = profile,
         .source_path = source_path,
     });

@@ -9,13 +9,13 @@ const std = @import("std");
 const artifact_model = @import("artifact_model.zig");
 const ast_bridge = @import("ast_bridge.zig");
 const backend = @import("backend.zig");
-const source_map_rows = @import("source_map_rows.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const mir = @import("mir.zig");
 const mir_syntax = @import("mir_syntax.zig");
 
 pub fn appendSourceMap(
     allocator: std.mem.Allocator,
-    source_map: source_map_rows.SourceMapRows,
+    source_map_artifacts: []const declaration_artifacts.SourceMapArtifact,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     mir_module: *const mir.Module,
@@ -39,7 +39,7 @@ pub fn appendSourceMap(
         .module_name = moduleNameFromPath(source_path),
     };
     defer mapper.deinit();
-    try mapper.collectRowArtifacts(source_map.artifacts);
+    try mapper.collectRowArtifacts(source_map_artifacts);
     try mapper.emitCollectedRows();
 
     var mir_facts_input: std.ArrayList(u8) = .empty;
@@ -318,13 +318,13 @@ const SourceMapEmitter = struct {
     symbol_kind: []const u8 = "value",
     visibility: []const u8 = "internal",
     origin: []const u8 = "source",
-    decl_row_artifacts: std.ArrayList(source_map_rows.RowArtifact) = .empty,
+    decl_row_artifacts: std.ArrayList(declaration_artifacts.SourceMapArtifact) = .empty,
 
     fn deinit(self: *SourceMapEmitter) void {
         self.decl_row_artifacts.deinit(self.allocator);
     }
 
-    fn collectRowArtifacts(self: *SourceMapEmitter, artifacts: []const source_map_rows.RowArtifact) !void {
+    fn collectRowArtifacts(self: *SourceMapEmitter, artifacts: []const declaration_artifacts.SourceMapArtifact) !void {
         for (artifacts) |artifact| {
             try self.decl_row_artifacts.append(self.allocator, artifact);
         }

@@ -69,8 +69,8 @@ table. `VerifiedProgram` no longer stores a general `ast.Module` or raw
 declaration slice. Declaration-list mechanics now go through collected
 `EarlyDeclarationArtifacts`, carried by `LowerRequest` instead of being stored
 on `VerifiedProgram`. Source-map row syntax enumeration is isolated in
-`source_map_rows.zig`; `EmitMapRequest` carries collected `SourceMapRows`
-artifacts rather than a declaration view. The early metadata artifact boundary
+`declaration_artifacts.zig`; `EmitMapRequest` carries collected
+`SourceMapArtifact` values rather than a declaration view or wrapper module. The early metadata artifact boundary
 now pre-collects const fn/global/type/aggregate categories while still carrying
 ordered declaration artifacts for C declaration collection. It still carries
 declaration slices for not-yet-normalized comptime and LLVM callable/global

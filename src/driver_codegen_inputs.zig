@@ -14,6 +14,7 @@ const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir.zig");
 
 pub const DeclarationArtifacts = declaration_artifacts.EarlyDeclarationArtifacts;
+pub const SourceMapArtifact = declaration_artifacts.SourceMapArtifact;
 const CompilationSession = compiler_session.CompilationSession;
 const StageFailure = compiler_session.StageFailure;
 

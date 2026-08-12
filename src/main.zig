@@ -25,7 +25,6 @@ const lower_cov = @import("lower_cov.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const monomorphize = @import("monomorphize.zig");
-const source_map_rows = @import("source_map_rows.zig");
 const symbols = @import("symbols.zig");
 
 const usage =
@@ -769,9 +768,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .artifact_kind = "c",
         .backend_name = "c",
     });
-    var source_rows = try source_map_rows.SourceMapRows.collectFromSourceArtifacts(allocator, early_metadata.source_map_artifacts);
-    defer source_rows.deinit(allocator);
-    try attachCSourceMapDigests(allocator, be, program, source_rows, output.items, lower_opts, &bundle);
+    try attachCSourceMapDigests(allocator, be, program, early_metadata.source_map_artifacts, output.items, lower_opts, &bundle);
     try session.writeArtifactWithMetadata(output.items, output_path, bundle);
 }
 
@@ -880,9 +877,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .backend_name = "c",
         .toolchain_identity = toolchain_identity,
     });
-    var source_rows = try source_map_rows.SourceMapRows.collectFromSourceArtifacts(allocator, early_metadata.source_map_artifacts);
-    defer source_rows.deinit(allocator);
-    try attachCSourceMapDigests(allocator, be, program, source_rows, raw_c.items, lower_opts, &bundle);
+    try attachCSourceMapDigests(allocator, be, program, early_metadata.source_map_artifacts, raw_c.items, lower_opts, &bundle);
     session.publishExistingArtifactWithMetadata(tmp_exe, output_path, bundle, "executable") catch {
         return error.BuildFailed;
     };
@@ -895,7 +890,7 @@ fn attachCSourceMapDigests(
     allocator: std.mem.Allocator,
     be: backend.Backend,
     program: backend.VerifiedProgram,
-    source_map: source_map_rows.SourceMapRows,
+    source_map_artifacts: []const driver_codegen_inputs.SourceMapArtifact,
     generated_c: []const u8,
     lower_opts: backend.LowerOptions,
     bundle: *artifact_model.ArtifactBundle,
@@ -905,7 +900,7 @@ fn attachCSourceMapDigests(
     defer map_bytes.deinit(allocator);
     try be.emitMapRequest(allocator, .{
         .program = program,
-        .source_map_rows = source_map,
+        .source_map_artifacts = source_map_artifacts,
         .out = &map_bytes,
         .generated_artifact = generated_c,
         .opts = lower_opts,
@@ -1194,11 +1189,9 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    var source_map = try source_map_rows.SourceMapRows.collectFromSourceArtifacts(allocator, early_metadata.source_map_artifacts);
-    defer source_map.deinit(allocator);
     try be.emitMapRequest(allocator, .{
         .program = program,
-        .source_map_rows = source_map,
+        .source_map_artifacts = early_metadata.source_map_artifacts,
         .out = &output,
         .generated_artifact = generated_c.items,
         .opts = .{

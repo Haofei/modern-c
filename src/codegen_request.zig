@@ -2,7 +2,6 @@ const std = @import("std");
 
 const codegen_options = @import("codegen_options.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
-const source_map_rows = @import("source_map_rows.zig");
 const verified_program = @import("verified_program.zig");
 
 /// Backend lowering request.
@@ -23,7 +22,7 @@ pub const LowerRequest = struct {
 /// from code-generation semantics.
 pub const EmitMapRequest = struct {
     program: verified_program.VerifiedProgram,
-    source_map_rows: source_map_rows.SourceMapRows,
+    source_map_artifacts: []const declaration_artifacts.SourceMapArtifact,
     out: *std.ArrayList(u8),
     generated_artifact: []const u8,
     opts: codegen_options.LowerOptions,
@@ -34,5 +33,5 @@ test "codegen requests keep syntax mechanics behind named artifact fields" {
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "declaration_artifacts") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "source_map_rows") != null);
+    try std.testing.expect(std.mem.indexOf(u8, source, "source_map_artifacts") != null);
 }

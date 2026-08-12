@@ -413,6 +413,7 @@ removing backend authority before adding new abstractions:
 | 225 | Name the driver artifact source as syntax-backed. | Complete: `declaration_artifacts.zig` now exposes `SyntaxDeclarationSlice` and `collectFromSyntaxDecls(...)`; `driver_codegen_inputs.zig` uses the explicit syntax-backed entrypoint, while inventory gates prevent production driver code from calling the generic `collectFromDecls(module.decls)` compatibility wrapper. |
 | 226 | Remove source-map row direct AST dependency. | Complete: `source_map_rows.zig` now aliases `declaration_artifacts.SourceMapArtifact` as `RowArtifact` and duplicates pre-collected source-map artifacts without importing `ast.zig`; inventory gates keep direct source-map row AST imports and duplicate row-union definitions at zero. |
 | 227 | Delete generic declaration artifact collection wrapper. | Complete: tests and driver helpers now call `EarlyDeclarationArtifacts.collectFromSyntaxDecls(...)` explicitly, the old `collectFromDecls([]const ast.Decl)` wrapper was removed, and inventory gates keep the generic wrapper signature at zero. |
+| 228 | Delete the source-map rows wrapper module. | Complete: `EmitMapRequest` now carries `[]const declaration_artifacts.SourceMapArtifact` directly, `lower_c_map` consumes that slice without `SourceMapRows`, `source_map_rows.zig` was removed, and inventory gates keep the wrapper import/request shape at zero. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

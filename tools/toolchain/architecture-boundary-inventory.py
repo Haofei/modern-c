@@ -81,11 +81,11 @@ EXACT_FILE_COUNTS = {
     ("src/declaration_artifacts.zig", "[]const ast.Decl"): 1,
     ("src/declaration_artifacts.zig", "pub const SyntaxDeclarationSlice = []const ast.Decl"): 1,
     ("src/declaration_artifacts.zig", "pub const EarlyDeclarationArtifacts = struct"): 1,
-    ("src/source_map_rows.zig", "[]const ast.Decl"): 0,
-    ("src/source_map_rows.zig", '@import("ast.zig")'): 0,
-    ("src/source_map_rows.zig", "pub const SourceMapRows = struct"): 1,
-    ("src/source_map_rows.zig", "pub const RowArtifact = union(enum)"): 0,
-    ("src/source_map_rows.zig", "pub const RowArtifact = declaration_artifacts.SourceMapArtifact"): 1,
+    ("src/codegen_request.zig", '@import("source_map_rows.zig")'): 0,
+    ("src/codegen_request.zig", "source_map_rows: source_map_rows.SourceMapRows"): 0,
+    ("src/codegen_request.zig", "source_map_artifacts: []const declaration_artifacts.SourceMapArtifact"): 1,
+    ("src/lower_c_map.zig", "source_map_rows"): 0,
+    ("src/lower_c_map.zig", "[]const declaration_artifacts.SourceMapArtifact"): 2,
     ("src/mir_facts_view.zig", "targetTypeFactAtWithModuleFallback"): 0,
     ("src/mir_facts_view.zig", "targetTypeFactAtOwnedWithModuleFallback"): 0,
     ("src/mir_facts_view.zig", "targetTypeFactAtCurrentSpan"): 1,
@@ -202,10 +202,6 @@ REQUIRED_ANCHORS = {
     "src/early_declaration_metadata.zig": (
         "Compatibility shim for the old early-declaration metadata module name.",
         "The artifact definitions now live in `declaration_artifacts.zig`",
-    ),
-    "src/source_map_rows.zig": (
-        "Transitional source-map row artifacts",
-        "enumeration is isolated in `declaration_artifacts.zig`",
     ),
     "src/loader.zig": (
         "MC has no",

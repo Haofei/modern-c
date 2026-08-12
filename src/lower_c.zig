@@ -4,7 +4,6 @@ const ast_bridge = @import("ast_bridge.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
-const source_map_rows = @import("source_map_rows.zig");
 const mir = @import("mir.zig");
 const lower_c_emitter = @import("lower_c_emitter.zig");
 const lower_c_inspect = @import("lower_c_inspect.zig");
@@ -53,7 +52,7 @@ fn backendEmitMap(
     _ = ctx;
     return appendCSourceMapFromGenerated(
         allocator,
-        request.source_map_rows,
+        request.source_map_artifacts,
         request.out,
         request.generated_artifact,
         request.program.typed_mir,
@@ -138,7 +137,7 @@ fn appendCProfileWithMirSourceSpelling(
 
 pub fn appendCSourceMapFromGenerated(
     allocator: std.mem.Allocator,
-    source_map_view: source_map_rows.SourceMapRows,
+    source_map_artifacts: []const declaration_artifacts.SourceMapArtifact,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     typed_mir: *const mir.Module,
@@ -146,5 +145,5 @@ pub fn appendCSourceMapFromGenerated(
     generated_c_path: ?[]const u8,
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
-    try lower_c_map.appendSourceMap(allocator, source_map_view, out, generated_c, typed_mir, source_path, generated_c_path, opts);
+    try lower_c_map.appendSourceMap(allocator, source_map_artifacts, out, generated_c, typed_mir, source_path, generated_c_path, opts);
 }
