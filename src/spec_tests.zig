@@ -19,7 +19,7 @@ const sema = @import("sema.zig");
 fn appendCModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
     var module_mir = try mir.buildOpt(allocator, module, .{});
     defer module_mir.deinit();
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromSyntaxDecls(allocator, module.decls);
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, module.decls);
     defer artifacts.deinit(allocator);
     try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts, &module_mir, out, .kernel, null, .{}, false, null);
 }
@@ -27,7 +27,7 @@ fn appendCModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std
 fn appendLlvmModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
     var module_mir = try mir.buildOpt(allocator, module, .{});
     defer module_mir.deinit();
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromSyntaxDecls(allocator, module.decls);
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, module.decls);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts, &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
 }

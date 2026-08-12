@@ -10,8 +10,6 @@ const eval = @import("eval.zig");
 const module_parser = @import("module_parser.zig");
 const std = @import("std");
 
-pub const SyntaxDeclarationSlice = []const ast.Decl;
-
 /// Transitional declaration artifacts.
 ///
 /// Codegen compatibility prepasses still read top-level syntax declarations,
@@ -30,7 +28,7 @@ pub const EarlyDeclarationArtifacts = struct {
     overlay_union_artifacts: []const ast.OverlayUnionDecl,
     source_map_artifacts: []const SourceMapArtifact,
 
-    pub fn collectFromSyntaxDecls(allocator: std.mem.Allocator, decls: SyntaxDeclarationSlice) !EarlyDeclarationArtifacts {
+    fn collectFromSyntaxDecls(allocator: std.mem.Allocator, syntax_items: []const ast.Decl) !EarlyDeclarationArtifacts {
         var function_artifacts: std.ArrayList(FunctionArtifact) = .empty;
         errdefer function_artifacts.deinit(allocator);
         var global_artifacts: std.ArrayList(GlobalArtifact) = .empty;
@@ -54,7 +52,7 @@ pub const EarlyDeclarationArtifacts = struct {
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
         errdefer source_map_artifacts.deinit(allocator);
 
-        for (decls) |decl| switch (decl.kind) {
+        for (syntax_items) |decl| switch (decl.kind) {
             .fn_decl => |fn_decl| {
                 try function_artifacts.append(allocator, FunctionArtifact.fromDecl(fn_decl, decl.attrs, false));
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
@@ -158,6 +156,18 @@ pub const EarlyDeclarationArtifacts = struct {
         defer allocator.free(syntax_decls);
         for (decls, 0..) |entry, i| syntax_decls[i] = entry.decl;
         return collectFromSyntaxDecls(allocator, syntax_decls);
+    }
+
+    pub fn collectFromModuleDeclsForTests(allocator: std.mem.Allocator, syntax_items: []const ast.Decl) !EarlyDeclarationArtifacts {
+        var resolved_decls = try allocator.alloc(module_parser.ResolvedDecl, syntax_items.len);
+        defer allocator.free(resolved_decls);
+        for (syntax_items, 0..) |decl, i| {
+            resolved_decls[i] = .{
+                .file_id = @enumFromInt(0),
+                .decl = decl,
+            };
+        }
+        return collectFromResolvedDecls(allocator, resolved_decls);
     }
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
@@ -476,7 +486,7 @@ test "declaration artifacts collect from resolved declaration stream" {
         };
     }
 
-    var from_syntax = try EarlyDeclarationArtifacts.collectFromSyntaxDecls(std.testing.allocator, parsed.module.decls);
+    var from_syntax = try EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(std.testing.allocator, parsed.module.decls);
     defer from_syntax.deinit(std.testing.allocator);
     var from_resolved = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls);
     defer from_resolved.deinit(std.testing.allocator);

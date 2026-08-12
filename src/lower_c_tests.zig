@@ -16,7 +16,7 @@ const test_support = @import("test_support.zig");
 fn appendLlvmModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
     var module_mir = try mir.buildOpt(allocator, module, .{});
     defer module_mir.deinit();
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromSyntaxDecls(allocator, module.decls);
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, module.decls);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts, &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
 }
@@ -34,7 +34,7 @@ fn appendCProfileWithSourcePathTest(allocator: std.mem.Allocator, module: ast.Mo
 }
 
 fn appendCProfileWithMirTest(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) !void {
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromSyntaxDecls(allocator, module.decls);
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, module.decls);
     defer artifacts.deinit(allocator);
     try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts, module_mir, out, profile, source_path, checks, stub_asm, reporter);
 }
@@ -47,7 +47,7 @@ fn appendCSourceMapTest(allocator: std.mem.Allocator, module: ast.Module, out: *
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
 
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromSyntaxDecls(allocator, module.decls);
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, module.decls);
     defer artifacts.deinit(allocator);
     try lower_c.appendCSourceMapFromGenerated(allocator, artifacts.source_map_artifacts, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
         .profile = profile,

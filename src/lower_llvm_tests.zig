@@ -147,7 +147,7 @@ fn appendLlvmCheckedMirTest(allocator: std.mem.Allocator, module: ast.Module, mo
 }
 
 fn appendLlvmCheckedMirProfileTest(allocator: std.mem.Allocator, module: ast.Module, module_mir: *const mir.Module, output: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromSyntaxDecls(allocator, module.decls);
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, module.decls);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts, module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
 }
@@ -13567,7 +13567,7 @@ test "LLVM unsupported diagnostics use nearest source span for generated nodes" 
     var module_mir = try mir.build(std.testing.allocator, module);
     defer module_mir.deinit();
     const verified = try backend_mod.VerifiedProgram.init(&module_mir, &reporter);
-    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromSyntaxDecls(std.testing.allocator, module.decls);
+    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(std.testing.allocator, module.decls);
     defer early_metadata.deinit(std.testing.allocator);
     const llvm_backend = lower_llvm.mcBackend();
     try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerRequest(std.testing.allocator, .{
