@@ -541,7 +541,7 @@ pub const CEmitter = struct {
                 if (!mir_ownership_authority.dropGlueDeclMatches(self.mir_module, type_name, fn_decl.name.text)) return error.UnsupportedCEmission;
             }
         }
-        try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = fn_decl, .attrs = attrs, .is_extern = is_extern });
+        try self.function_decl_artifacts.append(self.allocator, FunctionDeclArtifact.fromDecl(fn_decl, attrs, is_extern));
         if (!is_extern and fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
         if (!is_extern) if (backendNameOverride(attrs)) |name| try self.backend_names.put(fn_decl.name.text, name);
         try self.collectFunctionSliceTypes(fn_decl);
@@ -561,8 +561,9 @@ pub const CEmitter = struct {
         // `bind(scalar, f)` closures that need an env-widening thunk.
         for (self.function_decl_artifacts.items) |artifact| {
             if (artifact.is_extern) continue;
-            if (artifact.fn_decl.body) |body| {
-                const mir_function = self.mirFunctionNamed(artifact.fn_decl.name.text) orelse return error.UnsupportedCEmission;
+            const fn_decl = artifact.toDecl();
+            if (fn_decl.body) |body| {
+                const mir_function = self.mirFunctionNamed(fn_decl.name.text) orelse return error.UnsupportedCEmission;
                 try self.collectBlockBindThunks(body, mir_function);
             }
         }
@@ -611,12 +612,13 @@ pub const CEmitter = struct {
         // declared later in the (possibly import-merged) source resolves — MC
         // resolves calls module-wide, independent of declaration order.
         for (self.function_decl_artifacts.items) |artifact| {
+            const fn_decl = artifact.toDecl();
             if (artifact.is_extern) {
                 // Extern prototypes must precede any function body that calls them;
                 // an imported `extern fn` can be merged after its caller.
-                try self.emitExternFunction(artifact.fn_decl);
-            } else if (artifact.fn_decl.body != null) {
-                try self.emitFunctionForwardDecl(artifact.fn_decl);
+                try self.emitExternFunction(fn_decl);
+            } else if (fn_decl.body != null) {
+                try self.emitFunctionForwardDecl(fn_decl);
             }
         }
     }
@@ -644,14 +646,15 @@ pub const CEmitter = struct {
 
     pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
         for (self.function_decl_artifacts.items) |artifact| {
+            const fn_decl = artifact.toDecl();
             if (artifact.is_extern) {
                 // Extern prototypes were already emitted in the forward-declaration pass.
                 continue;
             }
-            if (artifact.fn_decl.body) |body| {
-                try self.emitFunction(artifact.fn_decl, body, artifact.attrs);
+            if (fn_decl.body) |body| {
+                try self.emitFunction(fn_decl, body, artifact.attrs);
             } else {
-                try self.emitFunctionPrototype(artifact.fn_decl);
+                try self.emitFunctionPrototype(fn_decl);
             }
         }
     }

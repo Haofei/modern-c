@@ -5,9 +5,56 @@ const ast_query = @import("ast_query.zig");
 const mir = @import("mir.zig");
 
 pub const FunctionDeclArtifact = struct {
-    fn_decl: ast.FnDecl,
+    name: ast.Ident,
+    associated_owner: ?ast.Ident,
+    abi: ?[]const u8,
+    params: []ast.Param,
+    return_type: ?ast.TypeExpr,
+    return_borrow_source: ?ast.Ident,
+    body: ?ast.Block,
+    is_const: bool,
+    exported: bool,
+    is_variadic: bool,
+    bounds: []ast.TraitBound,
+    is_async: bool,
     attrs: []const ast.Attr,
     is_extern: bool,
+
+    pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionDeclArtifact {
+        return .{
+            .name = fn_decl.name,
+            .associated_owner = fn_decl.associated_owner,
+            .abi = fn_decl.abi,
+            .params = fn_decl.params,
+            .return_type = fn_decl.return_type,
+            .return_borrow_source = fn_decl.return_borrow_source,
+            .body = fn_decl.body,
+            .is_const = fn_decl.is_const,
+            .exported = fn_decl.exported,
+            .is_variadic = fn_decl.is_variadic,
+            .bounds = fn_decl.bounds,
+            .is_async = fn_decl.is_async,
+            .attrs = attrs,
+            .is_extern = is_extern,
+        };
+    }
+
+    pub fn toDecl(self: FunctionDeclArtifact) ast.FnDecl {
+        return .{
+            .name = self.name,
+            .associated_owner = self.associated_owner,
+            .abi = self.abi,
+            .params = self.params,
+            .return_type = self.return_type,
+            .return_borrow_source = self.return_borrow_source,
+            .body = self.body,
+            .is_const = self.is_const,
+            .exported = self.exported,
+            .is_variadic = self.is_variadic,
+            .bounds = self.bounds,
+            .is_async = self.is_async,
+        };
+    }
 };
 
 pub const AutoDropLocalCleanup = struct {
@@ -95,9 +142,9 @@ fn dropGlueDeclArtifactMatches(
     artifact: FunctionDeclArtifact,
 ) bool {
     if (artifact.is_extern) return false;
-    if (!std.mem.eql(u8, artifact.fn_decl.name.text, fact.release_fn)) return false;
+    if (!std.mem.eql(u8, artifact.name.text, fact.release_fn)) return false;
     if (!hasNamedAttr(artifact.attrs, "drop")) return false;
-    const declared_resource = ast_query.dropPointerReleaseParamTypeName(artifact.fn_decl) orelse return false;
+    const declared_resource = ast_query.dropPointerReleaseParamTypeName(artifact.toDecl()) orelse return false;
     if (!std.mem.eql(u8, declared_resource, fact.resource_type)) return false;
     return dropGlueDeclMatches(module, declared_resource, fact.release_fn);
 }

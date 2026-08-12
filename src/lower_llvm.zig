@@ -720,7 +720,7 @@ const LlvmEmitter = struct {
         for (self.function_artifacts) |function| {
             const fn_decl = function.toDecl();
             try self.collectFunction(fn_decl, function.attrs);
-            try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = fn_decl, .attrs = function.attrs, .is_extern = function.is_extern });
+            try self.function_decl_artifacts.append(self.allocator, LlvmFunctionDeclArtifact.fromDecl(fn_decl, function.attrs, function.is_extern));
         }
         for (self.global_artifacts) |global| {
             try self.collectGlobal(global);
@@ -830,10 +830,11 @@ const LlvmEmitter = struct {
 
     fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {
         for (self.function_decl_artifacts.items) |artifact| {
+            const fn_decl = artifact.toDecl();
             if (artifact.is_extern) {
-                try self.emitExternFunction(artifact.fn_decl);
-            } else if (artifact.fn_decl.body) |body| {
-                try self.emitFunction(artifact.fn_decl, body, artifact.attrs);
+                try self.emitExternFunction(fn_decl);
+            } else if (fn_decl.body) |body| {
+                try self.emitFunction(fn_decl, body, artifact.attrs);
             }
         }
     }
