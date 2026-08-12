@@ -3332,6 +3332,7 @@ test "MIR owns inferred local types for arithmetic domain call results" {
 test "MIR owns const_get base result and index facts" {
     const source =
         \\type Words = [3]u32;
+        \\fn other() -> u32 { return 0; }
         \\fn get_word(values: Words) -> u32 { return values.const_get<2>(); }
     ;
 
@@ -3348,6 +3349,7 @@ test "MIR owns const_get base result and index facts" {
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "get_word").?;
+    const other = functionByName(typed_mir, "other").?;
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.const_get, function.call_target_facts[0].kind);
     try std.testing.expectEqual(@as(usize, 1), function.const_get_facts.len);
@@ -3367,6 +3369,21 @@ test "MIR owns const_get base result and index facts" {
     try std.testing.expectEqualStrings("Words", typeExprHeadName(base_fact.?.target_ty).?);
     try std.testing.expectEqualStrings("u32", typeExprHeadName(result_fact.?.target_ty).?);
     try std.testing.expectEqual(@as(?usize, 2), instruction_index);
+    const facts = mir_facts_view.MirFactsView.init(&typed_mir);
+    try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+        .current = &other,
+        .fact = .{
+            .kind = .const_get_base,
+            .source = base_fact.?.source,
+        },
+    }) == null);
+    try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+        .current = &other,
+        .fact = .{
+            .kind = .const_get_result,
+            .source = result_fact.?.source,
+        },
+    }) == null);
     try mir.validateConstGetFactsForLowering(typed_mir);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);

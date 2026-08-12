@@ -208,8 +208,6 @@ fn targetTypeKindAllowsModuleFallback(kind: mir.TargetTypeKind) bool {
         .atomic_init_payload,
         .atomic_init_result,
         .indirect_call_callee,
-        .const_get_base,
-        .const_get_result,
         => true,
         else => false,
     };
