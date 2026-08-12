@@ -670,8 +670,8 @@ fn appendDeclTest(allocator: std.mem.Allocator, decl: ast.Decl, out: *std.ArrayL
 
 fn runFacts(session: *CompilationSession, path: []const u8, source: []const u8) !void {
     const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
+    _ = path;
+    _ = source;
 
     if (session.resolved_sources) |resolved_sources| {
         var facts: std.ArrayList(u8) = .empty;
@@ -680,29 +680,13 @@ fn runFacts(session: *CompilationSession, path: []const u8, source: []const u8) 
         try session.writeStdout(facts.items);
         return;
     }
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
-    defer module.deinit(parse_allocator);
-
-    if (diag.has_errors) {
-        diag.render();
-        return error.FactsFailed;
-    }
-
-    var facts: std.ArrayList(u8) = .empty;
-    defer facts.deinit(allocator);
-    try ir.appendFacts(allocator, module, &facts);
-    try session.writeStdout(facts.items);
+    return error.MissingResolvedSources;
 }
 
 fn runLowerIr(session: *CompilationSession, path: []const u8, source: []const u8) !void {
     const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
+    _ = path;
+    _ = source;
 
     if (session.resolved_sources) |resolved_sources| {
         var output: std.ArrayList(u8) = .empty;
@@ -711,23 +695,7 @@ fn runLowerIr(session: *CompilationSession, path: []const u8, source: []const u8
         try session.writeStdout(output.items);
         return;
     }
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
-    defer module.deinit(parse_allocator);
-
-    if (diag.has_errors) {
-        diag.render();
-        return error.LowerIrFailed;
-    }
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(allocator);
-    try ir.appendLowerIr(allocator, module, &output);
-    try session.writeStdout(output.items);
+    return error.MissingResolvedSources;
 }
 
 fn runTrap(session: *CompilationSession, path: []const u8, source: []const u8) !void {
