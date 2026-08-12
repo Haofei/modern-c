@@ -6,7 +6,7 @@ const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
-const early_declaration_metadata = @import("early_declaration_metadata.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
@@ -170,7 +170,7 @@ pub fn appendLayoutAsserts(allocator: std.mem.Allocator, module: ast_bridge.Modu
 
     var emitter = CEmitter.init(allocator, out, &typed_mir, null, null);
     defer emitter.deinit();
-    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     try emitter.collectModule(early_metadata);
 
@@ -191,7 +191,7 @@ pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast_bridge.Module
 
     var emitter = CEmitter.init(allocator, out, &typed_mir, null, null);
     defer emitter.deinit();
-    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     try emitter.collectModule(early_metadata);
 
@@ -233,14 +233,14 @@ pub fn appendModule(
     var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = optimize });
     defer typed_mir.deinit();
 
-    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     try appendModuleMir(allocator, early_metadata, &typed_mir, out, source_path, ksan, msan, csan, stub_asm, reporter);
 }
 
 pub fn appendModuleMir(
     allocator: std.mem.Allocator,
-    early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts,
+    early_metadata: declaration_artifacts.EarlyDeclarationArtifacts,
     typed_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     source_path: ?[]const u8,
@@ -279,7 +279,7 @@ pub const CEmitter = struct {
     const_globals: std.StringHashMap(eval.ComptimeValue),
     const_global_widths: std.StringHashMap(u16),
     const_global_domains: std.StringHashMap(eval.DomainWidth),
-    owned_comptime_declarations: early_declaration_metadata.ComptimeDeclarationArtifacts = .empty,
+    owned_comptime_declarations: declaration_artifacts.ComptimeDeclarationArtifacts = .empty,
     comptime_declarations: ?eval.ComptimeDeclarations = null,
     structs: std.StringHashMap(ast_bridge.StructDecl),
     aggregate_decl_artifacts: std.ArrayList(AggregateDeclArtifact) = .empty,
@@ -457,17 +457,17 @@ pub const CEmitter = struct {
         self.loop_labels.deinit(self.allocator);
     }
 
-    fn collectModule(self: *CEmitter, early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
+    fn collectModule(self: *CEmitter, early_metadata: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
         try lower_c_module.collect(self, early_metadata);
     }
 
-    pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) !void {
+    pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
         self.owned_comptime_declarations.deinit(self.allocator);
-        self.owned_comptime_declarations = try early_declaration_metadata.ComptimeDeclarationArtifacts.collectFromArtifacts(self.allocator, artifacts);
+        self.owned_comptime_declarations = try declaration_artifacts.ComptimeDeclarationArtifacts.collectFromArtifacts(self.allocator, artifacts);
         self.comptime_declarations = self.owned_comptime_declarations.view();
     }
 
-    pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) !void {
+    pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
         // Pre-pass: collect const/comptime metadata and pre-register nominal type
         // names up front, so fixed-array lengths, reflection queries, and type-name
         // mangling resolve during the artifact-collection pass below. Const global
@@ -506,12 +506,12 @@ pub const CEmitter = struct {
         });
     }
 
-    pub fn collectDeclArtifacts(self: *CEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
+    pub fn collectDeclArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
         try self.collectCallableValueArtifacts(artifacts.callable_value_artifacts);
         try self.collectTypeArtifactsFromArtifacts(artifacts.type_artifacts);
     }
 
-    fn collectCallableValueArtifacts(self: *CEmitter, artifacts: []const early_declaration_metadata.CallableValueArtifact) anyerror!void {
+    fn collectCallableValueArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.CallableValueArtifact) anyerror!void {
         for (artifacts) |artifact| switch (artifact) {
             .global => |global| try self.collectGlobalDeclArtifact(global),
             .function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, false),
@@ -521,7 +521,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn collectTypeArtifactsFromArtifacts(self: *CEmitter, artifacts: []const early_declaration_metadata.TypeArtifact) anyerror!void {
+    fn collectTypeArtifactsFromArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.TypeArtifact) anyerror!void {
         for (artifacts) |artifact| switch (artifact) {
             .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
             .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
@@ -588,7 +588,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitModule(self: *CEmitter, early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
+    fn emitModule(self: *CEmitter, early_metadata: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
         try lower_c_module.emit(self, early_metadata);
     }
 

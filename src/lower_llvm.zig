@@ -5,7 +5,7 @@ const backend_cleanup = @import("backend_cleanup.zig");
 const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
-const early_declaration_metadata = @import("early_declaration_metadata.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
@@ -307,14 +307,14 @@ pub fn appendLlvmCheckedMir(allocator: std.mem.Allocator, module: ast_bridge.Mod
 }
 
 pub fn appendLlvmCheckedMirProfile(allocator: std.mem.Allocator, module: ast_bridge.Module, module_mir: *const mir.Module, out: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target_arch: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, early_metadata, module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
 }
 
 fn appendLlvmCheckedMirProfileWithSourceSpelling(
     allocator: std.mem.Allocator,
-    early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts,
+    early_metadata: declaration_artifacts.EarlyDeclarationArtifacts,
     module_mir: *const mir.Module,
     source_spelling: backend_mod.SourceSpellingView,
     out: *std.ArrayList(u8),
@@ -330,7 +330,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         else => return err,
     };
     if (!source_spelling.validateAgainstMir(module_mir.*)) return error.UnsupportedLlvmEmission;
-    var owned_comptime_declarations = try early_declaration_metadata.ComptimeDeclarationArtifacts.collectFromArtifacts(allocator, early_metadata);
+    var owned_comptime_declarations = try declaration_artifacts.ComptimeDeclarationArtifacts.collectFromArtifacts(allocator, early_metadata);
     defer owned_comptime_declarations.deinit(allocator);
     const comptime_declarations = owned_comptime_declarations.view();
     const ksan = checks.ksan;
@@ -475,8 +475,8 @@ const LlvmEmitter = struct {
     // alias `@Y = alias <fnty>, ptr @name` so the override symbol is linkable (the C backend
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
-    callable_value_artifacts: []const early_declaration_metadata.CallableValueArtifact = &.{},
-    type_artifacts: []const early_declaration_metadata.TypeArtifact = &.{},
+    callable_value_artifacts: []const declaration_artifacts.CallableValueArtifact = &.{},
+    type_artifacts: []const declaration_artifacts.TypeArtifact = &.{},
     struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
     function_decl_artifacts: std.ArrayList(LlvmFunctionDeclArtifact) = .empty,
     global_decl_artifacts: std.ArrayList(ast_bridge.GlobalDecl) = .empty,
@@ -597,7 +597,7 @@ const LlvmEmitter = struct {
         self.scratch.deinit();
     }
 
-    fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: early_declaration_metadata.EarlyDeclarationArtifacts) !void {
+    fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
         for (artifacts.callable_value_artifacts) |artifact| switch (artifact) {
             .function => |function| {
                 const fn_decl = function.fn_decl;

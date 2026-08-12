@@ -5,11 +5,11 @@
 //! narrow callback context, keeping collection/emission ordering independent of
 //! expression lowering and the emitter's large mutable function state.
 
-const early_declaration_metadata = @import("early_declaration_metadata.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 
 /// Populate all declaration and type artifacts needed by C emission without
 /// writing output.  Layout-header emission deliberately uses this same phase.
-pub fn collect(emitter: anytype, early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
+pub fn collect(emitter: anytype, early_metadata: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
     try emitter.setComptimeDeclarationsFromArtifacts(early_metadata);
     try emitter.collectEarlyDeclarationMetadata(early_metadata);
     try emitter.collectConstGlobals();
@@ -19,7 +19,7 @@ pub fn collect(emitter: anytype, early_metadata: early_declaration_metadata.Earl
 }
 
 /// Emit a complete translation unit in dependency-safe module order.
-pub fn emit(emitter: anytype, early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts) anyerror!void {
+pub fn emit(emitter: anytype, early_metadata: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
     defer emitter.deinit();
     try collect(emitter, early_metadata);
     try emitter.emitTypePrelude();

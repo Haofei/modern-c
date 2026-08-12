@@ -31,7 +31,7 @@ EXACT_BACKEND_COUNTS = {
     '@import("ast_query.zig")': 0,
     '@import("expr_syntax.zig")': 0,
     '@import("sema': 0,
-    '@import("early_declaration_metadata.zig")': 4,
+    '@import("early_declaration_metadata.zig")': 0,
     '@import("mir_facts_view.zig")': 0,
     '@import("type_syntax.zig")': 0,
     "[]const ast.Decl": 0,
@@ -48,6 +48,7 @@ EXACT_FILE_COUNTS = {
     ("src/backend.zig", "@import(\"legacy_backend_syntax.zig\")"): 0,
     ("src/codegen_request.zig", "@import(\"legacy_backend_syntax.zig\")"): 0,
     ("src/codegen_request.zig", "@import(\"early_declaration_metadata.zig\")"): 1,
+    ("src/declaration_artifacts.zig", "@import(\"early_declaration_metadata.zig\")"): 1,
     ("src/backend.zig", "@import(\"codegen_request.zig\")"): 1,
     ("src/backend.zig", "pub const Profile = enum"): 0,
     ("src/backend.zig", "pub const Checks = struct"): 0,
@@ -211,6 +212,10 @@ REQUIRED_ANCHORS = {
     "src/ast_bridge.zig": (
         "Transitional backend AST-shape bridge.",
         "direct AST access behind this bridge",
+    ),
+    "src/declaration_artifacts.zig": (
+        "Transitional backend declaration-artifact bridge.",
+        "Backend modules should use this bridge instead of importing the collector directly",
     ),
     "src/type_syntax.zig": (
         "pub const ViewType = struct",

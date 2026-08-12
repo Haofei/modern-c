@@ -3,7 +3,7 @@ const std = @import("std");
 const ast_bridge = @import("ast_bridge.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
-const early_declaration_metadata = @import("early_declaration_metadata.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const source_map_rows = @import("source_map_rows.zig");
 const mir = @import("mir.zig");
 const lower_c_emitter = @import("lower_c_emitter.zig");
@@ -92,14 +92,14 @@ fn appendCProfileWithOptions(allocator: std.mem.Allocator, module: ast_bridge.Mo
 }
 
 pub fn appendCProfileWithMir(allocator: std.mem.Allocator, module: ast_bridge.Module, typed_mir: *const mir.Module, out: *std.ArrayList(u8), profile: Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) anyerror!void {
-    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     return appendCProfileWithMirSourceSpelling(allocator, early_metadata, typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCProfileWithMirSourceSpelling(
     allocator: std.mem.Allocator,
-    early_metadata: early_declaration_metadata.EarlyDeclarationArtifacts,
+    early_metadata: declaration_artifacts.EarlyDeclarationArtifacts,
     typed_mir: *const mir.Module,
     source_spelling: backend_mod.SourceSpellingView,
     out: *std.ArrayList(u8),
@@ -144,7 +144,7 @@ pub fn appendCSourceMap(allocator: std.mem.Allocator, module: ast_bridge.Module,
     var typed_mir = try mir.build(allocator, module);
     defer typed_mir.deinit();
 
-    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     var source_rows = try source_map_rows.SourceMapRows.collectFromSourceArtifacts(allocator, early_metadata.source_map_artifacts);
     defer source_rows.deinit(allocator);
