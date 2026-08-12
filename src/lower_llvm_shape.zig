@@ -10,6 +10,28 @@ const type_syntax = @import("type_syntax.zig");
 const ResultTypeInfo = lower_llvm_model.ResultTypeInfo;
 const isPayloadDomainGenericName = lower_llvm_type.isPayloadDomainGenericName;
 
+pub fn isPointerLikeType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
+    const resolved_ty = type_syntax.resolveAliasType(type_aliases, ty);
+    return switch (resolved_ty.kind) {
+        .pointer, .raw_many_pointer => true,
+        .qualified => |node| isPointerLikeType(type_aliases, node.child.*),
+        else => false,
+    };
+}
+
+pub fn isFloatTypeOf(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
+    return lower_llvm_type.isFloatType(type_syntax.resolveAliasType(type_aliases, ty));
+}
+
+pub fn isF32TypeOf(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
+    const resolved_ty = type_syntax.resolveAliasType(type_aliases, ty);
+    return switch (resolved_ty.kind) {
+        .name => |name| std.mem.eql(u8, name.text, "f32"),
+        .qualified => |node| isF32TypeOf(type_aliases, node.child.*),
+        else => false,
+    };
+}
+
 pub fn nullableInnerType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) ?ast.TypeExpr {
     const resolved_ty = type_syntax.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {

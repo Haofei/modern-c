@@ -48,7 +48,6 @@ const rawScalarTypeName = lower_llvm_type.rawScalarTypeName;
 const parseU64Literal = lower_llvm_type.parseU64Literal;
 const integerBits = lower_llvm_type.integerBits;
 const isSignedInteger = lower_llvm_type.isSignedInteger;
-const isFloatType = lower_llvm_type.isFloatType;
 const signedMinLiteral = lower_llvm_type.signedMinLiteral;
 const intrinsicBits = lower_llvm_type.intrinsicBits;
 
@@ -960,12 +959,12 @@ const LlvmEmitter = struct {
                 );
             },
             .float_literal => |literal| if (self.mirTargetTypeFactAt(.float_literal, expr.span)) |fact|
-                try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(fact.target_ty))
+                try normalizedFloatLiteral(self.scratch.allocator(), literal, lower_llvm_shape.isF32TypeOf(&self.type_aliases, fact.target_ty))
             else
                 error.UnsupportedLlvmEmission,
             .unary => |node| blk: {
                 if (node.op != .neg) break :blk error.UnsupportedLlvmEmission;
-                if (self.isFloatTypeOf(semantic_ty)) {
+                if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, semantic_ty)) {
                     const literal = switch ((node.expr.*).kind) {
                         .float_literal => |literal| literal,
                         .grouped => |inner| switch (inner.kind) {
@@ -975,7 +974,7 @@ const LlvmEmitter = struct {
                         else => break :blk error.UnsupportedLlvmEmission,
                     };
                     const negated = try std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{literal});
-                    break :blk try normalizedFloatLiteral(self.scratch.allocator(), negated, self.isF32TypeOf(semantic_ty));
+                    break :blk try normalizedFloatLiteral(self.scratch.allocator(), negated, lower_llvm_shape.isF32TypeOf(&self.type_aliases, semantic_ty));
                 }
                 if (self.integerBitsOf(semantic_ty) != null) {
                     const literal = switch ((node.expr.*).kind) {
@@ -1166,7 +1165,7 @@ const LlvmEmitter = struct {
         return switch (resolved_ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "bool"))
                 "0"
-            else if (self.isFloatTypeOf(resolved_ty))
+            else if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, resolved_ty))
                 "0.0"
             else if (isOpaqueAddressTypeName(name.text))
                 "0"
@@ -1254,7 +1253,7 @@ const LlvmEmitter = struct {
             }
             return .{ .ty = ty, .value = value };
         }
-        if (self.isFloatTypeOf(ty) or self.fixedLayoutBitsOf(ty) != null or std.mem.eql(u8, try self.llvmType(ty), "ptr")) return .{ .ty = ty, .value = value };
+        if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, ty) or self.fixedLayoutBitsOf(ty) != null or std.mem.eql(u8, try self.llvmType(ty), "ptr")) return .{ .ty = ty, .value = value };
         return error.UnsupportedLlvmEmission;
     }
 
@@ -1538,7 +1537,7 @@ const LlvmEmitter = struct {
             .char_literal => |literal| try self.emitCharLiteralWithTarget(literal, expr.span, semantic_expected_ty),
             .string_literal => |literal| try self.emitStringLiteral(literal, expr.span),
             .float_literal => |literal| if (self.contextualTargetTypeAt(.float_literal, expr.span, semantic_expected_ty)) |target_ty|
-                try normalizedFloatLiteral(self.scratch.allocator(), literal, self.isF32TypeOf(target_ty))
+                try normalizedFloatLiteral(self.scratch.allocator(), literal, lower_llvm_shape.isF32TypeOf(&self.type_aliases, target_ty))
             else
                 error.UnsupportedLlvmEmission,
             .bool_literal => |value| if (value) "1" else "0",
@@ -2973,7 +2972,7 @@ const LlvmEmitter = struct {
         try self.updateAggregatePointerFieldProvenanceFromInit(name, ty, init);
         try self.updateLocalArrayPointerElementProvenanceFromInit(name, ty, init);
         try self.updateLocalSlicePointerElementProvenanceFromInit(name, ty, init);
-        if (!self.isPointerLikeType(ty)) try self.applyMirPointerProvenanceForLocalInitializer(name, ty, init);
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty)) try self.applyMirPointerProvenanceForLocalInitializer(name, ty, init);
         try self.emitDebugDeclare(name, ty, ptr, local.names[0].span, null);
         // `var ap: va_list = va.start();` — the slot IS the va_list cursor storage; initialize
         // it in place with llvm.va_start (it has no value to store).
@@ -3165,7 +3164,7 @@ const LlvmEmitter = struct {
                 try self.updateAggregatePointerFieldProvenanceFromInit(ident.text, slot.ty, value_expr);
                 try self.updateLocalArrayPointerElementProvenanceFromInit(ident.text, slot.ty, value_expr);
                 try self.updateLocalSlicePointerElementProvenanceFromInit(ident.text, slot.ty, value_expr);
-                if (!self.isPointerLikeType(slot.ty)) try self.applyMirPointerProvenanceForAssignment(ident.text, slot.ty, value_expr, span);
+                if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, slot.ty)) try self.applyMirPointerProvenanceForAssignment(ident.text, slot.ty, value_expr, span);
                 return;
             }
             if (self.global_types.get(ident.text)) |ty| {
@@ -5137,7 +5136,7 @@ const LlvmEmitter = struct {
                     else => break :blk null,
                 };
                 const child_ty = self.resolveAliasType(array.child.*);
-                if (!self.isPointerLikeType(child_ty) and self.directStructTypeName(child_ty) == null and child_ty.kind != .array) break :blk null;
+                if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, child_ty) and self.directStructTypeName(child_ty) == null and child_ty.kind != .array) break :blk null;
                 const index = self.localArrayConstIndexValue(node.index.*) orelse break :blk null;
                 const len = self.arrayLenValue(array.len) orelse break :blk null;
                 if (index >= len) break :blk null;
@@ -5157,7 +5156,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return null,
         };
-        if (!self.isPointerLikeType(array.child.*)) return null;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return null;
         return path;
     }
 
@@ -5224,7 +5223,7 @@ const LlvmEmitter = struct {
                     .array => |array| array,
                     else => break :blk null,
                 };
-                if (!self.isPointerLikeType(array.child.*)) break :blk null;
+                if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) break :blk null;
                 const index = self.localArrayConstIndexValue(node.index.*) orelse break :blk null;
                 const len = self.arrayLenValue(array.len) orelse break :blk null;
                 if (index >= len) break :blk null;
@@ -5244,7 +5243,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return null,
         };
-        if (!self.isPointerLikeType(array.child.*)) return null;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return null;
         return path;
     }
 
@@ -5338,7 +5337,7 @@ const LlvmEmitter = struct {
                     .array => |array| array,
                     else => break :blk null,
                 };
-                if (!self.isPointerLikeType(array.child.*)) break :blk null;
+                if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) break :blk null;
                 const index = self.localArrayConstIndexValue(node.index.*) orelse break :blk null;
                 const len = self.arrayLenValue(array.len) orelse break :blk null;
                 if (index >= len) break :blk null;
@@ -5355,7 +5354,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return false,
         };
-        if (!self.isPointerLikeType(array.child.*)) return false;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return false;
         const len = self.arrayLenValue(array.len) orelse return false;
         return self.localArrayAllElementsHaveGlobalPointerProvenance(local_name, len);
     }
@@ -5367,7 +5366,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return false,
         };
-        if (!self.isPointerLikeType(array.child.*)) return false;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return false;
         const len = self.arrayLenValue(array.len) orelse return false;
         return self.localArrayAnyElementHasGlobalPointerProvenance(local_name, len);
     }
@@ -5379,7 +5378,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return false,
         };
-        if (!self.isPointerLikeType(array.child.*)) return false;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return false;
         const len = self.arrayLenValue(array.len) orelse return false;
         return self.localArrayAllElementsHaveLocalPointerProvenance(local_name, len);
     }
@@ -5393,7 +5392,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return null,
         };
-        if (!self.isPointerLikeType(pointee_array.child.*)) return null;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, pointee_array.child.*)) return null;
 
         const init_target = switch (init.kind) {
             .address_of => |inner| inner.*,
@@ -5406,7 +5405,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return null,
         };
-        if (!self.isPointerLikeType(source_array.child.*)) return null;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, source_array.child.*)) return null;
         const pointee_len = self.arrayLenValue(pointee_array.len) orelse return null;
         const source_len = self.arrayLenValue(source_array.len) orelse return null;
         if (pointee_len != source_len) return null;
@@ -5447,7 +5446,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return false,
         };
-        if (!self.isPointerLikeType(array.child.*)) return false;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return false;
         const len = self.arrayLenValue(array.len) orelse return false;
         return self.localArrayAllElementsHaveGlobalPointerProvenance(array_name, len);
     }
@@ -5459,7 +5458,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return false,
         };
-        if (!self.isPointerLikeType(array.child.*)) return false;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return false;
         const len = self.arrayLenValue(array.len) orelse return false;
         return self.localArrayAnyElementHasGlobalPointerProvenance(array_name, len);
     }
@@ -5471,7 +5470,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return false,
         };
-        if (!self.isPointerLikeType(array.child.*)) return false;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return false;
         const len = self.arrayLenValue(array.len) orelse return false;
         return self.localArrayAllElementsHaveLocalPointerProvenance(array_name, len);
     }
@@ -5491,7 +5490,7 @@ const LlvmEmitter = struct {
             .slice => |slice| slice,
             else => return null,
         };
-        if (!self.isPointerLikeType(slice_ty.child.*)) return null;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, slice_ty.child.*)) return null;
 
         const node = switch (init.kind) {
             .slice => |node| node,
@@ -5507,7 +5506,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return null,
         };
-        if (!self.isPointerLikeType(array.child.*)) return null;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return null;
         const len = self.arrayLenValue(array.len) orelse return null;
         const maybe_start = self.localArrayConstIndexValue(node.start.*);
         const maybe_end = self.localArrayConstIndexValue(node.end.*);
@@ -5526,7 +5525,7 @@ const LlvmEmitter = struct {
             .slice => |slice| slice,
             else => return null,
         };
-        if (!self.isPointerLikeType(slice_ty.child.*)) return null;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, slice_ty.child.*)) return null;
 
         const node = switch (init.kind) {
             .slice => |node| node,
@@ -5544,7 +5543,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return null,
         };
-        if (!self.isPointerLikeType(array.child.*)) return null;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return null;
         const len = self.arrayLenValue(array.len) orelse return null;
         const maybe_start = self.localArrayConstIndexValue(node.start.*);
         const maybe_end = self.localArrayConstIndexValue(node.end.*);
@@ -5688,7 +5687,7 @@ const LlvmEmitter = struct {
                 try self.joinAggregatePointerFieldPath(prefix, field.name.text)
             else
                 field.name.text;
-            if (self.isPointerLikeType(field.ty)) {
+            if (lower_llvm_shape.isPointerLikeType(&self.type_aliases, field.ty)) {
                 if (try self.applyMirAggregatePointerFieldFactsAtSource(local_name, field_path, null, value_expr.span)) continue;
                 if (self.directMirPointerContainerValueExpr(value_expr)) {
                     try self.setAggregatePointerFieldProvenance(local_name, field_path, .unknown);
@@ -5717,7 +5716,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return false,
         };
-        if (!self.isPointerLikeType(array.child.*)) return false;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return false;
 
         self.clearAggregatePointerFieldsForLocalPath(local_name, array_path);
         const items = self.arrayLiteralItems(init) orelse return true;
@@ -5745,7 +5744,7 @@ const LlvmEmitter = struct {
         const direct_target_path = try self.directLocalAggregateAssignmentPath(base, field_name);
         const target_path = direct_target_path orelse
             (try self.aggregatePointerAliasAssignmentPath(base, field_name)) orelse return;
-        if (self.isPointerLikeType(field_ty)) {
+        if (lower_llvm_shape.isPointerLikeType(&self.type_aliases, field_ty)) {
             if (direct_target_path != null) {
                 if (try self.applyMirAggregatePointerFieldFactsAtSource(target_path.local_name, target_path.field_path, null, value_expr.span)) return;
                 if (self.directMirPointerContainerValueExpr(value_expr)) {
@@ -5802,7 +5801,7 @@ const LlvmEmitter = struct {
         };
         self.clearLocalSlicesBackedByArray(local_name);
         self.clearLocalPointerArrayAliasesBackedByArray(local_name);
-        if (!self.isPointerLikeType(array.child.*)) {
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) {
             self.clearLocalArrayPointerElementsForLocal(local_name);
             return;
         }
@@ -5840,7 +5839,7 @@ const LlvmEmitter = struct {
             return;
         };
         self.clearLocalPointerArrayAliasesBackedByArray(local_name);
-        if (!self.isPointerLikeType(element_ty)) return;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, element_ty)) return;
         const index = self.localArrayConstIndexValue(node.index.*) orelse {
             self.clearLocalArrayPointerElementsForLocal(local_name);
             return;
@@ -5888,7 +5887,7 @@ const LlvmEmitter = struct {
         const array_path = direct_array_path orelse
             self.aggregatePointerAliasArrayBasePath(node.base.*) orelse return;
         self.clearLocalSlicesBackedByArray(array_path.local_name);
-        if (!self.isPointerLikeType(element_ty)) return;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, element_ty)) return;
         if (self.localArrayConstIndexValue(node.index.*) == null) {
             self.clearAggregatePointerFieldsForLocalPath(array_path.local_name, array_path.field_path);
             return;
@@ -6029,7 +6028,7 @@ const LlvmEmitter = struct {
     fn mirFactSubjectSupportedNow(self: *LlvmEmitter, fact: mir.PointerProvenanceFact) bool {
         const ty = self.local_types.get(fact.subject) orelse return false;
         if (fact.element_index != null) return self.fixedLocalPointerArrayElementType(ty) != null;
-        return self.isPointerLikeType(ty) or self.fixedLocalPointerArrayElementType(ty) != null;
+        return lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty) or self.fixedLocalPointerArrayElementType(ty) != null;
     }
 
     fn fixedLocalPointerArrayElementType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
@@ -6038,7 +6037,7 @@ const LlvmEmitter = struct {
             .array => |array| array,
             else => return null,
         };
-        if (!self.isPointerLikeType(array.child.*)) return null;
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, array.child.*)) return null;
         if (self.arrayLenValue(array.len) == null) return null;
         return array.child.*;
     }
@@ -6221,7 +6220,7 @@ const LlvmEmitter = struct {
     }
 
     fn mirPointerProvenanceCoversDirectLocalUpdate(self: *LlvmEmitter, ty: ast.TypeExpr, expr: ast.Expr) bool {
-        return self.isPointerLikeType(ty) and self.directMirPointerContainerValueExpr(expr);
+        return lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty) and self.directMirPointerContainerValueExpr(expr);
     }
 
     fn directMirRawManyZeroOffsetExpr(self: *LlvmEmitter, expr: ast.Expr) bool {
@@ -6263,7 +6262,7 @@ const LlvmEmitter = struct {
             .call => |call| self.isMirAssumeNoaliasCall(call) and self.directMirPointerLocalCopyExpr(call.args[0]),
             .ident => |ident| blk: {
                 const ty = self.local_types.get(ident.text) orelse break :blk false;
-                break :blk self.isPointerLikeType(ty);
+                break :blk lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty);
             },
             else => false,
         };
@@ -6318,7 +6317,7 @@ const LlvmEmitter = struct {
     }
 
     fn applyMirPointerProvenanceForLocalInitializer(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr) !void {
-        if (self.isPointerLikeType(ty)) {
+        if (lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty)) {
             const matched = try self.applyMirPointerProvenanceFactsAtSource(name, null, init.span);
             if (!matched and self.directMirPointerContainerValueExpr(init)) _ = self.pointer_local_provenance.remove(name);
             return;
@@ -6334,7 +6333,7 @@ const LlvmEmitter = struct {
     }
 
     fn applyMirPointerProvenanceForAssignment(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, value_expr: ast.Expr, span: ast.Span) !void {
-        if (self.isPointerLikeType(ty)) {
+        if (lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty)) {
             const matched_value = try self.applyMirPointerProvenanceFactsAtSource(name, null, value_expr.span);
             _ = try self.applyMirPointerProvenanceFactsAtSource(name, null, span);
             if (!matched_value and self.directMirPointerContainerValueExpr(value_expr)) _ = self.pointer_local_provenance.remove(name);
@@ -6381,20 +6380,13 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn isPointerLikeType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
-        return switch (self.resolveAliasType(ty).kind) {
-            .pointer, .raw_many_pointer => true,
-            else => false,
-        };
-    }
-
     const MirFactCommentMode = enum {
         silent,
         emit_comment,
     };
 
     fn updatePointerProvenanceFromMirOrLocalProof(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, init: ast.Expr, comment_mode: MirFactCommentMode) !void {
-        if (!self.isPointerLikeType(ty)) {
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty)) {
             _ = self.pointer_local_provenance.remove(name);
             return;
         }
@@ -6407,7 +6399,7 @@ const LlvmEmitter = struct {
     }
 
     fn updatePointerProvenanceAssignmentFromMirOrLocalProof(self: *LlvmEmitter, name: []const u8, ty: ast.TypeExpr, value_expr: ast.Expr, span: ast.Span) !void {
-        if (!self.isPointerLikeType(ty)) {
+        if (!lower_llvm_shape.isPointerLikeType(&self.type_aliases, ty)) {
             _ = self.pointer_local_provenance.remove(name);
             return;
         }
@@ -8017,7 +8009,7 @@ const LlvmEmitter = struct {
         if (binaryIsComparison(node.op)) return self.emitComparison(node, ty);
         if (node.op == .logical_and or node.op == .logical_or) return self.emitLogicalBinary(node, ty);
         const llvm_ty = try self.llvmType(ty);
-        if (self.isFloatTypeOf(ty)) {
+        if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, ty)) {
             return switch (node.op) {
                 .add => try self.emitPlainBinary("fadd", node, ty, llvm_ty),
                 .sub => try self.emitPlainBinary("fsub", node, ty, llvm_ty),
@@ -8026,7 +8018,7 @@ const LlvmEmitter = struct {
                 else => error.UnsupportedLlvmEmission,
             };
         }
-        if (self.isWrapDomainType(ty)) {
+        if (lower_llvm_shape.isWrapDomainType(&self.type_aliases, ty)) {
             return switch (node.op) {
                 .add => try self.emitPlainBinary("add", node, ty, llvm_ty),
                 .sub => try self.emitPlainBinary("sub", node, ty, llvm_ty),
@@ -8038,7 +8030,7 @@ const LlvmEmitter = struct {
                 else => error.UnsupportedLlvmEmission,
             };
         }
-        if (self.isSatDomainType(ty)) {
+        if (lower_llvm_shape.isSatDomainType(&self.type_aliases, ty)) {
             return switch (node.op) {
                 .add, .sub, .mul => try self.emitSaturatingArithmetic(node, ty, llvm_ty),
                 else => error.UnsupportedLlvmEmission,
@@ -8111,7 +8103,7 @@ const LlvmEmitter = struct {
             .neg => blk: {
                 if (try self.negativeIntegerLiteralValue(node.expr.*)) |literal| break :blk literal;
                 const value = try self.emitExpr(node.expr.*, ty);
-                if (self.isFloatTypeOf(ty)) {
+                if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, ty)) {
                     const result = try self.nextTemp();
                     try self.out.print(self.allocator, "  {s} = fneg {s} {s}\n", .{ result, try self.llvmType(ty), value });
                     break :blk result;
@@ -8128,7 +8120,7 @@ const LlvmEmitter = struct {
                     try self.out.print(self.allocator, "  {s} = sub {s} 0, {s}\n", .{ result, llvm_ty, value });
                     break :blk result;
                 }
-                if (self.isWrapDomainType(ty)) {
+                if (lower_llvm_shape.isWrapDomainType(&self.type_aliases, ty)) {
                     const result = try self.nextTemp();
                     try self.out.print(self.allocator, "  {s} = sub {s} 0, {s}\n", .{ result, try self.llvmType(ty), value });
                     break :blk result;
@@ -8205,21 +8197,21 @@ const LlvmEmitter = struct {
         }
         // Float <-> float: widen f32->f64 (fpext) or narrow f64->f32 (fptrunc). Same-width
         // float-to-float is already handled by the identical-llvm-type early return above.
-        if (self.isFloatTypeOf(source_ty) and self.isFloatTypeOf(target_ty)) {
-            const op = if (self.isF32TypeOf(source_ty)) "fpext" else "fptrunc";
+        if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, source_ty) and lower_llvm_shape.isFloatTypeOf(&self.type_aliases, target_ty)) {
+            const op = if (lower_llvm_shape.isF32TypeOf(&self.type_aliases, source_ty)) "fpext" else "fptrunc";
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
             return result;
         }
         // Integer -> float: sitofp for signed sources, uitofp for unsigned.
-        if (self.integerBitsOf(source_ty) != null and self.isFloatTypeOf(target_ty)) {
+        if (self.integerBitsOf(source_ty) != null and lower_llvm_shape.isFloatTypeOf(&self.type_aliases, target_ty)) {
             const op = if (self.isSignedIntegerType(source_ty)) "sitofp" else "uitofp";
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
             return result;
         }
         // Float -> integer: fptosi for signed targets, fptoui for unsigned (C truncation).
-        if (self.isFloatTypeOf(source_ty) and self.integerBitsOf(target_ty) != null) {
+        if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, source_ty) and self.integerBitsOf(target_ty) != null) {
             const op = if (self.isSignedIntegerType(target_ty)) "fptosi" else "fptoui";
             const result = try self.nextTemp();
             try self.out.print(self.allocator, "  {s} = {s} {s} {s} to {s}\n", .{ result, op, source_llvm, value, target_llvm });
@@ -8445,14 +8437,14 @@ const LlvmEmitter = struct {
         if (!typeNameEql(want, "bool")) return error.UnsupportedLlvmEmission;
         const operand_ty = self.comparisonOperandType(node) orelse return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(operand_ty);
-        const pred = if (self.isFloatTypeOf(operand_ty))
+        const pred = if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, operand_ty))
             floatComparisonPredicate(node.op) orelse return error.UnsupportedLlvmEmission
         else
             comparisonPredicate(node.op, self.isSignedIntegerType(operand_ty)) orelse return error.UnsupportedLlvmEmission;
         const left = try self.emitExpr(node.left.*, operand_ty);
         const right = try self.emitExpr(node.right.*, operand_ty);
         const result = try self.nextTemp();
-        const cmp_op: []const u8 = if (self.isFloatTypeOf(operand_ty)) "fcmp" else "icmp";
+        const cmp_op: []const u8 = if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, operand_ty)) "fcmp" else "icmp";
         try self.out.print(self.allocator, "  {s} = {s} {s} {s} {s}, {s}\n", .{ result, cmp_op, pred, llvm_ty, left, right });
         return result;
     }
@@ -8946,7 +8938,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitReduceFloat(self: *LlvmEmitter, arg: ast.Expr, slice_ty: ast.TypeExpr, element_ty: ast.TypeExpr, fast: bool) ![]const u8 {
-        if (!self.isFloatTypeOf(element_ty)) return error.UnsupportedLlvmEmission;
+        if (!lower_llvm_shape.isFloatTypeOf(&self.type_aliases, element_ty)) return error.UnsupportedLlvmEmission;
         const element_llvm = try self.llvmType(element_ty);
         const slice_value = try self.emitExpr(arg, slice_ty);
         const data = try self.nextTemp();
@@ -9748,14 +9740,6 @@ const LlvmEmitter = struct {
 
     fn domainPayloadType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
         return lower_llvm_shape.domainPayloadType(&self.type_aliases, ty);
-    }
-
-    fn isWrapDomainType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
-        return lower_llvm_shape.isWrapDomainType(&self.type_aliases, ty);
-    }
-
-    fn isSatDomainType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
-        return lower_llvm_shape.isSatDomainType(&self.type_aliases, ty);
     }
 
     fn atomicStorageLlvmType(self: *LlvmEmitter, payload_ty: ast.TypeExpr) ![]const u8 {
@@ -10573,18 +10557,6 @@ const LlvmEmitter = struct {
         if (self.packedBitsInfoForType(ty)) |info| return self.isSignedIntegerType(info.repr);
         if (self.domainPayloadType(ty)) |payload_ty| return self.isSignedIntegerType(payload_ty);
         return isSignedInteger(self.resolveAliasType(ty));
-    }
-
-    fn isFloatTypeOf(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
-        return isFloatType(self.resolveAliasType(ty));
-    }
-
-    fn isF32TypeOf(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
-        const resolved = self.resolveAliasType(ty);
-        return switch (resolved.kind) {
-            .name => |name| std.mem.eql(u8, name.text, "f32"),
-            else => false,
-        };
     }
 
     fn fixedLayoutBitsOf(self: *LlvmEmitter, ty: ast.TypeExpr) ?u16 {
