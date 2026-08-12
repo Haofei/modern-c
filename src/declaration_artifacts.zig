@@ -60,7 +60,7 @@ pub const EarlyDeclarationArtifacts = struct {
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .global_decl => |global| {
-                try global_artifacts.append(allocator, .{ .global = global });
+                try global_artifacts.append(allocator, GlobalArtifact.fromDecl(global));
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .type_alias => |alias| {
@@ -176,7 +176,7 @@ pub const ComptimeDeclarationArtifacts = struct {
         var structs: std.ArrayList(ast.StructDecl) = .empty;
         errdefer structs.deinit(allocator);
 
-        for (artifacts.global_artifacts) |global| try globals.append(allocator, global.global);
+        for (artifacts.global_artifacts) |global| try globals.append(allocator, global.toDecl());
         try type_aliases.appendSlice(allocator, artifacts.type_alias_artifacts);
         try structs.appendSlice(allocator, artifacts.struct_artifacts);
 
@@ -231,7 +231,34 @@ pub const FunctionArtifact = struct {
 };
 
 pub const GlobalArtifact = struct {
-    global: ast.GlobalDecl,
+    name: ast.Ident,
+    ty: ?ast.TypeExpr,
+    init: ?ast.Expr,
+    is_const: bool,
+    exported: bool,
+    is_extern: bool,
+
+    pub fn fromDecl(global: ast.GlobalDecl) GlobalArtifact {
+        return .{
+            .name = global.name,
+            .ty = global.ty,
+            .init = global.init,
+            .is_const = global.is_const,
+            .exported = global.exported,
+            .is_extern = global.is_extern,
+        };
+    }
+
+    pub fn toDecl(self: GlobalArtifact) ast.GlobalDecl {
+        return .{
+            .name = self.name,
+            .ty = self.ty,
+            .init = self.init,
+            .is_const = self.is_const,
+            .exported = self.exported,
+            .is_extern = self.is_extern,
+        };
+    }
 };
 
 pub const TraitArtifact = union(enum) {

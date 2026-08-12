@@ -3,6 +3,7 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
@@ -63,7 +64,7 @@ pub const AccessContext = struct {
     global_info_from_type: GlobalInfoFromTypeFn,
 };
 
-pub fn emitGlobal(ctx: EmitContext, global: ast_bridge.GlobalDecl) !void {
+pub fn emitGlobal(ctx: EmitContext, global: declaration_artifacts.GlobalArtifact) !void {
     try ctx.write_line_directive(ctx.emit_ctx, global.name.span);
     // `extern global NAME: T;` — a declaration only (storage lives in another unit).
     if (global.is_extern) {

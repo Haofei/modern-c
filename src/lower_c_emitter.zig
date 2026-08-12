@@ -245,7 +245,7 @@ pub const CEmitter = struct {
     out: *std.ArrayList(u8),
     scratch: std.heap.ArenaAllocator,
     globals: std.StringHashMap(GlobalInfo),
-    global_decl_artifacts: std.ArrayList(ast_bridge.GlobalDecl) = .empty,
+    global_decl_artifacts: std.ArrayList(declaration_artifacts.GlobalArtifact) = .empty,
     static_initializers: std.StringHashMap(ast_bridge.Expr),
     type_aliases: std.StringHashMap(ast_bridge.TypeExpr),
     functions: std.StringHashMap(FnInfo),
@@ -494,7 +494,7 @@ pub const CEmitter = struct {
     }
 
     fn collectGlobalArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.GlobalArtifact) anyerror!void {
-        for (artifacts) |global| try self.collectGlobalDeclArtifact(global.global);
+        for (artifacts) |global| try self.collectGlobalDeclArtifact(global);
     }
 
     fn collectTraitArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.TraitArtifact) anyerror!void {
@@ -513,7 +513,7 @@ pub const CEmitter = struct {
         for (artifacts.overlay_union_artifacts) |overlay_union| try self.collectOverlayUnion(overlay_union);
     }
 
-    fn collectGlobalDeclArtifact(self: *CEmitter, global: ast_bridge.GlobalDecl) !void {
+    fn collectGlobalDeclArtifact(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
         try self.global_decl_artifacts.append(self.allocator, global);
         if (global.ty) |ty| {
             var info = try self.globalInfoFromType(ty);
@@ -656,7 +656,7 @@ pub const CEmitter = struct {
         }
     }
 
-    fn emitGlobal(self: *CEmitter, global: ast_bridge.GlobalDecl) !void {
+    fn emitGlobal(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
         const previous_function = self.current_function;
         self.current_function = global.name.text;
         defer self.current_function = previous_function;

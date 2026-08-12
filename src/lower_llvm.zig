@@ -479,7 +479,7 @@ const LlvmEmitter = struct {
     overlay_union_artifacts: []const ast_bridge.OverlayUnionDecl = &.{},
     struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
     function_decl_artifacts: std.ArrayList(LlvmFunctionDeclArtifact) = .empty,
-    global_decl_artifacts: std.ArrayList(ast_bridge.GlobalDecl) = .empty,
+    global_decl_artifacts: std.ArrayList(declaration_artifacts.GlobalArtifact) = .empty,
     global_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
     global_initializers: std.StringHashMap(ast_bridge.Expr) = undefined,
@@ -722,7 +722,7 @@ const LlvmEmitter = struct {
             try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = function.fn_decl, .attrs = function.attrs, .is_extern = function.is_extern });
         }
         for (self.global_artifacts) |global| {
-            try self.collectGlobal(global.global);
+            try self.collectGlobal(global);
         }
         for (self.trait_artifacts) |artifact| {
             switch (artifact) {
@@ -739,7 +739,7 @@ const LlvmEmitter = struct {
         if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(&self.mir_module, self.function_decl_artifacts.items)) return error.UnsupportedLlvmEmission;
     }
 
-    fn collectGlobal(self: *LlvmEmitter, global: ast_bridge.GlobalDecl) !void {
+    fn collectGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {
         const ty = global.ty orelse return error.UnsupportedLlvmEmission;
         _ = try self.llvmType(ty);
         try self.global_decl_artifacts.append(self.allocator, global);
@@ -802,7 +802,7 @@ const LlvmEmitter = struct {
         self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
     }
 
-    fn emitGlobal(self: *LlvmEmitter, global: ast_bridge.GlobalDecl) !void {
+    fn emitGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {
         const previous_function = self.current_function;
         self.current_function = global.name.text;
         defer self.current_function = previous_function;
