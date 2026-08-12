@@ -448,6 +448,7 @@ removing backend authority before adding new abstractions:
 | 260 | Delete the resolved-declaration syntax copy in artifact collection. | Complete: `collectFromResolvedDecls(...)` now directly iterates the `ResolvedDecl` stream through the shared declaration-artifact collector instead of allocating and copying a temporary `[]ast.Decl`; architecture inventory keeps that transitional copy path at zero. |
 | 261 | Delete the private syntax declaration artifact collector. | Complete: the remaining private `collectFromSyntaxDecls(...)` implementation was removed; artifact collection now has a resolved-declaration-only internal path, and test syntax modules are wrapped at the explicit `collectFromModuleDeclsForTests(...)` boundary. |
 | 262 | Delete the driver fallback resolved-declaration wrapper. | Complete: `driver_codegen_inputs.zig` no longer imports `module_parser.zig` or constructs fallback `ResolvedDecl` rows from `module.decls`; codegen input assembly now requires `CompilationSession.resolved_sources` and returns `MissingResolvedSources` if the caller bypasses the per-file resolved-source pipeline. |
+| 263 | Remove driver artifact collection's dead syntax parameter. | Complete: `collectDeclarationArtifacts(...)` no longer accepts an `ast.Module` after the fallback wrapper was deleted, and `driver_codegen_inputs.zig` no longer re-exports `SourceMapArtifact` as a type-only alias for `main.zig`. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

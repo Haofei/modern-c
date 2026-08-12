@@ -965,7 +965,7 @@ fn attachCSourceMapDigests(
     allocator: std.mem.Allocator,
     be: backend.Backend,
     program: backend.VerifiedProgram,
-    source_map_artifacts: []const driver_codegen_inputs.SourceMapArtifact,
+    source_map_artifacts: anytype,
     generated_c: []const u8,
     lower_opts: backend.LowerOptions,
     bundle: *artifact_model.ArtifactBundle,

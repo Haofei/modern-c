@@ -16,7 +16,6 @@ const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir.zig");
 
 pub const DeclarationArtifacts = declaration_artifacts.EarlyDeclarationArtifacts;
-pub const SourceMapArtifact = declaration_artifacts.SourceMapArtifact;
 const CompilationSession = compiler_session.CompilationSession;
 const StageFailure = compiler_session.StageFailure;
 
@@ -31,7 +30,7 @@ pub fn buildBackendInputs(
 ) !backend.VerifiedProgram {
     const program = try session.buildVerifiedProgram(module, diag, optimize, module_mir, failure_error);
     errdefer module_mir.deinit();
-    artifacts.* = try collectDeclarationArtifacts(session, module);
+    artifacts.* = try collectDeclarationArtifacts(session);
     errdefer artifacts.deinit(session.allocator);
     return program;
 }
@@ -44,16 +43,15 @@ pub fn buildCArtifactInputs(
 ) !void {
     module_mir.* = try mir.buildOpt(session.allocator, module, .{ .optimize = false });
     errdefer module_mir.deinit();
-    artifacts.* = try collectDeclarationArtifacts(session, module);
+    artifacts.* = try collectDeclarationArtifacts(session);
     errdefer artifacts.deinit(session.allocator);
 }
 
-fn collectDeclarationArtifacts(session: *CompilationSession, module: ast.Module) !DeclarationArtifacts {
+fn collectDeclarationArtifacts(session: *CompilationSession) !DeclarationArtifacts {
     if (session.resolved_sources) |resolved_sources| {
         const resolved_decls = try resolved_sources.collectDecls(session.allocator);
         defer session.allocator.free(resolved_decls);
         return DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls);
     }
-    _ = module;
     return error.MissingResolvedSources;
 }
