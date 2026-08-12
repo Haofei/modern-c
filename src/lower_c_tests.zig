@@ -49,7 +49,7 @@ fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, ou
 
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
-    try lower_c.appendCSourceMapFromGenerated(allocator, artifacts.source_map_artifacts, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
+    try lower_c.appendCSourceMapFromGenerated(allocator, artifacts, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
         .profile = profile,
         .source_path = source_path,
     });

@@ -52,7 +52,7 @@ fn backendEmitMap(
     _ = ctx;
     return appendCSourceMapFromGenerated(
         allocator,
-        request.source_map_artifacts,
+        request.declaration_artifacts,
         request.out,
         request.generated_artifact,
         request.program.typed_mir,
@@ -137,7 +137,7 @@ fn appendCProfileWithMirSourceSpelling(
 
 pub fn appendCSourceMapFromGenerated(
     allocator: std.mem.Allocator,
-    source_map_artifacts: []const declaration_artifacts.SourceMapArtifact,
+    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     typed_mir: *const mir.Module,
@@ -145,5 +145,5 @@ pub fn appendCSourceMapFromGenerated(
     generated_c_path: ?[]const u8,
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
-    try lower_c_map.appendSourceMap(allocator, source_map_artifacts, out, generated_c, typed_mir, source_path, generated_c_path, opts);
+    try lower_c_map.appendSourceMap(allocator, artifacts, out, generated_c, typed_mir, source_path, generated_c_path, opts);
 }

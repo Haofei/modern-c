@@ -22,16 +22,14 @@ pub const LowerRequest = struct {
 /// from code-generation semantics.
 pub const EmitMapRequest = struct {
     program: verified_program.VerifiedProgram,
-    source_map_artifacts: []const declaration_artifacts.SourceMapArtifact,
+    declaration_artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
     out: *std.ArrayList(u8),
     generated_artifact: []const u8,
     opts: codegen_options.LowerOptions,
 };
 
 test "codegen requests keep syntax mechanics behind named artifact fields" {
-    const source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, "src/codegen_request.zig", std.testing.allocator, .limited(1 << 20));
-    defer std.testing.allocator.free(source);
-
-    try std.testing.expect(std.mem.indexOf(u8, source, "declaration_artifacts") != null);
-    try std.testing.expect(std.mem.indexOf(u8, source, "source_map_artifacts") != null);
+    try std.testing.expect(@hasField(LowerRequest, "declaration_artifacts"));
+    try std.testing.expect(@hasField(EmitMapRequest, "declaration_artifacts"));
+    try std.testing.expect(!@hasField(EmitMapRequest, "source_map_artifacts"));
 }

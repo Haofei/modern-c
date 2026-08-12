@@ -770,7 +770,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .artifact_kind = "c",
         .backend_name = "c",
     });
-    try attachCSourceMapDigests(allocator, be, program, early_metadata.source_map_artifacts, output.items, lower_opts, &bundle);
+    try attachCSourceMapDigests(allocator, be, program, early_metadata, output.items, lower_opts, &bundle);
     try session.writeArtifactWithMetadata(output.items, output_path, bundle);
 }
 
@@ -879,7 +879,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .backend_name = "c",
         .toolchain_identity = toolchain_identity,
     });
-    try attachCSourceMapDigests(allocator, be, program, early_metadata.source_map_artifacts, raw_c.items, lower_opts, &bundle);
+    try attachCSourceMapDigests(allocator, be, program, early_metadata, raw_c.items, lower_opts, &bundle);
     session.publishExistingArtifactWithMetadata(tmp_exe, output_path, bundle, "executable") catch {
         return error.BuildFailed;
     };
@@ -892,7 +892,7 @@ fn attachCSourceMapDigests(
     allocator: std.mem.Allocator,
     be: backend.Backend,
     program: backend.VerifiedProgram,
-    source_map_artifacts: anytype,
+    declaration_artifacts: driver_codegen_inputs.DeclarationArtifacts,
     generated_c: []const u8,
     lower_opts: backend.LowerOptions,
     bundle: *artifact_model.ArtifactBundle,
@@ -902,7 +902,7 @@ fn attachCSourceMapDigests(
     defer map_bytes.deinit(allocator);
     try be.emitMapRequest(allocator, .{
         .program = program,
-        .source_map_artifacts = source_map_artifacts,
+        .declaration_artifacts = declaration_artifacts,
         .out = &map_bytes,
         .generated_artifact = generated_c,
         .opts = lower_opts,
@@ -1193,7 +1193,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     defer output.deinit(allocator);
     try be.emitMapRequest(allocator, .{
         .program = program,
-        .source_map_artifacts = early_metadata.source_map_artifacts,
+        .declaration_artifacts = early_metadata,
         .out = &output,
         .generated_artifact = generated_c.items,
         .opts = .{
