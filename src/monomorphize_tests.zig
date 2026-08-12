@@ -7,6 +7,15 @@ const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
 const testing = std.testing;
+
+fn moduleWithDecls(source_module: ast.Module, decls: []ast.Decl) ast.Module {
+    return .{
+        .decls = decls,
+        .qualified_owners = source_module.qualified_owners,
+        .qualified_symbols = source_module.qualified_symbols,
+        .visibility_mode = source_module.visibility_mode,
+    };
+}
 const zero_span = ast.Span{ .offset = 0, .len = 0, .line = 0, .column = 0 };
 
 fn hasDiagnosticMessage(reporter: *const diagnostics.Reporter, needle: []const u8) bool {
@@ -156,7 +165,7 @@ test "monomorphize preserves named loop break and continue targets" {
     try testing.expect(found);
 
     var checker = sema.Checker.init(&reporter);
-    const specialized_module = module.withDecls(specialized);
+    const specialized_module = moduleWithDecls(module, specialized);
     checker.checkDecls(specialized_module.decls, specialized_module.visibility_mode, specialized_module.qualified_owners);
     try testing.expect(!reporter.has_errors);
 }
@@ -313,7 +322,7 @@ test "monomorphize preserves qualified-owner metadata and diagnostics" {
     try testing.expectEqualStrings("Reserved", module.qualified_owners[0]);
 
     const specialized_decls = try monomorphize.transformDeclsReport(arena.allocator(), module.decls, &reporter);
-    const specialized = module.withDecls(specialized_decls);
+    const specialized = moduleWithDecls(module, specialized_decls);
     try testing.expectEqual(@as(usize, 1), specialized.qualified_owners.len);
     try testing.expectEqual(@as(usize, 1), specialized.qualified_symbols.len);
     try testing.expectEqualStrings("Reserved", specialized.qualified_owners[0]);

@@ -2501,7 +2501,6 @@ test "allocation failure across parse monomorphize and sema never reports clean 
         const module = try parseWithAllocator(source, arena.allocator(), &parse_reporter);
         try std.testing.expect(!parse_reporter.has_errors);
         const specialized_decls = try monomorphize.transformDeclsReport(arena.allocator(), module.decls, &parse_reporter);
-        const specialized = module.withDecls(specialized_decls);
         try std.testing.expect(!parse_reporter.has_errors);
 
         var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
@@ -2509,7 +2508,7 @@ test "allocation failure across parse monomorphize and sema never reports clean 
         defer reporter.deinit();
 
         var checker = sema.Checker.init(&reporter);
-        checker.checkDecls(specialized.decls, specialized.visibility_mode, specialized.qualified_owners);
+        checker.checkDecls(specialized_decls, module.visibility_mode, module.qualified_owners);
 
         try std.testing.expect(reporter.has_errors);
         try std.testing.expect(checker.oom);

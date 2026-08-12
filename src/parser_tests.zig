@@ -9,6 +9,15 @@ const parser = @import("parser.zig");
 
 const Parser = parser.Parser;
 
+fn moduleWithDecls(source_module: ast.Module, decls: []ast.Decl) ast.Module {
+    return .{
+        .decls = decls,
+        .qualified_owners = source_module.qualified_owners,
+        .qualified_symbols = source_module.qualified_symbols,
+        .visibility_mode = source_module.visibility_mode,
+    };
+}
+
 fn expectForwardQualifiedBindings(source: []const u8) !void {
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "qualified_forward.mc", source);
     defer reporter.deinit();
@@ -19,7 +28,7 @@ fn expectForwardQualifiedBindings(source: []const u8) !void {
     var p = Parser.init(source, &reporter);
     const parsed = try p.parseModule(arena.allocator());
     const resolved_decls = try name_resolve.transformDeclsWithSymbols(arena.allocator(), parsed.decls, parsed.qualified_symbols, null);
-    const module = parsed.withDecls(resolved_decls);
+    const module = moduleWithDecls(parsed, resolved_decls);
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
@@ -279,7 +288,7 @@ test "qualified expression resolution OOM does not fall back to member access" {
         if (parsed) |syntax_module| {
             const resolved_decls = name_resolve.transformDeclsWithSymbols(arena.allocator(), syntax_module.decls, syntax_module.qualified_symbols, null);
             if (resolved_decls) |decls| {
-                const module = syntax_module.withDecls(decls);
+                const module = moduleWithDecls(syntax_module, decls);
                 defer module.deinit(arena.allocator());
                 try std.testing.expect(!reporter.has_errors);
 
@@ -317,7 +326,7 @@ test "parser leaves qualified references for the dedicated resolver" {
     try std.testing.expectEqual(std.meta.Tag(ast.Expr.Kind).member, std.meta.activeTag(syntax_callee.kind));
 
     const resolved_decls = try name_resolve.transformDeclsWithSymbols(arena.allocator(), syntax_module.decls, syntax_module.qualified_symbols, null);
-    const resolved = syntax_module.withDecls(resolved_decls);
+    const resolved = moduleWithDecls(syntax_module, resolved_decls);
     const resolved_callee = resolved.decls[0].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.call.callee.*;
     try std.testing.expectEqualStrings("M__f", resolved_callee.kind.ident.text);
 }

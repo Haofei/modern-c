@@ -157,6 +157,7 @@ EXACT_FILE_COUNTS = {
     ("src/module_graph.zig", "source_db: SourceDatabase"): 1,
     ("src/module_graph.zig", "parser_source: []const u8"): 1,
     ("src/module_graph.zig", "combined textual source"): 1,
+    ("src/ast.zig", "pub fn withDecls"): 0,
     ("src/module_parser.zig", "pub const ParsedSourceDatabase = struct"): 1,
     ("src/module_parser.zig", "pub const ResolvedSourceFile = struct"): 1,
     ("src/module_parser.zig", "pub const ResolvedSourceFile = struct {\n    id: module_graph.FileId,\n    module: ast.Module"): 0,

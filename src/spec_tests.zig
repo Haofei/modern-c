@@ -16,6 +16,15 @@ const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
+fn moduleWithDecls(source_module: ast.Module, decls: []ast.Decl) ast.Module {
+    return .{
+        .decls = decls,
+        .qualified_owners = source_module.qualified_owners,
+        .qualified_symbols = source_module.qualified_symbols,
+        .visibility_mode = source_module.visibility_mode,
+    };
+}
+
 fn appendCDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
     var module_mir = try mir.buildOptFromDecls(allocator, decls, .{});
     defer module_mir.deinit();
@@ -830,10 +839,10 @@ fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *
     var p = parser.Parser.init(source, reporter);
     const module = try p.parseModule(allocator);
     const resolved_decls = try name_resolve.transformDeclsWithSymbols(allocator, module.decls, module.qualified_symbols, null);
-    const resolved = module.withDecls(resolved_decls);
+    const resolved = moduleWithDecls(module, resolved_decls);
     try generic_precheck.checkDecls(allocator, resolved.decls, resolved.visibility_mode, reporter, null);
     const specialized_decls = try monomorphize.transformDeclsReport(allocator, resolved.decls, reporter);
-    return resolved.withDecls(specialized_decls);
+    return moduleWithDecls(resolved, specialized_decls);
 }
 
 fn parseSpecModuleForExpectedDiagnostics(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !?ast.Module {
