@@ -128,7 +128,7 @@ fn cleanupRefFromCleanupCfgAction(function: mir.Function, action: mir.CleanupCfg
         .defer_cleanup => |ref| .{ .defer_ref = .{ .block_id = ref.block_id, .instruction_index = ref.instruction_index, .source = ref.source } },
         .ownership => |ref| .{ .ownership_action = .{
             .local_name = localNameForValueId(&function, ref.root_value_id) orelse return null,
-            .span = ast.Span{ .offset = ref.source.offset, .len = ref.source.len, .line = ref.source.line, .column = ref.source.column },
+            .source = ref.source,
             .cleanup_action_index = ref.cleanup_action_index,
             .root_value_id = ref.root_value_id,
             .resource_type_symbol_id = ref.resource_type_symbol_id,
@@ -274,7 +274,7 @@ fn cleanupRefInQueryScope(ref: CleanupRef, scope_span: ?ast.Span, before_span: ?
 fn cleanupRefSource(ref: CleanupRef) mir.SourcePoint {
     return switch (ref) {
         .defer_ref => |defer_ref| defer_ref.source,
-        .ownership_action => |action| mir.sourcePointFromSpan(action.span),
+        .ownership_action => |action| action.source,
     };
 }
 
@@ -358,7 +358,7 @@ fn explicitDropLocalCleanupFromMirAction(
     if (!std.mem.eql(u8, local_name, release.local_name)) return null;
     const ref: mir_ownership_authority.OwnershipCleanupActionRef = .{
         .local_name = local_name,
-        .span = expr.span,
+        .source = mir.sourcePointFromSpan(expr.span),
         .cleanup_action_index = action_match.action_index,
         .root_value_id = root_value_id,
         .resource_type_symbol_id = action_match.entry.place.root_type_symbol_id,

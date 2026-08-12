@@ -3534,11 +3534,11 @@ pub const CEmitter = struct {
                 if (action_ref.cleanup_action_index >= plan.actions.len) return error.UnsupportedCEmission;
                 switch (plan.actions[action_ref.cleanup_action_index].kind) {
                     .auto_drop => {
-                        try self.writeLineDirective(action_ref.span);
+                        try self.writeLineDirective(spanFromSourcePoint(action_ref.source));
                         try self.emitAutoDropPointerCleanup(action_ref);
                     },
                     .explicit_drop => {
-                        try self.writeLineDirective(action_ref.span);
+                        try self.writeLineDirective(spanFromSourcePoint(action_ref.source));
                         try self.emitExplicitDropPointerCleanup(action_ref);
                     },
                 }
@@ -8903,6 +8903,15 @@ fn sourcePointMatchesSpan(source: mir.SourcePoint, span: ast.Span) bool {
         source.column == span.column and
         source.offset == span.offset and
         source.len == span.len;
+}
+
+fn spanFromSourcePoint(source: mir.SourcePoint) ast.Span {
+    return .{
+        .offset = source.offset,
+        .len = source.len,
+        .line = source.line,
+        .column = source.column,
+    };
 }
 
 fn isSourceSpan(span: ast.Span) bool {

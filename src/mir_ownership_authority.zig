@@ -25,7 +25,7 @@ pub const AutoDropLocalCleanup = struct {
 
 pub const OwnershipCleanupActionRef = struct {
     local_name: []const u8,
-    span: ast.Span,
+    source: mir.SourcePoint,
     cleanup_action_index: usize,
     root_value_id: mir.ValueId,
     resource_type_symbol_id: mir.SymbolId,
@@ -43,7 +43,7 @@ pub const OwnershipCleanupRemovalRef = struct {
 pub fn ownershipCleanupActionRef(cleanup: AutoDropLocalCleanup) OwnershipCleanupActionRef {
     return .{
         .local_name = cleanup.local_name,
-        .span = cleanup.span,
+        .source = mir.sourcePointFromSpan(cleanup.span),
         .cleanup_action_index = cleanup.cleanup_action_index,
         .root_value_id = cleanup.root_value_id,
         .resource_type_symbol_id = cleanup.resource_type_symbol_id,
@@ -166,7 +166,7 @@ pub fn autoDropLocalCleanupFromActionRef(
     return .{
         .fn_name = drop_glue.release_fn,
         .local_name = ref.local_name,
-        .span = ref.span,
+        .span = spanFromSourcePoint(ref.source),
         .cleanup_action_index = ref.cleanup_action_index,
         .root_value_id = ref.root_value_id,
         .resource_type_symbol_id = ref.resource_type_symbol_id,
@@ -290,18 +290,27 @@ pub fn explicitDropLocalCleanupFromActionRef(
     const entry = cleanup_plan.actions[ref.cleanup_action_index];
     if (entry.kind != .explicit_drop) return null;
     if (!simpleOwnershipRootMatches(entry.place, ref.root_value_id)) return null;
-    if (!sourceMatches(entry.source, mir.sourcePointFromSpan(ref.span))) return null;
+    if (!sourceMatches(entry.source, ref.source)) return null;
     if (!entry.place.root_type_symbol_id.eql(ref.resource_type_symbol_id)) return null;
     if (!entry.drop_glue_symbol_id.eql(ref.drop_glue_symbol_id)) return null;
     return .{
         .fn_name = drop_glue.release_fn,
         .local_name = ref.local_name,
-        .span = ref.span,
+        .span = spanFromSourcePoint(ref.source),
         .cleanup_action_index = ref.cleanup_action_index,
         .root_value_id = ref.root_value_id,
         .resource_type_symbol_id = ref.resource_type_symbol_id,
         .drop_glue_symbol_id = ref.drop_glue_symbol_id,
         .explicit_drop_event_index = entry.primary_event_index,
+    };
+}
+
+fn spanFromSourcePoint(source: mir.SourcePoint) ast.Span {
+    return .{
+        .offset = source.offset,
+        .len = source.len,
+        .line = source.line,
+        .column = source.column,
     };
 }
 

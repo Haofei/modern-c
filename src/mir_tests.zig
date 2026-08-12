@@ -4372,7 +4372,7 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     const local_span = ast.Span{ .offset = 1, .len = 1, .line = 1, .column = 2 };
     const cleanup_ref: mir_ownership_authority.OwnershipCleanupActionRef = .{
         .local_name = "g",
-        .span = local_span,
+        .source = mir.sourcePointFromSpan(local_span),
         .cleanup_action_index = cleanup_edge_table.edges[0].actions[0].cleanup_action_index,
         .root_value_id = cleanup_edge_table.edges[0].actions[0].root_value_id,
         .resource_type_symbol_id = cleanup_edge_table.edges[0].actions[0].resource_type_symbol_id,
@@ -4773,7 +4773,7 @@ test "MIR records explicit drop glue call ownership events" {
     stale_ref.cleanup_action_index = 99;
     try std.testing.expect(mir_ownership_authority.explicitDropLocalCleanupFromActionRef(&module_mir, &function, &built_cleanup_plan, stale_ref) == null);
     stale_ref = cleanup_ref;
-    stale_ref.span.line += 1;
+    stale_ref.source.line += 1;
     try std.testing.expect(mir_ownership_authority.explicitDropLocalCleanupFromActionRef(&module_mir, &function, &built_cleanup_plan, stale_ref) == null);
     var stale_cleanup = cleanup;
     stale_cleanup.cleanup_action_index = 99;
