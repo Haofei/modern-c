@@ -240,7 +240,7 @@ EXACT_FILE_COUNTS = {
     ("src/mir.zig", "pub fn appendVerificationFactsFromDecls("): 1,
     ("src/mir.zig", "pub fn verifyFromDecls("): 1,
     ("src/mir.zig", "pub fn verifyOptFromDecls("): 1,
-    ("src/mir.zig", "ast.Module{ .decls = decls }"): 1,
+    ("src/mir.zig", "ast.Module{ .decls = decls }"): 0,
     ("src/mir.zig", "module: ast.Module"): 0,
     ("src/mir.zig", "for (module.decls)"): 0,
     ("src/mir.zig", "collectDropGlueFacts(allocator, module"): 0,

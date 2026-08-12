@@ -803,7 +803,6 @@ pub fn buildFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl) !Module {
 }
 
 pub fn buildOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, options: BuildOptions) !Module {
-    const module = ast.Module{ .decls = decls };
     var enums = std.StringHashMap(EnumSummary).init(allocator);
     defer enums.deinit();
     var structs = std.StringHashMap(StructSummary).init(allocator);
@@ -879,7 +878,7 @@ pub fn buildOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, option
         .packed_bits = &packed_bits,
         .aliases = &aliases,
     };
-    try eval.collectConstGlobalsWithOptions(allocator, module, &const_fns, &const_globals, .{
+    try eval.collectConstGlobalsFromDeclsWithOptions(allocator, decls, &const_fns, &const_globals, .{
         .reflect = mir_reflect.comptimeReflectThunk,
         .reflect_ctx = &reflect_env,
     });

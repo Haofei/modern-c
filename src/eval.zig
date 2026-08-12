@@ -809,16 +809,6 @@ pub const CollectConstGlobalsOptions = struct {
     domains: ?*std.StringHashMap(DomainWidth) = null,
 };
 
-pub fn collectConstGlobalsWithOptions(
-    allocator: std.mem.Allocator,
-    module: ast.Module,
-    funcs: *const std.StringHashMap(ast.FnDecl),
-    out: *std.StringHashMap(ComptimeValue),
-    options: CollectConstGlobalsOptions,
-) !void {
-    return collectConstGlobalsFromDeclsWithOptions(allocator, module.decls, funcs, out, options);
-}
-
 pub fn collectConstGlobalsFromDeclsWithOptions(
     allocator: std.mem.Allocator,
     decls: []const ast.Decl,

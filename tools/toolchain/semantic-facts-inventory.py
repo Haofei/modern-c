@@ -1277,7 +1277,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "magnitude = std.math.mul(u128, magnitude, radix) catch return null;": 1,
     },
     "src/eval.zig": {
-        "pub fn collectConstGlobalsWithOptions(": 1,
+        "pub fn collectConstGlobalsWithOptions(": 0,
         "pub fn collectConstGlobalsFromDeclsWithOptions(": 1,
         "module: ?ast.Module": 0,
         "decls: ?[]const ast.Decl": 1,
@@ -1297,7 +1297,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "callee_scope.decls = scope.decls": 0,
         "callee_scope.declarations = scope.declarations": 1,
         "return collectConstGlobalsFromDeclsWithOptions(allocator, module, module.decls": 0,
-        "return collectConstGlobalsFromDeclsWithOptions(allocator, module.decls": 1,
+        "return collectConstGlobalsFromDeclsWithOptions(allocator, module.decls": 0,
     },
     "src/mir_source_bridge.zig": {
         "Transitional AST-span to MIR-source-point bridge.": 1,
