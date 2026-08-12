@@ -1853,7 +1853,7 @@ const LlvmEmitter = struct {
                     },
                     .rejected => return error.UnsupportedLlvmEmission,
                 }
-                const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt.span)) orelse return error.UnsupportedLlvmEmission;
+                const defer_ref = mir_source_bridge.deferCleanupRefAtSpan(function.*, stmt.span) orelse return error.UnsupportedLlvmEmission;
                 const cleanup_cfg = self.currentCleanupCfg() orelse return error.UnsupportedLlvmEmission;
                 if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
                     switch (backend_cleanup.registerOrdinaryDeferCleanup(function, cleanup_cfg, cleanup.defer_ref)) {
@@ -2047,7 +2047,7 @@ const LlvmEmitter = struct {
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const sig = self.fn_sigs.get(fn_name) orelse return null;
         if (sig.is_variadic or call.args.len != sig.params.len) return error.UnsupportedLlvmEmission;
-        if (!mir.directDeferCallCleanupForRef(function.*, defer_ref, mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), fn_name, call.args)) return error.UnsupportedLlvmEmission;
+        if (!mir_source_bridge.directDeferCallCleanupForSpans(function.*, defer_ref, expr.span, call.callee.*.span, fn_name, call.args)) return error.UnsupportedLlvmEmission;
         return .{ .defer_ref = defer_ref, .fn_name = fn_name, .span = expr.span, .callee_span = call.callee.*.span, .args = call.args };
     }
 
@@ -2081,12 +2081,12 @@ const LlvmEmitter = struct {
             },
             else => return null,
         }
-        if (!mir.callTargetDeferCleanupForRef(function.*, defer_ref, mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedLlvmEmission;
+        if (!mir_source_bridge.callTargetDeferCleanupForSpans(function.*, defer_ref, expr.span, call.callee.*.span, kind)) return error.UnsupportedLlvmEmission;
         return .{ .defer_ref = defer_ref, .kind = kind, .span = expr.span, .callee = call.callee.*, .callee_span = call.callee.*.span, .type_args = call.type_args, .args = call.args };
     }
 
     fn emitCallTargetDeferCleanup(self: *LlvmEmitter, cleanup: backend_cleanup.CallTargetDeferCleanup) !void {
-        if (!mir.callTargetDeferCleanupForRef((self.currentMirFunction() orelse return error.UnsupportedLlvmEmission).*, cleanup.defer_ref, mir.sourcePointFromSpan(cleanup.span), mir.sourcePointFromSpan(cleanup.callee_span), cleanup.kind)) return error.UnsupportedLlvmEmission;
+        if (!mir_source_bridge.callTargetDeferCleanupForSpans((self.currentMirFunction() orelse return error.UnsupportedLlvmEmission).*, cleanup.defer_ref, cleanup.span, cleanup.callee_span, cleanup.kind)) return error.UnsupportedLlvmEmission;
         switch (cleanup.kind) {
             .cpu_pause => try self.out.print(self.allocator, "  call void asm sideeffect \"pause\", \"~{{memory}}\"(){s}\n", .{try self.debugCallSuffix()}),
             .fence_full => try self.out.print(self.allocator, "  fence seq_cst{s}\n", .{try self.debugCallSuffix()}),
@@ -2110,7 +2110,7 @@ const LlvmEmitter = struct {
         defer self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
         defer self.local_pointer_array_aliases.clearRetainingCapacity();
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        if (!mir.directDeferCallCleanupForRef(function.*, cleanup.defer_ref, mir.sourcePointFromSpan(cleanup.span), mir.sourcePointFromSpan(cleanup.callee_span), cleanup.fn_name, cleanup.args)) return error.UnsupportedLlvmEmission;
+        if (!mir_source_bridge.directDeferCallCleanupForSpans(function.*, cleanup.defer_ref, cleanup.span, cleanup.callee_span, cleanup.fn_name, cleanup.args)) return error.UnsupportedLlvmEmission;
         const sig = self.fn_sigs.get(cleanup.fn_name) orelse return error.UnsupportedLlvmEmission;
         if (sig.is_variadic or cleanup.args.len != sig.params.len) return error.UnsupportedLlvmEmission;
         if (typeNameEql(sig.ret, "void") or typeNameEql(sig.ret, "never")) {

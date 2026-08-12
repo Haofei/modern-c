@@ -3407,7 +3407,7 @@ pub const CEmitter = struct {
             },
             .rejected => return error.UnsupportedCEmission,
         }
-        const defer_ref = mir.deferCleanupRefAtSource(function.*, mir.sourcePointFromSpan(stmt_span)) orelse return error.UnsupportedCEmission;
+        const defer_ref = mir_source_bridge.deferCleanupRefAtSpan(function.*, stmt_span) orelse return error.UnsupportedCEmission;
         const cleanup_cfg = self.currentCleanupCfg() orelse return error.UnsupportedCEmission;
         if (try self.ordinaryDeferDirectCallCleanup(function, expr, defer_ref)) |cleanup| {
             switch (backend_cleanup.registerOrdinaryDeferCleanup(function, cleanup_cfg, cleanup.defer_ref)) {
@@ -3563,7 +3563,7 @@ pub const CEmitter = struct {
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const info = self.functions.get(fn_name) orelse return null;
         if (info.is_variadic or call.args.len != info.params.len) return error.UnsupportedCEmission;
-        if (!mir.directDeferCallCleanupForRef(function.*, defer_ref, mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), fn_name, call.args)) return error.UnsupportedCEmission;
+        if (!mir_source_bridge.directDeferCallCleanupForSpans(function.*, defer_ref, expr.span, call.callee.*.span, fn_name, call.args)) return error.UnsupportedCEmission;
         return .{ .defer_ref = defer_ref, .fn_name = fn_name, .span = expr.span, .callee_span = call.callee.*.span, .args = call.args };
     }
 
@@ -3597,12 +3597,12 @@ pub const CEmitter = struct {
             },
             else => return null,
         }
-        if (!mir.callTargetDeferCleanupForRef(function.*, defer_ref, mir.sourcePointFromSpan(expr.span), mir.sourcePointFromSpan(call.callee.*.span), kind)) return error.UnsupportedCEmission;
+        if (!mir_source_bridge.callTargetDeferCleanupForSpans(function.*, defer_ref, expr.span, call.callee.*.span, kind)) return error.UnsupportedCEmission;
         return .{ .defer_ref = defer_ref, .kind = kind, .span = expr.span, .callee = call.callee.*, .callee_span = call.callee.*.span, .type_args = call.type_args, .args = call.args };
     }
 
     fn emitCallTargetDeferCleanup(self: *CEmitter, cleanup: backend_cleanup.CallTargetDeferCleanup, locals: *std.StringHashMap(LocalInfo)) !void {
-        if (!mir.callTargetDeferCleanupForRef((self.currentMirFunction() orelse return error.UnsupportedCEmission).*, cleanup.defer_ref, mir.sourcePointFromSpan(cleanup.span), mir.sourcePointFromSpan(cleanup.callee_span), cleanup.kind)) return error.UnsupportedCEmission;
+        if (!mir_source_bridge.callTargetDeferCleanupForSpans((self.currentMirFunction() orelse return error.UnsupportedCEmission).*, cleanup.defer_ref, cleanup.span, cleanup.callee_span, cleanup.kind)) return error.UnsupportedCEmission;
         if (cleanup.kind == .raw_store) {
             try self.emitRawStorePayload(cleanup.callee_span, cleanup.type_args, cleanup.args, locals);
             return;
@@ -3660,7 +3660,7 @@ pub const CEmitter = struct {
     fn emitOrdinaryDeferDirectCallCleanup(self: *CEmitter, cleanup: backend_cleanup.OrdinaryDeferCallCleanup, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr) !void {
         _ = return_ty;
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        if (!mir.directDeferCallCleanupForRef(function.*, cleanup.defer_ref, mir.sourcePointFromSpan(cleanup.span), mir.sourcePointFromSpan(cleanup.callee_span), cleanup.fn_name, cleanup.args)) return error.UnsupportedCEmission;
+        if (!mir_source_bridge.directDeferCallCleanupForSpans(function.*, cleanup.defer_ref, cleanup.span, cleanup.callee_span, cleanup.fn_name, cleanup.args)) return error.UnsupportedCEmission;
         const info = self.functions.get(cleanup.fn_name) orelse return error.UnsupportedCEmission;
         if (info.is_variadic or cleanup.args.len != info.params.len) return error.UnsupportedCEmission;
         if (cleanup.args.len == 0) {

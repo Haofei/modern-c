@@ -135,9 +135,18 @@ EXACT_FILE_COUNTS = {
     ("src/mir_source_bridge.zig", "pub fn aggregatePointerFieldFactMatchesAt("): 1,
     ("src/mir_source_bridge.zig", "pub fn pointerFactIsCallInvalidationAt("): 1,
     ("src/mir_source_bridge.zig", "pub fn pointerFactMatchesSubjectFieldAt("): 1,
+    ("src/mir_source_bridge.zig", "pub fn deferCleanupRefAtSpan("): 1,
+    ("src/mir_source_bridge.zig", "pub fn directDeferCallCleanupForSpans("): 1,
+    ("src/mir_source_bridge.zig", "pub fn callTargetDeferCleanupForSpans("): 1,
     ("src/lower_c_emitter.zig", "mir_facts_view.TargetTypeFactQuery"): 0,
     ("src/lower_c_emitter.zig", "mir_facts_view.PointerFactQuery"): 0,
     ("src/lower_llvm.zig", "mir_facts_view.PointerFactQuery"): 0,
+    ("src/lower_c_emitter.zig", "mir.deferCleanupRefAtSource("): 0,
+    ("src/lower_llvm.zig", "mir.deferCleanupRefAtSource("): 0,
+    ("src/lower_c_emitter.zig", "mir.directDeferCallCleanupForRef("): 0,
+    ("src/lower_llvm.zig", "mir.directDeferCallCleanupForRef("): 0,
+    ("src/lower_c_emitter.zig", "mir.callTargetDeferCleanupForRef("): 0,
+    ("src/lower_llvm.zig", "mir.callTargetDeferCleanupForRef("): 0,
 }
 
 REQUIRED_ANCHORS = {

@@ -86,3 +86,15 @@ pub fn pointerFactIsCallInvalidationAt(module: *const mir.Module, fact: mir.Poin
 pub fn pointerFactMatchesSubjectFieldAt(module: *const mir.Module, fact: mir.PointerProvenanceFact, subject: []const u8, span: ast.Span) bool {
     return MirFactsView.init(module).pointerFactMatchesSubjectFieldAtSource(fact, subject, mir.sourcePointFromSpan(span));
 }
+
+pub fn deferCleanupRefAtSpan(function: mir.Function, span: ast.Span) ?mir.DeferCleanupRef {
+    return mir.deferCleanupRefAtSource(function, mir.sourcePointFromSpan(span));
+}
+
+pub fn directDeferCallCleanupForSpans(function: mir.Function, defer_ref: mir.DeferCleanupRef, call_span: ast.Span, callee_span: ast.Span, fn_name: []const u8, args: []const ast.Expr) bool {
+    return mir.directDeferCallCleanupForRef(function, defer_ref, mir.sourcePointFromSpan(call_span), mir.sourcePointFromSpan(callee_span), fn_name, args);
+}
+
+pub fn callTargetDeferCleanupForSpans(function: mir.Function, defer_ref: mir.DeferCleanupRef, call_span: ast.Span, callee_span: ast.Span, kind: mir.CallTargetKind) bool {
+    return mir.callTargetDeferCleanupForRef(function, defer_ref, mir.sourcePointFromSpan(call_span), mir.sourcePointFromSpan(callee_span), kind);
+}
