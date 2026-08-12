@@ -8,7 +8,7 @@ const type_layout = @import("layout.zig");
 const lower_llvm_model = @import("lower_llvm_model.zig");
 const lower_llvm_query = @import("lower_llvm_query.zig");
 const lower_llvm_type = @import("lower_llvm_type.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const ComptimeStructLayout = type_layout.ComptimeStructLayout;
 const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
@@ -24,7 +24,7 @@ const libraryScalarLlvmType = lower_llvm_type.libraryScalarLlvmType;
 const reflectionValueCallKind = syntax_bridge.reflectionValueCallKind;
 const reflectionFieldName = syntax_bridge.reflectionFieldName;
 const scalarLayout = type_layout.scalarLayout;
-const typeName = type_syntax.typeName;
+const typeName = type_bridge.typeName;
 const typeNameEql = lower_llvm_type.typeNameEql;
 const comptimeArraySize = type_layout.comptimeArraySize;
 const comptimeBitOffsetFromBytes = type_layout.comptimeBitOffset;

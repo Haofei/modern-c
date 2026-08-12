@@ -10,7 +10,7 @@ const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const GlobalAccess = lower_c_model.GlobalAccess;
 const LocalInfo = lower_c_model.LocalInfo;
@@ -24,7 +24,7 @@ const isBoolType = lower_c_type.isBoolType;
 const isComparisonOp = lower_c_op.isComparisonOp;
 const sameCStorageType = lower_c_type.sameCStorageType;
 const sequencedConditionCandidate = lower_c_expr.sequencedConditionCandidate;
-const simpleNameType = type_syntax.simpleNameType;
+const simpleNameType = type_bridge.simpleNameType;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) anyerror!void;

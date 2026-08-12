@@ -18,7 +18,7 @@ const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const FnInfo = lower_c_model.FnInfo;
@@ -187,7 +187,7 @@ pub fn emitTryExprWithReplacements(
         .binary => |node| {
             if (lower_c_op.isCheckedBinaryOp(node.op)) {
                 const target = target_ty orelse return error.UnsupportedCEmission;
-                const target_name = type_syntax.typeName(target) orelse return error.UnsupportedCEmission;
+                const target_name = type_bridge.typeName(target) orelse return error.UnsupportedCEmission;
                 const helper = lower_c_op.checkedHelperParts(node.op, target_name) orelse return error.UnsupportedCEmission;
                 try ctx.out.print(ctx.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
                 try emitTryExprWithReplacements(ctx, mode, node.left.*, locals, target, replacements);
@@ -498,7 +498,7 @@ pub fn emitNullableTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: 
 fn valueOptionalCType(ctx: TryDirectEmitContext, operand: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?[]const u8 {
     _ = locals;
     const ty = tryOperandType(ctx, operand) orelse return null;
-    const resolved = type_syntax.resolveAliasType(ctx.replacement.type_aliases, ty);
+    const resolved = type_bridge.resolveAliasType(ctx.replacement.type_aliases, ty);
     if (resolved.kind != .nullable) return null;
     if (!lower_c_type.nullablePayloadIsValueType(ctx.replacement.type_aliases, resolved.kind.nullable.*)) return null;
     return try ctx.replacement.c_type(ctx.replacement.emit_ctx, resolved);
@@ -513,14 +513,14 @@ fn tryExpressionResultType(ctx: TryDirectEmitContext, expr: ast.Expr) !?ast.Type
         .grouped => |inner| try tryExpressionResultType(ctx, inner.*),
         .try_expr => |node| blk: {
             const operand_ty = tryOperandType(ctx, node.operand.*) orelse return error.UnsupportedCEmission;
-            const expected_ty = resultPayloadTypeForTag(operand_ty, "ok") orelse switch (type_syntax.resolveAliasType(ctx.replacement.type_aliases, operand_ty).kind) {
+            const expected_ty = resultPayloadTypeForTag(operand_ty, "ok") orelse switch (type_bridge.resolveAliasType(ctx.replacement.type_aliases, operand_ty).kind) {
                 .nullable => |child| child.*,
                 else => return error.UnsupportedCEmission,
             };
             const fact_ty = ctx.replacement.mir_target_type(ctx.replacement.emit_ctx, .expression_result, expr.span) orelse return error.UnsupportedCEmission;
-            if (!type_syntax.sameTypeSyntax(
-                type_syntax.resolveAliasType(ctx.replacement.type_aliases, fact_ty),
-                type_syntax.resolveAliasType(ctx.replacement.type_aliases, expected_ty),
+            if (!type_bridge.sameTypeSyntax(
+                type_bridge.resolveAliasType(ctx.replacement.type_aliases, fact_ty),
+                type_bridge.resolveAliasType(ctx.replacement.type_aliases, expected_ty),
             )) return error.UnsupportedCEmission;
             break :blk fact_ty;
         },
@@ -537,12 +537,12 @@ fn resultTryOperandType(ctx: TryDirectEmitContext, operand: ast.Expr) ?ast.TypeE
 
 fn nullableTryOperandCType(ctx: TryDirectEmitContext, operand: ast.Expr) !?[]const u8 {
     const ty = tryOperandType(ctx, operand) orelse return null;
-    const resolved = type_syntax.resolveAliasType(ctx.replacement.type_aliases, ty);
+    const resolved = type_bridge.resolveAliasType(ctx.replacement.type_aliases, ty);
     const child = switch (resolved.kind) {
         .nullable => |inner| inner.*,
         else => return null,
     };
-    const resolved_child = type_syntax.resolveAliasType(ctx.replacement.type_aliases, child);
+    const resolved_child = type_bridge.resolveAliasType(ctx.replacement.type_aliases, child);
     return switch (resolved_child.kind) {
         .pointer, .raw_many_pointer, .dyn_trait => try ctx.replacement.c_type(ctx.replacement.emit_ctx, child),
         .name => |name| if (std.mem.eql(u8, name.text, "c_void")) null else try ctx.replacement.c_type(ctx.replacement.emit_ctx, child),
@@ -956,7 +956,7 @@ fn emitNullableTryTrapHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!bool {
 fn assignmentTargetType(ctx: TryReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return ctx.operand_emit_type(ctx.emit_ctx, assignment.target, locals) orelse blk: {
         const target = ctx.global_assignment_target(ctx.emit_ctx, assignment.target, locals) orelse return null;
-        break :blk type_syntax.simpleNameType(target.info.type_name, assignment.value.span);
+        break :blk type_bridge.simpleNameType(target.info.type_name, assignment.value.span);
     };
 }
 
@@ -972,9 +972,9 @@ fn emitAssignmentFromTemp(ctx: TryReplacementEmitContext, target: ast.Expr, loca
 
 fn emitCheckedUnaryTryReplacement(ctx: TryReplacementEmitContext, mode: TryReplacementMode, node: anytype, locals: ?*std.StringHashMap(lower_c_model.LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const lower_c_model.TryReplacement) anyerror!bool {
     if (node.op != .neg) return false;
-    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
-    if (type_syntax.isWrapType(target) or type_syntax.isSatType(target)) return false;
-    const target_name = type_syntax.typeName(target) orelse return error.UnsupportedCEmission;
+    const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
+    if (type_bridge.isWrapType(target) or type_bridge.isSatType(target)) return false;
+    const target_name = type_bridge.typeName(target) orelse return error.UnsupportedCEmission;
     const suffix = lower_c_type.signedTypeSuffix(target_name) orelse return false;
 
     try ctx.out.print(ctx.allocator, "mc_checked_neg_{s}(", .{suffix});

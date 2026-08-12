@@ -10,10 +10,10 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const scalar_repr = @import("scalar_repr.zig");
 const lower_c_model = @import("lower_c_model.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
-const typeName = type_syntax.typeName;
-const isOpaqueAddressTypeName = type_syntax.isOpaqueAddressTypeName;
+const typeName = type_bridge.typeName;
+const isOpaqueAddressTypeName = type_bridge.isOpaqueAddressTypeName;
 
 const MmioStruct = lower_c_model.MmioStruct;
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
@@ -51,7 +51,7 @@ pub const TypeEmitContext = struct {
 // (named scalar/struct/enum/address, not `c_void`). Pointers/slices/fn-pointers/`*dyn`
 // keep the null-sentinel repr and lower transparently to the inner type.
 pub fn nullablePayloadIsValueType(type_aliases: *const std.StringHashMap(ast.TypeExpr), child: ast.TypeExpr) bool {
-    const resolved = if (type_syntax.aliasTargetType(type_aliases, child)) |t| t else child;
+    const resolved = if (type_bridge.aliasTargetType(type_aliases, child)) |t| t else child;
     return switch (resolved.kind) {
         .name => |n| !std.mem.eql(u8, n.text, "c_void"),
         .qualified => |node| nullablePayloadIsValueType(type_aliases, node.child.*),
@@ -60,7 +60,7 @@ pub fn nullablePayloadIsValueType(type_aliases: *const std.StringHashMap(ast.Typ
 }
 
 pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast.TypeExpr, style: StructTypeStyle) anyerror!void {
-    if (type_syntax.aliasTargetType(ctx.type_aliases, ty)) |target| return appendType(ctx, out, target, style);
+    if (type_bridge.aliasTargetType(ctx.type_aliases, ty)) |target| return appendType(ctx, out, target, style);
     switch (ty.kind) {
         .pointer => |node| return appendPointerType(ctx, out, node.child.*, node.mutability, style),
         .raw_many_pointer => |node| return appendPointerType(ctx, out, node.child.*, node.mutability, style),
@@ -115,14 +115,14 @@ pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast.TypeExp
         .fn_pointer => {
             const name = try ctx.fn_ptr_type_name(ctx.emit_ctx, ty);
             if (ctx.fn_ptr_types.get(name)) |existing| {
-                if (!type_syntax.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
+                if (!type_bridge.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
             } else try ctx.fn_ptr_types.put(name, ty);
             return out.appendSlice(ctx.scratch, name);
         },
         .closure_type => {
             const name = try ctx.closure_type_name(ctx.emit_ctx, ty);
             if (ctx.closure_types.get(name)) |existing| {
-                if (!type_syntax.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
+                if (!type_bridge.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
             } else try ctx.closure_types.put(name, ty);
             return out.appendSlice(ctx.scratch, name);
         },

@@ -12,7 +12,7 @@ const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_target = @import("lower_c_target.zig");
 const lower_c_type = @import("lower_c_type.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const GlobalAccess = lower_c_model.GlobalAccess;
 const GlobalInfo = lower_c_model.GlobalInfo;
@@ -42,7 +42,7 @@ const calleeIdentName = syntax_bridge.calleeIdentName;
 const contractMatchesCallee = builtin_syntax.contractMatchesCallee;
 const contractName = syntax_bridge.contractName;
 const dmaAddrHandoffObject = lower_c_target.dmaAddrHandoffObject;
-const dmaBufInfo = type_syntax.dmaBufInfo;
+const dmaBufInfo = type_bridge.dmaBufInfo;
 const dmaOperation = lower_c_target.dmaOperation;
 const exprType = lower_c_target.exprType;
 const isBitcastCall = lower_c_expr.isBitcastCall;
@@ -53,9 +53,9 @@ const memberExpr = syntax_bridge.memberExpr;
 const isRawStoreCall = syntax_bridge.isRawStoreCall;
 const knownContractCalleeName = builtin_syntax.knownContractCalleeName;
 const localOrdinaryTarget = lower_c_target.localOrdinaryTarget;
-const mmioPointee = type_syntax.mmioPointee;
+const mmioPointee = type_bridge.mmioPointee;
 const ordinaryGlobalTarget = lower_c_target.ordinaryGlobalTarget;
-const typeName = type_syntax.typeName;
+const typeName = type_bridge.typeName;
 
 pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
     var inspector = Inspector.init(allocator, out);

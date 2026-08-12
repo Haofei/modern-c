@@ -10,7 +10,7 @@ const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const callExpr = syntax_bridge.callExpr;
 const calleeIdentName = syntax_bridge.calleeIdentName;
@@ -28,7 +28,7 @@ const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const TryReplacement = lower_c_model.TryReplacement;
 const arrayElementType = lower_c_shape.arrayElementType;
 const memberCallee = syntax_bridge.memberCallee;
-const simpleNameType = type_syntax.simpleNameType;
+const simpleNameType = type_bridge.simpleNameType;
 const sliceElementType = lower_c_shape.sliceElementType;
 const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;
 

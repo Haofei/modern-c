@@ -33,7 +33,7 @@ EXACT_BACKEND_COUNTS = {
     '@import("sema': 0,
     '@import("early_declaration_metadata.zig")': 4,
     '@import("mir_facts_view.zig")': 0,
-    '@import("type_syntax.zig")': 24,
+    '@import("type_syntax.zig")': 0,
     "[]const ast.Decl": 0,
     "LegacyDeclarationSlice": 0,
     "SourceMapRowsView": 0,
@@ -203,6 +203,10 @@ REQUIRED_ANCHORS = {
     "src/syntax_bridge.zig": (
         "Transitional backend syntax-shape bridge.",
         "expression-shape helper access behind this narrow bridge",
+    ),
+    "src/type_bridge.zig": (
+        "Transitional backend type-shape bridge.",
+        "direct type-syntax helper access behind this narrow bridge",
     ),
     "src/type_syntax.zig": (
         "pub const ViewType = struct",

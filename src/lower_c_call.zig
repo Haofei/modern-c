@@ -13,7 +13,7 @@ const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const calleeIdentName = syntax_bridge.calleeIdentName;
 const callExpr = syntax_bridge.callExpr;
@@ -22,7 +22,7 @@ const isNonNullPointerType = lower_c_type.isNonNullPointerType;
 const isVaListType = lower_c_type.isVaListType;
 const isVoidType = lower_c_type.isVoidType;
 const uncheckedNoOverflowOperator = lower_c_expr.uncheckedNoOverflowOperator;
-const typeName = type_syntax.typeName;
+const typeName = type_bridge.typeName;
 const LocalInfo = lower_c_model.LocalInfo;
 const FnInfo = lower_c_model.FnInfo;
 const GlobalAccess = lower_c_model.GlobalAccess;

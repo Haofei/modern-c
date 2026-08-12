@@ -14,7 +14,7 @@ const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const GlobalElementInfo = lower_c_model.GlobalElementInfo;
 const GlobalInfo = lower_c_model.GlobalInfo;
@@ -27,10 +27,10 @@ const arrayElementType = lower_c_shape.arrayElementType;
 const isPointerLikeGlobalType = lower_c_shape.isPointerLikeGlobalType;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const intTypeRange = lower_c_type.intTypeRange;
-const isOpaqueAddressTypeName = type_syntax.isOpaqueAddressTypeName;
-const mmioPointee = type_syntax.mmioPointee;
+const isOpaqueAddressTypeName = type_bridge.isOpaqueAddressTypeName;
+const mmioPointee = type_bridge.mmioPointee;
 const calleeIdentName = syntax_bridge.calleeIdentName;
-const typeName = type_syntax.typeName;
+const typeName = type_bridge.typeName;
 const widthBits = lower_c_op.widthBits;
 
 pub const CTypeForFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, style: StructTypeStyle) anyerror![]const u8;
@@ -372,5 +372,5 @@ fn cTypeFor(ctx: Context, ty: ast.TypeExpr) anyerror![]const u8 {
 }
 
 fn resolveAliasType(ctx: Context, ty: ast.TypeExpr) ast.TypeExpr {
-    return type_syntax.resolveAliasType(ctx.type_aliases, ty);
+    return type_bridge.resolveAliasType(ctx.type_aliases, ty);
 }

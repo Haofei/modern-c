@@ -6,15 +6,15 @@ const ast = @import("ast.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_model = @import("lower_c_model.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const OverlayFieldAccess = lower_c_model.OverlayFieldAccess;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
 
 const memberExpr = syntax_bridge.memberExpr;
-const overlayArrayElementType = type_syntax.overlayArrayElementType;
-const overlayByteArrayElementType = type_syntax.overlayByteArrayElementType;
+const overlayArrayElementType = type_bridge.overlayArrayElementType;
+const overlayByteArrayElementType = type_bridge.overlayByteArrayElementType;
 const overlayMemberFromIndexBase = syntax_bridge.overlayMemberFromIndexBase;
 const overlayUnionNameForExpr = lower_c_access.overlayUnionNameForExpr;
 

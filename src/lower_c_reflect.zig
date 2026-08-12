@@ -9,7 +9,7 @@ const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
@@ -20,12 +20,12 @@ const constArrayLenValue = lower_c_const.constArrayLenValue;
 const comptimeArraySize = type_layout.comptimeArraySize;
 const comptimeBitOffsetFromBytes = type_layout.comptimeBitOffset;
 const comptimeTaggedOptionalLayout = type_layout.comptimeTaggedOptionalLayout;
-const isArithmeticLayoutGeneric = type_syntax.isArithmeticLayoutGeneric;
-const isPointerLikeGeneric = type_syntax.isPointerLikeGeneric;
+const isArithmeticLayoutGeneric = type_bridge.isArithmeticLayoutGeneric;
+const isPointerLikeGeneric = type_bridge.isPointerLikeGeneric;
 const reflectionFieldName = syntax_bridge.reflectionFieldName;
 const scalarLayout = type_layout.scalarLayout;
-const simpleNameType = type_syntax.simpleNameType;
-const typeName = type_syntax.typeName;
+const simpleNameType = type_bridge.simpleNameType;
+const typeName = type_bridge.typeName;
 
 pub const ReflectEnv = struct {
     type_aliases: *const std.StringHashMap(ast.TypeExpr),

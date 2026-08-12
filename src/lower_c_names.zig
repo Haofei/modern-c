@@ -7,7 +7,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 pub const ArrayLenTextFn = *const fn (ctx: *anyopaque, expr: ast.Expr) anyerror![]const u8;
 
@@ -71,7 +71,7 @@ fn signatureTypeName(ctx: Context, prefix: []const u8, ret_ty: ast.TypeExpr, par
 }
 
 pub fn typeSuffix(ctx: Context, ty: ast.TypeExpr) ![]const u8 {
-    const resolved_ty = type_syntax.resolveAliasType(ctx.type_aliases, ty);
+    const resolved_ty = type_bridge.resolveAliasType(ctx.type_aliases, ty);
     return switch (resolved_ty.kind) {
         .name => |name| if (ctx.structs.contains(name.text))
             std.fmt.allocPrint(ctx.allocator, "mc_type_struct_{d}_{s}", .{ name.text.len, name.text })

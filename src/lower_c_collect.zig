@@ -7,7 +7,7 @@ const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const ArrayInfo = lower_c_model.ArrayInfo;
 const BindThunk = lower_c_model.BindThunk;
@@ -20,7 +20,7 @@ const SliceInfo = lower_c_model.SliceInfo;
 const calleeIdentName = syntax_bridge.calleeIdentName;
 const memberCallee = syntax_bridge.memberCallee;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
-const typeName = type_syntax.typeName;
+const typeName = type_bridge.typeName;
 
 pub const TypeArtifactFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr) anyerror!void;
 pub const MirCallTargetKindFn = *const fn (ctx: *anyopaque, span: ast.Span) ?mir.CallTargetKind;
@@ -196,7 +196,7 @@ pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast.TypeExpr) anyerror!vo
             for (node.params) |param| try collectFnPtrType(ctx, param);
             const name = try ctx.fn_ptr_type_name(ctx.emit_ctx, ty);
             if (ctx.fn_ptr_types.get(name)) |existing| {
-                if (!type_syntax.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
+                if (!type_bridge.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
             } else try ctx.fn_ptr_types.put(name, ty);
         },
         .closure_type => |node| {
@@ -204,7 +204,7 @@ pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast.TypeExpr) anyerror!vo
             for (node.params) |param| try collectFnPtrType(ctx, param);
             const name = try ctx.closure_type_name(ctx.emit_ctx, ty);
             if (ctx.closure_types.get(name)) |existing| {
-                if (!type_syntax.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
+                if (!type_bridge.sameTypeSyntax(existing, ty)) return error.GeneratedTypeNameCollision;
             } else try ctx.closure_types.put(name, ty);
         },
         .pointer => |node| try collectFnPtrType(ctx, node.child.*),
@@ -263,7 +263,7 @@ pub fn collectResultType(ctx: ResultArtifactContext, ty: ast.TypeExpr) anyerror!
             if (std.mem.eql(u8, node.base.text, "Result") and node.args.len == 2) {
                 const name = try ctx.result_type_name(ctx.emit_ctx, node.args[0], node.args[1]);
                 if (ctx.result_types.get(name)) |existing| {
-                    if (!type_syntax.sameTypeSyntax(existing.ok_ty, node.args[0]) or !type_syntax.sameTypeSyntax(existing.err_ty, node.args[1])) return error.GeneratedTypeNameCollision;
+                    if (!type_bridge.sameTypeSyntax(existing.ok_ty, node.args[0]) or !type_bridge.sameTypeSyntax(existing.err_ty, node.args[1])) return error.GeneratedTypeNameCollision;
                 } else {
                     try ctx.result_types.put(name, .{ .name = name, .ok_ty = node.args[0], .err_ty = node.args[1] });
                 }
@@ -311,7 +311,7 @@ fn putSliceType(ctx: SliceArtifactContext, child: ast.TypeExpr, mutability: ast.
 }
 
 pub fn bindEnvIsPointerLike(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
-    return switch (type_syntax.resolveAliasType(type_aliases, ty).kind) {
+    return switch (type_bridge.resolveAliasType(type_aliases, ty).kind) {
         .pointer, .raw_many_pointer, .fn_pointer, .slice => true,
         .nullable => |child| bindEnvIsPointerLike(type_aliases, child.*),
         .qualified => |node| bindEnvIsPointerLike(type_aliases, node.child.*),

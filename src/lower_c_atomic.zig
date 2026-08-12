@@ -10,11 +10,11 @@ const ast = @import("ast.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const mir = @import("mir.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const isIdentNamed = syntax_bridge.isIdentNamed;
 const memberCallee = syntax_bridge.memberCallee;
-const typeName = type_syntax.typeName;
+const typeName = type_bridge.typeName;
 const LocalInfo = lower_c_model.LocalInfo;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;

@@ -19,7 +19,7 @@ const lower_c_try = @import("lower_c_try.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const FnInfo = lower_c_model.FnInfo;
@@ -181,7 +181,7 @@ pub fn emitReadExprWithReplacements(
         .binary => |node| {
             if (lower_c_op.isCheckedBinaryOp(node.op)) {
                 const target = target_ty orelse return error.UnsupportedCEmission;
-                const target_name = type_syntax.typeName(target) orelse return error.UnsupportedCEmission;
+                const target_name = type_bridge.typeName(target) orelse return error.UnsupportedCEmission;
                 const helper = lower_c_op.checkedHelperParts(node.op, target_name) orelse return error.UnsupportedCEmission;
                 try ctx.out.print(ctx.allocator, "{s}{s}(", .{ helper.prefix, helper.suffix });
                 try emitReadExprWithReplacements(ctx, node.left.*, locals, target, replacements);
@@ -235,9 +235,9 @@ pub fn classifyAccess(ctx: AccessContext, callee: ast.Expr, args: []const ast.Ex
     const storage_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_storage, callee.span) orelse return null;
     const value_ty = ctx.mir_target_type(ctx.emit_ctx, .mmio_value, callee.span) orelse return null;
     _ = ctx.mir_target_type(ctx.emit_ctx, .mmio_result, callee.span) orelse return null;
-    const struct_name = type_syntax.typeName(struct_ty) orelse return null;
-    const width = type_syntax.typeName(storage_ty) orelse return null;
-    const value_type = type_syntax.typeName(value_ty) orelse return null;
+    const struct_name = type_bridge.typeName(struct_ty) orelse return null;
+    const width = type_bridge.typeName(storage_ty) orelse return null;
+    const value_type = type_bridge.typeName(value_ty) orelse return null;
     return .{
         .kind = kind,
         .param = param,
@@ -296,9 +296,9 @@ fn emitFieldPadding(ctx: Context, field: ast.Field, running: *u64, pad_n: *usize
 
 fn emitCheckedUnaryReadReplacement(ctx: ReplacementEmitContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const MmioReadReplacement) anyerror!bool {
     if (node.op != .neg) return false;
-    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
-    if (type_syntax.isWrapType(target) or type_syntax.isSatType(target)) return false;
-    const target_name = type_syntax.typeName(target) orelse return error.UnsupportedCEmission;
+    const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
+    if (type_bridge.isWrapType(target) or type_bridge.isSatType(target)) return false;
+    const target_name = type_bridge.typeName(target) orelse return error.UnsupportedCEmission;
     const suffix = lower_c_type.signedTypeSuffix(target_name) orelse return false;
 
     try ctx.out.print(ctx.allocator, "mc_checked_neg_{s}(", .{suffix});
@@ -343,7 +343,7 @@ pub fn emitWriteCall(ctx: EmitContext, callee: ast.Expr, args: []const ast.Expr,
     if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
     if (args.len == 0) return error.UnsupportedCEmission;
 
-    const value_ty = type_syntax.simpleNameType(access.value_type, args[0].span);
+    const value_ty = type_bridge.simpleNameType(access.value_type, args[0].span);
     const value_temp = try ctx.emit_sequenced_arg_temp(ctx.emit_ctx, args[0], locals, value_ty);
     if (std.mem.eql(u8, access.ordering, "release")) {
         try writeIndent(ctx.context);
@@ -421,7 +421,7 @@ pub fn emitDirectReadInferredLocalInit(ctx: EmitContext, name: []const u8, initi
     const inferred_ty = ctx.mir_owned_target_type(ctx.emit_ctx, .inferred_local, initializer_span, name, null) orelse return error.UnsupportedCEmission;
     const inferred_c_type = try ctx.c_type(ctx.emit_ctx, inferred_ty);
     if (!std.mem.eql(u8, inferred_c_type, read.value_c_type)) return error.UnsupportedCEmission;
-    const source_type_name = type_syntax.typeName(inferred_ty) orelse return error.UnsupportedCEmission;
+    const source_type_name = type_bridge.typeName(inferred_ty) orelse return error.UnsupportedCEmission;
 
     try emitReadDecl(ctx.context, inferred_c_type, name, read.access);
     try emitAcquireBarrierIfNeeded(ctx.context, read.access);
@@ -812,7 +812,7 @@ fn emitReadSequencedBinaryOperandTemp(ctx_ptr: *anyopaque, expr: ast.Expr, local
 fn assignmentTargetType(ctx: ReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
     return ctx.operand_emit_type(ctx.emit_ctx, assignment.target, locals) orelse blk: {
         const target = ctx.global_assignment_target(ctx.emit_ctx, assignment.target, locals) orelse return null;
-        break :blk type_syntax.simpleNameType(target.info.type_name, assignment.value.span);
+        break :blk type_bridge.simpleNameType(target.info.type_name, assignment.value.span);
     };
 }
 
@@ -871,7 +871,7 @@ pub fn emitReadInferredLocalInitWithReplacements(ctx: Context, replacement_ctx: 
     var nested = try emitReadReplacementFrame(ctx, locals.*, replacements);
     defer nested.deinit();
 
-    const source_ty = type_syntax.simpleNameType("u32", initializer.span);
+    const source_ty = type_bridge.simpleNameType("u32", initializer.span);
     try locals.put(name, .{
         .source_ty = source_ty,
         .c_type = "uint32_t",

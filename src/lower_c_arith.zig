@@ -16,7 +16,7 @@ const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_target = @import("lower_c_target.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
-const type_syntax = @import("type_syntax.zig");
+const type_bridge = @import("type_bridge.zig");
 
 const appendCIntLiteral = lower_c_const.appendCIntLiteral;
 const appendCFloatLiteral = lower_c_const.appendCFloatLiteral;
@@ -34,15 +34,15 @@ const intTypeRange = lower_c_type.intTypeRange;
 const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
 const isNoTrapBitwiseInfixOp = lower_c_op.isNoTrapBitwiseInfixOp;
 const isIdentNamed = syntax_bridge.isIdentNamed;
-const isSatType = type_syntax.isSatType;
-const isWrapType = type_syntax.isWrapType;
+const isSatType = type_bridge.isSatType;
+const isWrapType = type_bridge.isWrapType;
 const memberCallee = syntax_bridge.memberCallee;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const satHelperParts = lower_c_op.satHelperParts;
 const signedTypeSuffix = lower_c_type.signedTypeSuffix;
-const simpleNameType = type_syntax.simpleNameType;
+const simpleNameType = type_bridge.simpleNameType;
 const sameCStorageType = lower_c_type.sameCStorageType;
-const typeName = type_syntax.typeName;
+const typeName = type_bridge.typeName;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
 const uncheckedNoOverflowOperator = lower_c_expr.uncheckedNoOverflowOperator;
 
@@ -260,7 +260,7 @@ fn residueTypesForEmission(ctx: Context, call: anytype) !DomainTypes {
 
 pub fn sequencedBinaryPlan(ctx: Context, node: anytype, target_ty: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !?SequencedBinaryPlan {
     const op = node.op;
-    const resolved_target_ty = type_syntax.resolveAliasType(ctx.type_aliases, target_ty);
+    const resolved_target_ty = type_bridge.resolveAliasType(ctx.type_aliases, target_ty);
     if (genericChildType(resolved_target_ty, "wrap")) |inner| {
         return try wrapSequencedBinaryPlan(ctx, op, inner);
     }
@@ -533,7 +533,7 @@ fn writeIndent(ctx: Context) !void {
 }
 
 pub fn emitWrapBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
-    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return false;
+    const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return false;
     const inner = genericChildType(target, "wrap") orelse return false;
     const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
     if (unsignedTypeSuffix(inner_name) == null) return error.UnsupportedCEmission;
@@ -583,7 +583,7 @@ pub fn emitWrapBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.Strin
 }
 
 pub fn emitSatBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
-    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return false;
+    const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return false;
     const inner = genericChildType(target, "sat") orelse return false;
     const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
     const helper = satHelperParts(node.op, inner_name) orelse return false;
@@ -594,7 +594,7 @@ pub fn emitSatBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.String
 
 pub fn emitCheckedBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
     if (!isCheckedBinaryOp(node.op)) return false;
-    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return false;
+    const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return false;
     if (isWrapType(target) or isSatType(target)) return false;
     const target_name = typeName(target) orelse return error.UnsupportedCEmission;
 
@@ -621,7 +621,7 @@ pub fn emitCheckedBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.St
 
 pub fn emitCheckedUnaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
     if (node.op != .neg) return false;
-    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return false;
+    const target = if (target_ty) |ty| type_bridge.resolveAliasType(ctx.type_aliases, ty) else return false;
     if (isWrapType(target) or isSatType(target)) return false;
     const target_name = typeName(target) orelse return error.UnsupportedCEmission;
     const suffix = signedTypeSuffix(target_name) orelse return false;
