@@ -137,6 +137,8 @@ EXACT_FILE_COUNTS = {
     ("src/module_graph.zig", "source_db: SourceDatabase"): 1,
     ("src/module_graph.zig", "parser_source: []const u8"): 1,
     ("src/module_graph.zig", "combined textual source"): 1,
+    ("src/module_parser.zig", "pub const ParsedSourceDatabase = struct"): 1,
+    ("src/module_parser.zig", "parseSourceDatabase("): 2,
     ("src/hir_inspection.zig", "inspection_only_header"): 3,
     ("src/mir_facts_view.zig", "pub const MirFactsView = struct"): 1,
     ("src/type_syntax.zig", "pub fn sameTypeSyntax("): 1,
@@ -233,6 +235,11 @@ REQUIRED_ANCHORS = {
         "stable file/import identity model",
         "expanded byte offsets as semantic identity",
         "per-file source ownership",
+    ),
+    "src/module_parser.zig": (
+        "parser-owned per-file syntax boundary",
+        "SourceDatabase.parser_source",
+        "independent from expanded byte offsets",
     ),
     "src/hir_inspection.zig": (
         'pub const inspection_only_header = "hir mode=inspection-only production_boundary=false\\n";',

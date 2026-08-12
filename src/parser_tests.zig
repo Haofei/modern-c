@@ -3,6 +3,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
 const loader = @import("loader.zig");
+const module_parser = @import("module_parser.zig");
 const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
 
@@ -573,6 +574,16 @@ test "loader publishes stable module graph identities and edges" {
     const root_module = try per_file_parser.parseModule(per_file_arena.allocator());
     defer root_module.deinit(per_file_arena.allocator());
     try std.testing.expect(!per_file_reporter.has_errors);
+
+    var module_db_reporter = diagnostics.Reporter.init(std.testing.allocator, "import_wide_root.mc", root_parser_source);
+    defer module_db_reporter.deinit();
+    var module_db_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer module_db_arena.deinit();
+    var parsed_sources = try module_parser.parseSourceDatabase(module_db_arena.allocator(), wide.graph, wide.source_db, &module_db_reporter);
+    defer parsed_sources.deinit(module_db_arena.allocator());
+    try std.testing.expect(!module_db_reporter.has_errors);
+    try std.testing.expectEqual(wide.graph.files.len, parsed_sources.files.len);
+    try std.testing.expect((parsed_sources.moduleForFile(root) orelse return error.TestUnexpectedResult).decls.len > 0);
 
     const cycle_path = "tests/spec_support/import_cycle_a.mc";
     const cycle_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, cycle_path, std.testing.allocator, .limited(1 << 20));
