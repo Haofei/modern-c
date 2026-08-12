@@ -36,7 +36,8 @@ pub fn parseModule(source_name: []const u8, source: []const u8) !ParsedModule {
 
     var p = parser.Parser.init(source, &reporter);
     const syntax_module = try p.parseModule(arena.allocator());
-    const module = try name_resolve.transform(arena.allocator(), syntax_module);
+    const resolved_decls = try name_resolve.transformDeclsWithSymbols(arena.allocator(), syntax_module.decls, syntax_module.qualified_symbols, null);
+    const module = syntax_module.withDecls(resolved_decls);
     errdefer module.deinit(arena.allocator());
 
     var parsed = ParsedModule{

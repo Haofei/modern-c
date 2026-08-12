@@ -158,10 +158,11 @@ pub const CompilationSession = struct {
             return err;
         };
         module.visibility_mode = self.visibility_mode;
-        const resolved = name_resolve.transformWithGraph(allocator, module, self.module_graph) catch |err| {
+        const resolved_decls = name_resolve.transformDeclsWithSymbols(allocator, module.decls, module.qualified_symbols, self.module_graph) catch |err| {
             if (render_errors) diag.render();
             return err;
         };
+        const resolved = module.withDecls(resolved_decls);
         // Lower `async fn` / `await` to stackless Future state machines BEFORE
         // monomorphize/sema, so the move/borrow checker and both backends only
         // ever see ordinary MC. No-op for modules without any `async fn`

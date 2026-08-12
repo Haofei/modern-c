@@ -25,23 +25,24 @@ const QualifiedKeyContext = struct {
 
 const QualifiedMap = std.HashMap(QualifiedKey, []const u8, QualifiedKeyContext, 80);
 
-pub fn transform(allocator: std.mem.Allocator, module: ast.Module) !ast.Module {
-    return transformWithGraph(allocator, module, null);
-}
-
-pub fn transformWithGraph(allocator: std.mem.Allocator, module: ast.Module, graph: ?*const loader.ModuleGraph) !ast.Module {
+pub fn transformDeclsWithSymbols(
+    allocator: std.mem.Allocator,
+    decls: []ast.Decl,
+    qualified_symbols: []const ast.QualifiedSymbol,
+    graph: ?*const loader.ModuleGraph,
+) ![]ast.Decl {
     if (graph) |module_graph| {
-        for (module.qualified_symbols) |symbol| {
+        for (qualified_symbols) |symbol| {
             if (fileForOffset(module_graph.*, symbol.owner.span.offset) == null) return error.InvalidModuleGraph;
         }
     }
     var symbols = QualifiedMap.init(allocator);
     defer symbols.deinit();
-    for (module.qualified_symbols) |symbol| {
+    for (qualified_symbols) |symbol| {
         try symbols.put(.{ .owner = symbol.owner.text, .member = symbol.member.text }, symbol.linkage_name);
     }
-    try resolveDecls(&symbols, module.decls);
-    return module;
+    try resolveDecls(&symbols, decls);
+    return decls;
 }
 
 fn fileForOffset(graph: loader.ModuleGraph, offset: usize) ?loader.FileId {

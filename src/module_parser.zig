@@ -140,7 +140,8 @@ pub fn resolveParsedSourceDatabase(
     }
 
     for (parsed_sources.files) |file| {
-        const resolved = try name_resolve.transform(allocator, file.module);
+        const resolved_decls = try name_resolve.transformDeclsWithSymbols(allocator, file.module.decls, file.module.qualified_symbols, null);
+        const resolved = file.module.withDecls(resolved_decls);
         var resolved_transferred = false;
         errdefer if (!resolved_transferred) resolved.deinit(allocator);
         try files.append(allocator, .{

@@ -829,7 +829,8 @@ fn allMetadataValuesSupported(path: []const u8, key: []const u8, value: []const 
 fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !ast.Module {
     var p = parser.Parser.init(source, reporter);
     const module = try p.parseModule(allocator);
-    const resolved = try name_resolve.transform(allocator, module);
+    const resolved_decls = try name_resolve.transformDeclsWithSymbols(allocator, module.decls, module.qualified_symbols, null);
+    const resolved = module.withDecls(resolved_decls);
     try generic_precheck.checkDecls(allocator, resolved.decls, resolved.visibility_mode, reporter, null);
     return try monomorphize.transformReport(allocator, resolved, reporter);
 }

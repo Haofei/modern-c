@@ -18,7 +18,8 @@ fn expectForwardQualifiedBindings(source: []const u8) !void {
 
     var p = Parser.init(source, &reporter);
     const parsed = try p.parseModule(arena.allocator());
-    const module = try name_resolve.transform(arena.allocator(), parsed);
+    const resolved_decls = try name_resolve.transformDeclsWithSymbols(arena.allocator(), parsed.decls, parsed.qualified_symbols, null);
+    const module = parsed.withDecls(resolved_decls);
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
@@ -276,8 +277,9 @@ test "qualified expression resolution OOM does not fall back to member access" {
         var p = Parser.init(source, &reporter);
         const parsed = p.parseModule(arena.allocator());
         if (parsed) |syntax_module| {
-            const resolved = name_resolve.transform(arena.allocator(), syntax_module);
-            if (resolved) |module| {
+            const resolved_decls = name_resolve.transformDeclsWithSymbols(arena.allocator(), syntax_module.decls, syntax_module.qualified_symbols, null);
+            if (resolved_decls) |decls| {
+                const module = syntax_module.withDecls(decls);
                 defer module.deinit(arena.allocator());
                 try std.testing.expect(!reporter.has_errors);
 
@@ -314,7 +316,8 @@ test "parser leaves qualified references for the dedicated resolver" {
     const syntax_callee = syntax_module.decls[0].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.call.callee.*;
     try std.testing.expectEqual(std.meta.Tag(ast.Expr.Kind).member, std.meta.activeTag(syntax_callee.kind));
 
-    const resolved = try name_resolve.transform(arena.allocator(), syntax_module);
+    const resolved_decls = try name_resolve.transformDeclsWithSymbols(arena.allocator(), syntax_module.decls, syntax_module.qualified_symbols, null);
+    const resolved = syntax_module.withDecls(resolved_decls);
     const resolved_callee = resolved.decls[0].kind.fn_decl.body.?.items[0].kind.@"return".?.kind.call.callee.*;
     try std.testing.expectEqualStrings("M__f", resolved_callee.kind.ident.text);
 }
@@ -342,7 +345,7 @@ test "qualified resolver validates symbol origins against the module graph" {
     }};
     var imports = [_]loader.ImportEdge{};
     const graph = loader.ModuleGraph{ .files = files[0..], .imports = imports[0..] };
-    try std.testing.expectError(error.InvalidModuleGraph, name_resolve.transformWithGraph(arena.allocator(), module, &graph));
+    try std.testing.expectError(error.InvalidModuleGraph, name_resolve.transformDeclsWithSymbols(arena.allocator(), module.decls, module.qualified_symbols, &graph));
 }
 
 test "qualified resolution is independent of declaration order and unrelated generics" {
