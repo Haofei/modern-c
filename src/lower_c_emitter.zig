@@ -462,14 +462,13 @@ pub const CEmitter = struct {
             },
             else => {},
         };
-        const declarations = self.comptime_declarations orelse return error.UnsupportedCEmission;
-        for (declarations.globals) |global| {
-            if (!global.is_const) continue;
-            const ty = global.ty orelse continue;
-            const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
-            try self.const_global_widths.put(global.name.text, bits);
-        }
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+            .global => |global| {
+                if (!global.is_const) continue;
+                const ty = global.ty orelse continue;
+                const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
+                try self.const_global_widths.put(global.name.text, bits);
+            },
             .type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
                 .struct_decl => |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl),
@@ -537,7 +536,6 @@ pub const CEmitter = struct {
             }
         }
         try self.function_decl_artifacts.append(self.allocator, functionDeclArtifact(function));
-        if (!function.is_extern and function.is_const and !self.const_fns.contains(function.name.text)) try self.const_fns.put(function.name.text, declaration_artifacts.comptimeFnDeclFromArtifact(function));
         if (!function.is_extern) if (backendNameOverride(function.attrs)) |name| try self.backend_names.put(function.name.text, name);
         try self.collectFunctionArtifactSliceTypes(function);
     }

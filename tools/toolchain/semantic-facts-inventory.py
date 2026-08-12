@@ -1834,7 +1834,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "fn collectConstGlobals(self: *CEmitter) !void": 1,
         "const module = self.comptime_module orelse return error.UnsupportedCEmission;": 0,
         "const decls = self.comptime_decls orelse return error.UnsupportedCEmission;": 0,
-        "const declarations = self.comptime_declarations orelse return error.UnsupportedCEmission;": 2,
+        "const declarations = self.comptime_declarations orelse return error.UnsupportedCEmission;": 1,
         "eval.collectConstGlobalsFromDeclsWithOptions(self.allocator, module, self.decl_artifacts.items": 0,
         "eval.collectConstGlobalsFromDeclsWithOptions(self.allocator, decls, &self.const_fns": 0,
         "eval.collectConstGlobalsFromDeclarationsWithOptions(self.allocator, declarations, &self.const_fns": 1,
