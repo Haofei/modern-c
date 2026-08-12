@@ -127,25 +127,28 @@ source -> AST -> semantic analysis -> MIR -> MIR verification -> C or LLVM
 semantic representation -> optional HIR inspection / HIR verification
 ```
 
+Inspection projections are debug/report surfaces only; MIR verification is the
+backend production boundary.
+
 `extern "C" fn` and unmarked `export fn` use a strict, target-classified C ABI
 surface. `#[mc_abi] export fn` is available for same-backend object boundaries and
 is not C ABI stable. See [C ABI and interop](docs/c-abi-interop.md) for the current
 type allowlist and aggregate restrictions.
 
-HIR is currently an inspection and verification projection; it is not the
-production input to MIR or either backend. Inspect the available stages from
-the command line:
+HIR and the compact IR report are inspection projections; they are not the
+production input to MIR or either backend. Inspect the available stages from the
+command line:
 
 ```sh
 zig-out/bin/mcc lex tests/spec/arithmetic_checked.mc
 zig-out/bin/mcc check tests/spec/arithmetic_checked.mc
 zig-out/bin/mcc check tests/spec/arithmetic_checked.mc --json
 zig-out/bin/mcc facts tests/spec/arithmetic_checked.mc
-zig-out/bin/mcc lower-hir tests/spec/arithmetic_checked.mc
-zig-out/bin/mcc verify-hir tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc inspect-hir tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc verify-inspect-hir tests/spec/arithmetic_checked.mc
 zig-out/bin/mcc lower-mir tests/spec/arithmetic_checked.mc
 zig-out/bin/mcc verify tests/spec/arithmetic_checked.mc
-zig-out/bin/mcc lower-ir tests/spec/arithmetic_checked.mc
+zig-out/bin/mcc inspect-ir tests/spec/arithmetic_checked.mc
 ```
 
 Emission and tooling commands:

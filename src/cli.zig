@@ -250,10 +250,13 @@ pub const Options = struct {
             std.mem.eql(u8, command, "check") or
             std.mem.eql(u8, command, "run-trap") or
             std.mem.eql(u8, command, "facts") or
+            std.mem.eql(u8, command, "inspect-hir") or
             std.mem.eql(u8, command, "lower-hir") or
+            std.mem.eql(u8, command, "verify-inspect-hir") or
             std.mem.eql(u8, command, "verify-hir") or
             std.mem.eql(u8, command, "lower-mir") or
             std.mem.eql(u8, command, "verify") or
+            std.mem.eql(u8, command, "inspect-ir") or
             std.mem.eql(u8, command, "lower-ir") or
             std.mem.eql(u8, command, "lower-c") or
             std.mem.eql(u8, command, "emit-c") or

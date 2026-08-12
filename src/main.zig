@@ -37,11 +37,11 @@ const usage =
     \\  mcc check <file.mc> [--json]
     \\  mcc run-trap <file.mc>
     \\  mcc facts <file.mc>
-    \\  mcc lower-hir <file.mc>
-    \\  mcc verify-hir <file.mc>
+    \\  mcc inspect-hir <file.mc>
+    \\  mcc verify-inspect-hir <file.mc>
     \\  mcc lower-mir <file.mc> [--checks=all|elide-proven]
     \\  mcc verify <file.mc> [--checks=all|elide-proven]
-    \\  mcc lower-ir <file.mc>
+    \\  mcc inspect-ir <file.mc>
     \\  mcc lower-c <file.mc>
     \\  mcc emit-c <file.mc> [-o <out.c>] [--profile=kernel|hosted] [--checks=all|elide-proven] [--stub-asm] [--remap-prefix=FROM=TO]
     \\  mcc build <file.mc> -o <exe> [--remap-prefix=FROM=TO]
@@ -53,7 +53,11 @@ const usage =
     \\  mcc symbols <file.mc>
     \\  mcc list-tests <file.mc>
     \\
-    \\HIR commands are inspection-only; MIR verification remains the backend production boundary.
+    \\Inspection commands are not backend pipeline inputs; MIR verification remains the backend production boundary.
+    \\Legacy aliases remain accepted:
+    \\  mcc lower-hir <file.mc>
+    \\  mcc verify-hir <file.mc>
+    \\  mcc lower-ir <file.mc>
     \\
     \\input:
     \\  Use <file.mc> for normal file input, or - to read MC source from stdin.
@@ -283,15 +287,15 @@ fn runMain(init: std.process.Init) !void {
         try runTrap(&session, path, source);
     } else if (std.mem.eql(u8, command, "facts")) {
         try runFacts(&session, path, source);
-    } else if (std.mem.eql(u8, command, "lower-hir")) {
+    } else if (std.mem.eql(u8, command, "inspect-hir") or std.mem.eql(u8, command, "lower-hir")) {
         try runLowerHir(&session, path, source);
-    } else if (std.mem.eql(u8, command, "verify-hir")) {
+    } else if (std.mem.eql(u8, command, "verify-inspect-hir") or std.mem.eql(u8, command, "verify-hir")) {
         try runVerifyHir(&session, path, source);
     } else if (std.mem.eql(u8, command, "lower-mir")) {
         try runLowerMir(&session, path, source, options.checks.optimize);
     } else if (std.mem.eql(u8, command, "verify")) {
         try runVerify(&session, path, source, options.checks.optimize);
-    } else if (std.mem.eql(u8, command, "lower-ir")) {
+    } else if (std.mem.eql(u8, command, "inspect-ir") or std.mem.eql(u8, command, "lower-ir")) {
         try runLowerIr(&session, path, source);
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(&session, path, source);

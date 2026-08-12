@@ -724,6 +724,7 @@ ANCHORS: dict[str, list[str]] = {
     ],
     "src/main.zig": [
         'std.mem.eql(u8, command, "facts")',
+        'std.mem.eql(u8, command, "inspect-ir")',
         'std.mem.eql(u8, command, "lower-mir")',
         'std.mem.eql(u8, command, "lower-ir")',
         "try ir.appendFacts",
