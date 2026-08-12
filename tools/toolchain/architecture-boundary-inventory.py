@@ -124,6 +124,12 @@ EXACT_FILE_COUNTS = {
     ("src/mir_source_bridge.zig", "pub fn sourcePointMatchesSpan("): 1,
     ("src/mir_source_bridge.zig", "pub fn sourcePointFromOptionalSpan("): 1,
     ("src/mir_source_bridge.zig", "pub fn isSourceSpan("): 1,
+    ("src/mir_source_bridge.zig", "pub fn firstCallTargetKindAt("): 1,
+    ("src/mir_source_bridge.zig", "pub fn uniqueCallTargetKindAt("): 1,
+    ("src/mir_source_bridge.zig", "pub fn hasCallTargetKindAt("): 1,
+    ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtWithModuleFallback("): 1,
+    ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtOwnedWithModuleFallback("): 1,
+    ("src/mir_source_bridge.zig", "pub fn uniqueConstGetIndexAt("): 1,
 }
 
 REQUIRED_ANCHORS = {

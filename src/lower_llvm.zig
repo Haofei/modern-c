@@ -5946,11 +5946,11 @@ const LlvmEmitter = struct {
     }
 
     fn mirCallTargetKindAt(self: *LlvmEmitter, span: ast.Span) ?mir.CallTargetKind {
-        return mir_facts_view.MirFactsView.init(&self.mir_module).uniqueCallTargetKindAt(self.currentMirFunction(), mir.sourcePointFromSpan(span));
+        return mir_source_bridge.uniqueCallTargetKindAt(&self.mir_module, self.currentMirFunction(), span);
     }
 
     fn mirHasCallTargetKindAt(self: *LlvmEmitter, kind: mir.CallTargetKind, span: ast.Span) bool {
-        return mir_facts_view.MirFactsView.init(&self.mir_module).hasCallTargetKindAt(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span), true);
+        return mir_source_bridge.hasCallTargetKindAt(&self.mir_module, self.currentMirFunction(), kind, span, true);
     }
 
     fn atomicInitPayloadTypeAt(self: *LlvmEmitter, span: ast.Span, expected_result_ty: ast.TypeExpr) ?ast.TypeExpr {
@@ -5985,7 +5985,7 @@ const LlvmEmitter = struct {
     }
 
     fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
-        return mir_facts_view.MirFactsView.init(&self.mir_module).targetTypeFactAtWithModuleFallback(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span));
+        return mir_source_bridge.targetTypeFactAtWithModuleFallback(&self.mir_module, self.currentMirFunction(), kind, span);
     }
 
     fn contextualTargetTypeAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, generated_ty: ast.TypeExpr) ?ast.TypeExpr {
@@ -6021,11 +6021,11 @@ const LlvmEmitter = struct {
     }
 
     fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-        return mir_facts_view.MirFactsView.init(&self.mir_module).targetTypeFactAtOwnedWithModuleFallback(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span), target_owner, target_index);
+        return mir_source_bridge.targetTypeFactAtOwnedWithModuleFallback(&self.mir_module, self.currentMirFunction(), kind, span, target_owner, target_index);
     }
 
     fn mirConstGetIndexAt(self: *LlvmEmitter, span: ast.Span) ?usize {
-        return mir_facts_view.MirFactsView.init(&self.mir_module).uniqueConstGetIndexAt(self.currentMirFunction(), mir.sourcePointFromSpan(span));
+        return mir_source_bridge.uniqueConstGetIndexAt(&self.mir_module, self.currentMirFunction(), span);
     }
 
     fn mirFactSubjectSupportedNow(self: *LlvmEmitter, fact: mir.PointerProvenanceFact) bool {

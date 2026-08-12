@@ -6203,11 +6203,11 @@ pub const CEmitter = struct {
     }
 
     fn mirCallTargetKindAt(self: *CEmitter, span: ast.Span) ?mir.CallTargetKind {
-        return mir_facts_view.MirFactsView.init(self.mir_module).firstCallTargetKindAt(self.currentMirFunction(), mir.sourcePointFromSpan(span));
+        return mir_source_bridge.firstCallTargetKindAt(self.mir_module, self.currentMirFunction(), span);
     }
 
     fn mirHasCallTargetKindAt(self: *CEmitter, kind: mir.CallTargetKind, span: ast.Span) bool {
-        return mir_facts_view.MirFactsView.init(self.mir_module).hasCallTargetKindAt(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span), false);
+        return mir_source_bridge.hasCallTargetKindAt(self.mir_module, self.currentMirFunction(), kind, span, false);
     }
 
     fn atomicInitPayloadTypeAt(self: *CEmitter, span: ast.Span, expected_result_ty: ast.TypeExpr) ?ast.TypeExpr {
@@ -6242,7 +6242,7 @@ pub const CEmitter = struct {
     }
 
     fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
-        return mir_facts_view.MirFactsView.init(self.mir_module).targetTypeFactAtWithModuleFallback(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span));
+        return mir_source_bridge.targetTypeFactAtWithModuleFallback(self.mir_module, self.currentMirFunction(), kind, span);
     }
 
     fn mirTargetTypeFactMatchingType(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, expected_ty: ast.TypeExpr) ?mir.TargetTypeFact {
@@ -6257,11 +6257,11 @@ pub const CEmitter = struct {
     }
 
     fn mirTargetTypeFactAtOwned(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-        return mir_facts_view.MirFactsView.init(self.mir_module).targetTypeFactAtOwnedWithModuleFallback(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span), target_owner, target_index);
+        return mir_source_bridge.targetTypeFactAtOwnedWithModuleFallback(self.mir_module, self.currentMirFunction(), kind, span, target_owner, target_index);
     }
 
     fn mirConstGetIndexAt(self: *CEmitter, span: ast.Span) ?usize {
-        return mir_facts_view.MirFactsView.init(self.mir_module).uniqueConstGetIndexAt(self.currentMirFunction(), mir.sourcePointFromSpan(span));
+        return mir_source_bridge.uniqueConstGetIndexAt(self.mir_module, self.currentMirFunction(), span);
     }
 
     fn mirAggregateTargetTypeForExpr(self: *CEmitter, expr: ast.Expr) !?ast.TypeExpr {
