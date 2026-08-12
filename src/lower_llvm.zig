@@ -1,12 +1,12 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const backend_cleanup = @import("backend_cleanup.zig");
 const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const early_declaration_metadata = @import("early_declaration_metadata.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
@@ -14,21 +14,19 @@ const mir_facts_view = @import("mir_facts_view.zig");
 const numeric = @import("numeric.zig");
 const type_syntax = @import("type_syntax.zig");
 
-// Pure AST-shape queries shared with sema/mir/lower_c (see `ast_query.zig`); aliased so the
-// existing call sites read unchanged.
-const isIdentNamed = ast_query.isIdentNamed;
-const typeName = ast_query.typeName;
-const byteViewAddressTarget = ast_query.byteViewAddressTarget;
-const calleeIdentName = ast_query.calleeIdentName;
-const memberExpr = ast_query.memberExpr;
-const indexExpr = ast_query.indexExpr;
-const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
-const isStringLiteralTarget = ast_query.isStringLiteralTarget;
-const isMmioStructAbi = ast_query.isMmioStructAbi;
-const overlayByteArrayElementType = ast_query.overlayByteArrayElementType;
-const overlayArrayElementType = ast_query.overlayArrayElementType;
-const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
-const taggedUnionCase = ast_query.taggedUnionCase;
+const isIdentNamed = expr_syntax.isIdentNamed;
+const typeName = type_syntax.typeName;
+const byteViewAddressTarget = expr_syntax.byteViewAddressTarget;
+const calleeIdentName = expr_syntax.calleeIdentName;
+const memberExpr = expr_syntax.memberExpr;
+const indexExpr = expr_syntax.indexExpr;
+const isOpaqueAddressTypeName = type_syntax.isOpaqueAddressTypeName;
+const isStringLiteralTarget = type_syntax.isStringLiteralTarget;
+const isMmioStructAbi = type_syntax.isMmioStructAbi;
+const overlayByteArrayElementType = type_syntax.overlayByteArrayElementType;
+const overlayArrayElementType = type_syntax.overlayArrayElementType;
+const overlayMemberFromIndexBase = expr_syntax.overlayMemberFromIndexBase;
+const taggedUnionCase = expr_syntax.taggedUnionCase;
 
 const backend_mod = @import("backend.zig");
 const lower_llvm_alias = @import("lower_llvm_alias.zig");
@@ -718,7 +716,7 @@ const LlvmEmitter = struct {
         const c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi"));
         try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .c_abi = c_abi, .is_variadic = fn_decl.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
         if (hasNamedAttr(attrs, "drop")) {
-            if (ast_query.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
+            if (type_syntax.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
                 if (!mir_ownership_authority.dropGlueDeclMatches(&self.mir_module, type_name, fn_decl.name.text)) return error.UnsupportedLlvmEmission;
             }
         }
@@ -868,7 +866,7 @@ const LlvmEmitter = struct {
             return try self.comptimeValueInitializer(value, semantic_ty);
         }
         if (self.atomicPayloadType(resolved_ty)) |payload_ty| {
-            if (ast_query.callExpr(expr)) |call| {
+            if (expr_syntax.callExpr(expr)) |call| {
                 if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
                     const fact_payload_ty = self.atomicInitPayloadTypeAt(call.callee.*.span, semantic_ty) orelse return error.UnsupportedLlvmEmission;
                     if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
@@ -1362,7 +1360,7 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ attr_str, section_str, align_str, entry_label });
             }
             self.temp_index = 0;
-            try self.emitAsmStmt(ast_query.nakedAsmStmt(body) orelse return error.UnsupportedLlvmEmission);
+            try self.emitAsmStmt(expr_syntax.nakedAsmStmt(body) orelse return error.UnsupportedLlvmEmission);
             try self.out.appendSlice(self.allocator, "  unreachable\n}\n\n");
             return;
         }
@@ -2042,7 +2040,7 @@ const LlvmEmitter = struct {
     }
 
     fn ordinaryDeferDirectCallCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
-        const call = ast_query.callExpr(expr) orelse return null;
+        const call = expr_syntax.callExpr(expr) orelse return null;
         if (call.type_args.len != 0) return null;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const sig = self.fn_sigs.get(fn_name) orelse return null;
@@ -2052,14 +2050,14 @@ const LlvmEmitter = struct {
     }
 
     fn ordinaryDeferCallTargetCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.CallTargetDeferCleanup {
-        const call = ast_query.callExpr(expr) orelse return null;
+        const call = expr_syntax.callExpr(expr) orelse return null;
         const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         switch (kind) {
             .cpu_pause, .fence_full, .fence_release, .fence_acquire => {
                 if (call.type_args.len != 0 or call.args.len != 0) return null;
             },
             .raw_store => {
-                if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
+                if (!expr_syntax.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
             },
             .mmio_write => {
                 if (call.type_args.len != 0 or call.args.len != 2) return null;
@@ -7044,7 +7042,7 @@ const LlvmEmitter = struct {
         return self.aggregateIndexUsesRaceTolerantLowering(indexed.base.*, element_ty);
     }
 
-    fn indexedMemberRoot(self: *LlvmEmitter, expr: ast.Expr) ?ast_query.IndexExpr {
+    fn indexedMemberRoot(self: *LlvmEmitter, expr: ast.Expr) ?expr_syntax.IndexExpr {
         if (indexExpr(expr)) |indexed| return indexed;
         return switch (expr.kind) {
             .grouped => |inner| self.indexedMemberRoot(inner.*),
@@ -8838,7 +8836,7 @@ const LlvmEmitter = struct {
     // the callee owner (not a target type). Returns null when the owner is not a known
     // tagged union (an inherent/associated call, or an intrinsic).
     fn emitQualifiedUnionConstructor(self: *LlvmEmitter, call: anytype, union_ty: ast.TypeExpr) !?[]const u8 {
-        const q = ast_query.qualifiedMemberCallee(call.callee.*) orelse return null;
+        const q = expr_syntax.qualifiedMemberCallee(call.callee.*) orelse return null;
         const union_name = typeName(self.resolveAliasType(union_ty)) orelse return null;
         if (!std.mem.eql(u8, union_name, q.owner)) return error.UnsupportedLlvmEmission;
         const union_decl = self.tagged_unions.get(union_name) orelse return null;
@@ -9117,7 +9115,7 @@ const LlvmEmitter = struct {
         // `{ ptr = &.str, len = <byte count> }`. The pointer is the static string-literal
         // global (program-lifetime, always valid); the length excludes the trailing NUL that
         // `internStringLiteral` appends.
-        if (ast_query.u8SliceMutability(resolved)) |mutability| {
+        if (type_syntax.u8SliceMutability(resolved)) |mutability| {
             const global = try self.internStringLiteral(literal);
             const child = resolved.kind.slice.child.*;
             const slice_ty = try self.sliceTypeFor(child, mutability, target_ty.span);
@@ -9701,9 +9699,9 @@ const LlvmEmitter = struct {
 
     fn rawCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?RawCallInfo {
         const valid_shape = switch (kind) {
-            .raw_load => ast_query.isRawLoadCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
-            .raw_ptr => ast_query.isRawPtrCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
-            .raw_store => ast_query.isRawStoreCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 2,
+            .raw_load => expr_syntax.isRawLoadCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
+            .raw_ptr => expr_syntax.isRawPtrCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
+            .raw_store => expr_syntax.isRawStoreCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 2,
             else => false,
         };
         if (!valid_shape) return null;
@@ -10618,8 +10616,8 @@ const LlvmEmitter = struct {
         const value = switch (info.kind) {
             .reflection_size => lower_llvm_reflect.comptimeSizeOf(&env, info.target_ty, 0),
             .reflection_alignment => lower_llvm_reflect.comptimeAlignOf(&env, info.target_ty, 0),
-            .reflection_field_offset => lower_llvm_reflect.comptimeFieldOffset(&env, info.target_ty, ast_query.reflectionFieldName(call.args[0]) orelse return null, 0),
-            .reflection_bit_offset => lower_llvm_reflect.comptimeBitOffset(&env, info.target_ty, ast_query.reflectionFieldName(call.args[0]) orelse return null),
+            .reflection_field_offset => lower_llvm_reflect.comptimeFieldOffset(&env, info.target_ty, expr_syntax.reflectionFieldName(call.args[0]) orelse return null, 0),
+            .reflection_bit_offset => lower_llvm_reflect.comptimeBitOffset(&env, info.target_ty, expr_syntax.reflectionFieldName(call.args[0]) orelse return null),
             .reflection_repr => lower_llvm_reflect.comptimeReprOf(&env, info.target_ty, 0),
             else => null,
         } orelse return null;

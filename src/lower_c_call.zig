@@ -7,21 +7,22 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
+const type_syntax = @import("type_syntax.zig");
 
-const calleeIdentName = ast_query.calleeIdentName;
-const callExpr = ast_query.callExpr;
+const calleeIdentName = expr_syntax.calleeIdentName;
+const callExpr = expr_syntax.callExpr;
 const rawScalarSuffix = lower_c_type.rawScalarSuffix;
 const isNonNullPointerType = lower_c_type.isNonNullPointerType;
 const isVaListType = lower_c_type.isVaListType;
 const isVoidType = lower_c_type.isVoidType;
 const uncheckedNoOverflowOperator = lower_c_expr.uncheckedNoOverflowOperator;
-const typeName = ast_query.typeName;
+const typeName = type_syntax.typeName;
 const LocalInfo = lower_c_model.LocalInfo;
 const FnInfo = lower_c_model.FnInfo;
 const GlobalAccess = lower_c_model.GlobalAccess;
@@ -522,7 +523,7 @@ fn rawAddressTypesForEmission(ctx: Context, call: anytype) !RawAddressTypes {
 pub fn emitRawAddressCall(ctx: Context, call: anytype, locals: ?*std.StringHashMap(LocalInfo)) !bool {
     const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span);
     if (kind == .raw_load) {
-        if (!ast_query.isRawLoadCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+        if (!expr_syntax.isRawLoadCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
         const types = try rawAddressTypesForEmission(ctx, call);
         if (typeName(types.payload)) |name| {
             if (rawScalarSuffix(name)) |suffix| {
@@ -543,7 +544,7 @@ pub fn emitRawAddressCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
         return true;
     }
     if (kind == .raw_ptr) {
-        if (!ast_query.isRawPtrCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
+        if (!expr_syntax.isRawPtrCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 1) return error.UnsupportedCEmission;
         const types = try rawAddressTypesForEmission(ctx, call);
         try ctx.out.appendSlice(ctx.allocator, "(");
         try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, types.result));

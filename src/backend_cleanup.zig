@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 
@@ -99,7 +99,7 @@ pub fn registerDeferredExplicitDropCleanup(
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
     expr: ast.Expr,
 ) AutoDropStackDecision {
-    const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return .ignored;
+    const release = expr_syntax.dropPointerLocalReleaseCall(expr) orelse return .ignored;
     if (!dropGlueReleaseFunctionExists(module, release.fn_name)) return .ignored;
     _ = explicitDropLocalCleanupFromMirAction(module, function, cleanup_plan, expr) orelse return .rejected;
     return .applied;
@@ -350,7 +350,7 @@ fn explicitDropLocalCleanupFromMirAction(
     expr: ast.Expr,
 ) ?mir_ownership_authority.AutoDropLocalCleanup {
     const plan = cleanup_plan orelse return null;
-    const release = ast_query.dropPointerLocalReleaseCall(expr) orelse return null;
+    const release = expr_syntax.dropPointerLocalReleaseCall(expr) orelse return null;
     const action_match = explicitDropActionEntryFromMirPlan(plan, mir.sourcePointFromSpan(expr.span)) orelse return null;
     if (action_match.entry.place.root_symbol_id.isValid() or action_match.entry.place.projection_count != 0) return null;
     const root_value_id = action_match.entry.place.root_value_id;

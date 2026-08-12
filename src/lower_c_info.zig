@@ -8,13 +8,14 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const GlobalElementInfo = lower_c_model.GlobalElementInfo;
 const GlobalInfo = lower_c_model.GlobalInfo;
@@ -27,10 +28,10 @@ const arrayElementType = lower_c_shape.arrayElementType;
 const isPointerLikeGlobalType = lower_c_shape.isPointerLikeGlobalType;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const intTypeRange = lower_c_type.intTypeRange;
-const isOpaqueAddressTypeName = ast_query.isOpaqueAddressTypeName;
-const mmioPointee = ast_query.mmioPointee;
-const calleeIdentName = ast_query.calleeIdentName;
-const typeName = ast_query.typeName;
+const isOpaqueAddressTypeName = type_syntax.isOpaqueAddressTypeName;
+const mmioPointee = type_syntax.mmioPointee;
+const calleeIdentName = expr_syntax.calleeIdentName;
+const typeName = type_syntax.typeName;
 const widthBits = lower_c_op.widthBits;
 
 pub const CTypeForFn = *const fn (ctx: *anyopaque, ty: ast.TypeExpr, style: StructTypeStyle) anyerror![]const u8;

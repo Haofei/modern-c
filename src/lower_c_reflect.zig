@@ -1,14 +1,15 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const eval = @import("eval.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const type_layout = @import("layout.zig");
 const lower_c_builtin = @import("lower_c_builtin.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
@@ -19,12 +20,12 @@ const constArrayLenValue = lower_c_const.constArrayLenValue;
 const comptimeArraySize = type_layout.comptimeArraySize;
 const comptimeBitOffsetFromBytes = type_layout.comptimeBitOffset;
 const comptimeTaggedOptionalLayout = type_layout.comptimeTaggedOptionalLayout;
-const isArithmeticLayoutGeneric = ast_query.isArithmeticLayoutGeneric;
-const isPointerLikeGeneric = ast_query.isPointerLikeGeneric;
-const reflectionFieldName = ast_query.reflectionFieldName;
+const isArithmeticLayoutGeneric = type_syntax.isArithmeticLayoutGeneric;
+const isPointerLikeGeneric = type_syntax.isPointerLikeGeneric;
+const reflectionFieldName = expr_syntax.reflectionFieldName;
 const scalarLayout = type_layout.scalarLayout;
-const simpleNameType = ast_query.simpleNameType;
-const typeName = ast_query.typeName;
+const simpleNameType = type_syntax.simpleNameType;
+const typeName = type_syntax.typeName;
 
 pub const ReflectEnv = struct {
     type_aliases: *const std.StringHashMap(ast.TypeExpr),

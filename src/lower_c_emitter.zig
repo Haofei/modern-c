@@ -1,13 +1,13 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const backend_cleanup = @import("backend_cleanup.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const early_declaration_metadata = @import("early_declaration_metadata.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
@@ -128,12 +128,12 @@ const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;
 const appendGlobalArrayElementStore = lower_c_global.appendGlobalArrayElementStore;
 const appendGlobalArrayElementMemberStore = lower_c_global.appendGlobalArrayElementMemberStore;
 
-const isUninitLiteral = ast_query.isUninitLiteral;
-const typeName = ast_query.typeName;
-const simpleNameType = ast_query.simpleNameType;
-const contractName = ast_query.contractName;
-const calleeIdentName = ast_query.calleeIdentName;
-const callExpr = ast_query.callExpr;
+const isUninitLiteral = expr_syntax.isUninitLiteral;
+const typeName = type_syntax.typeName;
+const simpleNameType = type_syntax.simpleNameType;
+const contractName = expr_syntax.contractName;
+const calleeIdentName = expr_syntax.calleeIdentName;
+const callExpr = expr_syntax.callExpr;
 
 fn hasNamedAttr(attrs: []const ast.Attr, name: []const u8) bool {
     for (attrs) |attr| {
@@ -149,12 +149,12 @@ const MirSubjectType = struct {
     target_ty: ast.TypeExpr,
     nullable_representation: ?NullableRepresentation = null,
 };
-const indexExpr = ast_query.indexExpr;
-const memberCallee = ast_query.memberCallee;
-const memberExpr = ast_query.memberExpr;
-const isStringLiteralTarget = ast_query.isStringLiteralTarget;
-const isMmioStructAbi = ast_query.isMmioStructAbi;
-const dynCalleeMethodName = ast_query.dynCalleeMethodName;
+const indexExpr = expr_syntax.indexExpr;
+const memberCallee = expr_syntax.memberCallee;
+const memberExpr = expr_syntax.memberExpr;
+const isStringLiteralTarget = type_syntax.isStringLiteralTarget;
+const isMmioStructAbi = type_syntax.isMmioStructAbi;
+const dynCalleeMethodName = expr_syntax.dynCalleeMethodName;
 
 const FunctionDeclArtifact = mir_ownership_authority.FunctionDeclArtifact;
 
@@ -556,7 +556,7 @@ pub const CEmitter = struct {
     fn collectFnDeclArtifact(self: *CEmitter, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) !void {
         try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = is_extern, .is_variadic = fn_decl.is_variadic, .error_from = error_from.hasAttr(attrs) });
         if (!is_extern and hasNamedAttr(attrs, "drop")) {
-            if (ast_query.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
+            if (type_syntax.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
                 if (!mir_ownership_authority.dropGlueDeclMatches(self.mir_module, type_name, fn_decl.name.text)) return error.UnsupportedCEmission;
             }
         }
@@ -710,7 +710,7 @@ pub const CEmitter = struct {
     }
 
     fn emitConstGlobalInitializer(self: *CEmitter, ty: ast.TypeExpr, expr: ast.Expr) !bool {
-        if (ast_query.callExpr(expr)) |call| {
+        if (expr_syntax.callExpr(expr)) |call| {
             if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
                 try self.out.appendSlice(self.allocator, " = ");
                 try self.emitExprWithTarget(expr, null, ty);
@@ -1222,7 +1222,7 @@ pub const CEmitter = struct {
     // template strings carry the hand-written machine code that does the ABI-correct
     // jump/return itself.
     fn emitNakedAsmBody(self: *CEmitter, body: ast.Block) !void {
-        const asm_stmt = ast_query.nakedAsmStmt(body) orelse return error.UnsupportedCEmission;
+        const asm_stmt = expr_syntax.nakedAsmStmt(body) orelse return error.UnsupportedCEmission;
         self.indent += 1;
         try self.writeIndent();
         try self.out.appendSlice(self.allocator, "#if defined(__GNUC__) || defined(__clang__)\n");
@@ -1966,7 +1966,7 @@ pub const CEmitter = struct {
             else => return null,
         };
         const inferred = if (node.op == .logical_not)
-            ast_query.simpleNameType("bool", expr.span)
+            type_syntax.simpleNameType("bool", expr.span)
         else
             self.numericExprTypeForEmission(node.expr.*, locals);
         const fact_ty = if (self.mirTargetTypeFactAt(.expression_result, expr.span)) |fact|
@@ -3573,7 +3573,7 @@ pub const CEmitter = struct {
                 if (call.type_args.len != 0 or call.args.len != 0) return null;
             },
             .raw_store => {
-                if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
+                if (!expr_syntax.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
             },
             .mmio_write => {
                 if (call.type_args.len != 0 or call.args.len != 2) return null;
@@ -4064,7 +4064,7 @@ pub const CEmitter = struct {
         const call_span = call.callee.*.span;
         const call_kind = self.mirCallTargetKindAt(call_span);
         if (call_kind != .raw_store) return false;
-        if (!ast_query.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedCEmission;
+        if (!expr_syntax.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return error.UnsupportedCEmission;
         try self.emitRawStorePayload(call_span, call.type_args, call.args, locals);
         return true;
     }
@@ -4466,16 +4466,16 @@ pub const CEmitter = struct {
         const overlay_name = lower_c_access.overlayUnionNameForExpr(node.base.*, locals) orelse return null;
         const info = self.overlay_unions.get(overlay_name) orelse return null;
         const field = info.fields.get(node.name.text) orelse return null;
-        if (field.byte_array_len != null or ast_query.overlayArrayElementType(field.ty) != null) return null;
+        if (field.byte_array_len != null or type_syntax.overlayArrayElementType(field.ty) != null) return null;
         return field.ty;
     }
 
     fn overlayIndexResultType(self: *CEmitter, node: anytype, locals: *std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
-        const member = ast_query.overlayMemberFromIndexBase(node.base.*) orelse return null;
+        const member = expr_syntax.overlayMemberFromIndexBase(node.base.*) orelse return null;
         const overlay_name = lower_c_access.overlayUnionNameForExpr(member.base.*, locals) orelse return null;
         const info = self.overlay_unions.get(overlay_name) orelse return null;
         const field = info.fields.get(member.name.text) orelse return null;
-        return ast_query.overlayArrayElementType(field.ty);
+        return type_syntax.overlayArrayElementType(field.ty);
     }
 
     // A variant-path literal `Enum.variant` used as a value emits the enum's case
@@ -4602,7 +4602,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn emitIndexedMemberAddressExpr(self: *CEmitter, index: ast_query.IndexExpr, field_name: []const u8, locals: ?*std.StringHashMap(LocalInfo), index_temp: ?[]const u8) anyerror!bool {
+    fn emitIndexedMemberAddressExpr(self: *CEmitter, index: expr_syntax.IndexExpr, field_name: []const u8, locals: ?*std.StringHashMap(LocalInfo), index_temp: ?[]const u8) anyerror!bool {
         if (self.sliceAccessForBase(index.base.*, locals)) |slice| {
             try self.emitExpr(index.base.*, locals);
             try self.out.print(self.allocator, ".{s}[mc_check_index_usize(", .{slice.ptr_field});
@@ -4623,7 +4623,7 @@ pub const CEmitter = struct {
         return true;
     }
 
-    fn collectIndexedMemberPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), fields: *std.ArrayList([]const u8)) !?ast_query.IndexExpr {
+    fn collectIndexedMemberPath(self: *CEmitter, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), fields: *std.ArrayList([]const u8)) !?expr_syntax.IndexExpr {
         switch (expr.kind) {
             .member => |node| {
                 const index = try self.collectIndexedMemberPath(node.base.*, locals, fields) orelse return null;
@@ -4635,25 +4635,25 @@ pub const CEmitter = struct {
         }
     }
 
-    fn indexedElementType(self: *CEmitter, index: ast_query.IndexExpr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn indexedElementType(self: *CEmitter, index: expr_syntax.IndexExpr, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         const base_ty = self.arrayOrSliceBaseTypeForEmission(index.base.*, locals) orelse return null;
         return self.arrayOrSliceElementTypeFromCandidate(base_ty);
     }
 
-    fn indexedMemberPathFinalType(self: *CEmitter, index: ast_query.IndexExpr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
+    fn indexedMemberPathFinalType(self: *CEmitter, index: expr_syntax.IndexExpr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         var current = self.indexedElementType(index, locals) orelse return null;
         for (fields) |field_name| current = self.memberFieldTypeFromAggregate(current, field_name) orelse return null;
         return current;
     }
 
-    fn emitIndexedMemberPathAddressExpr(self: *CEmitter, index: ast_query.IndexExpr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo), index_temp: ?[]const u8) anyerror!bool {
+    fn emitIndexedMemberPathAddressExpr(self: *CEmitter, index: expr_syntax.IndexExpr, fields: []const []const u8, locals: ?*std.StringHashMap(LocalInfo), index_temp: ?[]const u8) anyerror!bool {
         if (fields.len == 0) return false;
         if (!try self.emitIndexedMemberAddressExpr(index, try self.cIdent(fields[0]), locals, index_temp)) return false;
         for (fields[1..]) |field_name| try self.out.print(self.allocator, ".{s}", .{try self.cIdent(field_name)});
         return true;
     }
 
-    fn indexedMemberHasRaceTolerantStorage(self: *CEmitter, index: ast_query.IndexExpr, locals: ?*std.StringHashMap(LocalInfo)) bool {
+    fn indexedMemberHasRaceTolerantStorage(self: *CEmitter, index: expr_syntax.IndexExpr, locals: ?*std.StringHashMap(LocalInfo)) bool {
         if (self.sliceAccessForBase(index.base.*, locals) != null) return true;
         if (self.arrayTypeForExpr(index.base.*, locals) != null and self.pointerArrayDerefInner(index.base.*, locals) != null) return true;
         return false;
@@ -5145,11 +5145,11 @@ pub const CEmitter = struct {
         // `(mc_slice_..._u8){ .ptr = (uint8_t const *)"hi", .len = 2 }`. The pointer is
         // the static C string literal (always valid — it is a program-lifetime literal),
         // the length is the decoded byte count (no trailing NUL).
-        if (ast_query.u8SliceMutability(resolved)) |mutability| {
+        if (type_syntax.u8SliceMutability(resolved)) |mutability| {
             const child = resolved.kind.slice.child.*;
             const slice_name = try self.sliceTypeName(child, mutability);
             const ptr_type = try self.pointerTypeForSliceElement(child, mutability);
-            const len = ast_query.stringLiteralByteLen(literal) orelse return error.UnsupportedCEmission;
+            const len = type_syntax.stringLiteralByteLen(literal) orelse return error.UnsupportedCEmission;
             try self.out.print(self.allocator, "(({s}){{ .ptr = ({s})", .{ slice_name, ptr_type });
             try self.emitCStringLiteral(literal);
             try self.out.print(self.allocator, ", .len = {d} }})", .{len});
@@ -5334,7 +5334,7 @@ pub const CEmitter = struct {
         const info = self.packed_bits.get(base_ty) orelse return false;
         const field = info.fields.get(node.name.text) orelse return false;
         const field_ty = (self.mirTargetTypeFactAt(.expression_result, member_span) orelse return error.UnsupportedCEmission).target_ty;
-        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(ast_query.simpleNameType("bool", member_span)))) return error.UnsupportedCEmission;
+        if (!type_syntax.sameTypeSyntax(self.resolveAliasType(field_ty), self.resolveAliasType(type_syntax.simpleNameType("bool", member_span)))) return error.UnsupportedCEmission;
         try self.emitPackedBitsMaskTest(node.base.*, locals, info, field.bit_index);
         return true;
     }
@@ -5679,7 +5679,7 @@ pub const CEmitter = struct {
     }
 
     fn enumNameFromCandidate(self: *CEmitter, ty: ast.TypeExpr) ?[]const u8 {
-        const enum_name = ast_query.typeName(self.resolveAliasType(ty)) orelse return null;
+        const enum_name = type_syntax.typeName(self.resolveAliasType(ty)) orelse return null;
         return if (self.enums.contains(enum_name)) enum_name else null;
     }
 
@@ -5767,7 +5767,7 @@ pub const CEmitter = struct {
 
     fn emitBooleanInferredLocalInit(self: *CEmitter, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
         if (!inferredLocalBooleanInitializer(initializer)) return false;
-        const bool_ty = ast_query.simpleNameType("bool", initializer.span);
+        const bool_ty = type_syntax.simpleNameType("bool", initializer.span);
         const inferred_ty = (try self.mirInferredLocalType(name, initializer, bool_ty)) orelse return error.UnsupportedCEmission;
         if (!isBoolType(self.resolveAliasType(inferred_ty))) return error.UnsupportedCEmission;
         try locals.put(name, try self.localInfoFromType(inferred_ty));
@@ -6082,7 +6082,7 @@ pub const CEmitter = struct {
         return .{ .name = temp_name, .ty = target_ty };
     }
 
-    fn emitAtomicResultValueTempFromCall(self: *CEmitter, call: ast_query.CallExpr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
+    fn emitAtomicResultValueTempFromCall(self: *CEmitter, call: expr_syntax.CallExpr, locals: *std.StringHashMap(LocalInfo)) anyerror!?SequencedArgTemp {
         const return_ty = self.atomicResultReturnTypeForCall(call, locals) orelse return null;
         const temp_name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_tmp{d}", .{self.temp_index});
         self.temp_index += 1;
@@ -8774,7 +8774,7 @@ pub const CEmitter = struct {
     fn binarySourceTypeForEmission(self: *CEmitter, expr: ast.Expr, node: anytype, locals: ?*std.StringHashMap(LocalInfo)) ?ast.TypeExpr {
         const fact = self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null;
         const inferred = switch (node.op) {
-            .eq, .ne, .lt, .le, .gt, .ge, .logical_and, .logical_or => ast_query.simpleNameType("bool", expr.span),
+            .eq, .ne, .lt, .le, .gt, .ge, .logical_and, .logical_or => type_syntax.simpleNameType("bool", expr.span),
             .shl, .shr => self.exprSourceTypeForEmission(node.left.*, locals),
             else => self.exprSourceTypeForEmission(node.left.*, locals) orelse self.exprSourceTypeForEmission(node.right.*, locals),
         };

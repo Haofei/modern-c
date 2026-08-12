@@ -1,13 +1,14 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
 const array_len = @import("array_len.zig");
 const eval = @import("eval.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const type_layout = @import("layout.zig");
 const lower_llvm_model = @import("lower_llvm_model.zig");
 const lower_llvm_query = @import("lower_llvm_query.zig");
 const lower_llvm_type = @import("lower_llvm_type.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const ComptimeStructLayout = type_layout.ComptimeStructLayout;
 const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
@@ -20,10 +21,10 @@ const isOpaqueAddressGenericName = lower_llvm_type.isOpaqueAddressGenericName;
 const isPayloadDomainGenericName = lower_llvm_type.isPayloadDomainGenericName;
 const isPointerLikeType = lower_llvm_type.isPointerLikeType;
 const libraryScalarLlvmType = lower_llvm_type.libraryScalarLlvmType;
-const reflectionValueCallKind = ast_query.reflectionValueCallKind;
-const reflectionFieldName = ast_query.reflectionFieldName;
+const reflectionValueCallKind = expr_syntax.reflectionValueCallKind;
+const reflectionFieldName = expr_syntax.reflectionFieldName;
 const scalarLayout = type_layout.scalarLayout;
-const typeName = ast_query.typeName;
+const typeName = type_syntax.typeName;
 const typeNameEql = lower_llvm_type.typeNameEql;
 const comptimeArraySize = type_layout.comptimeArraySize;
 const comptimeBitOffsetFromBytes = type_layout.comptimeBitOffset;

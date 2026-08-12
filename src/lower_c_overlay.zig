@@ -3,18 +3,19 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_model = @import("lower_c_model.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
 const OverlayFieldAccess = lower_c_model.OverlayFieldAccess;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
 
-const memberExpr = ast_query.memberExpr;
-const overlayArrayElementType = ast_query.overlayArrayElementType;
-const overlayByteArrayElementType = ast_query.overlayByteArrayElementType;
-const overlayMemberFromIndexBase = ast_query.overlayMemberFromIndexBase;
+const memberExpr = expr_syntax.memberExpr;
+const overlayArrayElementType = type_syntax.overlayArrayElementType;
+const overlayByteArrayElementType = type_syntax.overlayByteArrayElementType;
+const overlayMemberFromIndexBase = expr_syntax.overlayMemberFromIndexBase;
 const overlayUnionNameForExpr = lower_c_access.overlayUnionNameForExpr;
 
 pub const WriteIndentFn = *const fn (ctx: *anyopaque) anyerror!void;

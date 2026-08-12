@@ -3,7 +3,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_atomic = @import("lower_c_atomic.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
@@ -19,10 +19,10 @@ const globalInfoFromType = lower_c_shape.globalInfoFromType;
 const isAtomicIntegerPayload = lower_c_atomic.isAtomicIntegerPayload;
 const isAtomicLoadOrdering = lower_c_atomic.isAtomicLoadOrdering;
 const isAtomicStoreOrdering = lower_c_atomic.isAtomicStoreOrdering;
-const calleeIdentName = ast_query.calleeIdentName;
-const isIdentNamed = ast_query.isIdentNamed;
-const memberExpr = ast_query.memberExpr;
-const isSatPreservingBinary = ast_query.isSatPreservingBinary;
+const calleeIdentName = expr_syntax.calleeIdentName;
+const isIdentNamed = expr_syntax.isIdentNamed;
+const memberExpr = expr_syntax.memberExpr;
+const isSatPreservingBinary = expr_syntax.isSatPreservingBinary;
 const isWrapPreservingBinary = lower_c_op.isWrapPreservingBinary;
 const widthBits = lower_c_op.widthBits;
 

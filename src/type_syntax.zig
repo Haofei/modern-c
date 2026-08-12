@@ -74,6 +74,137 @@ pub fn isOpaqueAddressTypeName(name: []const u8) bool {
         std.mem.eql(u8, name, "DmaAddr");
 }
 
+pub fn isPointerLikeGeneric(name: []const u8) bool {
+    return std.mem.eql(u8, name, "MmioPtr") or
+        std.mem.eql(u8, name, "UserPtr");
+}
+
+pub fn isArithmeticLayoutGeneric(name: []const u8) bool {
+    return std.mem.eql(u8, name, "wrap") or
+        std.mem.eql(u8, name, "sat") or
+        std.mem.eql(u8, name, "serial") or
+        std.mem.eql(u8, name, "counter") or
+        std.mem.eql(u8, name, "Duration");
+}
+
+pub fn mmioPointee(ty: ast.TypeExpr) ?[]const u8 {
+    const generic = switch (ty.kind) {
+        .generic => |node| node,
+        else => return null,
+    };
+    if (!std.mem.eql(u8, generic.base.text, "MmioPtr") or generic.args.len != 1) return null;
+    return typeName(generic.args[0]);
+}
+
+pub fn dropPointerReleaseParamTypeName(fn_decl: ast.FnDecl) ?[]const u8 {
+    if (fn_decl.params.len == 0) return null;
+    const first = fn_decl.params[0].ty;
+    const child = switch (first.kind) {
+        .pointer => |pointer| blk: {
+            if (pointer.mutability != .mut) return null;
+            break :blk pointer.child.*;
+        },
+        else => return null,
+    };
+    return leadingTypeName(child);
+}
+
+pub fn leadingTypeName(ty: ast.TypeExpr) ?[]const u8 {
+    return switch (ty.kind) {
+        .generic => |generic| generic.base.text,
+        .qualified => |node| leadingTypeName(node.child.*),
+        else => typeName(ty),
+    };
+}
+
+pub const DmaBufInfo = struct {
+    payload: ast.TypeExpr,
+    mode: []const u8,
+};
+
+pub fn dmaBufInfo(ty: ast.TypeExpr) ?DmaBufInfo {
+    return switch (ty.kind) {
+        .generic => |node| {
+            if (!std.mem.eql(u8, node.base.text, "DmaBuf") or node.args.len != 2) return null;
+            const mode = switch (node.args[1].kind) {
+                .enum_literal => |literal| literal.text,
+                else => return null,
+            };
+            return .{ .payload = node.args[0], .mode = mode };
+        },
+        .qualified => |node| dmaBufInfo(node.child.*),
+        else => null,
+    };
+}
+
+pub fn isStringLiteralTarget(ty: ast.TypeExpr) bool {
+    if (typeName(ty)) |name| {
+        if (std.mem.eql(u8, name, "cstr")) return true;
+    }
+    const child = switch (ty.kind) {
+        .pointer => |node| node.child.*,
+        .raw_many_pointer => |node| node.child.*,
+        else => return false,
+    };
+    const name = typeName(child) orelse return false;
+    return std.mem.eql(u8, name, "u8");
+}
+
+pub fn stringLiteralByteLen(literal: []const u8) ?usize {
+    if (literal.len < 2 or literal[0] != '"' or literal[literal.len - 1] != '"') return null;
+    const body = literal[1 .. literal.len - 1];
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < body.len) : (i += 1) {
+        if (body[i] != '\\') {
+            n += 1;
+            continue;
+        }
+        i += 1;
+        if (i >= body.len) return null;
+        switch (body[i]) {
+            '\\', '\'', '"', '0', 'n', 'r', 't' => {},
+            else => return null,
+        }
+        n += 1;
+    }
+    return n;
+}
+
+pub fn isMmioStructAbi(struct_decl: ast.StructDecl) bool {
+    return if (struct_decl.abi) |abi| std.mem.eql(u8, abi, "mmio") else false;
+}
+
+pub fn u8SliceMutability(ty: ast.TypeExpr) ?ast.Mutability {
+    const node = switch (ty.kind) {
+        .slice => |node| node,
+        else => return null,
+    };
+    const name = typeName(node.child.*) orelse return null;
+    if (!std.mem.eql(u8, name, "u8")) return null;
+    return node.mutability;
+}
+
+pub fn overlayByteArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .array => |node| {
+            const child_name = typeName(node.child.*) orelse return null;
+            if (!std.mem.eql(u8, child_name, "u8")) return null;
+            return node.child.*;
+        },
+        .qualified => |node| overlayByteArrayElementType(node.child.*),
+        else => null,
+    };
+}
+
+pub fn overlayArrayElementType(ty: ast.TypeExpr) ?ast.TypeExpr {
+    return switch (ty.kind) {
+        .array => |node| node.child.*,
+        .qualified => |node| overlayArrayElementType(node.child.*),
+        else => null,
+    };
+}
+
 pub fn sameTypeSyntax(left: ast.TypeExpr, right: ast.TypeExpr) bool {
     if (std.meta.activeTag(left.kind) != std.meta.activeTag(right.kind)) return false;
     return switch (left.kind) {
