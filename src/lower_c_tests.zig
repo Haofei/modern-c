@@ -6307,7 +6307,7 @@ test "lower-c inspection markers for lowering-sensitive spec behavior" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try lower_c.appendInspection(std.testing.allocator, module, &output);
+    try lower_c.appendInspectionFromDecls(std.testing.allocator, module.decls, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "lower checked_arith") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "op=add") != null);

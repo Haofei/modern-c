@@ -57,9 +57,9 @@ const mmioPointee = type_bridge.mmioPointee;
 const ordinaryGlobalTarget = lower_c_target.ordinaryGlobalTarget;
 const typeName = type_bridge.typeName;
 
-pub fn appendInspection(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8)) anyerror!void {
+pub fn appendInspectionFromDecls(allocator: std.mem.Allocator, decls: []const ast_bridge.Decl, out: *std.ArrayList(u8)) anyerror!void {
     var inspector = Inspector.init(allocator, out);
-    try inspector.inspectModule(module);
+    try inspector.inspectDecls(decls);
 }
 
 const Inspector = struct {
@@ -87,10 +87,10 @@ const Inspector = struct {
         self.globals.deinit();
     }
 
-    fn inspectModule(self: *Inspector, module: ast_bridge.Module) anyerror!void {
+    fn inspectDecls(self: *Inspector, decls: []const ast_bridge.Decl) anyerror!void {
         defer self.deinit();
-        try self.collectDeclFacts(module);
-        for (module.decls) |decl| {
+        try self.collectDeclFacts(decls);
+        for (decls) |decl| {
             switch (decl.kind) {
                 .fn_decl, .extern_fn => |fn_decl| if (fn_decl.body) |body| try self.inspectFn(fn_decl, body),
                 .type_alias, .struct_decl, .enum_decl, .union_decl, .packed_bits_decl, .overlay_union_decl, .opaque_decl, .global_decl, .trait_decl, .impl_trait => {},
@@ -98,8 +98,8 @@ const Inspector = struct {
         }
     }
 
-    fn collectDeclFacts(self: *Inspector, module: ast_bridge.Module) !void {
-        for (module.decls) |decl| {
+    fn collectDeclFacts(self: *Inspector, decls: []const ast_bridge.Decl) !void {
+        for (decls) |decl| {
             switch (decl.kind) {
                 .struct_decl => |struct_decl| {
                     if (struct_decl.abi) |abi| {

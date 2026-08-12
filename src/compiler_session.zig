@@ -48,10 +48,6 @@ pub const ParsedModule = struct {
         return self.module.decls;
     }
 
-    pub fn moduleForInspection(self: ParsedModule) ast.Module {
-        return self.module;
-    }
-
     pub fn deinit(self: ParsedModule, allocator: std.mem.Allocator) void {
         self.module.deinit(allocator);
     }

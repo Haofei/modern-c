@@ -716,7 +716,7 @@ fn runLowerC(session: *CompilationSession, path: []const u8, source: []const u8)
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try lower_c.appendInspection(allocator, parsed.moduleForInspection(), &output);
+    try lower_c.appendInspectionFromDecls(allocator, parsed.decls(), &output);
     try session.writeStdout(output.items);
 }
 

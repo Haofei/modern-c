@@ -10,8 +10,8 @@ const lower_c_inspect = @import("lower_c_inspect.zig");
 const lower_c_map = @import("lower_c_map.zig");
 const lower_c_runtime = @import("lower_c_runtime.zig");
 
-pub fn appendInspection(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8)) anyerror!void {
-    return lower_c_inspect.appendInspection(allocator, module, out);
+pub fn appendInspectionFromDecls(allocator: std.mem.Allocator, decls: []const ast_bridge.Decl, out: *std.ArrayList(u8)) anyerror!void {
+    return lower_c_inspect.appendInspectionFromDecls(allocator, decls, out);
 }
 
 // The target conformance profile is owned by the backend seam. `kernel` is

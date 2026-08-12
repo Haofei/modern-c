@@ -12,6 +12,7 @@ pub const AsmStmt = ast.AsmStmt;
 pub const Attr = ast.Attr;
 pub const BinaryOp = ast.BinaryOp;
 pub const Block = ast.Block;
+pub const Decl = ast.Decl;
 pub const EnumCase = ast.EnumCase;
 pub const EnumDecl = ast.EnumDecl;
 pub const Expr = ast.Expr;
