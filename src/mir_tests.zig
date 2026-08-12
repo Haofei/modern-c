@@ -313,7 +313,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
     const result_span = result_fact.source;
 
     try std.testing.expect(db.targetTypeFactAtOwned(&callee, .direct_call_result, result_span, result_fact.target_owner.?, result_fact.target_index) == null);
-    const fallback_fact = db.targetTypeFactAtOwnedWithModuleFallback(&callee, .direct_call_result, result_span, result_fact.target_owner.?, result_fact.target_index) orelse return error.TestUnexpectedResult;
+    const fallback_fact = db.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(&callee, .direct_call_result, result_span, result_fact.target_owner.?, result_fact.target_index) orelse return error.TestUnexpectedResult;
     try std.testing.expect(std.meta.eql(result_fact, fallback_fact));
 
     const wrong_span = mir.SourcePoint{

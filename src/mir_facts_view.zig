@@ -54,7 +54,7 @@ pub const MirFactsView = struct {
     /// function, then falls back to a unique module-wide source match.  Keeping
     /// this fallback explicitly named prevents broad scans from hiding behind
     /// the ordinary local facts query.
-    pub fn targetTypeFactAtWithModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint) ?mir.TargetTypeFact {
+    pub fn targetTypeFactAtSpanWithExplicitModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint) ?mir.TargetTypeFact {
         if (self.targetTypeFactAt(current, kind, source)) |fact| return fact;
         if (!isSourcePoint(source)) return null;
         return uniqueModuleTargetTypeFact(self.module, kind, source, null, null);
@@ -72,7 +72,7 @@ pub const MirFactsView = struct {
 
     /// Transitional generated-plumbing owner query with explicit module-wide
     /// fallback.  New code should prefer `targetTypeFactById`.
-    pub fn targetTypeFactAtOwnedWithModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
+    pub fn targetTypeFactAtOwnedSpanWithExplicitModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
         if (self.targetTypeFactAtOwned(current, kind, source, owner, index)) |fact| return fact;
         if (!isSourcePoint(source)) return null;
         return uniqueModuleTargetTypeFact(self.module, kind, source, owner, index);
