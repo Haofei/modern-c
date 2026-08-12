@@ -148,10 +148,10 @@ pub const CompilationSession = struct {
     }
 
     pub fn parseModuleOrReport(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ParsedModule {
-        return .{ .module = try self.parseModuleOrReportMode(source, allocator, diag, true) };
+        return .{ .module = try parseModuleOrReportMode(self, source, allocator, diag, true) };
     }
 
-    pub fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {
+    fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {
         var p = parser.Parser.init(source, diag);
         var module = p.parseModule(allocator) catch |err| {
             if (render_errors) diag.render();
@@ -189,7 +189,7 @@ pub const CompilationSession = struct {
         };
     }
 
-    pub fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {
+    fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {
         var checker = sema.Checker.init(diag);
         checker.file_boundaries = self.file_boundaries;
         checker.optimize = optimize;
@@ -205,7 +205,7 @@ pub const CompilationSession = struct {
         render_errors: bool,
         failure_error: StageFailure,
     ) !CheckedModule {
-        const module = try self.parseModuleOrReportMode(source, allocator, diag, render_errors);
+        const module = try parseModuleOrReportMode(self, source, allocator, diag, render_errors);
         if (diag.has_errors) {
             if (render_errors) diag.render();
             return failure_error;
@@ -254,9 +254,9 @@ test "CompilationSession keeps parse context request scoped" {
     try std.testing.expectEqualStrings("a.mc", diag_a.file_boundaries.?[0].path);
     var arena_a = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_a.deinit();
-    const module_a = try session_a.parseModuleOrReportMode(source, arena_a.allocator(), &diag_a, false);
-    defer module_a.deinit(arena_a.allocator());
-    try std.testing.expectEqual(ast.VisibilityMode.explicit_public, module_a.visibility_mode);
+    const parsed_a = try session_a.parseModuleOrReport(source, arena_a.allocator(), &diag_a);
+    defer parsed_a.deinit(arena_a.allocator());
+    try std.testing.expectEqual(ast.VisibilityMode.explicit_public, parsed_a.module.visibility_mode);
 
     var boundaries_b = [_]loader.FileBoundary{.{ .start = 0, .path = "b.mc" }};
     var session_b = CompilationSession.init(std.testing.allocator, std.testing.io);
@@ -267,9 +267,9 @@ test "CompilationSession keeps parse context request scoped" {
     try std.testing.expectEqualStrings("b.mc", diag_b.file_boundaries.?[0].path);
     var arena_b = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_b.deinit();
-    const module_b = try session_b.parseModuleOrReportMode(source, arena_b.allocator(), &diag_b, false);
-    defer module_b.deinit(arena_b.allocator());
-    try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, module_b.visibility_mode);
+    const parsed_b = try session_b.parseModuleOrReport(source, arena_b.allocator(), &diag_b);
+    defer parsed_b.deinit(arena_b.allocator());
+    try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, parsed_b.module.visibility_mode);
 }
 
 test "CompilationSession attaches per-file resolved module syntax" {

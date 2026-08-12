@@ -255,6 +255,8 @@ EXACT_FILE_COUNTS = {
     ("src/compiler_session.zig", "pub const ParsedModule = struct"): 1,
     ("src/compiler_session.zig", ") !ParsedModule {"): 1,
     ("src/compiler_session.zig", ") !CheckedModule {"): 1,
+    ("src/compiler_session.zig", "pub fn parseModuleOrReportMode("): 0,
+    ("src/compiler_session.zig", "pub fn checkModule(self: *CompilationSession, module: ast.Module"): 0,
     ("src/compiler_session.zig", "moduleForInspection"): 0,
     ("src/main.zig", "parsed.decls()"): 4,
     ("src/main.zig", "parsed.moduleForInspection()"): 0,

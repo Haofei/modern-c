@@ -68,8 +68,8 @@ def main() -> int:
         "pub fn attachLoadedProjectSyntax(",
         "pub const ParsedModule = struct {",
         "pub fn parseModuleOrReport(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ParsedModule {",
-        "pub fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
-        "pub fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
+        "fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
+        "fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
         "pub fn parseCheckedModuleOrReport(",
         "pub fn buildVerifiedProgramFromDecls(",
         "pub fn artifactMetadataPath(allocator: std.mem.Allocator, output_path: []const u8) ![]const u8 {",
@@ -116,8 +116,8 @@ def main() -> int:
         'test "CompilationSession attaches per-file resolved module syntax"',
         'test "CompilationSession restores artifact metadata sidecar snapshots"',
         'test "CompilationSession diagnostic stage failures use a bounded error set"',
-        "try std.testing.expectEqual(ast.VisibilityMode.explicit_public, module_a.visibility_mode);",
-        "try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, module_b.visibility_mode);",
+        "try std.testing.expectEqual(ast.VisibilityMode.explicit_public, parsed_a.module.visibility_mode);",
+        "try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, parsed_b.module.visibility_mode);",
     ):
         require_contains(session_zig, needle)
 
@@ -125,6 +125,10 @@ def main() -> int:
     session_text = read(session_zig)
     if session_text.count("var checker = sema.Checker.init") != 1:
         fail("sema checker construction must stay centralized in CompilationSession.checkModule")
+    if "pub fn parseModuleOrReportMode(" in session_text:
+        fail("CompilationSession must not expose naked ast.Module parse helper publicly")
+    if "pub fn checkModule(self: *CompilationSession, module: ast.Module" in session_text:
+        fail("CompilationSession must not expose naked ast.Module check helper publicly")
     if main_text.count("var checker = sema.Checker.init") != 0:
         fail("main.zig must not construct sema checkers")
     if session_text.count("mir.buildOptFromDecls(") != 1:
