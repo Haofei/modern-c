@@ -52,17 +52,14 @@ pub const MirFactsView = struct {
         return targetTypeFactInFunction(current, kind, source, null, null);
     }
 
-    /// Transitional generated-plumbing query.  It first checks the current
-    /// function, then falls back to a unique module-wide source match.  Keeping
-    /// this fallback explicitly named prevents broad scans from hiding behind
-    /// the ordinary local facts query.
+    /// Retired module-fallback compatibility entrypoint. It now only checks the
+    /// current function; the explicit name is kept while callers migrate to the
+    /// ordinary local query or `targetTypeFactById`.
     pub fn targetTypeFactAtSpanWithExplicitModuleFallback(self: MirFactsView, query: TargetTypeModuleFallbackQuery) ?mir.TargetTypeFact {
         if (query.current) |function| {
             if (self.targetTypeFactAt(function, query.fact.kind, query.fact.source)) |fact| return fact;
         }
-        if (!targetTypeKindAllowsModuleFallback(query.fact.kind)) return null;
-        if (!isSourcePoint(query.fact.source)) return null;
-        return uniqueModuleTargetTypeFact(self.module, query.fact);
+        return null;
     }
 
     /// Same local query for fact families whose target belongs to a typed owner
@@ -72,16 +69,14 @@ pub const MirFactsView = struct {
         return targetTypeFactInFunction(current, kind, source, owner, index);
     }
 
-    /// Transitional generated-plumbing owner query with explicit module-wide
-    /// fallback.  New code should prefer `targetTypeFactById`.
+    /// Retired module-fallback owner query. It now only checks the current
+    /// function; new code should prefer `targetTypeFactById`.
     pub fn targetTypeFactAtOwnedSpanWithExplicitModuleFallback(self: MirFactsView, query: TargetTypeModuleFallbackQuery) ?mir.TargetTypeFact {
         if (query.fact.owner == null) return null;
         if (query.current) |function| {
             if (self.targetTypeFactAtOwned(function, query.fact.kind, query.fact.source, query.fact.owner.?, query.fact.index)) |fact| return fact;
         }
-        if (!isSourcePoint(query.fact.source)) return null;
-        if (!targetTypeKindAllowsModuleFallback(query.fact.kind)) return null;
-        return uniqueModuleTargetTypeFact(self.module, query.fact);
+        return null;
     }
 
     /// Returns a target-type fact by verified typed identities in `current`.
@@ -186,28 +181,6 @@ pub const MirFactsView = struct {
     }
 };
 
-fn uniqueModuleTargetTypeFact(module: *const mir.Module, query: TargetTypeFactQuery) ?mir.TargetTypeFact {
-    var matched: ?mir.TargetTypeFact = null;
-    for (module.functions) |function| {
-        const fact = targetTypeFactInFunction(&function, query.kind, query.source, query.owner, query.index) orelse continue;
-        if (matched) |existing| {
-            if (!sameFactIdentity(existing, fact)) return null;
-        } else {
-            matched = fact;
-        }
-    }
-    return matched;
-}
-
-fn targetTypeKindAllowsModuleFallback(kind: mir.TargetTypeKind) bool {
-    return switch (kind) {
-        .direct_call_result,
-        .direct_call_argument,
-        => true,
-        else => false,
-    };
-}
-
 fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {
     for (function.target_type_facts) |fact| {
         if (!targetTypeFactMatches(function, fact, .{ .kind = kind, .source = source, .owner = owner, .index = index })) continue;
@@ -239,14 +212,6 @@ fn targetTypeFactInFunctionById(function: *const mir.Function, key: TargetTypeLo
         return fact;
     }
     return null;
-}
-
-fn sameFactIdentity(left: mir.TargetTypeFact, right: mir.TargetTypeFact) bool {
-    // IDs are intentionally function-local interned identities.  They prove a
-    // fact is well-formed inside its producer, but equal numeric IDs from two
-    // different functions are not globally comparable; retain syntax equality
-    // for the unique cross-function fallback.
-    return std.meta.eql(left.target_ty, right.target_ty);
 }
 
 fn typedIdentityIsValid(function: *const mir.Function, fact: mir.TargetTypeFact) bool {
