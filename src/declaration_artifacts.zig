@@ -2,7 +2,7 @@
 //!
 //! Early declaration metadata is still collected from syntax while declarations
 //! are being normalized into VerifiedProgram facts.  Backend modules should use
-//! Backend modules should use this bridge instead of importing the collector directly, leaving
+//! this bridge instead of importing the collector directly, leaving
 //! `codegen_request` as the named request boundary for pre-collected artifacts.
 
 const early_declaration_metadata = @import("early_declaration_metadata.zig");

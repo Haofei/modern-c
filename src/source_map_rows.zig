@@ -1,5 +1,5 @@
 const ast = @import("ast.zig");
-const early_declaration_metadata = @import("early_declaration_metadata.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const std = @import("std");
 
 /// Transitional source-map row artifacts. Source maps still need syntax spans
@@ -11,7 +11,7 @@ pub const SourceMapRows = struct {
 
     pub fn collectFromSourceArtifacts(
         allocator: std.mem.Allocator,
-        source_artifacts: []const early_declaration_metadata.SourceMapArtifact,
+        source_artifacts: []const declaration_artifacts.SourceMapArtifact,
     ) !SourceMapRows {
         var artifacts: std.ArrayList(RowArtifact) = .empty;
         errdefer artifacts.deinit(allocator);
@@ -61,7 +61,7 @@ pub const RowArtifact = union(enum) {
         origin: []const u8,
     };
 
-    fn fromSourceMapArtifact(artifact: early_declaration_metadata.SourceMapArtifact) RowArtifact {
+    fn fromSourceMapArtifact(artifact: declaration_artifacts.SourceMapArtifact) RowArtifact {
         return switch (artifact) {
             .global => |global| .{ .global = .{
                 .symbol = global.symbol,

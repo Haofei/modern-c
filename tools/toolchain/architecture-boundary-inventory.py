@@ -230,7 +230,7 @@ REQUIRED_ANCHORS = {
     ),
     "src/declaration_artifacts.zig": (
         "Transitional backend declaration-artifact bridge.",
-        "Backend modules should use this bridge instead of importing the collector directly",
+        "this bridge instead of importing the collector directly",
     ),
     "src/type_syntax.zig": (
         "pub const ViewType = struct",
