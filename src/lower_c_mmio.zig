@@ -487,15 +487,15 @@ fn collectReadCall(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!lower_c_try.Cal
     if (!std.mem.eql(u8, access.kind, "read")) return .ignored;
     if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
 
-    try appendReadReplacement(ctx, expr.span, access);
+    try appendReadReplacement(ctx, mir.sourcePointFromSpan(expr.span), access);
     return .hoisted;
 }
 
-fn appendReadReplacement(ctx: *ReadHoistContext, span: ast.Span, access: MmioAccess) !void {
+fn appendReadReplacement(ctx: *ReadHoistContext, source: mir.SourcePoint, access: MmioAccess) !void {
     const temp_name = try std.fmt.allocPrint(ctx.ctx.scratch, "mc_tmp{d}", .{ctx.ctx.temp_index.*});
     ctx.ctx.temp_index.* += 1;
     try ctx.replacements.append(ctx.ctx.scratch, .{
-        .span = span,
+        .source = source,
         .temp_name = temp_name,
         .source_type_name = access.value_type,
         .c_type = ctx.ctx.value_c_type(ctx.ctx.emit_ctx, access.value_type),

@@ -832,7 +832,7 @@ pub fn exprHasMmioReadReplacement(expr: ast.Expr, replacements: []const MmioRead
 }
 
 fn exprHasReplacement(comptime Replacement: type, expr: ast.Expr, replacements: []const Replacement) bool {
-    if (replacementForSpan(Replacement, expr.span, replacements) != null) return true;
+    if (replacementForSource(Replacement, mir.sourcePointFromSpan(expr.span), replacements) != null) return true;
     return switch (expr.kind) {
         .grouped, .address_of, .deref => |inner| exprHasReplacement(Replacement, inner.*, replacements),
         .unary => |node| exprHasReplacement(Replacement, node.expr.*, replacements),
@@ -850,16 +850,16 @@ fn exprHasReplacement(comptime Replacement: type, expr: ast.Expr, replacements: 
 }
 
 pub fn tryReplacementForSpan(span: ast.Span, replacements: []const TryReplacement) ?[]const u8 {
-    return if (replacementForSpan(TryReplacement, span, replacements)) |replacement| replacement.temp_name else null;
+    return if (replacementForSource(TryReplacement, mir.sourcePointFromSpan(span), replacements)) |replacement| replacement.temp_name else null;
 }
 
 pub fn mmioReadReplacementForSpan(span: ast.Span, replacements: []const MmioReadReplacement) ?MmioReadReplacement {
-    return replacementForSpan(MmioReadReplacement, span, replacements);
+    return replacementForSource(MmioReadReplacement, mir.sourcePointFromSpan(span), replacements);
 }
 
-fn replacementForSpan(comptime Replacement: type, span: ast.Span, replacements: []const Replacement) ?Replacement {
+fn replacementForSource(comptime Replacement: type, source: mir.SourcePoint, replacements: []const Replacement) ?Replacement {
     for (replacements) |replacement| {
-        if (sameSpan(span, replacement.span)) return replacement;
+        if (sameSource(source, replacement.source)) return replacement;
     }
     return null;
 }
@@ -881,6 +881,6 @@ fn writeIndent(ctx: EmitContext) !void {
     for (0..ctx.indent.*) |_| try ctx.out.appendSlice(ctx.allocator, "    ");
 }
 
-fn sameSpan(left: ast.Span, right: ast.Span) bool {
+fn sameSource(left: mir.SourcePoint, right: mir.SourcePoint) bool {
     return left.offset == right.offset and left.len == right.len and left.line == right.line and left.column == right.column;
 }

@@ -9,6 +9,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const builtin_syntax = @import("builtin_syntax.zig");
 const lower_c_op = @import("lower_c_op.zig");
+const mir = @import("mir.zig");
 
 const CheckedHelperParts = lower_c_op.CheckedHelperParts;
 
@@ -93,7 +94,7 @@ pub const BindThunk = struct {
 };
 
 pub const TryReplacement = struct {
-    span: ast.Span,
+    source: mir.SourcePoint,
     temp_name: []const u8,
 };
 
@@ -104,7 +105,7 @@ pub const SequencedBinaryPlan = union(enum) {
 };
 
 pub const MmioReadReplacement = struct {
-    span: ast.Span,
+    source: mir.SourcePoint,
     temp_name: []const u8,
     source_type_name: []const u8,
     c_type: []const u8,
