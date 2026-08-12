@@ -640,7 +640,7 @@ test "tests/spec fixtures produce declared lower-c inspection markers" {
 
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(allocator);
-        try lower_c.appendInspection(allocator, module, &output);
+        try lower_c.appendInspectionFromDecls(allocator, module.decls, &output);
 
         var checks = std.mem.splitScalar(u8, check_value, ',');
         while (checks.next()) |raw_check| {

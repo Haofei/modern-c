@@ -263,6 +263,8 @@ EXACT_FILE_COUNTS = {
     ("src/lower_c_inspect.zig", "pub fn appendInspection(allocator: std.mem.Allocator, module"): 0,
     ("src/lower_c_inspect.zig", "pub fn appendInspectionFromDecls("): 1,
     ("src/lower_c_inspect.zig", "for (module.decls)"): 0,
+    ("src/spec_tests.zig", "lower_c.appendInspection(allocator, module"): 0,
+    ("src/spec_tests.zig", "lower_c.appendInspectionFromDecls(allocator, module.decls"): 1,
     ("src/main.zig", "checked.decls()"): 9,
     ("src/main.zig", "buildVerifiedProgramFromDecls(module.decls"): 0,
     ("src/mir_facts_view.zig", "pub const MirFactsView = struct"): 1,
