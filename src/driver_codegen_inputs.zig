@@ -14,7 +14,6 @@ const compiler_session = @import("compiler_session.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir.zig");
-const module_parser = @import("module_parser.zig");
 
 pub const DeclarationArtifacts = declaration_artifacts.EarlyDeclarationArtifacts;
 pub const SourceMapArtifact = declaration_artifacts.SourceMapArtifact;
@@ -55,18 +54,6 @@ fn collectDeclarationArtifacts(session: *CompilationSession, module: ast.Module)
         defer session.allocator.free(resolved_decls);
         return DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls);
     }
-    const fallback_decls = try fallbackResolvedDecls(session.allocator, module);
-    defer session.allocator.free(fallback_decls);
-    return DeclarationArtifacts.collectFromResolvedDecls(session.allocator, fallback_decls);
-}
-
-fn fallbackResolvedDecls(allocator: std.mem.Allocator, module: ast.Module) ![]module_parser.ResolvedDecl {
-    const decls = try allocator.alloc(module_parser.ResolvedDecl, module.decls.len);
-    for (module.decls, 0..) |decl, i| {
-        decls[i] = .{
-            .file_id = @enumFromInt(0),
-            .decl = decl,
-        };
-    }
-    return decls;
+    _ = module;
+    return error.MissingResolvedSources;
 }
