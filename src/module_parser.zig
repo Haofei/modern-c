@@ -9,6 +9,18 @@ const parser = @import("parser.zig");
 pub const ParsedSourceFile = struct {
     id: module_graph.FileId,
     module: ast.Module,
+
+    pub fn decls(self: ParsedSourceFile) []ast.Decl {
+        return self.module.decls;
+    }
+
+    pub fn qualifiedSymbols(self: ParsedSourceFile) []const ast.QualifiedSymbol {
+        return self.module.qualified_symbols;
+    }
+
+    pub fn deinit(self: ParsedSourceFile, allocator: std.mem.Allocator) void {
+        self.module.deinit(allocator);
+    }
 };
 
 /// ParsedSourceDatabase is the parser-owned per-file syntax boundary.
@@ -22,13 +34,13 @@ pub const ParsedSourceDatabase = struct {
 
     pub fn declsForFile(self: ParsedSourceDatabase, id: module_graph.FileId) ?[]const ast.Decl {
         for (self.files) |file| {
-            if (file.id == id) return file.module.decls;
+            if (file.id == id) return file.decls();
         }
         return null;
     }
 
     pub fn deinit(self: *ParsedSourceDatabase, allocator: std.mem.Allocator) void {
-        for (self.files) |file| file.module.deinit(allocator);
+        for (self.files) |file| file.deinit(allocator);
         allocator.free(self.files);
     }
 };
@@ -94,7 +106,7 @@ pub fn parseSourceDatabase(
 ) !ParsedSourceDatabase {
     var files: std.ArrayList(ParsedSourceFile) = .empty;
     errdefer {
-        for (files.items) |file| file.module.deinit(allocator);
+        for (files.items) |file| file.deinit(allocator);
         files.deinit(allocator);
     }
 
@@ -140,7 +152,7 @@ pub fn resolveParsedSourceDatabase(
     }
 
     for (parsed_sources.files) |file| {
-        const resolved_decls = try name_resolve.transformDeclsWithSymbols(allocator, file.module.decls, file.module.qualified_symbols, null);
+        const resolved_decls = try name_resolve.transformDeclsWithSymbols(allocator, file.decls(), file.qualifiedSymbols(), null);
         var resolved_transferred = false;
         errdefer if (!resolved_transferred) allocator.free(resolved_decls);
         try files.append(allocator, .{
