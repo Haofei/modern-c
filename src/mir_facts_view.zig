@@ -205,8 +205,6 @@ fn targetTypeKindAllowsModuleFallback(kind: mir.TargetTypeKind) bool {
         .direct_call_argument,
         .dyn_dispatch_result,
         .dyn_dispatch_argument,
-        .atomic_init_payload,
-        .atomic_init_result,
         => true,
         else => false,
     };

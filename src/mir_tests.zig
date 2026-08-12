@@ -152,6 +152,13 @@ fn functionByNameMut(module: *mir.Module, name: []const u8) ?*mir.Function {
     return null;
 }
 
+fn functionByNamePtr(module: *const mir.Module, name: []const u8) ?*const mir.Function {
+    for (module.functions) |*function| {
+        if (std.mem.eql(u8, function.name, name)) return function;
+    }
+    return null;
+}
+
 test "MIR verifier rejects function symbol identity drift" {
     // DIAGNOSTIC_UNIT: E_MIR_SYMBOL_ID
     const source =
@@ -3358,7 +3365,7 @@ test "MIR owns const_get base result and index facts" {
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "get_word").?;
-    const other = functionByName(typed_mir, "other").?;
+    const other = functionByNamePtr(&typed_mir, "other").?;
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
     try std.testing.expectEqual(mir.CallTargetKind.const_get, function.call_target_facts[0].kind);
     try std.testing.expectEqual(@as(usize, 1), function.const_get_facts.len);
@@ -3380,14 +3387,14 @@ test "MIR owns const_get base result and index facts" {
     try std.testing.expectEqual(@as(?usize, 2), instruction_index);
     const facts = mir_facts_view.MirFactsView.init(&typed_mir);
     try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
-        .current = &other,
+        .current = other,
         .fact = .{
             .kind = .const_get_base,
             .source = base_fact.?.source,
         },
     }) == null);
     try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
-        .current = &other,
+        .current = other,
         .fact = .{
             .kind = .const_get_result,
             .source = result_fact.?.source,
@@ -5295,6 +5302,10 @@ test "MIR records typed call target facts for atomic member calls" {
         \\    let next: u32 = counter.fetch_sub(1, .seq_cst);
         \\    return previous + next + counter.load(.acquire);
         \\}
+        \\
+        \\fn other() -> u32 {
+        \\    return 0;
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_atomic_call_targets.mc", source);
@@ -5339,6 +5350,26 @@ test "MIR records typed call target facts for atomic member calls" {
     try std.testing.expectEqual(init_payload.target_index, init_result.target_index);
     try std.testing.expectEqualStrings("u32", init_payload.target_ty.kind.name.text);
     try std.testing.expectEqualStrings("atomic", init_result.target_ty.kind.generic.base.text);
+    const other = functionByNamePtr(&typed_mir, "other").?;
+    const facts = mir_facts_view.MirFactsView.init(&typed_mir);
+    try std.testing.expect(facts.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+        .current = other,
+        .fact = .{
+            .kind = .atomic_init_payload,
+            .source = init_payload.source,
+            .owner = init_payload.target_owner,
+            .index = init_payload.target_index,
+        },
+    }) == null);
+    try std.testing.expect(facts.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+        .current = other,
+        .fact = .{
+            .kind = .atomic_init_result,
+            .source = init_result.source,
+            .owner = init_result.target_owner,
+            .index = init_result.target_index,
+        },
+    }) == null);
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
