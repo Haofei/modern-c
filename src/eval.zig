@@ -819,9 +819,30 @@ pub fn collectConstGlobalsFromDeclsWithOptions(
     return collectConstGlobalsFromDeclarationsWithOptions(allocator, ComptimeDeclarations.fromDecls(decls), funcs, out, options);
 }
 
+pub fn collectConstGlobalsFromDeclItemsWithOptions(
+    allocator: std.mem.Allocator,
+    decl_items: anytype,
+    funcs: *const std.StringHashMap(ast.FnDecl),
+    out: *std.StringHashMap(ComptimeValue),
+    options: CollectConstGlobalsOptions,
+) !void {
+    return collectConstGlobalsFromDeclItemsWithScope(allocator, ComptimeDeclarations{}, decl_items, funcs, out, options);
+}
+
 pub fn collectConstGlobalsFromDeclarationsWithOptions(
     allocator: std.mem.Allocator,
     declarations: ComptimeDeclarations,
+    funcs: *const std.StringHashMap(ast.FnDecl),
+    out: *std.StringHashMap(ComptimeValue),
+    options: CollectConstGlobalsOptions,
+) !void {
+    return collectConstGlobalsFromDeclItemsWithScope(allocator, declarations, null, funcs, out, options);
+}
+
+fn collectConstGlobalsFromDeclItemsWithScope(
+    allocator: std.mem.Allocator,
+    declarations: ComptimeDeclarations,
+    decl_items: anytype,
     funcs: *const std.StringHashMap(ast.FnDecl),
     out: *std.StringHashMap(ComptimeValue),
     options: CollectConstGlobalsOptions,
@@ -839,6 +860,17 @@ pub fn collectConstGlobalsFromDeclarationsWithOptions(
     scope.reflect_ctx = options.reflect_ctx;
     if (declarations.legacy_decls) |decls| {
         for (decls) |decl| {
+            const global = switch (decl.kind) {
+                .global_decl => |g| g,
+                else => continue,
+            };
+            try collectConstGlobal(allocator, &scope, global, out, options);
+        }
+        return;
+    }
+    if (@TypeOf(decl_items) != @TypeOf(null)) {
+        for (decl_items) |item| {
+            const decl = if (@hasField(@TypeOf(item), "decl")) item.decl else item;
             const global = switch (decl.kind) {
                 .global_decl => |g| g,
                 else => continue,
