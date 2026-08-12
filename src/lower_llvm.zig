@@ -364,7 +364,8 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .backend_names = std.StringHashMap([]const u8).init(allocator),
         .function_artifacts = early_metadata.function_artifacts,
         .global_artifacts = early_metadata.global_artifacts,
-        .trait_artifacts = early_metadata.trait_artifacts,
+        .trait_decl_artifacts = early_metadata.trait_decl_artifacts,
+        .impl_trait_artifacts = early_metadata.impl_trait_artifacts,
         .type_alias_artifacts = early_metadata.type_alias_artifacts,
         .struct_artifacts = early_metadata.struct_artifacts,
         .enum_artifacts = early_metadata.enum_artifacts,
@@ -470,7 +471,8 @@ const LlvmEmitter = struct {
     backend_names: std.StringHashMap([]const u8) = undefined,
     function_artifacts: []const declaration_artifacts.FunctionArtifact = &.{},
     global_artifacts: []const declaration_artifacts.GlobalArtifact = &.{},
-    trait_artifacts: []const declaration_artifacts.TraitArtifact = &.{},
+    trait_decl_artifacts: []const declaration_artifacts.TraitDeclArtifact = &.{},
+    impl_trait_artifacts: []const declaration_artifacts.ImplTraitArtifact = &.{},
     type_alias_artifacts: []const ast_bridge.TypeAlias = &.{},
     struct_artifacts: []const ast_bridge.StructDecl = &.{},
     enum_artifacts: []const ast_bridge.EnumDecl = &.{},
@@ -725,14 +727,12 @@ const LlvmEmitter = struct {
         for (self.global_artifacts) |global| {
             try self.collectGlobal(global);
         }
-        for (self.trait_artifacts) |artifact| {
-            switch (artifact) {
-                .trait_decl => |t| try self.trait_decls.put(t.name.text, t),
-                .impl_trait => |it| {
-                    const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ it.trait_name.text, it.type_name.text });
-                    try self.impl_methods.put(key, it.methods);
-                },
-            }
+        for (self.trait_decl_artifacts) |trait_decl| {
+            try self.trait_decls.put(trait_decl.name.text, trait_decl.toDecl());
+        }
+        for (self.impl_trait_artifacts) |impl_trait| {
+            const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.trait_name.text, impl_trait.type_name.text });
+            try self.impl_methods.put(key, impl_trait.methods);
         }
     }
 

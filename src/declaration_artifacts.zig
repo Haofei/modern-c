@@ -19,7 +19,8 @@ pub const SyntaxDeclarationSlice = []const ast.Decl;
 pub const EarlyDeclarationArtifacts = struct {
     function_artifacts: []const FunctionArtifact,
     global_artifacts: []const GlobalArtifact,
-    trait_artifacts: []const TraitArtifact,
+    trait_decl_artifacts: []const TraitDeclArtifact,
+    impl_trait_artifacts: []const ImplTraitArtifact,
     type_alias_artifacts: []const ast.TypeAlias,
     struct_artifacts: []const ast.StructDecl,
     enum_artifacts: []const ast.EnumDecl,
@@ -33,8 +34,10 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer function_artifacts.deinit(allocator);
         var global_artifacts: std.ArrayList(GlobalArtifact) = .empty;
         errdefer global_artifacts.deinit(allocator);
-        var trait_artifacts: std.ArrayList(TraitArtifact) = .empty;
-        errdefer trait_artifacts.deinit(allocator);
+        var trait_decl_artifacts: std.ArrayList(TraitDeclArtifact) = .empty;
+        errdefer trait_decl_artifacts.deinit(allocator);
+        var impl_trait_artifacts: std.ArrayList(ImplTraitArtifact) = .empty;
+        errdefer impl_trait_artifacts.deinit(allocator);
         var type_alias_artifacts: std.ArrayList(ast.TypeAlias) = .empty;
         errdefer type_alias_artifacts.deinit(allocator);
         var struct_artifacts: std.ArrayList(ast.StructDecl) = .empty;
@@ -91,11 +94,11 @@ pub const EarlyDeclarationArtifacts = struct {
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .trait_decl => |trait_decl| {
-                try trait_artifacts.append(allocator, .{ .trait_decl = trait_decl });
+                try trait_decl_artifacts.append(allocator, TraitDeclArtifact.fromDecl(trait_decl));
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .impl_trait => |impl_trait| {
-                try trait_artifacts.append(allocator, .{ .impl_trait = impl_trait });
+                try impl_trait_artifacts.append(allocator, ImplTraitArtifact.fromDecl(impl_trait));
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
         };
@@ -104,8 +107,10 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer allocator.free(owned_function_artifacts);
         const owned_global_artifacts = try global_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_global_artifacts);
-        const owned_trait_artifacts = try trait_artifacts.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_trait_artifacts);
+        const owned_trait_decl_artifacts = try trait_decl_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_trait_decl_artifacts);
+        const owned_impl_trait_artifacts = try impl_trait_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_impl_trait_artifacts);
         const owned_type_alias_artifacts = try type_alias_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_type_alias_artifacts);
         const owned_struct_artifacts = try struct_artifacts.toOwnedSlice(allocator);
@@ -124,7 +129,8 @@ pub const EarlyDeclarationArtifacts = struct {
         return .{
             .function_artifacts = owned_function_artifacts,
             .global_artifacts = owned_global_artifacts,
-            .trait_artifacts = owned_trait_artifacts,
+            .trait_decl_artifacts = owned_trait_decl_artifacts,
+            .impl_trait_artifacts = owned_impl_trait_artifacts,
             .type_alias_artifacts = owned_type_alias_artifacts,
             .struct_artifacts = owned_struct_artifacts,
             .enum_artifacts = owned_enum_artifacts,
@@ -138,7 +144,8 @@ pub const EarlyDeclarationArtifacts = struct {
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
         allocator.free(self.function_artifacts);
         allocator.free(self.global_artifacts);
-        allocator.free(self.trait_artifacts);
+        allocator.free(self.trait_decl_artifacts);
+        allocator.free(self.impl_trait_artifacts);
         allocator.free(self.type_alias_artifacts);
         allocator.free(self.struct_artifacts);
         allocator.free(self.enum_artifacts);
@@ -152,7 +159,8 @@ pub const EarlyDeclarationArtifacts = struct {
     pub const empty = EarlyDeclarationArtifacts{
         .function_artifacts = &.{},
         .global_artifacts = &.{},
-        .trait_artifacts = &.{},
+        .trait_decl_artifacts = &.{},
+        .impl_trait_artifacts = &.{},
         .type_alias_artifacts = &.{},
         .struct_artifacts = &.{},
         .enum_artifacts = &.{},
@@ -308,9 +316,45 @@ pub const GlobalArtifact = struct {
     }
 };
 
-pub const TraitArtifact = union(enum) {
-    trait_decl: ast.TraitDecl,
-    impl_trait: ast.ImplTrait,
+pub const TraitDeclArtifact = struct {
+    name: ast.Ident,
+    methods: []ast.TraitMethodSig,
+
+    pub fn fromDecl(trait_decl: ast.TraitDecl) TraitDeclArtifact {
+        return .{
+            .name = trait_decl.name,
+            .methods = trait_decl.methods,
+        };
+    }
+
+    pub fn toDecl(self: TraitDeclArtifact) ast.TraitDecl {
+        return .{
+            .name = self.name,
+            .methods = self.methods,
+        };
+    }
+};
+
+pub const ImplTraitArtifact = struct {
+    trait_name: ast.Ident,
+    type_name: ast.Ident,
+    methods: []ast.ImplTraitMethod,
+
+    pub fn fromDecl(impl_trait: ast.ImplTrait) ImplTraitArtifact {
+        return .{
+            .trait_name = impl_trait.trait_name,
+            .type_name = impl_trait.type_name,
+            .methods = impl_trait.methods,
+        };
+    }
+
+    pub fn toDecl(self: ImplTraitArtifact) ast.ImplTrait {
+        return .{
+            .trait_name = self.trait_name,
+            .type_name = self.type_name,
+            .methods = self.methods,
+        };
+    }
 };
 
 pub const SourceMapArtifact = union(enum) {

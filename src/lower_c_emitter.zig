@@ -485,7 +485,7 @@ pub const CEmitter = struct {
     pub fn collectDeclArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
         try self.collectFunctionArtifacts(artifacts.function_artifacts);
         try self.collectGlobalArtifacts(artifacts.global_artifacts);
-        try self.collectTraitArtifacts(artifacts.trait_artifacts);
+        try self.collectTraitArtifacts(artifacts.trait_decl_artifacts, artifacts.impl_trait_artifacts);
         try self.collectTypeArtifactsFromArtifacts(artifacts);
     }
 
@@ -497,11 +497,13 @@ pub const CEmitter = struct {
         for (artifacts) |global| try self.collectGlobalDeclArtifact(global);
     }
 
-    fn collectTraitArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.TraitArtifact) anyerror!void {
-        for (artifacts) |artifact| switch (artifact) {
-            .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),
-            .impl_trait => |impl_trait| try self.collectImplTraitArtifact(impl_trait),
-        };
+    fn collectTraitArtifacts(
+        self: *CEmitter,
+        trait_artifacts: []const declaration_artifacts.TraitDeclArtifact,
+        impl_artifacts: []const declaration_artifacts.ImplTraitArtifact,
+    ) anyerror!void {
+        for (trait_artifacts) |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl.toDecl());
+        for (impl_artifacts) |impl_trait| try self.collectImplTraitArtifact(impl_trait);
     }
 
     fn collectTypeArtifactsFromArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
@@ -551,7 +553,7 @@ pub const CEmitter = struct {
         if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(self.mir_module, self.function_decl_artifacts.items)) return error.UnsupportedCEmission;
     }
 
-    fn collectImplTraitArtifact(self: *CEmitter, impl_trait: ast_bridge.ImplTrait) !void {
+    fn collectImplTraitArtifact(self: *CEmitter, impl_trait: declaration_artifacts.ImplTraitArtifact) !void {
         const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.trait_name.text, impl_trait.type_name.text });
         try self.impl_methods.put(key, impl_trait.methods);
     }
