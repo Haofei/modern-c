@@ -2,7 +2,6 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
 const expr_syntax = @import("expr_syntax.zig");
 const lower_c_atomic = @import("lower_c_atomic.zig");
 const lower_c_model = @import("lower_c_model.zig");
@@ -26,7 +25,7 @@ const isSatPreservingBinary = expr_syntax.isSatPreservingBinary;
 const isWrapPreservingBinary = lower_c_op.isWrapPreservingBinary;
 const widthBits = lower_c_op.widthBits;
 
-pub fn atomicAccess(callee: ast.Expr, args: []const ast.Expr, ctx: anytype) ?AtomicAccess {
+pub fn atomicAccess(callee: anytype, args: anytype, ctx: anytype) ?AtomicAccess {
     const member = memberExpr(callee) orelse return null;
     const object = calleeIdentName(member.base.*) orelse return null;
     const payload = ctx.local_atomic_payloads.get(object) orelse return null;
@@ -49,7 +48,7 @@ pub fn atomicAccess(callee: ast.Expr, args: []const ast.Expr, ctx: anytype) ?Ato
     return null;
 }
 
-pub fn dmaOperation(callee: ast.Expr, args: []const ast.Expr, ctx: anytype) ?DmaOperation {
+pub fn dmaOperation(callee: anytype, args: anytype, ctx: anytype) ?DmaOperation {
     const member = memberExpr(callee) orelse return null;
     if (isIdentNamed(member.base.*, "cache")) {
         if (!std.mem.eql(u8, member.name.text, "clean") and !std.mem.eql(u8, member.name.text, "invalidate")) return null;
@@ -74,7 +73,7 @@ pub fn dmaOperation(callee: ast.Expr, args: []const ast.Expr, ctx: anytype) ?Dma
     return null;
 }
 
-pub fn dmaAddrHandoffObject(value: ast.Expr, ctx: anytype) ?[]const u8 {
+pub fn dmaAddrHandoffObject(value: anytype, ctx: anytype) ?[]const u8 {
     return switch (value.kind) {
         .grouped => |inner| dmaAddrHandoffObject(inner.*, ctx),
         .call => |call| blk: {
@@ -86,7 +85,7 @@ pub fn dmaAddrHandoffObject(value: ast.Expr, ctx: anytype) ?[]const u8 {
     };
 }
 
-pub fn exprType(expr: ast.Expr, ctx: anytype) ?[]const u8 {
+pub fn exprType(expr: anytype, ctx: anytype) ?[]const u8 {
     return switch (expr.kind) {
         .ident => |ident| ctx.local_types.get(ident.text),
         .grouped => |inner| exprType(inner.*, ctx),
@@ -101,7 +100,7 @@ pub fn arithmeticDomainForBinary(node: anytype, ctx: anytype) ?[]const u8 {
     return null;
 }
 
-pub fn exprHasArithmeticDomain(expr: ast.Expr, ctx: anytype, domain: []const u8) bool {
+pub fn exprHasArithmeticDomain(expr: anytype, ctx: anytype, domain: []const u8) bool {
     return switch (expr.kind) {
         .ident => |ident| if (ctx.local_domains.get(ident.text)) |found| std.mem.eql(u8, found, domain) else false,
         .grouped => |inner| exprHasArithmeticDomain(inner.*, ctx, domain),
@@ -115,7 +114,7 @@ pub fn exprHasArithmeticDomain(expr: ast.Expr, ctx: anytype, domain: []const u8)
     };
 }
 
-pub fn iterableElementCTypeForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(lower_c_model.LocalInfo)) ?[]const u8 {
+pub fn iterableElementCTypeForExpr(expr: anytype, locals: ?*std.StringHashMap(lower_c_model.LocalInfo)) ?[]const u8 {
     const local_set = locals orelse return null;
     return switch (expr.kind) {
         .ident => |ident| if (local_set.get(ident.text)) |info| info.iterable_element_c_type else null,
@@ -124,7 +123,7 @@ pub fn iterableElementCTypeForExpr(expr: ast.Expr, locals: ?*std.StringHashMap(l
     };
 }
 
-pub fn ordinaryGlobalTarget(allocator: std.mem.Allocator, target: ast.Expr, ctx: anytype, globals: std.StringHashMap(GlobalInfo), structs: std.StringHashMap(ast.StructDecl)) ?GlobalAccess {
+pub fn ordinaryGlobalTarget(allocator: std.mem.Allocator, target: anytype, ctx: anytype, globals: std.StringHashMap(GlobalInfo), structs: anytype) ?GlobalAccess {
     return switch (target.kind) {
         .ident => |ident| if (!ctx.locals.contains(ident.text))
             if (globals.get(ident.text)) |global| .{ .name = ident.text, .info = global } else null
@@ -157,7 +156,7 @@ pub fn ordinaryGlobalArrayTarget(allocator: std.mem.Allocator, index: anytype, c
     };
 }
 
-pub fn ordinaryGlobalMemberTarget(allocator: std.mem.Allocator, member: anytype, ctx: anytype, globals: std.StringHashMap(GlobalInfo), structs: std.StringHashMap(ast.StructDecl)) ?GlobalAccess {
+pub fn ordinaryGlobalMemberTarget(allocator: std.mem.Allocator, member: anytype, ctx: anytype, globals: std.StringHashMap(GlobalInfo), structs: anytype) ?GlobalAccess {
     const base_name = calleeIdentName(member.base.*) orelse return null;
     if (ctx.locals.contains(base_name)) return null;
     const global = globals.get(base_name) orelse return null;
@@ -173,7 +172,7 @@ pub fn ordinaryGlobalMemberTarget(allocator: std.mem.Allocator, member: anytype,
     return null;
 }
 
-pub fn localOrdinaryTarget(target: ast.Expr, ctx: anytype) ?[]const u8 {
+pub fn localOrdinaryTarget(target: anytype, ctx: anytype) ?[]const u8 {
     return switch (target.kind) {
         .ident => |ident| if (ctx.locals.contains(ident.text)) ident.text else null,
         .grouped => |inner| localOrdinaryTarget(inner.*, ctx),
@@ -181,7 +180,7 @@ pub fn localOrdinaryTarget(target: ast.Expr, ctx: anytype) ?[]const u8 {
     };
 }
 
-pub fn assignmentRangeTargetName(target: ast.Expr) ?[]const u8 {
+pub fn assignmentRangeTargetName(target: anytype) ?[]const u8 {
     return switch (target.kind) {
         .ident => |ident| ident.text,
         .member => |member| member.name.text,
