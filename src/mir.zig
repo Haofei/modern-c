@@ -819,7 +819,7 @@ pub fn buildOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, option
     var ast_structs = std.StringHashMap(ast.StructDecl).init(allocator);
     defer ast_structs.deinit();
 
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         switch (decl.kind) {
             .enum_decl => |enum_decl| try enums.put(enum_decl.name.text, .{ .is_open = enum_decl.is_open, .cases = enum_decl.cases, .repr = enum_decl.repr }),
             .struct_decl => |struct_decl| {
@@ -848,7 +848,7 @@ pub fn buildOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, option
     var mutable_globals = std.StringHashMap(void).init(allocator);
     defer mutable_globals.deinit();
 
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
                 try summaries.put(fn_decl.name.text, .{
@@ -887,18 +887,18 @@ pub fn buildOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, option
     // This deliberately covers only the unambiguous internal form `return &global`.
     // Callers receive ordinary pointer-provenance facts, so backend lowering does not
     // need to rediscover this provenance from the AST.
-    var pointer_return_summaries = try collectDirectGlobalPointerReturnSummaries(allocator, module, &globals, &enums, &structs, &packed_bits, &aliases);
+    var pointer_return_summaries = try collectDirectGlobalPointerReturnSummaries(allocator, decls, &globals, &enums, &structs, &packed_bits, &aliases);
     defer pointer_return_summaries.deinit();
 
-    var aggregate_return_facts = try collectDirectAggregateReturnPointerFacts(allocator, module, &globals, &enums, &structs, &packed_bits, &aliases, &pointer_return_summaries);
+    var aggregate_return_facts = try collectDirectAggregateReturnPointerFacts(allocator, decls, &globals, &enums, &structs, &packed_bits, &aliases, &pointer_return_summaries);
     errdefer aggregate_return_facts.deinit(allocator);
 
     var symbol_ids = std.StringHashMap(SymbolId).init(allocator);
     defer symbol_ids.deinit();
 
-    const drop_glue_facts = try collectDropGlueFacts(allocator, module, &ast_structs, &aliases, &symbol_ids);
+    const drop_glue_facts = try collectDropGlueFacts(allocator, decls, &ast_structs, &aliases, &symbol_ids);
     errdefer allocator.free(drop_glue_facts);
-    const type_ownership_facts = try collectTypeOwnershipFacts(allocator, module, &ast_structs, &aliases, drop_glue_facts, &symbol_ids);
+    const type_ownership_facts = try collectTypeOwnershipFacts(allocator, decls, &ast_structs, &aliases, drop_glue_facts, &symbol_ids);
     errdefer allocator.free(type_ownership_facts);
 
     var functions: std.ArrayList(Function) = .empty;
@@ -907,7 +907,7 @@ pub fn buildOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, option
         functions.deinit(allocator);
     }
 
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         switch (decl.kind) {
             .global_decl => |global| {
                 if (global.ty) |ty| {
@@ -1008,7 +1008,7 @@ fn internSymbolId(symbol_ids: *std.StringHashMap(SymbolId), spelling: []const u8
 
 fn collectDropGlueFacts(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    decls: []const ast.Decl,
     structs: *const std.StringHashMap(ast.StructDecl),
     aliases: *const std.StringHashMap(ast.TypeExpr),
     symbol_ids: *std.StringHashMap(SymbolId),
@@ -1016,7 +1016,7 @@ fn collectDropGlueFacts(
     var facts: std.ArrayList(DropGlueFact) = .empty;
     errdefer facts.deinit(allocator);
 
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         if (!hasAttr(decl.attrs, "drop")) continue;
         const fn_decl = switch (decl.kind) {
             .fn_decl => |node| node,
@@ -1043,7 +1043,7 @@ fn collectDropGlueFacts(
 
 fn collectTypeOwnershipFacts(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    decls: []const ast.Decl,
     structs: *const std.StringHashMap(ast.StructDecl),
     aliases: *const std.StringHashMap(ast.TypeExpr),
     drop_glue_facts: []const DropGlueFact,
@@ -1052,7 +1052,7 @@ fn collectTypeOwnershipFacts(
     var facts: std.ArrayList(TypeOwnershipFact) = .empty;
     errdefer facts.deinit(allocator);
 
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         const struct_decl = switch (decl.kind) {
             .struct_decl => |node| node,
             else => continue,
@@ -3246,7 +3246,7 @@ const AggregateReturnFactCollection = struct {
 // mutation, and arbitrary CFG joins remain outside this domain.
 fn collectDirectAggregateReturnPointerFacts(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    decls: []const ast.Decl,
     globals: *const std.StringHashMap(ValueType),
     enums: *const std.StringHashMap(EnumSummary),
     structs: *const std.StringHashMap(StructSummary),
@@ -3262,7 +3262,7 @@ fn collectDirectAggregateReturnPointerFacts(
         pointer_facts.deinit(allocator);
     }
 
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         if (decl.kind != .fn_decl) continue;
         const fn_decl = decl.kind.fn_decl;
         if (fn_decl.exported) continue;
@@ -4887,13 +4887,13 @@ fn aggregateReturnFixedStructArrayElementName(
     };
 }
 
-fn collectDirectGlobalPointerReturnSummaries(allocator: std.mem.Allocator, module: ast.Module, globals: *const std.StringHashMap(ValueType), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr)) !std.StringHashMap(PointerReturnProvenanceSummary) {
+fn collectDirectGlobalPointerReturnSummaries(allocator: std.mem.Allocator, decls: []const ast.Decl, globals: *const std.StringHashMap(ValueType), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr)) !std.StringHashMap(PointerReturnProvenanceSummary) {
     var summaries = std.StringHashMap(PointerReturnProvenanceSummary).init(allocator);
     errdefer summaries.deinit();
     var changed = true;
     while (changed) {
         changed = false;
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             if (decl.kind != .fn_decl) continue;
             const fn_decl = decl.kind.fn_decl;
             if (fn_decl.exported or summaries.contains(fn_decl.name.text)) continue;
