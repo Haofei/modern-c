@@ -490,7 +490,7 @@ pub const CEmitter = struct {
     }
 
     fn collectFunctionArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.FunctionArtifact) anyerror!void {
-        for (artifacts) |function| try self.collectFnDeclArtifact(function.toDecl(), function.attrs, function.is_extern);
+        for (artifacts) |function| try self.collectFunctionArtifact(function);
     }
 
     fn collectGlobalArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.GlobalArtifact) anyerror!void {
@@ -536,17 +536,36 @@ pub const CEmitter = struct {
         try self.aggregate_decl_artifacts.append(self.allocator, .{ .struct_decl = struct_decl });
     }
 
-    fn collectFnDeclArtifact(self: *CEmitter, fn_decl: ast_bridge.FnDecl, attrs: []const ast_bridge.Attr, is_extern: bool) !void {
-        try self.functions.put(fn_decl.name.text, .{ .params = fn_decl.params, .return_type = fn_decl.return_type, .is_extern = is_extern, .is_variadic = fn_decl.is_variadic, .error_from = error_from.hasAttr(attrs) });
-        if (!is_extern and hasNamedAttr(attrs, "drop")) {
-            if (type_bridge.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
-                if (!mir_ownership_authority.dropGlueDeclMatches(self.mir_module, type_name, fn_decl.name.text)) return error.UnsupportedCEmission;
+    fn collectFunctionArtifact(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
+        try self.functions.put(function.name.text, .{ .params = function.params, .return_type = function.return_type, .is_extern = function.is_extern, .is_variadic = function.is_variadic, .error_from = error_from.hasAttr(function.attrs) });
+        if (!function.is_extern and hasNamedAttr(function.attrs, "drop")) {
+            if (mir_ownership_authority.dropPointerReleaseParamTypeNameFromParams(function.params)) |type_name| {
+                if (!mir_ownership_authority.dropGlueDeclMatches(self.mir_module, type_name, function.name.text)) return error.UnsupportedCEmission;
             }
         }
-        try self.function_decl_artifacts.append(self.allocator, FunctionDeclArtifact.fromDecl(fn_decl, attrs, is_extern));
-        if (!is_extern and fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
-        if (!is_extern) if (backendNameOverride(attrs)) |name| try self.backend_names.put(fn_decl.name.text, name);
-        try self.collectFunctionSliceTypes(fn_decl);
+        try self.function_decl_artifacts.append(self.allocator, functionDeclArtifact(function));
+        if (!function.is_extern and function.is_const and !self.const_fns.contains(function.name.text)) try self.const_fns.put(function.name.text, function.toDecl());
+        if (!function.is_extern) if (backendNameOverride(function.attrs)) |name| try self.backend_names.put(function.name.text, name);
+        try self.collectFunctionArtifactSliceTypes(function);
+    }
+
+    fn functionDeclArtifact(function: declaration_artifacts.FunctionArtifact) FunctionDeclArtifact {
+        return .{
+            .name = function.name,
+            .associated_owner = function.associated_owner,
+            .abi = function.abi,
+            .params = function.params,
+            .return_type = function.return_type,
+            .return_borrow_source = function.return_borrow_source,
+            .body = function.body,
+            .is_const = function.is_const,
+            .exported = function.exported,
+            .is_variadic = function.is_variadic,
+            .bounds = function.bounds,
+            .is_async = function.is_async,
+            .attrs = function.attrs,
+            .is_extern = function.is_extern,
+        };
     }
 
     pub fn validateDropGlueFactsAgainstDecls(self: *CEmitter) !void {
@@ -563,9 +582,8 @@ pub const CEmitter = struct {
         // `bind(scalar, f)` closures that need an env-widening thunk.
         for (self.function_decl_artifacts.items) |artifact| {
             if (artifact.is_extern) continue;
-            const fn_decl = artifact.toDecl();
-            if (fn_decl.body) |body| {
-                const mir_function = self.mirFunctionNamed(fn_decl.name.text) orelse return error.UnsupportedCEmission;
+            if (artifact.body) |body| {
+                const mir_function = self.mirFunctionNamed(artifact.name.text) orelse return error.UnsupportedCEmission;
                 try self.collectBlockBindThunks(body, mir_function);
             }
         }
@@ -2485,6 +2503,15 @@ pub const CEmitter = struct {
         self.current_function = fn_decl.name.text;
         defer self.current_function = previous_function;
         try lower_c_collect.collectFunctionTypeArtifacts(self.typeArtifactContext(), fn_decl);
+    }
+
+    fn collectFunctionArtifactSliceTypes(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
+        const previous_function = self.current_function;
+        self.current_function = function.name.text;
+        defer self.current_function = previous_function;
+        for (function.params) |param| try self.collectTypeArtifacts(param.ty);
+        if (function.return_type) |ret| try self.collectTypeArtifacts(ret);
+        if (function.body) |body| try lower_c_collect.collectBlockTypeArtifacts(self.typeArtifactContext(), body);
     }
 
     fn collectBlockSliceTypes(self: *CEmitter, block: ast_bridge.Block) anyerror!void {

@@ -690,39 +690,38 @@ const LlvmEmitter = struct {
         try self.tagged_unions.put(union_decl.name.text, union_decl);
     }
 
-    fn collectFunction(self: *LlvmEmitter, fn_decl: ast_bridge.FnDecl, attrs: []const ast_bridge.Attr) !void {
-        const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
+    fn collectFunctionArtifact(self: *LlvmEmitter, function: declaration_artifacts.FunctionArtifact) !void {
+        const ret_ty = function.return_type orelse simpleType(function.name.span, "void");
         _ = try self.llvmType(ret_ty);
-        for (fn_decl.params) |param| _ = try self.llvmType(param.ty);
-        const debug_id: ?usize = if (fn_decl.body != null) blk: {
+        for (function.params) |param| _ = try self.llvmType(param.ty);
+        const debug_id: ?usize = if (function.body != null) blk: {
             const id = self.debug_next_id;
             self.debug_next_id += 1;
             try self.debug_functions.append(self.allocator, .{
                 .id = id,
-                .name = fn_decl.name.text,
-                .line = debugLine(fn_decl.name.span.line),
-                .column = debugColumn(fn_decl.name.span.column),
+                .name = function.name.text,
+                .line = debugLine(function.name.span.line),
+                .column = debugColumn(function.name.span.column),
             });
             break :blk id;
         } else null;
-        const c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi"));
-        try self.fn_sigs.put(fn_decl.name.text, .{ .ret = ret_ty, .params = fn_decl.params, .c_abi = c_abi, .is_variadic = fn_decl.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(attrs) });
-        if (hasNamedAttr(attrs, "drop")) {
-            if (type_bridge.dropPointerReleaseParamTypeName(fn_decl)) |type_name| {
-                if (!mir_ownership_authority.dropGlueDeclMatches(&self.mir_module, type_name, fn_decl.name.text)) return error.UnsupportedLlvmEmission;
+        const c_abi = function.is_variadic or function.abi != null or (function.exported and !hasNamedAttr(function.attrs, "mc_abi"));
+        try self.fn_sigs.put(function.name.text, .{ .ret = ret_ty, .params = function.params, .c_abi = c_abi, .is_variadic = function.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(function.attrs) });
+        if (hasNamedAttr(function.attrs, "drop")) {
+            if (mir_ownership_authority.dropPointerReleaseParamTypeNameFromParams(function.params)) |type_name| {
+                if (!mir_ownership_authority.dropGlueDeclMatches(&self.mir_module, type_name, function.name.text)) return error.UnsupportedLlvmEmission;
             }
         }
-        for (attrs) |attr| switch (attr.kind) {
-            .backend_name => |name| try self.backend_names.put(fn_decl.name.text, name),
+        for (function.attrs) |attr| switch (attr.kind) {
+            .backend_name => |name| try self.backend_names.put(function.name.text, name),
             else => {},
         };
     }
 
     fn collectFunctionGlobalAndTraitArtifacts(self: *LlvmEmitter) !void {
         for (self.function_artifacts) |function| {
-            const fn_decl = function.toDecl();
-            try self.collectFunction(fn_decl, function.attrs);
-            try self.function_decl_artifacts.append(self.allocator, LlvmFunctionDeclArtifact.fromDecl(fn_decl, function.attrs, function.is_extern));
+            try self.collectFunctionArtifact(function);
+            try self.function_decl_artifacts.append(self.allocator, llvmFunctionDeclArtifact(function));
         }
         for (self.global_artifacts) |global| {
             try self.collectGlobal(global);
@@ -738,6 +737,25 @@ const LlvmEmitter = struct {
 
     fn validateDropGlueFactsAgainstDecls(self: *LlvmEmitter) !void {
         if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(&self.mir_module, self.function_decl_artifacts.items)) return error.UnsupportedLlvmEmission;
+    }
+
+    fn llvmFunctionDeclArtifact(function: declaration_artifacts.FunctionArtifact) LlvmFunctionDeclArtifact {
+        return .{
+            .name = function.name,
+            .associated_owner = function.associated_owner,
+            .abi = function.abi,
+            .params = function.params,
+            .return_type = function.return_type,
+            .return_borrow_source = function.return_borrow_source,
+            .body = function.body,
+            .is_const = function.is_const,
+            .exported = function.exported,
+            .is_variadic = function.is_variadic,
+            .bounds = function.bounds,
+            .is_async = function.is_async,
+            .attrs = function.attrs,
+            .is_extern = function.is_extern,
+        };
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {
