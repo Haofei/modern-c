@@ -315,6 +315,14 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
         \\fn err_source() -> Result<u32, E> {
         \\    return err(.bad);
         \\}
+        \\
+        \\fn add(env: *mut u32, value: u32) -> u32 {
+        \\    return env.* + value;
+        \\}
+        \\
+        \\fn bind_source(env: *mut u32) -> closure(u32) -> u32 {
+        \\    return bind(env, add);
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_facts_view_typed_target_type.mc", source);
@@ -336,6 +344,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
     const array_source = functionByName(module_mir, "array_source").?;
     const ok_source = functionByName(module_mir, "ok_source").?;
     const err_source = functionByName(module_mir, "err_source").?;
+    const bind_source = functionByName(module_mir, "bind_source").?;
     const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
     const expression_fact = targetTypeFactByKind(caller, .expression_result) orelse return error.TestUnexpectedResult;
     const local_fact = targetTypeFactByKind(caller, .inferred_local) orelse return error.TestUnexpectedResult;
@@ -344,6 +353,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
     const array_fact = targetTypeFactByKind(array_source, .array_literal) orelse return error.TestUnexpectedResult;
     const ok_fact = targetTypeFactByKind(ok_source, .result_ok) orelse return error.TestUnexpectedResult;
     const err_fact = targetTypeFactByKind(err_source, .result_err) orelse return error.TestUnexpectedResult;
+    const bind_fact = targetTypeFactByKind(bind_source, .bind) orelse return error.TestUnexpectedResult;
     const db = mir_facts_view.MirFactsView.init(&module_mir);
     const result_span = result_fact.source;
 
@@ -407,6 +417,13 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
         .fact = .{
             .kind = .result_err,
             .source = err_fact.source,
+        },
+    }) == null);
+    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+        .current = &callee,
+        .fact = .{
+            .kind = .bind,
+            .source = bind_fact.source,
         },
     }) == null);
 
