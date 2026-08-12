@@ -1,19 +1,18 @@
 //! Driver-owned codegen input assembly.
 //!
-//! This is the remaining syntax compatibility edge for CLI backend commands:
-//! it builds verified MIR and pre-collects declaration artifacts before the
-//! backend request is assembled. Keep this boundary out of backend lowerers and
-//! out of `CompilationSession` until declaration artifacts are normalized into
-//! VerifiedProgram facts.
+//! It builds verified MIR and pre-collects declaration artifacts from the
+//! session-owned resolved declaration stream before the backend request is
+//! assembled. Keep this boundary out of backend lowerers until declaration
+//! artifacts are normalized into VerifiedProgram facts.
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
 const backend = @import("backend.zig");
 const compiler_session = @import("compiler_session.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const mir = @import("mir.zig");
+const module_parser = @import("module_parser.zig");
 
 pub const DeclarationArtifacts = declaration_artifacts.EarlyDeclarationArtifacts;
 const CompilationSession = compiler_session.CompilationSession;
@@ -21,37 +20,37 @@ const StageFailure = compiler_session.StageFailure;
 
 pub fn buildBackendInputs(
     session: *CompilationSession,
-    decls: []ast.Decl,
     diag: *diagnostics.Reporter,
     optimize: bool,
     module_mir: *mir.Module,
     artifacts: *DeclarationArtifacts,
     failure_error: StageFailure,
 ) !backend.VerifiedProgram {
-    const program = try session.buildVerifiedProgramFromDecls(decls, diag, optimize, module_mir, failure_error);
+    const resolved_decls = try collectResolvedDecls(session);
+    defer session.allocator.free(resolved_decls);
+    const program = try session.buildVerifiedProgramFromResolvedDecls(resolved_decls, diag, optimize, module_mir, failure_error);
     errdefer module_mir.deinit();
-    artifacts.* = try collectDeclarationArtifacts(session);
+    artifacts.* = try DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls);
     errdefer artifacts.deinit(session.allocator);
     return program;
 }
 
 pub fn buildCArtifactInputs(
     session: *CompilationSession,
-    decls: []ast.Decl,
     module_mir: *mir.Module,
     artifacts: *DeclarationArtifacts,
 ) !void {
-    module_mir.* = try mir.buildOptFromDecls(session.allocator, decls, .{ .optimize = false });
+    const resolved_decls = try collectResolvedDecls(session);
+    defer session.allocator.free(resolved_decls);
+    try session.buildMirFromResolvedDecls(resolved_decls, false, module_mir);
     errdefer module_mir.deinit();
-    artifacts.* = try collectDeclarationArtifacts(session);
+    artifacts.* = try DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls);
     errdefer artifacts.deinit(session.allocator);
 }
 
-fn collectDeclarationArtifacts(session: *CompilationSession) !DeclarationArtifacts {
+fn collectResolvedDecls(session: *CompilationSession) ![]const module_parser.ResolvedDecl {
     if (session.resolved_sources) |resolved_sources| {
-        const resolved_decls = try resolved_sources.collectDecls(session.allocator);
-        defer session.allocator.free(resolved_decls);
-        return DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls);
+        return resolved_sources.collectDecls(session.allocator);
     }
     return error.MissingResolvedSources;
 }

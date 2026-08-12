@@ -100,7 +100,7 @@ def main() -> int:
         "const checked = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);",
         "_ = try session.buildVerifiedProgramFromDecls(checked.decls(), &diag, optimize, &module_mir, error.LowerMirFailed);",
         "try mir.appendDumpFromMir(allocator, module_mir, &output);",
-        "const program = try driver_codegen_inputs.buildBackendInputs(session, checked.decls(), &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);",
+        "const program = try driver_codegen_inputs.buildBackendInputs(session, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);",
     ):
         require_contains(main_zig, needle)
 
@@ -151,12 +151,15 @@ def main() -> int:
         fail("CompilationSession must not keep a naked ast.Module check helper")
     if main_text.count("var checker = sema.Checker.init") != 0:
         fail("main.zig must not construct sema checkers")
-    if session_text.count("mir.buildOptFromDecls(") != 1:
-        fail("MIR build must stay centralized in CompilationSession.buildVerifiedProgram")
+    if session_text.count("mir.buildOptFromDecls(") != 2:
+        fail("MIR build must stay centralized in CompilationSession resolved/decl wrappers")
     if session_text.count("mir.buildOpt(") != 0:
         fail("CompilationSession must not use the old module-shaped MIR build API")
     if main_text.count("mir.buildOpt(") != 0 or main_text.count("mir.buildOptFromDecls(") != 0:
         fail("main.zig must not build MIR directly")
+    driver_codegen_inputs = read("src/driver_codegen_inputs.zig")
+    if driver_codegen_inputs.count("mir.buildOpt(") != 0 or driver_codegen_inputs.count("mir.buildOptFromDecls(") != 0:
+        fail("driver codegen inputs must delegate MIR construction to CompilationSession")
     if "createFileAtomic(" in main_text:
         fail("main.zig must not own artifact publication transactions")
     if "metadata_file" in main_text:
@@ -177,14 +180,13 @@ def main() -> int:
         fail("VerifiedProgram declaration-slice construction must not be used")
     if session_text.count("backend.VerifiedProgram.init(") != 1:
         fail("VerifiedProgram construction must stay centralized in CompilationSession.buildVerifiedProgramFromDecls")
-    require_contains("src/driver_codegen_inputs.zig", "const program = try session.buildVerifiedProgramFromDecls(decls, diag, optimize, module_mir, failure_error);")
-    driver_codegen_inputs = read("src/driver_codegen_inputs.zig")
+    require_contains("src/driver_codegen_inputs.zig", "const program = try session.buildVerifiedProgramFromResolvedDecls(resolved_decls, diag, optimize, module_mir, failure_error);")
     if "module: ast.Module" in driver_codegen_inputs:
         fail("driver codegen inputs must not accept ast.Module")
     if main_text.count("session.parseCheckedModuleOrReport(") < 7:
         fail("compile-like CLI commands must share CompilationSession.parseCheckedModuleOrReport")
-    if main_text.count("checked.decls()") != 9:
-        fail("compile-like CLI commands must use CheckedModule.decls() at semantic handoff points")
+    if main_text.count("checked.decls()") != 3:
+        fail("only explicit MIR dump/verify commands should still use CheckedModule.decls()")
     if "buildVerifiedProgramFromDecls(module.decls" in main_text:
         fail("compile-like CLI commands must not pass naked ast.Module decls to VerifiedProgram construction")
     if main_text.count("session.checkModule(") != 0:
