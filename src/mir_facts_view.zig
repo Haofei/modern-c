@@ -153,8 +153,27 @@ fn ownerMatches(actual: ?[]const u8, expected: ?[]const u8) bool {
 }
 
 fn sourceMatches(kind: mir.TargetTypeKind, query: mir.SourcePoint, source: mir.SourcePoint) bool {
-    if (query.line != source.line or query.column != source.column) return false;
-    return kind != .expression_result or (query.offset == source.offset and query.len == source.len);
+    if (!sourcePointLineColumnMatches(query, source)) return false;
+    return kind != .expression_result or sourcePointOffsetsMatch(query, source);
+}
+
+pub fn sourcePointLineColumnMatches(query: mir.SourcePoint, source: mir.SourcePoint) bool {
+    return query.line == source.line and query.column == source.column;
+}
+
+pub fn sourcePointOffsetsMatch(query: mir.SourcePoint, source: mir.SourcePoint) bool {
+    return query.offset == source.offset and query.len == source.len;
+}
+
+pub fn callTargetSourceMatches(query: mir.SourcePoint, source: mir.SourcePoint) bool {
+    if (!sourcePointLineColumnMatches(query, source)) return false;
+    if (source.offset == 0 and source.len == 0) return true;
+    return sourcePointOffsetsMatch(query, source);
+}
+
+pub fn targetTypeSourceMatches(kind: mir.TargetTypeKind, query: mir.SourcePoint, source: mir.SourcePoint) bool {
+    if (!sourcePointLineColumnMatches(query, source)) return false;
+    return kind != .expression_result or sourcePointOffsetsMatch(query, source);
 }
 
 fn isSourcePoint(source: mir.SourcePoint) bool {
