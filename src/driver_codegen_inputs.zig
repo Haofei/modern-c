@@ -29,7 +29,7 @@ pub fn buildBackendInputs(
 ) !backend.VerifiedProgram {
     const program = try session.buildVerifiedProgram(module, diag, optimize, module_mir, failure_error);
     errdefer module_mir.deinit();
-    artifacts.* = try DeclarationArtifacts.collectFromSyntaxDecls(session.allocator, module.decls);
+    artifacts.* = try collectDeclarationArtifacts(session, module);
     errdefer artifacts.deinit(session.allocator);
     return program;
 }
@@ -42,6 +42,17 @@ pub fn buildCArtifactInputs(
 ) !void {
     module_mir.* = try mir.buildOpt(session.allocator, module, .{ .optimize = false });
     errdefer module_mir.deinit();
-    artifacts.* = try DeclarationArtifacts.collectFromSyntaxDecls(session.allocator, module.decls);
+    artifacts.* = try collectDeclarationArtifacts(session, module);
     errdefer artifacts.deinit(session.allocator);
+}
+
+fn collectDeclarationArtifacts(session: *CompilationSession, module: ast.Module) !DeclarationArtifacts {
+    if (session.resolved_sources) |resolved_sources| {
+        if (session.module_graph) |graph| {
+            const resolved_decls = try resolved_sources.collectDecls(session.allocator);
+            defer session.allocator.free(resolved_decls);
+            return DeclarationArtifacts.collectFromResolvedDecls(session.allocator, graph.*, resolved_decls);
+        }
+    }
+    return DeclarationArtifacts.collectFromSyntaxDecls(session.allocator, module.decls);
 }
