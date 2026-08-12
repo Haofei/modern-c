@@ -989,6 +989,12 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "source_map_rows: source_map_rows.SourceMapRows": 1,
         "source_map_rows: source_map_rows.SourceMapRowsView": 0,
     },
+    "src/main.zig": {
+        '@import("early_declaration_metadata.zig")': 0,
+        '@import("declaration_artifacts.zig")': 1,
+        "early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls": 0,
+        "declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls": 4,
+    },
     "src/codegen_options.zig": {
         'const artifact_model = @import("artifact_model.zig")': 1,
         'const diagnostics = @import("diagnostics.zig")': 1,

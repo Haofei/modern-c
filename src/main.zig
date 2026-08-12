@@ -7,13 +7,13 @@ const backend_registry = @import("backend_registry.zig");
 const build_options = @import("build_options");
 const cli = @import("cli.zig");
 const compiler_session = @import("compiler_session.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const diagnostic_explain = @import("diagnostic_explain.zig");
 const eval = @import("eval.zig");
 const fmt = @import("fmt.zig");
 const hir = @import("hir.zig");
 const ir = @import("ir.zig");
-const early_declaration_metadata = @import("early_declaration_metadata.zig");
 const lexer = @import("lexer.zig");
 const loader = @import("loader.zig");
 const lower_c = @import("lower_c.zig");
@@ -750,7 +750,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
@@ -804,7 +804,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
@@ -1167,7 +1167,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     const be = backend_registry.byName("c").?;
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
@@ -1247,7 +1247,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    var early_metadata = try early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
