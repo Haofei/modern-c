@@ -1,5 +1,7 @@
 // Fixture for `symbols-test`: exercises the `mcc symbols` index — a function with params and a
 // local, a global read across functions, a type used as a parameter, and a cross-function call.
+import "./symbols_imported.mc";
+
 struct Point {
     x: u32,
     y: u32,
@@ -17,5 +19,5 @@ fn shift(p: Point, by: u32) -> u32 {
 }
 
 fn caller() -> u32 {
-    return add(1, 2);
+    return add(imported_value(), 2);
 }

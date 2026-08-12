@@ -343,6 +343,7 @@ fn isExpectedCliFailure(err: anyerror) bool {
         error.ImportNotFound,
         error.FmtCheckFailed,
         error.LexFailed,
+        error.SymbolsFailed,
         error.ParseFailed,
         error.AsyncLowerFailed,
         error.CheckFailed,
@@ -495,6 +496,18 @@ fn runSymbols(session: *CompilationSession, path: []const u8, source: []const u8
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
+
+    if (session.resolved_sources) |resolved_sources| {
+        const module_graph = session.module_graph orelse {
+            try session.writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_SYMBOLS_INTERNAL\",\"message\":\"symbol indexing aborted by an internal error\"}]}\n");
+            return error.SymbolsFailed;
+        };
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(allocator);
+        try symbols.emitJsonFromResolvedSources(allocator, module_graph.*, resolved_sources.*, &diag, &output);
+        try session.writeStdout(output.items);
+        return;
+    }
 
     const module = session.parseModuleOrReport(source, parse_allocator, &diag) catch |err| switch (err) {
         error.ParseFailed => {

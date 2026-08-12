@@ -16,6 +16,8 @@
 const std = @import("std");
 const ast = @import("ast.zig");
 const diagnostics = @import("diagnostics.zig");
+const module_graph = @import("module_graph.zig");
+const module_parser = @import("module_parser.zig");
 
 const Span = diagnostics.Span;
 
@@ -60,9 +62,19 @@ const Builder = struct {
     refs: std.ArrayList(Ref),
     fields: std.ArrayList(FieldInfo),
     frames: std.ArrayList(std.ArrayList(Local)),
+    span_offset: usize = 0,
+
+    fn shiftSpan(self: *const Builder, span: Span) Span {
+        return .{
+            .offset = span.offset + self.span_offset,
+            .len = span.len,
+            .line = span.line,
+            .column = span.column,
+        };
+    }
 
     fn addDef(self: *Builder, name: ast.Ident, kind: []const u8, ty: []const u8) !void {
-        try self.defs.append(self.arena, .{ .name = name.text, .kind = kind, .ty = ty, .span = name.span });
+        try self.defs.append(self.arena, .{ .name = name.text, .kind = kind, .ty = ty, .span = self.shiftSpan(name.span) });
     }
 
     fn addField(self: *Builder, owner: ast.Ident, owner_kind: []const u8, field: ast.Field) !void {
@@ -72,7 +84,7 @@ const Builder = struct {
             .owner_kind = owner_kind,
             .name = field.name.text,
             .ty = ty,
-            .span = field.name.span,
+            .span = self.shiftSpan(field.name.span),
         });
     }
 
@@ -96,7 +108,7 @@ const Builder = struct {
             .name = name.text,
             .kind = info.kind,
             .ty = info.ty,
-            .span = name.span,
+            .span = self.shiftSpan(name.span),
             .def = info.span,
         });
     }
@@ -113,7 +125,7 @@ const Builder = struct {
     fn bindLocal(self: *Builder, name: ast.Ident, kind: []const u8, ty: []const u8) !void {
         try self.addDef(name, kind, ty);
         const top = &self.frames.items[self.frames.items.len - 1];
-        try top.append(self.arena, .{ .name = name.text, .info = .{ .span = name.span, .kind = kind, .ty = ty } });
+        try top.append(self.arena, .{ .name = name.text, .info = .{ .span = self.shiftSpan(name.span), .kind = kind, .ty = ty } });
     }
 };
 
@@ -375,18 +387,18 @@ fn collectDecl(b: *Builder, decl: ast.Decl) !void {
         .fn_decl, .extern_fn => |f| {
             const ty = try renderFnType(b.arena, f);
             try b.addDef(f.name, "function", ty);
-            try b.globals.put(f.name.text, .{ .span = f.name.span, .kind = "function", .ty = ty });
+            try b.globals.put(f.name.text, .{ .span = b.shiftSpan(f.name.span), .kind = "function", .ty = ty });
         },
         .global_decl => |g| {
             const ty = try renderTypeOpt(b.arena, g.ty);
             const kind: []const u8 = if (g.is_const) "constant" else "global";
             try b.addDef(g.name, kind, ty);
-            try b.globals.put(g.name.text, .{ .span = g.name.span, .kind = kind, .ty = ty });
+            try b.globals.put(g.name.text, .{ .span = b.shiftSpan(g.name.span), .kind = kind, .ty = ty });
         },
         .type_alias => |t| {
             const ty = try renderType(b.arena, t.ty);
             try b.addDef(t.name, "type_alias", ty);
-            try b.globals.put(t.name.text, .{ .span = t.name.span, .kind = "type_alias", .ty = ty });
+            try b.globals.put(t.name.text, .{ .span = b.shiftSpan(t.name.span), .kind = "type_alias", .ty = ty });
         },
         .struct_decl => |s| {
             try collectType(b, s.name, "struct");
@@ -413,7 +425,7 @@ fn collectDecl(b: *Builder, decl: ast.Decl) !void {
 
 fn collectType(b: *Builder, name: ast.Ident, kind: []const u8) !void {
     try b.addDef(name, kind, kind);
-    try b.globals.put(name.text, .{ .span = name.span, .kind = kind, .ty = kind });
+    try b.globals.put(name.text, .{ .span = b.shiftSpan(name.span), .kind = kind, .ty = kind });
 }
 
 fn collectFields(b: *Builder, owner: ast.Ident, owner_kind: []const u8, fields: []const ast.Field) !void {
@@ -479,23 +491,69 @@ fn writeJsonString(out: *std.ArrayList(u8), a: std.mem.Allocator, s: []const u8)
     try out.append(a, '"');
 }
 
-pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, reporter: *const diagnostics.Reporter, out: *std.ArrayList(u8)) !void {
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const a = arena_state.allocator();
-
-    var b = Builder{
-        .arena = a,
-        .globals = std.StringHashMap(DefInfo).init(a),
+fn initBuilder(arena_allocator: std.mem.Allocator) Builder {
+    return .{
+        .arena = arena_allocator,
+        .globals = std.StringHashMap(DefInfo).init(arena_allocator),
         .defs = .empty,
         .refs = .empty,
         .fields = .empty,
         .frames = .empty,
     };
+}
 
-    for (module.decls) |decl| try collectDecl(&b, decl);
-    for (module.decls) |decl| try walkDeclBody(&b, decl);
+fn collectModule(b: *Builder, module: ast.Module, span_offset: usize) !void {
+    b.span_offset = span_offset;
+    for (module.decls) |decl| try collectDecl(b, decl);
+}
 
+fn walkModule(b: *Builder, module: ast.Module, span_offset: usize) !void {
+    b.span_offset = span_offset;
+    for (module.decls) |decl| try walkDeclBody(b, decl);
+}
+
+fn sourceStartForFile(graph: module_graph.ModuleGraph, id: module_graph.FileId) usize {
+    for (graph.files) |file| {
+        if (file.id == id) return file.source_start;
+    }
+    return 0;
+}
+
+pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, reporter: *const diagnostics.Reporter, out: *std.ArrayList(u8)) !void {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    var b = initBuilder(a);
+
+    try collectModule(&b, module, 0);
+    try walkModule(&b, module, 0);
+    try writeJson(allocator, &b, reporter, out);
+}
+
+pub fn emitJsonFromResolvedSources(
+    allocator: std.mem.Allocator,
+    graph: module_graph.ModuleGraph,
+    sources: module_parser.ResolvedSourceDatabase,
+    reporter: *const diagnostics.Reporter,
+    out: *std.ArrayList(u8),
+) !void {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    var b = initBuilder(a);
+
+    for (sources.files) |file| {
+        try collectModule(&b, file.module, sourceStartForFile(graph, file.id));
+    }
+    for (sources.files) |file| {
+        try walkModule(&b, file.module, sourceStartForFile(graph, file.id));
+    }
+    try writeJson(allocator, &b, reporter, out);
+}
+
+fn writeJson(allocator: std.mem.Allocator, b: *const Builder, reporter: *const diagnostics.Reporter, out: *std.ArrayList(u8)) !void {
     const w = struct {
         fn span(o: *std.ArrayList(u8), al: std.mem.Allocator, rep: *const diagnostics.Reporter, s: Span) !void {
             const loc = rep.location(s);

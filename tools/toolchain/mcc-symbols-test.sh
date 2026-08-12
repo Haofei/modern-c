@@ -45,6 +45,9 @@ add = def_named("add", "function") or fail("no function def 'add'")
 if add["type"] != "fn(u32, u32) -> u32":
     fail(f"add type should be 'fn(u32, u32) -> u32', got {add['type']}")
 if not def_named("origin", "global"): fail("no global def 'origin'")
+imported = def_named("imported_value", "function") or fail("no imported function def 'imported_value'")
+if not imported["span"]["path"].endswith("symbols_imported.mc"):
+    fail(f"imported function span should point at symbols_imported.mc, got {imported['span']}")
 if not def_named("Point", "struct"): fail("no struct def 'Point'")
 for name in ("x", "y"):
     fld = field_named("Point", name)
@@ -69,6 +72,7 @@ def check_resolves(refname, target_def, what):
         fail(f"{what}: '{refname}' refs do not all resolve to its def at {target_def['span']}")
 
 check_resolves("add", add, "call -> function def")
+check_resolves("imported_value", imported, "imported call -> imported function def")
 check_resolves("origin", def_named("origin"), "cross-function global read")
 check_resolves("sum", def_named("sum"), "local use -> local def")
 check_resolves("a", def_named("a"), "param use -> param def")
