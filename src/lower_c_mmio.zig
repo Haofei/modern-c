@@ -8,7 +8,6 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const expr_syntax = @import("expr_syntax.zig");
 const lower_c_access = @import("lower_c_access.zig");
-const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_arith = @import("lower_c_arith.zig");
 const lower_c_atomic = @import("lower_c_atomic.zig");
 const lower_c_call = @import("lower_c_call.zig");
@@ -296,7 +295,7 @@ fn emitFieldPadding(ctx: Context, field: ast.Field, running: *u64, pad_n: *usize
 
 fn emitCheckedUnaryReadReplacement(ctx: ReplacementEmitContext, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const MmioReadReplacement) anyerror!bool {
     if (node.op != .neg) return false;
-    const target = if (target_ty) |ty| lower_c_alias.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
+    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
     if (type_syntax.isWrapType(target) or type_syntax.isSatType(target)) return false;
     const target_name = type_syntax.typeName(target) orelse return error.UnsupportedCEmission;
     const suffix = lower_c_type.signedTypeSuffix(target_name) orelse return false;

@@ -8,7 +8,6 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const expr_syntax = @import("expr_syntax.zig");
 const lower_c_access = @import("lower_c_access.zig");
-const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
@@ -75,7 +74,7 @@ pub const EmitContext = struct {
 };
 
 pub fn emitArrayLiteral(ctx: EmitContext, items: []const ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
-    const resolved_target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty);
+    const resolved_target_ty = type_syntax.resolveAliasType(ctx.type_aliases, target_ty);
     const child_ty = resolvedArrayChildType(resolved_target_ty) orelse return error.UnsupportedCEmission;
     if (locals == null) {
         try ctx.out.print(ctx.allocator, "({s}){{ .elems = {{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
@@ -105,7 +104,7 @@ pub fn emitArrayLiteral(ctx: EmitContext, items: []const ast.Expr, locals: ?*std
 }
 
 pub fn emitStructLiteral(ctx: EmitContext, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!void {
-    const resolved_target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty);
+    const resolved_target_ty = type_syntax.resolveAliasType(ctx.type_aliases, target_ty);
     const struct_decl = structDeclForResolvedTarget(ctx, resolved_target_ty) orelse return error.UnsupportedCEmission;
     if (locals == null) {
         if (struct_decl.is_c_union) {
@@ -164,7 +163,7 @@ pub fn emitStructLiteral(ctx: EmitContext, fields: []const ast.StructLiteralFiel
 }
 
 pub fn emitArrayLiteralWithTemps(ctx: EmitContext, items: []const ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, temps: []const ?SequencedArgTemp) anyerror!void {
-    const resolved_target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty);
+    const resolved_target_ty = type_syntax.resolveAliasType(ctx.type_aliases, target_ty);
     const child_ty = resolvedArrayChildType(resolved_target_ty) orelse return error.UnsupportedCEmission;
     try ctx.out.print(ctx.allocator, "({s}){{ .elems = {{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
     for (items, 0..) |item, i| {
@@ -181,7 +180,7 @@ pub fn emitArrayLiteralWithTemps(ctx: EmitContext, items: []const ast.Expr, loca
 }
 
 pub fn emitStructLiteralWithTemps(ctx: EmitContext, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr, temps: []const ?SequencedArgTemp) anyerror!void {
-    const resolved_target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty);
+    const resolved_target_ty = type_syntax.resolveAliasType(ctx.type_aliases, target_ty);
     const struct_decl = structDeclForResolvedTarget(ctx, resolved_target_ty) orelse return error.UnsupportedCEmission;
     try ctx.out.print(ctx.allocator, "({s}){{ ", .{try ctx.c_type(ctx.emit_ctx, resolved_target_ty)});
     if (struct_decl.is_c_union) {
@@ -239,11 +238,11 @@ fn emitCUnionLiteralFields(ctx: EmitContext, struct_decl: ast.StructDecl, fields
 }
 
 pub fn arrayChildTypeForTarget(ctx: EmitContext, target_ty: ast.TypeExpr) ?ast.TypeExpr {
-    return resolvedArrayChildType(lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty));
+    return resolvedArrayChildType(type_syntax.resolveAliasType(ctx.type_aliases, target_ty));
 }
 
 pub fn structDeclForTarget(ctx: EmitContext, target_ty: ast.TypeExpr) ?ast.StructDecl {
-    return structDeclForResolvedTarget(ctx, lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty));
+    return structDeclForResolvedTarget(ctx, type_syntax.resolveAliasType(ctx.type_aliases, target_ty));
 }
 
 pub fn emitUncheckedAddAggregateCallArgTemp(ctx: EmitContext, arg: ast.Expr, locals: *std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!?SequencedArgTemp {
@@ -423,7 +422,7 @@ pub fn collectUncheckedAddStructLiteralTemps(ctx: EmitContext, fields: []const a
 }
 
 pub fn emitPackedBitsLiteral(ctx: EmitContext, fields: []const ast.StructLiteralField, locals: ?*std.StringHashMap(LocalInfo), target_ty: ast.TypeExpr) anyerror!bool {
-    const resolved_target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty);
+    const resolved_target_ty = type_syntax.resolveAliasType(ctx.type_aliases, target_ty);
     const packed_name = typeName(resolved_target_ty) orelse return false;
     const info = ctx.packed_bits.get(packed_name) orelse return false;
     var temps: std.ArrayList([]const u8) = .empty;
@@ -589,7 +588,7 @@ pub fn collectTypeClosure(
     seen: *std.StringHashMap(void),
     scalar_deps: *std.ArrayList([]const u8),
 ) anyerror!void {
-    const resolved = lower_c_alias.resolveAliasType(ctx.type_aliases, ty);
+    const resolved = type_syntax.resolveAliasType(ctx.type_aliases, ty);
     switch (resolved.kind) {
         .array => {
             const wrapper = try ctx.name_for_type(ctx.name_ctx, resolved);
@@ -659,7 +658,7 @@ pub fn aggregateDepsSatisfied(ctx: DepContext, unit: AggregateEmitUnit, emitted:
 // and nullable pointers reference their pointee only through a pointer, so
 // they impose no ordering and return null; scalars and enums likewise.
 pub fn aggregateDepName(ctx: DepContext, ty: ast.TypeExpr) !?[]const u8 {
-    const resolved = lower_c_alias.resolveAliasType(ctx.type_aliases, ty);
+    const resolved = type_syntax.resolveAliasType(ctx.type_aliases, ty);
     return switch (resolved.kind) {
         .array => try ctx.name_for_type(ctx.name_ctx, resolved),
         .qualified => |node| try aggregateDepName(ctx, node.child.*),

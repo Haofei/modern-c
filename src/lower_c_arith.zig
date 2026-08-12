@@ -7,7 +7,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const expr_syntax = @import("expr_syntax.zig");
-const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
@@ -261,7 +260,7 @@ fn residueTypesForEmission(ctx: Context, call: anytype) !DomainTypes {
 
 pub fn sequencedBinaryPlan(ctx: Context, node: anytype, target_ty: ast.TypeExpr, locals: ?*std.StringHashMap(LocalInfo)) !?SequencedBinaryPlan {
     const op = node.op;
-    const resolved_target_ty = lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty);
+    const resolved_target_ty = type_syntax.resolveAliasType(ctx.type_aliases, target_ty);
     if (genericChildType(resolved_target_ty, "wrap")) |inner| {
         return try wrapSequencedBinaryPlan(ctx, op, inner);
     }
@@ -534,7 +533,7 @@ fn writeIndent(ctx: Context) !void {
 }
 
 pub fn emitWrapBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
-    const target = if (target_ty) |ty| lower_c_alias.resolveAliasType(ctx.type_aliases, ty) else return false;
+    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return false;
     const inner = genericChildType(target, "wrap") orelse return false;
     const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
     if (unsignedTypeSuffix(inner_name) == null) return error.UnsupportedCEmission;
@@ -584,7 +583,7 @@ pub fn emitWrapBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.Strin
 }
 
 pub fn emitSatBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
-    const target = if (target_ty) |ty| lower_c_alias.resolveAliasType(ctx.type_aliases, ty) else return false;
+    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return false;
     const inner = genericChildType(target, "sat") orelse return false;
     const inner_name = typeName(inner) orelse return error.UnsupportedCEmission;
     const helper = satHelperParts(node.op, inner_name) orelse return false;
@@ -595,7 +594,7 @@ pub fn emitSatBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.String
 
 pub fn emitCheckedBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
     if (!isCheckedBinaryOp(node.op)) return false;
-    const target = if (target_ty) |ty| lower_c_alias.resolveAliasType(ctx.type_aliases, ty) else return false;
+    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return false;
     if (isWrapType(target) or isSatType(target)) return false;
     const target_name = typeName(target) orelse return error.UnsupportedCEmission;
 
@@ -622,7 +621,7 @@ pub fn emitCheckedBinaryWithTarget(ctx: Context, node: anytype, locals: ?*std.St
 
 pub fn emitCheckedUnaryWithTarget(ctx: Context, node: anytype, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr) !bool {
     if (node.op != .neg) return false;
-    const target = if (target_ty) |ty| lower_c_alias.resolveAliasType(ctx.type_aliases, ty) else return false;
+    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return false;
     if (isWrapType(target) or isSatType(target)) return false;
     const target_name = typeName(target) orelse return error.UnsupportedCEmission;
     const suffix = signedTypeSuffix(target_name) orelse return false;

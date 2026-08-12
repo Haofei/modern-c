@@ -9,7 +9,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const expr_syntax = @import("expr_syntax.zig");
-const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
@@ -373,5 +372,5 @@ fn cTypeFor(ctx: Context, ty: ast.TypeExpr) anyerror![]const u8 {
 }
 
 fn resolveAliasType(ctx: Context, ty: ast.TypeExpr) ast.TypeExpr {
-    return lower_c_alias.resolveAliasType(ctx.type_aliases, ty);
+    return type_syntax.resolveAliasType(ctx.type_aliases, ty);
 }

@@ -3,8 +3,8 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const lower_llvm_alias = @import("lower_llvm_alias.zig");
 const lower_llvm_model = @import("lower_llvm_model.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const PackedBitsInfo = lower_llvm_model.PackedBitsInfo;
 const OverlayUnionInfo = lower_llvm_model.OverlayUnionInfo;
@@ -14,7 +14,7 @@ pub fn structDeclForType(
     struct_types: *const std.StringHashMap(ast.StructDecl),
     ty: ast.TypeExpr,
 ) ?ast.StructDecl {
-    const resolved_ty = lower_llvm_alias.resolveAliasType(type_aliases, ty);
+    const resolved_ty = type_syntax.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .name => |name| struct_types.get(name.text),
         else => null,
@@ -26,7 +26,7 @@ pub fn packedBitsInfoForType(
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     ty: ast.TypeExpr,
 ) ?PackedBitsInfo {
-    const resolved_ty = lower_llvm_alias.resolveAliasType(type_aliases, ty);
+    const resolved_ty = type_syntax.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .name => |name| packed_bits.get(name.text),
         else => null,
@@ -38,7 +38,7 @@ pub fn overlayInfoForType(
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
     ty: ast.TypeExpr,
 ) ?OverlayUnionInfo {
-    const resolved_ty = lower_llvm_alias.resolveAliasType(type_aliases, ty);
+    const resolved_ty = type_syntax.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .name => |name| overlay_unions.get(name.text),
         else => null,
@@ -50,7 +50,7 @@ pub fn taggedUnionForType(
     tagged_unions: *const std.StringHashMap(ast.UnionDecl),
     ty: ast.TypeExpr,
 ) ?ast.UnionDecl {
-    const resolved_ty = lower_llvm_alias.resolveAliasType(type_aliases, ty);
+    const resolved_ty = type_syntax.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .name => |name| tagged_unions.get(name.text),
         else => null,
@@ -62,7 +62,7 @@ pub fn enumDeclForType(
     enum_types: *const std.StringHashMap(ast.EnumDecl),
     ty: ast.TypeExpr,
 ) ?ast.EnumDecl {
-    const resolved_ty = lower_llvm_alias.resolveAliasType(type_aliases, ty);
+    const resolved_ty = type_syntax.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .name => |name| enum_types.get(name.text),
         else => null,
@@ -70,7 +70,7 @@ pub fn enumDeclForType(
 }
 
 pub fn memberBaseStructType(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) ?ast.TypeExpr {
-    const resolved_ty = lower_llvm_alias.resolveAliasType(type_aliases, ty);
+    const resolved_ty = type_syntax.resolveAliasType(type_aliases, ty);
     return switch (resolved_ty.kind) {
         .pointer => |node| node.child.*,
         .generic => |node| if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1) node.args[0] else ty,

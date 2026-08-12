@@ -9,7 +9,6 @@ const ast = @import("ast.zig");
 const error_from = @import("error_from.zig");
 const expr_syntax = @import("expr_syntax.zig");
 const lower_c_access = @import("lower_c_access.zig");
-const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_arith = @import("lower_c_arith.zig");
 const lower_c_call = @import("lower_c_call.zig");
 const lower_c_global = @import("lower_c_global.zig");
@@ -498,7 +497,7 @@ pub fn emitNullableTryReturn(ctx: TryDirectEmitContext, expr: ast.Expr, locals: 
 fn valueOptionalCType(ctx: TryDirectEmitContext, operand: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !?[]const u8 {
     _ = locals;
     const ty = tryOperandType(ctx, operand) orelse return null;
-    const resolved = lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, ty);
+    const resolved = type_syntax.resolveAliasType(ctx.replacement.type_aliases, ty);
     if (resolved.kind != .nullable) return null;
     if (!lower_c_type.nullablePayloadIsValueType(ctx.replacement.type_aliases, resolved.kind.nullable.*)) return null;
     return try ctx.replacement.c_type(ctx.replacement.emit_ctx, resolved);
@@ -513,14 +512,14 @@ fn tryExpressionResultType(ctx: TryDirectEmitContext, expr: ast.Expr) !?ast.Type
         .grouped => |inner| try tryExpressionResultType(ctx, inner.*),
         .try_expr => |node| blk: {
             const operand_ty = tryOperandType(ctx, node.operand.*) orelse return error.UnsupportedCEmission;
-            const expected_ty = resultPayloadTypeForTag(operand_ty, "ok") orelse switch (lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, operand_ty).kind) {
+            const expected_ty = resultPayloadTypeForTag(operand_ty, "ok") orelse switch (type_syntax.resolveAliasType(ctx.replacement.type_aliases, operand_ty).kind) {
                 .nullable => |child| child.*,
                 else => return error.UnsupportedCEmission,
             };
             const fact_ty = ctx.replacement.mir_target_type(ctx.replacement.emit_ctx, .expression_result, expr.span) orelse return error.UnsupportedCEmission;
             if (!type_syntax.sameTypeSyntax(
-                lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, fact_ty),
-                lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, expected_ty),
+                type_syntax.resolveAliasType(ctx.replacement.type_aliases, fact_ty),
+                type_syntax.resolveAliasType(ctx.replacement.type_aliases, expected_ty),
             )) return error.UnsupportedCEmission;
             break :blk fact_ty;
         },
@@ -537,12 +536,12 @@ fn resultTryOperandType(ctx: TryDirectEmitContext, operand: ast.Expr) ?ast.TypeE
 
 fn nullableTryOperandCType(ctx: TryDirectEmitContext, operand: ast.Expr) !?[]const u8 {
     const ty = tryOperandType(ctx, operand) orelse return null;
-    const resolved = lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, ty);
+    const resolved = type_syntax.resolveAliasType(ctx.replacement.type_aliases, ty);
     const child = switch (resolved.kind) {
         .nullable => |inner| inner.*,
         else => return null,
     };
-    const resolved_child = lower_c_alias.resolveAliasType(ctx.replacement.type_aliases, child);
+    const resolved_child = type_syntax.resolveAliasType(ctx.replacement.type_aliases, child);
     return switch (resolved_child.kind) {
         .pointer, .raw_many_pointer, .dyn_trait => try ctx.replacement.c_type(ctx.replacement.emit_ctx, child),
         .name => |name| if (std.mem.eql(u8, name.text, "c_void")) null else try ctx.replacement.c_type(ctx.replacement.emit_ctx, child),
@@ -972,7 +971,7 @@ fn emitAssignmentFromTemp(ctx: TryReplacementEmitContext, target: ast.Expr, loca
 
 fn emitCheckedUnaryTryReplacement(ctx: TryReplacementEmitContext, mode: TryReplacementMode, node: anytype, locals: ?*std.StringHashMap(lower_c_model.LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const lower_c_model.TryReplacement) anyerror!bool {
     if (node.op != .neg) return false;
-    const target = if (target_ty) |ty| lower_c_alias.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
+    const target = if (target_ty) |ty| type_syntax.resolveAliasType(ctx.type_aliases, ty) else return error.UnsupportedCEmission;
     if (type_syntax.isWrapType(target) or type_syntax.isSatType(target)) return false;
     const target_name = type_syntax.typeName(target) orelse return error.UnsupportedCEmission;
     const suffix = lower_c_type.signedTypeSuffix(target_name) orelse return false;

@@ -9,7 +9,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const scalar_repr = @import("scalar_repr.zig");
-const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const type_syntax = @import("type_syntax.zig");
 
@@ -52,7 +51,7 @@ pub const TypeEmitContext = struct {
 // (named scalar/struct/enum/address, not `c_void`). Pointers/slices/fn-pointers/`*dyn`
 // keep the null-sentinel repr and lower transparently to the inner type.
 pub fn nullablePayloadIsValueType(type_aliases: *const std.StringHashMap(ast.TypeExpr), child: ast.TypeExpr) bool {
-    const resolved = if (lower_c_alias.aliasTargetType(type_aliases, child)) |t| t else child;
+    const resolved = if (type_syntax.aliasTargetType(type_aliases, child)) |t| t else child;
     return switch (resolved.kind) {
         .name => |n| !std.mem.eql(u8, n.text, "c_void"),
         .qualified => |node| nullablePayloadIsValueType(type_aliases, node.child.*),
@@ -61,7 +60,7 @@ pub fn nullablePayloadIsValueType(type_aliases: *const std.StringHashMap(ast.Typ
 }
 
 pub fn appendType(ctx: TypeEmitContext, out: *std.ArrayList(u8), ty: ast.TypeExpr, style: StructTypeStyle) anyerror!void {
-    if (lower_c_alias.aliasTargetType(ctx.type_aliases, ty)) |target| return appendType(ctx, out, target, style);
+    if (type_syntax.aliasTargetType(ctx.type_aliases, ty)) |target| return appendType(ctx, out, target, style);
     switch (ty.kind) {
         .pointer => |node| return appendPointerType(ctx, out, node.child.*, node.mutability, style),
         .raw_many_pointer => |node| return appendPointerType(ctx, out, node.child.*, node.mutability, style),

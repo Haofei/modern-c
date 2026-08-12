@@ -7,7 +7,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const expr_syntax = @import("expr_syntax.zig");
-const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
@@ -62,7 +61,7 @@ pub fn emitConversionCall(ctx: Context, call: anytype, locals: ?*std.StringHashM
     if (ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) != expected_target) return error.UnsupportedCEmission;
     const target_ty = ctx.mir_target_type(ctx.emit_ctx, .conversion_target, call.callee.*.span) orelse return error.UnsupportedCEmission;
     const source_ty = ctx.mir_target_type(ctx.emit_ctx, .conversion_source, call.callee.*.span) orelse return error.UnsupportedCEmission;
-    const resolved = lower_c_alias.resolveAliasType(ctx.type_aliases, target_ty);
+    const resolved = type_syntax.resolveAliasType(ctx.type_aliases, target_ty);
     const target_name = typeName(resolved);
     const numeric_target = isNumericStorageType(resolved) or
         (target_name != null and !std.mem.eql(u8, target_name.?, "cstr") and primitiveCTypeName(target_name.?) != null);

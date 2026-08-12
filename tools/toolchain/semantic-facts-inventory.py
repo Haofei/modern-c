@@ -319,7 +319,6 @@ T4_BACKEND_FILE_AUTHORITY: dict[str, list[str]] = {
         "src/lower_llvm_reflect.zig",
     ],
     "mechanics-only": [
-        "src/lower_c_alias.zig",
         "src/lower_c_asm.zig",
         "src/lower_c_const.zig",
         "src/lower_c_defs.zig",
@@ -333,7 +332,6 @@ T4_BACKEND_FILE_AUTHORITY: dict[str, list[str]] = {
         "src/lower_c_overlay.zig",
         "src/lower_c_runtime.zig",
         "src/lower_c_module.zig",
-        "src/lower_llvm_alias.zig",
         "src/lower_llvm_model.zig",
         "src/lower_llvm_op.zig",
         "src/lower_llvm_prelude.zig",

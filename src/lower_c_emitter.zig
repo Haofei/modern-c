@@ -36,7 +36,6 @@ const lower_c_atomic = @import("lower_c_atomic.zig");
 
 // C emission model and helper modules used by the emitter implementation.
 const lower_c_model = @import("lower_c_model.zig");
-const lower_c_alias = @import("lower_c_alias.zig");
 const attr_syntax = @import("attr_syntax.zig");
 const lower_c_flow = @import("lower_c_flow.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -1293,11 +1292,11 @@ pub const CEmitter = struct {
     }
 
     fn resolveAliasType(self: *CEmitter, ty: ast.TypeExpr) ast.TypeExpr {
-        return lower_c_alias.resolveAliasType(&self.type_aliases, ty);
+        return type_syntax.resolveAliasType(&self.type_aliases, ty);
     }
 
     fn aliasTargetType(self: *CEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
-        return lower_c_alias.aliasTargetType(&self.type_aliases, ty);
+        return type_syntax.aliasTargetType(&self.type_aliases, ty);
     }
 
     fn typeNameContext(self: *CEmitter) lower_c_names.Context {

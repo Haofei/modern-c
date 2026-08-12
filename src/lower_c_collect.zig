@@ -4,7 +4,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const expr_syntax = @import("expr_syntax.zig");
-const lower_c_alias = @import("lower_c_alias.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
@@ -312,7 +311,7 @@ fn putSliceType(ctx: SliceArtifactContext, child: ast.TypeExpr, mutability: ast.
 }
 
 pub fn bindEnvIsPointerLike(type_aliases: *const std.StringHashMap(ast.TypeExpr), ty: ast.TypeExpr) bool {
-    return switch (lower_c_alias.resolveAliasType(type_aliases, ty).kind) {
+    return switch (type_syntax.resolveAliasType(type_aliases, ty).kind) {
         .pointer, .raw_many_pointer, .fn_pointer, .slice => true,
         .nullable => |child| bindEnvIsPointerLike(type_aliases, child.*),
         .qualified => |node| bindEnvIsPointerLike(type_aliases, node.child.*),

@@ -29,7 +29,6 @@ const overlayMemberFromIndexBase = expr_syntax.overlayMemberFromIndexBase;
 const taggedUnionCase = expr_syntax.taggedUnionCase;
 
 const backend_mod = @import("backend.zig");
-const lower_llvm_alias = @import("lower_llvm_alias.zig");
 const lower_llvm_lookup = @import("lower_llvm_lookup.zig");
 const lower_llvm_shape = @import("lower_llvm_shape.zig");
 
@@ -10043,7 +10042,7 @@ const LlvmEmitter = struct {
     }
 
     fn resolveAliasType(self: *LlvmEmitter, ty: ast.TypeExpr) ast.TypeExpr {
-        return lower_llvm_alias.resolveAliasType(&self.type_aliases, ty);
+        return type_syntax.resolveAliasType(&self.type_aliases, ty);
     }
 
     fn structLlvmType(self: *LlvmEmitter, struct_decl: ast.StructDecl) anyerror![]const u8 {
