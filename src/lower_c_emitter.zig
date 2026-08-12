@@ -6306,10 +6306,6 @@ pub const CEmitter = struct {
         };
     }
 
-    // A live local_storage fact is the positive locality proof that keeps a deref
-    // PLAIN under the spec I.13 conservative default. Liveness is symmetric with
-    // the global side: any call/indirect-call/address-escape/dynamic-index
-    // invalidation drops the proof back to unknown (-> race-tolerant lowering).
     fn deinitOwnedStringVoidMap(self: *CEmitter, map: *std.StringHashMap(void)) void {
         var it = map.keyIterator();
         while (it.next()) |key| self.allocator.free(key.*);

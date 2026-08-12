@@ -6026,10 +6026,6 @@ const LlvmEmitter = struct {
         return mir_facts_view.MirFactsView.init(&self.mir_module).uniqueConstGetIndexAt(self.currentMirFunction(), mir.sourcePointFromSpan(span));
     }
 
-    // A live local_storage fact is the positive locality proof that lets a deref
-    // keep PLAIN lowering under the spec I.13 conservative default. Liveness is
-    // symmetric with the global side: any call/indirect-call/address-escape/
-    // dynamic-index invalidation drops the proof back to unknown (-> atomic).
     fn mirFactSubjectSupportedNow(self: *LlvmEmitter, fact: mir.PointerProvenanceFact) bool {
         const ty = self.local_types.get(fact.subject) orelse return false;
         if (fact.element_index != null) return self.fixedLocalPointerArrayElementType(ty) != null;

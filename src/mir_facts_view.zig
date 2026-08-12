@@ -296,6 +296,9 @@ pub fn pointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {
     return fact.provenance == .global_storage and pointerFactReasonIsLive(fact);
 }
 
+/// A live local_storage/global_storage fact is the positive locality proof that
+/// lets a backend use the ordinary pointer lowering. Any call/indirect-call,
+/// address escape, or dynamic-index invalidation drops the proof to unknown.
 pub fn pointerFactIsLiveLocal(fact: mir.PointerProvenanceFact) bool {
     return fact.provenance == .local_storage and pointerFactReasonIsLive(fact);
 }
