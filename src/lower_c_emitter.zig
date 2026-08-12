@@ -49,7 +49,6 @@ const lower_c_domain = @import("lower_c_domain.zig");
 const lower_c_names = @import("lower_c_names.zig");
 const lower_c_aggregate = @import("lower_c_aggregate.zig");
 const lower_c_access = @import("lower_c_access.zig");
-const lower_c_builtin = @import("lower_c_builtin.zig");
 const lower_c_builtin_emit = @import("lower_c_builtin_emit.zig");
 const lower_c_call = @import("lower_c_call.zig");
 const lower_c_reflect = @import("lower_c_reflect.zig");

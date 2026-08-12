@@ -26,7 +26,7 @@ BACKEND_EXTRA_FILES = {
 }
 
 EXACT_BACKEND_COUNTS = {
-    '@import("ast.zig")': 45,
+    '@import("ast.zig")': 44,
     '@import("attr_syntax.zig")': 2,
     '@import("ast_query.zig")': 0,
     '@import("expr_syntax.zig")': 24,
@@ -223,8 +223,8 @@ def require_absent_glob(pattern: str, description: str) -> None:
 
 def main() -> int:
     sources = backend_sources()
-    if len(sources) != 53:
-        fail(f"backend source inventory has {len(sources)} files, expected 53")
+    if len(sources) != 52:
+        fail(f"backend source inventory has {len(sources)} files, expected 52")
 
     for needle, expected in EXACT_BACKEND_COUNTS.items():
         require_exact_backend_count(needle, expected)

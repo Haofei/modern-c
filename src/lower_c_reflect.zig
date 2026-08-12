@@ -1,10 +1,10 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const builtin_syntax = @import("builtin_syntax.zig");
 const eval = @import("eval.zig");
 const expr_syntax = @import("expr_syntax.zig");
 const type_layout = @import("layout.zig");
-const lower_c_builtin = @import("lower_c_builtin.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
@@ -143,7 +143,7 @@ pub fn comptimeReflect(env: *const ReflectEnv, call: ast.Expr) ?i128 {
         .call => |n| n,
         else => return null,
     };
-    const kind = lower_c_builtin.reflectionCallKind(node.callee.*) orelse return null;
+    const kind = builtin_syntax.reflectionCallKind(node.callee.*) orelse return null;
     if (node.type_args.len != 1) return null;
     const ty = node.type_args[0];
     return switch (kind) {

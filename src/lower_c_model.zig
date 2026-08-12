@@ -7,6 +7,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const builtin_syntax = @import("builtin_syntax.zig");
 const lower_c_op = @import("lower_c_op.zig");
 
 const CheckedHelperParts = lower_c_op.CheckedHelperParts;
@@ -154,13 +155,7 @@ pub const OverlayLayout = struct {
     alignment: usize,
 };
 
-pub const ReflectionCallKind = enum {
-    size,
-    alignment,
-    field_offset,
-    bit_offset,
-    repr,
-};
+pub const ReflectionCallKind = builtin_syntax.ReflectionCallKind;
 
 pub const ResultInfo = struct {
     name: []const u8,

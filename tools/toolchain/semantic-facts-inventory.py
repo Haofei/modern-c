@@ -303,7 +303,6 @@ T4_BACKEND_FILE_AUTHORITY: dict[str, list[str]] = {
         "src/lower_c_access.zig",
         "src/lower_c_arith.zig",
         "src/lower_c_atomic.zig",
-        "src/lower_c_builtin.zig",
         "src/lower_c_builtin_emit.zig",
         "src/lower_c_call.zig",
         "src/lower_c_collect.zig",
@@ -1540,7 +1539,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/lower_c_expr.zig": {
         "pub fn isDeclassifyCall(": 0,
     },
-    "src/lower_c_builtin.zig": {
+    "src/builtin_syntax.zig": {
+        "pub fn knownContractCalleeName(": 1,
+        "pub fn reflectionCallKind(": 1,
         "pub fn isAssumeNoaliasCall(": 0,
     },
     "src/lower_llvm_query.zig": {

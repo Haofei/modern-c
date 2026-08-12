@@ -1,11 +1,20 @@
-//! C backend builtin-call classifiers and source-text helpers.
+//! Narrow builtin-call syntax classifiers.
+//!
+//! These helpers inspect source expression spelling during the transition from
+//! AST-shaped backend input to verified MIR facts.  They are deliberately kept
+//! outside backend modules so remaining syntax dependencies are explicit.
 
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const lower_c_model = @import("lower_c_model.zig");
 
-const ReflectionCallKind = lower_c_model.ReflectionCallKind;
+pub const ReflectionCallKind = enum {
+    size,
+    alignment,
+    field_offset,
+    bit_offset,
+    repr,
+};
 
 pub fn knownContractCalleeName(expr: ast.Expr) ?[]const u8 {
     return switch (expr.kind) {
