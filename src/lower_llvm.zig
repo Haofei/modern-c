@@ -11,6 +11,7 @@ const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
+const mir_source_bridge = @import("mir_source_bridge.zig");
 const numeric = @import("numeric.zig");
 const type_syntax = @import("type_syntax.zig");
 
@@ -20,6 +21,9 @@ const byteViewAddressTarget = expr_syntax.byteViewAddressTarget;
 const calleeIdentName = expr_syntax.calleeIdentName;
 const memberExpr = expr_syntax.memberExpr;
 const indexExpr = expr_syntax.indexExpr;
+const isSourceSpan = mir_source_bridge.isSourceSpan;
+const sourcePointFromOptionalSpan = mir_source_bridge.sourcePointFromOptionalSpan;
+const sourcePointMatchesSpan = mir_source_bridge.sourcePointMatchesSpan;
 const isOpaqueAddressTypeName = type_syntax.isOpaqueAddressTypeName;
 const isStringLiteralTarget = type_syntax.isStringLiteralTarget;
 const isMmioStructAbi = type_syntax.isMmioStructAbi;
@@ -10627,18 +10631,6 @@ fn deferExprForRefInBlock(block: ast.Block, ref: mir.DeferCleanupRef) ?ast.Expr 
         }
     }
     return null;
-}
-
-fn sourcePointMatchesSpan(source: mir.SourcePoint, span: ast.Span) bool {
-    return mir_facts_view.sourcePointExactMatches(source, mir.sourcePointFromSpan(span));
-}
-
-fn isSourceSpan(span: ast.Span) bool {
-    return mir_facts_view.sourcePointHasLineColumn(mir.sourcePointFromSpan(span));
-}
-
-fn sourcePointFromOptionalSpan(span: ?ast.Span) ?mir.SourcePoint {
-    return if (span) |value| mir.sourcePointFromSpan(value) else null;
 }
 
 fn restoreLocal(map: anytype, key: []const u8, old: anytype) void {

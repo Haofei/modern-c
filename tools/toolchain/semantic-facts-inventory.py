@@ -1244,6 +1244,12 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "return collectConstGlobalsFromDeclsWithOptions(allocator, module, module.decls": 0,
         "return collectConstGlobalsFromDeclsWithOptions(allocator, module.decls": 1,
     },
+    "src/mir_source_bridge.zig": {
+        "Transitional AST-span to MIR-source-point bridge.": 1,
+        "pub fn sourcePointMatchesSpan(": 1,
+        "pub fn sourcePointFromOptionalSpan(": 1,
+        "pub fn isSourceSpan(": 1,
+    },
     "src/lower_c.zig": {
         "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)": 1,
         "program.syntax_module": 0,
@@ -1867,7 +1873,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "if (self.generatedNullableLocalTypeForEmission(expr, locals)) |ty| return ty;": 1,
         "else => self.nullableExpressionResultTypeOrGenerated(expr, locals),": 1,
         "return if (self.resolveAliasType(inferred).kind == .nullable) inferred else null;": 0,
-        "fn isSourceSpan(span: ast.Span) bool": 1,
+        "fn isSourceSpan(span: ast.Span) bool": 0,
         "expr.span.line": 0,
         "expr.span.column": 0,
         "base.span.line": 0,

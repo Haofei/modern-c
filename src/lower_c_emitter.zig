@@ -11,6 +11,7 @@ const expr_syntax = @import("expr_syntax.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
+const mir_source_bridge = @import("mir_source_bridge.zig");
 const type_syntax = @import("type_syntax.zig");
 const switch_lower = @import("switch_lower.zig");
 
@@ -90,6 +91,9 @@ const GlobalInfo = lower_c_model.GlobalInfo;
 const GlobalElementInfo = lower_c_model.GlobalElementInfo;
 const GlobalAccess = lower_c_model.GlobalAccess;
 const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
+const isSourceSpan = mir_source_bridge.isSourceSpan;
+const sourcePointFromOptionalSpan = mir_source_bridge.sourcePointFromOptionalSpan;
+const sourcePointMatchesSpan = mir_source_bridge.sourcePointMatchesSpan;
 const hasNakedAttr = attr_syntax.hasNakedAttr;
 const backendNameOverride = attr_syntax.backendNameOverride;
 const exprContainsCall = lower_c_expr.exprContainsCall;
@@ -8832,10 +8836,6 @@ fn deferExprForRefInBlock(block: ast.Block, ref: mir.DeferCleanupRef) ?ast.Expr 
     return null;
 }
 
-fn sourcePointMatchesSpan(source: mir.SourcePoint, span: ast.Span) bool {
-    return mir_facts_view.sourcePointExactMatches(source, mir.sourcePointFromSpan(span));
-}
-
 fn spanFromSourcePoint(source: mir.SourcePoint) ast.Span {
     return .{
         .offset = source.offset,
@@ -8843,12 +8843,4 @@ fn spanFromSourcePoint(source: mir.SourcePoint) ast.Span {
         .line = source.line,
         .column = source.column,
     };
-}
-
-fn sourcePointFromOptionalSpan(span: ?ast.Span) ?mir.SourcePoint {
-    return if (span) |value| mir.sourcePointFromSpan(value) else null;
-}
-
-fn isSourceSpan(span: ast.Span) bool {
-    return mir_facts_view.sourcePointHasLineColumn(mir.sourcePointFromSpan(span));
 }

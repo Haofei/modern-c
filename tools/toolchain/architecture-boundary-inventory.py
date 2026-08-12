@@ -115,6 +115,15 @@ EXACT_FILE_COUNTS = {
     ("src/lower_llvm_shape.zig", "pub fn maybeUninitPayloadType("): 1,
     ("src/lower_llvm_shape.zig", "pub fn resultInfo("): 1,
     ("src/lower_llvm_shape.zig", "pub fn domainPayloadType("): 1,
+    ("src/lower_c_emitter.zig", "fn sourcePointMatchesSpan("): 0,
+    ("src/lower_c_emitter.zig", "fn sourcePointFromOptionalSpan("): 0,
+    ("src/lower_c_emitter.zig", "fn isSourceSpan("): 0,
+    ("src/lower_llvm.zig", "fn sourcePointMatchesSpan("): 0,
+    ("src/lower_llvm.zig", "fn sourcePointFromOptionalSpan("): 0,
+    ("src/lower_llvm.zig", "fn isSourceSpan("): 0,
+    ("src/mir_source_bridge.zig", "pub fn sourcePointMatchesSpan("): 1,
+    ("src/mir_source_bridge.zig", "pub fn sourcePointFromOptionalSpan("): 1,
+    ("src/mir_source_bridge.zig", "pub fn isSourceSpan("): 1,
 }
 
 REQUIRED_ANCHORS = {
@@ -146,6 +155,10 @@ REQUIRED_ANCHORS = {
         "MIR owns construction and verification.",
         "small query surface",
         "targetTypeFactById",
+    ),
+    "src/mir_source_bridge.zig": (
+        "Transitional AST-span to MIR-source-point bridge.",
+        "VerifiedProgram boundary is being",
     ),
     "src/type_syntax.zig": (
         "pub const ViewType = struct",
