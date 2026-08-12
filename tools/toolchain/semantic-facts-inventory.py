@@ -321,7 +321,6 @@ T4_BACKEND_FILE_AUTHORITY: dict[str, list[str]] = {
     "mechanics-only": [
         "src/lower_c_alias.zig",
         "src/lower_c_asm.zig",
-        "src/lower_c_attr.zig",
         "src/lower_c_const.zig",
         "src/lower_c_defs.zig",
         "src/lower_c_dispatch.zig",

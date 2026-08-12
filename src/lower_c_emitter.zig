@@ -37,7 +37,7 @@ const lower_c_atomic = @import("lower_c_atomic.zig");
 // C emission model and helper modules used by the emitter implementation.
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_alias = @import("lower_c_alias.zig");
-const lower_c_attr = @import("lower_c_attr.zig");
+const attr_syntax = @import("attr_syntax.zig");
 const lower_c_flow = @import("lower_c_flow.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
@@ -92,8 +92,8 @@ const GlobalInfo = lower_c_model.GlobalInfo;
 const GlobalElementInfo = lower_c_model.GlobalElementInfo;
 const GlobalAccess = lower_c_model.GlobalAccess;
 const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
-const hasNakedAttr = lower_c_attr.hasNakedAttr;
-const backendNameOverride = lower_c_attr.backendNameOverride;
+const hasNakedAttr = attr_syntax.hasNakedAttr;
+const backendNameOverride = attr_syntax.backendNameOverride;
 const exprContainsCall = lower_c_expr.exprContainsCall;
 const resolvedArrayChildType = lower_c_shape.resolvedArrayChildType;
 const overlayFieldLayoutForType = lower_c_shape.overlayFieldLayout;
@@ -1159,7 +1159,7 @@ pub const CEmitter = struct {
 
     fn emitFunction(self: *CEmitter, fn_decl: ast.FnDecl, body: ast.Block, attrs: []const ast.Attr) anyerror!void {
         try self.writeLineDirective(fn_decl.name.span);
-        try lower_c_attr.emitFunctionAttrs(self.allocator, self.out, attrs);
+        try attr_syntax.emitCFunctionAttrs(self.allocator, self.out, attrs);
         if (hasNakedAttr(attrs)) {
             try self.emitNakedFunction(fn_decl, body);
             return;

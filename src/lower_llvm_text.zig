@@ -2,51 +2,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 
-pub fn hasNakedAttr(attrs: []const ast.Attr) bool {
-    for (attrs) |attr| {
-        if (std.meta.activeTag(attr.kind) == .naked) return true;
-    }
-    return false;
-}
-
-pub fn hasWeakAttr(attrs: []const ast.Attr) bool {
-    for (attrs) |attr| {
-        if (std.meta.activeTag(attr.kind) == .weak) return true;
-    }
-    return false;
-}
-
-pub fn hasNoinlineAttr(attrs: []const ast.Attr) bool {
-    for (attrs) |attr| {
-        if (std.meta.activeTag(attr.kind) == .@"noinline") return true;
-    }
-    return false;
-}
-
-// The `#[section("...")]` target name, or null if the declaration has no section attribute.
-pub fn sectionAttr(attrs: []const ast.Attr) ?[]const u8 {
-    for (attrs) |attr| {
-        if (attr.kind == .section) return attr.kind.section;
-    }
-    return null;
-}
-
-// Effective alignment for a function: the explicit `#[align(N)]` value if present, else 4 for a
-// `#[naked]` function. When both apply, the larger wins. Mirrors lower_c.zig's effectiveAlign so
-// the backends stay in parity.
-pub fn effectiveAlign(attrs: []const ast.Attr) ?u32 {
-    var explicit: ?u32 = null;
-    for (attrs) |attr| {
-        if (attr.kind == .@"align") explicit = attr.kind.@"align";
-    }
-    const naked_min: ?u32 = if (hasNakedAttr(attrs)) 4 else null;
-    if (explicit) |e| {
-        if (naked_min) |n| return @max(e, n);
-        return e;
-    }
-    return naked_min;
-}
-
 pub fn debugLine(span: ast.Span) usize {
     return if (span.line == 0) 1 else span.line;
 }

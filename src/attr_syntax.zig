@@ -1,4 +1,8 @@
-//! C backend attribute helpers.
+//! Narrow attribute-syntax helpers shared by codegen and declaration-artifact
+//! collection.
+//!
+//! This module may inspect AST attributes. Backend modules should use this
+//! helper instead of re-implementing attribute spelling checks locally.
 
 const std = @import("std");
 
@@ -25,13 +29,13 @@ pub fn hasNoinlineAttr(attrs: []const ast.Attr) bool {
     return false;
 }
 
-pub fn emitFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
-    try emitLinkageFunctionAttrs(allocator, out, attrs);
-    try emitLayoutFunctionAttrs(allocator, out, attrs);
-    try emitInliningFunctionAttrs(allocator, out, attrs);
+pub fn emitCFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
+    try emitCLinkageFunctionAttrs(allocator, out, attrs);
+    try emitCLayoutFunctionAttrs(allocator, out, attrs);
+    try emitCInliningFunctionAttrs(allocator, out, attrs);
 }
 
-fn emitLinkageFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
+fn emitCLinkageFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
     if (hasWeakAttr(attrs)) try out.appendSlice(allocator, "MC_WEAK ");
     if (sectionAttr(attrs)) |sec| {
         try out.appendSlice(allocator, "__attribute__((section(\"");
@@ -40,14 +44,14 @@ fn emitLinkageFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8
     }
 }
 
-fn emitLayoutFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
+fn emitCLayoutFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
     if (effectiveAlign(attrs)) |al| {
         var buf: [32]u8 = undefined;
         try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "__attribute__((aligned({d}))) ", .{al}) catch unreachable);
     }
 }
 
-fn emitInliningFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
+fn emitCInliningFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
     if (hasNoinlineAttr(attrs)) try out.appendSlice(allocator, "__attribute__((noinline)) ");
     if (hasNakedAttr(attrs)) try out.appendSlice(allocator, "__attribute__((naked)) ");
 }

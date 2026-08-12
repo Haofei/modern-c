@@ -76,19 +76,20 @@ const llvmTargetTriple = lower_llvm_prelude.targetTriple;
 // LLVM textual escaping, inline-asm spelling, debug line normalization, and
 // declaration attribute helpers.
 const lower_llvm_text = @import("lower_llvm_text.zig");
+const attr_syntax = @import("attr_syntax.zig");
 const debugColumn = lower_llvm_text.debugColumn;
 const debugLine = lower_llvm_text.debugLine;
-const effectiveAlign = lower_llvm_text.effectiveAlign;
+const effectiveAlign = attr_syntax.effectiveAlign;
 const escapedLlvmString = lower_llvm_text.escapedLlvmString;
-const hasNakedAttr = lower_llvm_text.hasNakedAttr;
-const hasNoinlineAttr = lower_llvm_text.hasNoinlineAttr;
-const hasWeakAttr = lower_llvm_text.hasWeakAttr;
+const hasNakedAttr = attr_syntax.hasNakedAttr;
+const hasNoinlineAttr = attr_syntax.hasNoinlineAttr;
+const hasWeakAttr = attr_syntax.hasWeakAttr;
 const llvmAsmClobbers = lower_llvm_text.llvmAsmClobbers;
 const llvmOpaqueAsmTemplate = lower_llvm_text.llvmOpaqueAsmTemplate;
 const llvmPreciseAsmConstraints = lower_llvm_text.llvmPreciseAsmConstraints;
 const llvmPreciseAsmTemplate = lower_llvm_text.llvmPreciseAsmTemplate;
 const llvmStringLiteralBytes = lower_llvm_text.llvmStringLiteralBytes;
-const sectionAttr = lower_llvm_text.sectionAttr;
+const sectionAttr = attr_syntax.sectionAttr;
 
 const NullableRepresentation = enum {
     pointer,
