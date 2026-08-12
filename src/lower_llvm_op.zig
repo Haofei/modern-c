@@ -11,17 +11,16 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
 const numeric = @import("numeric.zig");
 
-pub fn binaryIsComparison(op: ast.BinaryOp) bool {
+pub fn binaryIsComparison(op: anytype) bool {
     return switch (op) {
         .eq, .ne, .lt, .le, .gt, .ge => true,
         else => false,
     };
 }
 
-pub fn comparisonPredicate(op: ast.BinaryOp, signed: bool) ?[]const u8 {
+pub fn comparisonPredicate(op: anytype, signed: bool) ?[]const u8 {
     return switch (op) {
         .eq => "eq",
         .ne => "ne",
@@ -33,7 +32,7 @@ pub fn comparisonPredicate(op: ast.BinaryOp, signed: bool) ?[]const u8 {
     };
 }
 
-pub fn floatComparisonPredicate(op: ast.BinaryOp) ?[]const u8 {
+pub fn floatComparisonPredicate(op: anytype) ?[]const u8 {
     return switch (op) {
         .eq => "oeq",
         .ne => "une",
