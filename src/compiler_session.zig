@@ -42,14 +42,17 @@ pub const CheckedModule = struct {
 };
 
 pub const ParsedModule = struct {
-    module: ast.Module,
+    decls_slice: []ast.Decl,
+    visibility_mode: ast.VisibilityMode,
+    qualified_owners: [][]const u8,
+    qualified_symbols: []const ast.QualifiedSymbol,
 
     pub fn decls(self: ParsedModule) []ast.Decl {
-        return self.module.decls;
+        return self.decls_slice;
     }
 
     pub fn deinit(self: ParsedModule, allocator: std.mem.Allocator) void {
-        self.module.deinit(allocator);
+        allocator.free(self.decls_slice);
     }
 };
 
@@ -148,10 +151,10 @@ pub const CompilationSession = struct {
     }
 
     pub fn parseModuleOrReport(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ParsedModule {
-        return .{ .module = try parseModuleOrReportMode(self, source, allocator, diag, true) };
+        return try parseModuleOrReportMode(self, source, allocator, diag, true);
     }
 
-    fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {
+    fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ParsedModule {
         var p = parser.Parser.init(source, diag);
         var module = p.parseModule(allocator) catch |err| {
             if (render_errors) diag.render();
@@ -194,10 +197,10 @@ pub const CompilationSession = struct {
             return err;
         };
         return .{
-            .decls = decls,
+            .decls_slice = decls,
+            .visibility_mode = visibility_mode,
             .qualified_owners = qualified_owners,
             .qualified_symbols = qualified_symbols,
-            .visibility_mode = visibility_mode,
         };
     }
 
@@ -217,17 +220,18 @@ pub const CompilationSession = struct {
         render_errors: bool,
         failure_error: StageFailure,
     ) !CheckedModule {
-        const module = try parseModuleOrReportMode(self, source, allocator, diag, render_errors);
+        const parsed = try parseModuleOrReportMode(self, source, allocator, diag, render_errors);
+        errdefer parsed.deinit(allocator);
         if (diag.has_errors) {
             if (render_errors) diag.render();
             return failure_error;
         }
-        self.checkDecls(module.decls, module.visibility_mode, module.qualified_owners, diag, optimize);
+        self.checkDecls(parsed.decls(), parsed.visibility_mode, parsed.qualified_owners, diag, optimize);
         if (diag.has_errors) {
             if (render_errors) diag.render();
             return failure_error;
         }
-        return .{ .decls_slice = module.decls };
+        return .{ .decls_slice = parsed.decls() };
     }
 
     pub fn buildVerifiedProgramFromDecls(
@@ -268,7 +272,7 @@ test "CompilationSession keeps parse context request scoped" {
     defer arena_a.deinit();
     const parsed_a = try session_a.parseModuleOrReport(source, arena_a.allocator(), &diag_a);
     defer parsed_a.deinit(arena_a.allocator());
-    try std.testing.expectEqual(ast.VisibilityMode.explicit_public, parsed_a.module.visibility_mode);
+    try std.testing.expectEqual(ast.VisibilityMode.explicit_public, parsed_a.visibility_mode);
 
     var boundaries_b = [_]loader.FileBoundary{.{ .start = 0, .path = "b.mc" }};
     var session_b = CompilationSession.init(std.testing.allocator, std.testing.io);
@@ -281,7 +285,7 @@ test "CompilationSession keeps parse context request scoped" {
     defer arena_b.deinit();
     const parsed_b = try session_b.parseModuleOrReport(source, arena_b.allocator(), &diag_b);
     defer parsed_b.deinit(arena_b.allocator());
-    try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, parsed_b.module.visibility_mode);
+    try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, parsed_b.visibility_mode);
 }
 
 test "CompilationSession attaches per-file resolved module syntax" {

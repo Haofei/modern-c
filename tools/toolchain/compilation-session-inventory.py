@@ -67,8 +67,10 @@ def main() -> int:
         "pub fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {",
         "pub fn attachLoadedProjectSyntax(",
         "pub const ParsedModule = struct {",
+        "decls_slice: []ast.Decl,",
+        "visibility_mode: ast.VisibilityMode,",
         "pub fn parseModuleOrReport(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ParsedModule {",
-        "fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
+        "fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ParsedModule {",
         "fn checkDecls(self: *CompilationSession, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, qualified_owners: [][]const u8, diag: *diagnostics.Reporter, optimize: bool) void {",
         "pub fn parseCheckedModuleOrReport(",
         "pub fn buildVerifiedProgramFromDecls(",
@@ -122,8 +124,8 @@ def main() -> int:
         'test "CompilationSession attaches per-file resolved module syntax"',
         'test "CompilationSession restores artifact metadata sidecar snapshots"',
         'test "CompilationSession diagnostic stage failures use a bounded error set"',
-        "try std.testing.expectEqual(ast.VisibilityMode.explicit_public, parsed_a.module.visibility_mode);",
-        "try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, parsed_b.module.visibility_mode);",
+        "try std.testing.expectEqual(ast.VisibilityMode.explicit_public, parsed_a.visibility_mode);",
+        "try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, parsed_b.visibility_mode);",
     ):
         require_contains(session_zig, needle)
 
@@ -143,6 +145,8 @@ def main() -> int:
         fail("CompilationSession must not call the retired module-shaped private-mangling API")
     if "pub fn parseModuleOrReportMode(" in session_text:
         fail("CompilationSession must not expose naked ast.Module parse helper publicly")
+    if "module: ast.Module" in session_text:
+        fail("CompilationSession parsed/checked results must not expose ast.Module as a semantic carrier")
     if "fn checkModule(self: *CompilationSession, module: ast.Module" in session_text:
         fail("CompilationSession must not keep a naked ast.Module check helper")
     if main_text.count("var checker = sema.Checker.init") != 0:
