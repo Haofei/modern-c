@@ -135,6 +135,7 @@ EXACT_FILE_COUNTS = {
     ("src/module_graph.zig", "pub const SourceDatabase = struct"): 1,
     ("src/module_graph.zig", "pub const LoadedProject = struct"): 1,
     ("src/module_graph.zig", "source_db: SourceDatabase"): 1,
+    ("src/module_graph.zig", "parser_source: []const u8"): 1,
     ("src/module_graph.zig", "combined textual source"): 1,
     ("src/hir_inspection.zig", "inspection_only_header"): 3,
     ("src/mir_facts_view.zig", "pub const MirFactsView = struct"): 1,

@@ -544,7 +544,9 @@ test "loader publishes stable module graph identities and edges" {
     try std.testing.expectEqual(wide.graph.files.len, wide.source_db.files.len);
     for (wide.graph.files) |file| {
         const file_source = wide.source_db.sourceForFile(file.id) orelse return error.TestUnexpectedResult;
+        const parser_source = wide.source_db.parserSourceForFile(file.id) orelse return error.TestUnexpectedResult;
         try std.testing.expect(file_source.len > 0);
+        try std.testing.expect(parser_source.len == file_source.len);
         try std.testing.expect(file.source_len > 0);
         var found_boundary = false;
         for (wide.boundaries) |boundary| {
@@ -557,9 +559,20 @@ test "loader publishes stable module graph identities and edges" {
     }
     const root_file = wide.graph.files[@intFromEnum(root)];
     const root_raw_source = wide.source_db.sourceForFile(root).?;
+    const root_parser_source = wide.source_db.parserSourceForFile(root).?;
     const root_combined_source = wide.source[root_file.source_start..][0..root_file.source_len];
     try std.testing.expect(std.mem.indexOf(u8, root_raw_source, "import \"./import_wide_left.mc\";") != null);
+    try std.testing.expect(std.mem.indexOf(u8, root_parser_source, "import \"./import_wide_left.mc\";") == null);
     try std.testing.expect(std.mem.indexOf(u8, root_combined_source, "import \"./import_wide_left.mc\";") == null);
+
+    var per_file_reporter = diagnostics.Reporter.init(std.testing.allocator, "import_wide_root.mc", root_parser_source);
+    defer per_file_reporter.deinit();
+    var per_file_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer per_file_arena.deinit();
+    var per_file_parser = Parser.init(root_parser_source, &per_file_reporter);
+    const root_module = try per_file_parser.parseModule(per_file_arena.allocator());
+    defer root_module.deinit(per_file_arena.allocator());
+    try std.testing.expect(!per_file_reporter.has_errors);
 
     const cycle_path = "tests/spec_support/import_cycle_a.mc";
     const cycle_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, cycle_path, std.testing.allocator, .limited(1 << 20));

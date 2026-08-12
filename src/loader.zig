@@ -224,7 +224,10 @@ pub fn loadProjectOptionsReport(
             allocator.free(file.canonical_path);
             allocator.free(file.display_path);
         }
-        for (graph_builder.sources.items) |source_file| allocator.free(source_file.source);
+        for (graph_builder.sources.items) |source_file| {
+            allocator.free(source_file.source);
+            allocator.free(source_file.parser_source);
+        }
         graph_builder.files.deinit(allocator);
         graph_builder.imports.deinit(allocator);
         graph_builder.sources.deinit(allocator);
@@ -251,7 +254,10 @@ pub fn loadProjectOptionsReport(
     }
     const source_files = try graph_builder.sources.toOwnedSlice(allocator);
     errdefer {
-        for (source_files) |source_file| allocator.free(source_file.source);
+        for (source_files) |source_file| {
+            allocator.free(source_file.source);
+            allocator.free(source_file.parser_source);
+        }
         allocator.free(source_files);
     }
     return .{
@@ -381,7 +387,6 @@ fn expandAll(
         const file_source = stripUtf8Bom(item.source);
         const file_start = out.items.len;
         setSourceRange(graph, item.id, file_start, file_source.len);
-        try recordSourceFile(allocator, graph, item.id, file_source);
         if (boundaries) |b| {
             const boundary_path = try allocator.dupe(u8, item.display_path);
             errdefer allocator.free(boundary_path);
@@ -408,6 +413,7 @@ fn expandAll(
                 if (blanked[i] != '\n' and blanked[i] != '\r') blanked[i] = ' ';
             }
         }
+        try recordSourceFile(allocator, graph, item.id, file_source, blanked);
         try out.appendSlice(allocator, blanked);
         try out.append(allocator, '\n');
 
@@ -571,13 +577,17 @@ fn recordSourceFile(
     graph: ?*GraphBuilder,
     id: FileId,
     source: []const u8,
+    parser_source: []const u8,
 ) std.mem.Allocator.Error!void {
     if (graph) |builder| {
         const source_copy = try allocator.dupe(u8, source);
         errdefer allocator.free(source_copy);
+        const parser_source_copy = try allocator.dupe(u8, parser_source);
+        errdefer allocator.free(parser_source_copy);
         try builder.sources.append(allocator, .{
             .id = id,
             .source = source_copy,
+            .parser_source = parser_source_copy,
         });
     }
 }

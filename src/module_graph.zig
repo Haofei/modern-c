@@ -22,7 +22,13 @@ pub const ImportEdge = struct {
 
 pub const SourceFile = struct {
     id: FileId,
+    /// Original source bytes after BOM stripping. Import directives remain
+    /// present so tools can inspect the file exactly as loaded.
     source: []const u8,
+    /// Parser-ready per-file source. Import directive bytes are blanked in the
+    /// same way as the legacy combined source, but offsets stay local to this
+    /// FileId rather than depending on whole-program textual inclusion.
+    parser_source: []const u8,
 };
 
 /// SourceDatabase owns each module file's independent source buffer. The
@@ -39,8 +45,18 @@ pub const SourceDatabase = struct {
         return null;
     }
 
+    pub fn parserSourceForFile(self: SourceDatabase, id: FileId) ?[]const u8 {
+        for (self.files) |file| {
+            if (file.id == id) return file.parser_source;
+        }
+        return null;
+    }
+
     pub fn deinit(self: *SourceDatabase, allocator: std.mem.Allocator) void {
-        for (self.files) |file| allocator.free(file.source);
+        for (self.files) |file| {
+            allocator.free(file.source);
+            allocator.free(file.parser_source);
+        }
         allocator.free(self.files);
     }
 };
@@ -101,9 +117,12 @@ test "SourceDatabase maps file ids to independent source buffers" {
     db.files[0] = .{
         .id = @enumFromInt(0),
         .source = try std.testing.allocator.dupe(u8, "let x: u32 = 1;"),
+        .parser_source = try std.testing.allocator.dupe(u8, "let x: u32 = 1;"),
     };
     defer db.deinit(std.testing.allocator);
 
     try std.testing.expectEqualStrings("let x: u32 = 1;", db.sourceForFile(@enumFromInt(0)).?);
+    try std.testing.expectEqualStrings("let x: u32 = 1;", db.parserSourceForFile(@enumFromInt(0)).?);
     try std.testing.expect(db.sourceForFile(@enumFromInt(1)) == null);
+    try std.testing.expect(db.parserSourceForFile(@enumFromInt(1)) == null);
 }
