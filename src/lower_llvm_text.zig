@@ -1,13 +1,11 @@
 const std = @import("std");
 
-const ast = @import("ast.zig");
-
-pub fn debugLine(span: ast.Span) usize {
-    return if (span.line == 0) 1 else span.line;
+pub fn debugLine(line: usize) usize {
+    return if (line == 0) 1 else line;
 }
 
-pub fn debugColumn(span: ast.Span) usize {
-    return if (span.column == 0) 1 else span.column;
+pub fn debugColumn(column: usize) usize {
+    return if (column == 0) 1 else column;
 }
 
 pub fn escapedLlvmString(allocator: std.mem.Allocator, text: []const u8) ![]const u8 {
@@ -108,20 +106,20 @@ pub fn llvmAsmClobbers(allocator: std.mem.Allocator, clobbers: []const []const u
     return constraints.toOwnedSlice(allocator);
 }
 
-pub fn llvmPreciseAsmConstraints(allocator: std.mem.Allocator, asm_stmt: ast.AsmStmt) ![]const u8 {
+pub fn llvmPreciseAsmConstraints(allocator: std.mem.Allocator, output_count: usize, input_count: usize, clobbers: []const []const u8) ![]const u8 {
     var constraints: std.ArrayList(u8) = .empty;
     var first = true;
-    for (asm_stmt.outputs) |_| {
+    for (0..output_count) |_| {
         if (!first) try constraints.append(allocator, ',');
         first = false;
         try constraints.appendSlice(allocator, "=r");
     }
-    for (asm_stmt.inputs) |_| {
+    for (0..input_count) |_| {
         if (!first) try constraints.append(allocator, ',');
         first = false;
         try constraints.append(allocator, 'r');
     }
-    for (asm_stmt.clobbers) |clobber| {
+    for (clobbers) |clobber| {
         const name = try stringLiteralText(allocator, clobber);
         if (!first) try constraints.append(allocator, ',');
         first = false;

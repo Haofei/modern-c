@@ -708,8 +708,8 @@ const LlvmEmitter = struct {
             try self.debug_functions.append(self.allocator, .{
                 .id = id,
                 .name = fn_decl.name.text,
-                .line = debugLine(fn_decl.name.span),
-                .column = debugColumn(fn_decl.name.span),
+                .line = debugLine(fn_decl.name.span.line),
+                .column = debugColumn(fn_decl.name.span.column),
             });
             break :blk id;
         } else null;
@@ -2344,7 +2344,7 @@ const LlvmEmitter = struct {
             return;
         }
         const template = try llvmPreciseAsmTemplate(self.scratch.allocator(), asm_stmt.templates);
-        const constraints = try llvmPreciseAsmConstraints(self.scratch.allocator(), asm_stmt);
+        const constraints = try llvmPreciseAsmConstraints(self.scratch.allocator(), asm_stmt.outputs.len, asm_stmt.inputs.len, asm_stmt.clobbers);
         const ret_ty = try self.preciseAsmReturnType(asm_stmt.outputs);
         const sideeffect: []const u8 = if (asm_stmt.is_volatile) " sideeffect" else "";
 
@@ -9243,8 +9243,8 @@ const LlvmEmitter = struct {
         try self.debug_locations.append(self.allocator, .{
             .id = id,
             .scope = scope,
-            .line = debugLine(span),
-            .column = debugColumn(span),
+            .line = debugLine(span.line),
+            .column = debugColumn(span.column),
         });
         return id;
     }
@@ -9287,7 +9287,7 @@ const LlvmEmitter = struct {
             .id = id,
             .name = name,
             .scope = scope,
-            .line = debugLine(span),
+            .line = debugLine(span.line),
             .ty = ty,
             .kind = kind,
             .arg_index = arg_index,
