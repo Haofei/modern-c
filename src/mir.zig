@@ -798,11 +798,12 @@ const floatBinaryFinding = mir_operator.floatBinaryFinding;
 const isCheckedUnsignedType = mir_operator.isCheckedUnsignedType;
 const isCheckedSignedType = mir_operator.isCheckedSignedType;
 
-pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
-    return buildOpt(allocator, module, .{});
+pub fn buildFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl) !Module {
+    return buildOptFromDecls(allocator, decls, .{});
 }
 
-pub fn buildOpt(allocator: std.mem.Allocator, module: ast.Module, options: BuildOptions) !Module {
+pub fn buildOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, options: BuildOptions) !Module {
+    const module = ast.Module{ .decls = decls };
     var enums = std.StringHashMap(EnumSummary).init(allocator);
     defer enums.deinit();
     var structs = std.StringHashMap(StructSummary).init(allocator);
@@ -1108,8 +1109,8 @@ fn buildSymbolIdentities(allocator: std.mem.Allocator, symbol_ids: *std.StringHa
     return identities;
 }
 
-pub fn appendDump(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    return appendDumpOpt(allocator, module, out, .{});
+pub fn appendDumpFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
+    return appendDumpOptFromDecls(allocator, decls, out, .{});
 }
 
 fn buildFfiParamContracts(
@@ -1182,8 +1183,8 @@ fn buildFfiParamContracts(
     return facts.toOwnedSlice(allocator);
 }
 
-pub fn appendDumpOpt(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8), options: BuildOptions) !void {
-    var module_mir = try buildOpt(allocator, module, options);
+pub fn appendDumpOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8), options: BuildOptions) !void {
+    var module_mir = try buildOptFromDecls(allocator, decls, options);
     defer module_mir.deinit();
     try appendDumpFromMir(allocator, module_mir, out);
 }
@@ -1486,8 +1487,8 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
     }
 }
 
-pub fn appendVerificationFacts(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    var mir = try build(allocator, module);
+pub fn appendVerificationFactsFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
+    var mir = try buildFromDecls(allocator, decls);
     defer mir.deinit();
     try appendVerificationFactsFromMir(allocator, mir, out);
 }
@@ -1660,12 +1661,12 @@ pub fn appendVerificationFactsFromMir(allocator: std.mem.Allocator, mir: Module,
     }
 }
 
-pub fn verify(allocator: std.mem.Allocator, module: ast.Module, reporter: *diagnostics.Reporter) !void {
-    return verifyOpt(allocator, module, reporter, .{});
+pub fn verifyFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, reporter: *diagnostics.Reporter) !void {
+    return verifyOptFromDecls(allocator, decls, reporter, .{});
 }
 
-pub fn verifyOpt(allocator: std.mem.Allocator, module: ast.Module, reporter: *diagnostics.Reporter, options: BuildOptions) !void {
-    var mir = try buildOpt(allocator, module, options);
+pub fn verifyOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, reporter: *diagnostics.Reporter, options: BuildOptions) !void {
+    var mir = try buildOptFromDecls(allocator, decls, options);
     defer mir.deinit();
     try verifyBuiltMir(mir, reporter);
 }

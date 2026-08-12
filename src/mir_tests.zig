@@ -40,7 +40,7 @@ test "MIR block model carries typed block identity" {
     const module = try p.parseModule(arena.allocator());
     defer module.deinit(arena.allocator());
 
-    var module_mir = try mir.build(std.testing.allocator, module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
 
     const main_fn = functionByName(module_mir, "main").?;
@@ -176,7 +176,7 @@ test "MIR verifier rejects function symbol identity drift" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var module_mir = try mir.build(std.testing.allocator, module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
     try std.testing.expect(module_mir.symbol_identities.len > 0);
     module_mir.functions[0].typed_symbol_id = SymbolId.fromIndex(4096);
@@ -206,7 +206,7 @@ test "MIR verifier rejects instruction typed identity drift" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var type_drift_mir = try mir.build(std.testing.allocator, module);
+    var type_drift_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer type_drift_mir.deinit();
     var type_drift_fn = functionByNameMut(&type_drift_mir, "main").?;
     type_drift_fn.blocks[0].instructions[0].typed_result_ty = TypeId.fromIndex(4096);
@@ -217,7 +217,7 @@ test "MIR verifier rejects instruction typed identity drift" {
     try std.testing.expect(type_reporter.has_errors);
     try std.testing.expect(std.mem.indexOf(u8, type_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
 
-    var span_drift_mir = try mir.build(std.testing.allocator, module);
+    var span_drift_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer span_drift_mir.deinit();
     var span_drift_fn = functionByNameMut(&span_drift_mir, "main").?;
     span_drift_fn.blocks[0].instructions[0].typed_span_id = SpanId.fromIndex(4096);
@@ -249,7 +249,7 @@ test "MIR target-type owner identities mirror direct calls" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var module_mir = try mir.build(std.testing.allocator, module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
 
     const caller = functionByName(module_mir, "caller").?;
@@ -341,7 +341,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var module_mir = try mir.build(std.testing.allocator, module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
 
     const callee = functionByName(module_mir, "callee").?;
@@ -478,7 +478,7 @@ test "MIR verifier rejects target owner instruction identity drift" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var module_mir = try mir.build(std.testing.allocator, module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
 
     const caller = functionByNameMut(&module_mir, "caller").?;
@@ -522,7 +522,7 @@ test "MIR target-type admission rejects target owner fact identity drift" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var module_mir = try mir.build(std.testing.allocator, module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
     const caller = functionByNameMut(&module_mir, "caller").?;
     for (caller.target_type_facts) |*fact| {
@@ -554,7 +554,7 @@ test "MIR target-type admission rejects target result type identity drift" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var module_mir = try mir.build(std.testing.allocator, module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
     const caller = functionByNameMut(&module_mir, "caller").?;
     for (caller.target_type_facts) |*fact| {
@@ -586,7 +586,7 @@ test "MIR target-type admission rejects target span identity drift" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var module_mir = try mir.build(std.testing.allocator, module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
     const caller = functionByNameMut(&module_mir, "caller").?;
     for (caller.target_type_facts) |*fact| {
@@ -619,7 +619,7 @@ test "MIR target-type admission rejects target fact identity table drift" {
     try std.testing.expect(!reporter.has_errors);
 
     {
-        var module_mir = try mir.build(std.testing.allocator, module);
+        var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
         defer module_mir.deinit();
         const caller = functionByNameMut(&module_mir, "caller").?;
         const fact = targetTypeFactByKind(caller.*, .direct_call_result) orelse return error.TestUnexpectedResult;
@@ -629,7 +629,7 @@ test "MIR target-type admission rejects target fact identity table drift" {
     }
 
     {
-        var module_mir = try mir.build(std.testing.allocator, module);
+        var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
         defer module_mir.deinit();
         const caller = functionByNameMut(&module_mir, "caller").?;
         const fact = targetTypeFactByKind(caller.*, .direct_call_result) orelse return error.TestUnexpectedResult;
@@ -639,7 +639,7 @@ test "MIR target-type admission rejects target fact identity table drift" {
     }
 
     {
-        var module_mir = try mir.build(std.testing.allocator, module);
+        var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
         defer module_mir.deinit();
         const caller = functionByNameMut(&module_mir, "caller").?;
         const fact = targetTypeFactByKind(caller.*, .direct_call_result) orelse return error.TestUnexpectedResult;
@@ -669,7 +669,7 @@ test "MIR target-type admission rejects unknown target-type result identity drif
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var module_mir = try mir.build(std.testing.allocator, module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
     const caller = functionByNameMut(&module_mir, "caller").?;
     var fact_count: usize = 0;
@@ -706,7 +706,7 @@ test "MIR dump exposes bounded FFI parameter contracts" {
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
 
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=dma_submit symbol_id=") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "return=i32 no_lang_trap=false irq_context=false extern=true c_abi=true params=3") != null);
@@ -897,7 +897,7 @@ test "MIR owns all scalar conversion builtin call targets" {
     const module = try p.parseModule(arena.allocator());
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.validateCallTargetFactsForLowering(typed_mir);
 
@@ -937,7 +937,7 @@ test "MIR lowering admission rejects unknown call-target result facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByNameMut(&typed_mir, "from_value").?;
     for (function.call_target_facts) |*fact| {
@@ -976,7 +976,7 @@ test "MIR assign instructions carry known lowering types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.validateLoweringAdmission(typed_mir);
 
@@ -1009,7 +1009,7 @@ test "MIR lowering admission rejects unknown assign instruction types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByNameMut(&typed_mir, "assign_value").?;
     for (function.blocks) |*block| {
@@ -1039,7 +1039,7 @@ test "MIR lowering admission rejects unknown runtime instruction types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByNameMut(&typed_mir, "add_value").?;
     for (function.blocks) |*block| {
@@ -1070,7 +1070,7 @@ test "MIR lowering admission rejects unknown contextual call instruction types" 
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByNameMut(&typed_mir, "make_ok").?;
     for (function.blocks) |*block| {
@@ -1103,7 +1103,7 @@ test "MIR lowering admission rejects unknown qualified union constructor call in
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByNameMut(&typed_mir, "make").?;
     for (function.blocks) |*block| {
@@ -1137,7 +1137,7 @@ test "MIR owns inferred local types for conversion results" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "inferred_conversion").?;
     const result_fact = targetTypeFactByKind(function, .conversion_target) orelse return error.TestUnexpectedResult;
@@ -1166,7 +1166,7 @@ test "MIR owns inferred local types for reflection results" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "inferred_reflection").?;
     const result_fact = targetTypeFactByKind(function, .reflection_result) orelse return error.TestUnexpectedResult;
@@ -1230,7 +1230,7 @@ test "MIR owns target types for contextual constructors and literals" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.validateCallTargetFactsForLowering(typed_mir);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
@@ -1298,7 +1298,7 @@ test "MIR owns target types for contextual constructors and literals" {
     try std.testing.expectEqual(mir.AggregateConstructionKind.c_union, c_word_fact.aggregate_construction.?);
     var construction_dump: std.ArrayList(u8) = .empty;
     defer construction_dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &construction_dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &construction_dump);
     try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_slot kind=struct_literal target_type=Slot result_type=Slot aggregate_construction=declared_struct") != null);
     try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_flags kind=struct_literal target_type=Flags result_type=Flags aggregate_construction=packed_bits") != null);
     try std.testing.expect(std.mem.indexOf(u8, construction_dump.items, "fn=make_c_word kind=struct_literal target_type=CWord result_type=CWord aggregate_construction=c_union") != null);
@@ -1342,7 +1342,7 @@ test "MIR target-type admission rejects stale complete syntax" {
     const module = try p.parseModule(arena.allocator());
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const function = functionByNameMut(&typed_mir, "read") orelse return error.TestUnexpectedResult;
@@ -1370,7 +1370,7 @@ test "MIR target-type admission accepts computed array lengths" {
     const module = try p.parseModule(arena.allocator());
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const function = functionByName(typed_mir, "read") orelse return error.TestUnexpectedResult;
@@ -1397,7 +1397,7 @@ test "MIR owns implicit view const narrowing source and target types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 
@@ -1429,7 +1429,7 @@ test "MIR owns mapped try error target types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 
@@ -1461,7 +1461,7 @@ test "MIR owns qualified union and enum variant path result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 
@@ -1529,7 +1529,7 @@ test "MIR owns dyn coercion targets and excludes pass-through values" {
     const module = try p.parseModule(arena.allocator());
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const as_dyn = functionByName(typed_mir, "as_dyn").?;
     try std.testing.expectEqual(mir.TargetTypeKind.dyn_coercion, as_dyn.target_type_facts[0].kind);
@@ -1605,7 +1605,7 @@ test "MIR resolves type aliases for checked ints and arithmetic domains" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const checked_fn = functionByName(typed_mir, "checked_alias_add").?;
@@ -1652,7 +1652,7 @@ test "OPT const-index bounds-check elision drops only provably-dead Bounds trap 
 
     // Default mir.build keeps each check and its trap edge (Bounds for the indices, DivideByZero
     // for the divisions).
-    var base = try mir.build(std.testing.allocator, module);
+    var base = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer base.deinit();
     try std.testing.expectEqual(@as(usize, 1), functionByName(base, "const_index").?.trap_edges.len);
     try std.testing.expectEqual(@as(usize, 1), functionByName(base, "var_index").?.trap_edges.len);
@@ -1662,7 +1662,7 @@ test "OPT const-index bounds-check elision drops only provably-dead Bounds trap 
     // Optimized mir.build elides the provably-dead checks — the in-range constant index (2 < 4)
     // and the unsigned division by a non-zero literal (/ 7) — but keeps the variable index's
     // and variable divisor's checks; the proofs are conservative.
-    var opt = try mir.buildOpt(std.testing.allocator, module, .{ .optimize = true });
+    var opt = try mir.buildOptFromDecls(std.testing.allocator, module.decls, .{ .optimize = true });
     defer opt.deinit();
     try std.testing.expectEqual(@as(usize, 0), functionByName(opt, "const_index").?.trap_edges.len);
     try std.testing.expectEqual(@as(usize, 1), functionByName(opt, "var_index").?.trap_edges.len);
@@ -1716,7 +1716,7 @@ test "MIR verifier reports arithmetic-domain misuse" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    try mir.verify(std.testing.allocator, module, &reporter);
+    try mir.verifyFromDecls(std.testing.allocator, module.decls, &reporter);
 
     var found_mix = false;
     var found_division = false;
@@ -1732,7 +1732,7 @@ test "MIR verifier reports arithmetic-domain misuse" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_wrap_checked_mix pass=core finding=arith_policy_mix") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_sat_bitwise pass=core finding=bitwise_arith_domain_operand") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_wrap_div pass=core finding=arith_domain_division") != null);
@@ -1783,7 +1783,7 @@ test "MIR verifier reports invalid operator operands" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    try mir.verify(std.testing.allocator, module, &reporter);
+    try mir.verifyFromDecls(std.testing.allocator, module.decls, &reporter);
 
     var found_unsigned_negation = false;
     var found_bool_operator: usize = 0;
@@ -1808,7 +1808,7 @@ test "MIR verifier reports invalid operator operands" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_unsigned_negation pass=core finding=unsigned_negation") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_not pass=core finding=bool_operator_operand") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_logical_and pass=core finding=bool_operator_operand") != null);
@@ -1859,7 +1859,7 @@ test "MIR verifier reports binary numeric compatibility errors" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    try mir.verify(std.testing.allocator, module, &reporter);
+    try mir.verifyFromDecls(std.testing.allocator, module.decls, &reporter);
 
     var signed_unsigned_count: usize = 0;
     var promotion_count: usize = 0;
@@ -1878,7 +1878,7 @@ test "MIR verifier reports binary numeric compatibility errors" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_signed_unsigned_arithmetic pass=core finding=signed_unsigned_mix") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_unsigned_signed_comparison pass=core finding=signed_unsigned_mix") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_width_arithmetic pass=core finding=integer_promotion") != null);
@@ -1906,7 +1906,7 @@ test "builds typed MIR CFG with explicit trap edge" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), typed_mir.functions.len);
@@ -1935,7 +1935,7 @@ test "MIR owns every explicit trap reason identity" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const cases = [_]struct { name: []const u8, kind: mir.CallTargetKind }{
         .{ .name = "trap_bounds", .kind = .trap_bounds },
@@ -1973,7 +1973,7 @@ test "MIR owns runtime assert condition types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "require_flag").?;
     const fact = targetTypeFactByKind(function, .assert_condition) orelse return error.TestUnexpectedResult;
@@ -1998,7 +1998,7 @@ test "MIR owns while-loop condition types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "wait_for_flag").?;
     const fact = targetTypeFactByKind(function, .loop_condition) orelse return error.TestUnexpectedResult;
@@ -2026,7 +2026,7 @@ test "MIR owns switch subject types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const result_fact = targetTypeFactByKind(functionByName(typed_mir, "result_subject").?, .switch_subject) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("Result", result_fact.target_ty.kind.generic.base.text);
@@ -2055,7 +2055,7 @@ test "MIR owns if-let subject types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const result_fact = targetTypeFactByKind(functionByName(typed_mir, "result_subject").?, .if_let_subject) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("Result", result_fact.target_ty.kind.generic.base.text);
@@ -2077,7 +2077,7 @@ test "MIR target-type admission rejects forged if-let subject family" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByNameMut(&typed_mir, "result_subject") orelse return error.TestUnexpectedResult;
     try retargetFirstTargetTypeFactAndInstruction(function, .if_let_subject, "u32", .{ .integer = "u32" });
@@ -2100,7 +2100,7 @@ test "MIR owns try operand and result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const result_fact = targetTypeFactByKind(functionByName(typed_mir, "result_try").?, .try_operand) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("Result", result_fact.target_ty.kind.generic.base.text);
@@ -2127,7 +2127,7 @@ test "MIR target-type admission rejects forged try operand family" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByNameMut(&typed_mir, "result_try") orelse return error.TestUnexpectedResult;
     try retargetFirstTargetTypeFactAndInstruction(function, .try_operand, "u32", .{ .integer = "u32" });
@@ -2150,7 +2150,7 @@ test "MIR owns for-loop iterable and element types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const array_iterable = targetTypeFactByKind(functionByName(typed_mir, "array_loop").?, .for_iterable) orelse return error.TestUnexpectedResult;
     const array_element = targetTypeFactByKind(functionByName(typed_mir, "array_loop").?, .for_element) orelse return error.TestUnexpectedResult;
@@ -2182,7 +2182,7 @@ test "MIR owns inferred local copy types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "copies").?;
     try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .inferred_local));
@@ -2217,7 +2217,7 @@ test "MIR owns inferred local direct storage read types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "storage_reads").?;
     try std.testing.expectEqual(@as(usize, 4), countTargetTypeFactsByKind(function, .inferred_local));
@@ -2268,7 +2268,7 @@ test "MIR owns inferred local try payload types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const result_fact = targetTypeFactByKind(functionByName(typed_mir, "result_local").?, .inferred_local) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("u32", result_fact.target_ty.kind.name.text);
@@ -2357,7 +2357,7 @@ test "MIR owns inferred local direct address types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const global_fact = targetTypeFactByKind(functionByName(typed_mir, "address_global").?, .inferred_local) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ast.Mutability.mut, global_fact.target_ty.kind.pointer.mutability);
@@ -2409,7 +2409,7 @@ test "MIR owns inferred local cast types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "casts").?;
     try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .inferred_local));
@@ -2455,7 +2455,7 @@ test "MIR owns inferred local binary types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "binary").?;
     try std.testing.expectEqual(@as(usize, 3), countTargetTypeFactsByKind(function, .inferred_local));
@@ -2507,7 +2507,7 @@ test "MIR owns inferred local literal types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "literals").?;
     try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .inferred_local));
@@ -2559,7 +2559,7 @@ test "MIR owns direct identifier expression result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "direct_identifier").?;
     var saw_value = false;
@@ -2599,7 +2599,7 @@ test "MIR owns direct call expression result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "use_call").?;
     var saw_call = false;
@@ -2630,7 +2630,7 @@ test "MIR owns inferred local unary types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "unary").?;
     try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .inferred_local));
@@ -2667,7 +2667,7 @@ test "MIR owns contextual negative integer unary result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "compares").?;
     var saw_negative_i32 = false;
@@ -2708,7 +2708,7 @@ test "MIR continues building facts after inline asm" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "asm_then_cast").?;
     try std.testing.expect(functionHasInstruction(function, .asm_effect, "opaque"));
@@ -2734,7 +2734,7 @@ test "MIR owns inferred local direct call types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "caller").?;
     const fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
@@ -2763,7 +2763,7 @@ test "MIR owns inferred local indirect call types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     for ([_][]const u8{ "invoke_pointer", "invoke_closure" }) |name| {
         const function = functionByName(typed_mir, name).?;
@@ -2795,7 +2795,7 @@ test "MIR owns inferred local dyn dispatch call types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "caller").?;
     const local_fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
@@ -2858,7 +2858,7 @@ test "MIR owns ordinary direct call result and argument types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const caller = functionByName(typed_mir, "caller").?;
     var result_count: usize = 0;
@@ -2907,7 +2907,7 @@ test "MIR owns indirect function-pointer and closure callee signatures" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const increment = functionByName(typed_mir, "increment").?;
     const facts = mir_facts_view.MirFactsView.init();
@@ -2945,7 +2945,7 @@ test "MIR owns explicit cast source types for call results" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "widen").?;
     const source_fact = targetTypeFactByKind(function, .explicit_cast_source) orelse return error.TestUnexpectedResult;
@@ -2970,7 +2970,7 @@ test "MIR identifies indirect function-pointer struct fields before direct calls
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "invoke").?;
     const fact = targetTypeFactByKind(function, .indirect_call_callee) orelse return error.TestUnexpectedResult;
@@ -3023,7 +3023,7 @@ test "MIR records complete checked binary trap edges for division remainder and 
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const unsigned_div_fn = functionByName(typed_mir, "unsigned_div").?;
@@ -3059,7 +3059,7 @@ test "MIR records complete checked binary trap edges for division remainder and 
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=signed_div pass=trap finding=trap_edge detail=DivideByZero") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=signed_div pass=trap finding=trap_edge detail=IntegerOverflow") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=checked_shl pass=trap finding=trap_edge detail=InvalidShift") != null);
@@ -3090,7 +3090,7 @@ test "MIR const_get fixed indexing has no bounds trap edge" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const fixed_fn = functionByName(typed_mir, "fixed").?;
@@ -3129,7 +3129,7 @@ test "MIR records typed call target facts for reductions" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const checked = functionByName(typed_mir, "checked").?;
@@ -3206,7 +3206,7 @@ test "MIR owns enum raw call identities and source result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     for ([_]struct { name: []const u8, source_name: []const u8, result_name: []const u8 }{
@@ -3252,7 +3252,7 @@ test "MIR owns inferred local types for enum raw results" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "inferred_enum_raw").?;
     const result_fact = targetTypeFactByKind(function, .enum_raw_result) orelse return error.TestUnexpectedResult;
@@ -3289,7 +3289,7 @@ test "MIR owns arithmetic domain call identities and complete types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     for ([_]struct {
@@ -3353,7 +3353,7 @@ test "MIR owns inferred local types for arithmetic domain call results" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "inferred_bounded").?;
     const domain_fact = targetTypeFactByKind(function, .domain_result) orelse return error.TestUnexpectedResult;
@@ -3381,7 +3381,7 @@ test "MIR owns const_get base result and index facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "get_word").?;
     const other = functionByNamePtr(&typed_mir, "other").?;
@@ -3425,7 +3425,7 @@ test "MIR owns const_get base result and index facts" {
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "kind=index detail=const_get type=u32 const_index=2") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir const_get_fact fn=get_word index=2 recorded=true") != null);
 }
@@ -3445,7 +3445,7 @@ test "MIR rejects const_get with both index instruction and fact removed" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.validateConstGetFactsForLowering(typed_mir);
 
@@ -3497,7 +3497,7 @@ test "MIR owns DMA call identities and complete types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "dma_cycle").?;
     try std.testing.expectEqual(@as(usize, 4), function.call_target_facts.len);
@@ -3582,7 +3582,7 @@ test "MIR owns value reflection call target facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const expected = [_]struct { name: []const u8, kind: mir.CallTargetKind, target: []const u8 }{
@@ -3626,7 +3626,7 @@ test "MIR owns byte-view call target facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const view = functionByName(typed_mir, "byte_view").?;
@@ -3676,7 +3676,7 @@ test "MIR owns raw-many offset identity and complete types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const shifted = functionByName(typed_mir, "shifted").?;
@@ -3713,7 +3713,7 @@ test "MIR owns inferred local types for raw-many offset results" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "inferred_raw_many").?;
     const result_fact = targetTypeFactByKind(function, .raw_many_offset_result) orelse return error.TestUnexpectedResult;
@@ -3744,7 +3744,7 @@ test "MIR owns inferred local types for raw-many offset dereferences" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "inferred_raw_many_deref").?;
     const element_fact = targetTypeFactByKind(function, .raw_many_offset_element) orelse return error.TestUnexpectedResult;
@@ -3778,7 +3778,7 @@ test "MIR owns span-identified result types for compound expressions" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "expression_results").?;
     try std.testing.expect(countTargetTypeFactsByKind(function, .expression_result) >= 15);
@@ -3810,7 +3810,7 @@ test "MIR owns grouped expression result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "grouped_result").?;
     var found = false;
@@ -3839,7 +3839,7 @@ test "MIR owns grouped direct-call result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "grouped_call_result").?;
     var found = false;
@@ -3867,7 +3867,7 @@ test "MIR owns source block expression result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "block_result").?;
     var found = false;
@@ -3895,7 +3895,7 @@ test "MIR owns source boolean expression result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "compare").?;
     var found = false;
@@ -3923,7 +3923,7 @@ test "MIR owns source void literal expression result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "explicit_void").?;
     var found = false;
@@ -3953,7 +3953,7 @@ test "MIR owns direct address dereference result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "read_local").?;
     const fact = targetTypeFactByKind(function, .expression_result) orelse return error.TestUnexpectedResult;
@@ -3986,7 +3986,7 @@ test "MIR owns MMIO read write identities and complete types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const cases = [_]struct { name: []const u8, kind: mir.CallTargetKind, storage: []const u8, value: []const u8, result: []const u8 }{
@@ -4038,7 +4038,7 @@ test "MIR owns MMIO map identity and complete types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "map_device").?;
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
@@ -4087,7 +4087,7 @@ test "MIR owns semantic escape call target facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const reveal_fn = functionByName(typed_mir, "reveal_value").?;
@@ -4150,7 +4150,7 @@ test "MIR owns discard call identities and argument types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "discard_values").?;
     const plain_function = functionByName(typed_mir, "discard_plain").?;
@@ -4200,7 +4200,7 @@ test "MIR ownership event admission rejects explicit drop without glue identity"
     var parsed = try test_support.parseModule("mir_explicit_drop_requires_glue.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer bad_mir.deinit();
     const function = functionByNameMut(&bad_mir, "discard_values") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 1), function.ownership_events.len);
@@ -4233,7 +4233,7 @@ test "MIR ownership event admission rejects symbol-root drop glue type drift" {
     var parsed = try test_support.parseModule("mir_drop_glue_type_drift.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer bad_mir.deinit();
     try std.testing.expectEqual(@as(usize, 2), bad_mir.drop_glue_facts.len);
     const guard_fact = bad_mir.drop_glue_facts[0];
@@ -4276,7 +4276,7 @@ test "MIR ownership event admission rejects local-root drop glue type drift" {
     var parsed = try test_support.parseModule("mir_local_drop_glue_type_drift.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer bad_mir.deinit();
     try std.testing.expectEqual(@as(usize, 2), bad_mir.drop_glue_facts.len);
     const other_fact = bad_mir.drop_glue_facts[1];
@@ -4320,7 +4320,7 @@ test "MIR records drop glue facts for auto-drop resources" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var module_mir = try mir.build(std.testing.allocator, module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
     try std.testing.expectEqual(@as(usize, 2), module_mir.drop_glue_facts.len);
     try std.testing.expectEqualStrings("Ticket", module_mir.drop_glue_facts[0].resource_type);
@@ -4369,7 +4369,7 @@ test "MIR records canonical type ownership facts" {
     var parsed = try test_support.parseModule("mir_type_ownership_facts.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     try std.testing.expectEqual(@as(usize, 7), module_mir.type_ownership_facts.len);
     try std.testing.expectEqual(mir.TypeOwnershipKind.copy, typeOwnershipByName(module_mir, "Plain").?.kind);
@@ -4412,13 +4412,13 @@ test "MIR type ownership fact admission rejects symbol and duplicate drift" {
     var parsed = try test_support.parseModule("mir_type_ownership_fact_admission.mc", source);
     defer parsed.deinit();
 
-    var symbol_drift = try mir.build(std.testing.allocator, parsed.module);
+    var symbol_drift = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer symbol_drift.deinit();
     try std.testing.expectEqual(@as(usize, 1), symbol_drift.type_ownership_facts.len);
     symbol_drift.type_ownership_facts[0].typed_type_symbol_id = .invalid;
     try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, mir.validateLoweringAdmission(symbol_drift));
 
-    var drop_drift = try mir.build(std.testing.allocator, parsed.module);
+    var drop_drift = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer drop_drift.deinit();
     try std.testing.expectEqual(@as(usize, 1), drop_drift.type_ownership_facts.len);
     drop_drift.type_ownership_facts[0].drop_glue_symbol_id = .invalid;
@@ -4426,7 +4426,7 @@ test "MIR type ownership fact admission rejects symbol and duplicate drift" {
     drop_drift.type_ownership_facts[0].drop_glue_symbol_id = mir.SymbolId.fromIndex(4096);
     try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(drop_drift));
 
-    var duplicate = try mir.build(std.testing.allocator, parsed.module);
+    var duplicate = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer duplicate.deinit();
     try std.testing.expectEqual(@as(usize, 1), duplicate.type_ownership_facts.len);
     const original = duplicate.type_ownership_facts;
@@ -4454,25 +4454,25 @@ test "MIR drop glue fact admission rejects unknown and duplicate release facts" 
     var parsed = try test_support.parseModule("mir_drop_glue_fact_admission.mc", source);
     defer parsed.deinit();
 
-    var unknown = try mir.build(std.testing.allocator, parsed.module);
+    var unknown = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer unknown.deinit();
     try std.testing.expectEqual(@as(usize, 1), unknown.drop_glue_facts.len);
     unknown.drop_glue_facts[0].release_fn = "missing_close_guard";
     try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(unknown));
 
-    var release_drift = try mir.build(std.testing.allocator, parsed.module);
+    var release_drift = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer release_drift.deinit();
     try std.testing.expectEqual(@as(usize, 1), release_drift.drop_glue_facts.len);
     release_drift.drop_glue_facts[0].typed_release_symbol_id = .invalid;
     try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(release_drift));
 
-    var resource_drift = try mir.build(std.testing.allocator, parsed.module);
+    var resource_drift = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer resource_drift.deinit();
     try std.testing.expectEqual(@as(usize, 1), resource_drift.drop_glue_facts.len);
     resource_drift.drop_glue_facts[0].typed_resource_symbol_id = .invalid;
     try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(resource_drift));
 
-    var duplicate = try mir.build(std.testing.allocator, parsed.module);
+    var duplicate = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer duplicate.deinit();
     try std.testing.expectEqual(@as(usize, 1), duplicate.drop_glue_facts.len);
     const original = duplicate.drop_glue_facts;
@@ -4500,7 +4500,7 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     var parsed = try test_support.parseModule("mir_ownership_event.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     try std.testing.expectEqual(@as(usize, 1), module_mir.drop_glue_facts.len);
     const drop_fact = module_mir.drop_glue_facts[0];
@@ -4624,7 +4624,7 @@ test "MIR ownership event admission rejects missing simple local cleanup" {
     var parsed = try test_support.parseModule("mir_missing_simple_local_cleanup.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer bad_mir.deinit();
     const use_guard = functionByNameMut(&bad_mir, "use_guard") orelse return error.TestUnexpectedResult;
     const generated_events = use_guard.ownership_events;
@@ -4658,7 +4658,7 @@ test "MIR ownership event admission rejects storage-dead without auto-drop" {
     var parsed = try test_support.parseModule("mir_storage_dead_without_auto_drop.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer bad_mir.deinit();
     const use_guard = functionByNameMut(&bad_mir, "use_guard") orelse return error.TestUnexpectedResult;
     const generated_events = use_guard.ownership_events;
@@ -4694,7 +4694,7 @@ test "MIR ownership event admission rejects auto-drop without storage-dead" {
     var parsed = try test_support.parseModule("mir_auto_drop_without_storage_dead.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer bad_mir.deinit();
     const use_guard = functionByNameMut(&bad_mir, "use_guard") orelse return error.TestUnexpectedResult;
     const generated_events = use_guard.ownership_events;
@@ -4727,7 +4727,7 @@ test "MIR records local reinit ownership events" {
     var parsed = try test_support.parseModule("mir_ownership_reinit.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     const function = functionByName(module_mir, "reassign_local") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
@@ -4766,7 +4766,7 @@ test "MIR ownership event admission accepts sibling copy locals with reused name
     var parsed = try test_support.parseModule("mir_sibling_copy_locals.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     try mir.validateLoweringAdmission(module_mir);
 
@@ -4789,7 +4789,7 @@ test "MIR records forget events for no-drop move resources" {
     var parsed = try test_support.parseModule("mir_no_drop_forget.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     const function = functionByName(module_mir, "forget_token") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
@@ -4811,7 +4811,7 @@ test "MIR cleanup cfg records ordinary defer cleanup actions" {
     var parsed = try test_support.parseModule("mir_cleanup_cfg_defer.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     const function = functionByName(module_mir, "use_defer") orelse return error.TestUnexpectedResult;
     var cleanup_plan = try mir.buildOwnershipCleanupPlan(std.testing.allocator, module_mir, function);
@@ -4847,7 +4847,7 @@ test "MIR ownership authority does not let forget authorize auto-drop registrati
     var parsed = try test_support.parseModule("mir_forget_not_auto_drop_authority.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     const function = functionByName(module_mir, "forget_guard") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
@@ -4877,7 +4877,7 @@ test "MIR records explicit drop glue call ownership events" {
     var parsed = try test_support.parseModule("mir_explicit_drop_glue_call.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     const function = functionByName(module_mir, "release_one") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 7), function.ownership_events.len);
@@ -4992,7 +4992,7 @@ test "MIR reinit ownership events require mutable locals" {
     var parsed = try test_support.parseModule("mir_ownership_reinit_mutable.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     try std.testing.expectEqual(@as(usize, 1), countOwnershipEventsByKind(functionByName(module_mir, "accept_var").?, .reinit));
     try std.testing.expectEqual(@as(usize, 0), countOwnershipEventsByKind(functionByName(module_mir, "reject_let").?, .reinit));
@@ -5013,7 +5013,7 @@ test "MIR records simple move-out ownership events" {
     var parsed = try test_support.parseModule("mir_ownership_move_out.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     const function = functionByName(module_mir, "return_guard") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
@@ -5054,7 +5054,7 @@ test "MIR ownership authority skips cleanup registration for move-out" {
     var parsed = try test_support.parseModule("mir_ownership_registration_decision.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     const function = functionByName(module_mir, "return_guard") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
@@ -5086,7 +5086,7 @@ test "MIR cleanup producer ignores move-out events that cannot reach fallthrough
     var parsed = try test_support.parseModule("mir_path_sensitive_cleanup_after_loop.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.build(std.testing.allocator, parsed.module);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer module_mir.deinit();
     const function = functionByName(module_mir, "transfer_in_loop") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 1), countOwnershipEventsByKind(function, .move_out));
@@ -5108,7 +5108,7 @@ test "MIR ownership event admission rejects duplicate local consumption" {
     var parsed = try test_support.parseModule("mir_ownership_duplicate_consume.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer bad_mir.deinit();
     const function = functionByNameMut(&bad_mir, "return_guard") orelse return error.TestUnexpectedResult;
     const generated_events = function.ownership_events;
@@ -5141,7 +5141,7 @@ test "MIR ownership event admission enforces local generations" {
     var parsed = try test_support.parseModule("mir_ownership_generation.mc", source);
     defer parsed.deinit();
 
-    var good_mir = try mir.build(std.testing.allocator, parsed.module);
+    var good_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer good_mir.deinit();
     const good_function = functionByNameMut(&good_mir, "return_guard") orelse return error.TestUnexpectedResult;
     const generated_good_events = good_function.ownership_events;
@@ -5157,7 +5157,7 @@ test "MIR ownership event admission enforces local generations" {
     std.testing.allocator.free(generated_good_events);
     try mir.validateLoweringAdmission(good_mir);
 
-    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer bad_mir.deinit();
     const bad_function = functionByNameMut(&bad_mir, "return_guard") orelse return error.TestUnexpectedResult;
     const generated_bad_events = bad_function.ownership_events;
@@ -5172,7 +5172,7 @@ test "MIR ownership event admission enforces local generations" {
     std.testing.allocator.free(generated_bad_events);
     try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));
 
-    var stale_mir = try mir.build(std.testing.allocator, parsed.module);
+    var stale_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer stale_mir.deinit();
     const stale_function = functionByNameMut(&stale_mir, "return_guard") orelse return error.TestUnexpectedResult;
     const generated_stale_events = stale_function.ownership_events;
@@ -5205,7 +5205,7 @@ test "MIR ownership event admission rejects malformed event identity" {
     var parsed = try test_support.parseModule("mir_bad_ownership_event.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.build(std.testing.allocator, parsed.module);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
     defer bad_mir.deinit();
     try std.testing.expectEqual(@as(usize, 1), bad_mir.drop_glue_facts.len);
     const drop_fact = bad_mir.drop_glue_facts[0];
@@ -5248,7 +5248,7 @@ test "MIR rejects duplicate call target facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     for (typed_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, "checked")) continue;
@@ -5274,7 +5274,7 @@ test "MIR accepts matching call target multiplicity at one source point" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByNameMut(&typed_mir, "make").?;
     try duplicateCallTargetFact(function, typed_mir.allocator);
@@ -5303,7 +5303,7 @@ test "MIR call target facts do not collide with ordinary call names" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const caller = functionByName(typed_mir, "caller").?;
     try std.testing.expectEqual(@as(usize, 0), caller.call_target_facts.len);
@@ -5337,7 +5337,7 @@ test "MIR records typed call target facts for atomic member calls" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const global = functionByName(typed_mir, "boot_counter").?;
     try std.testing.expectEqual(@as(usize, 1), global.call_target_facts.len);
@@ -5415,7 +5415,7 @@ test "MIR records typed call target facts for MaybeUninit member calls" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "maybe_uninit_ops").?;
     try std.testing.expectEqual(@as(usize, 2), function.call_target_facts.len);
@@ -5463,7 +5463,7 @@ test "MIR owns inferred local types for atomic and MaybeUninit result calls" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const atomic_function = functionByName(typed_mir, "atomic_inferred_locals").?;
     try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(atomic_function, .inferred_local));
@@ -5497,7 +5497,7 @@ test "MIR records typed call target facts for bitcast calls" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "bitcast_bits").?;
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
@@ -5529,7 +5529,7 @@ test "MIR owns inferred local types for bitcast results" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "inferred_bitcast").?;
     const result_fact = targetTypeFactByKind(function, .bitcast_target) orelse return error.TestUnexpectedResult;
@@ -5564,7 +5564,7 @@ test "MIR owns inferred local types for byte-view results" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const view_fact = targetTypeFactByKind(functionByName(typed_mir, "inferred_byte_view").?, .inferred_local) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("bytes", view_fact.target_owner.?);
@@ -5596,7 +5596,7 @@ test "MIR owns inferred local types for semantic escape results" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "inferred_noalias").?;
     const result_fact = targetTypeFactByKind(function, .assume_noalias_result) orelse return error.TestUnexpectedResult;
@@ -5624,7 +5624,7 @@ test "MIR records typed call target facts for phys calls" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "make_phys").?;
     try std.testing.expectEqual(@as(usize, 1), function.call_target_facts.len);
@@ -5654,7 +5654,7 @@ test "MIR owns inferred local types for phys results" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "inferred_phys").?;
     const result_fact = targetTypeFactByKind(function, .phys_result) orelse return error.TestUnexpectedResult;
@@ -5692,7 +5692,7 @@ test "MIR owns inferred local types for raw result calls" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const load = functionByName(typed_mir, "inferred_raw_load").?;
     const load_fact = targetTypeFactByKind(load, .inferred_local) orelse return error.TestUnexpectedResult;
@@ -5740,7 +5740,7 @@ test "MIR records typed call target facts for raw address calls" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const read = functionByName(typed_mir, "read").?;
     const pointer = functionByName(typed_mir, "pointer").?;
@@ -5798,7 +5798,7 @@ test "MIR owns complete varargs cursor payload and result types" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "sum_args").?;
     try std.testing.expectEqual(@as(usize, 3), function.call_target_facts.len);
@@ -5868,7 +5868,7 @@ test "MIR verifier reports no_lang_trap, fallthrough, contract, and irq findings
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    try mir.verify(std.testing.allocator, module, &reporter);
+    try mir.verifyFromDecls(std.testing.allocator, module.decls, &reporter);
 
     var found_missing_return = false;
     var found_no_lang_trap = false;
@@ -5910,7 +5910,7 @@ test "MIR verifier requires matching unsafe contract kind" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    try mir.verify(std.testing.allocator, module, &reporter);
+    try mir.verifyFromDecls(std.testing.allocator, module.decls, &reporter);
 
     var count: usize = 0;
     for (reporter.diagnostics.items) |diag| {
@@ -5964,7 +5964,7 @@ test "MIR verifier reports strict unsafe effects outside unsafe blocks" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    try mir.verify(std.testing.allocator, module, &reporter);
+    try mir.verifyFromDecls(std.testing.allocator, module.decls, &reporter);
 
     var unsafe_required_count: usize = 0;
     for (reporter.diagnostics.items) |diag| {
@@ -5974,7 +5974,7 @@ test "MIR verifier reports strict unsafe effects outside unsafe blocks" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_raw_store pass=unsafe finding=unsafe_required detail=raw.store") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_mmio_map pass=unsafe finding=unsafe_required detail=mmio.map") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_asm pass=unsafe finding=unsafe_required detail=asm.opaque") != null);
@@ -6050,7 +6050,7 @@ test "MIR context verifier handles extern irq callees and ordinary store name" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    try mir.verify(std.testing.allocator, module, &reporter);
+    try mir.verifyFromDecls(std.testing.allocator, module.decls, &reporter);
 
     var irq_call_count: usize = 0;
     var irq_blocking_count: usize = 0;
@@ -6062,7 +6062,7 @@ test "MIR context verifier handles extern irq callees and ordinary store name" {
     try std.testing.expectEqual(@as(usize, 4), irq_blocking_count);
     try std.testing.expectEqual(@as(usize, 5), reporter.diagnostics.items.len);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const accepted_mmio_fn = functionByName(typed_mir, "accepted_mmio").?;
     try std.testing.expect(functionHasInstruction(accepted_mmio_fn, .call, "mmio.write"));
@@ -6070,7 +6070,7 @@ test "MIR context verifier handles extern irq callees and ordinary store name" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=rejected_store_name pass=context finding=irq_call detail=store") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=rejected_blocking pass=context finding=irq_blocking detail=lock.acquire") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=rejected_blocking pass=context finding=irq_blocking detail=heap.alloc") != null);
@@ -6123,7 +6123,7 @@ test "MIR verifier enforces typed MMIO register access modes" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const reject_read_fn = functionByName(typed_mir, "reject_read_write_only").?;
@@ -6140,7 +6140,7 @@ test "MIR verifier enforces typed MMIO register access modes" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_read_write_only pass=mmio finding=access_forbidden op=read") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_write_read_only pass=mmio finding=access_forbidden op=write") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_read_write pass=mmio finding=access_forbidden") == null);
@@ -6176,7 +6176,7 @@ test "MIR models local callee values as indirect calls" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const no_trap_fn = functionByName(typed_mir, "reject_indirect_no_lang_trap").?;
@@ -6218,7 +6218,7 @@ test "MIR CFG loop control uses explicit jump successors" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const function = typed_mir.functions[0];
@@ -6460,7 +6460,7 @@ test "MIR records no_overflow range facts for unchecked add contract" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), typed_mir.functions[0].range_facts.len);
@@ -6473,7 +6473,7 @@ test "MIR records no_overflow range facts for unchecked add contract" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accumulate pass=range finding=no_overflow_range target=sum op=add left=sum right=b") != null);
 }
 
@@ -6496,7 +6496,7 @@ test "MIR records unchecked call identity and operand/result type facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "unchecked_ops") orelse return error.TestUnexpectedResult;
     try mir.validateCallTargetFactsForLowering(typed_mir);
@@ -6527,7 +6527,7 @@ test "MIR records wrapping facts through inferred local results" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "wrapping_ops") orelse return error.TestUnexpectedResult;
     try mir.validateCallTargetFactsForLowering(typed_mir);
@@ -6565,7 +6565,7 @@ test "MIR dump exposes elided bounds facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.buildOpt(std.testing.allocator, module, .{ .optimize = true });
+    var typed_mir = try mir.buildOptFromDecls(std.testing.allocator, module.decls, .{ .optimize = true });
     defer typed_mir.deinit();
 
     const index_fn = functionByName(typed_mir, "read_const_index").?;
@@ -6577,7 +6577,7 @@ test "MIR dump exposes elided bounds facts" {
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDumpOpt(std.testing.allocator, module, &dump, .{ .optimize = true });
+    try mir.appendDumpOptFromDecls(std.testing.allocator, module.decls, &dump, .{ .optimize = true });
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=read_const_index") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "elided_bounds=") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir elided_bounds_fact fn=read_const_index check=bounds_elided recorded=true") != null);
@@ -6604,7 +6604,7 @@ test "MIR dump emits non-elided bounds facts" {
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "bounds_facts=1") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir bounds_fact fn=read_at kind=index recorded=true") != null);
 }
@@ -6631,7 +6631,7 @@ test "MIR dump emits target-typed integer literal facts" {
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "integer_facts=3") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=255 target_type=u8 recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=0xff target_type=u8 recorded=true") != null);
@@ -6659,7 +6659,7 @@ test "MIR dump exposes representation value identities" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const return_fn = functionByName(typed_mir, "return_ptr_param").?;
@@ -6714,7 +6714,7 @@ test "MIR dump exposes representation value identities" {
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
 
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir instr fn=return_ptr_param") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir type_identity fn=return_ptr_param id=") != null);
@@ -6759,7 +6759,7 @@ test "MIR representation admission rejects typed span identity drift" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     var read_fn = functionByNameMut(&typed_mir, "read_ptr_param").?;
@@ -6785,7 +6785,7 @@ test "MIR representation admission rejects typed result type drift" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     var read_fn = functionByNameMut(&typed_mir, "read_ptr_param").?;
@@ -6811,7 +6811,7 @@ test "MIR representation admission requires typed result identity" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     var read_fn = functionByNameMut(&typed_mir, "read_ptr_param").?;
@@ -6847,7 +6847,7 @@ test "MIR representation admission rejects typed value identity drift" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     var read_fn = functionByNameMut(&typed_mir, "read_ptr_param").?;
@@ -6921,7 +6921,7 @@ test "MIR records typed pointer provenance facts for direct globals and pointer 
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const function = functionByName(typed_mir, "direct_pointer_and_array").?;
@@ -6964,7 +6964,7 @@ test "MIR records typed pointer provenance facts for direct globals and pointer 
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir function name=direct_pointer_and_array symbol_id=") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "return=void no_lang_trap=false irq_context=false") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "pointer_provenance_facts=") != null);
@@ -7500,7 +7500,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "direct_holder"));
     try std.testing.expect(hasAggregateReturnSummaryFact(typed_mir, "direct_holder_after_noise"));
@@ -7631,7 +7631,7 @@ test "MIR records direct aggregate-return pointer facts and excludes legacy shap
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_summary_fact callee=direct_holder recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=direct_holder field=ptr provenance=global_storage pointer_kind=single") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir aggregate_return_pointer_fact callee=pointer_array_holder field=ptrs[0] provenance=global_storage pointer_kind=single") != null);
@@ -7743,7 +7743,7 @@ test "MIR records direct internal global pointer return provenance in callers" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const function = functionByName(typed_mir, "uses_returned_global_pointer").?;
     try std.testing.expect(hasPointerProvenanceFact(function, "gp", null, .global_storage, .none, "shared_counter"));
@@ -7811,7 +7811,7 @@ test "MIR records internal global pointer return provenance through local functi
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const aliased = functionByName(typed_mir, "uses_global_pointer_through_alias").?;
     try std.testing.expect(hasPointerProvenanceFact(aliased, "gp", null, .global_storage, .none, "shared_counter"));
@@ -7852,7 +7852,7 @@ test "MIR joins consistent internal global pointer returns across branches" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     const branched = functionByName(typed_mir, "uses_branched_global_pointer").?;
     try std.testing.expect(hasPointerProvenanceFact(branched, "gp", null, .global_storage, .none, "shared_counter"));
@@ -7902,7 +7902,7 @@ test "MIR pointer provenance facts fail closed on reassignment dynamic writes ca
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const invalidations_fn = functionByName(typed_mir, "invalidations").?;
@@ -7920,7 +7920,7 @@ test "MIR pointer provenance facts fail closed on reassignment dynamic writes ca
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=invalidations subject=p element=none provenance=unknown storage=none") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=call") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "invalidation_reason=address_escape") != null);
@@ -7969,7 +7969,7 @@ test "MIR records direct pointer-local copy provenance facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const copy_fn = functionByName(typed_mir, "pointer_local_copy_fact").?;
@@ -7988,7 +7988,7 @@ test "MIR records direct pointer-local copy provenance facts" {
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=single") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=noalias_q element=none provenance=global_storage storage=shared_counter pointer_kind=single") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=pointer_local_copy_fact subject=r element=none provenance=global_storage storage=shared_counter pointer_kind=single") != null);
@@ -8022,7 +8022,7 @@ test "MIR records fixed pointer-array assignment from pointer-local copy facts" 
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const function = functionByName(typed_mir, "pointer_array_assignment_from_copy").?;
@@ -8263,7 +8263,7 @@ test "MIR records aggregate pointer assignments from pointer-local copy facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const function = functionByName(typed_mir, "aggregate_assignment_from_copy").?;
@@ -8434,7 +8434,7 @@ test "MIR records direct local aggregate pointer alias provenance facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const direct = functionByName(typed_mir, "alias_field_and_element").?;
@@ -8507,7 +8507,7 @@ test "MIR records direct local pointer-array alias provenance facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const direct = functionByName(typed_mir, "alias_constant_element").?;
@@ -8594,7 +8594,7 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const zero_fn = functionByName(typed_mir, "raw_many_zero_fact").?;
@@ -8619,7 +8619,7 @@ test "MIR records narrow raw-many zero offset pointer provenance facts" {
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_fact subject=t element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir pointer_provenance_fact fn=raw_many_zero_assignment_fact subject=q element=none provenance=global_storage storage=shared_counter pointer_kind=raw_many") != null);
@@ -8771,7 +8771,7 @@ test "MIR records every no_overflow operation and rejects unknown operations" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const nested_fn = functionByName(typed_mir, "nested").?;
@@ -8906,7 +8906,7 @@ test "MIR verifier reports address-class deref and operations" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    try mir.verify(std.testing.allocator, module, &reporter);
+    try mir.verifyFromDecls(std.testing.allocator, module.decls, &reporter);
 
     const expected = [_][]const u8{
         "E_PADDR_DEREF",
@@ -8927,7 +8927,7 @@ test "MIR verifier reports address-class deref and operations" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_paddr_deref pass=address finding=direct_deref class=PAddr") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_call_deref pass=address finding=direct_deref class=PAddr") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_paddr_arithmetic pass=address finding=opaque_operation detail=add") != null);
@@ -8973,7 +8973,7 @@ test "MIR verifier reports address-class conversion mismatches" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    try mir.verify(std.testing.allocator, module, &reporter);
+    try mir.verifyFromDecls(std.testing.allocator, module.decls, &reporter);
 
     const expected = [_][]const u8{
         "E_DMA_ADDR_NOT_PADDR",
@@ -8990,7 +8990,7 @@ test "MIR verifier reports address-class conversion mismatches" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_dma_addr_return pass=address finding=address_class_mismatch source=DmaAddr target=PAddr") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_dma_addr_as_vaddr pass=address finding=address_class_mismatch source=DmaAddr target=VAddr") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_paddr_as_vaddr pass=address finding=address_class_mismatch source=PAddr target=VAddr") != null);
@@ -9137,7 +9137,7 @@ test "MIR emits representation checks for nonnull pointer and closed enum call r
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const use_ptr_fn = functionByName(typed_mir, "use_ptr").?;
@@ -9208,7 +9208,7 @@ test "MIR emits representation checks for nonnull pointer and closed enum call r
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_ptr pass=representation finding=representation_check type=nonnull_pointer") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_irq pass=representation finding=representation_check type=Irq") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=use_ptr_param pass=representation finding=typed_load detail=p type=*mut") != null);
@@ -9267,7 +9267,7 @@ test "MIR nullable-pointer narrowing discharges the nonnull trap" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const narrowed_fn = functionByName(typed_mir, "narrowed_read").?;
@@ -9327,7 +9327,7 @@ test "MIR representation checks emit invalid-representation trap edges" {
     defer module.deinit(arena.allocator());
     try std.testing.expect(!reporter.has_errors);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     const checked_ptr_fn = functionByName(typed_mir, "checked_ptr_param").?;
@@ -9339,7 +9339,7 @@ test "MIR representation checks emit invalid-representation trap edges" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=checked_ptr_param pass=trap finding=trap_edge detail=InvalidRepresentation source=representation_check") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=checked_irq_param pass=trap finding=trap_edge detail=InvalidRepresentation source=representation_check") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=checked_open_enum pass=trap finding=trap_edge detail=InvalidRepresentation") == null);
@@ -9812,7 +9812,7 @@ test "MIR target representation checks see through casts" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=cast_pointer_return pass=representation finding=representation_check type=nonnull_pointer") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=cast_pointer_local pass=representation finding=representation_use detail=initializer type=*mut") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=cast_pointer_assignment pass=representation finding=representation_use detail=assignment type=*mut") != null);
@@ -9820,12 +9820,12 @@ test "MIR target representation checks see through casts" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=cast_pointer_aggregate_field pass=representation finding=representation_use detail=aggregate_field type=*mut") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=cast_pointer_aggregate_element pass=representation finding=representation_use detail=aggregate_element type=*mut") != null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
 
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
-    try mir.appendDump(std.testing.allocator, module, &dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_return kind=representation_check detail=nonnull_pointer type=*mut value_id=cast recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_local kind=representation_use detail=initializer type=*mut value_id=cast recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir representation_fact fn=cast_pointer_assignment kind=representation_use detail=assignment type=*mut value_id=cast recorded=true") != null);
@@ -9881,7 +9881,7 @@ test "MIR verifier reports nullability conversion violations" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_null_local pass=nullability finding=null_to_nonnull") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_null_assignment pass=nullability finding=null_to_nonnull") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_nullable_return pass=nullability finding=nullable_to_nonnull") != null);
@@ -9889,7 +9889,7 @@ test "MIR verifier reports nullability conversion violations" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_nonnull_to_nullable pass=nullability") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_null_nullable pass=nullability") == null);
 
-    try mir.verify(std.testing.allocator, module, &reporter);
+    try mir.verifyFromDecls(std.testing.allocator, module.decls, &reporter);
     var found_null_to_nonnull = false;
     var found_nullable_to_nonnull = false;
     for (reporter.diagnostics.items) |diag| {
@@ -10052,7 +10052,7 @@ test "MIR verifier reports general return local and assignment conversions" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_matching_return pass=conversion") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_nonnull_to_nullable pass=conversion") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_return_type pass=conversion finding=return_type_mismatch source_type=u32") != null);
@@ -10085,7 +10085,7 @@ test "MIR verifier reports general return local and assignment conversions" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_call_argument pass=conversion finding=call_arg_type_mismatch source_type=i32") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_cast_nullable_to_nonnull pass=nullability finding=nullable_to_nonnull") != null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
 
@@ -10194,7 +10194,7 @@ test "MIR verifier reports invalid assignment targets for immutable locals and c
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_assign_to_var pass=core finding=assign_") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_to_let pass=core finding=assign_to_immutable_local") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_to_param pass=core finding=assign_to_immutable_local") != null);
@@ -10208,7 +10208,7 @@ test "MIR verifier reports invalid assignment targets for immutable locals and c
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_through_cast_const_slice pass=core finding=assign_through_const_view") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assign_field_through_cast_const_pointer pass=core finding=assign_through_const_view") != null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
     var found_immutable = false;
@@ -10278,7 +10278,7 @@ test "MIR verifier reports integer literal range conversions" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_literals pass=conversion") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_return_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_local_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
@@ -10288,7 +10288,7 @@ test "MIR verifier reports integer literal range conversions" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_assignment_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_call_arg_literal pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
 
@@ -10454,7 +10454,7 @@ test "MIR verifier recurses into target typed aggregate literal conversions" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_aggregate_literals pass=conversion") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_aggregate_literals pass=nullability") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_pointer_aggregate_field pass=representation finding=representation_use detail=aggregate_field type=*mut") != null);
@@ -10489,7 +10489,7 @@ test "MIR verifier recurses into target typed aggregate literal conversions" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_packed_bits_duplicate_field pass=aggregate finding=struct_literal_duplicate_field type=Flags") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_packed_bits_unknown_field pass=aggregate finding=struct_literal_unknown_field type=Flags") != null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
 
@@ -10558,7 +10558,7 @@ test "MIR verifier validates typed global aggregate initializers" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=ok_bytes pass=conversion") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=ok_bytes pass=aggregate") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=ok_raw_flags pass=conversion") == null);
@@ -10571,7 +10571,7 @@ test "MIR verifier validates typed global aggregate initializers" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_global_flags_missing pass=aggregate finding=struct_literal_missing_field type=GlobalFlags") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_raw_flags_range pass=conversion finding=integer_literal_out_of_range source_type=comptime_int") != null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
 
@@ -10630,13 +10630,13 @@ test "MIR verifier reports unhandled Result expressions and locals" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_unhandled_result_statement pass=result finding=unhandled_result") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_unhandled_result_local pass=result finding=unhandled_result") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_defer_unhandled_result pass=result finding=unhandled_result") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_switch_arm_unhandled_result pass=result finding=unhandled_result") != null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
     var unhandled_count: usize = 0;
@@ -10715,14 +10715,14 @@ test "MIR verifier accepts Result locals handled by try if-let-else and switch" 
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "pass=result finding=unhandled_result") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_handled_result_local pass=result finding=try_handled") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_array_literal_result_local pass=result finding=try_handled") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_struct_literal_result_local pass=result finding=try_handled") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_switch_arm_body_result_local pass=result finding=try_handled") != null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
     try std.testing.expect(!reporter.has_errors);
@@ -10801,7 +10801,7 @@ test "MIR verifier reports invalid if-let and switch Result patterns" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_if_let_optional_required pass=result finding=if_let_optional_required") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_if_let_result_required pass=result finding=if_let_result_required") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_if_let_result_tag pass=result finding=if_let_result_tag") != null);
@@ -10812,7 +10812,7 @@ test "MIR verifier reports invalid if-let and switch Result patterns" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_valid_result_patterns pass=result finding=if_let_") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_valid_result_patterns pass=result finding=switch_") == null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
     var found_if_optional = false;
@@ -10908,7 +10908,7 @@ test "MIR verifier reports duplicate switch cases" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_bool_duplicate pass=core finding=duplicate_switch_case") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_duplicate pass=core finding=duplicate_switch_case") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_result_duplicate pass=core finding=duplicate_switch_case") != null);
@@ -10916,7 +10916,7 @@ test "MIR verifier reports duplicate switch cases" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_same_arm_wildcard_cover pass=core finding=duplicate_switch_case") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_distinct_switches pass=core finding=duplicate_switch_case") == null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
     var duplicate_count: usize = 0;
@@ -10979,13 +10979,13 @@ test "MIR verifier reports switch literal pattern type mismatches" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_bool_switch_integer_pattern pass=core finding=switch_literal_type_mismatch") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_switch_bool_pattern pass=core finding=switch_literal_type_mismatch") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_enum_switch_literal_pattern pass=core finding=switch_literal_type_mismatch") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_scalar_switch_literals pass=core finding=switch_literal_type_mismatch") == null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
     var mismatch_count: usize = 0;
@@ -11062,7 +11062,7 @@ test "MIR verifier validates enum switch cases and closed enum exhaustiveness" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_closed_enum_nonexhaustive pass=core finding=closed_enum_switch_exhaustive") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_closed_enum_unknown_case pass=core finding=unknown_enum_case") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_open_enum_unknown_case pass=core finding=unknown_enum_case") != null);
@@ -11071,7 +11071,7 @@ test "MIR verifier validates enum switch cases and closed enum exhaustiveness" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_closed_enum_exhaustive pass=core") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_closed_enum_wildcard pass=core") == null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
     var found_nonexhaustive = false;
@@ -11144,13 +11144,13 @@ test "MIR verifier validates tagged union switch cases" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_unknown_union_case pass=core finding=unknown_union_case") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_payloadless_union_case_binding pass=core finding=union_case_has_no_payload") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_duplicate_union_case pass=core finding=duplicate_switch_case") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_union_patterns pass=core") == null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
     var found_unknown = false;
@@ -11205,13 +11205,13 @@ test "MIR verifier reports Result reassignment and invalid try operands" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_overwrite_unhandled_result pass=result finding=unhandled_result") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_assignment_handled_later pass=result finding=unhandled_result") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_void_direct_call_try pass=result finding=try_requires_result_or_nullable") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_integer_try pass=result finding=try_requires_result_or_nullable") != null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
     var found_unhandled = false;
@@ -11359,7 +11359,7 @@ test "MIR verifier reports Result try payload return mismatches" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try mir.appendVerificationFacts(std.testing.allocator, module, &facts);
+    try mir.appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_result_try_payload pass=result finding=try_payload_type_mismatch") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_result_pointer_try_payload pass=result finding=try_payload_") == null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=accept_nullable_pointer_try_payload pass=result finding=try_payload_") == null);
@@ -11390,7 +11390,7 @@ test "MIR verifier reports Result try payload return mismatches" {
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_if_let_result_array_binding pass=conversion finding=return_type_mismatch source_type=u8") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "mir verify fn=reject_switch_result_array_binding pass=conversion finding=return_type_mismatch source_type=u8") != null);
 
-    var typed_mir = try mir.build(std.testing.allocator, module);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer typed_mir.deinit();
     try mir.verifyBuiltMir(typed_mir, &reporter);
     var mismatch_count: usize = 0;

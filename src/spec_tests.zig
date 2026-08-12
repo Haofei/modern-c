@@ -17,7 +17,7 @@ const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
 fn appendCModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    var module_mir = try mir.buildOpt(allocator, module, .{});
+    var module_mir = try mir.buildOptFromDecls(allocator, module.decls, .{});
     defer module_mir.deinit();
     var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, module.decls);
     defer artifacts.deinit(allocator);
@@ -25,7 +25,7 @@ fn appendCModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std
 }
 
 fn appendLlvmModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    var module_mir = try mir.buildOpt(allocator, module, .{});
+    var module_mir = try mir.buildOptFromDecls(allocator, module.decls, .{});
     defer module_mir.deinit();
     var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, module.decls);
     defer artifacts.deinit(allocator);
@@ -398,7 +398,7 @@ test "tests/spec diagnostic declarations and inline EXPECT_ERROR comments match 
                 checker.file_boundaries = loaded_spec.boundaries;
                 checker.checkModule(m);
                 if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
-                    try mir.verify(allocator, m, &reporter);
+                    try mir.verifyFromDecls(allocator, m.decls, &reporter);
                 }
             }
         }
@@ -585,14 +585,14 @@ test "tests/spec fixtures produce declared IR inspection facts" {
                 }
                 var mir_facts: std.ArrayList(u8) = .empty;
                 defer mir_facts.deinit(allocator);
-                try mir.appendVerificationFacts(allocator, module, &mir_facts);
+                try mir.appendVerificationFactsFromDecls(allocator, module.decls, &mir_facts);
                 if (!hasMirVerifierEvidenceForCheck(mir_facts.items, check)) {
                     std.debug.print("{s}: expected MIR verifier evidence for {s}\nMIR verifier:\n{s}", .{ path, check, mir_facts.items });
                     try std.testing.expect(false);
                 }
             }
             if (std.mem.eql(u8, check, "contract_region")) {
-                var typed_mir = try mir.build(allocator, module);
+                var typed_mir = try mir.buildFromDecls(allocator, module.decls);
                 defer typed_mir.deinit();
                 if (!hasMirEvidenceForCheck(typed_mir, check)) {
                     std.debug.print("{s}: expected MIR artifact evidence for {s}\n", .{ path, check });

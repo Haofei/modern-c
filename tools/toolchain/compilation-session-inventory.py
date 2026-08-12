@@ -108,7 +108,7 @@ def main() -> int:
         "generic_precheck.check(allocator, lowered, diag, self.file_boundaries)",
         "mangle_private.transform(allocator, specialized, self.file_boundaries)",
         "checker.file_boundaries = self.file_boundaries;",
-        "module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });",
+        "module_mir.* = try mir.buildOptFromDecls(self.allocator, module.decls, .{ .optimize = optimize });",
         "const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {",
         'test "CompilationSession keeps parse context request scoped"',
         'test "CompilationSession attaches per-file resolved module syntax"',
@@ -125,9 +125,11 @@ def main() -> int:
         fail("sema checker construction must stay centralized in CompilationSession.checkModule")
     if main_text.count("var checker = sema.Checker.init") != 0:
         fail("main.zig must not construct sema checkers")
-    if session_text.count("mir.buildOpt(") != 1:
+    if session_text.count("mir.buildOptFromDecls(") != 1:
         fail("MIR build must stay centralized in CompilationSession.buildVerifiedProgram")
-    if main_text.count("mir.buildOpt(") != 0:
+    if session_text.count("mir.buildOpt(") != 0:
+        fail("CompilationSession must not use the old module-shaped MIR build API")
+    if main_text.count("mir.buildOpt(") != 0 or main_text.count("mir.buildOptFromDecls(") != 0:
         fail("main.zig must not build MIR directly")
     if "createFileAtomic(" in main_text:
         fail("main.zig must not own artifact publication transactions")

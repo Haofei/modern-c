@@ -41,7 +41,7 @@ pub fn buildCArtifactInputs(
     module_mir: *mir.Module,
     artifacts: *DeclarationArtifacts,
 ) !void {
-    module_mir.* = try mir.buildOpt(session.allocator, module, .{ .optimize = false });
+    module_mir.* = try mir.buildOptFromDecls(session.allocator, module.decls, .{ .optimize = false });
     errdefer module_mir.deinit();
     artifacts.* = try collectDeclarationArtifacts(session);
     errdefer artifacts.deinit(session.allocator);

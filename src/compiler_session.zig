@@ -202,7 +202,7 @@ pub const CompilationSession = struct {
         module_mir: *mir.Module,
         failure_error: StageFailure,
     ) !backend.VerifiedProgram {
-        module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });
+        module_mir.* = try mir.buildOptFromDecls(self.allocator, module.decls, .{ .optimize = optimize });
         errdefer module_mir.deinit();
         const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {
             if (diag.has_errors) return failure_error;

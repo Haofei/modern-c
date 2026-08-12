@@ -467,7 +467,7 @@ fn runVerify(session: *CompilationSession, path: []const u8, source: []const u8,
     const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.VerifyFailed);
     defer module.deinit(parse_allocator);
 
-    try mir.verifyOpt(allocator, module, &diag, .{ .optimize = optimize });
+    try mir.verifyOptFromDecls(allocator, module.decls, &diag, .{ .optimize = optimize });
     if (diag.has_errors) {
         diag.render();
         return error.VerifyFailed;
