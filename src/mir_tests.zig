@@ -2883,6 +2883,8 @@ test "MIR owns indirect function-pointer and closure callee signatures" {
 
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
+    const increment = functionByName(typed_mir, "increment").?;
+    const facts = mir_facts_view.MirFactsView.init(&typed_mir);
     for ([_][]const u8{ "invoke_pointer", "invoke_closure" }) |name| {
         const function = functionByName(typed_mir, name).?;
         const fact = targetTypeFactByKind(function, .indirect_call_callee) orelse return error.TestUnexpectedResult;
@@ -2892,6 +2894,13 @@ test "MIR owns indirect function-pointer and closure callee signatures" {
         };
         try std.testing.expect(resolved);
         try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .indirect_call_callee));
+        try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+            .current = &increment,
+            .fact = .{
+                .kind = .indirect_call_callee,
+                .source = fact.source,
+            },
+        }) == null);
     }
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
