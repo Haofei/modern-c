@@ -1460,25 +1460,45 @@ test "MIR owns qualified union and enum variant path result types" {
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 
     const make = functionByName(typed_mir, "make").?;
+    var qualified_fact: ?mir.TargetTypeFact = null;
     var qualified_count: usize = 0;
     for (make.target_type_facts) |fact| if (fact.kind == .qualified_union_result) {
         try std.testing.expectEqualStrings("Token", fact.target_ty.kind.name.text);
+        qualified_fact = fact;
         qualified_count += 1;
     };
     try std.testing.expectEqual(@as(usize, 1), qualified_count);
     try std.testing.expect(callInstructionByDetail(make, "number").?.result_ty != .unknown);
 
     const variant = functionByName(typed_mir, "variant").?;
+    var variant_fact: ?mir.TargetTypeFact = null;
     var variant_count: usize = 0;
     for (variant.target_type_facts) |fact| if (fact.kind == .enum_variant_path_result) {
         try std.testing.expectEqualStrings("E", fact.target_ty.kind.name.text);
+        variant_fact = fact;
         variant_count += 1;
     };
     try std.testing.expectEqual(@as(usize, 1), variant_count);
 
-    for (functionByName(typed_mir, "shadow").?.target_type_facts) |fact| {
+    const shadow = functionByName(typed_mir, "shadow").?;
+    for (shadow.target_type_facts) |fact| {
         try std.testing.expect(fact.kind != .enum_variant_path_result);
     }
+    const facts = mir_facts_view.MirFactsView.init(&typed_mir);
+    try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+        .current = &shadow,
+        .fact = .{
+            .kind = .qualified_union_result,
+            .source = qualified_fact.?.source,
+        },
+    }) == null);
+    try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+        .current = &shadow,
+        .fact = .{
+            .kind = .enum_variant_path_result,
+            .source = variant_fact.?.source,
+        },
+    }) == null);
 }
 
 test "MIR owns dyn coercion targets and excludes pass-through values" {

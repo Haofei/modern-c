@@ -210,8 +210,6 @@ fn targetTypeKindAllowsModuleFallback(kind: mir.TargetTypeKind) bool {
         .indirect_call_callee,
         .const_get_base,
         .const_get_result,
-        .qualified_union_result,
-        .enum_variant_path_result,
         => true,
         else => false,
     };
