@@ -18,6 +18,7 @@ const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_try = @import("lower_c_try.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
+const mir_source_bridge = @import("mir_source_bridge.zig");
 const type_syntax = @import("type_syntax.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
@@ -487,7 +488,7 @@ fn collectReadCall(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!lower_c_try.Cal
     if (!std.mem.eql(u8, access.kind, "read")) return .ignored;
     if (primitiveCTypeName(access.width) == null) return error.UnsupportedCEmission;
 
-    try appendReadReplacement(ctx, mir.sourcePointFromSpan(expr.span), access);
+    try appendReadReplacement(ctx, mir_source_bridge.replacementSourceFromSpan(expr.span), access);
     return .hoisted;
 }
 

@@ -9,6 +9,7 @@ const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
+const mir_source_bridge = @import("mir_source_bridge.zig");
 const type_syntax = @import("type_syntax.zig");
 
 const callExpr = expr_syntax.callExpr;
@@ -832,7 +833,7 @@ pub fn exprHasMmioReadReplacement(expr: ast.Expr, replacements: []const MmioRead
 }
 
 fn exprHasReplacement(comptime Replacement: type, expr: ast.Expr, replacements: []const Replacement) bool {
-    if (replacementForSource(Replacement, mir.sourcePointFromSpan(expr.span), replacements) != null) return true;
+    if (replacementForSpan(Replacement, expr.span, replacements) != null) return true;
     return switch (expr.kind) {
         .grouped, .address_of, .deref => |inner| exprHasReplacement(Replacement, inner.*, replacements),
         .unary => |node| exprHasReplacement(Replacement, node.expr.*, replacements),
@@ -850,11 +851,18 @@ fn exprHasReplacement(comptime Replacement: type, expr: ast.Expr, replacements: 
 }
 
 pub fn tryReplacementForSpan(span: ast.Span, replacements: []const TryReplacement) ?[]const u8 {
-    return if (replacementForSource(TryReplacement, mir.sourcePointFromSpan(span), replacements)) |replacement| replacement.temp_name else null;
+    return if (replacementForSpan(TryReplacement, span, replacements)) |replacement| replacement.temp_name else null;
 }
 
 pub fn mmioReadReplacementForSpan(span: ast.Span, replacements: []const MmioReadReplacement) ?MmioReadReplacement {
-    return replacementForSource(MmioReadReplacement, mir.sourcePointFromSpan(span), replacements);
+    return replacementForSpan(MmioReadReplacement, span, replacements);
+}
+
+fn replacementForSpan(comptime Replacement: type, span: ast.Span, replacements: []const Replacement) ?Replacement {
+    for (replacements) |replacement| {
+        if (mir_source_bridge.replacementSourceMatchesSpan(replacement.source, span)) return replacement;
+    }
+    return null;
 }
 
 fn replacementForSource(comptime Replacement: type, source: mir.SourcePoint, replacements: []const Replacement) ?Replacement {

@@ -1263,6 +1263,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn deferCleanupRefAtSpan(": 1,
         "pub fn directDeferCallCleanupForSpans(": 1,
         "pub fn callTargetDeferCleanupForSpans(": 1,
+        "pub fn replacementSourceFromSpan(": 1,
+        "pub fn replacementSourceMatchesSpan(": 1,
     },
     "src/lower_c.zig": {
         "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)": 1,

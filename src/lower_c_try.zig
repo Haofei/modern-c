@@ -17,6 +17,7 @@ const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
+const mir_source_bridge = @import("mir_source_bridge.zig");
 const type_syntax = @import("type_syntax.zig");
 
 const LocalInfo = lower_c_model.LocalInfo;
@@ -923,7 +924,7 @@ fn emitResultTryHoistTemp(ctx: *DirectTryHoistContext, span: ast.Span, operand: 
     _ = resultPayloadTypeForTag(operand_result_ty, "ok") orelse return null;
     _ = resultPayloadTypeForTag(operand_result_ty, "err") orelse return null;
     const temp_name = try nextTempName(ctx.ctx.replacement);
-    try ctx.replacements.append(ctx.ctx.replacement.scratch, .{ .source = mir.sourcePointFromSpan(span), .temp_name = temp_name });
+    try ctx.replacements.append(ctx.ctx.replacement.scratch, .{ .source = mir_source_bridge.replacementSourceFromSpan(span), .temp_name = temp_name });
 
     try writeIndent(ctx.ctx.replacement);
     try ctx.ctx.replacement.out.print(ctx.ctx.replacement.allocator, "{s} {s} = ", .{ try ctx.ctx.replacement.c_type(ctx.ctx.replacement.emit_ctx, operand_result_ty), temp_name });
@@ -941,7 +942,7 @@ fn emitNullableTryTrapHoist(ctx_ptr: *anyopaque, expr: ast.Expr) anyerror!bool {
     _ = try tryExpressionResultType(ctx.ctx, expr) orelse return false;
     const inner_c_type = try nullableTryOperandCType(ctx.ctx, inner.operand.*) orelse return false;
     const temp_name = try nextTempName(ctx.ctx.replacement);
-    try ctx.replacements.append(ctx.ctx.replacement.scratch, .{ .source = mir.sourcePointFromSpan(expr.span), .temp_name = temp_name });
+    try ctx.replacements.append(ctx.ctx.replacement.scratch, .{ .source = mir_source_bridge.replacementSourceFromSpan(expr.span), .temp_name = temp_name });
 
     try writeIndent(ctx.ctx.replacement);
     try ctx.ctx.replacement.out.print(ctx.ctx.replacement.allocator, "{s} {s} = ", .{ inner_c_type, temp_name });
