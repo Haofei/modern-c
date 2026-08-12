@@ -119,6 +119,18 @@ pub fn pointerFactMatchesSubjectFieldAt(module: *const mir.Module, fact: mir.Poi
     return MirFactsView.init(module).pointerFactMatchesSubjectFieldAtSource(fact, subject, mir.sourcePointFromSpan(span));
 }
 
+pub fn pointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {
+    return mir_facts_view.pointerFactIsLiveGlobal(fact);
+}
+
+pub fn pointerFactIsLiveLocal(fact: mir.PointerProvenanceFact) bool {
+    return mir_facts_view.pointerFactIsLiveLocal(fact);
+}
+
+pub fn pointerFactLiveState(fact: mir.PointerProvenanceFact) mir.PointerProvenance {
+    return mir_facts_view.pointerFactLiveState(fact);
+}
+
 pub fn deferCleanupRefAtSpan(function: mir.Function, span: ast.Span) ?mir.DeferCleanupRef {
     return mir.deferCleanupRefAtSource(function, mir.sourcePointFromSpan(span));
 }

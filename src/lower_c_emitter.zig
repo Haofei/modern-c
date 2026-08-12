@@ -10,7 +10,6 @@ const early_declaration_metadata = @import("early_declaration_metadata.zig");
 const expr_syntax = @import("expr_syntax.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
-const mir_facts_view = @import("mir_facts_view.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
 const type_syntax = @import("type_syntax.zig");
 const switch_lower = @import("switch_lower.zig");
@@ -6589,17 +6588,17 @@ pub const CEmitter = struct {
         if (fact.field_path) |field_path| {
             if (fact.element_index) |index| {
                 const element_path = try self.aggregatePointerArrayElementPath(field_path, @intCast(index));
-                try self.setAggregatePointerFieldProvenance(fact.subject, element_path, mir_facts_view.pointerFactLiveState(fact));
+                try self.setAggregatePointerFieldProvenance(fact.subject, element_path, mir_source_bridge.pointerFactLiveState(fact));
             } else {
-                try self.setAggregatePointerFieldProvenance(fact.subject, field_path, mir_facts_view.pointerFactLiveState(fact));
+                try self.setAggregatePointerFieldProvenance(fact.subject, field_path, mir_source_bridge.pointerFactLiveState(fact));
             }
             return;
         }
         if (fact.element_index) |index| {
-            try self.setLocalArrayPointerElementProvenance(fact.subject, @intCast(index), mir_facts_view.pointerFactLiveState(fact));
+            try self.setLocalArrayPointerElementProvenance(fact.subject, @intCast(index), mir_source_bridge.pointerFactLiveState(fact));
             return;
         }
-        const live_global = mir_facts_view.pointerFactIsLiveGlobal(fact);
+        const live_global = mir_source_bridge.pointerFactIsLiveGlobal(fact);
         const ty = mirPointerFactSubjectRecoveredType(fact, locals) orelse return;
         if (self.fixedLocalPointerArrayElementType(ty) != null) {
             self.clearLocalArrayPointerElementsForLocal(fact.subject);
@@ -6607,7 +6606,7 @@ pub const CEmitter = struct {
         }
         if (live_global) {
             try self.mir_pointer_local_provenance.put(fact.subject, .global_storage);
-        } else if (mir_facts_view.pointerFactIsLiveLocal(fact)) {
+        } else if (mir_source_bridge.pointerFactIsLiveLocal(fact)) {
             try self.mir_pointer_local_provenance.put(fact.subject, .local_storage);
         } else {
             _ = self.mir_pointer_local_provenance.remove(fact.subject);
