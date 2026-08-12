@@ -184,7 +184,7 @@ pub const ComptimeDeclarationArtifacts = struct {
         var structs: std.ArrayList(ast.StructDecl) = .empty;
         errdefer structs.deinit(allocator);
 
-        for (artifacts.global_artifacts) |global| try globals.append(allocator, global.toDecl());
+        for (artifacts.global_artifacts) |global| try globals.append(allocator, globalDeclFromArtifact(global));
         try type_aliases.appendSlice(allocator, artifacts.type_alias_artifacts);
         try structs.appendSlice(allocator, artifacts.struct_artifacts);
 
@@ -266,24 +266,24 @@ pub const FunctionArtifact = struct {
             .is_extern = is_extern,
         };
     }
-
-    pub fn toDecl(self: FunctionArtifact) ast.FnDecl {
-        return .{
-            .name = self.name,
-            .associated_owner = self.associated_owner,
-            .abi = self.abi,
-            .params = self.params,
-            .return_type = self.return_type,
-            .return_borrow_source = self.return_borrow_source,
-            .body = self.body,
-            .is_const = self.is_const,
-            .exported = self.exported,
-            .is_variadic = self.is_variadic,
-            .bounds = self.bounds,
-            .is_async = self.is_async,
-        };
-    }
 };
+
+pub fn comptimeFnDeclFromArtifact(function: FunctionArtifact) ast.FnDecl {
+    return .{
+        .name = function.name,
+        .associated_owner = function.associated_owner,
+        .abi = function.abi,
+        .params = function.params,
+        .return_type = function.return_type,
+        .return_borrow_source = function.return_borrow_source,
+        .body = function.body,
+        .is_const = function.is_const,
+        .exported = function.exported,
+        .is_variadic = function.is_variadic,
+        .bounds = function.bounds,
+        .is_async = function.is_async,
+    };
+}
 
 pub const GlobalArtifact = struct {
     name: ast.Ident,
@@ -303,18 +303,18 @@ pub const GlobalArtifact = struct {
             .is_extern = global.is_extern,
         };
     }
-
-    pub fn toDecl(self: GlobalArtifact) ast.GlobalDecl {
-        return .{
-            .name = self.name,
-            .ty = self.ty,
-            .init = self.init,
-            .is_const = self.is_const,
-            .exported = self.exported,
-            .is_extern = self.is_extern,
-        };
-    }
 };
+
+fn globalDeclFromArtifact(global: GlobalArtifact) ast.GlobalDecl {
+    return .{
+        .name = global.name,
+        .ty = global.ty,
+        .init = global.init,
+        .is_const = global.is_const,
+        .exported = global.exported,
+        .is_extern = global.is_extern,
+    };
+}
 
 pub const TraitDeclArtifact = struct {
     name: ast.Ident,

@@ -456,7 +456,7 @@ pub const CEmitter = struct {
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
         for (artifacts.function_artifacts) |function| {
-            const fn_decl = function.toDecl();
+            const fn_decl = declaration_artifacts.comptimeFnDeclFromArtifact(function);
             if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
         }
         const declarations = self.comptime_declarations orelse return error.UnsupportedCEmission;
@@ -544,7 +544,7 @@ pub const CEmitter = struct {
             }
         }
         try self.function_decl_artifacts.append(self.allocator, functionDeclArtifact(function));
-        if (!function.is_extern and function.is_const and !self.const_fns.contains(function.name.text)) try self.const_fns.put(function.name.text, function.toDecl());
+        if (!function.is_extern and function.is_const and !self.const_fns.contains(function.name.text)) try self.const_fns.put(function.name.text, declaration_artifacts.comptimeFnDeclFromArtifact(function));
         if (!function.is_extern) if (backendNameOverride(function.attrs)) |name| try self.backend_names.put(function.name.text, name);
         try self.collectFunctionArtifactSliceTypes(function);
     }

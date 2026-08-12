@@ -601,7 +601,7 @@ const LlvmEmitter = struct {
 
     fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
         for (artifacts.function_artifacts) |function| {
-            const fn_decl = function.toDecl();
+            const fn_decl = declaration_artifacts.comptimeFnDeclFromArtifact(function);
             if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
         }
         for (artifacts.type_alias_artifacts) |alias| try self.type_aliases.put(alias.name.text, alias.ty);
