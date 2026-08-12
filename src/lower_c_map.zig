@@ -243,6 +243,90 @@ fn appendSourcePointForDigest(allocator: std.mem.Allocator, out: *std.ArrayList(
     try out.print(allocator, "line={} column={} offset={} len={}\n", .{ source.line, source.column, source.offset, source.len });
 }
 
+fn sourcePointAsSpan(line: usize, column: usize, offset: usize, len: usize) mir.SourcePoint {
+    return .{
+        .line = line,
+        .column = column,
+        .offset = offset,
+        .len = len,
+    };
+}
+
+fn astSpanAsSourcePoint(span: ast_bridge.Span) mir.SourcePoint {
+    return .{
+        .line = span.line,
+        .column = span.column,
+        .offset = span.offset,
+        .len = span.len,
+    };
+}
+
+fn sourceMapKindForMirInstruction(function: mir.Function, instruction: mir.Instruction) ?[]const u8 {
+    return switch (instruction.kind) {
+        .local => "let_decl",
+        .assign => "assignment",
+        .defer_cleanup => "defer",
+        .return_value => "return",
+        .assert_condition => "assert",
+        .asm_effect => "asm_stmt",
+        .binary => if (std.mem.eql(u8, instruction.detail, "switch_subject"))
+            "switch_subject_expr"
+        else if (std.mem.eql(u8, instruction.result_ty.name(), "branch"))
+            "if_let_value_expr"
+        else
+            "expr_binary",
+        .unary => "expr_unary",
+        .call, .indirect_call => "expr_call",
+        .index => "expr_index",
+        .typed_load => "expr_deref",
+        .expr => sourceMapExprKind(instruction.detail),
+        .representation_use => if (std.mem.eql(u8, instruction.detail, "initializer"))
+            "initializer_expr"
+        else if (std.mem.eql(u8, instruction.detail, "assignment"))
+            "assignment_value_expr"
+        else
+            "expr",
+        .target_type => if (std.mem.eql(u8, instruction.detail, "expression_result"))
+            expressionResultSourceMapKind(function, instruction)
+        else if (std.mem.eql(u8, instruction.detail, "loop_condition"))
+            "while_condition_expr"
+        else
+            null,
+        else => null,
+    };
+}
+
+fn expressionResultSourceMapKind(function: mir.Function, instruction: mir.Instruction) []const u8 {
+    if (functionHasInstructionAt(function, .return_value, instruction.line, null)) return "return_expr";
+    if (functionHasInstructionAt(function, .local, instruction.line, null)) return "initializer_expr";
+    if (functionHasInstructionAt(function, .defer_cleanup, instruction.line, null)) return "defer_expr";
+    return "expr";
+}
+
+fn functionHasInstructionAt(function: mir.Function, kind: mir.Instruction.Kind, line: usize, column: ?usize) bool {
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind != kind) continue;
+            if (instruction.line != line) continue;
+            if (column) |expected| {
+                if (instruction.column != expected) continue;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+fn sourceMapExprKind(detail: []const u8) []const u8 {
+    if (std.mem.eql(u8, detail, "array_literal")) return "expr_array_literal";
+    if (std.mem.eql(u8, detail, "struct_literal")) return "expr_struct_literal";
+    if (std.mem.eql(u8, detail, "cast")) return "expr_cast";
+    if (std.mem.eql(u8, detail, "int")) return "expr_int_literal";
+    if (std.mem.eql(u8, detail, "true") or std.mem.eql(u8, detail, "false")) return "expr_bool_literal";
+    if (detail.len != 0 and detail[0] >= '0' and detail[0] <= '9') return "expr_int_literal";
+    return "expr_ident";
+}
+
 fn typedIndexOrMax(index: anytype) usize {
     return if (index.isValid()) index.index() else std.math.maxInt(usize);
 }
@@ -337,30 +421,30 @@ const SourceMapEmitter = struct {
                     self.origin = global.origin;
                     self.symbol_kind = if (global.is_const) "assoc_const" else "value";
                     self.visibility = "internal";
-                    try self.emitEntry("global", global.symbol, global.name_span, global.symbol, "mir:global:init");
-                    if (global.init_span) |init_span| try self.emitEntry("global_initializer_expr", global.symbol, init_span, global.symbol, "mir:global:init");
+                    try self.emitEntry("global", global.symbol, astSpanAsSourcePoint(global.name_span), global.symbol, "mir:global:init");
+                    if (global.init_span) |init_span| try self.emitEntry("global_initializer_expr", global.symbol, astSpanAsSourcePoint(init_span), global.symbol, "mir:global:init");
                 },
                 .function => |function| {
                     self.origin = function.origin;
                     self.symbol_kind = "free_fn";
                     self.visibility = if (function.exported) "exported" else "internal";
-                    try self.emitEntry("function", function.symbol, function.name_span, function.object_symbol, "mir:function:entry");
+                    try self.emitEntry("function", function.symbol, astSpanAsSourcePoint(function.name_span), function.object_symbol, "mir:function:entry");
                     const previous_function = self.current_function;
                     self.current_function = function.symbol;
-                    try self.emitBlock(function.body);
+                    try self.emitFunctionMirRows(function.symbol);
                     self.current_function = previous_function;
                 },
                 .extern_fn => |function| {
                     self.origin = function.origin;
                     self.symbol_kind = "extern_fn";
                     self.visibility = "exported";
-                    try self.emitEntry("extern_fn", function.symbol, function.name_span, function.symbol, "mir:function:entry");
+                    try self.emitEntry("extern_fn", function.symbol, astSpanAsSourcePoint(function.name_span), function.symbol, "mir:function:entry");
                 },
                 .type_decl => |decl| {
                     self.origin = decl.origin;
                     self.symbol_kind = if (std.mem.eql(u8, decl.kind, "type_alias")) "type_alias" else "type";
                     self.visibility = "internal";
-                    try self.emitEntry(decl.kind, decl.symbol, decl.name_span, decl.symbol, "-");
+                    try self.emitEntry(decl.kind, decl.symbol, astSpanAsSourcePoint(decl.name_span), decl.symbol, "-");
                 },
             }
         }
@@ -368,120 +452,40 @@ const SourceMapEmitter = struct {
         self.visibility = "internal";
     }
 
-    fn emitBlock(self: *SourceMapEmitter, block: ast_bridge.Block) !void {
-        for (block.items) |stmt| {
-            try self.emitStmt(stmt);
-            switch (stmt.kind) {
-                .block, .unsafe_block => |nested| try self.emitBlock(nested),
-                .comptime_block => {},
-                .contract_block => |contract| try self.emitBlock(contract.block),
-                .loop => |loop| try self.emitBlock(loop.body),
-                .if_let => |node| {
-                    try self.emitBlock(node.then_block);
-                    if (node.else_block) |else_block| try self.emitBlock(else_block);
-                },
-                .@"switch" => |node| {
-                    for (node.arms) |arm| switch (arm.body) {
-                        .block => |arm_block| try self.emitBlock(arm_block),
-                        .expr => |expr| try self.emitEntry("switch_expr", self.current_function orelse "-", expr.span, self.current_function orelse "-", "mir:switch:expr"),
-                    };
-                },
-                .@"defer" => |expr| switch (expr.kind) {
-                    .block => |nested| try self.emitBlock(nested),
-                    else => {},
-                },
-                else => {},
+    fn emitFunctionMirRows(self: *SourceMapEmitter, symbol: []const u8) !void {
+        const function = self.mirFunctionByName(symbol) orelse return;
+        var emitted: std.StringHashMap(void) = .init(self.allocator);
+        defer {
+            var it = emitted.keyIterator();
+            while (it.next()) |key| self.allocator.free(key.*);
+            emitted.deinit();
+        }
+        for (function.blocks) |block| {
+            for (block.instructions, 0..) |instruction, instruction_index| {
+                if (instruction.line == 0) continue;
+                const span = sourcePointAsSpan(instruction.line, instruction.column, instruction.source_offset, instruction.source_len);
+                const mir_block = try std.fmt.allocPrint(
+                    self.allocator,
+                    "mir:{s}:block:{d}:instr:{d}:{s}",
+                    .{ function.name, block.id, instruction_index, @tagName(instruction.kind) },
+                );
+                defer self.allocator.free(mir_block);
+                const primary_kind = sourceMapKindForMirInstruction(function, instruction) orelse continue;
+                const row_key = try std.fmt.allocPrint(self.allocator, "{s}\x00{d}\x00{d}", .{ primary_kind, span.line, span.column });
+                const entry = try emitted.getOrPut(row_key);
+                if (entry.found_existing) {
+                    self.allocator.free(row_key);
+                    continue;
+                }
+                try self.emitEntry(primary_kind, symbol, span, symbol, mir_block);
+                if (instruction.kind == .defer_cleanup) {
+                    try self.emitEntry("defer_expr", symbol, span, symbol, mir_block);
+                }
             }
         }
     }
 
-    fn emitStmt(self: *SourceMapEmitter, stmt: ast_bridge.Stmt) !void {
-        const symbol = self.current_function orelse "-";
-        const mir_block = try std.fmt.allocPrint(self.allocator, "mir:{s}:span:{d}:{d}", .{ symbol, stmt.span.line, stmt.span.column });
-        defer self.allocator.free(mir_block);
-        try self.emitEntry(@tagName(stmt.kind), symbol, stmt.span, symbol, mir_block);
-        try self.emitStmtExpressions(stmt);
-    }
-
-    fn emitStmtExpressions(self: *SourceMapEmitter, stmt: ast_bridge.Stmt) !void {
-        switch (stmt.kind) {
-            .let_decl, .var_decl => |local| if (local.init) |init| try self.emitExprTree("initializer_expr", init),
-            .assignment => |node| {
-                try self.emitExprTree("assignment_target_expr", node.target);
-                try self.emitExprTree("assignment_value_expr", node.value);
-            },
-            .@"return" => |maybe_expr| if (maybe_expr) |expr| try self.emitExprTree("return_expr", expr),
-            .assert => |expr| try self.emitExprTree("assert_expr", expr),
-            .loop => |loop| if (loop.iterable) |expr| try self.emitExprTree(if (loop.kind == .@"while") "while_condition_expr" else "for_iterable_expr", expr),
-            .if_let => |node| try self.emitExprTree("if_let_value_expr", node.value),
-            .@"switch" => |node| try self.emitExprTree("switch_subject_expr", node.subject),
-            .@"defer" => |expr| try self.emitExprTree("defer_expr", expr),
-            .asm_stmt => |asm_stmt| {
-                for (asm_stmt.inputs) |input| try self.emitExprTree("asm_input_expr", input.value);
-            },
-            .expr => |expr| try self.emitExprTree("expr", expr),
-            else => {},
-        }
-    }
-
-    fn emitExprTree(self: *SourceMapEmitter, root_kind: []const u8, expr: ast_bridge.Expr) anyerror!void {
-        try self.emitExprEntry(root_kind, expr.span);
-        try self.emitExprChildren(expr);
-    }
-
-    fn emitNestedExpr(self: *SourceMapEmitter, expr: ast_bridge.Expr) anyerror!void {
-        const kind = try std.fmt.allocPrint(self.allocator, "expr_{s}", .{@tagName(expr.kind)});
-        defer self.allocator.free(kind);
-        try self.emitExprEntry(kind, expr.span);
-        try self.emitExprChildren(expr);
-    }
-
-    fn emitExprChildren(self: *SourceMapEmitter, expr: ast_bridge.Expr) anyerror!void {
-        switch (expr.kind) {
-            .array_literal => |items| {
-                for (items) |item| try self.emitNestedExpr(item);
-            },
-            .struct_literal => |fields| {
-                for (fields) |field| try self.emitNestedExpr(field.value);
-            },
-            .grouped, .address_of, .deref => |inner| try self.emitNestedExpr(inner.*),
-            .block => |block| try self.emitBlock(block),
-            .unary => |node| try self.emitNestedExpr(node.expr.*),
-            .binary => |node| {
-                try self.emitNestedExpr(node.left.*);
-                try self.emitNestedExpr(node.right.*);
-            },
-            .cast => |node| try self.emitNestedExpr(node.value.*),
-            .call => |node| {
-                try self.emitNestedExpr(node.callee.*);
-                for (node.args) |arg| try self.emitNestedExpr(arg);
-            },
-            .index => |node| {
-                try self.emitNestedExpr(node.base.*);
-                try self.emitNestedExpr(node.index.*);
-            },
-            .slice => |node| {
-                try self.emitNestedExpr(node.base.*);
-                try self.emitNestedExpr(node.start.*);
-                try self.emitNestedExpr(node.end.*);
-            },
-            .member => |node| try self.emitNestedExpr(node.base.*),
-            .try_expr => |node| {
-                try self.emitNestedExpr(node.operand.*);
-                if (node.mapped) |mapped| try self.emitNestedExpr(mapped.*);
-            },
-            else => {},
-        }
-    }
-
-    fn emitExprEntry(self: *SourceMapEmitter, kind: []const u8, span: ast_bridge.Span) !void {
-        const symbol = self.current_function orelse "-";
-        const mir_block = try std.fmt.allocPrint(self.allocator, "mir:{s}:expr:{d}:{d}", .{ symbol, span.line, span.column });
-        defer self.allocator.free(mir_block);
-        try self.emitEntry(kind, symbol, span, symbol, mir_block);
-    }
-
-    fn emitEntry(self: *SourceMapEmitter, kind: []const u8, symbol: []const u8, span: ast_bridge.Span, object_symbol: []const u8, mir_block: []const u8) !void {
+    fn emitEntry(self: *SourceMapEmitter, kind: []const u8, symbol: []const u8, span: mir.SourcePoint, object_symbol: []const u8, mir_block: []const u8) !void {
         try self.out.appendSlice(self.allocator, "entry kind=");
         try appendMapString(self.out, self.allocator, kind);
         try self.out.appendSlice(self.allocator, " symbol=");
@@ -526,7 +530,7 @@ const SourceMapEmitter = struct {
         try self.out.appendSlice(self.allocator, "\n");
     }
 
-    fn mirLabelFor(self: *SourceMapEmitter, symbol: []const u8, span: ast_bridge.Span) !?[]const u8 {
+    fn mirLabelFor(self: *SourceMapEmitter, symbol: []const u8, span: mir.SourcePoint) !?[]const u8 {
         const function = self.mirFunctionByName(symbol) orelse return null;
         if (try self.mirLabelForMatch(function, span, true)) |label| return label;
         return try self.mirLabelForMatch(function, span, false);
@@ -539,7 +543,7 @@ const SourceMapEmitter = struct {
         return null;
     }
 
-    fn mirLabelForMatch(self: *SourceMapEmitter, function: mir.Function, span: ast_bridge.Span, exact_column: bool) !?[]const u8 {
+    fn mirLabelForMatch(self: *SourceMapEmitter, function: mir.Function, span: mir.SourcePoint, exact_column: bool) !?[]const u8 {
         for (function.blocks) |block| {
             for (block.instructions, 0..) |instruction, instruction_index| {
                 if (instruction.line != span.line) continue;

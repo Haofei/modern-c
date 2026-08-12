@@ -224,7 +224,6 @@ pub const SourceMapArtifact = union(enum) {
     pub const Function = struct {
         symbol: []const u8,
         name_span: ast.Span,
-        body: ast.Block,
         object_symbol: []const u8,
         exported: bool,
         origin: []const u8,
@@ -254,10 +253,9 @@ fn sourceMapArtifactFromDecl(decl: ast.Decl) ?SourceMapArtifact {
             .is_const = global.is_const,
             .origin = origin,
         } },
-        .fn_decl => |fn_decl| if (fn_decl.body) |body| .{ .function = .{
+        .fn_decl => |fn_decl| if (fn_decl.body != null) .{ .function = .{
             .symbol = fn_decl.name.text,
             .name_span = fn_decl.name.span,
-            .body = body,
             .object_symbol = backendNameOverride(decl.attrs) orelse fn_decl.name.text,
             .exported = fn_decl.exported,
             .origin = origin,
