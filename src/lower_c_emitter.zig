@@ -6246,14 +6246,7 @@ pub const CEmitter = struct {
     }
 
     fn mirTargetTypeFactMatchingType(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, expected_ty: ast.TypeExpr) ?mir.TargetTypeFact {
-        const function = self.currentMirFunction() orelse return null;
-        const view = mir_facts_view.MirFactsView.init(self.mir_module);
-        const query: mir_facts_view.TargetTypeFactQuery = .{ .kind = kind, .source = mir.sourcePointFromSpan(span) };
-        for (function.target_type_facts) |fact| {
-            if (!view.targetTypeFactMatchesQuery(function, fact, query)) continue;
-            if (type_syntax.sameTypeSyntax(self.resolveAliasType(fact.target_ty), self.resolveAliasType(expected_ty))) return fact;
-        }
-        return null;
+        return mir_source_bridge.targetTypeFactMatchingType(self.mir_module, self.currentMirFunction(), &self.type_aliases, kind, span, expected_ty);
     }
 
     fn mirTargetTypeFactAtOwned(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {

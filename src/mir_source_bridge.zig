@@ -5,9 +5,12 @@
 //! own source matching policy while the VerifiedProgram boundary is being
 //! migrated to typed identities.
 
+const std = @import("std");
+
 const ast = @import("ast.zig");
 const mir = @import("mir.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const MirFactsView = mir_facts_view.MirFactsView;
 
@@ -37,6 +40,18 @@ pub fn hasCallTargetKindAt(module: *const mir.Module, current: ?*const mir.Funct
 
 pub fn targetTypeFactAtWithModuleFallback(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
     return MirFactsView.init(module).targetTypeFactAtWithModuleFallback(current, kind, mir.sourcePointFromSpan(span));
+}
+
+pub fn targetTypeFactMatchingType(module: *const mir.Module, current: ?*const mir.Function, type_aliases: *const std.StringHashMap(ast.TypeExpr), kind: mir.TargetTypeKind, span: ast.Span, expected_ty: ast.TypeExpr) ?mir.TargetTypeFact {
+    const function = current orelse return null;
+    const view = MirFactsView.init(module);
+    const query: mir_facts_view.TargetTypeFactQuery = .{ .kind = kind, .source = mir.sourcePointFromSpan(span) };
+    const resolved_expected = type_syntax.resolveAliasType(type_aliases, expected_ty);
+    for (function.target_type_facts) |fact| {
+        if (!view.targetTypeFactMatchesQuery(function, fact, query)) continue;
+        if (type_syntax.sameTypeSyntax(type_syntax.resolveAliasType(type_aliases, fact.target_ty), resolved_expected)) return fact;
+    }
+    return null;
 }
 
 pub fn targetTypeFactAtOwnedWithModuleFallback(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {

@@ -128,8 +128,10 @@ EXACT_FILE_COUNTS = {
     ("src/mir_source_bridge.zig", "pub fn uniqueCallTargetKindAt("): 1,
     ("src/mir_source_bridge.zig", "pub fn hasCallTargetKindAt("): 1,
     ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtWithModuleFallback("): 1,
+    ("src/mir_source_bridge.zig", "pub fn targetTypeFactMatchingType("): 1,
     ("src/mir_source_bridge.zig", "pub fn targetTypeFactAtOwnedWithModuleFallback("): 1,
     ("src/mir_source_bridge.zig", "pub fn uniqueConstGetIndexAt("): 1,
+    ("src/lower_c_emitter.zig", "mir_facts_view.TargetTypeFactQuery"): 0,
 }
 
 REQUIRED_ANCHORS = {
