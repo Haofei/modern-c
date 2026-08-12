@@ -23,6 +23,7 @@ const MmioStruct = lower_c_model.MmioStruct;
 const CheckedOp = lower_c_op.CheckedOp;
 const TrapKind = lower_c_op.TrapKind;
 const arithmeticDomainOpName = lower_c_op.arithmeticDomainOpName;
+const checkedOpForBinary = lower_c_op.checkedOpForBinary;
 const checkedOpName = lower_c_op.checkedOpName;
 const floatCTypeName = lower_c_type.floatCTypeName;
 const genericChildType = lower_c_shape.genericChildType;
@@ -270,19 +271,19 @@ const Inspector = struct {
                 try self.inspectExpr(node.expr.*, ctx);
             },
             .binary => |node| {
-                const op = CheckedOp{ .binary = node.op };
+                const op = checkedOpForBinary(node.op);
                 if (arithmeticDomainForBinary(node, ctx)) |domain| {
                     try self.writeArithmeticDomainLowering(ctx, domain, node.op);
                 } else if (node.op == .shl) {
                     const ty = exprType(node.left.*, ctx) orelse "unknown";
-                    try self.writeCheckedArithmetic(ctx, op, ty, .invalid_shift);
-                    try self.writeCheckedArithmetic(ctx, op, ty, .integer_overflow);
+                    try self.writeCheckedArithmetic(ctx, op.?, ty, .invalid_shift);
+                    try self.writeCheckedArithmetic(ctx, op.?, ty, .integer_overflow);
                 } else if (node.op == .shr) {
                     const ty = exprType(node.left.*, ctx) orelse "unknown";
-                    try self.writeCheckedArithmetic(ctx, op, ty, .invalid_shift);
-                } else if (checkedOpName(op)) |_| {
+                    try self.writeCheckedArithmetic(ctx, op.?, ty, .invalid_shift);
+                } else if (op) |checked_op| {
                     const ty = exprType(node.left.*, ctx) orelse "unknown";
-                    try self.writeCheckedArithmetic(ctx, op, ty, trapKindForBinary(node, ty));
+                    try self.writeCheckedArithmetic(ctx, checked_op, ty, trapKindForBinary(node, ty));
                 }
                 try self.inspectExpr(node.left.*, ctx);
                 try self.inspectExpr(node.right.*, ctx);

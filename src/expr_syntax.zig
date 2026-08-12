@@ -93,6 +93,21 @@ pub fn atomicOrderingExpr(expr: ast.Expr) ?[]const u8 {
     };
 }
 
+pub fn isNegativeOne(expr: ast.Expr) bool {
+    return switch (expr.kind) {
+        .unary => |node| node.op == .neg and isIntLiteral(node.expr.*, "1"),
+        else => false,
+    };
+}
+
+pub fn isIntLiteral(expr: ast.Expr, value: []const u8) bool {
+    return switch (expr.kind) {
+        .int_literal => |literal| std.mem.eql(u8, literal, value),
+        .grouped, .move_expr => |inner| isIntLiteral(inner.*, value),
+        else => false,
+    };
+}
+
 pub const CallExpr = struct {
     callee: *ast.Expr,
     type_args: []ast.TypeExpr,

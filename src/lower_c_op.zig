@@ -8,13 +8,13 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
-
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const checkedTypeSuffix = lower_c_type.checkedTypeSuffix;
+const isNegativeOne = expr_syntax.isNegativeOne;
 const unsignedTypeSuffix = lower_c_type.unsignedTypeSuffix;
 
-pub fn unaryCOp(op: ast.UnaryOp) []const u8 {
+pub fn unaryCOp(op: anytype) []const u8 {
     return switch (op) {
         .neg => "-",
         .bit_not => "~",
@@ -22,7 +22,7 @@ pub fn unaryCOp(op: ast.UnaryOp) []const u8 {
     };
 }
 
-pub fn binaryCOp(op: ast.BinaryOp) []const u8 {
+pub fn binaryCOp(op: anytype) []const u8 {
     return switch (op) {
         .logical_or => "||",
         .logical_and => "&&",
@@ -45,21 +45,21 @@ pub fn binaryCOp(op: ast.BinaryOp) []const u8 {
     };
 }
 
-pub fn isCheckedBinaryOp(op: ast.BinaryOp) bool {
+pub fn isCheckedBinaryOp(op: anytype) bool {
     return switch (op) {
         .add, .sub, .mul, .div, .mod, .shl, .shr => true,
         else => false,
     };
 }
 
-pub fn isComparisonOp(op: ast.BinaryOp) bool {
+pub fn isComparisonOp(op: anytype) bool {
     return switch (op) {
         .eq, .ne, .lt, .le, .gt, .ge => true,
         else => false,
     };
 }
 
-pub fn isNoTrapBitwiseInfixOp(op: ast.BinaryOp) bool {
+pub fn isNoTrapBitwiseInfixOp(op: anytype) bool {
     return switch (op) {
         .bit_and, .bit_or, .bit_xor => true,
         else => false,
@@ -71,7 +71,7 @@ pub const CheckedHelperParts = struct {
     suffix: []const u8,
 };
 
-pub fn checkedHelperParts(op: ast.BinaryOp, type_name: []const u8) ?CheckedHelperParts {
+pub fn checkedHelperParts(op: anytype, type_name: []const u8) ?CheckedHelperParts {
     const suffix = checkedTypeSuffix(type_name) orelse return null;
     const prefix = switch (op) {
         .add => "mc_checked_add_",
@@ -86,7 +86,7 @@ pub fn checkedHelperParts(op: ast.BinaryOp, type_name: []const u8) ?CheckedHelpe
     return .{ .prefix = prefix, .suffix = suffix };
 }
 
-pub fn satHelperParts(op: ast.BinaryOp, type_name: []const u8) ?CheckedHelperParts {
+pub fn satHelperParts(op: anytype, type_name: []const u8) ?CheckedHelperParts {
     const suffix = unsignedTypeSuffix(type_name) orelse return null;
     const prefix = switch (op) {
         .add => "mc_sat_add_",
@@ -97,14 +97,14 @@ pub fn satHelperParts(op: ast.BinaryOp, type_name: []const u8) ?CheckedHelperPar
     return .{ .prefix = prefix, .suffix = suffix };
 }
 
-pub fn isWrapPreservingBinary(op: ast.BinaryOp) bool {
+pub fn isWrapPreservingBinary(op: anytype) bool {
     return switch (op) {
         .add, .sub, .mul, .bit_and, .bit_or, .bit_xor, .shl, .shr => true,
         else => false,
     };
 }
 
-pub fn arithmeticDomainOpName(op: ast.BinaryOp) []const u8 {
+pub fn arithmeticDomainOpName(op: anytype) []const u8 {
     return switch (op) {
         .add => "add",
         .sub => "sub",
@@ -119,7 +119,7 @@ pub fn arithmeticDomainOpName(op: ast.BinaryOp) []const u8 {
 }
 
 pub const CheckedOp = union(enum) {
-    binary: ast.BinaryOp,
+    binary: []const u8,
     neg,
 };
 
@@ -140,26 +140,36 @@ pub const TrapKind = enum {
 pub fn checkedOpName(op: CheckedOp) ?[]const u8 {
     return switch (op) {
         .neg => "neg",
-        .binary => |binary| switch (binary) {
-            .add => "add",
-            .sub => "sub",
-            .mul => "mul",
-            .div => "div",
-            .mod => "mod",
-            .shl => "shl",
-            .shr => "shr",
-            else => null,
-        },
+        .binary => |binary| binary,
+    };
+}
+
+pub fn checkedOpForBinary(op: anytype) ?CheckedOp {
+    return if (checkedBinaryOpName(op)) |name| .{ .binary = name } else null;
+}
+
+pub fn checkedBinaryOpName(op: anytype) ?[]const u8 {
+    return switch (op) {
+        .add => "add",
+        .sub => "sub",
+        .mul => "mul",
+        .div => "div",
+        .mod => "mod",
+        .shl => "shl",
+        .shr => "shr",
+        else => null,
     };
 }
 
 pub fn isOverflowOp(op: CheckedOp) bool {
     return switch (op) {
         .neg => true,
-        .binary => |binary| switch (binary) {
-            .add, .sub, .mul, .div, .mod, .shl => true,
-            else => false,
-        },
+        .binary => |binary| std.mem.eql(u8, binary, "add") or
+            std.mem.eql(u8, binary, "sub") or
+            std.mem.eql(u8, binary, "mul") or
+            std.mem.eql(u8, binary, "div") or
+            std.mem.eql(u8, binary, "mod") or
+            std.mem.eql(u8, binary, "shl"),
     };
 }
 
@@ -171,20 +181,6 @@ pub fn trapKindForBinary(node: anytype, ty: []const u8) TrapKind {
 
 pub fn isSignedIntType(ty: []const u8) bool {
     return ty.len >= 2 and ty[0] == 'i' and std.ascii.isDigit(ty[1]);
-}
-
-pub fn isNegativeOne(expr: ast.Expr) bool {
-    return switch (expr.kind) {
-        .unary => |node| node.op == .neg and isIntLiteral(node.expr.*, "1"),
-        else => false,
-    };
-}
-
-pub fn isIntLiteral(expr: ast.Expr, value: []const u8) bool {
-    return switch (expr.kind) {
-        .int_literal => |literal| std.mem.eql(u8, literal, value),
-        else => false,
-    };
 }
 
 pub fn widthBits(width: []const u8) []const u8 {

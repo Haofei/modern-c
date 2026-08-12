@@ -26,10 +26,10 @@ BACKEND_EXTRA_FILES = {
 }
 
 EXACT_BACKEND_COUNTS = {
-    '@import("ast.zig")': 43,
+    '@import("ast.zig")': 42,
     '@import("attr_syntax.zig")': 2,
     '@import("ast_query.zig")': 0,
-    '@import("expr_syntax.zig")': 24,
+    '@import("expr_syntax.zig")': 25,
     '@import("sema': 0,
     '@import("early_declaration_metadata.zig")': 4,
     '@import("mir_facts_view.zig")': 2,
