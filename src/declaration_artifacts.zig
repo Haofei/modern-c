@@ -7,6 +7,7 @@
 
 const ast = @import("ast.zig");
 const eval = @import("eval.zig");
+const module_parser = @import("module_parser.zig");
 const std = @import("std");
 
 pub const SyntaxDeclarationSlice = []const ast.Decl;
@@ -139,6 +140,24 @@ pub const EarlyDeclarationArtifacts = struct {
             .overlay_union_artifacts = owned_overlay_union_artifacts,
             .source_map_artifacts = owned_source_map_artifacts,
         };
+    }
+
+    /// Collect declaration artifacts from the per-file resolved declaration
+    /// stream.
+    ///
+    /// This is intentionally a compatibility adapter today: `SourceMapArtifact`
+    /// still stores legacy source spans without a `FileId`, so production
+    /// codegen must not switch to this entrypoint until source-map artifacts are
+    /// file-id aware. The adapter gives module-aware callers and tests a single
+    /// named boundary while the artifact schema is being normalized.
+    pub fn collectFromResolvedDecls(
+        allocator: std.mem.Allocator,
+        decls: []const module_parser.ResolvedDecl,
+    ) !EarlyDeclarationArtifacts {
+        var syntax_decls = try allocator.alloc(ast.Decl, decls.len);
+        defer allocator.free(syntax_decls);
+        for (decls, 0..) |entry, i| syntax_decls[i] = entry.decl;
+        return collectFromSyntaxDecls(allocator, syntax_decls);
     }
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
@@ -430,4 +449,43 @@ fn backendNameOverride(attrs: []const ast.Attr) ?[]const u8 {
         else => {},
     };
     return null;
+}
+
+test "declaration artifacts collect from resolved declaration stream" {
+    const test_support = @import("test_support.zig");
+
+    var parsed = try test_support.parseModule("declaration_artifacts_resolved.mc",
+        \\struct Box {
+        \\    value: u32,
+        \\}
+        \\
+        \\global counter: u32 = 1;
+        \\
+        \\fn inc(x: u32) -> u32 {
+        \\    return x + counter;
+        \\}
+    );
+    defer parsed.deinit();
+
+    var resolved_decls = try std.testing.allocator.alloc(module_parser.ResolvedDecl, parsed.module.decls.len);
+    defer std.testing.allocator.free(resolved_decls);
+    for (parsed.module.decls, 0..) |decl, i| {
+        resolved_decls[i] = .{
+            .file_id = @enumFromInt(0),
+            .decl = decl,
+        };
+    }
+
+    var from_syntax = try EarlyDeclarationArtifacts.collectFromSyntaxDecls(std.testing.allocator, parsed.module.decls);
+    defer from_syntax.deinit(std.testing.allocator);
+    var from_resolved = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls);
+    defer from_resolved.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(from_syntax.function_artifacts.len, from_resolved.function_artifacts.len);
+    try std.testing.expectEqual(from_syntax.global_artifacts.len, from_resolved.global_artifacts.len);
+    try std.testing.expectEqual(from_syntax.struct_artifacts.len, from_resolved.struct_artifacts.len);
+    try std.testing.expectEqual(from_syntax.source_map_artifacts.len, from_resolved.source_map_artifacts.len);
+    try std.testing.expectEqualStrings(from_syntax.function_artifacts[0].name.text, from_resolved.function_artifacts[0].name.text);
+    try std.testing.expectEqualStrings(from_syntax.global_artifacts[0].name.text, from_resolved.global_artifacts[0].name.text);
+    try std.testing.expectEqualStrings(from_syntax.struct_artifacts[0].name.text, from_resolved.struct_artifacts[0].name.text);
 }

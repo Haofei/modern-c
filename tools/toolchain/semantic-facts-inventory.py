@@ -1038,6 +1038,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub const EarlyDeclarationArtifacts = struct": 1,
         "decls: []const ast.Decl": 0,
         "pub fn collectFromSyntaxDecls(allocator: std.mem.Allocator, decls: SyntaxDeclarationSlice) !EarlyDeclarationArtifacts": 1,
+        "pub fn collectFromResolvedDecls(": 1,
+        "[]const module_parser.ResolvedDecl": 1,
         "pub fn collectFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !EarlyDeclarationArtifacts": 0,
         "pub const SourceMapArtifact = union(enum)": 1,
         "pub const CallableValueArtifact = union(enum)": 0,
