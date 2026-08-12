@@ -23,6 +23,13 @@ pub const TargetTypeFactQuery = struct {
     index: ?usize = null,
 };
 
+pub const PointerFactQuery = struct {
+    subject: []const u8,
+    source: mir.SourcePoint,
+    field_path: ?[]const u8 = null,
+    element_index: ?usize = null,
+};
+
 pub const MirFactsView = struct {
     module: *const mir.Module,
 
@@ -146,6 +153,30 @@ pub const MirFactsView = struct {
         if (!ownerMatches(fact.target_owner, owner)) return false;
         if (!sourceMatches(kind, source, fact.source)) return false;
         return typedIdentityIsValid(current, fact);
+    }
+
+    pub fn pointerFactMatchesQuery(self: MirFactsView, fact: mir.PointerProvenanceFact, query: PointerFactQuery) bool {
+        _ = self;
+        if (!std.mem.eql(u8, fact.subject, query.subject)) return false;
+        if (!ownerMatches(fact.field_path, query.field_path)) return false;
+        if (fact.element_index != query.element_index) return false;
+        return sourcePointLineColumnMatches(query.source, fact.source);
+    }
+
+    pub fn pointerFactMatchesSubjectFieldAtSource(self: MirFactsView, fact: mir.PointerProvenanceFact, subject: []const u8, source: mir.SourcePoint) bool {
+        _ = self;
+        if (!std.mem.eql(u8, fact.subject, subject)) return false;
+        if (fact.field_path == null) return false;
+        return sourcePointLineColumnMatches(source, fact.source);
+    }
+
+    pub fn pointerFactIsCallInvalidationAt(self: MirFactsView, fact: mir.PointerProvenanceFact, source: mir.SourcePoint) bool {
+        _ = self;
+        if (!sourcePointLineColumnMatches(source, fact.source)) return false;
+        return switch (fact.invalidation_reason) {
+            .call, .indirect_call => true,
+            else => false,
+        };
     }
 };
 

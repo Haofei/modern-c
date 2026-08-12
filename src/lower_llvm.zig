@@ -6154,16 +6154,11 @@ const LlvmEmitter = struct {
 
     fn applyMirPointerProvenanceFactsAtSourceWithMode(self: *LlvmEmitter, subject: []const u8, element_index: ?usize, span: ast.Span, comment_mode: MirFactCommentMode) !bool {
         const function = self.currentMirFunction() orelse return false;
+        const view = mir_facts_view.MirFactsView.init(&self.mir_module);
+        const query: mir_facts_view.PointerFactQuery = .{ .subject = subject, .element_index = element_index, .source = mir.sourcePointFromSpan(span) };
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (fact.field_path != null) continue;
-            if (!std.mem.eql(u8, fact.subject, subject)) continue;
-            if (element_index) |wanted| {
-                if (fact.element_index == null or fact.element_index.? != wanted) continue;
-            } else if (fact.element_index != null) {
-                continue;
-            }
-            if (!mirSourceMatches(span, fact.source)) continue;
+            if (!view.pointerFactMatchesQuery(fact, query)) continue;
             matched = true;
             switch (comment_mode) {
                 .silent => {
@@ -6178,12 +6173,10 @@ const LlvmEmitter = struct {
 
     fn applyMirPointerProvenanceInvalidationsAtCall(self: *LlvmEmitter, span: ast.Span) void {
         const function = self.currentMirFunction() orelse return;
+        const view = mir_facts_view.MirFactsView.init(&self.mir_module);
+        const source = mir.sourcePointFromSpan(span);
         for (function.pointer_provenance_facts) |fact| {
-            if (!mirSourceMatches(span, fact.source)) continue;
-            switch (fact.invalidation_reason) {
-                .call, .indirect_call => {},
-                else => continue,
-            }
+            if (!view.pointerFactIsCallInvalidationAt(fact, source)) continue;
             if (fact.field_path) |field_path| {
                 self.clearAggregatePointerFieldsForLocalPath(fact.subject, field_path);
                 continue;
@@ -6205,17 +6198,11 @@ const LlvmEmitter = struct {
 
     fn applyMirAggregatePointerFieldFactsAtSource(self: *LlvmEmitter, subject: []const u8, field_path: []const u8, element_index: ?usize, span: ast.Span) !bool {
         const function = self.currentMirFunction() orelse return false;
+        const view = mir_facts_view.MirFactsView.init(&self.mir_module);
+        const query: mir_facts_view.PointerFactQuery = .{ .subject = subject, .field_path = field_path, .element_index = element_index, .source = mir.sourcePointFromSpan(span) };
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (!std.mem.eql(u8, fact.subject, subject)) continue;
-            const fact_field = fact.field_path orelse continue;
-            if (!std.mem.eql(u8, fact_field, field_path)) continue;
-            if (element_index) |wanted| {
-                if (fact.element_index == null or fact.element_index.? != wanted) continue;
-            } else if (fact.element_index != null) {
-                continue;
-            }
-            if (!mirSourceMatches(span, fact.source)) continue;
+            if (!view.pointerFactMatchesQuery(fact, query)) continue;
             matched = true;
             try self.emitMirPointerProvenanceConsumedComment(fact);
             try self.applyMirPointerProvenanceFactState(fact);
@@ -6225,11 +6212,11 @@ const LlvmEmitter = struct {
 
     fn applyMirAggregatePointerFieldFactsForSubjectAtSource(self: *LlvmEmitter, subject: []const u8, span: ast.Span) !bool {
         const function = self.currentMirFunction() orelse return false;
+        const view = mir_facts_view.MirFactsView.init(&self.mir_module);
+        const source = mir.sourcePointFromSpan(span);
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (!std.mem.eql(u8, fact.subject, subject)) continue;
-            if (fact.field_path == null) continue;
-            if (!mirSourceMatches(span, fact.source)) continue;
+            if (!view.pointerFactMatchesSubjectFieldAtSource(fact, subject, source)) continue;
             matched = true;
             try self.emitMirPointerProvenanceConsumedComment(fact);
             try self.applyMirPointerProvenanceFactState(fact);
