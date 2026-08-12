@@ -36,10 +36,8 @@ pub const PointerFactQuery = struct {
 };
 
 pub const MirFactsView = struct {
-    module: *const mir.Module,
-
-    pub fn init(module: *const mir.Module) MirFactsView {
-        return .{ .module = module };
+    pub fn init() MirFactsView {
+        return .{};
     }
 
     /// Returns an unowned, verified target-type fact from the current function.

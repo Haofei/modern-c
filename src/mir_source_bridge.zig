@@ -28,23 +28,28 @@ pub fn isSourceSpan(span: ast_bridge.Span) bool {
 }
 
 pub fn firstCallTargetKindAt(module: *const mir.Module, current: ?*const mir.Function, span: ast_bridge.Span) ?mir.CallTargetKind {
-    return MirFactsView.init(module).firstCallTargetKindAt(current, mir.sourcePointFromSpan(span));
+    _ = module;
+    return MirFactsView.init().firstCallTargetKindAt(current, mir.sourcePointFromSpan(span));
 }
 
 pub fn uniqueCallTargetKindAt(module: *const mir.Module, current: ?*const mir.Function, span: ast_bridge.Span) ?mir.CallTargetKind {
-    return MirFactsView.init(module).uniqueCallTargetKindAt(current, mir.sourcePointFromSpan(span));
+    _ = module;
+    return MirFactsView.init().uniqueCallTargetKindAt(current, mir.sourcePointFromSpan(span));
 }
 
 pub fn hasCallTargetKindAt(module: *const mir.Module, current: ?*const mir.Function, kind: mir.CallTargetKind, span: ast_bridge.Span, strict_call_source: bool) bool {
-    return MirFactsView.init(module).hasCallTargetKindAt(current, kind, mir.sourcePointFromSpan(span), strict_call_source);
+    _ = module;
+    return MirFactsView.init().hasCallTargetKindAt(current, kind, mir.sourcePointFromSpan(span), strict_call_source);
 }
 
 pub fn targetTypeFactById(module: *const mir.Module, current: *const mir.Function, key: TargetTypeLookupKey) ?mir.TargetTypeFact {
-    return MirFactsView.init(module).targetTypeFactById(current, key);
+    _ = module;
+    return MirFactsView.init().targetTypeFactById(current, key);
 }
 
 pub fn targetTypeFactAtCurrentSpan(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
-    return MirFactsView.init(module).targetTypeFactAtCurrentSpan(.{
+    _ = module;
+    return MirFactsView.init().targetTypeFactAtCurrentSpan(.{
         .current = current,
         .fact = .{
             .kind = kind,
@@ -54,8 +59,9 @@ pub fn targetTypeFactAtCurrentSpan(module: *const mir.Module, current: ?*const m
 }
 
 pub fn targetTypeFactMatchingType(module: *const mir.Module, current: ?*const mir.Function, type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), kind: mir.TargetTypeKind, span: ast_bridge.Span, expected_ty: ast_bridge.TypeExpr) ?mir.TargetTypeFact {
+    _ = module;
     const function = current orelse return null;
-    const view = MirFactsView.init(module);
+    const view = MirFactsView.init();
     const query: mir_facts_view.TargetTypeFactQuery = .{ .kind = kind, .source = mir.sourcePointFromSpan(span) };
     const resolved_expected = type_bridge.resolveAliasType(type_aliases, expected_ty);
     for (function.target_type_facts) |fact| {
@@ -66,8 +72,9 @@ pub fn targetTypeFactMatchingType(module: *const mir.Module, current: ?*const mi
 }
 
 pub fn atomicInitPayloadTypeAt(module: *const mir.Module, current: ?*const mir.Function, type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), span: ast_bridge.Span, expected_result_ty: ast_bridge.TypeExpr, expected_payload_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
+    _ = module;
     const function = current orelse return null;
-    const view = MirFactsView.init(module);
+    const view = MirFactsView.init();
     const source = mir.sourcePointFromSpan(span);
     const resolved_result_ty = type_bridge.resolveAliasType(type_aliases, expected_result_ty);
     const resolved_expected_payload_ty = type_bridge.resolveAliasType(type_aliases, expected_payload_ty);
@@ -98,7 +105,8 @@ pub fn atomicInitPayloadTypeAt(module: *const mir.Module, current: ?*const mir.F
 }
 
 pub fn targetTypeFactAtOwnedCurrentSpan(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-    return MirFactsView.init(module).targetTypeFactAtOwnedCurrentSpan(.{
+    _ = module;
+    return MirFactsView.init().targetTypeFactAtOwnedCurrentSpan(.{
         .current = current,
         .fact = .{
             .kind = kind,
@@ -110,11 +118,13 @@ pub fn targetTypeFactAtOwnedCurrentSpan(module: *const mir.Module, current: ?*co
 }
 
 pub fn uniqueConstGetIndexAt(module: *const mir.Module, current: ?*const mir.Function, span: ast_bridge.Span) ?usize {
-    return MirFactsView.init(module).uniqueConstGetIndexAt(current, mir.sourcePointFromSpan(span));
+    _ = module;
+    return MirFactsView.init().uniqueConstGetIndexAt(current, mir.sourcePointFromSpan(span));
 }
 
 pub fn pointerFactMatchesAt(module: *const mir.Module, fact: mir.PointerProvenanceFact, subject: []const u8, element_index: ?usize, span: ast_bridge.Span) bool {
-    return MirFactsView.init(module).pointerFactMatchesQuery(fact, .{
+    _ = module;
+    return MirFactsView.init().pointerFactMatchesQuery(fact, .{
         .subject = subject,
         .element_index = element_index,
         .source = mir.sourcePointFromSpan(span),
@@ -122,7 +132,8 @@ pub fn pointerFactMatchesAt(module: *const mir.Module, fact: mir.PointerProvenan
 }
 
 pub fn aggregatePointerFieldFactMatchesAt(module: *const mir.Module, fact: mir.PointerProvenanceFact, subject: []const u8, field_path: []const u8, element_index: ?usize, span: ast_bridge.Span) bool {
-    return MirFactsView.init(module).pointerFactMatchesQuery(fact, .{
+    _ = module;
+    return MirFactsView.init().pointerFactMatchesQuery(fact, .{
         .subject = subject,
         .field_path = field_path,
         .element_index = element_index,
@@ -131,11 +142,13 @@ pub fn aggregatePointerFieldFactMatchesAt(module: *const mir.Module, fact: mir.P
 }
 
 pub fn pointerFactIsCallInvalidationAt(module: *const mir.Module, fact: mir.PointerProvenanceFact, span: ast_bridge.Span) bool {
-    return MirFactsView.init(module).pointerFactIsCallInvalidationAt(fact, mir.sourcePointFromSpan(span));
+    _ = module;
+    return MirFactsView.init().pointerFactIsCallInvalidationAt(fact, mir.sourcePointFromSpan(span));
 }
 
 pub fn pointerFactMatchesSubjectFieldAt(module: *const mir.Module, fact: mir.PointerProvenanceFact, subject: []const u8, span: ast_bridge.Span) bool {
-    return MirFactsView.init(module).pointerFactMatchesSubjectFieldAtSource(fact, subject, mir.sourcePointFromSpan(span));
+    _ = module;
+    return MirFactsView.init().pointerFactMatchesSubjectFieldAtSource(fact, subject, mir.sourcePointFromSpan(span));
 }
 
 pub fn pointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {

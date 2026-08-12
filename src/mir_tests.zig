@@ -361,7 +361,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
     const ok_fact = targetTypeFactByKind(ok_source, .result_ok) orelse return error.TestUnexpectedResult;
     const err_fact = targetTypeFactByKind(err_source, .result_err) orelse return error.TestUnexpectedResult;
     const bind_fact = targetTypeFactByKind(bind_source, .bind) orelse return error.TestUnexpectedResult;
-    const db = mir_facts_view.MirFactsView.init(&module_mir);
+    const db = mir_facts_view.MirFactsView.init();
     const result_span = result_fact.source;
 
     try std.testing.expect(db.targetTypeFactAtOwned(&callee, .direct_call_result, result_span, result_fact.target_owner.?, result_fact.target_index) == null);
@@ -1490,7 +1490,7 @@ test "MIR owns qualified union and enum variant path result types" {
     for (shadow.target_type_facts) |fact| {
         try std.testing.expect(fact.kind != .enum_variant_path_result);
     }
-    const facts = mir_facts_view.MirFactsView.init(&typed_mir);
+    const facts = mir_facts_view.MirFactsView.init();
     try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
         .current = &shadow,
         .fact = .{
@@ -2814,7 +2814,7 @@ test "MIR owns inferred local dyn dispatch call types" {
     const void_argument_fact = targetTypeFactByKind(notify, .dyn_dispatch_argument) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(?usize, mir.dynDispatchArgumentFactIndex(1, 0)), void_argument_fact.target_index);
     const notify_ptr = functionByNamePtr(&typed_mir, "notify").?;
-    const facts = mir_facts_view.MirFactsView.init(&typed_mir);
+    const facts = mir_facts_view.MirFactsView.init();
     try std.testing.expect(facts.targetTypeFactAtOwnedCurrentSpan(.{
         .current = notify_ptr,
         .fact = .{
@@ -2910,7 +2910,7 @@ test "MIR owns indirect function-pointer and closure callee signatures" {
     var typed_mir = try mir.build(std.testing.allocator, module);
     defer typed_mir.deinit();
     const increment = functionByName(typed_mir, "increment").?;
-    const facts = mir_facts_view.MirFactsView.init(&typed_mir);
+    const facts = mir_facts_view.MirFactsView.init();
     for ([_][]const u8{ "invoke_pointer", "invoke_closure" }) |name| {
         const function = functionByName(typed_mir, name).?;
         const fact = targetTypeFactByKind(function, .indirect_call_callee) orelse return error.TestUnexpectedResult;
@@ -3404,7 +3404,7 @@ test "MIR owns const_get base result and index facts" {
     try std.testing.expectEqualStrings("Words", typeExprHeadName(base_fact.?.target_ty).?);
     try std.testing.expectEqualStrings("u32", typeExprHeadName(result_fact.?.target_ty).?);
     try std.testing.expectEqual(@as(?usize, 2), instruction_index);
-    const facts = mir_facts_view.MirFactsView.init(&typed_mir);
+    const facts = mir_facts_view.MirFactsView.init();
     try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
         .current = other,
         .fact = .{
@@ -5370,7 +5370,7 @@ test "MIR records typed call target facts for atomic member calls" {
     try std.testing.expectEqualStrings("u32", init_payload.target_ty.kind.name.text);
     try std.testing.expectEqualStrings("atomic", init_result.target_ty.kind.generic.base.text);
     const other = functionByNamePtr(&typed_mir, "other").?;
-    const facts = mir_facts_view.MirFactsView.init(&typed_mir);
+    const facts = mir_facts_view.MirFactsView.init();
     try std.testing.expect(facts.targetTypeFactAtOwnedCurrentSpan(.{
         .current = other,
         .fact = .{
