@@ -566,7 +566,7 @@ test "tests/spec fixtures produce declared IR inspection facts" {
                 try std.testing.expect(false);
             }
             if (std.mem.eql(u8, check, "no-language-trap-edge") or std.mem.eql(u8, check, "contract_region")) {
-                var module_ir = try ir.buildModuleIr(allocator, module);
+                var module_ir = try ir.buildModuleIrFromModuleForSpecHarness(allocator, module);
                 defer module_ir.deinit();
                 if (!hasLowerIrEvidenceForCheck(module_ir, check)) {
                     std.debug.print("{s}: expected lower-ir artifact evidence for {s}\n", .{ path, check });

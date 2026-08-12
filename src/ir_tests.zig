@@ -4,7 +4,6 @@ const diagnostics = @import("diagnostics.zig");
 const ir = @import("ir_inspection.zig");
 const module_graph = @import("module_graph.zig");
 const module_parser = @import("module_parser.zig");
-const parser = @import("parser.zig");
 
 test "writes early inspection facts for parser AST" {
     const source =
@@ -151,19 +150,16 @@ fn resolvedSourceDatabase(allocator: std.mem.Allocator, path: []const u8, source
 }
 
 fn expectLowerIrOutOfMemory(source: []const u8, fail_index: usize) !void {
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "lower_ir_oom.mc", source);
-    defer reporter.deinit();
-
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
+    var fixture = try resolvedSourceDatabase(arena.allocator(), "lower_ir_oom.mc", source);
+    defer fixture.deinit(arena.allocator());
 
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
+    const decls = try fixture.resolved.collectDecls(std.testing.allocator);
+    defer std.testing.allocator.free(decls);
 
     var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
-    var module_ir = ir.buildModuleIr(failing.allocator(), module) catch |err| {
+    var module_ir = ir.buildModuleIrFromDecls(failing.allocator(), decls) catch |err| {
         try std.testing.expectEqual(error.OutOfMemory, err);
         try std.testing.expect(failing.has_induced_failure);
         try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);

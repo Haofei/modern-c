@@ -102,7 +102,7 @@ fn deinitFunctionIr(allocator: std.mem.Allocator, function: FunctionIr) void {
     allocator.free(function.unchecked_calls);
 }
 
-pub fn buildModuleIr(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr {
+pub fn buildModuleIrFromModuleForSpecHarness(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr {
     var functions: std.ArrayList(FunctionIr) = .empty;
     errdefer {
         for (functions.items) |function| {
