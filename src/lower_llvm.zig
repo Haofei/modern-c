@@ -5952,20 +5952,20 @@ const LlvmEmitter = struct {
     }
 
     fn mirCallTargetKindAt(self: *LlvmEmitter, span: ast_bridge.Span) ?mir.CallTargetKind {
-        return mir_source_bridge.uniqueCallTargetKindAt(&self.mir_module, self.currentMirFunction(), span);
+        return mir_source_bridge.uniqueCallTargetKindAt(self.currentMirFunction(), span);
     }
 
     fn mirHasCallTargetKindAt(self: *LlvmEmitter, kind: mir.CallTargetKind, span: ast_bridge.Span) bool {
-        return mir_source_bridge.hasCallTargetKindAt(&self.mir_module, self.currentMirFunction(), kind, span, true);
+        return mir_source_bridge.hasCallTargetKindAt(self.currentMirFunction(), kind, span, true);
     }
 
     fn atomicInitPayloadTypeAt(self: *LlvmEmitter, span: ast_bridge.Span, expected_result_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const expected_payload_ty = lower_llvm_shape.atomicPayloadType(&self.type_aliases, self.resolveAliasType(expected_result_ty)) orelse return null;
-        return mir_source_bridge.atomicInitPayloadTypeAt(&self.mir_module, self.currentMirFunction(), &self.type_aliases, span, expected_result_ty, expected_payload_ty);
+        return mir_source_bridge.atomicInitPayloadTypeAt(self.currentMirFunction(), &self.type_aliases, span, expected_result_ty, expected_payload_ty);
     }
 
     fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
-        return mir_source_bridge.targetTypeFactAtCurrentSpan(&self.mir_module, self.currentMirFunction(), kind, span);
+        return mir_source_bridge.targetTypeFactAtCurrentSpan(self.currentMirFunction(), kind, span);
     }
 
     fn contextualTargetTypeAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, generated_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
@@ -6001,11 +6001,11 @@ const LlvmEmitter = struct {
     }
 
     fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-        return mir_source_bridge.targetTypeFactAtOwnedCurrentSpan(&self.mir_module, self.currentMirFunction(), kind, span, target_owner, target_index);
+        return mir_source_bridge.targetTypeFactAtOwnedCurrentSpan(self.currentMirFunction(), kind, span, target_owner, target_index);
     }
 
     fn mirConstGetIndexAt(self: *LlvmEmitter, span: ast_bridge.Span) ?usize {
-        return mir_source_bridge.uniqueConstGetIndexAt(&self.mir_module, self.currentMirFunction(), span);
+        return mir_source_bridge.uniqueConstGetIndexAt(self.currentMirFunction(), span);
     }
 
     fn mirFactSubjectSupportedNow(self: *LlvmEmitter, fact: mir.PointerProvenanceFact) bool {
@@ -6110,7 +6110,7 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (!mir_source_bridge.pointerFactMatchesAt(&self.mir_module, fact, subject, element_index, span)) continue;
+            if (!mir_source_bridge.pointerFactMatchesAt(fact, subject, element_index, span)) continue;
             matched = true;
             switch (comment_mode) {
                 .silent => {
@@ -6126,7 +6126,7 @@ const LlvmEmitter = struct {
     fn applyMirPointerProvenanceInvalidationsAtCall(self: *LlvmEmitter, span: ast_bridge.Span) void {
         const function = self.currentMirFunction() orelse return;
         for (function.pointer_provenance_facts) |fact| {
-            if (!mir_source_bridge.pointerFactIsCallInvalidationAt(&self.mir_module, fact, span)) continue;
+            if (!mir_source_bridge.pointerFactIsCallInvalidationAt(fact, span)) continue;
             if (fact.field_path) |field_path| {
                 self.clearAggregatePointerFieldsForLocalPath(fact.subject, field_path);
                 continue;
@@ -6150,7 +6150,7 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (!mir_source_bridge.aggregatePointerFieldFactMatchesAt(&self.mir_module, fact, subject, field_path, element_index, span)) continue;
+            if (!mir_source_bridge.aggregatePointerFieldFactMatchesAt(fact, subject, field_path, element_index, span)) continue;
             matched = true;
             try self.emitMirPointerProvenanceConsumedComment(fact);
             try self.applyMirPointerProvenanceFactState(fact);
@@ -6162,7 +6162,7 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (!mir_source_bridge.pointerFactMatchesSubjectFieldAt(&self.mir_module, fact, subject, span)) continue;
+            if (!mir_source_bridge.pointerFactMatchesSubjectFieldAt(fact, subject, span)) continue;
             matched = true;
             try self.emitMirPointerProvenanceConsumedComment(fact);
             try self.applyMirPointerProvenanceFactState(fact);

@@ -6211,32 +6211,32 @@ pub const CEmitter = struct {
     }
 
     fn mirCallTargetKindAt(self: *CEmitter, span: ast_bridge.Span) ?mir.CallTargetKind {
-        return mir_source_bridge.firstCallTargetKindAt(self.mir_module, self.currentMirFunction(), span);
+        return mir_source_bridge.firstCallTargetKindAt(self.currentMirFunction(), span);
     }
 
     fn mirHasCallTargetKindAt(self: *CEmitter, kind: mir.CallTargetKind, span: ast_bridge.Span) bool {
-        return mir_source_bridge.hasCallTargetKindAt(self.mir_module, self.currentMirFunction(), kind, span, false);
+        return mir_source_bridge.hasCallTargetKindAt(self.currentMirFunction(), kind, span, false);
     }
 
     fn atomicInitPayloadTypeAt(self: *CEmitter, span: ast_bridge.Span, expected_result_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
         const expected_payload_ty = lower_c_shape.atomicPayloadOfType(self.resolveAliasType(expected_result_ty)) orelse return null;
-        return mir_source_bridge.atomicInitPayloadTypeAt(self.mir_module, self.currentMirFunction(), &self.type_aliases, span, expected_result_ty, expected_payload_ty);
+        return mir_source_bridge.atomicInitPayloadTypeAt(self.currentMirFunction(), &self.type_aliases, span, expected_result_ty, expected_payload_ty);
     }
 
     fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
-        return mir_source_bridge.targetTypeFactAtCurrentSpan(self.mir_module, self.currentMirFunction(), kind, span);
+        return mir_source_bridge.targetTypeFactAtCurrentSpan(self.currentMirFunction(), kind, span);
     }
 
     fn mirTargetTypeFactMatchingType(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, expected_ty: ast_bridge.TypeExpr) ?mir.TargetTypeFact {
-        return mir_source_bridge.targetTypeFactMatchingType(self.mir_module, self.currentMirFunction(), &self.type_aliases, kind, span, expected_ty);
+        return mir_source_bridge.targetTypeFactMatchingType(self.currentMirFunction(), &self.type_aliases, kind, span, expected_ty);
     }
 
     fn mirTargetTypeFactAtOwned(self: *CEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-        return mir_source_bridge.targetTypeFactAtOwnedCurrentSpan(self.mir_module, self.currentMirFunction(), kind, span, target_owner, target_index);
+        return mir_source_bridge.targetTypeFactAtOwnedCurrentSpan(self.currentMirFunction(), kind, span, target_owner, target_index);
     }
 
     fn mirConstGetIndexAt(self: *CEmitter, span: ast_bridge.Span) ?usize {
-        return mir_source_bridge.uniqueConstGetIndexAt(self.mir_module, self.currentMirFunction(), span);
+        return mir_source_bridge.uniqueConstGetIndexAt(self.currentMirFunction(), span);
     }
 
     fn mirAggregateTargetTypeForExpr(self: *CEmitter, expr: ast_bridge.Expr) !?ast_bridge.TypeExpr {
@@ -6626,7 +6626,7 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (!mir_source_bridge.pointerFactMatchesAt(self.mir_module, fact, subject, element_index, span)) continue;
+            if (!mir_source_bridge.pointerFactMatchesAt(fact, subject, element_index, span)) continue;
             matched = true;
             try self.applyMirPointerProvenanceFact(fact, locals);
         }
@@ -6636,7 +6636,7 @@ pub const CEmitter = struct {
     fn applyMirPointerProvenanceInvalidationsAtCall(self: *CEmitter, span: ast_bridge.Span, locals: ?*std.StringHashMap(LocalInfo)) void {
         const function = self.currentMirFunction() orelse return;
         for (function.pointer_provenance_facts) |fact| {
-            if (!mir_source_bridge.pointerFactIsCallInvalidationAt(self.mir_module, fact, span)) continue;
+            if (!mir_source_bridge.pointerFactIsCallInvalidationAt(fact, span)) continue;
             if (fact.field_path) |field_path| {
                 self.clearAggregatePointerFieldsForLocalPath(fact.subject, field_path);
                 continue;
@@ -6660,7 +6660,7 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (!mir_source_bridge.aggregatePointerFieldFactMatchesAt(self.mir_module, fact, subject, field_path, element_index, span)) continue;
+            if (!mir_source_bridge.aggregatePointerFieldFactMatchesAt(fact, subject, field_path, element_index, span)) continue;
             matched = true;
             try self.applyMirPointerProvenanceFact(fact, locals);
         }
@@ -6671,7 +6671,7 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return false;
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (!mir_source_bridge.pointerFactMatchesSubjectFieldAt(self.mir_module, fact, subject, span)) continue;
+            if (!mir_source_bridge.pointerFactMatchesSubjectFieldAt(fact, subject, span)) continue;
             matched = true;
             try self.applyMirPointerProvenanceFact(fact, locals);
         }
