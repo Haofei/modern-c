@@ -1508,7 +1508,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "valueIdForLocal(function, release.local_name)": 0,
         "pub const FunctionDeclArtifact": 1,
         "    fn_decl: ast.FnDecl,": 0,
-        "pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionDeclArtifact": 1,
+        "pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionDeclArtifact": 0,
         "pub fn toDecl(self: FunctionDeclArtifact) ast.FnDecl": 0,
         "artifact.fn_decl": 0,
         "artifact.name.text": 1,

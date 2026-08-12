@@ -19,23 +19,20 @@ pub const FunctionDeclArtifact = struct {
     is_async: bool,
     attrs: []const ast.Attr,
     is_extern: bool,
+};
 
-    pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionDeclArtifact {
+pub const DropGlueDeclArtifact = struct {
+    name: ast.Ident,
+    params: []ast.Param,
+    attrs: []const ast.Attr,
+    is_extern: bool,
+
+    pub fn fromFunctionArtifact(function: FunctionDeclArtifact) DropGlueDeclArtifact {
         return .{
-            .name = fn_decl.name,
-            .associated_owner = fn_decl.associated_owner,
-            .abi = fn_decl.abi,
-            .params = fn_decl.params,
-            .return_type = fn_decl.return_type,
-            .return_borrow_source = fn_decl.return_borrow_source,
-            .body = fn_decl.body,
-            .is_const = fn_decl.is_const,
-            .exported = fn_decl.exported,
-            .is_variadic = fn_decl.is_variadic,
-            .bounds = fn_decl.bounds,
-            .is_async = fn_decl.is_async,
-            .attrs = attrs,
-            .is_extern = is_extern,
+            .name = function.name,
+            .params = function.params,
+            .attrs = function.attrs,
+            .is_extern = function.is_extern,
         };
     }
 };
@@ -110,7 +107,7 @@ pub fn dropGlueFactsMatchDeclArtifacts(
     for (module.drop_glue_facts) |fact| {
         var matched = false;
         for (artifacts) |artifact| {
-            if (!dropGlueDeclArtifactMatches(module, fact, artifact)) continue;
+            if (!dropGlueDeclArtifactMatches(module, fact, DropGlueDeclArtifact.fromFunctionArtifact(artifact))) continue;
             matched = true;
             break;
         }
@@ -122,7 +119,7 @@ pub fn dropGlueFactsMatchDeclArtifacts(
 fn dropGlueDeclArtifactMatches(
     module: *const mir.Module,
     fact: mir.DropGlueFact,
-    artifact: FunctionDeclArtifact,
+    artifact: DropGlueDeclArtifact,
 ) bool {
     if (artifact.is_extern) return false;
     if (!std.mem.eql(u8, artifact.name.text, fact.release_fn)) return false;
