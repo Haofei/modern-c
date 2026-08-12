@@ -285,6 +285,8 @@ test "MIR target-type owner identities mirror direct calls" {
 
 test "MIR facts view keeps typed lookup and module fallback separate" {
     const source =
+        \\enum E { bad }
+        \\
         \\fn callee(x: u32) -> u32 {
         \\    return x;
         \\}
@@ -305,6 +307,14 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
         \\fn array_source() -> [2]u32 {
         \\    return .{ 1, 2 };
         \\}
+        \\
+        \\fn ok_source(value: u32) -> Result<u32, E> {
+        \\    return ok(value);
+        \\}
+        \\
+        \\fn err_source() -> Result<u32, E> {
+        \\    return err(.bad);
+        \\}
     ;
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_facts_view_typed_target_type.mc", source);
@@ -324,12 +334,16 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
     const literal_source = functionByName(module_mir, "literal_source").?;
     const text_source = functionByName(module_mir, "text_source").?;
     const array_source = functionByName(module_mir, "array_source").?;
+    const ok_source = functionByName(module_mir, "ok_source").?;
+    const err_source = functionByName(module_mir, "err_source").?;
     const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
     const expression_fact = targetTypeFactByKind(caller, .expression_result) orelse return error.TestUnexpectedResult;
     const local_fact = targetTypeFactByKind(caller, .inferred_local) orelse return error.TestUnexpectedResult;
     const float_fact = targetTypeFactByKind(literal_source, .float_literal) orelse return error.TestUnexpectedResult;
     const string_fact = targetTypeFactByKind(text_source, .string_literal) orelse return error.TestUnexpectedResult;
     const array_fact = targetTypeFactByKind(array_source, .array_literal) orelse return error.TestUnexpectedResult;
+    const ok_fact = targetTypeFactByKind(ok_source, .result_ok) orelse return error.TestUnexpectedResult;
+    const err_fact = targetTypeFactByKind(err_source, .result_err) orelse return error.TestUnexpectedResult;
     const db = mir_facts_view.MirFactsView.init(&module_mir);
     const result_span = result_fact.source;
 
@@ -379,6 +393,20 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
         .fact = .{
             .kind = .array_literal,
             .source = array_fact.source,
+        },
+    }) == null);
+    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+        .current = &callee,
+        .fact = .{
+            .kind = .result_ok,
+            .source = ok_fact.source,
+        },
+    }) == null);
+    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+        .current = &callee,
+        .fact = .{
+            .kind = .result_err,
+            .source = err_fact.source,
         },
     }) == null);
 
