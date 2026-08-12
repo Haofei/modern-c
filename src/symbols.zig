@@ -502,33 +502,11 @@ fn initBuilder(arena_allocator: std.mem.Allocator) Builder {
     };
 }
 
-fn collectModule(b: *Builder, module: ast.Module, span_offset: usize) !void {
-    b.span_offset = span_offset;
-    for (module.decls) |decl| try collectDecl(b, decl);
-}
-
-fn walkModule(b: *Builder, module: ast.Module, span_offset: usize) !void {
-    b.span_offset = span_offset;
-    for (module.decls) |decl| try walkDeclBody(b, decl);
-}
-
 fn sourceStartForFile(graph: module_graph.ModuleGraph, id: module_graph.FileId) usize {
     for (graph.files) |file| {
         if (file.id == id) return file.source_start;
     }
     return 0;
-}
-
-pub fn emitJson(allocator: std.mem.Allocator, module: ast.Module, reporter: *const diagnostics.Reporter, out: *std.ArrayList(u8)) !void {
-    var arena_state = std.heap.ArenaAllocator.init(allocator);
-    defer arena_state.deinit();
-    const a = arena_state.allocator();
-
-    var b = initBuilder(a);
-
-    try collectModule(&b, module, 0);
-    try walkModule(&b, module, 0);
-    try writeJson(allocator, &b, reporter, out);
 }
 
 pub fn emitJsonFromResolvedSources(
