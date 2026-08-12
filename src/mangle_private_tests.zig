@@ -29,11 +29,11 @@ fn expectPrivateMangle(mode: ast.VisibilityMode, expected_a: []const u8, expecte
         .{ .start = 0, .path = "private_a.mc" },
         .{ .start = file_a.len, .path = "private_b.mc" },
     };
-    const transformed = try mangle_private.transform(arena.allocator(), module, &boundaries);
+    const transformed_decls = try mangle_private.transformDecls(arena.allocator(), module.decls, module.visibility_mode, &boundaries);
 
     var helper_a: ?[]const u8 = null;
     var helper_b: ?[]const u8 = null;
-    for (transformed.decls) |decl| {
+    for (transformed_decls) |decl| {
         if (decl.kind != .fn_decl) continue;
         const fn_decl = decl.kind.fn_decl;
         if (std.mem.eql(u8, fn_decl.name.text, "call_a")) {
@@ -74,11 +74,11 @@ test "private mangling rewrites declaration-level value references" {
         .{ .start = 0, .path = "private_decl_a.mc" },
         .{ .start = file_a.len, .path = "private_decl_b.mc" },
     };
-    const transformed = try mangle_private.transform(arena.allocator(), module, &boundaries);
+    const transformed_decls = try mangle_private.transformDecls(arena.allocator(), module.decls, module.visibility_mode, &boundaries);
 
     var lengths: [2]?[]const u8 = .{ null, null };
     var index: usize = 0;
-    for (transformed.decls) |decl| {
+    for (transformed_decls) |decl| {
         if (decl.kind != .struct_decl) continue;
         const len = decl.kind.struct_decl.fields[0].ty.kind.array.len;
         lengths[index] = len.kind.ident.text;
@@ -115,12 +115,12 @@ test "private mangling avoids user names and rewrites statement contracts" {
         .{ .start = 0, .path = "private_contract_a.mc" },
         .{ .start = file_a.len, .path = "private_contract_b.mc" },
     };
-    const transformed = try mangle_private.transform(arena.allocator(), module, &boundaries);
+    const transformed_decls = try mangle_private.transformDecls(arena.allocator(), module.decls, module.visibility_mode, &boundaries);
 
     var contract_names: [2]?[]const u8 = .{ null, null };
     var contract_index: usize = 0;
     var saw_disambiguated = false;
-    for (transformed.decls) |decl| switch (decl.kind) {
+    for (transformed_decls) |decl| switch (decl.kind) {
         .global_decl => |global| {
             if (std.mem.startsWith(u8, global.name.text, "LIMIT__mcp0__g")) saw_disambiguated = true;
         },

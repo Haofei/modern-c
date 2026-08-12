@@ -183,10 +183,11 @@ pub const CompilationSession = struct {
             if (render_errors) diag.render();
             return error.ParseFailed;
         }
-        return mangle_private.transform(allocator, specialized, self.file_boundaries) catch |err| {
+        const mangled_decls = mangle_private.transformDecls(allocator, specialized.decls, specialized.visibility_mode, self.file_boundaries) catch |err| {
             if (render_errors) diag.render();
             return err;
         };
+        return specialized.withDecls(mangled_decls);
     }
 
     fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {

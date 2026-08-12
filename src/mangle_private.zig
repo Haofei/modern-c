@@ -62,31 +62,31 @@ const NameInfo = struct {
 };
 
 // Rewrite file-private colliding top-level names to per-file-unique mangled names, in place.
-// No-op (returns `module` untouched) unless at least two files are involved and at least one
+// No-op (returns `decls` untouched) unless at least two files are involved and at least one
 // name genuinely collides across files, so single-file / non-colliding code is never changed.
-pub fn transform(arena: std.mem.Allocator, module: ast.Module, boundaries: ?[]const loader.FileBoundary) !ast.Module {
-    const b = boundaries orelse return module;
-    if (b.len < 2) return module;
+pub fn transformDecls(arena: std.mem.Allocator, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, boundaries: ?[]const loader.FileBoundary) ![]ast.Decl {
+    const b = boundaries orelse return decls;
+    if (b.len < 2) return decls;
 
     // Explicit mode makes every file private-by-default. Legacy mode preserves the original
     // per-file opt-in rule for source compatibility.
     var strict_files = std.AutoHashMap(usize, void).init(arena);
     defer strict_files.deinit();
-    if (module.visibility_mode == .explicit_public) {
+    if (visibility_mode == .explicit_public) {
         for (b, 0..) |_, fi| try strict_files.put(fi, {});
     } else {
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             if (!decl.is_pub) continue;
             if (originFileIndex(b, decl.span.offset)) |fi| try strict_files.put(fi, {});
         }
     }
-    if (strict_files.count() == 0) return module;
+    if (strict_files.count() == 0) return decls;
 
     // Bucket every top-level name: is it ever non-renameable, and which files hold a
     // renameable file-private decl of it?
     var names = std.StringHashMap(NameInfo).init(arena);
     defer names.deinit();
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         if (decl.kind == .impl_trait) continue; // introduces no importable name of its own
         const nm = declName(decl).text;
         const gop = try names.getOrPut(nm);
@@ -131,10 +131,10 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, boundaries: ?[]co
             any = true;
         }
     }
-    if (!any) return module;
+    if (!any) return decls;
 
     // Rename the declarations themselves.
-    for (module.decls) |*decl| {
+    for (decls) |*decl| {
         const fi = originFileIndex(b, decl.span.offset) orelse continue;
         const map = per_file.get(fi) orelse continue;
         const new = map.get(declName(decl.*).text) orelse continue;
@@ -142,14 +142,14 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, boundaries: ?[]co
     }
 
     // Rewrite file-local references (scope-aware) in every decl that lives in a renaming file.
-    for (module.decls) |*decl| {
+    for (decls) |*decl| {
         const fi = originFileIndex(b, decl.span.offset) orelse continue;
         const map = per_file.get(fi) orelse continue;
         var w = Walker{ .arena = arena, .map = map };
         try w.walkDecl(decl);
     }
 
-    return module;
+    return decls;
 }
 
 fn spansTwoFiles(files: []const usize) bool {
