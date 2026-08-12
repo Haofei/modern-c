@@ -608,8 +608,8 @@ fn emitCheckDiagnostics(session: *CompilationSession, diag: *diagnostics.Reporte
 // any other on both backends.
 fn runListTests(session: *CompilationSession, path: []const u8, source: []const u8) !void {
     const allocator = session.allocator;
-    var diag = session.initReporter(path, source);
-    defer diag.deinit();
+    _ = path;
+    _ = source;
 
     if (session.resolved_sources) |resolved_sources| {
         var out: std.ArrayList(u8) = .empty;
@@ -620,33 +620,11 @@ fn runListTests(session: *CompilationSession, path: []const u8, source: []const 
         try session.writeStdout(out.items);
         return;
     }
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
-    defer module.deinit(parse_allocator);
-
-    if (diag.has_errors) {
-        diag.render();
-        return error.CheckFailed;
-    }
-
-    var out: std.ArrayList(u8) = .empty;
-    defer out.deinit(allocator);
-    try appendModuleTests(allocator, module, &out);
-    try session.writeStdout(out.items);
+    return error.MissingResolvedSources;
 }
 
 fn appendResolvedTests(allocator: std.mem.Allocator, decls: []const module_parser.ResolvedDecl, out: *std.ArrayList(u8)) !void {
     for (decls) |entry| try appendDeclTest(allocator, entry.decl, out);
-}
-
-fn appendModuleTests(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    for (module.decls) |decl| {
-        try appendDeclTest(allocator, decl, out);
-    }
 }
 
 fn appendDeclTest(allocator: std.mem.Allocator, decl: ast.Decl, out: *std.ArrayList(u8)) !void {
