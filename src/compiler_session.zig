@@ -10,6 +10,7 @@ const generic_precheck = @import("generic_precheck.zig");
 const loader = @import("loader.zig");
 const mangle_private = @import("mangle_private.zig");
 const mir = @import("mir.zig");
+const module_parser = @import("module_parser.zig");
 const monomorphize = @import("monomorphize.zig");
 const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
@@ -37,6 +38,7 @@ pub const CompilationSession = struct {
     // module was loaded (e.g. `fmt`, which bypasses the loader).
     file_boundaries: ?[]const loader.FileBoundary = null,
     module_graph: ?*const loader.ModuleGraph = null,
+    resolved_sources: ?*const module_parser.ResolvedSourceDatabase = null,
     visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) CompilationSession {
@@ -103,6 +105,22 @@ pub const CompilationSession = struct {
         var reporter = diagnostics.Reporter.init(self.allocator, path, source);
         reporter.file_boundaries = self.file_boundaries;
         return reporter;
+    }
+
+    pub fn attachLoadedProjectSyntax(
+        self: *CompilationSession,
+        project: *const loader.LoadedProject,
+        parse_allocator: std.mem.Allocator,
+        reporter: *diagnostics.Reporter,
+        parsed_out: *module_parser.ParsedSourceDatabase,
+        resolved_out: *module_parser.ResolvedSourceDatabase,
+    ) !void {
+        parsed_out.* = try module_parser.parseSourceDatabase(parse_allocator, project.graph, project.source_db, reporter);
+        var parsed_ready = true;
+        errdefer if (parsed_ready) parsed_out.deinit(parse_allocator);
+        resolved_out.* = try module_parser.resolveParsedSourceDatabase(parse_allocator, parsed_out.*);
+        self.resolved_sources = resolved_out;
+        parsed_ready = false;
     }
 
     pub fn parseModuleOrReport(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ast.Module {
@@ -206,6 +224,7 @@ test "CompilationSession keeps parse context request scoped" {
     var session_a = CompilationSession.init(std.testing.allocator, std.testing.io);
     session_a.visibility_mode = .explicit_public;
     session_a.file_boundaries = boundaries_a[0..];
+    try std.testing.expect(session_a.resolved_sources == null);
     var diag_a = session_a.initReporter("root_a.mc", source);
     defer diag_a.deinit();
     try std.testing.expectEqualStrings("a.mc", diag_a.file_boundaries.?[0].path);
@@ -218,6 +237,7 @@ test "CompilationSession keeps parse context request scoped" {
     var boundaries_b = [_]loader.FileBoundary{.{ .start = 0, .path = "b.mc" }};
     var session_b = CompilationSession.init(std.testing.allocator, std.testing.io);
     session_b.file_boundaries = boundaries_b[0..];
+    try std.testing.expect(session_b.resolved_sources == null);
     var diag_b = session_b.initReporter("root_b.mc", source);
     defer diag_b.deinit();
     try std.testing.expectEqualStrings("b.mc", diag_b.file_boundaries.?[0].path);
@@ -226,6 +246,33 @@ test "CompilationSession keeps parse context request scoped" {
     const module_b = try session_b.parseModuleOrReportMode(source, arena_b.allocator(), &diag_b, false);
     defer module_b.deinit(arena_b.allocator());
     try std.testing.expectEqual(ast.VisibilityMode.legacy_pub_opt_in, module_b.visibility_mode);
+}
+
+test "CompilationSession attaches per-file resolved module syntax" {
+    const root_path = "tests/spec_support/import_wide_root.mc";
+    const root_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, root_path, std.testing.allocator, .limited(1 << 20));
+    defer std.testing.allocator.free(root_source);
+
+    var loaded = try loader.loadProjectOptionsReport(std.testing.allocator, std.testing.io, root_path, root_source, .{}, null);
+    defer loaded.deinit(std.testing.allocator);
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, root_path, loaded.source);
+    defer reporter.deinit();
+    var session = CompilationSession.init(std.testing.allocator, std.testing.io);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var parsed_sources: module_parser.ParsedSourceDatabase = undefined;
+    var resolved_sources: module_parser.ResolvedSourceDatabase = undefined;
+    try session.attachLoadedProjectSyntax(&loaded, arena.allocator(), &reporter, &parsed_sources, &resolved_sources);
+    defer {
+        resolved_sources.deinit(arena.allocator());
+        parsed_sources.deinit(arena.allocator());
+    }
+
+    try std.testing.expect(!reporter.has_errors);
+    try std.testing.expect(session.resolved_sources != null);
+    try std.testing.expectEqual(loaded.graph.files.len, session.resolved_sources.?.files.len);
+    try std.testing.expect(session.resolved_sources.?.moduleForFile(loaded.graph.files[0].id) != null);
 }
 
 test "CompilationSession restores artifact metadata sidecar snapshots" {

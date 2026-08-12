@@ -51,6 +51,7 @@ def main() -> int:
         "io: std.Io,",
         "file_boundaries: ?[]const loader.FileBoundary = null,",
         "module_graph: ?*const loader.ModuleGraph = null,",
+        "resolved_sources: ?*const module_parser.ResolvedSourceDatabase = null,",
         "visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in,",
         "pub fn writeStdout(self: *CompilationSession, bytes: []const u8) !void {",
         "pub fn writeOutputPath(self: *CompilationSession, path: []const u8, bytes: []const u8) !void {",
@@ -64,6 +65,7 @@ def main() -> int:
         "pub fn writeArtifactWithMetadata(self: *CompilationSession, bytes: []const u8, output_path: ?[]const u8, bundle: artifact_model.ArtifactBundle) !void {",
         "pub fn publishExistingArtifactWithMetadata(",
         "pub fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {",
+        "pub fn attachLoadedProjectSyntax(",
         "pub fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
         "pub fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
         "pub fn parseCheckedModuleOrReport(",
@@ -89,22 +91,26 @@ def main() -> int:
         "session.visibility_mode = options.visibility_mode;",
         "session.file_boundaries = loaded.boundaries;",
         "session.module_graph = &loaded.graph;",
+        "try session.attachLoadedProjectSyntax(&loaded, module_parse_arena.allocator(), &load_diag, &parsed_sources, &resolved_sources);",
         "const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);",
         "_ = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.LowerMirFailed);",
         "try mir.appendDumpFromMir(allocator, module_mir, &output);",
-        "const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.EmitCFailed);",
+        "const program = try driver_codegen_inputs.buildBackendInputs(session, module, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);",
     ):
         require_contains(main_zig, needle)
 
     for needle in (
         "module.visibility_mode = self.visibility_mode;",
         "name_resolve.transformWithGraph(allocator, module, self.module_graph)",
+        "parsed_out.* = try module_parser.parseSourceDatabase(parse_allocator, project.graph, project.source_db, reporter);",
+        "resolved_out.* = try module_parser.resolveParsedSourceDatabase(parse_allocator, parsed_out.*);",
         "generic_precheck.check(allocator, lowered, diag, self.file_boundaries)",
         "mangle_private.transform(allocator, specialized, self.file_boundaries)",
         "checker.file_boundaries = self.file_boundaries;",
         "module_mir.* = try mir.buildOpt(self.allocator, module, .{ .optimize = optimize });",
         "const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {",
         'test "CompilationSession keeps parse context request scoped"',
+        'test "CompilationSession attaches per-file resolved module syntax"',
         'test "CompilationSession restores artifact metadata sidecar snapshots"',
         'test "CompilationSession diagnostic stage failures use a bounded error set"',
         "try std.testing.expectEqual(ast.VisibilityMode.explicit_public, module_a.visibility_mode);",
@@ -142,6 +148,7 @@ def main() -> int:
         fail("VerifiedProgram declaration-slice construction must not be used")
     if session_text.count("backend.VerifiedProgram.init(") != 1:
         fail("VerifiedProgram construction must stay centralized in CompilationSession.buildVerifiedProgram")
+    require_contains("src/driver_codegen_inputs.zig", "const program = try session.buildVerifiedProgram(module, diag, optimize, module_mir, failure_error);")
     if main_text.count("session.parseCheckedModuleOrReport(") < 7:
         fail("compile-like CLI commands must share CompilationSession.parseCheckedModuleOrReport")
     if main_text.count("session.checkModule(") != 0:

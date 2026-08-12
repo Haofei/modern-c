@@ -24,6 +24,7 @@ const lower_c = @import("lower_c.zig");
 const lower_cov = @import("lower_cov.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
+const module_parser = @import("module_parser.zig");
 const monomorphize = @import("monomorphize.zig");
 const symbols = @import("symbols.zig");
 
@@ -276,6 +277,14 @@ fn runMain(init: std.process.Init) !void {
     defer session.file_boundaries = null;
     session.module_graph = &loaded.graph;
     defer session.module_graph = null;
+    var module_parse_arena = std.heap.ArenaAllocator.init(allocator);
+    defer module_parse_arena.deinit();
+    var parsed_sources: module_parser.ParsedSourceDatabase = undefined;
+    var resolved_sources: module_parser.ResolvedSourceDatabase = undefined;
+    try session.attachLoadedProjectSyntax(&loaded, module_parse_arena.allocator(), &load_diag, &parsed_sources, &resolved_sources);
+    defer session.resolved_sources = null;
+    defer resolved_sources.deinit(module_parse_arena.allocator());
+    defer parsed_sources.deinit(module_parse_arena.allocator());
 
     if (std.mem.eql(u8, command, "lex")) {
         try runLex(&session, path, source);
