@@ -6026,18 +6026,6 @@ const LlvmEmitter = struct {
         return mir_facts_view.MirFactsView.init(&self.mir_module).uniqueConstGetIndexAt(self.currentMirFunction(), mir.sourcePointFromSpan(span));
     }
 
-    fn mirSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
-        return mir_facts_view.sourcePointLineColumnMatches(mir.sourcePointFromSpan(span), source);
-    }
-
-    fn mirCallTargetSourceMatches(span: ast.Span, source: mir.SourcePoint) bool {
-        return mir_facts_view.callTargetSourceMatches(mir.sourcePointFromSpan(span), source);
-    }
-
-    fn mirTargetTypeSourceMatches(kind: mir.TargetTypeKind, span: ast.Span, source: mir.SourcePoint) bool {
-        return mir_facts_view.targetTypeSourceMatches(kind, mir.sourcePointFromSpan(span), source);
-    }
-
     fn mirPointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {
         return mir_facts_view.pointerFactIsLiveGlobal(fact);
     }

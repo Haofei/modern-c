@@ -2692,7 +2692,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)": 1,
         "fn mirTargetTypeFactAt(": 1,
         "fn mirTargetTypeFactAtOwned(": 1,
-        "fn mirCallTargetSourceMatches(span: ast.Span, source: mir.SourcePoint) bool": 1,
+        "fn mirCallTargetSourceMatches(span: ast.Span, source: mir.SourcePoint) bool": 0,
         ".uniqueCallTargetKindAt(self.currentMirFunction(), mir.sourcePointFromSpan(span))": 1,
         ".hasCallTargetKindAt(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span), true)": 1,
         "fact.kind == kind and mirSourceMatches(span, fact.source)": 0,
