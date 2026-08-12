@@ -463,6 +463,15 @@ pub const Checker = struct {
     }
 
     pub fn checkModule(self: *Checker, module: ast.Module) void {
+        self.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
+    }
+
+    pub fn checkDecls(self: *Checker, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, qualified_owners: [][]const u8) void {
+        const module = ast.Module{
+            .decls = decls,
+            .visibility_mode = visibility_mode,
+            .qualified_owners = qualified_owners,
+        };
         defer self.live_locals.deinit(self.reporter.allocator); // free the block-scoping liveness stack
         var mmio_structs = std.StringHashMap(MmioStruct).init(self.reporter.allocator);
         defer deinitMmioStructs(&mmio_structs);

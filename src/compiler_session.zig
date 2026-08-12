@@ -198,11 +198,11 @@ pub const CompilationSession = struct {
         return specialized.withDecls(mangled_decls);
     }
 
-    fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {
+    fn checkDecls(self: *CompilationSession, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, qualified_owners: [][]const u8, diag: *diagnostics.Reporter, optimize: bool) void {
         var checker = sema.Checker.init(diag);
         checker.file_boundaries = self.file_boundaries;
         checker.optimize = optimize;
-        checker.checkModule(module);
+        checker.checkDecls(decls, visibility_mode, qualified_owners);
     }
 
     pub fn parseCheckedModuleOrReport(
@@ -219,7 +219,7 @@ pub const CompilationSession = struct {
             if (render_errors) diag.render();
             return failure_error;
         }
-        self.checkModule(module, diag, optimize);
+        self.checkDecls(module.decls, module.visibility_mode, module.qualified_owners, diag, optimize);
         if (diag.has_errors) {
             if (render_errors) diag.render();
             return failure_error;

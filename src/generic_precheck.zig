@@ -39,9 +39,5 @@ pub fn checkDecls(
     checker.file_boundaries = file_boundaries;
     checker.generic_template_precheck = true;
     checker.generic_template_fns = &generic_fns;
-    const module = ast.Module{
-        .decls = decls,
-        .visibility_mode = visibility_mode,
-    };
-    checker.checkModule(module);
+    checker.checkDecls(decls, visibility_mode, &.{});
 }

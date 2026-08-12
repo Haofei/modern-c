@@ -69,7 +69,7 @@ def main() -> int:
         "pub const ParsedModule = struct {",
         "pub fn parseModuleOrReport(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ParsedModule {",
         "fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
-        "fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
+        "fn checkDecls(self: *CompilationSession, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, qualified_owners: [][]const u8, diag: *diagnostics.Reporter, optimize: bool) void {",
         "pub fn parseCheckedModuleOrReport(",
         "pub fn buildVerifiedProgramFromDecls(",
         "pub fn artifactMetadataPath(allocator: std.mem.Allocator, output_path: []const u8) ![]const u8 {",
@@ -130,7 +130,7 @@ def main() -> int:
     if "async_lower.transform(allocator, resolved" in session_text:
         fail("CompilationSession must not call the retired module-shaped async lowering API")
     if session_text.count("var checker = sema.Checker.init") != 1:
-        fail("sema checker construction must stay centralized in CompilationSession.checkModule")
+        fail("sema checker construction must stay centralized in CompilationSession.checkDecls")
     if "generic_precheck.check(allocator, lowered" in session_text:
         fail("CompilationSession must not call the retired module-shaped generic precheck API")
     if "monomorphize.transformReport(allocator, lowered" in session_text:
@@ -139,8 +139,8 @@ def main() -> int:
         fail("CompilationSession must not call the retired module-shaped private-mangling API")
     if "pub fn parseModuleOrReportMode(" in session_text:
         fail("CompilationSession must not expose naked ast.Module parse helper publicly")
-    if "pub fn checkModule(self: *CompilationSession, module: ast.Module" in session_text:
-        fail("CompilationSession must not expose naked ast.Module check helper publicly")
+    if "fn checkModule(self: *CompilationSession, module: ast.Module" in session_text:
+        fail("CompilationSession must not keep a naked ast.Module check helper")
     if main_text.count("var checker = sema.Checker.init") != 0:
         fail("main.zig must not construct sema checkers")
     if session_text.count("mir.buildOptFromDecls(") != 1:
