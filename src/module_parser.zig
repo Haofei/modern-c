@@ -35,7 +35,7 @@ pub const ParsedSourceDatabase = struct {
 
 pub const ResolvedSourceFile = struct {
     id: module_graph.FileId,
-    module: ast.Module,
+    decls: []ast.Decl,
 };
 
 pub const ResolvedDecl = struct {
@@ -54,14 +54,14 @@ pub const ResolvedSourceDatabase = struct {
 
     pub fn declsForFile(self: ResolvedSourceDatabase, id: module_graph.FileId) ?[]const ast.Decl {
         for (self.files) |file| {
-            if (file.id == id) return file.module.decls;
+            if (file.id == id) return file.decls;
         }
         return null;
     }
 
     pub fn declCount(self: ResolvedSourceDatabase) usize {
         var count: usize = 0;
-        for (self.files) |file| count += file.module.decls.len;
+        for (self.files) |file| count += file.decls.len;
         return count;
     }
 
@@ -70,7 +70,7 @@ pub const ResolvedSourceDatabase = struct {
         errdefer decls.deinit(allocator);
         try decls.ensureTotalCapacity(allocator, self.declCount());
         for (self.files) |file| {
-            for (file.module.decls) |decl| {
+            for (file.decls) |decl| {
                 decls.appendAssumeCapacity(.{
                     .file_id = file.id,
                     .decl = decl,
@@ -81,7 +81,7 @@ pub const ResolvedSourceDatabase = struct {
     }
 
     pub fn deinit(self: *ResolvedSourceDatabase, allocator: std.mem.Allocator) void {
-        for (self.files) |file| file.module.deinit(allocator);
+        for (self.files) |file| allocator.free(file.decls);
         allocator.free(self.files);
     }
 };
@@ -135,18 +135,17 @@ pub fn resolveParsedSourceDatabase(
 ) !ResolvedSourceDatabase {
     var files: std.ArrayList(ResolvedSourceFile) = .empty;
     errdefer {
-        for (files.items) |file| file.module.deinit(allocator);
+        for (files.items) |file| allocator.free(file.decls);
         files.deinit(allocator);
     }
 
     for (parsed_sources.files) |file| {
         const resolved_decls = try name_resolve.transformDeclsWithSymbols(allocator, file.module.decls, file.module.qualified_symbols, null);
-        const resolved = file.module.withDecls(resolved_decls);
         var resolved_transferred = false;
-        errdefer if (!resolved_transferred) resolved.deinit(allocator);
+        errdefer if (!resolved_transferred) allocator.free(resolved_decls);
         try files.append(allocator, .{
             .id = file.id,
-            .module = resolved,
+            .decls = resolved_decls,
         });
         resolved_transferred = true;
     }
