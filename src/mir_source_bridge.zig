@@ -44,7 +44,13 @@ pub fn targetTypeFactById(module: *const mir.Module, current: *const mir.Functio
 }
 
 pub fn targetTypeFactAtSpanWithExplicitModuleFallback(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
-    return MirFactsView.init(module).targetTypeFactAtSpanWithExplicitModuleFallback(current, kind, mir.sourcePointFromSpan(span));
+    return MirFactsView.init(module).targetTypeFactAtSpanWithExplicitModuleFallback(.{
+        .current = current,
+        .fact = .{
+            .kind = kind,
+            .source = mir.sourcePointFromSpan(span),
+        },
+    });
 }
 
 pub fn targetTypeFactMatchingType(module: *const mir.Module, current: ?*const mir.Function, type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr), kind: mir.TargetTypeKind, span: ast_bridge.Span, expected_ty: ast_bridge.TypeExpr) ?mir.TargetTypeFact {
@@ -92,7 +98,15 @@ pub fn atomicInitPayloadTypeAt(module: *const mir.Module, current: ?*const mir.F
 }
 
 pub fn targetTypeFactAtOwnedSpanWithExplicitModuleFallback(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-    return MirFactsView.init(module).targetTypeFactAtOwnedSpanWithExplicitModuleFallback(current, kind, mir.sourcePointFromSpan(span), target_owner, target_index);
+    return MirFactsView.init(module).targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+        .current = current,
+        .fact = .{
+            .kind = kind,
+            .source = mir.sourcePointFromSpan(span),
+            .owner = target_owner,
+            .index = target_index,
+        },
+    });
 }
 
 pub fn uniqueConstGetIndexAt(module: *const mir.Module, current: ?*const mir.Function, span: ast_bridge.Span) ?usize {

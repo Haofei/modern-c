@@ -23,6 +23,11 @@ pub const TargetTypeFactQuery = struct {
     index: ?usize = null,
 };
 
+pub const TargetTypeModuleFallbackQuery = struct {
+    current: ?*const mir.Function,
+    fact: TargetTypeFactQuery,
+};
+
 pub const PointerFactQuery = struct {
     subject: []const u8,
     source: mir.SourcePoint,
@@ -41,41 +46,40 @@ pub const MirFactsView = struct {
     ///
     /// This is the preferred source-spanned compatibility query while callers
     /// are being migrated to `targetTypeFactById`.
-    pub fn targetTypeFactAt(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint) ?mir.TargetTypeFact {
+    pub fn targetTypeFactAt(self: MirFactsView, current: *const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint) ?mir.TargetTypeFact {
         _ = self;
         if (kind == .expression_result and !isSourcePoint(source)) return null;
-        if (current) |function| {
-            if (targetTypeFactInFunction(function, kind, source, null, null)) |fact| return fact;
-        }
-        return null;
+        return targetTypeFactInFunction(current, kind, source, null, null);
     }
 
     /// Transitional generated-plumbing query.  It first checks the current
     /// function, then falls back to a unique module-wide source match.  Keeping
     /// this fallback explicitly named prevents broad scans from hiding behind
     /// the ordinary local facts query.
-    pub fn targetTypeFactAtSpanWithExplicitModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint) ?mir.TargetTypeFact {
-        if (self.targetTypeFactAt(current, kind, source)) |fact| return fact;
-        if (!isSourcePoint(source)) return null;
-        return uniqueModuleTargetTypeFact(self.module, kind, source, null, null);
+    pub fn targetTypeFactAtSpanWithExplicitModuleFallback(self: MirFactsView, query: TargetTypeModuleFallbackQuery) ?mir.TargetTypeFact {
+        if (query.current) |function| {
+            if (self.targetTypeFactAt(function, query.fact.kind, query.fact.source)) |fact| return fact;
+        }
+        if (!isSourcePoint(query.fact.source)) return null;
+        return uniqueModuleTargetTypeFact(self.module, query.fact);
     }
 
     /// Same local query for fact families whose target belongs to a typed owner
     /// and optional target index (for example atomic-init payload/result pairs).
-    pub fn targetTypeFactAtOwned(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
+    pub fn targetTypeFactAtOwned(self: MirFactsView, current: *const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
         _ = self;
-        if (current) |function| {
-            if (targetTypeFactInFunction(function, kind, source, owner, index)) |fact| return fact;
-        }
-        return null;
+        return targetTypeFactInFunction(current, kind, source, owner, index);
     }
 
     /// Transitional generated-plumbing owner query with explicit module-wide
     /// fallback.  New code should prefer `targetTypeFactById`.
-    pub fn targetTypeFactAtOwnedSpanWithExplicitModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
-        if (self.targetTypeFactAtOwned(current, kind, source, owner, index)) |fact| return fact;
-        if (!isSourcePoint(source)) return null;
-        return uniqueModuleTargetTypeFact(self.module, kind, source, owner, index);
+    pub fn targetTypeFactAtOwnedSpanWithExplicitModuleFallback(self: MirFactsView, query: TargetTypeModuleFallbackQuery) ?mir.TargetTypeFact {
+        if (query.fact.owner == null) return null;
+        if (query.current) |function| {
+            if (self.targetTypeFactAtOwned(function, query.fact.kind, query.fact.source, query.fact.owner.?, query.fact.index)) |fact| return fact;
+        }
+        if (!isSourcePoint(query.fact.source)) return null;
+        return uniqueModuleTargetTypeFact(self.module, query.fact);
     }
 
     /// Returns a target-type fact by verified typed identities in `current`.
@@ -180,10 +184,10 @@ pub const MirFactsView = struct {
     }
 };
 
-fn uniqueModuleTargetTypeFact(module: *const mir.Module, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {
+fn uniqueModuleTargetTypeFact(module: *const mir.Module, query: TargetTypeFactQuery) ?mir.TargetTypeFact {
     var matched: ?mir.TargetTypeFact = null;
     for (module.functions) |function| {
-        const fact = targetTypeFactInFunction(&function, kind, source, owner, index) orelse continue;
+        const fact = targetTypeFactInFunction(&function, query.kind, query.source, query.owner, query.index) orelse continue;
         if (matched) |existing| {
             if (!sameFactIdentity(existing, fact)) return null;
         } else {
