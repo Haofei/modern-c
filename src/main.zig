@@ -719,6 +719,34 @@ fn runLowerC(session: *CompilationSession, path: []const u8, source: []const u8)
     try session.writeStdout(output.items);
 }
 
+fn buildDriverBackendInputs(
+    session: *CompilationSession,
+    module: ast.Module,
+    diag: *diagnostics.Reporter,
+    optimize: bool,
+    module_mir: *mir.Module,
+    artifacts: *declaration_artifacts.EarlyDeclarationArtifacts,
+    failure_error: anyerror,
+) !backend.VerifiedProgram {
+    const program = try session.buildVerifiedProgram(module, diag, optimize, module_mir, failure_error);
+    errdefer module_mir.deinit();
+    artifacts.* = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(session.allocator, module.decls);
+    errdefer artifacts.deinit(session.allocator);
+    return program;
+}
+
+fn buildDriverCArtifactInputs(
+    session: *CompilationSession,
+    module: ast.Module,
+    module_mir: *mir.Module,
+    artifacts: *declaration_artifacts.EarlyDeclarationArtifacts,
+) !void {
+    module_mir.* = try mir.buildOpt(session.allocator, module, .{ .optimize = false });
+    errdefer module_mir.deinit();
+    artifacts.* = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(session.allocator, module.decls);
+    errdefer artifacts.deinit(session.allocator);
+}
+
 fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path: []const u8, source: []const u8, profile: backend.Profile, checks: backend.Checks, stub_asm: bool, target_arch: backend.TargetArch, output_path: ?[]const u8) !void {
     const allocator = session.allocator;
     const optimize = checks.optimize;
@@ -734,8 +762,10 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
     defer module.deinit(parse_allocator);
 
     var module_mir: mir.Module = undefined;
-    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.EmitCFailed);
+    var early_metadata = declaration_artifacts.EarlyDeclarationArtifacts.empty;
+    const program = try buildDriverBackendInputs(session, module, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
     defer module_mir.deinit();
+    defer early_metadata.deinit(allocator);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
@@ -750,8 +780,6 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
-    defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
         .declaration_artifacts = early_metadata,
@@ -790,8 +818,10 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     defer module.deinit(parse_allocator);
 
     var module_mir: mir.Module = undefined;
-    const program = try session.buildVerifiedProgram(module, &diag, false, &module_mir, error.BuildFailed);
+    var early_metadata = declaration_artifacts.EarlyDeclarationArtifacts.empty;
+    const program = try buildDriverBackendInputs(session, module, &diag, false, &module_mir, &early_metadata, error.BuildFailed);
     defer module_mir.deinit();
+    defer early_metadata.deinit(allocator);
 
     var raw_c: std.ArrayList(u8) = .empty;
     defer raw_c.deinit(allocator);
@@ -804,8 +834,6 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
-    defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
         .declaration_artifacts = early_metadata,
@@ -1161,14 +1189,14 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     defer module.deinit(parse_allocator);
 
     var module_mir: mir.Module = undefined;
-    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.EmitCFailed);
+    var early_metadata = declaration_artifacts.EarlyDeclarationArtifacts.empty;
+    const program = try buildDriverBackendInputs(session, module, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
     defer module_mir.deinit();
+    defer early_metadata.deinit(allocator);
 
     const be = backend_registry.byName("c").?;
     var generated_c: std.ArrayList(u8) = .empty;
     defer generated_c.deinit(allocator);
-    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
-    defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
         .declaration_artifacts = early_metadata,
@@ -1230,8 +1258,10 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
     defer module.deinit(parse_allocator);
 
     var module_mir: mir.Module = undefined;
-    const program = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.EmitLlvmFailed);
+    var early_metadata = declaration_artifacts.EarlyDeclarationArtifacts.empty;
+    const program = try buildDriverBackendInputs(session, module, &diag, optimize, &module_mir, &early_metadata, error.EmitLlvmFailed);
     defer module_mir.deinit();
+    defer early_metadata.deinit(allocator);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
@@ -1247,8 +1277,6 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
         .source_sha256 = source_sha256,
         .compiler_version = build_options.version,
     };
-    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
-    defer early_metadata.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
         .declaration_artifacts = early_metadata,
@@ -1317,9 +1345,10 @@ fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []const
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = false });
+    var typed_mir: mir.Module = undefined;
+    var artifacts = declaration_artifacts.EarlyDeclarationArtifacts.empty;
+    try buildDriverCArtifactInputs(session, module, &typed_mir, &artifacts);
     defer typed_mir.deinit();
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer artifacts.deinit(allocator);
     lower_c.appendLayoutAssertsWithMirArtifacts(allocator, artifacts, &typed_mir, &output, names.items) catch |err| switch (err) {
         error.LayoutStructNotFound => {
@@ -1364,9 +1393,10 @@ fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []cons
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = false });
+    var typed_mir: mir.Module = undefined;
+    var artifacts = declaration_artifacts.EarlyDeclarationArtifacts.empty;
+    try buildDriverCArtifactInputs(session, module, &typed_mir, &artifacts);
     defer typed_mir.deinit();
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
     defer artifacts.deinit(allocator);
     lower_c.appendStructDeclsWithMirArtifacts(allocator, artifacts, &typed_mir, &output, names.items) catch |err| switch (err) {
         error.LayoutStructNotFound => {

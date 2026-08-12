@@ -408,6 +408,7 @@ removing backend authority before adding new abstractions:
 | 220 | Route C declaration artifacts through early artifacts. | Complete: `EarlyDeclarationArtifacts` now carries ordered `DeclArtifact` values; C declaration artifact collection consumes those values instead of `collectDeclArtifactsFromDecls([]const ast.Decl)`, and backend declaration-slice inventory drops from 4 to 3. |
 | 221 | Make `declaration_artifacts.zig` the implementation owner. | Complete: the syntax-backed artifact implementation moved from `early_declaration_metadata.zig` into `declaration_artifacts.zig`; the old module name is now only a compatibility shim, and exact inventory gates prevent it from regaining AST collection logic. |
 | 222 | Remove C emitter module-declaration artifact wrappers. | Complete: layout/header helper emission now receives pre-collected declaration artifacts plus typed MIR; `lower_c_emitter.zig` no longer calls `EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls)`, and the exact inventory ratchets that count to zero. |
+| 223 | Centralize driver declaration artifact collection. | Complete: backend-facing CLI commands now build `VerifiedProgram` and declaration artifacts through `buildDriverBackendInputs`, while layout/header helper commands use `buildDriverCArtifactInputs`; direct `collectFromDecls(module.decls)` callsites in `main.zig` drop from six to two helper-owned compatibility edges. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

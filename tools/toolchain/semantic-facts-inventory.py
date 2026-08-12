@@ -993,7 +993,11 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         '@import("early_declaration_metadata.zig")': 0,
         '@import("declaration_artifacts.zig")': 1,
         "early_declaration_metadata.EarlyDeclarationArtifacts.collectFromDecls": 0,
-        "declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls": 6,
+        "declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls": 2,
+        "fn buildDriverBackendInputs(": 1,
+        "fn buildDriverCArtifactInputs(": 1,
+        "try buildDriverBackendInputs(": 4,
+        "try buildDriverCArtifactInputs(": 2,
     },
     "src/codegen_options.zig": {
         'const artifact_model = @import("artifact_model.zig")': 1,
