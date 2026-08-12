@@ -1115,8 +1115,9 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn buildBackendInputs(": 1,
         "pub fn buildCArtifactInputs(": 1,
         "DeclarationArtifacts.collectFromDecls(session.allocator, module.decls)": 0,
-        "DeclarationArtifacts.collectFromSyntaxDecls(session.allocator, module.decls)": 1,
-        "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, graph.*, resolved_decls)": 1,
+        "DeclarationArtifacts.collectFromSyntaxDecls(session.allocator, module.decls)": 0,
+        "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, resolved_decls)": 1,
+        "DeclarationArtifacts.collectFromResolvedDecls(session.allocator, fallback_decls)": 1,
     },
     "src/lower_llvm_prelude.zig": {
         "fn moduleDefinesHook(source_spelling: backend.SourceSpellingView": 0,
