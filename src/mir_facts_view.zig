@@ -237,6 +237,27 @@ pub fn targetTypeSourceMatches(kind: mir.TargetTypeKind, query: mir.SourcePoint,
     return kind != .expression_result or sourcePointOffsetsMatch(query, source);
 }
 
+pub fn pointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {
+    return fact.provenance == .global_storage and pointerFactReasonIsLive(fact);
+}
+
+pub fn pointerFactIsLiveLocal(fact: mir.PointerProvenanceFact) bool {
+    return fact.provenance == .local_storage and pointerFactReasonIsLive(fact);
+}
+
+pub fn pointerFactLiveState(fact: mir.PointerProvenanceFact) mir.PointerProvenance {
+    if (pointerFactIsLiveGlobal(fact)) return .global_storage;
+    if (pointerFactIsLiveLocal(fact)) return .local_storage;
+    return .unknown;
+}
+
+fn pointerFactReasonIsLive(fact: mir.PointerProvenanceFact) bool {
+    return switch (fact.invalidation_reason) {
+        .none, .reassignment => true,
+        .dynamic_index_write, .call, .indirect_call, .address_escape => false,
+    };
+}
+
 fn isSourcePoint(source: mir.SourcePoint) bool {
     return source.offset != 0 or source.len != 0 or source.line != 0 or source.column != 0;
 }

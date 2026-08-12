@@ -6314,8 +6314,7 @@ pub const CEmitter = struct {
     }
 
     fn mirPointerFactIsLiveGlobal(fact: mir.PointerProvenanceFact) bool {
-        if (fact.provenance != .global_storage) return false;
-        return mirPointerFactReasonIsLive(fact);
+        return mir_facts_view.pointerFactIsLiveGlobal(fact);
     }
 
     // A live local_storage fact is the positive locality proof that keeps a deref
@@ -6323,15 +6322,7 @@ pub const CEmitter = struct {
     // the global side: any call/indirect-call/address-escape/dynamic-index
     // invalidation drops the proof back to unknown (-> race-tolerant lowering).
     fn mirPointerFactIsLiveLocal(fact: mir.PointerProvenanceFact) bool {
-        if (fact.provenance != .local_storage) return false;
-        return mirPointerFactReasonIsLive(fact);
-    }
-
-    fn mirPointerFactReasonIsLive(fact: mir.PointerProvenanceFact) bool {
-        return switch (fact.invalidation_reason) {
-            .none, .reassignment => true,
-            .dynamic_index_write, .call, .indirect_call, .address_escape => false,
-        };
+        return mir_facts_view.pointerFactIsLiveLocal(fact);
     }
 
     fn deinitOwnedStringVoidMap(self: *CEmitter, map: *std.StringHashMap(void)) void {
@@ -6641,9 +6632,7 @@ pub const CEmitter = struct {
     }
 
     fn mirPointerFactState(fact: mir.PointerProvenanceFact) mir.PointerProvenance {
-        if (mirPointerFactIsLiveGlobal(fact)) return .global_storage;
-        if (mirPointerFactIsLiveLocal(fact)) return .local_storage;
-        return .unknown;
+        return mir_facts_view.pointerFactLiveState(fact);
     }
 
     fn applyMirPointerProvenanceFact(self: *CEmitter, fact: mir.PointerProvenanceFact, locals: ?*std.StringHashMap(LocalInfo)) !void {
