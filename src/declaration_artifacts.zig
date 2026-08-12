@@ -18,12 +18,15 @@ pub const SyntaxDeclarationSlice = []const ast.Decl;
 /// through backend lowering requests as a generic legacy view.
 pub const EarlyDeclarationArtifacts = struct {
     callable_value_artifacts: []const CallableValueArtifact,
+    trait_artifacts: []const TraitArtifact,
     type_artifacts: []const TypeArtifact,
     source_map_artifacts: []const SourceMapArtifact,
 
     pub fn collectFromSyntaxDecls(allocator: std.mem.Allocator, decls: SyntaxDeclarationSlice) !EarlyDeclarationArtifacts {
         var callable_value_artifacts: std.ArrayList(CallableValueArtifact) = .empty;
         errdefer callable_value_artifacts.deinit(allocator);
+        var trait_artifacts: std.ArrayList(TraitArtifact) = .empty;
+        errdefer trait_artifacts.deinit(allocator);
         var type_artifacts: std.ArrayList(TypeArtifact) = .empty;
         errdefer type_artifacts.deinit(allocator);
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
@@ -70,17 +73,19 @@ pub const EarlyDeclarationArtifacts = struct {
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .trait_decl => |trait_decl| {
-                try callable_value_artifacts.append(allocator, .{ .trait_decl = trait_decl });
+                try trait_artifacts.append(allocator, .{ .trait_decl = trait_decl });
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .impl_trait => |impl_trait| {
-                try callable_value_artifacts.append(allocator, .{ .impl_trait = impl_trait });
+                try trait_artifacts.append(allocator, .{ .impl_trait = impl_trait });
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
         };
 
         const owned_callable_value_artifacts = try callable_value_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_callable_value_artifacts);
+        const owned_trait_artifacts = try trait_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_trait_artifacts);
         const owned_type_artifacts = try type_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_type_artifacts);
         const owned_source_map_artifacts = try source_map_artifacts.toOwnedSlice(allocator);
@@ -88,6 +93,7 @@ pub const EarlyDeclarationArtifacts = struct {
 
         return .{
             .callable_value_artifacts = owned_callable_value_artifacts,
+            .trait_artifacts = owned_trait_artifacts,
             .type_artifacts = owned_type_artifacts,
             .source_map_artifacts = owned_source_map_artifacts,
         };
@@ -95,6 +101,7 @@ pub const EarlyDeclarationArtifacts = struct {
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
         allocator.free(self.callable_value_artifacts);
+        allocator.free(self.trait_artifacts);
         allocator.free(self.type_artifacts);
         allocator.free(self.source_map_artifacts);
         self.* = empty;
@@ -102,6 +109,7 @@ pub const EarlyDeclarationArtifacts = struct {
 
     pub const empty = EarlyDeclarationArtifacts{
         .callable_value_artifacts = &.{},
+        .trait_artifacts = &.{},
         .type_artifacts = &.{},
         .source_map_artifacts = &.{},
     };
@@ -178,13 +186,16 @@ pub const CallableValueArtifact = union(enum) {
     global: ast.GlobalDecl,
     function: Function,
     extern_function: Function,
-    trait_decl: ast.TraitDecl,
-    impl_trait: ast.ImplTrait,
 
     pub const Function = struct {
         fn_decl: ast.FnDecl,
         attrs: []const ast.Attr,
     };
+};
+
+pub const TraitArtifact = union(enum) {
+    trait_decl: ast.TraitDecl,
+    impl_trait: ast.ImplTrait,
 };
 
 pub const TypeArtifact = union(enum) {

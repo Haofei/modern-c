@@ -363,6 +363,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
         .callable_value_artifacts = early_metadata.callable_value_artifacts,
+        .trait_artifacts = early_metadata.trait_artifacts,
         .type_artifacts = early_metadata.type_artifacts,
         .global_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
         .global_is_const = std.StringHashMap(bool).init(allocator),
@@ -462,6 +463,7 @@ const LlvmEmitter = struct {
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
     callable_value_artifacts: []const declaration_artifacts.CallableValueArtifact = &.{},
+    trait_artifacts: []const declaration_artifacts.TraitArtifact = &.{},
     type_artifacts: []const declaration_artifacts.TypeArtifact = &.{},
     struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
     function_decl_artifacts: std.ArrayList(LlvmFunctionDeclArtifact) = .empty,
@@ -725,6 +727,10 @@ const LlvmEmitter = struct {
                     try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = function.fn_decl, .attrs = function.attrs, .is_extern = true });
                 },
                 .global => |global| try self.collectGlobal(global),
+            }
+        }
+        for (self.trait_artifacts) |artifact| {
+            switch (artifact) {
                 .trait_decl => |t| try self.trait_decls.put(t.name.text, t),
                 .impl_trait => |it| {
                     const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ it.trait_name.text, it.type_name.text });

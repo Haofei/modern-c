@@ -490,6 +490,7 @@ pub const CEmitter = struct {
 
     pub fn collectDeclArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
         try self.collectCallableValueArtifacts(artifacts.callable_value_artifacts);
+        try self.collectTraitArtifacts(artifacts.trait_artifacts);
         try self.collectTypeArtifactsFromArtifacts(artifacts.type_artifacts);
     }
 
@@ -498,6 +499,11 @@ pub const CEmitter = struct {
             .global => |global| try self.collectGlobalDeclArtifact(global),
             .function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, false),
             .extern_function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, true),
+        };
+    }
+
+    fn collectTraitArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.TraitArtifact) anyerror!void {
+        for (artifacts) |artifact| switch (artifact) {
             .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),
             .impl_trait => |impl_trait| try self.collectImplTraitArtifact(impl_trait),
         };
