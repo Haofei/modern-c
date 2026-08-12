@@ -216,8 +216,6 @@ fn targetTypeKindAllowsModuleFallback(kind: mir.TargetTypeKind) bool {
         .result_ok,
         .result_err,
         .tagged_union,
-        .array_literal,
-        .struct_literal,
         => true,
         else => false,
     };
