@@ -162,6 +162,7 @@ EXACT_FILE_COUNTS = {
     ("src/module_parser.zig", "resolveParsedSourceDatabase("): 2,
     ("src/main.zig", "resolved_sources.files"): 0,
     ("src/main.zig", "resolved_sources.collectDecls"): 1,
+    ("src/main.zig", "symbols.emitJson(allocator, module, &diag, &output)"): 0,
     ("src/main.zig", "fn appendModuleTests("): 0,
     ("src/main.zig", "try appendModuleTests(allocator, module, &out)"): 0,
     ("src/main.zig", "ir.appendFacts(allocator, module, &facts)"): 0,

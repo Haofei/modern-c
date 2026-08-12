@@ -504,10 +504,6 @@ fn runSymbols(session: *CompilationSession, path: []const u8, source: []const u8
     var diag = session.initReporter(path, source);
     defer diag.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const parse_allocator = arena.allocator();
-
     if (session.resolved_sources) |resolved_sources| {
         const module_graph = session.module_graph orelse {
             try session.writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_SYMBOLS_INTERNAL\",\"message\":\"symbol indexing aborted by an internal error\"}]}\n");
@@ -519,23 +515,8 @@ fn runSymbols(session: *CompilationSession, path: []const u8, source: []const u8
         try session.writeStdout(output.items);
         return;
     }
-
-    const module = session.parseModuleOrReport(source, parse_allocator, &diag) catch |err| switch (err) {
-        error.ParseFailed => {
-            try session.writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_PARSE_FAILED\",\"message\":\"symbol indexing aborted after parse diagnostics\"}]}\n");
-            return error.ParseFailed;
-        },
-        else => {
-            try session.writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_SYMBOLS_INTERNAL\",\"message\":\"symbol indexing aborted by an internal error\"}]}\n");
-            return err;
-        },
-    };
-    defer module.deinit(parse_allocator);
-
-    var output: std.ArrayList(u8) = .empty;
-    defer output.deinit(allocator);
-    try symbols.emitJson(allocator, module, &diag, &output);
-    try session.writeStdout(output.items);
+    try session.writeStdout("{\"complete\":false,\"defs\":[],\"refs\":[],\"diagnostics\":[{\"severity\":\"error\",\"code\":\"E_SYMBOLS_INTERNAL\",\"message\":\"symbol indexing aborted before resolved sources were attached\"}]}\n");
+    return error.MissingResolvedSources;
 }
 
 fn runLex(session: *CompilationSession, path: []const u8, source: []const u8) !void {
