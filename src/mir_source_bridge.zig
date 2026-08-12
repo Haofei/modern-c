@@ -54,6 +54,38 @@ pub fn targetTypeFactMatchingType(module: *const mir.Module, current: ?*const mi
     return null;
 }
 
+pub fn atomicInitPayloadTypeAt(module: *const mir.Module, current: ?*const mir.Function, type_aliases: *const std.StringHashMap(ast.TypeExpr), span: ast.Span, expected_result_ty: ast.TypeExpr, expected_payload_ty: ast.TypeExpr) ?ast.TypeExpr {
+    const function = current orelse return null;
+    const view = MirFactsView.init(module);
+    const source = mir.sourcePointFromSpan(span);
+    const resolved_result_ty = type_syntax.resolveAliasType(type_aliases, expected_result_ty);
+    const resolved_expected_payload_ty = type_syntax.resolveAliasType(type_aliases, expected_payload_ty);
+    var matched_payload_ty: ?ast.TypeExpr = null;
+    var found_result = false;
+    for (function.target_type_facts) |result_fact| {
+        if (result_fact.target_index == null or !view.targetTypeFactMatchesFamily(function, result_fact, .atomic_init_result, source, "atomic.init")) continue;
+        if (!type_syntax.sameTypeSyntax(type_syntax.resolveAliasType(type_aliases, result_fact.target_ty), resolved_result_ty)) continue;
+        found_result = true;
+
+        var group_payload_ty: ?ast.TypeExpr = null;
+        for (function.target_type_facts) |payload_fact| {
+            if (payload_fact.target_index != result_fact.target_index or !view.targetTypeFactMatchesFamily(function, payload_fact, .atomic_init_payload, source, "atomic.init")) continue;
+            if (!type_syntax.sameTypeSyntax(type_syntax.resolveAliasType(type_aliases, payload_fact.target_ty), resolved_expected_payload_ty)) return null;
+            if (group_payload_ty) |known| {
+                if (!type_syntax.sameTypeSyntax(type_syntax.resolveAliasType(type_aliases, known), type_syntax.resolveAliasType(type_aliases, payload_fact.target_ty))) return null;
+            }
+            group_payload_ty = payload_fact.target_ty;
+        }
+        const payload_ty = group_payload_ty orelse return null;
+        if (matched_payload_ty) |known| {
+            if (!type_syntax.sameTypeSyntax(type_syntax.resolveAliasType(type_aliases, known), type_syntax.resolveAliasType(type_aliases, payload_ty))) return null;
+        }
+        matched_payload_ty = payload_ty;
+    }
+    if (!found_result) return null;
+    return matched_payload_ty;
+}
+
 pub fn targetTypeFactAtOwnedWithModuleFallback(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
     return MirFactsView.init(module).targetTypeFactAtOwnedWithModuleFallback(current, kind, mir.sourcePointFromSpan(span), target_owner, target_index);
 }

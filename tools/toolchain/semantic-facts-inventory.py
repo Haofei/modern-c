@@ -1254,6 +1254,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn hasCallTargetKindAt(": 1,
         "pub fn targetTypeFactAtWithModuleFallback(": 1,
         "pub fn targetTypeFactMatchingType(": 1,
+        "pub fn atomicInitPayloadTypeAt(": 1,
         "pub fn targetTypeFactAtOwnedWithModuleFallback(": 1,
         "pub fn uniqueConstGetIndexAt(": 1,
         "pub fn pointerFactMatchesAt(": 1,

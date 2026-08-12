@@ -6211,34 +6211,8 @@ pub const CEmitter = struct {
     }
 
     fn atomicInitPayloadTypeAt(self: *CEmitter, span: ast.Span, expected_result_ty: ast.TypeExpr) ?ast.TypeExpr {
-        const function = self.currentMirFunction() orelse return null;
-        const view = mir_facts_view.MirFactsView.init(self.mir_module);
-        const source = mir.sourcePointFromSpan(span);
         const expected_payload_ty = lower_c_shape.atomicPayloadOfType(self.resolveAliasType(expected_result_ty)) orelse return null;
-        var matched_payload_ty: ?ast.TypeExpr = null;
-        var found_result = false;
-        for (function.target_type_facts) |result_fact| {
-            if (result_fact.target_index == null or !view.targetTypeFactMatchesFamily(function, result_fact, .atomic_init_result, source, "atomic.init")) continue;
-            if (!type_syntax.sameTypeSyntax(self.resolveAliasType(result_fact.target_ty), self.resolveAliasType(expected_result_ty))) continue;
-            found_result = true;
-
-            var group_payload_ty: ?ast.TypeExpr = null;
-            for (function.target_type_facts) |payload_fact| {
-                if (payload_fact.target_index != result_fact.target_index or !view.targetTypeFactMatchesFamily(function, payload_fact, .atomic_init_payload, source, "atomic.init")) continue;
-                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(payload_fact.target_ty), self.resolveAliasType(expected_payload_ty))) return null;
-                if (group_payload_ty) |known| {
-                    if (!type_syntax.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_fact.target_ty))) return null;
-                }
-                group_payload_ty = payload_fact.target_ty;
-            }
-            const payload_ty = group_payload_ty orelse return null;
-            if (matched_payload_ty) |known| {
-                if (!type_syntax.sameTypeSyntax(self.resolveAliasType(known), self.resolveAliasType(payload_ty))) return null;
-            }
-            matched_payload_ty = payload_ty;
-        }
-        if (!found_result) return null;
-        return matched_payload_ty;
+        return mir_source_bridge.atomicInitPayloadTypeAt(self.mir_module, self.currentMirFunction(), &self.type_aliases, span, expected_result_ty, expected_payload_ty);
     }
 
     fn mirTargetTypeFactAt(self: *CEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
