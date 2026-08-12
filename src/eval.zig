@@ -72,13 +72,13 @@ pub fn freeRunTrapExpectations(allocator: std.mem.Allocator, expectations: *std.
     expectations.deinit(allocator);
 }
 
-pub fn runTrapExpectation(
+pub fn runTrapExpectationFromDecls(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    decls: []const ast.Decl,
     function_name: []const u8,
     args: []const i128,
 ) EvalError!?Trap {
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         const fn_decl = switch (decl.kind) {
             .fn_decl => |node| node,
             else => continue,

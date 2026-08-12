@@ -1277,8 +1277,11 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "magnitude = std.math.mul(u128, magnitude, radix) catch return null;": 1,
     },
     "src/eval.zig": {
+        "pub fn runTrapExpectation(": 0,
+        "pub fn runTrapExpectationFromDecls(": 1,
         "pub fn collectConstGlobalsWithOptions(": 0,
         "pub fn collectConstGlobalsFromDeclsWithOptions(": 1,
+        "for (module.decls) |decl|": 0,
         "module: ?ast.Module": 0,
         "decls: ?[]const ast.Decl": 1,
         "pub const ComptimeDeclarations = struct": 1,

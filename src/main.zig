@@ -682,7 +682,7 @@ fn runTrap(session: *CompilationSession, path: []const u8, source: []const u8) !
     }
 
     for (expectations.items) |expectation| {
-        const actual = try eval.runTrapExpectation(allocator, module, expectation.function_name, expectation.args);
+        const actual = try eval.runTrapExpectationFromDecls(allocator, module.decls, expectation.function_name, expectation.args);
         if (actual == null or actual.? != expectation.trap) {
             std.debug.print(
                 "{s}:{d}: expected run {s}(...) to trap .{s}, got {s}\n",

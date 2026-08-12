@@ -247,6 +247,8 @@ EXACT_FILE_COUNTS = {
     ("src/mir.zig", "collectTypeOwnershipFacts(allocator, module"): 0,
     ("src/mir.zig", "collectDirectAggregateReturnPointerFacts(allocator, module"): 0,
     ("src/mir.zig", "collectDirectGlobalPointerReturnSummaries(allocator, module"): 0,
+    ("src/eval.zig", "pub fn runTrapExpectation("): 0,
+    ("src/eval.zig", "pub fn runTrapExpectationFromDecls("): 1,
     ("src/mir_facts_view.zig", "pub const MirFactsView = struct"): 1,
     ("src/type_syntax.zig", "pub fn sameTypeSyntax("): 1,
     ("src/type_syntax.zig", "pub fn viewType("): 1,

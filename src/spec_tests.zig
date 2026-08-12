@@ -483,7 +483,7 @@ test "tests/spec inline run trap expectations are reached by arithmetic evaluato
         defer module.deinit(parse_allocator);
 
         for (expectations.items) |expectation| {
-            const actual = try eval.runTrapExpectation(allocator, module, expectation.function_name, expectation.args);
+            const actual = try eval.runTrapExpectationFromDecls(allocator, module.decls, expectation.function_name, expectation.args);
             if (actual == null or actual.? != expectation.trap) {
                 std.debug.print(
                     "{s}:{d}: expected run {s}(...) to trap .{s}, got {s}\n",
