@@ -13,10 +13,10 @@ const mir = @import("mir.zig");
 const parser = @import("parser.zig");
 const test_support = @import("test_support.zig");
 
-fn appendLlvmModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    var module_mir = try mir.buildOptFromDecls(allocator, module.decls, .{});
+fn appendLlvmDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
+    var module_mir = try mir.buildOptFromDecls(allocator, decls, .{});
     defer module_mir.deinit();
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, module.decls);
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, decls);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts, &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
 }
@@ -10205,7 +10205,7 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
 
     var llvm_output: std.ArrayList(u8) = .empty;
     defer llvm_output.deinit(std.testing.allocator);
-    try appendLlvmModuleTest(std.testing.allocator, parsed.module, &llvm_output);
+    try appendLlvmDeclsTest(std.testing.allocator, parsed.module.decls, &llvm_output);
     const c_source = try commentSourceText(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_load subject=gp provenance=global_storage reason=none source=");
     const llvm_comment = try std.fmt.allocPrint(
         std.testing.allocator,
@@ -10782,7 +10782,7 @@ test "lower-c consumes MIR pointer provenance facts for fixed pointer-array elem
 
     var llvm_output: std.ArrayList(u8) = .empty;
     defer llvm_output.deinit(std.testing.allocator);
-    try appendLlvmModuleTest(std.testing.allocator, parsed.module, &llvm_output);
+    try appendLlvmDeclsTest(std.testing.allocator, parsed.module.decls, &llvm_output);
     const c_source = try commentSourceText(output.items, "/* mir pointer_provenance consumed fn=c_array_global_pointer_element_load subject=ptrs element=0 provenance=global_storage reason=none source=");
     const llvm_comment = try std.fmt.allocPrint(
         std.testing.allocator,
