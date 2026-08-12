@@ -16,18 +16,18 @@ const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
-fn appendCModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    var module_mir = try mir.buildOptFromDecls(allocator, module.decls, .{});
+fn appendCDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
+    var module_mir = try mir.buildOptFromDecls(allocator, decls, .{});
     defer module_mir.deinit();
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, module.decls);
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, decls);
     defer artifacts.deinit(allocator);
     try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts, &module_mir, out, .kernel, null, .{}, false, null);
 }
 
-fn appendLlvmModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    var module_mir = try mir.buildOptFromDecls(allocator, module.decls, .{});
+fn appendLlvmDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
+    var module_mir = try mir.buildOptFromDecls(allocator, decls, .{});
     defer module_mir.deinit();
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, module.decls);
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, decls);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts, &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
 }
@@ -673,7 +673,7 @@ test "nullable trait object fixture lowers on both backends with the data-word n
     {
         const module = try parseSpecModule(source, a, &reporter);
         var out: std.ArrayList(u8) = .empty;
-        try appendCModuleTest(a, module, &out);
+        try appendCDeclsTest(a, module.decls, &out);
         try std.testing.expect(std.mem.indexOf(u8, out.items, "(mc_dyn_CharDevice){0}") != null);
         try std.testing.expect(std.mem.indexOf(u8, out.items, ".data != NULL") != null);
         try std.testing.expect(std.mem.indexOf(u8, out.items, "vtable->putc") != null);
@@ -682,7 +682,7 @@ test "nullable trait object fixture lowers on both backends with the data-word n
     {
         const module = try parseSpecModule(source, a, &reporter);
         var out: std.ArrayList(u8) = .empty;
-        try appendLlvmModuleTest(a, module, &out);
+        try appendLlvmDeclsTest(a, module.decls, &out);
         try std.testing.expect(std.mem.indexOf(u8, out.items, "{ ptr, ptr }") != null);
         try std.testing.expect(std.mem.indexOf(u8, out.items, "extractvalue") != null);
     }
