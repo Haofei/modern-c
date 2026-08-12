@@ -493,8 +493,8 @@ pub const CEmitter = struct {
         for (artifacts) |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, function.is_extern);
     }
 
-    fn collectGlobalArtifacts(self: *CEmitter, artifacts: []const ast_bridge.GlobalDecl) anyerror!void {
-        for (artifacts) |global| try self.collectGlobalDeclArtifact(global);
+    fn collectGlobalArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.GlobalArtifact) anyerror!void {
+        for (artifacts) |global| try self.collectGlobalDeclArtifact(global.global);
     }
 
     fn collectTraitArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.TraitArtifact) anyerror!void {

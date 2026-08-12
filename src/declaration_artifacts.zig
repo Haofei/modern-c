@@ -18,7 +18,7 @@ pub const SyntaxDeclarationSlice = []const ast.Decl;
 /// through backend lowering requests as a generic legacy view.
 pub const EarlyDeclarationArtifacts = struct {
     function_artifacts: []const FunctionArtifact,
-    global_artifacts: []const ast.GlobalDecl,
+    global_artifacts: []const GlobalArtifact,
     trait_artifacts: []const TraitArtifact,
     type_alias_artifacts: []const ast.TypeAlias,
     struct_artifacts: []const ast.StructDecl,
@@ -31,7 +31,7 @@ pub const EarlyDeclarationArtifacts = struct {
     pub fn collectFromSyntaxDecls(allocator: std.mem.Allocator, decls: SyntaxDeclarationSlice) !EarlyDeclarationArtifacts {
         var function_artifacts: std.ArrayList(FunctionArtifact) = .empty;
         errdefer function_artifacts.deinit(allocator);
-        var global_artifacts: std.ArrayList(ast.GlobalDecl) = .empty;
+        var global_artifacts: std.ArrayList(GlobalArtifact) = .empty;
         errdefer global_artifacts.deinit(allocator);
         var trait_artifacts: std.ArrayList(TraitArtifact) = .empty;
         errdefer trait_artifacts.deinit(allocator);
@@ -60,7 +60,7 @@ pub const EarlyDeclarationArtifacts = struct {
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .global_decl => |global| {
-                try global_artifacts.append(allocator, global);
+                try global_artifacts.append(allocator, .{ .global = global });
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .type_alias => |alias| {
@@ -176,7 +176,7 @@ pub const ComptimeDeclarationArtifacts = struct {
         var structs: std.ArrayList(ast.StructDecl) = .empty;
         errdefer structs.deinit(allocator);
 
-        try globals.appendSlice(allocator, artifacts.global_artifacts);
+        for (artifacts.global_artifacts) |global| try globals.append(allocator, global.global);
         try type_aliases.appendSlice(allocator, artifacts.type_alias_artifacts);
         try structs.appendSlice(allocator, artifacts.struct_artifacts);
 
@@ -228,6 +228,10 @@ pub const FunctionArtifact = struct {
     fn_decl: ast.FnDecl,
     attrs: []const ast.Attr,
     is_extern: bool,
+};
+
+pub const GlobalArtifact = struct {
+    global: ast.GlobalDecl,
 };
 
 pub const TraitArtifact = union(enum) {

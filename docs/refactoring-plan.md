@@ -420,6 +420,7 @@ removing backend authority before adding new abstractions:
 | 232 | Delete callable/value declaration artifact union. | Complete: `CallableValueArtifact` was removed; early declaration artifacts now carry separate `function_artifacts` and `global_artifacts`, C and LLVM collect functions/globals through explicit slices, and inventory gates keep the old mixed `callable_value_artifacts` path at zero. |
 | 233 | Remove function-body AST from source-map artifacts. | Complete: `SourceMapArtifact.Function` no longer stores `ast.Block`; C source-map expression/statement rows are now derived from verified MIR instruction spans, and inventory gates forbid the retired AST body walker in `lower_c_map`. |
 | 234 | Delete the generic type declaration artifact union. | Complete: `TypeArtifact` was removed; early declaration artifacts now carry separate type-alias/struct/enum/union/packed-bits/overlay-union slices, and C/LLVM type prepasses consume explicit slices instead of switching over a mixed type union. |
+| 235 | Name global declaration artifacts explicitly. | Complete: `EarlyDeclarationArtifacts.global_artifacts` now carries `GlobalArtifact` entries instead of a bare `[]const ast.GlobalDecl`; C and LLVM unwrap the named compatibility artifact at their collection edge, and inventory gates prevent the backend request artifact boundary from regressing to a raw global declaration slice. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

@@ -469,7 +469,7 @@ const LlvmEmitter = struct {
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
     function_artifacts: []const declaration_artifacts.FunctionArtifact = &.{},
-    global_artifacts: []const ast_bridge.GlobalDecl = &.{},
+    global_artifacts: []const declaration_artifacts.GlobalArtifact = &.{},
     trait_artifacts: []const declaration_artifacts.TraitArtifact = &.{},
     type_alias_artifacts: []const ast_bridge.TypeAlias = &.{},
     struct_artifacts: []const ast_bridge.StructDecl = &.{},
@@ -722,7 +722,7 @@ const LlvmEmitter = struct {
             try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = function.fn_decl, .attrs = function.attrs, .is_extern = function.is_extern });
         }
         for (self.global_artifacts) |global| {
-            try self.collectGlobal(global);
+            try self.collectGlobal(global.global);
         }
         for (self.trait_artifacts) |artifact| {
             switch (artifact) {
