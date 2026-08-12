@@ -99,17 +99,34 @@ fn emitStaticNegativeOperand(allocator: std.mem.Allocator, out: *std.ArrayList(u
     }
 }
 
-pub fn staticCInitializer(expr: ast_bridge.Expr, static_initializers: anytype, functions: anytype, allocator: std.mem.Allocator) ?ast_bridge.Expr {
+pub const StaticCInitializerRef = struct {
+    expr: ast_bridge.Expr,
+    owner: ?[]const u8 = null,
+};
+
+pub fn staticCInitializerRef(expr: ast_bridge.Expr, static_initializers: anytype, functions: anytype, allocator: std.mem.Allocator) ?StaticCInitializerRef {
     return switch (expr.kind) {
-        .ident => |ident| static_initializers.get(ident.text) orelse if (functions.contains(ident.text)) expr else null,
-        .grouped => |inner| if (staticCInitializer(inner.*, static_initializers, functions, allocator)) |resolved| resolved else if (isStaticCInitializer(expr)) expr else null,
-        .cast => |node| if (staticCInitializer(node.value.*, static_initializers, functions, allocator)) |resolved| blk: {
+        .ident => |ident| if (static_initializers.get(ident.text)) |initializer|
+            .{ .expr = initializer, .owner = ident.text }
+        else if (functions.contains(ident.text))
+            .{ .expr = expr }
+        else
+            null,
+        .grouped => |inner| if (staticCInitializerRef(inner.*, static_initializers, functions, allocator)) |resolved| resolved else if (isStaticCInitializer(expr)) .{ .expr = expr } else null,
+        .cast => |node| if (staticCInitializerRef(node.value.*, static_initializers, functions, allocator)) |resolved| blk: {
             const value = allocator.create(ast_bridge.Expr) catch break :blk null;
-            value.* = resolved;
-            break :blk .{ .span = expr.span, .kind = .{ .cast = .{ .value = value, .ty = node.ty } } };
-        } else if (isStaticCInitializer(expr)) expr else null,
-        else => if (isStaticCInitializer(expr)) expr else null,
+            value.* = resolved.expr;
+            break :blk .{
+                .expr = .{ .span = expr.span, .kind = .{ .cast = .{ .value = value, .ty = node.ty } } },
+                .owner = resolved.owner,
+            };
+        } else if (isStaticCInitializer(expr)) .{ .expr = expr } else null,
+        else => if (isStaticCInitializer(expr)) .{ .expr = expr } else null,
     };
+}
+
+pub fn staticCInitializer(expr: ast_bridge.Expr, static_initializers: anytype, functions: anytype, allocator: std.mem.Allocator) ?ast_bridge.Expr {
+    return if (staticCInitializerRef(expr, static_initializers, functions, allocator)) |resolved| resolved.expr else null;
 }
 
 pub fn appendCIntLiteral(allocator: std.mem.Allocator, out: *std.ArrayList(u8), literal: []const u8) !void {

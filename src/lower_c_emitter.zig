@@ -1347,6 +1347,7 @@ pub const CEmitter = struct {
             .const_global_c_value = constGlobalCValueForGlobal,
             .emit_expr = emitExprForGlobal,
             .emit_expr_with_target = emitExprWithTargetForGlobal,
+            .emit_expr_with_target_for_owner = emitExprWithTargetForGlobalOwner,
             .emit_const_global_initializer = emitConstGlobalInitializerForGlobal,
             .is_aggregate_global_type = isAggregateGlobalTypeForGlobal,
         };
@@ -1440,6 +1441,14 @@ pub const CEmitter = struct {
 
     fn emitExprWithTargetForGlobal(ctx: *anyopaque, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void {
         const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        try self.emitExprWithTarget(expr, null, target_ty);
+    }
+
+    fn emitExprWithTargetForGlobalOwner(ctx: *anyopaque, owner: ?[]const u8, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void {
+        const self: *CEmitter = @ptrCast(@alignCast(ctx));
+        const previous_function = self.current_function;
+        if (owner) |name| self.current_function = name;
+        defer self.current_function = previous_function;
         try self.emitExprWithTarget(expr, null, target_ty);
     }
 

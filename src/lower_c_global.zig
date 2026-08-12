@@ -18,12 +18,14 @@ const emitStaticCInitializer = lower_c_const.emitStaticCInitializer;
 const isArrayLiteralExpr = lower_c_const.isArrayLiteralExpr;
 const isStructLiteralExpr = lower_c_const.isStructLiteralExpr;
 const staticCInitializer = lower_c_const.staticCInitializer;
+const staticCInitializerRef = lower_c_const.staticCInitializerRef;
 
 pub const WriteLineDirectiveFn = *const fn (ctx: *anyopaque, span: ast_bridge.Span) anyerror!void;
 pub const EmitDeclaratorFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, name: []const u8) anyerror!void;
 pub const ConstGlobalCValueFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, ty: ?ast_bridge.TypeExpr) anyerror!?[]const u8;
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerror!void;
 pub const EmitExprWithTargetFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void;
+pub const EmitExprWithTargetForOwnerFn = *const fn (ctx: *anyopaque, owner: ?[]const u8, expr: ast_bridge.Expr, target_ty: ast_bridge.TypeExpr) anyerror!void;
 pub const EmitExprWithLocalsFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitConstGlobalInitializerFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr, expr: ast_bridge.Expr) anyerror!bool;
 pub const IsAggregateGlobalTypeFn = *const fn (ctx: *anyopaque, ty: ast_bridge.TypeExpr) bool;
@@ -41,6 +43,7 @@ pub const EmitContext = struct {
     const_global_c_value: ConstGlobalCValueFn,
     emit_expr: EmitExprFn,
     emit_expr_with_target: EmitExprWithTargetFn,
+    emit_expr_with_target_for_owner: EmitExprWithTargetForOwnerFn,
     emit_const_global_initializer: EmitConstGlobalInitializerFn,
     is_aggregate_global_type: IsAggregateGlobalTypeFn,
 };
@@ -99,16 +102,16 @@ pub fn emitGlobal(ctx: EmitContext, global: ast_bridge.GlobalDecl) !void {
                 return;
             }
         }
-        if (staticCInitializer(initializer, ctx.static_initializers, ctx.functions, ctx.scratch)) |static_initializer| {
+        if (staticCInitializerRef(initializer, ctx.static_initializers, ctx.functions, ctx.scratch)) |static_initializer| {
             try ctx.out.appendSlice(ctx.allocator, " = ");
-            if (try emitStaticCInitializer(ctx.allocator, ctx.out, static_initializer)) {
+            if (try emitStaticCInitializer(ctx.allocator, ctx.out, static_initializer.expr)) {
                 // Emitted directly.
             } else if (global.ty) |global_ty| {
-                try ctx.emit_expr_with_target(ctx.emit_ctx, static_initializer, global_ty);
+                try ctx.emit_expr_with_target_for_owner(ctx.emit_ctx, static_initializer.owner, static_initializer.expr, global_ty);
             } else {
-                try ctx.emit_expr(ctx.emit_ctx, static_initializer);
+                try ctx.emit_expr(ctx.emit_ctx, static_initializer.expr);
             }
-            try ctx.static_initializers.put(global.name.text, static_initializer);
+            try ctx.static_initializers.put(global.name.text, static_initializer.expr);
         } else if (global.ty != null and isArrayLiteralExpr(initializer)) {
             try ctx.out.appendSlice(ctx.allocator, " = ");
             try ctx.emit_expr_with_target(ctx.emit_ctx, initializer, global.ty.?);

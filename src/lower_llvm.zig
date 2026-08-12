@@ -900,7 +900,7 @@ const LlvmEmitter = struct {
             .ident => |ident| {
                 if (!self.isFnPointerType(semantic_ty)) {
                     if (self.global_initializers.get(ident.text)) |initializer| {
-                        return try self.emitGlobalInitializer(initializer, semantic_ty);
+                        return try self.emitGlobalInitializerForOwner(ident.text, initializer, semantic_ty);
                     }
                 }
             },
@@ -1042,6 +1042,13 @@ const LlvmEmitter = struct {
             "getelementptr ({s}, ptr {s}, i64 0, i32 {d})",
             .{ try self.llvmType(struct_ty), base_ptr, index },
         );
+    }
+
+    fn emitGlobalInitializerForOwner(self: *LlvmEmitter, owner: []const u8, expr: ast_bridge.Expr, ty: ast_bridge.TypeExpr) anyerror![]const u8 {
+        const previous_function = self.current_function;
+        self.current_function = owner;
+        defer self.current_function = previous_function;
+        return try self.emitGlobalInitializer(expr, ty);
     }
 
     fn globalConstIndexValue(self: *LlvmEmitter, expr: ast_bridge.Expr) ?u64 {
