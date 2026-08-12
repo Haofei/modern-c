@@ -2814,6 +2814,26 @@ test "MIR owns inferred local dyn dispatch call types" {
     try std.testing.expectEqual(@as(usize, 0), countTargetTypeFactsByKind(notify, .dyn_dispatch_result));
     const void_argument_fact = targetTypeFactByKind(notify, .dyn_dispatch_argument) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(?usize, mir.dynDispatchArgumentFactIndex(1, 0)), void_argument_fact.target_index);
+    const notify_ptr = functionByNamePtr(&typed_mir, "notify").?;
+    const facts = mir_facts_view.MirFactsView.init(&typed_mir);
+    try std.testing.expect(facts.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+        .current = notify_ptr,
+        .fact = .{
+            .kind = .dyn_dispatch_result,
+            .source = dispatch_fact.source,
+            .owner = dispatch_fact.target_owner,
+            .index = dispatch_fact.target_index,
+        },
+    }) == null);
+    try std.testing.expect(facts.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+        .current = notify_ptr,
+        .fact = .{
+            .kind = .dyn_dispatch_argument,
+            .source = argument_fact.source,
+            .owner = argument_fact.target_owner,
+            .index = argument_fact.target_index,
+        },
+    }) == null);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 

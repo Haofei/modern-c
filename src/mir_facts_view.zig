@@ -203,8 +203,6 @@ fn targetTypeKindAllowsModuleFallback(kind: mir.TargetTypeKind) bool {
     return switch (kind) {
         .direct_call_result,
         .direct_call_argument,
-        .dyn_dispatch_result,
-        .dyn_dispatch_argument,
         => true,
         else => false,
     };
