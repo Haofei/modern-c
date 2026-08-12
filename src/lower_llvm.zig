@@ -6128,11 +6128,9 @@ const LlvmEmitter = struct {
 
     fn applyMirPointerProvenanceFactsAtSourceWithMode(self: *LlvmEmitter, subject: []const u8, element_index: ?usize, span: ast.Span, comment_mode: MirFactCommentMode) !bool {
         const function = self.currentMirFunction() orelse return false;
-        const view = mir_facts_view.MirFactsView.init(&self.mir_module);
-        const query: mir_facts_view.PointerFactQuery = .{ .subject = subject, .element_index = element_index, .source = mir.sourcePointFromSpan(span) };
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (!view.pointerFactMatchesQuery(fact, query)) continue;
+            if (!mir_source_bridge.pointerFactMatchesAt(&self.mir_module, fact, subject, element_index, span)) continue;
             matched = true;
             switch (comment_mode) {
                 .silent => {
@@ -6147,10 +6145,8 @@ const LlvmEmitter = struct {
 
     fn applyMirPointerProvenanceInvalidationsAtCall(self: *LlvmEmitter, span: ast.Span) void {
         const function = self.currentMirFunction() orelse return;
-        const view = mir_facts_view.MirFactsView.init(&self.mir_module);
-        const source = mir.sourcePointFromSpan(span);
         for (function.pointer_provenance_facts) |fact| {
-            if (!view.pointerFactIsCallInvalidationAt(fact, source)) continue;
+            if (!mir_source_bridge.pointerFactIsCallInvalidationAt(&self.mir_module, fact, span)) continue;
             if (fact.field_path) |field_path| {
                 self.clearAggregatePointerFieldsForLocalPath(fact.subject, field_path);
                 continue;
@@ -6172,11 +6168,9 @@ const LlvmEmitter = struct {
 
     fn applyMirAggregatePointerFieldFactsAtSource(self: *LlvmEmitter, subject: []const u8, field_path: []const u8, element_index: ?usize, span: ast.Span) !bool {
         const function = self.currentMirFunction() orelse return false;
-        const view = mir_facts_view.MirFactsView.init(&self.mir_module);
-        const query: mir_facts_view.PointerFactQuery = .{ .subject = subject, .field_path = field_path, .element_index = element_index, .source = mir.sourcePointFromSpan(span) };
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (!view.pointerFactMatchesQuery(fact, query)) continue;
+            if (!mir_source_bridge.aggregatePointerFieldFactMatchesAt(&self.mir_module, fact, subject, field_path, element_index, span)) continue;
             matched = true;
             try self.emitMirPointerProvenanceConsumedComment(fact);
             try self.applyMirPointerProvenanceFactState(fact);
@@ -6186,11 +6180,9 @@ const LlvmEmitter = struct {
 
     fn applyMirAggregatePointerFieldFactsForSubjectAtSource(self: *LlvmEmitter, subject: []const u8, span: ast.Span) !bool {
         const function = self.currentMirFunction() orelse return false;
-        const view = mir_facts_view.MirFactsView.init(&self.mir_module);
-        const source = mir.sourcePointFromSpan(span);
         var matched = false;
         for (function.pointer_provenance_facts) |fact| {
-            if (!view.pointerFactMatchesSubjectFieldAtSource(fact, subject, source)) continue;
+            if (!mir_source_bridge.pointerFactMatchesSubjectFieldAt(&self.mir_module, fact, subject, span)) continue;
             matched = true;
             try self.emitMirPointerProvenanceConsumedComment(fact);
             try self.applyMirPointerProvenanceFactState(fact);

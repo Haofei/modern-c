@@ -1256,6 +1256,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn targetTypeFactMatchingType(": 1,
         "pub fn targetTypeFactAtOwnedWithModuleFallback(": 1,
         "pub fn uniqueConstGetIndexAt(": 1,
+        "pub fn pointerFactMatchesAt(": 1,
+        "pub fn aggregatePointerFieldFactMatchesAt(": 1,
+        "pub fn pointerFactIsCallInvalidationAt(": 1,
+        "pub fn pointerFactMatchesSubjectFieldAt(": 1,
     },
     "src/lower_c.zig": {
         "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)": 1,

@@ -61,3 +61,28 @@ pub fn targetTypeFactAtOwnedWithModuleFallback(module: *const mir.Module, curren
 pub fn uniqueConstGetIndexAt(module: *const mir.Module, current: ?*const mir.Function, span: ast.Span) ?usize {
     return MirFactsView.init(module).uniqueConstGetIndexAt(current, mir.sourcePointFromSpan(span));
 }
+
+pub fn pointerFactMatchesAt(module: *const mir.Module, fact: mir.PointerProvenanceFact, subject: []const u8, element_index: ?usize, span: ast.Span) bool {
+    return MirFactsView.init(module).pointerFactMatchesQuery(fact, .{
+        .subject = subject,
+        .element_index = element_index,
+        .source = mir.sourcePointFromSpan(span),
+    });
+}
+
+pub fn aggregatePointerFieldFactMatchesAt(module: *const mir.Module, fact: mir.PointerProvenanceFact, subject: []const u8, field_path: []const u8, element_index: ?usize, span: ast.Span) bool {
+    return MirFactsView.init(module).pointerFactMatchesQuery(fact, .{
+        .subject = subject,
+        .field_path = field_path,
+        .element_index = element_index,
+        .source = mir.sourcePointFromSpan(span),
+    });
+}
+
+pub fn pointerFactIsCallInvalidationAt(module: *const mir.Module, fact: mir.PointerProvenanceFact, span: ast.Span) bool {
+    return MirFactsView.init(module).pointerFactIsCallInvalidationAt(fact, mir.sourcePointFromSpan(span));
+}
+
+pub fn pointerFactMatchesSubjectFieldAt(module: *const mir.Module, fact: mir.PointerProvenanceFact, subject: []const u8, span: ast.Span) bool {
+    return MirFactsView.init(module).pointerFactMatchesSubjectFieldAtSource(fact, subject, mir.sourcePointFromSpan(span));
+}
