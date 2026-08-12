@@ -467,11 +467,6 @@ pub const Checker = struct {
     }
 
     pub fn checkDecls(self: *Checker, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, qualified_owners: [][]const u8) void {
-        const module = ast.Module{
-            .decls = decls,
-            .visibility_mode = visibility_mode,
-            .qualified_owners = qualified_owners,
-        };
         defer self.live_locals.deinit(self.reporter.allocator); // free the block-scoping liveness stack
         var mmio_structs = std.StringHashMap(MmioStruct).init(self.reporter.allocator);
         defer deinitMmioStructs(&mmio_structs);
@@ -508,7 +503,7 @@ pub const Checker = struct {
         defer self.trait_decls = null;
         if (!self.generic_template_precheck) {
             self.checkTopLevelNames(decls);
-            self.checkBackendNameUniqueness(module);
+            self.checkBackendNameUniqueness(decls);
         }
         self.collectTypeAliases(decls, &type_aliases);
         if (!self.generic_template_precheck) self.checkTypeAliasCycles(decls, &type_aliases);
@@ -523,7 +518,7 @@ pub const Checker = struct {
         defer self.active_tagged_unions = null;
         self.collectEnums(decls, &enums);
         self.collectFunctions(decls, &functions);
-        if (!self.generic_template_precheck) self.checkErrorFromDecls(module);
+        if (!self.generic_template_precheck) self.checkErrorFromDecls(decls);
         self.collectGlobals(decls, &globals);
         const safe_module = moduleHasSafeModuleAttr(decls);
 
@@ -558,14 +553,14 @@ pub const Checker = struct {
         // associated implementation. Trait impls follow the spec's
         // wider coherence boundary: `impl Trait for Type` must be in `Type`'s declaring file.
         // No-op without file boundaries.
-        if (!self.generic_template_precheck) self.checkOrphanImpls(module);
+        if (!self.generic_template_precheck) self.checkOrphanImpls(decls);
 
         // Tier 1 traits: conformance (every trait method present, matching self-mode +
         // effect annotations) and coherence (<=1 impl per (Trait, Type)). Bound
         // satisfaction is checked at the instantiation site during monomorphization;
         // the orphan rule for `impl Trait for <opaque>` is covered by checkOrphanImpls
         // above (the impl methods are `Type__m` functions keyed on the opaque owner).
-        self.checkTraits(module, safe_module);
+        self.checkTraits(decls, safe_module);
 
         var const_fns = std.StringHashMap(ast.FnDecl).init(self.reporter.allocator);
         defer const_fns.deinit();
@@ -737,7 +732,7 @@ pub const Checker = struct {
             if (self.generic_template_precheck and !self.shouldCheckGenericTemplateDecl(decl)) continue;
             self.checkDecl(decl, safe_module, &mmio_structs, &structs, &packed_bits, &overlay_unions, &tagged_unions, &enums, &functions, &globals, &type_aliases);
         }
-        self.checkBoundedCallCycles(module, &functions);
+        self.checkBoundedCallCycles(decls, &functions);
 
         // Definite-initialization pass (S0.1). A scalar `var x: T = uninit;`
         // must be definitely assigned on every control-flow path before it is
@@ -3717,14 +3712,14 @@ pub const Checker = struct {
     // one was previously ignored, then surfaced misleadingly as E_NO_ERROR_CONVERSION at the `?` site).
     // And each (E1 -> E2) pair must be UNIQUE: two conversions for the same error types are ambiguous
     // (the resolver would silently pick one by iteration order), so reject them here.
-    fn checkErrorFromDecls(self: *Checker, module: ast.Module) void {
+    fn checkErrorFromDecls(self: *Checker, decls: []const ast.Decl) void {
         var seen = std.StringHashMap(void).init(self.reporter.allocator);
         defer {
             var it = seen.keyIterator();
             while (it.next()) |k| self.reporter.allocator.free(k.*);
             seen.deinit();
         }
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             const fn_decl = switch (decl.kind) {
                 .fn_decl, .extern_fn => |fd| fd,
                 else => continue,
@@ -5558,7 +5553,7 @@ pub const Checker = struct {
         span: diagnostics.Span,
     };
 
-    fn checkBoundedCallCycles(self: *Checker, module: ast.Module, functions: *const std.StringHashMap(FunctionInfo)) void {
+    fn checkBoundedCallCycles(self: *Checker, decls: []const ast.Decl, functions: *const std.StringHashMap(FunctionInfo)) void {
         var graph = std.StringHashMap([]BoundedCallEdge).init(self.reporter.allocator);
         defer {
             var it = graph.iterator();
@@ -5566,7 +5561,7 @@ pub const Checker = struct {
             graph.deinit();
         }
 
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             const fn_decl = switch (decl.kind) {
                 .fn_decl => |node| node,
                 else => continue,
@@ -5591,7 +5586,7 @@ pub const Checker = struct {
 
         var colors = std.StringHashMap(u8).init(self.reporter.allocator);
         defer colors.deinit();
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             const fn_decl = switch (decl.kind) {
                 .fn_decl => |node| node,
                 else => continue,
@@ -5975,10 +5970,10 @@ pub const Checker = struct {
 
     // `#[backend_name("Y")]` overrides the object symbol; two declarations may not map to the
     // same backend symbol, or one would silently shadow the other at link time.
-    fn checkBackendNameUniqueness(self: *Checker, module: ast.Module) void {
+    fn checkBackendNameUniqueness(self: *Checker, decls: []const ast.Decl) void {
         var seen = std.StringHashMap(ast.Ident).init(self.reporter.allocator);
         defer seen.deinit();
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             const name_ident: ast.Ident = switch (decl.kind) {
                 .fn_decl => |f| f.name,
                 .extern_fn => |f| f.name,
@@ -7641,7 +7636,7 @@ pub const Checker = struct {
     // belongs in the file declaring `Type`, even when `Type` is non-opaque. Co-located
     // stdlib/kernel impls (the legitimate case) are accepted. No-op without file boundaries
     // (single-file/standalone check — nothing cross-file to forge).
-    fn checkOrphanImpls(self: *Checker, module: ast.Module) void {
+    fn checkOrphanImpls(self: *Checker, decls: []const ast.Decl) void {
         if (self.file_boundaries == null) return;
         // Map each opaque struct's stable semantic identity to its defining file. Generic
         // specializations retain the source identity, so this does not parse emitted names.
@@ -7649,7 +7644,7 @@ pub const Checker = struct {
         defer opaque_files.deinit();
         var type_files = std.StringHashMap([]const u8).init(self.reporter.allocator);
         defer type_files.deinit();
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             switch (decl.kind) {
                 .struct_decl => |sd| {
                     const file = self.originFile(sd.name.span.offset) orelse continue;
@@ -7674,7 +7669,7 @@ pub const Checker = struct {
         }
         // An explicitly associated function for an opaque owner must originate in the same file.
         if (opaque_files.count() > 0) {
-            for (module.decls) |decl| {
+            for (decls) |decl| {
                 const fd = switch (decl.kind) {
                     .fn_decl, .extern_fn => |f| f,
                     else => continue,
@@ -7691,7 +7686,7 @@ pub const Checker = struct {
         // the conformance must be declared with that target type. Builtin/scalar targets have no
         // declaring file in this map and are left to the normal trait checks.
         if (type_files.count() > 0) {
-            for (module.decls) |decl| {
+            for (decls) |decl| {
                 const it = switch (decl.kind) {
                     .impl_trait => |node| node,
                     else => continue,
@@ -7714,11 +7709,11 @@ pub const Checker = struct {
     // Tier 1 trait checks (docs/traits-design.md §7): conformance and coherence. The
     // method bodies are ordinary `Type__m` fn_decls checked elsewhere; this pass works
     // on the `trait_decl` / `impl_trait` records the parser emits.
-    fn checkTraits(self: *Checker, module: ast.Module, safe_module: bool) void {
+    fn checkTraits(self: *Checker, decls: []const ast.Decl, safe_module: bool) void {
         // Collect trait declarations by name.
         var traits = std.StringHashMap(ast.TraitDecl).init(self.reporter.allocator);
         defer traits.deinit();
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             if (decl.kind == .trait_decl) {
                 const t = decl.kind.trait_decl;
                 const trait_experimental_ownership = hasExperimentalOwnership(decl.attrs);
@@ -7769,7 +7764,7 @@ pub const Checker = struct {
             seen_pairs.deinit();
         }
 
-        for (module.decls) |decl| {
+        for (decls) |decl| {
             if (decl.kind != .impl_trait) continue;
             const it = decl.kind.impl_trait;
 
