@@ -2,7 +2,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -11,12 +10,13 @@ const lower_c_shape = @import("lower_c_shape.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const parser = @import("parser.zig");
+const test_artifact_support = @import("test_artifact_support.zig");
 const test_support = @import("test_support.zig");
 
 fn appendLlvmDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
     var module_mir = try mir.buildOptFromDecls(allocator, decls, .{});
     defer module_mir.deinit();
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, decls);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts, &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
 }
@@ -34,7 +34,7 @@ fn appendCProfileWithSourcePathDeclsTest(allocator: std.mem.Allocator, decls: []
 }
 
 fn appendCProfileWithMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) !void {
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, decls);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
     try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts, module_mir, out, profile, source_path, checks, stub_asm, reporter);
 }
@@ -47,7 +47,7 @@ fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, ou
     var typed_mir = try mir.buildFromDecls(allocator, decls);
     defer typed_mir.deinit();
 
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, decls);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
     try lower_c.appendCSourceMapFromGenerated(allocator, artifacts.source_map_artifacts, out, generated_c.items, &typed_mir, source_path, generated_c_path, .{
         .profile = profile,

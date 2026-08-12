@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const generic_precheck = @import("generic_precheck.zig");
@@ -15,6 +14,7 @@ const monomorphize = @import("monomorphize.zig");
 const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
+const test_artifact_support = @import("test_artifact_support.zig");
 
 fn moduleWithDecls(source_module: ast.Module, decls: []ast.Decl) ast.Module {
     return .{
@@ -28,7 +28,7 @@ fn moduleWithDecls(source_module: ast.Module, decls: []ast.Decl) ast.Module {
 fn appendCDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
     var module_mir = try mir.buildOptFromDecls(allocator, decls, .{});
     defer module_mir.deinit();
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, decls);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
     try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts, &module_mir, out, .kernel, null, .{}, false, null);
 }
@@ -36,7 +36,7 @@ fn appendCDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.A
 fn appendLlvmDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
     var module_mir = try mir.buildOptFromDecls(allocator, decls, .{});
     defer module_mir.deinit();
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, decls);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts, &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
 }

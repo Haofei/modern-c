@@ -3,10 +3,10 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const lower_llvm_prelude = @import("lower_llvm_prelude.zig");
 const mir = @import("mir.zig");
+const test_artifact_support = @import("test_artifact_support.zig");
 const test_support = @import("test_support.zig");
 
 test "LLVM nullable initialization and race lowering follow representation" {
@@ -147,7 +147,7 @@ fn appendLlvmCheckedMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl
 }
 
 fn appendLlvmCheckedMirProfileDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, output: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
-    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(allocator, decls);
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts, module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
 }
@@ -13567,7 +13567,7 @@ test "LLVM unsupported diagnostics use nearest source span for generated nodes" 
     var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
     defer module_mir.deinit();
     const verified = try backend_mod.VerifiedProgram.init(&module_mir, &reporter);
-    var early_metadata = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(std.testing.allocator, module.decls);
+    var early_metadata = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, module.decls);
     defer early_metadata.deinit(std.testing.allocator);
     const llvm_backend = lower_llvm.mcBackend();
     try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerRequest(std.testing.allocator, .{

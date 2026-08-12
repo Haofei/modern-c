@@ -143,18 +143,6 @@ pub const EarlyDeclarationArtifacts = struct {
         return collectFromResolvedDeclItems(allocator, resolved_decls);
     }
 
-    pub fn collectFromModuleDeclsForTests(allocator: std.mem.Allocator, syntax_items: []const ast.Decl) !EarlyDeclarationArtifacts {
-        var resolved_decls = try allocator.alloc(module_parser.ResolvedDecl, syntax_items.len);
-        defer allocator.free(resolved_decls);
-        for (syntax_items, 0..) |decl, i| {
-            resolved_decls[i] = .{
-                .file_id = @enumFromInt(0),
-                .decl = decl,
-            };
-        }
-        return collectFromResolvedDecls(allocator, resolved_decls);
-    }
-
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
         allocator.free(self.function_artifacts);
         allocator.free(self.global_artifacts);
@@ -471,16 +459,14 @@ test "declaration artifacts collect from resolved declaration stream" {
         };
     }
 
-    var from_syntax = try EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(std.testing.allocator, parsed.decls());
-    defer from_syntax.deinit(std.testing.allocator);
     var from_resolved = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls);
     defer from_resolved.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(from_syntax.function_artifacts.len, from_resolved.function_artifacts.len);
-    try std.testing.expectEqual(from_syntax.global_artifacts.len, from_resolved.global_artifacts.len);
-    try std.testing.expectEqual(from_syntax.struct_artifacts.len, from_resolved.struct_artifacts.len);
-    try std.testing.expectEqual(from_syntax.source_map_artifacts.len, from_resolved.source_map_artifacts.len);
-    try std.testing.expectEqualStrings(from_syntax.function_artifacts[0].name.text, from_resolved.function_artifacts[0].name.text);
-    try std.testing.expectEqualStrings(from_syntax.global_artifacts[0].name.text, from_resolved.global_artifacts[0].name.text);
-    try std.testing.expectEqualStrings(from_syntax.struct_artifacts[0].name.text, from_resolved.struct_artifacts[0].name.text);
+    try std.testing.expectEqual(@as(usize, 1), from_resolved.function_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 1), from_resolved.global_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 1), from_resolved.struct_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 3), from_resolved.source_map_artifacts.len);
+    try std.testing.expectEqualStrings("inc", from_resolved.function_artifacts[0].name.text);
+    try std.testing.expectEqualStrings("counter", from_resolved.global_artifacts[0].name.text);
+    try std.testing.expectEqualStrings("Box", from_resolved.struct_artifacts[0].name.text);
 }

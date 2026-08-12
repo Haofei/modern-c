@@ -91,7 +91,7 @@ EXACT_FILE_COUNTS = {
     ("src/declaration_artifacts.zig", "fn collectFromSyntaxDecls("): 0,
     ("src/declaration_artifacts.zig", "fn collectFromResolvedDeclItems("): 1,
     ("src/declaration_artifacts.zig", "pub fn collectFromResolvedDecls("): 1,
-    ("src/declaration_artifacts.zig", "pub fn collectFromModuleDeclsForTests("): 1,
+    ("src/declaration_artifacts.zig", "pub fn collectFromModuleDeclsForTests("): 0,
     ("src/declaration_artifacts.zig", "[]const module_parser.ResolvedDecl"): 1,
     ("src/declaration_artifacts.zig", "var syntax_decls = try allocator.alloc(ast.Decl"): 0,
     ("src/declaration_artifacts.zig", "syntax_decls[i] = entry.decl"): 0,
