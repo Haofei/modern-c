@@ -396,7 +396,7 @@ test "tests/spec diagnostic declarations and inline EXPECT_ERROR comments match 
             if (module) |m| {
                 var checker = sema.Checker.init(&reporter);
                 checker.file_boundaries = loaded_spec.boundaries;
-                checker.checkModule(m);
+                checker.checkDecls(m.decls, m.visibility_mode, m.qualified_owners);
                 if (metadataListContains(metadata.valueFor("phase") orelse "", "verifier")) {
                     try mir.verifyFromDecls(allocator, m.decls, &reporter);
                 }

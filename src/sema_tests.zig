@@ -17,7 +17,7 @@ fn checkSource(source: []const u8, reporter: *diagnostics.Reporter) !void {
     try std.testing.expect(!reporter.has_errors);
 
     var checker = sema.Checker.init(reporter);
-    checker.checkModule(module);
+    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
 }
 
 fn hasDiagnosticCode(reporter: *const diagnostics.Reporter, code: []const u8) bool {
@@ -75,7 +75,7 @@ fn checkVisibilityMode(source: []const u8, imported_offset: usize, mode: ast.Vis
     };
     var checker = sema.Checker.init(&reporter);
     checker.file_boundaries = &boundaries;
-    checker.checkModule(module);
+    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
     return hasDiagnosticCode(&reporter, "E_PRIVATE_IMPORT");
 }
 
@@ -117,7 +117,7 @@ test "trait orphan ownership keeps double-underscore type names exact" {
     };
     var checker = sema.Checker.init(&reporter);
     checker.file_boundaries = &boundaries;
-    checker.checkModule(module);
+    checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
     try std.testing.expect(hasDiagnosticCode(&reporter, "E_ORPHAN_IMPL"));
 }
 
@@ -2509,7 +2509,7 @@ test "allocation failure across parse monomorphize and sema never reports clean 
         defer reporter.deinit();
 
         var checker = sema.Checker.init(&reporter);
-        checker.checkModule(specialized);
+        checker.checkDecls(specialized.decls, specialized.visibility_mode, specialized.qualified_owners);
 
         try std.testing.expect(reporter.has_errors);
         try std.testing.expect(checker.oom);
@@ -2539,7 +2539,7 @@ test "allocation failure while checking type alias cycles fails closed" {
         defer reporter.deinit();
 
         var checker = sema.Checker.init(&reporter);
-        checker.checkModule(module);
+        checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
 
         try std.testing.expect(reporter.has_errors or checker.oom);
         if (checker.oom) saw_oom = true;
@@ -2579,7 +2579,7 @@ test "allocation failure while tracking asm register conflicts fails closed" {
         defer reporter.deinit();
 
         var checker = sema.Checker.init(&reporter);
-        checker.checkModule(module);
+        checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
 
         try std.testing.expect(reporter.has_errors or checker.oom);
         if (checker.oom) saw_oom = true;
@@ -2615,7 +2615,7 @@ test "allocation failure while tracking backend name collisions fails closed" {
         defer reporter.deinit();
 
         var checker = sema.Checker.init(&reporter);
-        checker.checkModule(module);
+        checker.checkDecls(module.decls, module.visibility_mode, module.qualified_owners);
 
         try std.testing.expect(reporter.has_errors or checker.oom);
         if (checker.oom) saw_oom = true;

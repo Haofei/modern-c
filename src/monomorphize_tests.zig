@@ -156,7 +156,8 @@ test "monomorphize preserves named loop break and continue targets" {
     try testing.expect(found);
 
     var checker = sema.Checker.init(&reporter);
-    checker.checkModule(module.withDecls(specialized));
+    const specialized_module = module.withDecls(specialized);
+    checker.checkDecls(specialized_module.decls, specialized_module.visibility_mode, specialized_module.qualified_owners);
     try testing.expect(!reporter.has_errors);
 }
 
@@ -319,7 +320,7 @@ test "monomorphize preserves qualified-owner metadata and diagnostics" {
     try testing.expectEqual(ast.VisibilityMode.explicit_public, specialized.visibility_mode);
 
     var checker = sema.Checker.init(&reporter);
-    checker.checkModule(specialized);
+    checker.checkDecls(specialized.decls, specialized.visibility_mode, specialized.qualified_owners);
     var reserved_diagnostics: usize = 0;
     for (reporter.diagnostics.items) |diagnostic| {
         if (std.mem.indexOf(u8, diagnostic.message, "E_RESERVED_QUALIFIED_NAME") != null) {

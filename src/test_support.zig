@@ -19,7 +19,7 @@ pub const ParsedModule = struct {
 
     pub fn check(self: *ParsedModule) void {
         var checker = sema.Checker.init(&self.reporter);
-        checker.checkModule(self.module);
+        checker.checkDecls(self.module.decls, self.module.visibility_mode, self.module.qualified_owners);
     }
 
     pub fn expectNoErrors(self: *const ParsedModule) !void {
