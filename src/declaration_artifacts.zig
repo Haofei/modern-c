@@ -20,11 +20,7 @@ pub const EarlyDeclarationArtifacts = struct {
     overlay_union_artifacts: []const ast.OverlayUnionDecl,
     source_map_artifacts: []const SourceMapArtifact,
 
-    fn collectFromSyntaxDecls(allocator: std.mem.Allocator, syntax_items: []const ast.Decl) !EarlyDeclarationArtifacts {
-        return collectFromDeclItems(allocator, syntax_items, false);
-    }
-
-    fn collectFromDeclItems(allocator: std.mem.Allocator, items: anytype, comptime resolved_items: bool) !EarlyDeclarationArtifacts {
+    fn collectFromResolvedDeclItems(allocator: std.mem.Allocator, resolved_decls: anytype) !EarlyDeclarationArtifacts {
         var function_artifacts: std.ArrayList(FunctionArtifact) = .empty;
         errdefer function_artifacts.deinit(allocator);
         var global_artifacts: std.ArrayList(GlobalArtifact) = .empty;
@@ -48,8 +44,8 @@ pub const EarlyDeclarationArtifacts = struct {
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
         errdefer source_map_artifacts.deinit(allocator);
 
-        for (items) |item| {
-            const decl = if (resolved_items) item.decl else item;
+        for (resolved_decls) |item| {
+            const decl = item.decl;
             switch (decl.kind) {
                 .fn_decl => |fn_decl| {
                     try function_artifacts.append(allocator, FunctionArtifact.fromDecl(fn_decl, decl.attrs, false));
@@ -144,7 +140,7 @@ pub const EarlyDeclarationArtifacts = struct {
         allocator: std.mem.Allocator,
         resolved_decls: []const module_parser.ResolvedDecl,
     ) !EarlyDeclarationArtifacts {
-        return collectFromDeclItems(allocator, resolved_decls, true);
+        return collectFromResolvedDeclItems(allocator, resolved_decls);
     }
 
     pub fn collectFromModuleDeclsForTests(allocator: std.mem.Allocator, syntax_items: []const ast.Decl) !EarlyDeclarationArtifacts {
