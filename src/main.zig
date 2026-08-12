@@ -1317,7 +1317,11 @@ fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []const
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    lower_c.appendLayoutAsserts(allocator, module, &output, names.items) catch |err| switch (err) {
+    var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = false });
+    defer typed_mir.deinit();
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    defer artifacts.deinit(allocator);
+    lower_c.appendLayoutAssertsWithMirArtifacts(allocator, artifacts, &typed_mir, &output, names.items) catch |err| switch (err) {
         error.LayoutStructNotFound => {
             std.debug.print("emit-layout: a struct named in --structs= was not found in {s}\n", .{path});
             return error.EmitLayoutFailed;
@@ -1360,7 +1364,11 @@ fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []cons
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    lower_c.appendStructDecls(allocator, module, &output, names.items) catch |err| switch (err) {
+    var typed_mir = try mir.buildOpt(allocator, module, .{ .optimize = false });
+    defer typed_mir.deinit();
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    defer artifacts.deinit(allocator);
+    lower_c.appendStructDeclsWithMirArtifacts(allocator, artifacts, &typed_mir, &output, names.items) catch |err| switch (err) {
         error.LayoutStructNotFound => {
             std.debug.print("emit-c-struct: a struct named in --structs= was not found in {s}\n", .{path});
             return error.EmitCStructFailed;

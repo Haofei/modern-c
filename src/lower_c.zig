@@ -63,14 +63,24 @@ fn backendEmitMap(
     ) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
-/// Emit a generated C header asserting MC's authoritative layout for the named structs.
-pub fn appendLayoutAsserts(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), struct_names: []const []const u8) anyerror!void {
-    return lower_c_emitter.appendLayoutAsserts(allocator, module, out, struct_names);
+pub fn appendLayoutAssertsWithMirArtifacts(
+    allocator: std.mem.Allocator,
+    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
+    typed_mir: *const mir.Module,
+    out: *std.ArrayList(u8),
+    struct_names: []const []const u8,
+) anyerror!void {
+    return lower_c_emitter.appendLayoutAsserts(allocator, artifacts, typed_mir, out, struct_names);
 }
 
-/// Emit the GENERATED C struct *definitions* for the named structs (A2: single source of truth).
-pub fn appendStructDecls(allocator: std.mem.Allocator, module: ast_bridge.Module, out: *std.ArrayList(u8), struct_names: []const []const u8) anyerror!void {
-    return lower_c_emitter.appendStructDecls(allocator, module, out, struct_names);
+pub fn appendStructDeclsWithMirArtifacts(
+    allocator: std.mem.Allocator,
+    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
+    typed_mir: *const mir.Module,
+    out: *std.ArrayList(u8),
+    struct_names: []const []const u8,
+) anyerror!void {
+    return lower_c_emitter.appendStructDecls(allocator, artifacts, typed_mir, out, struct_names);
 }
 
 pub fn appendCProfileWithMirArtifacts(
