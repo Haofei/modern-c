@@ -640,6 +640,14 @@ fn runFacts(session: *CompilationSession, path: []const u8, source: []const u8) 
     var diag = session.initReporter(path, source);
     defer diag.deinit();
 
+    if (session.resolved_sources) |resolved_sources| {
+        var facts: std.ArrayList(u8) = .empty;
+        defer facts.deinit(allocator);
+        try ir.appendFactsFromResolvedSources(allocator, resolved_sources.*, &facts);
+        try session.writeStdout(facts.items);
+        return;
+    }
+
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const parse_allocator = arena.allocator();
@@ -662,6 +670,14 @@ fn runLowerIr(session: *CompilationSession, path: []const u8, source: []const u8
     const allocator = session.allocator;
     var diag = session.initReporter(path, source);
     defer diag.deinit();
+
+    if (session.resolved_sources) |resolved_sources| {
+        var output: std.ArrayList(u8) = .empty;
+        defer output.deinit(allocator);
+        try ir.appendLowerIrFromResolvedSources(allocator, resolved_sources.*, &output);
+        try session.writeStdout(output.items);
+        return;
+    }
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();

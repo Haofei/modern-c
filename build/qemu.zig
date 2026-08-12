@@ -105,6 +105,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "fmt-test", "Validate `mcc fmt` is token-preserving + idempotent across the corpus, and --check semantics", &.{ "bash", "tools/toolchain/fmt-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "mcc-symbols-test", "Validate the `mcc symbols` index: refs resolve to their declarations", &.{ "bash", "tools/toolchain/mcc-symbols-test.sh", "zig-out/bin/mcc" });
+    _ = h.addScriptTest(ctx, "mcc-inspection-modules-test", "Validate inspection artifacts consume per-file resolved modules across imports", &.{ "bash", "tools/toolchain/mcc-inspection-modules-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTestOpts(ctx, "editor-client-test", "Validate the VS Code editor client manifest/grammar/extension", &.{ "bash", "tools/toolchain/editor-client-test.sh" }, .{ .install = false });
 

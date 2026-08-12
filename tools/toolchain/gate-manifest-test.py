@@ -44,6 +44,7 @@ REQUIRED_GOVERNANCE_GATES = {
 ARTIFACT_METADATA_ANCHORS: dict[str, list[str]] = {
     "src/artifact_model.zig": [
         "pub const ArtifactBundle = struct",
+        "source_sha256: ?Sha256Digest = null",
         "pub fn forArtifact(",
         "pub fn forSourceMap(",
         "pub const ArtifactBundleFormat = enum",
@@ -51,9 +52,6 @@ ARTIFACT_METADATA_ANCHORS: dict[str, list[str]] = {
         "pub fn appendArtifactMetadata(",
         "generated_artifact_sha256",
         "source_map_payload_sha256",
-    ],
-    "src/backend.zig": [
-        "source_sha256: ?artifact_model.Sha256Digest = null",
     ],
     "src/artifact_publisher.zig": [
         "pub fn writeArtifactMetadataSidecar(self: Publisher",

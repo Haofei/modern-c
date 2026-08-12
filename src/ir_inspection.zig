@@ -9,6 +9,7 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const diagnostics = @import("diagnostics.zig");
+const module_parser = @import("module_parser.zig");
 const parser = @import("parser.zig");
 
 const contractName = ast_query.contractName;
@@ -134,6 +135,20 @@ pub fn buildModuleIr(allocator: std.mem.Allocator, module: ast.Module) !ModuleIr
 pub fn appendLowerIr(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
     var module_ir = try buildModuleIr(allocator, module);
     defer module_ir.deinit();
+    try appendModuleIrText(allocator, module_ir, out);
+}
+
+pub fn appendLowerIrFromResolvedSources(
+    allocator: std.mem.Allocator,
+    sources: module_parser.ResolvedSourceDatabase,
+    out: *std.ArrayList(u8),
+) !void {
+    for (sources.files) |file| {
+        try appendLowerIr(allocator, file.module, out);
+    }
+}
+
+fn appendModuleIrText(allocator: std.mem.Allocator, module_ir: ModuleIr, out: *std.ArrayList(u8)) !void {
     for (module_ir.functions) |function| {
         try out.print(
             allocator,
@@ -523,6 +538,15 @@ pub const Collector = struct {
         try collector.appendFacts(module, out);
     }
 
+    pub fn appendFactsFromResolvedSources(
+        allocator: std.mem.Allocator,
+        sources: module_parser.ResolvedSourceDatabase,
+        out: *std.ArrayList(u8),
+    ) anyerror!void {
+        var collector = ModuleFactCollector.init(allocator);
+        try collector.appendResolvedFacts(sources, out);
+    }
+
     pub fn writeFacts(module: ast.Module, writer: anytype) !void {
         var collector = ModuleFactCollector.init(std.heap.page_allocator);
         try collector.writeFacts(module, writer);
@@ -535,6 +559,14 @@ pub fn appendFacts(
     out: *std.ArrayList(u8),
 ) anyerror!void {
     try Collector.appendFacts(allocator, module, out);
+}
+
+pub fn appendFactsFromResolvedSources(
+    allocator: std.mem.Allocator,
+    sources: module_parser.ResolvedSourceDatabase,
+    out: *std.ArrayList(u8),
+) anyerror!void {
+    try Collector.appendFactsFromResolvedSources(allocator, sources, out);
 }
 
 pub fn writeFacts(module: ast.Module, writer: anytype) !void {
@@ -597,6 +629,15 @@ const ModuleFactCollector = struct {
     fn appendFacts(self: *ModuleFactCollector, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
         var writer: ListFactWriter = .{ .allocator = self.allocator, .out = out };
         try self.writeFacts(module, &writer);
+    }
+
+    fn appendResolvedFacts(self: *ModuleFactCollector, sources: module_parser.ResolvedSourceDatabase, out: *std.ArrayList(u8)) anyerror!void {
+        var writer: ListFactWriter = .{ .allocator = self.allocator, .out = out };
+        defer self.deinit();
+        for (sources.files) |file| try self.collectDeclFacts(file.module);
+        for (sources.files) |file| {
+            for (file.module.decls) |decl| try self.writeDeclFacts(decl, &writer);
+        }
     }
 
     fn writeFacts(self: *ModuleFactCollector, module: ast.Module, writer: anytype) anyerror!void {

@@ -172,6 +172,11 @@ RULES: tuple[Rule, ...] = (
         "symbol index harness changes need the symbols gate",
     ),
     Rule(
+        ("tools/toolchain/mcc-inspection-modules-test.sh",),
+        ("mcc-inspection-modules-test",),
+        "inspection module-boundary harness changes need the inspection module gate",
+    ),
+    Rule(
         ("tools/toolchain/std-api-docs.py",),
         ("std-api-docs-test",),
         "stdlib API docs checker changes need the std API docs gate",
