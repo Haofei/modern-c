@@ -3,7 +3,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const lower_c_atomic = @import("lower_c_atomic.zig");
 const lower_c_builtin = @import("lower_c_builtin.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -12,6 +12,7 @@ const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_target = @import("lower_c_target.zig");
 const lower_c_type = @import("lower_c_type.zig");
+const type_syntax = @import("type_syntax.zig");
 
 const GlobalAccess = lower_c_model.GlobalAccess;
 const GlobalInfo = lower_c_model.GlobalInfo;
@@ -36,24 +37,24 @@ const atomicAccess = lower_c_target.atomicAccess;
 const atomicOrderCConstant = lower_c_atomic.atomicOrderCConstant;
 const atomicOrderSynchronizes = lower_c_atomic.atomicOrderSynchronizes;
 const arithmeticDomainForBinary = lower_c_target.arithmeticDomainForBinary;
-const calleeIdentName = ast_query.calleeIdentName;
+const calleeIdentName = expr_syntax.calleeIdentName;
 const contractMatchesCallee = lower_c_builtin.contractMatchesCallee;
-const contractName = ast_query.contractName;
+const contractName = expr_syntax.contractName;
 const dmaAddrHandoffObject = lower_c_target.dmaAddrHandoffObject;
-const dmaBufInfo = ast_query.dmaBufInfo;
+const dmaBufInfo = type_syntax.dmaBufInfo;
 const dmaOperation = lower_c_target.dmaOperation;
 const exprType = lower_c_target.exprType;
 const isBitcastCall = lower_c_expr.isBitcastCall;
 const isFixtureLocalAccess = lower_c_target.isFixtureLocalAccess;
-const isIdentNamed = ast_query.isIdentNamed;
-const memberCallee = ast_query.memberCallee;
-const memberExpr = ast_query.memberExpr;
-const isRawStoreCall = ast_query.isRawStoreCall;
+const isIdentNamed = expr_syntax.isIdentNamed;
+const memberCallee = expr_syntax.memberCallee;
+const memberExpr = expr_syntax.memberExpr;
+const isRawStoreCall = expr_syntax.isRawStoreCall;
 const knownContractCalleeName = lower_c_builtin.knownContractCalleeName;
 const localOrdinaryTarget = lower_c_target.localOrdinaryTarget;
-const mmioPointee = ast_query.mmioPointee;
+const mmioPointee = type_syntax.mmioPointee;
 const ordinaryGlobalTarget = lower_c_target.ordinaryGlobalTarget;
-const typeName = ast_query.typeName;
+const typeName = type_syntax.typeName;
 
 pub fn appendInspection(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) anyerror!void {
     var inspector = Inspector.init(allocator, out);
@@ -399,7 +400,7 @@ const Inspector = struct {
     }
 
     fn writeFloatReduceMetadata(self: *Inspector, call: anytype, ctx: *FnContext) !void {
-        const kind = ast_query.reduceCallKind(call.callee.*) orelse return;
+        const kind = expr_syntax.reduceCallKind(call.callee.*) orelse return;
         const member = memberCallee(call.callee.*) orelse return;
         const is_left = kind == .sum_left;
         const is_fast = kind == .sum_fast;
