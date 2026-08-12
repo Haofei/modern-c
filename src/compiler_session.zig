@@ -158,44 +158,47 @@ pub const CompilationSession = struct {
             return err;
         };
         module.visibility_mode = self.visibility_mode;
-        const resolved_decls = name_resolve.transformDeclsWithSymbols(allocator, module.decls, module.qualified_symbols, self.module_graph) catch |err| {
+        var decls = module.decls;
+        var qualified_owners = module.qualified_owners;
+        const qualified_symbols = module.qualified_symbols;
+        const visibility_mode = module.visibility_mode;
+        decls = name_resolve.transformDeclsWithSymbols(allocator, decls, qualified_symbols, self.module_graph) catch |err| {
             if (render_errors) diag.render();
             return err;
         };
-        const resolved = module.withDecls(resolved_decls);
         // Lower `async fn` / `await` to stackless Future state machines BEFORE
         // monomorphize/sema, so the move/borrow checker and both backends only
         // ever see ordinary MC. No-op for modules without any `async fn`
         // (passes the module through untouched).
-        const lowered_result = async_lower.transformDecls(allocator, resolved.decls, resolved.qualified_owners, diag) catch |err| {
+        const lowered_result = async_lower.transformDecls(allocator, decls, qualified_owners, diag) catch |err| {
             if (render_errors) diag.render();
             return err;
         };
-        const lowered = ast.Module{
-            .decls = lowered_result.decls,
-            .qualified_owners = lowered_result.qualified_owners,
-            .qualified_symbols = resolved.qualified_symbols,
-            .visibility_mode = resolved.visibility_mode,
-        };
-        try generic_precheck.checkDecls(allocator, lowered.decls, lowered.visibility_mode, diag, self.file_boundaries);
+        decls = lowered_result.decls;
+        qualified_owners = lowered_result.qualified_owners;
+        try generic_precheck.checkDecls(allocator, decls, visibility_mode, diag, self.file_boundaries);
         if (diag.has_errors) {
             if (render_errors) diag.render();
             return error.ParseFailed;
         }
-        const specialized_decls = monomorphize.transformDeclsReport(allocator, lowered.decls, diag) catch |err| {
+        decls = monomorphize.transformDeclsReport(allocator, decls, diag) catch |err| {
             if (render_errors) diag.render();
             return err;
         };
-        const specialized = lowered.withDecls(specialized_decls);
         if (diag.has_errors) {
             if (render_errors) diag.render();
             return error.ParseFailed;
         }
-        const mangled_decls = mangle_private.transformDecls(allocator, specialized.decls, specialized.visibility_mode, self.file_boundaries) catch |err| {
+        decls = mangle_private.transformDecls(allocator, decls, visibility_mode, self.file_boundaries) catch |err| {
             if (render_errors) diag.render();
             return err;
         };
-        return specialized.withDecls(mangled_decls);
+        return .{
+            .decls = decls,
+            .qualified_owners = qualified_owners,
+            .qualified_symbols = qualified_symbols,
+            .visibility_mode = visibility_mode,
+        };
     }
 
     fn checkDecls(self: *CompilationSession, decls: []ast.Decl, visibility_mode: ast.VisibilityMode, qualified_owners: [][]const u8, diag: *diagnostics.Reporter, optimize: bool) void {
