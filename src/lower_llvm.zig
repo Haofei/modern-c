@@ -138,9 +138,9 @@ const LlvmReflectEnv = lower_llvm_reflect.ReflectEnv;
 // `lower_llvm_atomic.zig`. Re-exported here so call sites read unchanged.
 const lower_llvm_atomic = @import("lower_llvm_atomic.zig");
 const AtomicOrderContext = lower_llvm_atomic.AtomicOrderContext;
-const atomicOrderingArg = lower_llvm_atomic.atomicOrderingArg;
-const atomicOrderingExpr = lower_llvm_atomic.atomicOrderingExpr;
-const orderingArg = lower_llvm_atomic.orderingArg;
+const atomicOrderingArg = expr_syntax.atomicOrderingArg;
+const atomicOrderingExpr = expr_syntax.atomicOrderingExpr;
+const orderingArg = expr_syntax.atomicOrderingExpr;
 const atomicLlvmOrdering = lower_llvm_atomic.atomicLlvmOrdering;
 const LocalSlot = lower_llvm_model.LocalSlot;
 const LocalSlotKind = lower_llvm_model.LocalSlotKind;

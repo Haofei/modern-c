@@ -26,7 +26,7 @@ BACKEND_EXTRA_FILES = {
 }
 
 EXACT_BACKEND_COUNTS = {
-    '@import("ast.zig")': 44,
+    '@import("ast.zig")': 43,
     '@import("attr_syntax.zig")': 2,
     '@import("ast_query.zig")': 0,
     '@import("expr_syntax.zig")': 24,

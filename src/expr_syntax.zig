@@ -80,6 +80,19 @@ pub fn calleeIdentName(expr: ast.Expr) ?[]const u8 {
     };
 }
 
+pub fn atomicOrderingArg(args: []const ast.Expr, index: usize) ?[]const u8 {
+    if (index >= args.len) return null;
+    return atomicOrderingExpr(args[index]);
+}
+
+pub fn atomicOrderingExpr(expr: ast.Expr) ?[]const u8 {
+    return switch (expr.kind) {
+        .enum_literal => |literal| literal.text,
+        .grouped, .move_expr => |inner| atomicOrderingExpr(inner.*),
+        else => null,
+    };
+}
+
 pub const CallExpr = struct {
     callee: *ast.Expr,
     type_args: []ast.TypeExpr,

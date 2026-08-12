@@ -10,30 +10,11 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
-
 pub const AtomicOrderContext = enum {
     load,
     store,
     rmw,
 };
-
-pub fn atomicOrderingArg(args: []const ast.Expr, index: usize) ?[]const u8 {
-    if (index >= args.len) return null;
-    return atomicOrderingExpr(args[index]);
-}
-
-pub fn atomicOrderingExpr(expr: ast.Expr) ?[]const u8 {
-    return switch (expr.kind) {
-        .enum_literal => |literal| literal.text,
-        .grouped => |inner| atomicOrderingExpr(inner.*),
-        else => null,
-    };
-}
-
-pub fn orderingArg(expr: ast.Expr) ?[]const u8 {
-    return atomicOrderingExpr(expr);
-}
 
 pub fn atomicLlvmOrdering(ordering: []const u8, context: AtomicOrderContext) ?[]const u8 {
     if (std.mem.eql(u8, ordering, "relaxed")) return "monotonic";
@@ -55,27 +36,5 @@ pub fn atomicLlvmOrdering(ordering: []const u8, context: AtomicOrderContext) ?[]
             if (std.mem.eql(u8, ordering, "seq_cst")) return "seq_cst";
             return null;
         },
-    };
-}
-
-pub fn fenceOrderingForCall(callee: ast.Expr) ?[]const u8 {
-    return switch (callee.kind) {
-        .member => |member| blk: {
-            if (!isIdentNamed(member.base.*, "fence")) break :blk null;
-            if (std.mem.eql(u8, member.name.text, "full")) break :blk "seq_cst";
-            if (std.mem.eql(u8, member.name.text, "release")) break :blk "release";
-            if (std.mem.eql(u8, member.name.text, "acquire")) break :blk "acquire";
-            break :blk null;
-        },
-        .grouped => |inner| fenceOrderingForCall(inner.*),
-        else => null,
-    };
-}
-
-fn isIdentNamed(expr: ast.Expr, name: []const u8) bool {
-    return switch (expr.kind) {
-        .ident => |ident| std.mem.eql(u8, ident.text, name),
-        .grouped, .move_expr => |inner| isIdentNamed(inner.*, name),
-        else => false,
     };
 }
