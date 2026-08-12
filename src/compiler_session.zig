@@ -296,7 +296,7 @@ test "CompilationSession attaches per-file resolved module syntax" {
     try std.testing.expect(!reporter.has_errors);
     try std.testing.expect(session.resolved_sources != null);
     try std.testing.expectEqual(loaded.graph.files.len, session.resolved_sources.?.files.len);
-    try std.testing.expect(session.resolved_sources.?.moduleForFile(loaded.graph.files[0].id) != null);
+    try std.testing.expect(session.resolved_sources.?.declsForFile(loaded.graph.files[0].id) != null);
 }
 
 test "CompilationSession restores artifact metadata sidecar snapshots" {

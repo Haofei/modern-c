@@ -258,6 +258,8 @@ EXACT_FILE_COUNTS = {
     ("src/compiler_session.zig", "pub fn parseModuleOrReportMode("): 0,
     ("src/compiler_session.zig", "pub fn checkModule(self: *CompilationSession, module: ast.Module"): 0,
     ("src/compiler_session.zig", "moduleForInspection"): 0,
+    ("src/module_parser.zig", "moduleForFile"): 0,
+    ("src/module_parser.zig", "pub fn declsForFile("): 2,
     ("src/main.zig", "parsed.decls()"): 4,
     ("src/main.zig", "parsed.moduleForInspection()"): 0,
     ("src/lower_c.zig", "pub fn appendInspection(allocator: std.mem.Allocator, module"): 0,

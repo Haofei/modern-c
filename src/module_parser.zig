@@ -20,9 +20,9 @@ pub const ParsedSourceFile = struct {
 pub const ParsedSourceDatabase = struct {
     files: []ParsedSourceFile,
 
-    pub fn moduleForFile(self: ParsedSourceDatabase, id: module_graph.FileId) ?ast.Module {
+    pub fn declsForFile(self: ParsedSourceDatabase, id: module_graph.FileId) ?[]const ast.Decl {
         for (self.files) |file| {
-            if (file.id == id) return file.module;
+            if (file.id == id) return file.module.decls;
         }
         return null;
     }
@@ -52,9 +52,9 @@ pub const ResolvedDecl = struct {
 pub const ResolvedSourceDatabase = struct {
     files: []ResolvedSourceFile,
 
-    pub fn moduleForFile(self: ResolvedSourceDatabase, id: module_graph.FileId) ?ast.Module {
+    pub fn declsForFile(self: ResolvedSourceDatabase, id: module_graph.FileId) ?[]const ast.Decl {
         for (self.files) |file| {
-            if (file.id == id) return file.module;
+            if (file.id == id) return file.module.decls;
         }
         return null;
     }
@@ -190,9 +190,9 @@ test "ParsedSourceDatabase owns per-file AST modules" {
 
     try std.testing.expect(!reporter.has_errors);
     try std.testing.expectEqual(@as(usize, 1), parsed.files.len);
-    const root_module = parsed.moduleForFile(@enumFromInt(0)) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 1), root_module.decls.len);
-    try std.testing.expect(parsed.moduleForFile(@enumFromInt(1)) == null);
+    const root_decls = parsed.declsForFile(@enumFromInt(0)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), root_decls.len);
+    try std.testing.expect(parsed.declsForFile(@enumFromInt(1)) == null);
 }
 
 test "ResolvedSourceDatabase runs per-file name resolution" {
@@ -238,9 +238,9 @@ test "ResolvedSourceDatabase runs per-file name resolution" {
     defer resolved.deinit(arena.allocator());
 
     try std.testing.expect(!reporter.has_errors);
-    const root_module = resolved.moduleForFile(@enumFromInt(0)) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 2), root_module.decls.len);
-    const answer = root_module.decls[1].kind.fn_decl;
+    const root_decls = resolved.declsForFile(@enumFromInt(0)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), root_decls.len);
+    const answer = root_decls[1].kind.fn_decl;
     const return_expr = answer.body.?.items[0].kind.@"return".?.kind.call.callee.kind.ident;
     try std.testing.expectEqualStrings("Math__one", return_expr.text);
 

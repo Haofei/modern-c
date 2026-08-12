@@ -586,8 +586,8 @@ test "loader publishes stable module graph identities and edges" {
     try std.testing.expect(!module_db_reporter.has_errors);
     try std.testing.expectEqual(wide.graph.files.len, parsed_sources.files.len);
     try std.testing.expectEqual(wide.graph.files.len, resolved_sources.files.len);
-    try std.testing.expect((parsed_sources.moduleForFile(root) orelse return error.TestUnexpectedResult).decls.len > 0);
-    try std.testing.expect((resolved_sources.moduleForFile(root) orelse return error.TestUnexpectedResult).decls.len > 0);
+    try std.testing.expect((parsed_sources.declsForFile(root) orelse return error.TestUnexpectedResult).len > 0);
+    try std.testing.expect((resolved_sources.declsForFile(root) orelse return error.TestUnexpectedResult).len > 0);
 
     const cycle_path = "tests/spec_support/import_cycle_a.mc";
     const cycle_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, cycle_path, std.testing.allocator, .limited(1 << 20));
