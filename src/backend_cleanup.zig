@@ -144,8 +144,8 @@ pub fn buildCleanupEdgePlan(
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
     cleanup_cfg: ?*const mir.CleanupCfg,
     kind: CleanupEdgeKind,
-    scope_span: ?ast.Span,
-    before_span: ?ast.Span,
+    scope_source: ?mir.SourcePoint,
+    before_source: ?mir.SourcePoint,
 ) !?CleanupEdgePlan {
     const cfg = cleanup_cfg orelse return .{
         .kind = kind,
@@ -157,8 +157,8 @@ pub fn buildCleanupEdgePlan(
         if (edge.kind != cleanupCfgKindFromBackend(kind)) continue;
         for (edge.actions) |action| {
             const ref = cleanupRefFromCleanupCfgAction(function, action) orelse return null;
-            if (!cleanupRefEdgeMatchesQuery(ref, edge, before_span)) continue;
-            if (!cleanupRefInQueryScope(ref, scope_span, before_span)) continue;
+            if (!cleanupRefEdgeMatchesQuery(ref, edge, before_source)) continue;
+            if (!cleanupRefInQueryScope(ref, scope_source, before_source)) continue;
             if (!cleanupRefValidForEdge(ref, module, function, cleanup_plan)) return null;
             if (!cleanupCfgContainsRefOnKind(cfg.*, cleanupCfgKindFromBackend(kind), ref)) return null;
             if (cleanupRefsContain(refs.items, ref)) continue;
@@ -171,14 +171,14 @@ pub fn buildCleanupEdgePlan(
     };
 }
 
-fn cleanupRefEdgeMatchesQuery(ref: CleanupRef, edge: mir.CleanupCfgEdge, before_span: ?ast.Span) bool {
+fn cleanupRefEdgeMatchesQuery(ref: CleanupRef, edge: mir.CleanupCfgEdge, before_source: ?mir.SourcePoint) bool {
     switch (ref) {
         .defer_ref => return true,
         .ownership_action => {},
     }
-    const query = before_span orelse return true;
+    const query = before_source orelse return true;
     if (edge.source.offset == 0 and edge.source.len == 0 and edge.source.line == 0 and edge.source.column == 0) return true;
-    return sourceMatches(edge.source, mir.sourcePointFromSpan(query));
+    return sourceMatches(edge.source, query);
 }
 
 fn cleanupRefsContain(refs: []const CleanupRef, needle: CleanupRef) bool {
@@ -257,12 +257,12 @@ fn cleanupRefEquivalent(a: CleanupRef, b: CleanupRef) bool {
     };
 }
 
-fn cleanupRefInQueryScope(ref: CleanupRef, scope_span: ?ast.Span, before_span: ?ast.Span) bool {
+fn cleanupRefInQueryScope(ref: CleanupRef, scope_source: ?mir.SourcePoint, before_source: ?mir.SourcePoint) bool {
     const source = cleanupRefSource(ref);
-    if (before_span) |limit| {
+    if (before_source) |limit| {
         if (limit.offset != 0 and source.offset != 0 and source.offset > limit.offset) return false;
     }
-    if (scope_span) |scope| {
+    if (scope_source) |scope| {
         if (scope.offset != 0 and scope.len != 0 and source.offset != 0) {
             if (source.offset < scope.offset) return false;
             if (source.offset >= scope.offset + scope.len) return false;

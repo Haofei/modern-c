@@ -3482,7 +3482,7 @@ pub const CEmitter = struct {
 
     fn cleanupEdgeIsEmpty(self: *CEmitter, kind: backend_cleanup.CleanupEdgeKind, scope_span: ?ast.Span, before_span: ?ast.Span) !bool {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), kind, scope_span, before_span)) orelse return error.UnsupportedCEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), kind, sourcePointFromOptionalSpan(scope_span), sourcePointFromOptionalSpan(before_span))) orelse return error.UnsupportedCEmission;
         defer plan.deinit(self.allocator);
         return plan.refs.len == 0;
     }
@@ -3492,7 +3492,7 @@ pub const CEmitter = struct {
     // the active cleanup state intact.
     fn emitCleanupEdge(self: *CEmitter, kind: backend_cleanup.CleanupEdgeKind, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast.TypeExpr, scope_span: ?ast.Span, before_span: ?ast.Span) anyerror!void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), kind, scope_span, before_span)) orelse return error.UnsupportedCEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), kind, sourcePointFromOptionalSpan(scope_span), sourcePointFromOptionalSpan(before_span))) orelse return error.UnsupportedCEmission;
         defer plan.deinit(self.allocator);
         for (plan.refs) |ref| {
             try self.emitCleanupRef(ref, locals, return_ty);
@@ -8912,6 +8912,10 @@ fn spanFromSourcePoint(source: mir.SourcePoint) ast.Span {
         .line = source.line,
         .column = source.column,
     };
+}
+
+fn sourcePointFromOptionalSpan(span: ?ast.Span) ?mir.SourcePoint {
+    return if (span) |value| mir.sourcePointFromSpan(value) else null;
 }
 
 fn isSourceSpan(span: ast.Span) bool {

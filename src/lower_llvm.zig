@@ -1985,7 +1985,7 @@ const LlvmEmitter = struct {
 
     fn emitCleanupEdge(self: *LlvmEmitter, kind: backend_cleanup.CleanupEdgeKind, ret_ty: ast.TypeExpr, scope_span: ?ast.Span, before_span: ?ast.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), kind, scope_span, before_span)) orelse return error.UnsupportedLlvmEmission;
+        var plan = (try backend_cleanup.buildCleanupEdgePlan(self.allocator, &self.mir_module, function.*, self.currentOwnershipCleanupPlan(), self.currentCleanupCfg(), kind, sourcePointFromOptionalSpan(scope_span), sourcePointFromOptionalSpan(before_span))) orelse return error.UnsupportedLlvmEmission;
         defer plan.deinit(self.allocator);
         for (plan.refs) |ref| {
             try self.emitCleanupRef(ref, ret_ty);
@@ -10812,6 +10812,10 @@ fn sourcePointMatchesSpan(source: mir.SourcePoint, span: ast.Span) bool {
 
 fn isSourceSpan(span: ast.Span) bool {
     return span.line != 0 and span.column != 0;
+}
+
+fn sourcePointFromOptionalSpan(span: ?ast.Span) ?mir.SourcePoint {
+    return if (span) |value| mir.sourcePointFromSpan(value) else null;
 }
 
 fn restoreLocal(map: anytype, key: []const u8, old: anytype) void {
