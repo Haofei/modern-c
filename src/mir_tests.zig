@@ -365,7 +365,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
     const result_span = result_fact.source;
 
     try std.testing.expect(db.targetTypeFactAtOwned(&callee, .direct_call_result, result_span, result_fact.target_owner.?, result_fact.target_index) == null);
-    try std.testing.expect(db.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(db.targetTypeFactAtOwnedCurrentSpan(.{
         .current = &callee,
         .fact = .{
             .kind = .direct_call_result,
@@ -374,14 +374,14 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
             .index = result_fact.target_index,
         },
     }) == null);
-    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
         .current = &callee,
         .fact = .{
             .kind = .expression_result,
             .source = expression_fact.source,
         },
     }) == null);
-    try std.testing.expect(db.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(db.targetTypeFactAtOwnedCurrentSpan(.{
         .current = &callee,
         .fact = .{
             .kind = .inferred_local,
@@ -390,42 +390,42 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
             .index = local_fact.target_index,
         },
     }) == null);
-    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
         .current = &callee,
         .fact = .{
             .kind = .float_literal,
             .source = float_fact.source,
         },
     }) == null);
-    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
         .current = &callee,
         .fact = .{
             .kind = .string_literal,
             .source = string_fact.source,
         },
     }) == null);
-    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
         .current = &callee,
         .fact = .{
             .kind = .array_literal,
             .source = array_fact.source,
         },
     }) == null);
-    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
         .current = &callee,
         .fact = .{
             .kind = .result_ok,
             .source = ok_fact.source,
         },
     }) == null);
-    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
         .current = &callee,
         .fact = .{
             .kind = .result_err,
             .source = err_fact.source,
         },
     }) == null);
-    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(db.targetTypeFactAtCurrentSpan(.{
         .current = &callee,
         .fact = .{
             .kind = .bind,
@@ -1491,14 +1491,14 @@ test "MIR owns qualified union and enum variant path result types" {
         try std.testing.expect(fact.kind != .enum_variant_path_result);
     }
     const facts = mir_facts_view.MirFactsView.init(&typed_mir);
-    try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
         .current = &shadow,
         .fact = .{
             .kind = .qualified_union_result,
             .source = qualified_fact.?.source,
         },
     }) == null);
-    try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
         .current = &shadow,
         .fact = .{
             .kind = .enum_variant_path_result,
@@ -2815,7 +2815,7 @@ test "MIR owns inferred local dyn dispatch call types" {
     try std.testing.expectEqual(@as(?usize, mir.dynDispatchArgumentFactIndex(1, 0)), void_argument_fact.target_index);
     const notify_ptr = functionByNamePtr(&typed_mir, "notify").?;
     const facts = mir_facts_view.MirFactsView.init(&typed_mir);
-    try std.testing.expect(facts.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(facts.targetTypeFactAtOwnedCurrentSpan(.{
         .current = notify_ptr,
         .fact = .{
             .kind = .dyn_dispatch_result,
@@ -2824,7 +2824,7 @@ test "MIR owns inferred local dyn dispatch call types" {
             .index = dispatch_fact.target_index,
         },
     }) == null);
-    try std.testing.expect(facts.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(facts.targetTypeFactAtOwnedCurrentSpan(.{
         .current = notify_ptr,
         .fact = .{
             .kind = .dyn_dispatch_argument,
@@ -2920,7 +2920,7 @@ test "MIR owns indirect function-pointer and closure callee signatures" {
         };
         try std.testing.expect(resolved);
         try std.testing.expectEqual(@as(usize, 1), countTargetTypeFactsByKind(function, .indirect_call_callee));
-        try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+        try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
             .current = &increment,
             .fact = .{
                 .kind = .indirect_call_callee,
@@ -3405,14 +3405,14 @@ test "MIR owns const_get base result and index facts" {
     try std.testing.expectEqualStrings("u32", typeExprHeadName(result_fact.?.target_ty).?);
     try std.testing.expectEqual(@as(?usize, 2), instruction_index);
     const facts = mir_facts_view.MirFactsView.init(&typed_mir);
-    try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
         .current = other,
         .fact = .{
             .kind = .const_get_base,
             .source = base_fact.?.source,
         },
     }) == null);
-    try std.testing.expect(facts.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(facts.targetTypeFactAtCurrentSpan(.{
         .current = other,
         .fact = .{
             .kind = .const_get_result,
@@ -5371,7 +5371,7 @@ test "MIR records typed call target facts for atomic member calls" {
     try std.testing.expectEqualStrings("atomic", init_result.target_ty.kind.generic.base.text);
     const other = functionByNamePtr(&typed_mir, "other").?;
     const facts = mir_facts_view.MirFactsView.init(&typed_mir);
-    try std.testing.expect(facts.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(facts.targetTypeFactAtOwnedCurrentSpan(.{
         .current = other,
         .fact = .{
             .kind = .atomic_init_payload,
@@ -5380,7 +5380,7 @@ test "MIR records typed call target facts for atomic member calls" {
             .index = init_payload.target_index,
         },
     }) == null);
-    try std.testing.expect(facts.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+    try std.testing.expect(facts.targetTypeFactAtOwnedCurrentSpan(.{
         .current = other,
         .fact = .{
             .kind = .atomic_init_result,

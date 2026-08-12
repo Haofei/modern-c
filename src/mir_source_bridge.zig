@@ -43,8 +43,8 @@ pub fn targetTypeFactById(module: *const mir.Module, current: *const mir.Functio
     return MirFactsView.init(module).targetTypeFactById(current, key);
 }
 
-pub fn targetTypeFactAtSpanWithExplicitModuleFallback(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
-    return MirFactsView.init(module).targetTypeFactAtSpanWithExplicitModuleFallback(.{
+pub fn targetTypeFactAtCurrentSpan(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
+    return MirFactsView.init(module).targetTypeFactAtCurrentSpan(.{
         .current = current,
         .fact = .{
             .kind = kind,
@@ -97,8 +97,8 @@ pub fn atomicInitPayloadTypeAt(module: *const mir.Module, current: ?*const mir.F
     return matched_payload_ty;
 }
 
-pub fn targetTypeFactAtOwnedSpanWithExplicitModuleFallback(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-    return MirFactsView.init(module).targetTypeFactAtOwnedSpanWithExplicitModuleFallback(.{
+pub fn targetTypeFactAtOwnedCurrentSpan(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
+    return MirFactsView.init(module).targetTypeFactAtOwnedCurrentSpan(.{
         .current = current,
         .fact = .{
             .kind = kind,

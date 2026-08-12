@@ -23,7 +23,7 @@ pub const TargetTypeFactQuery = struct {
     index: ?usize = null,
 };
 
-pub const TargetTypeModuleFallbackQuery = struct {
+pub const TargetTypeCurrentQuery = struct {
     current: ?*const mir.Function,
     fact: TargetTypeFactQuery,
 };
@@ -52,10 +52,10 @@ pub const MirFactsView = struct {
         return targetTypeFactInFunction(current, kind, source, null, null);
     }
 
-    /// Retired module-fallback compatibility entrypoint. It now only checks the
-    /// current function; the explicit name is kept while callers migrate to the
-    /// ordinary local query or `targetTypeFactById`.
-    pub fn targetTypeFactAtSpanWithExplicitModuleFallback(self: MirFactsView, query: TargetTypeModuleFallbackQuery) ?mir.TargetTypeFact {
+    /// Current-function source-span compatibility entrypoint. It does not scan
+    /// other functions; new code should prefer the ordinary local query or
+    /// `targetTypeFactById`.
+    pub fn targetTypeFactAtCurrentSpan(self: MirFactsView, query: TargetTypeCurrentQuery) ?mir.TargetTypeFact {
         if (query.current) |function| {
             if (self.targetTypeFactAt(function, query.fact.kind, query.fact.source)) |fact| return fact;
         }
@@ -69,9 +69,9 @@ pub const MirFactsView = struct {
         return targetTypeFactInFunction(current, kind, source, owner, index);
     }
 
-    /// Retired module-fallback owner query. It now only checks the current
-    /// function; new code should prefer `targetTypeFactById`.
-    pub fn targetTypeFactAtOwnedSpanWithExplicitModuleFallback(self: MirFactsView, query: TargetTypeModuleFallbackQuery) ?mir.TargetTypeFact {
+    /// Current-function owner source-span compatibility entrypoint. It does not
+    /// scan other functions; new code should prefer `targetTypeFactById`.
+    pub fn targetTypeFactAtOwnedCurrentSpan(self: MirFactsView, query: TargetTypeCurrentQuery) ?mir.TargetTypeFact {
         if (query.fact.owner == null) return null;
         if (query.current) |function| {
             if (self.targetTypeFactAtOwned(function, query.fact.kind, query.fact.source, query.fact.owner.?, query.fact.index)) |fact| return fact;

@@ -200,8 +200,9 @@ These modules are legitimate shared inputs for backend work:
 
 - `mir.zig`: typed MIR, facts, verifier/admission.
 - `mir_facts_view.zig`: transitional query layer for facts not yet indexed by
-  stable typed ids. Module-wide source-span fallback is explicitly named with
-  `*WithModuleFallback` so remaining broad scans are searchable and gated.
+  stable typed ids. Target-type source-span compatibility queries are
+  current-function-only, so broad module scans cannot reappear hidden behind
+  backend lookups.
 - `layout.zig`: layout calculation shared by semantic and backend code.
 - `eval.zig`: compile-time constant evaluation.
 - `numeric.zig`: numeric literal and arithmetic helpers.
