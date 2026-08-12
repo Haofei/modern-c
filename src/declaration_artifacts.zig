@@ -110,34 +110,26 @@ fn declOrigin(decl: ast.Decl) []const u8 {
 
 pub const FunctionArtifact = struct {
     name: ast.Ident,
-    associated_owner: ?ast.Ident,
     abi: ?[]const u8,
     params: []ast.Param,
     return_type: ?ast.TypeExpr,
-    return_borrow_source: ?ast.Ident,
     body: ?ast.Block,
     is_const: bool,
     exported: bool,
     is_variadic: bool,
-    bounds: []ast.TraitBound,
-    is_async: bool,
     attrs: []const ast.Attr,
     is_extern: bool,
 
     pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
         return .{
             .name = fn_decl.name,
-            .associated_owner = fn_decl.associated_owner,
             .abi = fn_decl.abi,
             .params = fn_decl.params,
             .return_type = fn_decl.return_type,
-            .return_borrow_source = fn_decl.return_borrow_source,
             .body = fn_decl.body,
             .is_const = fn_decl.is_const,
             .exported = fn_decl.exported,
             .is_variadic = fn_decl.is_variadic,
-            .bounds = fn_decl.bounds,
-            .is_async = fn_decl.is_async,
             .attrs = attrs,
             .is_extern = is_extern,
         };
