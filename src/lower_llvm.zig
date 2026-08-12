@@ -863,7 +863,7 @@ const LlvmEmitter = struct {
         if (self.foldConstGlobalValue(expr, semantic_ty)) |value| {
             return try self.comptimeValueInitializer(value, semantic_ty);
         }
-        if (self.atomicPayloadType(resolved_ty)) |payload_ty| {
+        if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| {
             if (expr_syntax.callExpr(expr)) |call| {
                 if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
                     const fact_payload_ty = self.atomicInitPayloadTypeAt(call.callee.*.span, semantic_ty) orelse return error.UnsupportedLlvmEmission;
@@ -1159,8 +1159,8 @@ const LlvmEmitter = struct {
 
     fn zeroInitializer(self: *LlvmEmitter, ty: ast.TypeExpr) ![]const u8 {
         const resolved_ty = self.resolveAliasType(ty);
-        if (self.atomicPayloadType(resolved_ty)) |payload_ty| return self.zeroInitializer(payload_ty);
-        if (self.maybeUninitPayloadType(resolved_ty)) |payload_ty| return self.zeroInitializer(payload_ty);
+        if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.zeroInitializer(payload_ty);
+        if (lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.zeroInitializer(payload_ty);
         return switch (resolved_ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "bool"))
                 "0"
@@ -1188,7 +1188,7 @@ const LlvmEmitter = struct {
             .slice => "zeroinitializer",
             .array => "zeroinitializer",
             .qualified => |node| try self.zeroInitializer(node.child.*),
-            .generic => |node| if (self.resultInfo(resolved_ty)) |_|
+            .generic => |node| if (lower_llvm_shape.resultInfo(&self.type_aliases, resolved_ty)) |_|
                 "zeroinitializer"
             else if (std.mem.eql(u8, node.base.text, "MmioPtr") and node.args.len == 1)
                 // MmioPtr<T> lowers to `ptr` (see llvmType); its zero is a null pointer.
@@ -1401,10 +1401,10 @@ const LlvmEmitter = struct {
                 try self.emitAlloca(ptr, "ptr");
                 try self.out.print(self.allocator, "  store ptr %{s}, ptr {s}\n", .{ param.name.text, ptr });
                 try self.local_slots.put(param.name.text, .{ .ty = param.ty, .ptr = ptr, .kind = .va_list_param });
-            } else if (self.isAggregateType(param.ty) or self.atomicPayloadType(param.ty) != null) {
+            } else if (self.isAggregateType(param.ty) or lower_llvm_shape.atomicPayloadType(&self.type_aliases, param.ty) != null) {
                 const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{param.name.text});
                 try self.emitAlloca(ptr, try self.llvmType(param.ty));
-                if (self.atomicPayloadType(param.ty) != null) {
+                if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, param.ty) != null) {
                     try self.out.print(self.allocator, "  store {s} %{s}, ptr {s}\n", .{ try self.llvmType(param.ty), param.name.text, ptr });
                 } else {
                     const value = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{param.name.text});
@@ -2505,7 +2505,7 @@ const LlvmEmitter = struct {
 
     fn emitPaddingPreservingStore(self: *LlvmEmitter, ptr: []const u8, ty: ast.TypeExpr, value: []const u8) !void {
         const resolved = self.resolveAliasType(ty);
-        if (self.maybeUninitPayloadType(resolved)) |payload_ty| {
+        if (lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, resolved)) |payload_ty| {
             try self.emitPaddingPreservingStore(ptr, payload_ty, value);
             return;
         }
@@ -2558,7 +2558,7 @@ const LlvmEmitter = struct {
                 return;
             },
             .generic => |node| {
-                if (self.resultInfo(resolved)) |info| {
+                if (lower_llvm_shape.resultInfo(&self.type_aliases, resolved)) |info| {
                     const result_llvm = try self.llvmType(resolved);
                     const tag = try self.nextTemp();
                     const tag_ptr = try self.nextTemp();
@@ -2630,7 +2630,7 @@ const LlvmEmitter = struct {
     fn emitTryExpr(self: *LlvmEmitter, operand: ast.Expr, mapped: ?*ast.Expr, expected_ty: ast.TypeExpr) ![]const u8 {
         const operand_ty = try self.requireMirTryOperandType(operand);
         _ = try self.llvmType(expected_ty);
-        if (self.resultInfo(operand_ty)) |info| {
+        if (lower_llvm_shape.resultInfo(&self.type_aliases, operand_ty)) |info| {
             _ = try self.resultPayloadLlvmType(info.ok_ty);
             const value = try self.emitExpr(operand, operand_ty);
             if (try self.emitResultPropagationCheck(value, operand_ty, info, mapped, operand.span)) {
@@ -2642,7 +2642,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ payload, try self.llvmType(operand_ty), value });
             return payload;
         }
-        const inner_ty = self.nullableInnerType(operand_ty) orelse return error.UnsupportedLlvmEmission;
+        const inner_ty = lower_llvm_shape.nullableInnerType(&self.type_aliases, operand_ty) orelse return error.UnsupportedLlvmEmission;
         // Value optional `?T`: trap on absent (present tag false), then yield the payload.
         if (self.targetIsValueOptional(operand_ty)) {
             const value = try self.emitExpr(operand, operand_ty);
@@ -2665,7 +2665,7 @@ const LlvmEmitter = struct {
 
     fn emitResultPropagationCheck(self: *LlvmEmitter, value: []const u8, operand_ty: ast.TypeExpr, info: ResultTypeInfo, mapped: ?*ast.Expr, span: ast.Span) !bool {
         const return_ty = self.current_return_ty orelse return false;
-        const return_info = self.resultInfo(return_ty) orelse return false;
+        const return_info = lower_llvm_shape.resultInfo(&self.type_aliases, return_ty) orelse return false;
         // G8: when the operand error (E1) differs from the function error (E2), a
         // `#[error_from]` conversion is invoked on the propagated error. When the
         // error types match no conversion resolves and the same-repr fast path is
@@ -2742,7 +2742,7 @@ const LlvmEmitter = struct {
             .bind => |ident| ident,
             else => return false,
         };
-        const inner_ty = self.nullableInnerType(subject_ty) orelse return false;
+        const inner_ty = lower_llvm_shape.nullableInnerType(&self.type_aliases, subject_ty) orelse return false;
         const nullable_representation = representation orelse return error.UnsupportedLlvmEmission;
         const subject = try self.emitExpr(node.value, subject_ty);
         const then_label = try self.nextLabel("nullable_some");
@@ -2818,7 +2818,7 @@ const LlvmEmitter = struct {
             false
         else
             return false;
-        const info = self.resultInfo(subject_ty) orelse return false;
+        const info = lower_llvm_shape.resultInfo(&self.type_aliases, subject_ty) orelse return false;
         const binding_ty = if (is_ok_pattern) info.ok_ty else info.err_ty;
         const payload_index: u8 = if (is_ok_pattern) 1 else 2;
         const subject = try self.emitExpr(node.value, subject_ty);
@@ -3050,10 +3050,10 @@ const LlvmEmitter = struct {
             .try_expr => |node| blk: {
                 const result_ty = (self.mirTargetTypeFactAt(.expression_result, initializer.span) orelse return error.UnsupportedLlvmEmission).target_ty;
                 const operand_ty = try self.requireMirTryOperandType(node.operand.*);
-                const expected_ty = if (self.resultInfo(operand_ty)) |info|
+                const expected_ty = if (lower_llvm_shape.resultInfo(&self.type_aliases, operand_ty)) |info|
                     info.ok_ty
                 else
-                    self.nullableInnerType(operand_ty) orelse return error.UnsupportedLlvmEmission;
+                    lower_llvm_shape.nullableInnerType(&self.type_aliases, operand_ty) orelse return error.UnsupportedLlvmEmission;
                 if (!type_syntax.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
                 break :blk result_ty;
             },
@@ -3150,7 +3150,7 @@ const LlvmEmitter = struct {
                 }
                 const llvm_ty = try self.llvmType(slot.ty);
                 const value = try self.emitExprWithMirRangeTarget(value_expr, slot.ty, ident.text);
-                if (self.atomicPayloadType(slot.ty) != null) {
+                if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, slot.ty) != null) {
                     try self.out.print(self.allocator, "  store {s} {s}, ptr {s}{s}\n", .{ llvm_ty, value, slot.ptr, try self.debugCallSuffix() });
                 } else {
                     try self.emitConcreteObjectStore(slot.ptr, slot.ty, value);
@@ -3767,7 +3767,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitNullableSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr, representation: ?NullableRepresentation) !?bool {
-        const inner_ty = self.nullableInnerType(subject_ty) orelse return null;
+        const inner_ty = lower_llvm_shape.nullableInnerType(&self.type_aliases, subject_ty) orelse return null;
         const nullable_representation = representation orelse return error.UnsupportedLlvmEmission;
         if (node.arms.len == 0) return error.UnsupportedLlvmEmission;
 
@@ -3850,7 +3850,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitResultSwitch(self: *LlvmEmitter, node: ast.Switch, ret_ty: ast.TypeExpr, subject_ty: ast.TypeExpr) !?bool {
-        const info = self.resultInfo(subject_ty) orelse return null;
+        const info = lower_llvm_shape.resultInfo(&self.type_aliases, subject_ty) orelse return null;
         if (node.arms.len != 2) return error.UnsupportedLlvmEmission;
 
         var ok_index: ?usize = null;
@@ -5953,7 +5953,7 @@ const LlvmEmitter = struct {
         const function = self.currentMirFunction() orelse return null;
         const view = mir_facts_view.MirFactsView.init(&self.mir_module);
         const source = mir.sourcePointFromSpan(span);
-        const expected_payload_ty = self.atomicPayloadType(self.resolveAliasType(expected_result_ty)) orelse return null;
+        const expected_payload_ty = lower_llvm_shape.atomicPayloadType(&self.type_aliases, self.resolveAliasType(expected_result_ty)) orelse return null;
         var matched_payload_ty: ?ast.TypeExpr = null;
         var found_result = false;
         for (function.target_type_facts) |result_fact| {
@@ -8681,7 +8681,7 @@ const LlvmEmitter = struct {
 
     fn emitResultConstructorValue(self: *LlvmEmitter, call: anytype, expected_ty: ast.TypeExpr, tag: []const u8) ![]const u8 {
         if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
-        const info = self.resultInfo(expected_ty) orelse return error.UnsupportedLlvmEmission;
+        const info = lower_llvm_shape.resultInfo(&self.type_aliases, expected_ty) orelse return error.UnsupportedLlvmEmission;
         const result_ty = try self.llvmType(expected_ty);
         const ok_ty = try self.resultPayloadLlvmType(info.ok_ty);
         const err_ty = try self.resultPayloadLlvmType(info.err_ty);
@@ -8708,7 +8708,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitResultValue(self: *LlvmEmitter, result_ty: ast.TypeExpr, is_ok: []const u8, ok_value: []const u8, err_value: []const u8) ![]const u8 {
-        const info = self.resultInfo(result_ty) orelse return error.UnsupportedLlvmEmission;
+        const info = lower_llvm_shape.resultInfo(&self.type_aliases, result_ty) orelse return error.UnsupportedLlvmEmission;
         const result_llvm = try self.llvmType(result_ty);
         const tagged = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 {s}, 0\n", .{ tagged, result_llvm, is_ok });
@@ -9533,10 +9533,10 @@ const LlvmEmitter = struct {
     fn tryExpressionResultType(self: *LlvmEmitter, expr: ast.Expr, operand: ast.Expr) ?ast.TypeExpr {
         const result_ty = (self.mirTargetTypeFactAt(.expression_result, expr.span) orelse return null).target_ty;
         const operand_ty = self.mirTryOperandTypeForQuery(operand) orelse return null;
-        const expected_ty = if (self.resultInfo(operand_ty)) |info|
+        const expected_ty = if (lower_llvm_shape.resultInfo(&self.type_aliases, operand_ty)) |info|
             info.ok_ty
         else
-            self.nullableInnerType(operand_ty) orelse return null;
+            lower_llvm_shape.nullableInnerType(&self.type_aliases, operand_ty) orelse return null;
         if (!type_syntax.sameTypeSyntax(self.resolveAliasType(result_ty), self.resolveAliasType(expected_ty))) return null;
         return result_ty;
     }
@@ -9548,18 +9548,6 @@ const LlvmEmitter = struct {
             .span = child.span,
             .kind = .{ .pointer = .{ .mutability = .mut, .child = child_ptr } },
         };
-    }
-
-    fn nullableInnerType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
-        return lower_llvm_shape.nullableInnerType(&self.type_aliases, ty);
-    }
-
-    fn atomicPayloadType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
-        return lower_llvm_shape.atomicPayloadType(&self.type_aliases, ty);
-    }
-
-    fn maybeUninitPayloadType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
-        return lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, ty);
     }
 
     fn mmioAccessInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?MmioAccessInfo {
@@ -9731,14 +9719,6 @@ const LlvmEmitter = struct {
         const args = try self.scratch.allocator().alloc(ast.TypeExpr, 1);
         args[0] = child_ty;
         return .{ .span = span, .kind = .{ .generic = .{ .base = .{ .text = "MmioPtr", .span = span }, .args = args } } };
-    }
-
-    fn resultInfo(self: *LlvmEmitter, ty: ast.TypeExpr) ?ResultTypeInfo {
-        return lower_llvm_shape.resultInfo(&self.type_aliases, ty);
-    }
-
-    fn domainPayloadType(self: *LlvmEmitter, ty: ast.TypeExpr) ?ast.TypeExpr {
-        return lower_llvm_shape.domainPayloadType(&self.type_aliases, ty);
     }
 
     fn atomicStorageLlvmType(self: *LlvmEmitter, payload_ty: ast.TypeExpr) ![]const u8 {
@@ -10354,10 +10334,10 @@ const LlvmEmitter = struct {
         const member = memberCallee(call) orelse return null;
         const payload_ty = (self.mirTargetTypeFactAt(.atomic_payload, call.callee.*.span) orelse return null).target_ty;
         const base_ty = self.exprType(member.base.*) orelse return null;
-        const base_is_pointer = if (self.atomicPayloadType(base_ty) != null)
+        const base_is_pointer = if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, base_ty) != null)
             false
         else switch (self.resolveAliasType(base_ty).kind) {
-            .pointer => |pointer| if (self.atomicPayloadType(pointer.child.*) != null) true else return null,
+            .pointer => |pointer| if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, pointer.child.*) != null) true else return null,
             else => return null,
         };
         return .{
@@ -10487,9 +10467,9 @@ const LlvmEmitter = struct {
     fn llvmAlignOf(self: *LlvmEmitter, ty: ast.TypeExpr) u8 {
         if (self.enumDeclForType(ty)) |enum_decl| return self.llvmAlignOf(enumReprType(enum_decl));
         const resolved_ty = self.resolveAliasType(ty);
-        if (self.atomicPayloadType(resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
-        if (self.maybeUninitPayloadType(resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
-        if (self.domainPayloadType(resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
+        if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
+        if (lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
+        if (lower_llvm_shape.domainPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.llvmAlignOf(payload_ty);
         return switch (resolved_ty.kind) {
             .name => |name| if (std.mem.eql(u8, name.text, "bool") or
                 std.mem.eql(u8, name.text, "i8") or
@@ -10547,14 +10527,14 @@ const LlvmEmitter = struct {
         if (self.enumDeclForType(ty)) |enum_decl| return self.integerBitsOf(enumReprType(enum_decl));
         if (self.packedBitsInfoForType(ty)) |info| return self.integerBitsOf(info.repr);
         if (self.structDeclForType(ty) != null or self.taggedUnionForType(ty) != null or self.overlayInfoForType(ty) != null) return null;
-        if (self.domainPayloadType(ty)) |payload_ty| return self.integerBitsOf(payload_ty);
+        if (lower_llvm_shape.domainPayloadType(&self.type_aliases, ty)) |payload_ty| return self.integerBitsOf(payload_ty);
         return integerBits(self.resolveAliasType(ty));
     }
 
     fn isSignedIntegerType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         if (self.enumDeclForType(ty)) |enum_decl| return self.isSignedIntegerType(enumReprType(enum_decl));
         if (self.packedBitsInfoForType(ty)) |info| return self.isSignedIntegerType(info.repr);
-        if (self.domainPayloadType(ty)) |payload_ty| return self.isSignedIntegerType(payload_ty);
+        if (lower_llvm_shape.domainPayloadType(&self.type_aliases, ty)) |payload_ty| return self.isSignedIntegerType(payload_ty);
         return isSignedInteger(self.resolveAliasType(ty));
     }
 
@@ -10599,7 +10579,7 @@ const LlvmEmitter = struct {
 
     fn isAggregateType(self: *LlvmEmitter, ty: ast.TypeExpr) bool {
         const resolved_ty = self.resolveAliasType(ty);
-        if (self.maybeUninitPayloadType(resolved_ty)) |payload_ty| return self.isAggregateType(payload_ty);
+        if (lower_llvm_shape.maybeUninitPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| return self.isAggregateType(payload_ty);
         return switch (resolved_ty.kind) {
             .array => true,
             .slice => true,
