@@ -8898,10 +8898,7 @@ fn deferExprForRefInBlock(block: ast.Block, ref: mir.DeferCleanupRef) ?ast.Expr 
 }
 
 fn sourcePointMatchesSpan(source: mir.SourcePoint, span: ast.Span) bool {
-    return source.line == span.line and
-        source.column == span.column and
-        source.offset == span.offset and
-        source.len == span.len;
+    return mir_facts_view.sourcePointExactMatches(source, mir.sourcePointFromSpan(span));
 }
 
 fn spanFromSourcePoint(source: mir.SourcePoint) ast.Span {
@@ -8918,5 +8915,5 @@ fn sourcePointFromOptionalSpan(span: ?ast.Span) ?mir.SourcePoint {
 }
 
 fn isSourceSpan(span: ast.Span) bool {
-    return span.line != 0 and span.column != 0;
+    return mir_facts_view.sourcePointHasLineColumn(mir.sourcePointFromSpan(span));
 }

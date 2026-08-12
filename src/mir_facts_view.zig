@@ -161,8 +161,16 @@ pub fn sourcePointLineColumnMatches(query: mir.SourcePoint, source: mir.SourcePo
     return query.line == source.line and query.column == source.column;
 }
 
+pub fn sourcePointExactMatches(query: mir.SourcePoint, source: mir.SourcePoint) bool {
+    return sourcePointLineColumnMatches(query, source) and sourcePointOffsetsMatch(query, source);
+}
+
 pub fn sourcePointOffsetsMatch(query: mir.SourcePoint, source: mir.SourcePoint) bool {
     return query.offset == source.offset and query.len == source.len;
+}
+
+pub fn sourcePointHasLineColumn(source: mir.SourcePoint) bool {
+    return source.line != 0 and source.column != 0;
 }
 
 pub fn callTargetSourceMatches(query: mir.SourcePoint, source: mir.SourcePoint) bool {
