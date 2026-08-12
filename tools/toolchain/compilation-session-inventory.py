@@ -107,7 +107,7 @@ def main() -> int:
         "name_resolve.transformWithGraph(allocator, module, self.module_graph)",
         "parsed_out.* = try module_parser.parseSourceDatabase(parse_allocator, project.graph, project.source_db, reporter);",
         "resolved_out.* = try module_parser.resolveParsedSourceDatabase(parse_allocator, parsed_out.*);",
-        "generic_precheck.check(allocator, lowered, diag, self.file_boundaries)",
+        "generic_precheck.checkDecls(allocator, lowered.decls, lowered.visibility_mode, diag, self.file_boundaries)",
         "mangle_private.transformDecls(allocator, specialized.decls, specialized.visibility_mode, self.file_boundaries)",
         "checker.file_boundaries = self.file_boundaries;",
         "module_mir.* = try mir.buildOptFromDecls(self.allocator, decls, .{ .optimize = optimize });",
@@ -125,6 +125,8 @@ def main() -> int:
     session_text = read(session_zig)
     if session_text.count("var checker = sema.Checker.init") != 1:
         fail("sema checker construction must stay centralized in CompilationSession.checkModule")
+    if "generic_precheck.check(allocator, lowered" in session_text:
+        fail("CompilationSession must not call the retired module-shaped generic precheck API")
     if "mangle_private.transform(allocator, specialized" in session_text:
         fail("CompilationSession must not call the retired module-shaped private-mangling API")
     if "pub fn parseModuleOrReportMode(" in session_text:

@@ -830,7 +830,7 @@ fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *
     var p = parser.Parser.init(source, reporter);
     const module = try p.parseModule(allocator);
     const resolved = try name_resolve.transform(allocator, module);
-    try generic_precheck.check(allocator, resolved, reporter, null);
+    try generic_precheck.checkDecls(allocator, resolved.decls, resolved.visibility_mode, reporter, null);
     return try monomorphize.transformReport(allocator, resolved, reporter);
 }
 

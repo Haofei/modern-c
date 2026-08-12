@@ -170,7 +170,7 @@ pub const CompilationSession = struct {
             if (render_errors) diag.render();
             return err;
         };
-        try generic_precheck.check(allocator, lowered, diag, self.file_boundaries);
+        try generic_precheck.checkDecls(allocator, lowered.decls, lowered.visibility_mode, diag, self.file_boundaries);
         if (diag.has_errors) {
             if (render_errors) diag.render();
             return error.ParseFailed;

@@ -6,16 +6,17 @@ const loader = @import("loader.zig");
 const monomorphize = @import("monomorphize.zig");
 const sema = @import("sema.zig");
 
-pub fn check(
+pub fn checkDecls(
     allocator: std.mem.Allocator,
-    module: ast.Module,
+    decls: []ast.Decl,
+    visibility_mode: ast.VisibilityMode,
     reporter: *diagnostics.Reporter,
     file_boundaries: ?[]const loader.FileBoundary,
 ) std.mem.Allocator.Error!void {
     var generic_fns = std.StringHashMap(void).init(allocator);
     defer generic_fns.deinit();
     var needs_check = false;
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         switch (decl.kind) {
             .fn_decl => |fn_decl| {
                 if (monomorphize.isTypeGenericFunction(fn_decl)) {
@@ -38,5 +39,9 @@ pub fn check(
     checker.file_boundaries = file_boundaries;
     checker.generic_template_precheck = true;
     checker.generic_template_fns = &generic_fns;
+    const module = ast.Module{
+        .decls = decls,
+        .visibility_mode = visibility_mode,
+    };
     checker.checkModule(module);
 }
