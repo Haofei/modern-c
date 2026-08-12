@@ -455,10 +455,13 @@ pub const CEmitter = struct {
         // mangling resolve during the artifact-collection pass below. Const global
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
-        for (artifacts.function_artifacts) |function| {
-            const fn_decl = declaration_artifacts.comptimeFnDeclFromArtifact(function);
-            if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
-        }
+        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+            .function => |function| {
+                const fn_decl = declaration_artifacts.comptimeFnDeclFromArtifact(function);
+                if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+            },
+            else => {},
+        };
         const declarations = self.comptime_declarations orelse return error.UnsupportedCEmission;
         for (declarations.globals) |global| {
             if (!global.is_const) continue;
@@ -466,11 +469,14 @@ pub const CEmitter = struct {
             const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
             try self.const_global_widths.put(global.name.text, bits);
         }
-        for (artifacts.type_decl_artifacts) |artifact| switch (artifact) {
-            .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
-            .struct_decl => |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl),
-            .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
-            .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
+        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+            .type_decl => |type_decl| switch (type_decl) {
+                .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
+                .struct_decl => |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl),
+                .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
+                .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
+                else => {},
+            },
             else => {},
         };
     }
@@ -486,37 +492,19 @@ pub const CEmitter = struct {
     }
 
     pub fn collectDeclArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
-        try self.collectFunctionArtifacts(artifacts.function_artifacts);
-        try self.collectGlobalArtifacts(artifacts.global_artifacts);
-        try self.collectTraitArtifacts(artifacts.trait_decl_artifacts, artifacts.impl_trait_artifacts);
-        try self.collectTypeArtifactsFromArtifacts(artifacts);
-    }
-
-    fn collectFunctionArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.FunctionArtifact) anyerror!void {
-        for (artifacts) |function| try self.collectFunctionArtifact(function);
-    }
-
-    fn collectGlobalArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.GlobalArtifact) anyerror!void {
-        for (artifacts) |global| try self.collectGlobalDeclArtifact(global);
-    }
-
-    fn collectTraitArtifacts(
-        self: *CEmitter,
-        trait_artifacts: []const declaration_artifacts.TraitDeclArtifact,
-        impl_artifacts: []const declaration_artifacts.ImplTraitArtifact,
-    ) anyerror!void {
-        for (trait_artifacts) |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl);
-        for (impl_artifacts) |impl_trait| try self.collectImplTraitArtifact(impl_trait);
-    }
-
-    fn collectTypeArtifactsFromArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
-        for (artifacts.type_decl_artifacts) |artifact| switch (artifact) {
-            .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
-            .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
-            .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
-            .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
-            .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
-            .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
+        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+            .function => |function| try self.collectFunctionArtifact(function),
+            .global => |global| try self.collectGlobalDeclArtifact(global),
+            .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),
+            .impl_trait => |impl_trait| try self.collectImplTraitArtifact(impl_trait),
+            .type_decl => |type_decl| switch (type_decl) {
+                .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
+                .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
+                .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
+                .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
+                .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
+                .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
+            },
         };
     }
 

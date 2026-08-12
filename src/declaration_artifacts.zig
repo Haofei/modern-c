@@ -8,24 +8,12 @@ const std = @import("std");
 
 /// Transitional declaration artifacts isolated from backend lowering requests.
 pub const EarlyDeclarationArtifacts = struct {
-    function_artifacts: []const FunctionArtifact,
-    global_artifacts: []const GlobalArtifact,
-    trait_decl_artifacts: []const TraitDeclArtifact,
-    impl_trait_artifacts: []const ImplTraitArtifact,
-    type_decl_artifacts: []const TypeDeclArtifact,
+    decl_artifacts: []const DeclArtifact,
     source_map_artifacts: []const SourceMapArtifact,
 
     fn collectFromResolvedDeclItems(allocator: std.mem.Allocator, resolved_decls: anytype) !EarlyDeclarationArtifacts {
-        var function_artifacts: std.ArrayList(FunctionArtifact) = .empty;
-        errdefer function_artifacts.deinit(allocator);
-        var global_artifacts: std.ArrayList(GlobalArtifact) = .empty;
-        errdefer global_artifacts.deinit(allocator);
-        var trait_decl_artifacts: std.ArrayList(TraitDeclArtifact) = .empty;
-        errdefer trait_decl_artifacts.deinit(allocator);
-        var impl_trait_artifacts: std.ArrayList(ImplTraitArtifact) = .empty;
-        errdefer impl_trait_artifacts.deinit(allocator);
-        var type_decl_artifacts: std.ArrayList(TypeDeclArtifact) = .empty;
-        errdefer type_decl_artifacts.deinit(allocator);
+        var decl_artifacts: std.ArrayList(DeclArtifact) = .empty;
+        errdefer decl_artifacts.deinit(allocator);
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
         errdefer source_map_artifacts.deinit(allocator);
 
@@ -33,74 +21,62 @@ pub const EarlyDeclarationArtifacts = struct {
             const decl = item.decl;
             switch (decl.kind) {
                 .fn_decl => |fn_decl| {
-                    try function_artifacts.append(allocator, FunctionArtifact.fromDecl(fn_decl, decl.attrs, false));
+                    try decl_artifacts.append(allocator, .{ .function = FunctionArtifact.fromDecl(fn_decl, decl.attrs, false) });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .extern_fn => |fn_decl| {
-                    try function_artifacts.append(allocator, FunctionArtifact.fromDecl(fn_decl, decl.attrs, true));
+                    try decl_artifacts.append(allocator, .{ .function = FunctionArtifact.fromDecl(fn_decl, decl.attrs, true) });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .global_decl => |global| {
-                    try global_artifacts.append(allocator, GlobalArtifact.fromDecl(global));
+                    try decl_artifacts.append(allocator, .{ .global = GlobalArtifact.fromDecl(global) });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .type_alias => |alias| {
-                    try type_decl_artifacts.append(allocator, .{ .type_alias = alias });
+                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .type_alias = alias } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .struct_decl => |struct_decl| {
-                    try type_decl_artifacts.append(allocator, .{ .struct_decl = struct_decl });
+                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .struct_decl = struct_decl } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .enum_decl => |enum_decl| {
-                    try type_decl_artifacts.append(allocator, .{ .enum_decl = enum_decl });
+                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .enum_decl = enum_decl } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .union_decl => |union_decl| {
-                    try type_decl_artifacts.append(allocator, .{ .union_decl = union_decl });
+                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .union_decl = union_decl } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .packed_bits_decl => |packed_bits_decl| {
-                    try type_decl_artifacts.append(allocator, .{ .packed_bits_decl = packed_bits_decl });
+                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .packed_bits_decl = packed_bits_decl } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .overlay_union_decl => |overlay_union| {
-                    try type_decl_artifacts.append(allocator, .{ .overlay_union_decl = overlay_union });
+                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .overlay_union_decl = overlay_union } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .opaque_decl => {
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .trait_decl => |trait_decl| {
-                    try trait_decl_artifacts.append(allocator, TraitDeclArtifact.fromDecl(trait_decl));
+                    try decl_artifacts.append(allocator, .{ .trait_decl = TraitDeclArtifact.fromDecl(trait_decl) });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .impl_trait => |impl_trait| {
-                    try impl_trait_artifacts.append(allocator, ImplTraitArtifact.fromDecl(impl_trait));
+                    try decl_artifacts.append(allocator, .{ .impl_trait = ImplTraitArtifact.fromDecl(impl_trait) });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
             }
         }
 
-        const owned_function_artifacts = try function_artifacts.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_function_artifacts);
-        const owned_global_artifacts = try global_artifacts.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_global_artifacts);
-        const owned_trait_decl_artifacts = try trait_decl_artifacts.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_trait_decl_artifacts);
-        const owned_impl_trait_artifacts = try impl_trait_artifacts.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_impl_trait_artifacts);
-        const owned_type_decl_artifacts = try type_decl_artifacts.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_type_decl_artifacts);
+        const owned_decl_artifacts = try decl_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_decl_artifacts);
         const owned_source_map_artifacts = try source_map_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_source_map_artifacts);
 
         return .{
-            .function_artifacts = owned_function_artifacts,
-            .global_artifacts = owned_global_artifacts,
-            .trait_decl_artifacts = owned_trait_decl_artifacts,
-            .impl_trait_artifacts = owned_impl_trait_artifacts,
-            .type_decl_artifacts = owned_type_decl_artifacts,
+            .decl_artifacts = owned_decl_artifacts,
             .source_map_artifacts = owned_source_map_artifacts,
         };
     }
@@ -114,21 +90,13 @@ pub const EarlyDeclarationArtifacts = struct {
     }
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
-        allocator.free(self.function_artifacts);
-        allocator.free(self.global_artifacts);
-        allocator.free(self.trait_decl_artifacts);
-        allocator.free(self.impl_trait_artifacts);
-        allocator.free(self.type_decl_artifacts);
+        allocator.free(self.decl_artifacts);
         allocator.free(self.source_map_artifacts);
         self.* = empty;
     }
 
     pub const empty = EarlyDeclarationArtifacts{
-        .function_artifacts = &.{},
-        .global_artifacts = &.{},
-        .trait_decl_artifacts = &.{},
-        .impl_trait_artifacts = &.{},
-        .type_decl_artifacts = &.{},
+        .decl_artifacts = &.{},
         .source_map_artifacts = &.{},
     };
 };
@@ -146,10 +114,13 @@ pub const ComptimeDeclarationArtifacts = struct {
         var structs: std.ArrayList(ast.StructDecl) = .empty;
         errdefer structs.deinit(allocator);
 
-        for (artifacts.global_artifacts) |global| try globals.append(allocator, globalDeclFromArtifact(global));
-        for (artifacts.type_decl_artifacts) |artifact| switch (artifact) {
-            .type_alias => |alias| try type_aliases.append(allocator, alias),
-            .struct_decl => |struct_decl| try structs.append(allocator, struct_decl),
+        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
+            .global => |global| try globals.append(allocator, globalDeclFromArtifact(global)),
+            .type_decl => |type_decl| switch (type_decl) {
+                .type_alias => |alias| try type_aliases.append(allocator, alias),
+                .struct_decl => |struct_decl| try structs.append(allocator, struct_decl),
+                else => {},
+            },
             else => {},
         };
 
@@ -307,6 +278,14 @@ pub const ImplTraitArtifact = struct {
     }
 };
 
+pub const DeclArtifact = union(enum) {
+    function: FunctionArtifact,
+    global: GlobalArtifact,
+    trait_decl: TraitDeclArtifact,
+    impl_trait: ImplTraitArtifact,
+    type_decl: TypeDeclArtifact,
+};
+
 pub const TypeDeclArtifact = union(enum) {
     type_alias: ast.TypeAlias,
     struct_decl: ast.StructDecl,
@@ -434,11 +413,27 @@ test "declaration artifacts collect from resolved declaration stream" {
     var from_resolved = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls);
     defer from_resolved.deinit(std.testing.allocator);
 
-    try std.testing.expectEqual(@as(usize, 1), from_resolved.function_artifacts.len);
-    try std.testing.expectEqual(@as(usize, 1), from_resolved.global_artifacts.len);
-    try std.testing.expectEqual(@as(usize, 1), from_resolved.type_decl_artifacts.len);
+    try std.testing.expectEqual(@as(usize, 3), from_resolved.decl_artifacts.len);
     try std.testing.expectEqual(@as(usize, 3), from_resolved.source_map_artifacts.len);
-    try std.testing.expectEqualStrings("inc", from_resolved.function_artifacts[0].name.text);
-    try std.testing.expectEqualStrings("counter", from_resolved.global_artifacts[0].name.text);
-    try std.testing.expectEqualStrings("Box", from_resolved.type_decl_artifacts[0].struct_decl.name.text);
+    var saw_function = false;
+    var saw_global = false;
+    var saw_struct = false;
+    for (from_resolved.decl_artifacts) |artifact| switch (artifact) {
+        .function => |function| {
+            try std.testing.expectEqualStrings("inc", function.name.text);
+            saw_function = true;
+        },
+        .global => |global| {
+            try std.testing.expectEqualStrings("counter", global.name.text);
+            saw_global = true;
+        },
+        .type_decl => |type_decl| {
+            try std.testing.expectEqualStrings("Box", type_decl.struct_decl.name.text);
+            saw_struct = true;
+        },
+        else => {},
+    };
+    try std.testing.expect(saw_function);
+    try std.testing.expect(saw_global);
+    try std.testing.expect(saw_struct);
 }
