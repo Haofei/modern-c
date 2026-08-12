@@ -16,6 +16,14 @@ const name_resolve = @import("name_resolve.zig");
 const parser = @import("parser.zig");
 const sema = @import("sema.zig");
 
+fn appendCModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
+    var module_mir = try mir.buildOpt(allocator, module, .{});
+    defer module_mir.deinit();
+    var artifacts = try declaration_artifacts.EarlyDeclarationArtifacts.collectFromDecls(allocator, module.decls);
+    defer artifacts.deinit(allocator);
+    try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts, &module_mir, out, .kernel, null, .{}, false, null);
+}
+
 fn appendLlvmModuleTest(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
     var module_mir = try mir.buildOpt(allocator, module, .{});
     defer module_mir.deinit();
@@ -665,7 +673,7 @@ test "nullable trait object fixture lowers on both backends with the data-word n
     {
         const module = try parseSpecModule(source, a, &reporter);
         var out: std.ArrayList(u8) = .empty;
-        try lower_c.appendC(a, module, &out);
+        try appendCModuleTest(a, module, &out);
         try std.testing.expect(std.mem.indexOf(u8, out.items, "(mc_dyn_CharDevice){0}") != null);
         try std.testing.expect(std.mem.indexOf(u8, out.items, ".data != NULL") != null);
         try std.testing.expect(std.mem.indexOf(u8, out.items, "vtable->putc") != null);
