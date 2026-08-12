@@ -309,6 +309,7 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
     const callee = functionByName(module_mir, "callee").?;
     const caller = functionByName(module_mir, "caller").?;
     const result_fact = targetTypeFactByKind(caller, .direct_call_result) orelse return error.TestUnexpectedResult;
+    const expression_fact = targetTypeFactByKind(caller, .expression_result) orelse return error.TestUnexpectedResult;
     const db = mir_facts_view.MirFactsView.init(&module_mir);
     const result_span = result_fact.source;
 
@@ -323,6 +324,13 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
         },
     }) orelse return error.TestUnexpectedResult;
     try std.testing.expect(std.meta.eql(result_fact, fallback_fact));
+    try std.testing.expect(db.targetTypeFactAtSpanWithExplicitModuleFallback(.{
+        .current = &callee,
+        .fact = .{
+            .kind = .expression_result,
+            .source = expression_fact.source,
+        },
+    }) == null);
 
     const wrong_span = mir.SourcePoint{
         .line = result_fact.source.line + 100,

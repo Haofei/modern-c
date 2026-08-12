@@ -60,6 +60,7 @@ pub const MirFactsView = struct {
         if (query.current) |function| {
             if (self.targetTypeFactAt(function, query.fact.kind, query.fact.source)) |fact| return fact;
         }
+        if (query.fact.kind == .expression_result) return null;
         if (!isSourcePoint(query.fact.source)) return null;
         return uniqueModuleTargetTypeFact(self.module, query.fact);
     }
