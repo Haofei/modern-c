@@ -5997,7 +5997,7 @@ const LlvmEmitter = struct {
     }
 
     fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
-        return mir_facts_view.MirFactsView.init(&self.mir_module).targetTypeFactAtWithModuleFallback(self.currentMirFunction(), kind, span);
+        return mir_facts_view.MirFactsView.init(&self.mir_module).targetTypeFactAtWithModuleFallback(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span));
     }
 
     fn contextualTargetTypeAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, generated_ty: ast.TypeExpr) ?ast.TypeExpr {
@@ -6033,7 +6033,7 @@ const LlvmEmitter = struct {
     }
 
     fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-        return mir_facts_view.MirFactsView.init(&self.mir_module).targetTypeFactAtOwnedWithModuleFallback(self.currentMirFunction(), kind, span, target_owner, target_index);
+        return mir_facts_view.MirFactsView.init(&self.mir_module).targetTypeFactAtOwnedWithModuleFallback(self.currentMirFunction(), kind, mir.sourcePointFromSpan(span), target_owner, target_index);
     }
 
     fn mirConstGetIndexAt(self: *LlvmEmitter, span: ast.Span) ?usize {

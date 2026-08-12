@@ -6,7 +6,6 @@
 
 const std = @import("std");
 
-const ast = @import("ast.zig");
 const mir = @import("mir.zig");
 
 pub const TargetTypeLookupKey = struct {
@@ -28,11 +27,11 @@ pub const MirFactsView = struct {
     ///
     /// This is the preferred source-spanned compatibility query while callers
     /// are being migrated to `targetTypeFactById`.
-    pub fn targetTypeFactAt(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
+    pub fn targetTypeFactAt(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint) ?mir.TargetTypeFact {
         _ = self;
-        if (kind == .expression_result and !isSourceSpan(span)) return null;
+        if (kind == .expression_result and !isSourcePoint(source)) return null;
         if (current) |function| {
-            if (targetTypeFactInFunction(function, kind, span, null, null)) |fact| return fact;
+            if (targetTypeFactInFunction(function, kind, source, null, null)) |fact| return fact;
         }
         return null;
     }
@@ -41,28 +40,28 @@ pub const MirFactsView = struct {
     /// function, then falls back to a unique module-wide source match.  Keeping
     /// this fallback explicitly named prevents broad scans from hiding behind
     /// the ordinary local facts query.
-    pub fn targetTypeFactAtWithModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span) ?mir.TargetTypeFact {
-        if (self.targetTypeFactAt(current, kind, span)) |fact| return fact;
-        if (!isSourceSpan(span)) return null;
-        return uniqueModuleTargetTypeFact(self.module, kind, span, null, null);
+    pub fn targetTypeFactAtWithModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint) ?mir.TargetTypeFact {
+        if (self.targetTypeFactAt(current, kind, source)) |fact| return fact;
+        if (!isSourcePoint(source)) return null;
+        return uniqueModuleTargetTypeFact(self.module, kind, source, null, null);
     }
 
     /// Same local query for fact families whose target belongs to a typed owner
     /// and optional target index (for example atomic-init payload/result pairs).
-    pub fn targetTypeFactAtOwned(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
+    pub fn targetTypeFactAtOwned(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
         _ = self;
         if (current) |function| {
-            if (targetTypeFactInFunction(function, kind, span, owner, index)) |fact| return fact;
+            if (targetTypeFactInFunction(function, kind, source, owner, index)) |fact| return fact;
         }
         return null;
     }
 
     /// Transitional generated-plumbing owner query with explicit module-wide
     /// fallback.  New code should prefer `targetTypeFactById`.
-    pub fn targetTypeFactAtOwnedWithModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast.Span, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
-        if (self.targetTypeFactAtOwned(current, kind, span, owner, index)) |fact| return fact;
-        if (!isSourceSpan(span)) return null;
-        return uniqueModuleTargetTypeFact(self.module, kind, span, owner, index);
+    pub fn targetTypeFactAtOwnedWithModuleFallback(self: MirFactsView, current: ?*const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: []const u8, index: ?usize) ?mir.TargetTypeFact {
+        if (self.targetTypeFactAtOwned(current, kind, source, owner, index)) |fact| return fact;
+        if (!isSourcePoint(source)) return null;
+        return uniqueModuleTargetTypeFact(self.module, kind, source, owner, index);
     }
 
     /// Returns a target-type fact by verified typed identities in `current`.
@@ -77,10 +76,10 @@ pub const MirFactsView = struct {
     }
 };
 
-fn uniqueModuleTargetTypeFact(module: *const mir.Module, kind: mir.TargetTypeKind, span: ast.Span, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {
+fn uniqueModuleTargetTypeFact(module: *const mir.Module, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {
     var matched: ?mir.TargetTypeFact = null;
     for (module.functions) |function| {
-        const fact = targetTypeFactInFunction(&function, kind, span, owner, index) orelse continue;
+        const fact = targetTypeFactInFunction(&function, kind, source, owner, index) orelse continue;
         if (matched) |existing| {
             if (!sameFactIdentity(existing, fact)) return null;
         } else {
@@ -90,11 +89,11 @@ fn uniqueModuleTargetTypeFact(module: *const mir.Module, kind: mir.TargetTypeKin
     return matched;
 }
 
-fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeKind, span: ast.Span, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {
+fn targetTypeFactInFunction(function: *const mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint, owner: ?[]const u8, index: ?usize) ?mir.TargetTypeFact {
     for (function.target_type_facts) |fact| {
         if (fact.kind != kind or fact.target_index != index) continue;
         if (!ownerMatches(fact.target_owner, owner)) continue;
-        if (!sourceMatches(kind, span, fact.source)) continue;
+        if (!sourceMatches(kind, source, fact.source)) continue;
         if (!typedIdentityIsValid(function, fact)) return null;
         return fact;
     }
@@ -153,11 +152,11 @@ fn ownerMatches(actual: ?[]const u8, expected: ?[]const u8) bool {
     return std.mem.eql(u8, actual.?, expected.?);
 }
 
-fn sourceMatches(kind: mir.TargetTypeKind, span: ast.Span, source: mir.SourcePoint) bool {
-    if (span.line != source.line or span.column != source.column) return false;
-    return kind != .expression_result or (span.offset == source.offset and span.len == source.len);
+fn sourceMatches(kind: mir.TargetTypeKind, query: mir.SourcePoint, source: mir.SourcePoint) bool {
+    if (query.line != source.line or query.column != source.column) return false;
+    return kind != .expression_result or (query.offset == source.offset and query.len == source.len);
 }
 
-fn isSourceSpan(span: ast.Span) bool {
-    return span.offset != 0 or span.len != 0 or span.line != 0 or span.column != 0;
+fn isSourcePoint(source: mir.SourcePoint) bool {
+    return source.offset != 0 or source.len != 0 or source.line != 0 or source.column != 0;
 }
