@@ -554,37 +554,13 @@ pub const FactKind = enum {
     store,
 };
 
-pub const Collector = struct {
-    pub fn appendFacts(
-        allocator: std.mem.Allocator,
-        module: ast.Module,
-        out: *std.ArrayList(u8),
-    ) anyerror!void {
-        var collector = ModuleFactCollector.init(allocator);
-        try collector.appendFacts(module, out);
-    }
-
-    pub fn appendFactsFromResolvedSources(
-        allocator: std.mem.Allocator,
-        sources: module_parser.ResolvedSourceDatabase,
-        out: *std.ArrayList(u8),
-    ) anyerror!void {
-        var collector = ModuleFactCollector.init(allocator);
-        try collector.appendResolvedFacts(sources, out);
-    }
-
-    pub fn writeFacts(module: ast.Module, writer: anytype) !void {
-        var collector = ModuleFactCollector.init(std.heap.page_allocator);
-        try collector.writeFacts(module, writer);
-    }
-};
-
 pub fn appendFacts(
     allocator: std.mem.Allocator,
     module: ast.Module,
     out: *std.ArrayList(u8),
 ) anyerror!void {
-    try Collector.appendFacts(allocator, module, out);
+    var collector = ModuleFactCollector.init(allocator);
+    try collector.appendFacts(module, out);
 }
 
 pub fn appendFactsFromResolvedSources(
@@ -592,11 +568,13 @@ pub fn appendFactsFromResolvedSources(
     sources: module_parser.ResolvedSourceDatabase,
     out: *std.ArrayList(u8),
 ) anyerror!void {
-    try Collector.appendFactsFromResolvedSources(allocator, sources, out);
+    var collector = ModuleFactCollector.init(allocator);
+    try collector.appendResolvedFacts(sources, out);
 }
 
 pub fn writeFacts(module: ast.Module, writer: anytype) !void {
-    try Collector.writeFacts(module, writer);
+    var collector = ModuleFactCollector.init(std.heap.page_allocator);
+    try collector.writeFacts(module, writer);
 }
 
 const Context = struct {
