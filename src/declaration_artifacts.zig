@@ -462,16 +462,16 @@ test "declaration artifacts collect from resolved declaration stream" {
     );
     defer parsed.deinit();
 
-    var resolved_decls = try std.testing.allocator.alloc(module_parser.ResolvedDecl, parsed.module.decls.len);
+    var resolved_decls = try std.testing.allocator.alloc(module_parser.ResolvedDecl, parsed.decls().len);
     defer std.testing.allocator.free(resolved_decls);
-    for (parsed.module.decls, 0..) |decl, i| {
+    for (parsed.decls(), 0..) |decl, i| {
         resolved_decls[i] = .{
             .file_id = @enumFromInt(0),
             .decl = decl,
         };
     }
 
-    var from_syntax = try EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(std.testing.allocator, parsed.module.decls);
+    var from_syntax = try EarlyDeclarationArtifacts.collectFromModuleDeclsForTests(std.testing.allocator, parsed.decls());
     defer from_syntax.deinit(std.testing.allocator);
     var from_resolved = try EarlyDeclarationArtifacts.collectFromResolvedDecls(std.testing.allocator, resolved_decls);
     defer from_resolved.deinit(std.testing.allocator);

@@ -115,7 +115,7 @@ test "lower-c runtime hook suppression uses MIR source spelling view" {
     var parsed = try test_support.parseModule("c_runtime_hook_source_spelling.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
 
     var output: std.ArrayList(u8) = .empty;
@@ -166,14 +166,14 @@ fn appendCTest(source_name: []const u8, source: []const u8, output: *std.ArrayLi
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();
 
-    try appendCDeclsTest(std.testing.allocator, parsed.module.decls, output);
+    try appendCDeclsTest(std.testing.allocator, parsed.decls(), output);
 }
 
 fn appendCheckedCTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseCheckedModule(source_name, source);
     defer parsed.deinit();
 
-    try appendCDeclsTest(std.testing.allocator, parsed.module.decls, output);
+    try appendCDeclsTest(std.testing.allocator, parsed.decls(), output);
 }
 
 test "lower-c synthesized function-pointer names encode pointer mutability" {
@@ -256,28 +256,28 @@ test "lower-c target-typed char literals require MIR facts" {
     defer parsed.deinit();
 
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_char_literal_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_char_literal_facts.mc", .{}, false, null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "((uint16_t)65)") != null);
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try removeTargetTypeKindForFunction(&module_mir, "char_value", .char_literal);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_char_literal_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_char_literal_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try renameTargetTypeFactForFunction(&module_mir, "char_value", .char_literal, "u8");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_char_literal_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_char_literal_facts.mc", .{}, false, null));
     }
 }
 
@@ -557,12 +557,12 @@ test "lower-c rejects prebuilt MIR with missing target type facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_missing_target_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "make");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_target_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_target_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c Result constructors require MIR call target facts" {
@@ -574,12 +574,12 @@ test "lower-c Result constructors require MIR call target facts" {
     var parsed = try test_support.parseCheckedModule("c_result_constructor_call_facts.mc", source);
     defer parsed.deinit();
     for ([_][]const u8{ "make", "forward" }) |name| {
-        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer module_mir.deinit();
         try clearCallTargetFactsForFunction(&module_mir, name);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_result_constructor_call_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_result_constructor_call_facts.mc", .{}, false, null));
     }
 }
 
@@ -590,12 +590,12 @@ test "lower-c bind closures require MIR call target facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_bind_call_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "make");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_bind_call_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_bind_call_facts.mc", .{}, false, null));
 }
 
 test "lower-c rejects missing tagged-union target type facts" {
@@ -605,12 +605,12 @@ test "lower-c rejects missing tagged-union target type facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_missing_union_target_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "make");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_union_target_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_union_target_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c rejects missing enum-literal target type facts" {
@@ -620,12 +620,12 @@ test "lower-c rejects missing enum-literal target type facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_missing_enum_target_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "make");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_enum_target_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_enum_target_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c rejects missing string-literal target type facts" {
@@ -634,12 +634,12 @@ test "lower-c rejects missing string-literal target type facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_missing_string_target_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "text");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_string_target_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_string_target_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c rejects missing aggregate-literal target type facts" {
@@ -649,12 +649,12 @@ test "lower-c rejects missing aggregate-literal target type facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_missing_aggregate_target_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "pair");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_aggregate_target_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_aggregate_target_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c struct literal construction class is MIR-owned" {
@@ -669,19 +669,19 @@ test "lower-c struct literal construction class is MIR-owned" {
     ;
     var parsed = try test_support.parseCheckedModule("c_aggregate_construction_fact.mc", source);
     defer parsed.deinit();
-    var valid_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var valid_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer valid_mir.deinit();
     var valid_output: std.ArrayList(u8) = .empty;
     defer valid_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &valid_mir, &valid_output, .kernel, "c_aggregate_construction_fact.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &valid_mir, &valid_output, .kernel, "c_aggregate_construction_fact.mc", .{}, false, null);
 
     for ([_]?mir.AggregateConstructionKind{ null, .packed_bits }) |stale| {
-        var stale_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale_mir.deinit();
         try retargetAggregateConstructionForFunction(&stale_mir, "pair", stale);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_mir, &output, .kernel, "c_aggregate_construction_fact.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_mir, &output, .kernel, "c_aggregate_construction_fact.mc", .{}, false, null));
     }
 }
 
@@ -691,12 +691,12 @@ test "lower-c rejects missing float-literal target type facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_missing_float_target_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "value");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_float_target_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_float_target_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c rejects missing null and value-optional target type facts" {
@@ -707,12 +707,12 @@ test "lower-c rejects missing null and value-optional target type facts" {
     var parsed = try test_support.parseCheckedModule("c_missing_optional_target_type_facts.mc", source);
     defer parsed.deinit();
     for ([_][]const u8{ "present", "absent" }) |name| {
-        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, name);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_optional_target_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_optional_target_type_facts.mc", .{}, false, null));
     }
 }
 
@@ -725,12 +725,12 @@ test "lower-c rejects missing dyn-coercion target type facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_missing_dyn_target_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "as_dyn");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_dyn_target_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_dyn_target_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c rejects missing dyn-coercion source type facts" {
@@ -742,12 +742,12 @@ test "lower-c rejects missing dyn-coercion source type facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_missing_dyn_source_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try removeTargetTypeKindForFunction(&module_mir, "as_dyn", .dyn_coercion_source);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_dyn_source_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_dyn_source_type_facts.mc", .{}, false, null));
 }
 
 fn retargetCallTargetFactsForFunction(module_mir: *mir.Module, name: []const u8, kind: mir.CallTargetKind) !void {
@@ -767,26 +767,26 @@ test "lower-c conversion builtins require exact MIR call-target facts" {
     var parsed = try test_support.parseCheckedModule("c_conversion_call_target_facts.mc", source);
     defer parsed.deinit();
 
-    var missing_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_mir.deinit();
     try clearCallTargetFactsForFunction(&missing_mir, "convert");
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_mir, &missing_output, .kernel, "c_conversion_call_target_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_mir, &missing_output, .kernel, "c_conversion_call_target_facts.mc", .{}, false, null));
 
-    var stale_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_mir.deinit();
     try retargetCallTargetFactsForFunction(&stale_mir, "convert", .conversion_sat_from);
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_mir, &stale_output, .kernel, "c_conversion_call_target_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_mir, &stale_output, .kernel, "c_conversion_call_target_facts.mc", .{}, false, null));
 
-    var missing_types_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_types_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_types_mir.deinit();
     try clearTargetTypeFactsForFunction(&missing_types_mir, "convert");
     var missing_types_output: std.ArrayList(u8) = .empty;
     defer missing_types_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_types_mir, &missing_types_output, .kernel, "c_conversion_call_target_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_types_mir, &missing_types_output, .kernel, "c_conversion_call_target_facts.mc", .{}, false, null));
 }
 
 test "lower-c explicit casts require MIR source and target type facts" {
@@ -795,12 +795,12 @@ test "lower-c explicit casts require MIR source and target type facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_explicit_cast_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "widen");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_explicit_cast_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_explicit_cast_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c cast deref pointee requires MIR expression result" {
@@ -814,25 +814,25 @@ test "lower-c cast deref pointee requires MIR expression result" {
     var parsed = try test_support.parseCheckedModule("c_cast_deref_expression_result.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_cast_deref_expression_result.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_cast_deref_expression_result.mc", .{}, false, null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeFactAtOffsetForFunction(&missing, "read", .expression_result, cast_offset, cast_text.len);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_cast_deref_expression_result.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_cast_deref_expression_result.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactAtOffsetForFunction(&stale, "read", .expression_result, cast_offset, cast_text.len, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_cast_deref_expression_result.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_cast_deref_expression_result.mc", .{}, false, null));
 }
 
 test "lower-c member deref pointee requires MIR expression result" {
@@ -847,25 +847,25 @@ test "lower-c member deref pointee requires MIR expression result" {
     var parsed = try test_support.parseCheckedModule("c_member_deref_expression_result.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_member_deref_expression_result.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_member_deref_expression_result.mc", .{}, false, null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeFactAtOffsetForFunction(&missing, "read", .expression_result, member_offset, member_text.len);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_member_deref_expression_result.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_member_deref_expression_result.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactAtOffsetForFunction(&stale, "read", .expression_result, member_offset, member_text.len, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_member_deref_expression_result.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_member_deref_expression_result.mc", .{}, false, null));
 }
 
 test "lower-c implicit view const narrowing requires MIR source and target type facts" {
@@ -874,12 +874,12 @@ test "lower-c implicit view const narrowing requires MIR source and target type 
     ;
     var parsed = try test_support.parseCheckedModule("c_view_const_narrow_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "narrow");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_view_const_narrow_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_view_const_narrow_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c self-typed union and enum paths require MIR result type facts" {
@@ -892,12 +892,12 @@ test "lower-c self-typed union and enum paths require MIR result type facts" {
     var parsed = try test_support.parseCheckedModule("c_self_typed_expression_facts.mc", source);
     defer parsed.deinit();
     for ([_][]const u8{ "make", "variant" }) |name| {
-        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, name);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_self_typed_expression_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_self_typed_expression_facts.mc", .{}, false, null));
     }
 }
 
@@ -1014,13 +1014,13 @@ fn appendCheckedCTestWithoutRangeFacts(source_name: []const u8, source: []const 
     var parsed = try test_support.parseCheckedModule(source_name, source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     for (function_names) |function_name| {
         try clearRangeFactsForFunction(&module_mir, function_name);
     }
 
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, output, .kernel, source_name, .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, output, .kernel, source_name, .{}, false, null);
 }
 
 test "lower-c rejects prebuilt MIR with missing bounds facts" {
@@ -1031,12 +1031,12 @@ test "lower-c rejects prebuilt MIR with missing bounds facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_missing_bounds_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearBoundsFactsForFunction(&module_mir, "bounds_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_bounds_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_bounds_facts.mc", .{}, false, null));
 }
 
 test "lower-c rejects prebuilt MIR with missing representation facts" {
@@ -1048,7 +1048,7 @@ test "lower-c rejects prebuilt MIR with missing representation facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_representation_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearRepresentationFactsForFunction(&module_mir, "representation_fact_gate");
 
@@ -1056,7 +1056,7 @@ test "lower-c rejects prebuilt MIR with missing representation facts" {
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirRepresentationFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_representation_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_representation_facts.mc", .{}, false, null),
     );
 }
 
@@ -1069,7 +1069,7 @@ test "lower-c rejects prebuilt MIR with stale representation facts" {
 
     var parsed = try test_support.parseCheckedModule("c_stale_representation_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try retargetRepresentationFactsForFunction(&module_mir, "representation_fact_gate", "stale_value");
 
@@ -1077,7 +1077,7 @@ test "lower-c rejects prebuilt MIR with stale representation facts" {
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirRepresentationFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_stale_representation_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_stale_representation_facts.mc", .{}, false, null),
     );
 }
 
@@ -1090,7 +1090,7 @@ test "lower-c rejects prebuilt MIR with extra stale representation facts" {
 
     var parsed = try test_support.parseCheckedModule("c_extra_stale_representation_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try appendStaleRepresentationFactForFunction(&module_mir, "representation_fact_gate", "extra_stale_value");
 
@@ -1098,7 +1098,7 @@ test "lower-c rejects prebuilt MIR with extra stale representation facts" {
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirRepresentationFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_extra_stale_representation_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_extra_stale_representation_facts.mc", .{}, false, null),
     );
 }
 
@@ -1113,7 +1113,7 @@ test "lower-c rejects prebuilt MIR with missing Result try payload representatio
 
     var parsed = try test_support.parseCheckedModule("c_missing_result_try_payload_representation_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearRepresentationFactsForFunction(&module_mir, "result_try_payload_representation_gate");
 
@@ -1121,7 +1121,7 @@ test "lower-c rejects prebuilt MIR with missing Result try payload representatio
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirRepresentationFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_result_try_payload_representation_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_result_try_payload_representation_facts.mc", .{}, false, null),
     );
 }
 
@@ -1136,7 +1136,7 @@ test "lower-c rejects prebuilt MIR with stale Result try payload representation 
 
     var parsed = try test_support.parseCheckedModule("c_stale_result_try_payload_representation_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try retargetRepresentationFactsForFunction(&module_mir, "result_try_payload_representation_gate", "stale_try_payload");
 
@@ -1144,7 +1144,7 @@ test "lower-c rejects prebuilt MIR with stale Result try payload representation 
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirRepresentationFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_stale_result_try_payload_representation_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_stale_result_try_payload_representation_facts.mc", .{}, false, null),
     );
 }
 
@@ -1158,14 +1158,14 @@ test "lower-c rejects prebuilt MIR with missing integer facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_integer_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearIntegerFactsForFunction(&module_mir, "integer_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirIntegerFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_integer_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_integer_facts.mc", .{}, false, null),
     );
 }
 
@@ -1178,14 +1178,14 @@ test "lower-c rejects prebuilt MIR with missing call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -1198,14 +1198,14 @@ test "lower-c rejects prebuilt MIR with missing reflection call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_reflection_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "reflection_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_reflection_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_reflection_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -1218,14 +1218,14 @@ test "lower-c rejects prebuilt MIR with missing byte-view call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_byte_view_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "byte_view_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_byte_view_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_byte_view_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -1244,12 +1244,12 @@ test "lower-c reflection and complete byte-view types require MIR target facts" 
     var parsed = try test_support.parseCheckedModule("c_reflection_byte_view_type_facts.mc", source);
     defer parsed.deinit();
     for ([_][]const u8{ "reflected_size", "reflected_alignment", "reflected_field_offset", "reflected_bit_offset", "reflected_repr", "view", "equal" }) |name| {
-        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, name);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_reflection_byte_view_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_reflection_byte_view_type_facts.mc", .{}, false, null));
     }
 }
 
@@ -1268,24 +1268,24 @@ test "lower-c rejects prebuilt MIR with missing semantic escape call target fact
     var parsed = try test_support.parseCheckedModule("c_missing_semantic_escape_call_target_facts.mc", source);
     defer parsed.deinit();
 
-    var reveal_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var reveal_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer reveal_mir.deinit();
     try clearCallTargetFactsForFunction(&reveal_mir, "reveal_fact_gate");
     var reveal_output: std.ArrayList(u8) = .empty;
     defer reveal_output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &reveal_mir, &reveal_output, .kernel, "c_missing_semantic_escape_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &reveal_mir, &reveal_output, .kernel, "c_missing_semantic_escape_call_target_facts.mc", .{}, false, null),
     );
 
-    var noalias_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var noalias_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer noalias_mir.deinit();
     try clearCallTargetFactsForFunction(&noalias_mir, "noalias_fact_gate");
     var noalias_output: std.ArrayList(u8) = .empty;
     defer noalias_output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &noalias_mir, &noalias_output, .kernel, "c_missing_semantic_escape_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &noalias_mir, &noalias_output, .kernel, "c_missing_semantic_escape_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -1303,12 +1303,12 @@ test "lower-c semantic escape types require MIR target facts" {
     var parsed = try test_support.parseCheckedModule("c_semantic_escape_target_type_facts.mc", source);
     defer parsed.deinit();
     for ([_][]const u8{ "reveal_type_gate", "noalias_type_gate" }) |name| {
-        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, name);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_semantic_escape_target_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_semantic_escape_target_type_facts.mc", .{}, false, null));
     }
 }
 
@@ -1322,26 +1322,26 @@ test "lower-c discard calls require MIR identity and argument type facts" {
     var parsed = try test_support.parseCheckedModule("c_discard_call_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_discard_call_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_discard_call_facts.mc", .{}, false, null);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, complete_output.items, "(void)(value)"));
 
-    var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_identity.deinit();
     try clearCallTargetFactsForFunction(&missing_identity, "discard_values");
     var identity_output: std.ArrayList(u8) = .empty;
     defer identity_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_identity, &identity_output, .kernel, "c_discard_call_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_identity, &identity_output, .kernel, "c_discard_call_facts.mc", .{}, false, null));
 
-    var missing_type = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_type = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_type.deinit();
     try removeTargetTypeKindForFunction(&missing_type, "discard_values", .discard_argument);
     var type_output: std.ArrayList(u8) = .empty;
     defer type_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_type, &type_output, .kernel, "c_discard_call_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_type, &type_output, .kernel, "c_discard_call_facts.mc", .{}, false, null));
 }
 
 test "lower-c wrapping arithmetic requires MIR identity and operand/result type facts" {
@@ -1353,27 +1353,27 @@ test "lower-c wrapping arithmetic requires MIR identity and operand/result type 
     var parsed = try test_support.parseCheckedModule("c_wrapping_call_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_wrapping_call_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_wrapping_call_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "(a + 1)") != null);
 
-    var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_identity.deinit();
     try clearCallTargetFactsForFunction(&missing_identity, "wrapping_fact_gate");
     var identity_output: std.ArrayList(u8) = .empty;
     defer identity_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_identity, &identity_output, .kernel, "c_wrapping_call_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_identity, &identity_output, .kernel, "c_wrapping_call_facts.mc", .{}, false, null));
 
     inline for ([_]mir.TargetTypeKind{ .wrapping_left, .wrapping_right, .wrapping_result }) |kind| {
-        var missing_type = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var missing_type = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer missing_type.deinit();
         try removeTargetTypeKindForFunction(&missing_type, "wrapping_fact_gate", kind);
         var type_output: std.ArrayList(u8) = .empty;
         defer type_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_type, &type_output, .kernel, "c_wrapping_call_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_type, &type_output, .kernel, "c_wrapping_call_facts.mc", .{}, false, null));
     }
 }
 
@@ -1388,27 +1388,27 @@ test "lower-c unchecked arithmetic requires MIR identity and operand/result type
     var parsed = try test_support.parseCheckedModule("c_unchecked_call_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_unchecked_call_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_unchecked_call_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "MC_MIR_RANGE no_overflow target=value op=add") != null);
 
-    var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_identity.deinit();
     try clearCallTargetFactsForFunction(&missing_identity, "unchecked_fact_gate");
     var identity_output: std.ArrayList(u8) = .empty;
     defer identity_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_identity, &identity_output, .kernel, "c_unchecked_call_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_identity, &identity_output, .kernel, "c_unchecked_call_facts.mc", .{}, false, null));
 
     inline for ([_]mir.TargetTypeKind{ .unchecked_left, .unchecked_right, .unchecked_result }) |kind| {
-        var missing_type = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var missing_type = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer missing_type.deinit();
         try removeTargetTypeKindForFunction(&missing_type, "unchecked_fact_gate", kind);
         var type_output: std.ArrayList(u8) = .empty;
         defer type_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_type, &type_output, .kernel, "c_unchecked_call_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_type, &type_output, .kernel, "c_unchecked_call_facts.mc", .{}, false, null));
     }
 }
 
@@ -1422,14 +1422,14 @@ test "lower-c rejects prebuilt MIR with missing atomic call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_atomic_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "atomic_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_atomic_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_atomic_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -1451,12 +1451,12 @@ test "lower-c atomic and MaybeUninit payloads require MIR target facts" {
     var parsed = try test_support.parseCheckedModule("c_atomic_maybe_uninit_payload_facts.mc", source);
     defer parsed.deinit();
     for ([_][]const u8{ "atomic_payload_fact_gate", "maybe_uninit_payload_fact_gate" }) |name| {
-        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, name);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_atomic_maybe_uninit_payload_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_atomic_maybe_uninit_payload_facts.mc", .{}, false, null));
     }
 }
 
@@ -1470,44 +1470,44 @@ test "lower-c atomic init requires MIR identity and complete types" {
     var parsed = try test_support.parseCheckedModule("c_atomic_init_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "boot_counter = 9") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "counter = 1") != null);
 
     for ([_][]const u8{ "boot_counter", "local_init" }) |name| {
-        var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer missing_identity.deinit();
         try clearCallTargetFactsForFunction(&missing_identity, name);
         var missing_identity_output: std.ArrayList(u8) = .empty;
         defer missing_identity_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_identity, &missing_identity_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_identity, &missing_identity_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
 
         inline for ([_]mir.TargetTypeKind{ .atomic_init_payload, .atomic_init_result }) |kind| {
-            var missing_type = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+            var missing_type = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
             defer missing_type.deinit();
             try removeTargetTypeKindForFunction(&missing_type, name, kind);
             var missing_type_output: std.ArrayList(u8) = .empty;
             defer missing_type_output.deinit(std.testing.allocator);
-            try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_type, &missing_type_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
+            try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_type, &missing_type_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
         }
 
-        var stale_payload = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale_payload = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale_payload.deinit();
         try renameTargetTypeFactForFunction(&stale_payload, name, .atomic_init_payload, "bool");
         var stale_payload_output: std.ArrayList(u8) = .empty;
         defer stale_payload_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_payload, &stale_payload_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_payload, &stale_payload_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
 
-        var stale_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale_result.deinit();
         try renameTargetTypeFactForFunction(&stale_result, name, .atomic_init_result, "u32");
         var stale_result_output: std.ArrayList(u8) = .empty;
         defer stale_result_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_result, &stale_result_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_result, &stale_result_output, .kernel, "c_atomic_init_facts.mc", .{}, false, null));
     }
 }
 
@@ -1520,14 +1520,14 @@ test "lower-c rejects prebuilt MIR with missing bitcast call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_bitcast_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "bitcast_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_bitcast_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_bitcast_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -1540,14 +1540,14 @@ test "lower-c rejects prebuilt MIR with missing bitcast target type facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_bitcast_target_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "bitcast_target_type_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirTargetTypeFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_bitcast_target_type_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_bitcast_target_type_facts.mc", .{}, false, null),
     );
 }
 
@@ -1560,14 +1560,14 @@ test "lower-c rejects prebuilt MIR with missing const_get call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_const_get_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "const_get_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_const_get_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_const_get_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -1579,36 +1579,36 @@ test "lower-c const_get consumes MIR base result and index facts" {
     var parsed = try test_support.parseCheckedModule("c_const_get_facts.mc", source);
     defer parsed.deinit();
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "[2]") != null);
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, "const_get_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearConstGetFactsForFunction(&module_mir, "const_get_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirConstGetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirConstGetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try retargetConstGetFactForFunction(&module_mir, "const_get_fact_gate", 1);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirConstGetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirConstGetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_const_get_facts.mc", .{}, false, null));
     }
 }
 
@@ -1627,11 +1627,11 @@ test "lower-c DMA calls consume MIR identities and complete types" {
     var parsed = try test_support.parseCheckedModule("c_dma_facts.mc", source);
     defer parsed.deinit();
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_dma_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_dma_facts.mc", .{}, false, null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "((void)(buf), mc_barrier_release_before())") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "((void)(buf), mc_barrier_acquire_after())") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before()") != null);
@@ -1640,28 +1640,28 @@ test "lower-c DMA calls consume MIR identities and complete types" {
         try std.testing.expect(std.mem.indexOf(u8, output.items, ".len = 1") != null);
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearCallTargetFactsForFunction(&module_mir, "dma_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_dma_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_dma_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try retargetCallTargetFactsForFunction(&module_mir, "dma_fact_gate", .const_get);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_dma_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_dma_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, "dma_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_dma_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_dma_facts.mc", .{}, false, null));
     }
 }
 
@@ -1678,69 +1678,69 @@ test "lower-c raw-many offset consumes MIR identity and complete types" {
     var parsed = try test_support.parseCheckedModule("c_raw_many_offset_facts.mc", source);
     defer parsed.deinit();
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "(p + index)") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "uint16_t value =") != null);
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearCallTargetFactsForFunction(&module_mir, "raw_many_offset_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try retargetCallTargetFactsForFunction(&module_mir, "raw_many_offset_fact_gate", .const_get);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, "raw_many_offset_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try removeTargetTypeKindForFunction(&module_mir, "raw_many_offset_fact_gate", .inferred_local);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try renameTargetTypeFactForFunction(&module_mir, "raw_many_offset_fact_gate", .inferred_local, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try removeTargetTypeKindForFunction(&module_mir, "raw_many_offset_deref_fact_gate", .inferred_local);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try renameTargetTypeFactForFunction(&module_mir, "raw_many_offset_deref_fact_gate", .inferred_local, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_many_offset_facts.mc", .{}, false, null));
     }
 }
 
@@ -1760,26 +1760,26 @@ test "lower-c direct storage-read inferred locals require MIR facts" {
     var parsed = try test_support.parseCheckedModule("c_inferred_storage_reads.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_storage_reads.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_storage_reads.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "storage_reads") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "storage_reads", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_storage_reads.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_storage_reads.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "storage_reads", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_storage_reads.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_storage_reads.mc", .{}, false, null));
 }
 
 test "lower-c inferred local try payloads require MIR types" {
@@ -1792,27 +1792,27 @@ test "lower-c inferred local try payloads require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_try_payloads.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_try_payloads.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_try_payloads.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "result_local") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "nullable_local") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "result_local", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_local_try_payloads.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_local_try_payloads.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "result_local", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_local_try_payloads.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_try_payloads.mc", .{}, false, null));
 }
 
 test "lower-c inferred local direct addresses require MIR types" {
@@ -1888,11 +1888,11 @@ test "lower-c inferred local direct addresses require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_address.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_address.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_address.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &shared_value") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t const * pointer = &readonly_value") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = &value") != null);
@@ -1905,42 +1905,42 @@ test "lower-c inferred local direct addresses require MIR types" {
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "static uint32_t address_const_pointee(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "static uint32_t address_raw_many_pointee(void)") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "address_global", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
 
-    var missing_const_global = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_const_global = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_const_global.deinit();
     try removeTargetTypeKindForFunction(&missing_const_global, "address_const_global", .inferred_local);
     var missing_const_global_output: std.ArrayList(u8) = .empty;
     defer missing_const_global_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_const_global, &missing_const_global_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_const_global, &missing_const_global_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
 
-    var stale_const_global = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_const_global = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_const_global.deinit();
     try renameTargetTypeFactForFunction(&stale_const_global, "address_const_global", .inferred_local, "u64");
     var stale_const_global_output: std.ArrayList(u8) = .empty;
     defer stale_const_global_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_const_global, &stale_const_global_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_const_global, &stale_const_global_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "address_global", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
 
-    var stale_pointee_source = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_pointee_source = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_pointee_source.deinit();
     const pointee_function_offset = std.mem.indexOf(u8, source, "fn address_pointee") orelse return error.TestUnexpectedResult;
     const pointee_source_offset = std.mem.indexOfPos(u8, source, pointee_function_offset, "source.*") orelse return error.TestUnexpectedResult;
     try renameTargetTypeFactAtOffsetForFunction(&stale_pointee_source, "address_pointee", .expression_result, pointee_source_offset, "source".len, "u64");
     var stale_pointee_source_output: std.ArrayList(u8) = .empty;
     defer stale_pointee_source_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_pointee_source, &stale_pointee_source_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_pointee_source, &stale_pointee_source_output, .kernel, "c_inferred_local_address.mc", .{}, false, null));
 }
 
 test "lower-c compound expressions require complete MIR result facts" {
@@ -2019,298 +2019,298 @@ test "lower-c compound expressions require complete MIR result facts" {
     var parsed = try test_support.parseCheckedModule("c_expression_result_facts.mc", source);
     defer parsed.deinit();
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null);
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const address_offset = std.mem.indexOf(u8, source, "&address_target") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "function_address_result", .expression_result, address_offset, "&address_target".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const address_offset = std.mem.indexOf(u8, source, "&address_target") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "function_address_result", .expression_result, address_offset, "&address_target".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const function_offset = std.mem.indexOf(u8, source, "fn inferred_data_address_result") orelse return error.TestUnexpectedResult;
         const address_offset = std.mem.indexOfPos(u8, source, function_offset, "&value") orelse return error.TestUnexpectedResult;
         try retargetPointerMutabilityFactAtOffsetForFunction(&module_mir, "inferred_data_address_result", .inferred_local, address_offset, "&value".len, .mut);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const function_offset = std.mem.indexOf(u8, source, "fn data_address_result") orelse return error.TestUnexpectedResult;
         const address_offset = std.mem.indexOfPos(u8, source, function_offset, "&value") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "data_address_result", .expression_result, address_offset, "&value".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const function_offset = std.mem.indexOf(u8, source, "fn data_address_result") orelse return error.TestUnexpectedResult;
         const address_offset = std.mem.indexOfPos(u8, source, function_offset, "&value") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "data_address_result", .expression_result, address_offset, "&value".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try removeTargetTypeKindForFunction(&module_mir, "expression_facts", .expression_result);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const len_offset = std.mem.indexOf(u8, source, "values.len") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "slice_len_result", .expression_result, len_offset, "values.len".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const len_offset = std.mem.indexOf(u8, source, "values.len") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "slice_len_result", .expression_result, len_offset, "values.len".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const binary_offset = std.mem.indexOf(u8, source, "left + 1") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "binary_result", .expression_result, binary_offset, "left + 1".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const binary_offset = std.mem.indexOf(u8, source, "left + 1") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "binary_result", .expression_result, binary_offset, "left + 1".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const overlay_index_return_offset = std.mem.indexOf(u8, source, "return word.bytes[0]") orelse return error.TestUnexpectedResult;
         const index_offset = overlay_index_return_offset + "return ".len;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_index_return_result", .expression_result, index_offset, "word.bytes[0]".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const overlay_index_return_offset = std.mem.indexOf(u8, source, "return word.bytes[0]") orelse return error.TestUnexpectedResult;
         const index_offset = overlay_index_return_offset + "return ".len;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_index_return_result", .expression_result, index_offset, "word.bytes[0]".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const overlay_return_offset = std.mem.indexOf(u8, source, "return word.value") orelse return error.TestUnexpectedResult;
         const member_offset = overlay_return_offset + "return ".len;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_return_result", .expression_result, member_offset, "word.value".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const overlay_return_offset = std.mem.indexOf(u8, source, "return word.value") orelse return error.TestUnexpectedResult;
         const member_offset = overlay_return_offset + "return ".len;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_return_result", .expression_result, member_offset, "word.value".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const overlay_index_start = std.mem.indexOf(u8, source, "fn overlay_index_result") orelse return error.TestUnexpectedResult;
         const overlay_index_offset = std.mem.indexOfPos(u8, source, overlay_index_start, "word.bytes[0]") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_index_result", .expression_result, overlay_index_offset, "word.bytes[0]".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const overlay_index_start = std.mem.indexOf(u8, source, "fn overlay_index_result") orelse return error.TestUnexpectedResult;
         const overlay_index_offset = std.mem.indexOfPos(u8, source, overlay_index_start, "word.bytes[0]") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_index_result", .expression_result, overlay_index_offset, "word.bytes[0]".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const slice_offset = std.mem.indexOf(u8, source, "values[0..index]") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "expression_facts", .expression_result, slice_offset, "values[0..index]".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const slice_offset = std.mem.indexOf(u8, source, "values[0..index]") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "expression_facts", .expression_result, slice_offset, "values[0..index]".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const index_offset = std.mem.indexOf(u8, source, "window[0] ==") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "expression_facts", .expression_result, index_offset, "window[0]".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const member_offset = std.mem.indexOf(u8, source, "pair.value") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "member_result", .expression_result, member_offset, "pair.value".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const member_offset = std.mem.indexOf(u8, source, "pair.value") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "member_result", .expression_result, member_offset, "pair.value".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const overlay_offset = std.mem.indexOf(u8, source, "word.value") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_result", .expression_result, overlay_offset, "word.value".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const overlay_offset = std.mem.indexOf(u8, source, "word.value") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "overlay_result", .expression_result, overlay_offset, "word.value".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const deref_offset = std.mem.indexOf(u8, source, "pointer.*") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "deref_result", .expression_result, deref_offset, "pointer.*".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const deref_offset = std.mem.indexOf(u8, source, "pointer.*") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "deref_result", .expression_result, deref_offset, "pointer.*".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const negated_offset = std.mem.indexOf(u8, source, "-value") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "negated_result", .expression_result, negated_offset, "-value".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const negated_offset = std.mem.indexOf(u8, source, "-value") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "negated_result", .expression_result, negated_offset, "-value".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const unary_offset = std.mem.indexOf(u8, source, "!flag") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "unary_result", .expression_result, unary_offset, "!flag".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const unary_offset = std.mem.indexOf(u8, source, "!flag") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "unary_result", .expression_result, unary_offset, "!flag".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const packed_offset = std.mem.indexOf(u8, source, "flags.set") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "packed_result", .expression_result, packed_offset, "flags.set".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const packed_offset = std.mem.indexOf(u8, source, "flags.set") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "packed_result", .expression_result, packed_offset, "flags.set".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_expression_result_facts.mc", .{}, false, null));
     }
 }
 
@@ -2326,26 +2326,26 @@ test "lower-c grouped expressions consume their own MIR result facts" {
     var parsed = try test_support.parseCheckedModule("c_grouped_expression_result.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_grouped_expression_result.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_grouped_expression_result.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "grouped_result") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeFactAtOffsetForFunction(&missing, "grouped_result", .expression_result, grouped_offset, grouped_text.len);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_grouped_expression_result.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_grouped_expression_result.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactAtOffsetForFunction(&stale, "grouped_result", .expression_result, grouped_offset, grouped_text.len, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_grouped_expression_result.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_grouped_expression_result.mc", .{}, false, null));
 }
 
 test "lower-c grouped direct calls consume the outer MIR result fact" {
@@ -2361,25 +2361,25 @@ test "lower-c grouped direct calls consume the outer MIR result fact" {
     var parsed = try test_support.parseCheckedModule("c_grouped_call_result.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_grouped_call_result.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_grouped_call_result.mc", .{}, false, null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeFactAtOffsetForFunction(&missing, "grouped_call_result", .expression_result, grouped_offset, grouped_text.len);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_grouped_call_result.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_grouped_call_result.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactAtOffsetForFunction(&stale, "grouped_call_result", .expression_result, grouped_offset, grouped_text.len, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_grouped_call_result.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_grouped_call_result.mc", .{}, false, null));
 }
 
 test "lower-c diagnoses source block expressions instead of inferring their result" {
@@ -2390,11 +2390,11 @@ test "lower-c diagnoses source block expressions instead of inferring their resu
     ;
     var parsed = try test_support.parseCheckedModule("c_block_expression_policy.mc", source);
     defer parsed.deinit();
-    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer typed_mir.deinit();
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &typed_mir, &output, .kernel, "c_block_expression_policy.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &typed_mir, &output, .kernel, "c_block_expression_policy.mc", .{}, false, null));
 }
 
 test "lower-c indexes direct fixed-array call results through MIR return types" {
@@ -2407,11 +2407,11 @@ test "lower-c indexes direct fixed-array call results through MIR return types" 
     ;
     var parsed = try test_support.parseCheckedModule("c_direct_array_call_index.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_direct_array_call_index.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_direct_array_call_index.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "make_matrix()") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, ".elems[") != null);
 }
@@ -2426,30 +2426,30 @@ test "lower-c nested array member and index results require MIR expression facts
     var parsed = try test_support.parseCheckedModule("c_array_member_expression_result_facts.mc", source);
     defer parsed.deinit();
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_array_member_expression_result_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_array_member_expression_result_facts.mc", .{}, false, null);
         try expectContains(output.items, "holder.rows.elems[");
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const member_offset = std.mem.indexOf(u8, source, "holder.rows") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "read_matrix_member", .expression_result, member_offset, "holder.rows".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_array_member_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_array_member_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const member_offset = std.mem.indexOf(u8, source, "holder.rows") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "read_matrix_member", .expression_result, member_offset, "holder.rows".len, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_array_member_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_array_member_expression_result_facts.mc", .{}, false, null));
     }
 }
 
@@ -2464,30 +2464,30 @@ test "lower-c nested pointer members require MIR expression facts" {
     var parsed = try test_support.parseCheckedModule("c_pointer_member_expression_result_facts.mc", source);
     defer parsed.deinit();
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_pointer_member_expression_result_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_pointer_member_expression_result_facts.mc", .{}, false, null);
         try expectContains(output.items, "holder.child->value");
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const member_offset = std.mem.indexOf(u8, source, "holder.child") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "read_nested_member", .expression_result, member_offset, "holder.child".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_pointer_member_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_pointer_member_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const member_offset = std.mem.indexOf(u8, source, "holder.child") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "read_nested_member", .expression_result, member_offset, "holder.child".len, "u32");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_pointer_member_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_pointer_member_expression_result_facts.mc", .{}, false, null));
     }
 }
 
@@ -2502,30 +2502,30 @@ test "lower-c nested struct members require MIR expression facts" {
     var parsed = try test_support.parseCheckedModule("c_struct_member_expression_result_facts.mc", source);
     defer parsed.deinit();
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_struct_member_expression_result_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_struct_member_expression_result_facts.mc", .{}, false, null);
         try expectContains(output.items, "holder.child.value");
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const member_offset = std.mem.indexOf(u8, source, "holder.child") orelse return error.TestUnexpectedResult;
         try removeTargetTypeFactAtOffsetForFunction(&module_mir, "read_nested_member", .expression_result, member_offset, "holder.child".len);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_struct_member_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_struct_member_expression_result_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         const member_offset = std.mem.indexOf(u8, source, "holder.child") orelse return error.TestUnexpectedResult;
         try renameTargetTypeFactAtOffsetForFunction(&module_mir, "read_nested_member", .expression_result, member_offset, "holder.child".len, "u32");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_struct_member_expression_result_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_struct_member_expression_result_facts.mc", .{}, false, null));
     }
 }
 
@@ -2545,55 +2545,55 @@ test "lower-c MMIO calls consume MIR identities and complete types" {
     var parsed = try test_support.parseCheckedModule("c_mmio_facts.mc", source);
     defer parsed.deinit();
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u32(&dev->raw") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u32(&dev->raw") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u8(&dev->flags") != null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t raw = (uint32_t)mc_mmio_read_u32(&dev->raw);") != null);
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearCallTargetFactsForFunction(&module_mir, "mmio_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try retargetCallTargetFactsForFunction(&module_mir, "mmio_fact_gate", .const_get);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, "mmio_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try removeTargetTypeKindForFunction(&module_mir, "mmio_fact_gate", .inferred_local);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try renameTargetTypeFactForFunction(&module_mir, "mmio_fact_gate", .inferred_local, "u64");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_facts.mc", .{}, false, null));
     }
 }
 
@@ -2609,36 +2609,36 @@ test "lower-c MMIO map consumes MIR identity and complete types" {
     var parsed = try test_support.parseCheckedModule("c_mmio_map_facts.mc", source);
     defer parsed.deinit();
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_mmio_map_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_map_facts.mc", .{}, false, null);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "((Device volatile *)pa)") != null);
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearCallTargetFactsForFunction(&module_mir, "map_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_mmio_map_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_map_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try retargetCallTargetFactsForFunction(&module_mir, "map_fact_gate", .mmio_read);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_mmio_map_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_map_facts.mc", .{}, false, null));
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, "map_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_mmio_map_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_mmio_map_facts.mc", .{}, false, null));
     }
 }
 
@@ -2652,14 +2652,14 @@ test "lower-c reductions require MIR source and element type facts" {
     var parsed = try test_support.parseCheckedModule("c_missing_reduce_element_facts.mc", source);
     defer parsed.deinit();
     for ([_]mir.TargetTypeKind{ .reduce_source, .reduce_element }) |kind| {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try removeTargetTypeKindForFunction(&module_mir, "reduce_element_fact_gate", kind);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(
             error.InvalidMirTargetTypeFacts,
-            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_reduce_element_facts.mc", .{}, false, null),
+            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_reduce_element_facts.mc", .{}, false, null),
         );
     }
 }
@@ -2678,32 +2678,32 @@ test "lower-c enum raw requires MIR call and target type facts" {
     var parsed = try test_support.parseCheckedModule("c_enum_raw_facts.mc", source);
     defer parsed.deinit();
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_enum_raw_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_enum_raw_facts.mc", .{}, false, null);
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearCallTargetFactsForFunction(&module_mir, "enum_raw_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(
             error.InvalidMirCallTargetFacts,
-            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_enum_raw_facts.mc", .{}, false, null),
+            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_enum_raw_facts.mc", .{}, false, null),
         );
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, "enum_raw_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(
             error.InvalidMirTargetTypeFacts,
-            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_enum_raw_facts.mc", .{}, false, null),
+            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_enum_raw_facts.mc", .{}, false, null),
         );
     }
 }
@@ -2729,43 +2729,43 @@ test "lower-c arithmetic domain calls require MIR identities and complete types"
     var parsed = try test_support.parseCheckedModule("c_domain_call_facts.mc", source);
     defer parsed.deinit();
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null);
+        try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null);
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearCallTargetFactsForFunction(&module_mir, "domain_fact_gate");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(
             error.InvalidMirCallTargetFacts,
-            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null),
+            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null),
         );
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try retargetCallTargetFactsForFunction(&module_mir, "before", .serial_after);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(
             error.InvalidMirCallTargetFacts,
-            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null),
+            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null),
         );
     }
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, "bounded");
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try std.testing.expectError(
             error.InvalidMirTargetTypeFacts,
-            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null),
+            appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_domain_call_facts.mc", .{}, false, null),
         );
     }
 }
@@ -2779,14 +2779,14 @@ test "lower-c rejects prebuilt MIR with missing phys call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_phys_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "phys_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_phys_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_phys_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -2799,14 +2799,14 @@ test "lower-c rejects prebuilt MIR with missing phys result type facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_phys_result_type_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "phys_result_type_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirTargetTypeFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_phys_result_type_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_phys_result_type_facts.mc", .{}, false, null),
     );
 }
 
@@ -2824,14 +2824,14 @@ test "lower-c rejects prebuilt MIR with missing MaybeUninit call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_maybe_uninit_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "maybe_uninit_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_maybe_uninit_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_maybe_uninit_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -2844,14 +2844,14 @@ test "lower-c rejects prebuilt MIR with missing raw store call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_raw_store_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "raw_store_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_raw_store_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_raw_store_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -2864,14 +2864,14 @@ test "lower-c rejects prebuilt MIR with missing raw load call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_raw_load_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "raw_load_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_raw_load_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_raw_load_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -2884,14 +2884,14 @@ test "lower-c rejects prebuilt MIR with missing raw ptr call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_raw_ptr_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "raw_ptr_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_raw_ptr_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_raw_ptr_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -2904,12 +2904,12 @@ test "lower-c raw memory calls require complete MIR target type facts" {
     var parsed = try test_support.parseCheckedModule("c_raw_memory_type_facts.mc", source);
     defer parsed.deinit();
     for ([_][]const u8{ "read", "pointer", "write" }) |name| {
-        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer module_mir.deinit();
         try clearTargetTypeFactsForFunction(&module_mir, name);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_raw_memory_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_raw_memory_type_facts.mc", .{}, false, null));
     }
 }
 
@@ -2922,19 +2922,19 @@ test "lower-c pointer-to-PAddr coercions require MIR source type facts" {
     var parsed = try test_support.parseCheckedModule("c_paddr_coercion_source_type_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_paddr_coercion_source_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_paddr_coercion_source_type_facts.mc", .{}, false, null);
     try expectContains(complete_output.items, "((uintptr_t)(addr))");
 
-    var missing_source = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_source = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_source.deinit();
     try removeTargetTypeKindForFunction(&missing_source, "write_pointer", .paddr_coercion_source);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_source, &missing_output, .kernel, "c_paddr_coercion_source_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_source, &missing_output, .kernel, "c_paddr_coercion_source_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c aggregate member copy source type requires MIR expression result" {
@@ -2955,21 +2955,21 @@ test "lower-c aggregate member copy source type requires MIR expression result" 
     var parsed = try test_support.parseCheckedModule("c_aggregate_member_copy_source_type_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_aggregate_member_copy_source_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_aggregate_member_copy_source_type_facts.mc", .{}, false, null);
     const complete_body = try cFunctionBody(complete_output.items, "static uint32_t member_copy_source_type_gate(void)");
     try expectContains(complete_body, "/* mir pointer_provenance consumed fn=member_copy_source_type_gate subject=dst field=inner.ptr provenance=global_storage reason=reassignment source=");
     try expectContains(complete_body, "return ((uint32_t)mc_race_load_u32(dst.inner.ptr));");
 
-    var missing_source_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_source_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_source_result.deinit();
     try removeTargetTypeKindForFunctionLineAndTargetName(&missing_source_result, "member_copy_source_type_gate", .expression_result, 10, "Inner");
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_source_result, &missing_output, .kernel, "c_aggregate_member_copy_source_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_source_result, &missing_output, .kernel, "c_aggregate_member_copy_source_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c varargs calls require complete MIR cursor payload and result facts" {
@@ -2990,28 +2990,28 @@ test "lower-c varargs calls require complete MIR cursor payload and result facts
     ;
     var parsed = try test_support.parseCheckedModule("c_varargs_call_type_facts.mc", source);
     defer parsed.deinit();
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_varargs_call_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_varargs_call_type_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.count(u8, complete_output.items, "__builtin_va_arg") >= 2);
     try std.testing.expect(std.mem.count(u8, complete_output.items, "__builtin_va_end") >= 2);
 
-    var missing_calls = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_calls = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_calls.deinit();
     try clearCallTargetFactsForFunction(&missing_calls, "first_arg");
     var call_output: std.ArrayList(u8) = .empty;
     defer call_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_calls, &call_output, .kernel, "c_varargs_call_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_calls, &call_output, .kernel, "c_varargs_call_type_facts.mc", .{}, false, null));
 
     for ([_]mir.TargetTypeKind{ .va_cursor, .va_payload, .va_result }) |kind| {
-        var missing_type = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var missing_type = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer missing_type.deinit();
         try removeTargetTypeKindForFunction(&missing_type, "first_arg", kind);
         var type_output: std.ArrayList(u8) = .empty;
         defer type_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_type, &type_output, .kernel, "c_varargs_call_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_type, &type_output, .kernel, "c_varargs_call_type_facts.mc", .{}, false, null));
     }
 }
 
@@ -3029,30 +3029,30 @@ test "lower-c explicit traps require exact MIR reason identities" {
     var parsed = try test_support.parseCheckedModule("c_explicit_trap_target_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_explicit_trap_target_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_explicit_trap_target_facts.mc", .{}, false, null);
     for ([_][]const u8{ "Bounds", "NullUnwrap", "IntegerOverflow", "DivideByZero", "InvalidShift", "InvalidRepresentation", "Assert", "Unreachable" }) |reason| {
         const helper = try std.fmt.allocPrint(std.testing.allocator, "mc_trap_{s}();", .{reason});
         defer std.testing.allocator.free(helper);
         try std.testing.expect(std.mem.indexOf(u8, complete_output.items, helper) != null);
     }
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try clearCallTargetFactsForFunction(&missing, "trap_bounds");
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_explicit_trap_target_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_explicit_trap_target_facts.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try retargetCallTargetFactsForFunction(&stale, "trap_bounds", .trap_assert);
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_explicit_trap_target_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_explicit_trap_target_facts.mc", .{}, false, null));
 }
 
 test "lower-c runtime asserts require MIR bool condition types" {
@@ -3062,26 +3062,26 @@ test "lower-c runtime asserts require MIR bool condition types" {
     var parsed = try test_support.parseCheckedModule("c_assert_condition_type_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "if (!(flag)) mc_trap_Assert();") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "require_flag", .assert_condition);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "require_flag", .assert_condition, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c while loops require MIR bool condition types" {
@@ -3091,26 +3091,26 @@ test "lower-c while loops require MIR bool condition types" {
     var parsed = try test_support.parseCheckedModule("c_loop_condition_type_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_loop_condition_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_loop_condition_type_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "while (flag)") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "wait_for_flag", .loop_condition);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_loop_condition_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_loop_condition_type_facts.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "wait_for_flag", .loop_condition, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_loop_condition_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_loop_condition_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c switches require MIR subject types" {
@@ -3126,44 +3126,44 @@ test "lower-c switches require MIR subject types" {
     var parsed = try test_support.parseCheckedModule("c_switch_subject_type_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null);
     for ([_][]const u8{ "result_subject", "nullable_subject", "union_subject", "enum_subject", "bool_subject" }) |name| {
         try std.testing.expect(std.mem.indexOf(u8, complete_output.items, name) != null);
     }
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "result_subject", .switch_subject);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
 
     for ([_][]const u8{ "result_subject", "nullable_subject", "union_subject", "enum_subject", "bool_subject" }) |name| {
-        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale.deinit();
         try renameTargetTypeFactForFunction(&stale, name, .switch_subject, "u32");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
     }
 
-    var stale_nullable_repr = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_nullable_repr = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_nullable_repr.deinit();
     try retargetTargetTypeResultForFunction(&stale_nullable_repr, "nullable_subject", .switch_subject, .{ .nullable_value = "u32" });
     var stale_nullable_repr_output: std.ArrayList(u8) = .empty;
     defer stale_nullable_repr_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_nullable_repr, &stale_nullable_repr_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_nullable_repr, &stale_nullable_repr_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
 
-    var unknown_subject_repr = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var unknown_subject_repr = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer unknown_subject_repr.deinit();
     try retargetTargetTypeResultForFunction(&unknown_subject_repr, "nullable_subject", .switch_subject, .unknown);
     var unknown_subject_repr_output: std.ArrayList(u8) = .empty;
     defer unknown_subject_repr_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &unknown_subject_repr, &unknown_subject_repr_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &unknown_subject_repr, &unknown_subject_repr_output, .kernel, "c_switch_subject_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c if-let statements require MIR subject types" {
@@ -3178,37 +3178,37 @@ test "lower-c if-let statements require MIR subject types" {
     var parsed = try test_support.parseCheckedModule("c_if_let_subject_type_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null);
     for ([_][]const u8{ "result_subject", "nullable_subject", "result_call_subject", "nullable_call_subject" }) |name| {
         try std.testing.expect(std.mem.indexOf(u8, complete_output.items, name) != null);
     }
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "result_subject", .if_let_subject);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
 
     for ([_][]const u8{ "result_subject", "nullable_subject" }) |name| {
-        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale.deinit();
         try renameTargetTypeFactForFunction(&stale, name, .if_let_subject, "u32");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
     }
 
-    var stale_nullable_repr = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_nullable_repr = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_nullable_repr.deinit();
     try retargetTargetTypeResultForFunction(&stale_nullable_repr, "nullable_subject", .if_let_subject, .{ .nullable_value = "u32" });
     var stale_nullable_repr_output: std.ArrayList(u8) = .empty;
     defer stale_nullable_repr_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_nullable_repr, &stale_nullable_repr_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_nullable_repr, &stale_nullable_repr_output, .kernel, "c_if_let_subject_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c try expressions require MIR operand and result types" {
@@ -3223,46 +3223,46 @@ test "lower-c try expressions require MIR operand and result types" {
     var parsed = try test_support.parseCheckedModule("c_try_operand_type_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "result_try") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "nullable_try") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "result_direct_return") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "nullable_direct_return") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "result_try", .try_operand);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null));
 
-    var missing_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_result.deinit();
     try removeTargetTypeKindForFunction(&missing_result, "result_try", .expression_result);
     var missing_result_output: std.ArrayList(u8) = .empty;
     defer missing_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_result, &missing_result_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_result, &missing_result_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null));
 
     for ([_][]const u8{ "result_try", "nullable_try", "result_direct_return", "nullable_direct_return" }) |name| {
-        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale.deinit();
         try renameTargetTypeFactForFunction(&stale, name, .try_operand, "u32");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null));
     }
 
     for ([_][]const u8{ "result_try", "nullable_try" }) |name| {
-        var stale_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale_result.deinit();
         try renameTargetTypeFactForFunction(&stale_result, name, .expression_result, "u64");
         var stale_result_output: std.ArrayList(u8) = .empty;
         defer stale_result_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_result, &stale_result_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_result, &stale_result_output, .kernel, "c_try_operand_type_facts.mc", .{}, false, null));
     }
 }
 
@@ -3276,29 +3276,29 @@ test "lower-c for loops require MIR iterable and element types" {
     var parsed = try test_support.parseCheckedModule("c_for_loop_type_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_for_loop_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_for_loop_type_facts.mc", .{}, false, null);
     for ([_][]const u8{ "array_loop", "slice_loop", "call_loop" }) |name| {
         try std.testing.expect(std.mem.indexOf(u8, complete_output.items, name) != null);
     }
 
     for ([_]mir.TargetTypeKind{ .for_iterable, .for_element }) |kind| {
-        var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer missing.deinit();
         try removeTargetTypeKindForFunction(&missing, "array_loop", kind);
         var missing_output: std.ArrayList(u8) = .empty;
         defer missing_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_for_loop_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_for_loop_type_facts.mc", .{}, false, null));
 
-        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale.deinit();
         try renameTargetTypeFactForFunction(&stale, "array_loop", kind, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_for_loop_type_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_for_loop_type_facts.mc", .{}, false, null));
     }
 }
 
@@ -3313,26 +3313,26 @@ test "lower-c inferred local copies require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_copy_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_copy_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_copy_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t copied_value = value") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "copies", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_local_copy_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_local_copy_types.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "copies", .inferred_local, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_local_copy_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_copy_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local casts require MIR types" {
@@ -3346,43 +3346,43 @@ test "lower-c inferred local casts require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_cast_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t narrowed =") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "view =") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "casts", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "casts", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null));
 
     const cast_offset = std.mem.indexOf(u8, source, "value as u32") orelse return error.TestUnexpectedResult;
 
-    var missing_cast_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_cast_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_cast_result.deinit();
     try removeTargetTypeFactAtOffsetForFunction(&missing_cast_result, "casts", .expression_result, cast_offset, "value as u32".len);
     var missing_cast_result_output: std.ArrayList(u8) = .empty;
     defer missing_cast_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_cast_result, &missing_cast_result_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_cast_result, &missing_cast_result_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null));
 
-    var stale_cast_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_cast_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_cast_result.deinit();
     try renameTargetTypeFactAtOffsetForFunction(&stale_cast_result, "casts", .expression_result, cast_offset, "value as u32".len, "u64");
     var stale_cast_result_output: std.ArrayList(u8) = .empty;
     defer stale_cast_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_cast_result, &stale_cast_result_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_cast_result, &stale_cast_result_output, .kernel, "c_inferred_local_cast_types.mc", .{}, false, null));
 }
 
 test "lower-c float cast operands require MIR result type" {
@@ -3394,27 +3394,27 @@ test "lower-c float cast operands require MIR result type" {
     var parsed = try test_support.parseCheckedModule("c_float_cast_operand_type.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_float_cast_operand_type.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_float_cast_operand_type.mc", .{}, false, null);
 
     const cast_offset = std.mem.indexOf(u8, source, "value as f32") orelse return error.TestUnexpectedResult;
 
-    var missing_cast_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_cast_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_cast_result.deinit();
     try removeTargetTypeFactAtOffsetForFunction(&missing_cast_result, "cast_float", .expression_result, cast_offset, "value as f32".len);
     var missing_cast_result_output: std.ArrayList(u8) = .empty;
     defer missing_cast_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_cast_result, &missing_cast_result_output, .kernel, "c_float_cast_operand_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_cast_result, &missing_cast_result_output, .kernel, "c_float_cast_operand_type.mc", .{}, false, null));
 
-    var stale_cast_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_cast_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_cast_result.deinit();
     try renameTargetTypeFactAtOffsetForFunction(&stale_cast_result, "cast_float", .expression_result, cast_offset, "value as f32".len, "u32");
     var stale_cast_result_output: std.ArrayList(u8) = .empty;
     defer stale_cast_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_cast_result, &stale_cast_result_output, .kernel, "c_float_cast_operand_type.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_cast_result, &stale_cast_result_output, .kernel, "c_float_cast_operand_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local binary expressions require MIR types" {
@@ -3435,44 +3435,44 @@ test "lower-c inferred local binary expressions require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_binary_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t sum") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "bool is_less") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "bool both") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t combined") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t shifted") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "binary", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "binary", .inferred_local, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null));
 
-    var missing_bitwise = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_bitwise = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_bitwise.deinit();
     try removeTargetTypeKindForFunction(&missing_bitwise, "bitwise", .inferred_local);
     var missing_bitwise_output: std.ArrayList(u8) = .empty;
     defer missing_bitwise_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_bitwise, &missing_bitwise_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_bitwise, &missing_bitwise_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null));
 
-    var stale_bitwise = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_bitwise = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_bitwise.deinit();
     try renameTargetTypeFactForFunction(&stale_bitwise, "bitwise", .inferred_local, "u64");
     var stale_bitwise_output: std.ArrayList(u8) = .empty;
     defer stale_bitwise_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_bitwise, &stale_bitwise_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_bitwise, &stale_bitwise_output, .kernel, "c_inferred_local_binary_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local literals require MIR types" {
@@ -3487,41 +3487,41 @@ test "lower-c inferred local literals require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_literal_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t count") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "bool enabled") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "literals", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
 
-    var missing_literal_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_literal_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_literal_result.deinit();
     try removeTargetTypeKindForFunction(&missing_literal_result, "literals", .expression_result);
     var missing_literal_result_output: std.ArrayList(u8) = .empty;
     defer missing_literal_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_literal_result, &missing_literal_result_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_literal_result, &missing_literal_result_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "literals", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
 
-    var stale_literal_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_literal_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_literal_result.deinit();
     try renameTargetTypeFactForFunction(&stale_literal_result, "literals", .expression_result, "u64");
     var stale_literal_result_output: std.ArrayList(u8) = .empty;
     defer stale_literal_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_literal_result, &stale_literal_result_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_literal_result, &stale_literal_result_output, .kernel, "c_inferred_local_literal_types.mc", .{}, false, null));
 }
 
 test "lower-c sequenced comparison literals require MIR result types" {
@@ -3533,26 +3533,26 @@ test "lower-c sequenced comparison literals require MIR result types" {
     defer parsed.deinit();
     const literal_offset = std.mem.indexOf(u8, source, "7") orelse return error.TestUnexpectedResult;
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_condition_literal_result.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_condition_literal_result.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t mc_tmp") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeFactAtOffsetForFunction(&missing, "compare", .expression_result, literal_offset, 1);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_condition_literal_result.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_condition_literal_result.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactAtOffsetForFunction(&stale, "compare", .expression_result, literal_offset, 1, "bool");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_condition_literal_result.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_condition_literal_result.mc", .{}, false, null));
 }
 
 test "lower-c sequenced comparison member operands require MIR result types" {
@@ -3565,25 +3565,25 @@ test "lower-c sequenced comparison member operands require MIR result types" {
     var parsed = try test_support.parseCheckedModule("c_condition_member_result.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_condition_member_result.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_condition_member_result.mc", .{}, false, null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeFactAtOffsetForFunction(&missing, "compare", .expression_result, member_offset, member_text.len);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_condition_member_result.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_condition_member_result.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactAtOffsetForFunction(&stale, "compare", .expression_result, member_offset, member_text.len, "bool");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_condition_member_result.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_condition_member_result.mc", .{}, false, null));
 }
 
 test "lower-c boolean expressions require MIR result types" {
@@ -3595,25 +3595,25 @@ test "lower-c boolean expressions require MIR result types" {
     var parsed = try test_support.parseCheckedModule("c_boolean_expression_result.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_boolean_expression_result.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_boolean_expression_result.mc", .{}, false, null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeFactAtOffsetForFunction(&missing, "compare", .expression_result, comparison_offset, comparison_text.len);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_boolean_expression_result.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_boolean_expression_result.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactAtOffsetForFunction(&stale, "compare", .expression_result, comparison_offset, comparison_text.len, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_boolean_expression_result.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_boolean_expression_result.mc", .{}, false, null));
 }
 
 test "lower-c inferred local unary expressions require MIR types" {
@@ -3628,27 +3628,27 @@ test "lower-c inferred local unary expressions require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_unary_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_unary_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_unary_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "int64_t negated") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "bool disabled") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "unary", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_local_unary_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_local_unary_types.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "unary", .inferred_local, "i32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_local_unary_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_unary_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local direct calls require MIR types" {
@@ -3672,67 +3672,67 @@ test "lower-c inferred local direct calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_call_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t count = make_count()") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = maybe_pointer()") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_trap_InvalidRepresentation()") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "caller", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "caller", .inferred_local, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
 
     const caller_offset = std.mem.indexOf(u8, source, "fn caller") orelse return error.TestUnexpectedResult;
     const call_offset = std.mem.indexOfPos(u8, source, caller_offset, "make_count()") orelse return error.TestUnexpectedResult;
 
-    var missing_call_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_call_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_call_result.deinit();
     try removeTargetTypeFactAtOffsetForFunction(&missing_call_result, "caller", .expression_result, call_offset, "make_count()".len);
     var missing_call_result_output: std.ArrayList(u8) = .empty;
     defer missing_call_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_call_result, &missing_call_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_call_result, &missing_call_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
 
-    var stale_call_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_call_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_call_result.deinit();
     try renameTargetTypeFactAtOffsetForFunction(&stale_call_result, "caller", .expression_result, call_offset, "make_count()".len, "u32");
     var stale_call_result_output: std.ArrayList(u8) = .empty;
     defer stale_call_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_call_result, &stale_call_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_call_result, &stale_call_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
 
-    var external_stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var external_stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer external_stale.deinit();
     try renameTargetTypeFactForFunction(&external_stale, "external_caller", .inferred_local, "u64");
     var external_stale_output: std.ArrayList(u8) = .empty;
     defer external_stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &external_stale, &external_stale_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &external_stale, &external_stale_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
 
-    var missing_nullable_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_nullable_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_nullable_result.deinit();
     try removeTargetTypeKindForFunction(&missing_nullable_result, "nullable_caller", .direct_call_result);
     var missing_nullable_result_output: std.ArrayList(u8) = .empty;
     defer missing_nullable_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_nullable_result, &missing_nullable_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_nullable_result, &missing_nullable_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
 
-    var stale_nullable_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_nullable_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_nullable_result.deinit();
     try renameTargetTypeFactForFunction(&stale_nullable_result, "nullable_caller", .direct_call_result, "u64");
     var stale_nullable_result_output: std.ArrayList(u8) = .empty;
     defer stale_nullable_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_nullable_result, &stale_nullable_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_nullable_result, &stale_nullable_result_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local array and slice calls require MIR types" {
@@ -3754,77 +3754,77 @@ test "lower-c inferred local array and slice calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_array_slice_call_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_array_u32_2 values = make_array()") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_slice_const_u32 values = make_slice()") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "direct_slice_index") != null);
 
-    var missing_array = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_array = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_array.deinit();
     try removeTargetTypeKindForFunction(&missing_array, "array_caller", .inferred_local);
     var missing_array_output: std.ArrayList(u8) = .empty;
     defer missing_array_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_array, &missing_array_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_array, &missing_array_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
-    var missing_array_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_array_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_array_result.deinit();
     try removeTargetTypeKindForFunction(&missing_array_result, "array_caller", .direct_call_result);
     var missing_array_result_output: std.ArrayList(u8) = .empty;
     defer missing_array_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_array_result, &missing_array_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_array_result, &missing_array_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
-    var stale_array = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_array = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_array.deinit();
     try renameTargetTypeFactForFunction(&stale_array, "array_caller", .inferred_local, "u64");
     var stale_array_output: std.ArrayList(u8) = .empty;
     defer stale_array_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_array, &stale_array_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_array, &stale_array_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
-    var stale_array_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_array_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_array_result.deinit();
     try renameTargetTypeFactForFunction(&stale_array_result, "array_caller", .direct_call_result, "u64");
     var stale_array_result_output: std.ArrayList(u8) = .empty;
     defer stale_array_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_array_result, &stale_array_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_array_result, &stale_array_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
-    var missing_slice_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_slice_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_slice_result.deinit();
     try removeTargetTypeKindForFunction(&missing_slice_result, "slice_caller", .direct_call_result);
     var missing_slice_result_output: std.ArrayList(u8) = .empty;
     defer missing_slice_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_slice_result, &missing_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_slice_result, &missing_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
-    var stale_slice = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_slice = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_slice.deinit();
     try renameTargetTypeFactForFunction(&stale_slice, "slice_caller", .inferred_local, "u64");
     var stale_slice_output: std.ArrayList(u8) = .empty;
     defer stale_slice_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_slice, &stale_slice_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_slice, &stale_slice_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
-    var stale_slice_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_slice_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_slice_result.deinit();
     try renameTargetTypeFactForFunction(&stale_slice_result, "slice_caller", .direct_call_result, "u64");
     var stale_slice_result_output: std.ArrayList(u8) = .empty;
     defer stale_slice_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_slice_result, &stale_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_slice_result, &stale_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
-    var missing_direct_slice_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_direct_slice_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_direct_slice_result.deinit();
     try removeTargetTypeKindForFunction(&missing_direct_slice_result, "direct_slice_index", .direct_call_result);
     var missing_direct_slice_result_output: std.ArrayList(u8) = .empty;
     defer missing_direct_slice_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_direct_slice_result, &missing_direct_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_direct_slice_result, &missing_direct_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 
-    var stale_direct_slice_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_direct_slice_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_direct_slice_result.deinit();
     try renameTargetTypeFactForFunction(&stale_direct_slice_result, "direct_slice_index", .direct_call_result, "u64");
     var stale_direct_slice_result_output: std.ArrayList(u8) = .empty;
     defer stale_direct_slice_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_direct_slice_result, &stale_direct_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_direct_slice_result, &stale_direct_slice_result_output, .kernel, "c_inferred_local_array_slice_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local enum and tagged-union calls require MIR types" {
@@ -3845,41 +3845,41 @@ test "lower-c inferred local enum and tagged-union calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_enum_union_call_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "Mode mode = make_mode()") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "Token token = make_token()") != null);
 
-    var missing_enum_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_enum_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_enum_result.deinit();
     try removeTargetTypeKindForFunction(&missing_enum_result, "enum_caller", .direct_call_result);
     var missing_enum_result_output: std.ArrayList(u8) = .empty;
     defer missing_enum_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_enum_result, &missing_enum_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_enum_result, &missing_enum_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
 
-    var stale_enum_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_enum_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_enum_result.deinit();
     try renameTargetTypeFactForFunction(&stale_enum_result, "enum_caller", .direct_call_result, "u64");
     var stale_enum_result_output: std.ArrayList(u8) = .empty;
     defer stale_enum_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_enum_result, &stale_enum_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_enum_result, &stale_enum_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
 
-    var missing_union_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_union_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_union_result.deinit();
     try removeTargetTypeKindForFunction(&missing_union_result, "union_caller", .direct_call_result);
     var missing_union_result_output: std.ArrayList(u8) = .empty;
     defer missing_union_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_union_result, &missing_union_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_union_result, &missing_union_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
 
-    var stale_union_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_union_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_union_result.deinit();
     try renameTargetTypeFactForFunction(&stale_union_result, "union_caller", .direct_call_result, "u64");
     var stale_union_result_output: std.ArrayList(u8) = .empty;
     defer stale_union_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_union_result, &stale_union_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_union_result, &stale_union_result_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local Result direct calls require MIR types" {
@@ -3897,26 +3897,26 @@ test "lower-c inferred local Result direct calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_result_call_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_result_call_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_result_call_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "result = make_result()") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "caller", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_local_result_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_local_result_call_types.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "caller", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_local_result_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_result_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local indirect calls require MIR types" {
@@ -3929,26 +3929,26 @@ test "lower-c inferred local indirect calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_indirect_call_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_indirect_call_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_indirect_call_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t result") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "caller", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_local_indirect_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_local_indirect_call_types.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "caller", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_local_indirect_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_indirect_call_types.mc", .{}, false, null));
 }
 
 test "lower-c inferred local atomic and MaybeUninit calls require MIR types" {
@@ -3972,29 +3972,29 @@ test "lower-c inferred local atomic and MaybeUninit calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_builtin_inferred_local_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_builtin_inferred_local_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_builtin_inferred_local_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t previous") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t loaded") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "Node value") != null);
 
     for ([_][]const u8{ "atomic_inferred_locals", "maybe_uninit_inferred_local" }) |name| {
-        var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer missing.deinit();
         try removeTargetTypeKindForFunction(&missing, name, .inferred_local);
         var missing_output: std.ArrayList(u8) = .empty;
         defer missing_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_builtin_inferred_local_types.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_builtin_inferred_local_types.mc", .{}, false, null));
 
-        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale.deinit();
         try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_builtin_inferred_local_types.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_builtin_inferred_local_types.mc", .{}, false, null));
     }
 }
 
@@ -4008,26 +4008,26 @@ test "lower-c inferred local phys calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_phys_local_type.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_phys_local_type.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_phys_local_type.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uintptr_t address = ((uintptr_t)(value))") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "inferred_phys", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_phys_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_phys_local_type.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "inferred_phys", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_phys_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_phys_local_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local bitcast calls require MIR types" {
@@ -4040,26 +4040,26 @@ test "lower-c inferred local bitcast calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_bitcast_local_type.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_bitcast_local_type.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_bitcast_local_type.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t bits") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "inferred_bitcast", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_bitcast_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_bitcast_local_type.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "inferred_bitcast", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_bitcast_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_bitcast_local_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local byte-view calls require MIR types" {
@@ -4078,28 +4078,28 @@ test "lower-c inferred local byte-view calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_byte_view_local_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_byte_view_local_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_byte_view_local_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_slice_const_u8 bytes") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "bool equal") != null);
 
     for ([_][]const u8{ "inferred_byte_view", "inferred_byte_equal" }) |name| {
-        var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer missing.deinit();
         try removeTargetTypeKindForFunction(&missing, name, .inferred_local);
         var missing_output: std.ArrayList(u8) = .empty;
         defer missing_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_byte_view_local_types.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_byte_view_local_types.mc", .{}, false, null));
 
-        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale.deinit();
         try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_byte_view_local_types.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_byte_view_local_types.mc", .{}, false, null));
     }
 }
 
@@ -4114,26 +4114,26 @@ test "lower-c inferred local enum raw calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_enum_raw_local_type.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_enum_raw_local_type.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_enum_raw_local_type.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t raw") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "inferred_enum_raw", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_enum_raw_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_enum_raw_local_type.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "inferred_enum_raw", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_enum_raw_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_enum_raw_local_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local conversion calls require MIR types" {
@@ -4146,26 +4146,26 @@ test "lower-c inferred local conversion calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_conversion_local_type.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_conversion_local_type.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_conversion_local_type.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint8_t narrowed") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "inferred_conversion", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_conversion_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_conversion_local_type.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "inferred_conversion", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_conversion_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_conversion_local_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local reflection calls require MIR types" {
@@ -4178,25 +4178,25 @@ test "lower-c inferred local reflection calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_reflection_local_type.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_reflection_local_type.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_reflection_local_type.mc", .{}, false, null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "inferred_reflection", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_reflection_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_reflection_local_type.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "inferred_reflection", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_reflection_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_reflection_local_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local semantic escape calls require MIR types" {
@@ -4212,26 +4212,26 @@ test "lower-c inferred local semantic escape calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_semantic_escape_local_type.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_semantic_escape_local_type.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_semantic_escape_local_type.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint8_t * alias") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "inferred_noalias", .inferred_local);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_semantic_escape_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_semantic_escape_local_type.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "inferred_noalias", .inferred_local, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_semantic_escape_local_type.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_semantic_escape_local_type.mc", .{}, false, null));
 }
 
 test "lower-c inferred local raw result calls require MIR types" {
@@ -4253,28 +4253,28 @@ test "lower-c inferred local raw result calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_raw_local_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_raw_local_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_raw_local_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t value") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "pointer") != null);
 
     for ([_][]const u8{ "inferred_raw_load", "inferred_raw_ptr" }) |name| {
-        var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer missing.deinit();
         try removeTargetTypeKindForFunction(&missing, name, .inferred_local);
         var missing_output: std.ArrayList(u8) = .empty;
         defer missing_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_raw_local_types.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_raw_local_types.mc", .{}, false, null));
 
-        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale.deinit();
         try renameTargetTypeFactForFunction(&stale, name, .inferred_local, "u64");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_raw_local_types.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_raw_local_types.mc", .{}, false, null));
     }
 }
 
@@ -4292,40 +4292,40 @@ test "lower-c inferred local dyn dispatch calls require MIR types" {
     var parsed = try test_support.parseCheckedModule("c_inferred_local_dyn_dispatch_call_types.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t result") != null);
 
-    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
     try removeTargetTypeKindForFunction(&missing, "caller", .dyn_dispatch_result);
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &missing_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &missing_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
 
-    var missing_argument = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_argument = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_argument.deinit();
     try removeTargetTypeKindForFunction(&missing_argument, "caller", .dyn_dispatch_argument);
     var missing_argument_output: std.ArrayList(u8) = .empty;
     defer missing_argument_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_argument, &missing_argument_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_argument, &missing_argument_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "caller", .dyn_dispatch_result, "u64");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
 
-    var stale_argument = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_argument = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_argument.deinit();
     try renameTargetTypeFactForFunction(&stale_argument, "caller", .dyn_dispatch_argument, "u64");
     var stale_argument_output: std.ArrayList(u8) = .empty;
     defer stale_argument_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale_argument, &stale_argument_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_argument, &stale_argument_output, .kernel, "c_inferred_local_dyn_dispatch_call_types.mc", .{}, false, null));
 }
 
 test "lower-c ordinary direct calls require MIR result and argument types" {
@@ -4336,33 +4336,33 @@ test "lower-c ordinary direct calls require MIR result and argument types" {
     var parsed = try test_support.parseCheckedModule("c_direct_call_type_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_direct_call_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_direct_call_type_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "widen(") != null);
 
-    var missing_result = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_result.deinit();
     try removeTargetTypeKindForFunction(&missing_result, "caller", .direct_call_result);
     var missing_result_output: std.ArrayList(u8) = .empty;
     defer missing_result_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_result, &missing_result_output, .kernel, "c_direct_call_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_result, &missing_result_output, .kernel, "c_direct_call_type_facts.mc", .{}, false, null));
 
-    var missing_argument = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var missing_argument = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_argument.deinit();
     try removeTargetTypeKindForFunction(&missing_argument, "caller", .direct_call_argument);
     var missing_argument_output: std.ArrayList(u8) = .empty;
     defer missing_argument_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing_argument, &missing_argument_output, .kernel, "c_direct_call_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_argument, &missing_argument_output, .kernel, "c_direct_call_type_facts.mc", .{}, false, null));
 
-    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale.deinit();
     try renameTargetTypeFactForFunction(&stale, "caller", .direct_call_argument, "u32");
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_direct_call_type_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_direct_call_type_facts.mc", .{}, false, null));
 }
 
 test "lower-c indirect calls require MIR callee signature facts" {
@@ -4374,27 +4374,27 @@ test "lower-c indirect calls require MIR callee signature facts" {
     var parsed = try test_support.parseCheckedModule("c_indirect_call_signature_facts.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &complete, &complete_output, .kernel, "c_indirect_call_signature_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_indirect_call_signature_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "callback(") != null);
 
     for ([_][]const u8{ "invoke_pointer", "invoke_closure" }) |name| {
-        var missing = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer missing.deinit();
         try removeTargetTypeKindForFunction(&missing, name, .indirect_call_callee);
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &missing, &output, .kernel, "c_indirect_call_signature_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing, &output, .kernel, "c_indirect_call_signature_facts.mc", .{}, false, null));
 
-        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+        var stale = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
         defer stale.deinit();
         try renameTargetTypeFactForFunction(&stale, name, .indirect_call_callee, "u32");
         var stale_output: std.ArrayList(u8) = .empty;
         defer stale_output.deinit(std.testing.allocator);
-        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &stale, &stale_output, .kernel, "c_indirect_call_signature_facts.mc", .{}, false, null));
+        try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_indirect_call_signature_facts.mc", .{}, false, null));
     }
 }
 
@@ -4407,14 +4407,14 @@ test "lower-c rejects prebuilt MIR with missing cpu pause call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_cpu_pause_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "cpu_pause_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_cpu_pause_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_cpu_pause_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -4429,14 +4429,14 @@ test "lower-c rejects prebuilt MIR with missing fence call target facts" {
 
     var parsed = try test_support.parseCheckedModule("c_missing_fence_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearCallTargetFactsForFunction(&module_mir, "fence_call_target_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirCallTargetFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_missing_fence_call_target_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_missing_fence_call_target_facts.mc", .{}, false, null),
     );
 }
 
@@ -4448,12 +4448,12 @@ test "lower-c rejects prebuilt MIR with stale call target facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_stale_call_target_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try retargetCallTargetFactsForFunction(&module_mir, "call_target_fact_gate", .const_get);
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_stale_call_target_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirCallTargetFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_stale_call_target_facts.mc", .{}, false, null));
 }
 
 test "lower-c rejects prebuilt MIR with stale integer facts" {
@@ -4466,14 +4466,14 @@ test "lower-c rejects prebuilt MIR with stale integer facts" {
 
     var parsed = try test_support.parseCheckedModule("c_stale_integer_facts.mc", source);
     defer parsed.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try retargetIntegerFactsForFunction(&module_mir, "integer_fact_gate", .{ .integer = "u16" });
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try std.testing.expectError(
         error.InvalidMirIntegerFacts,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_stale_integer_facts.mc", .{}, false, null),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_stale_integer_facts.mc", .{}, false, null),
     );
 }
 
@@ -4481,43 +4481,43 @@ fn appendCheckedCTestWithRetargetedRangeFacts(source_name: []const u8, source: [
     var parsed = try test_support.parseCheckedModule(source_name, source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try retargetRangeFactsForFunction(&module_mir, function_name, target);
 
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, output, .kernel, source_name, .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, output, .kernel, source_name, .{}, false, null);
 }
 
 fn appendCheckedCTestWithoutPointerProvenanceFactsForSubject(source_name: []const u8, source: []const u8, function_name: []const u8, subject: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseCheckedModule(source_name, source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearPointerProvenanceFactsForFunctionSubject(&module_mir, function_name, subject);
 
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, output, .kernel, source_name, .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, output, .kernel, source_name, .{}, false, null);
 }
 
 fn appendCheckedCTestWithoutPointerProvenanceFactsForSubjectField(source_name: []const u8, source: []const u8, function_name: []const u8, subject: []const u8, field_path: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseCheckedModule(source_name, source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearPointerProvenanceFactsForFunctionSubjectField(&module_mir, function_name, subject, field_path);
 
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, output, .kernel, source_name, .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, output, .kernel, source_name, .{}, false, null);
 }
 
 fn appendCheckedCTestWithoutAggregateReturnPointerFact(source_name: []const u8, source: []const u8, callee: []const u8, field_path: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseCheckedModule(source_name, source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     try clearAggregateReturnPointerFact(&module_mir, callee, field_path);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, output, .kernel, source_name, .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, output, .kernel, source_name, .{}, false, null);
 }
 
 fn expectUnsupportedCheckedCEmission(source_name: []const u8, source: []const u8) !void {
@@ -4526,14 +4526,14 @@ fn expectUnsupportedCheckedCEmission(source_name: []const u8, source: []const u8
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCDeclsTest(std.testing.allocator, parsed.module.decls, &output));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCDeclsTest(std.testing.allocator, parsed.decls(), &output));
 }
 
 fn expectUnsupportedCheckedCEmissionDiagnostic(source_name: []const u8, source: []const u8, expected_construct: []const u8) !void {
     var parsed = try test_support.parseCheckedModule(source_name, source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{});
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
     var reporter = diagnostics.Reporter.init(std.testing.allocator, source_name, source);
     defer reporter.deinit();
@@ -4542,7 +4542,7 @@ fn expectUnsupportedCheckedCEmissionDiagnostic(source_name: []const u8, source: 
 
     try std.testing.expectError(
         error.UnsupportedCEmission,
-        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, source_name, .{}, false, &reporter),
+        appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, source_name, .{}, false, &reporter),
     );
     try std.testing.expect(reporter.has_errors);
     try std.testing.expectEqual(@as(usize, 1), reporter.diagnostics.items.len);
@@ -6179,7 +6179,7 @@ fn expectUnsupportedCEmission(source_name: []const u8, source: []const u8, outpu
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();
 
-    try std.testing.expectError(error.UnsupportedCEmission, appendCDeclsTest(std.testing.allocator, parsed.module.decls, output));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCDeclsTest(std.testing.allocator, parsed.decls(), output));
 }
 
 fn hasTestDiagnosticCode(reporter: diagnostics.Reporter, code: []const u8) bool {
@@ -6250,7 +6250,7 @@ test "C bitcast query accepts only the real builtin call shape" {
     var parsed = try test_support.parseModule("c_bitcast_grouped_call_callee.mc", source);
     defer parsed.deinit();
 
-    const probe_fn = parsed.module.decls[0].kind.fn_decl;
+    const probe_fn = parsed.decls()[0].kind.fn_decl;
     const probe_ret = probe_fn.body.?.items[0].kind.@"return".?;
     const outer_call = probe_ret.kind.call;
     try std.testing.expect(!lower_c_expr.isBitcastCall(outer_call));
@@ -6259,15 +6259,15 @@ test "C bitcast query accepts only the real builtin call shape" {
     const inner_call = grouped_callee.kind.call;
     try std.testing.expect(lower_c_expr.isBitcastCall(inner_call));
 
-    const missing_value_fn = parsed.module.decls[1].kind.fn_decl;
+    const missing_value_fn = parsed.decls()[1].kind.fn_decl;
     const missing_value_ret = missing_value_fn.body.?.items[0].kind.@"return".?;
     try std.testing.expect(!lower_c_expr.isBitcastCall(missing_value_ret.kind.call));
 
-    const missing_type_fn = parsed.module.decls[2].kind.fn_decl;
+    const missing_type_fn = parsed.decls()[2].kind.fn_decl;
     const missing_type_ret = missing_type_fn.body.?.items[0].kind.@"return".?;
     try std.testing.expect(!lower_c_expr.isBitcastCall(missing_type_ret.kind.call));
 
-    const valid_fn = parsed.module.decls[3].kind.fn_decl;
+    const valid_fn = parsed.decls()[3].kind.fn_decl;
     const valid_ret = valid_fn.body.?.items[0].kind.@"return".?;
     try std.testing.expect(lower_c_expr.isBitcastCall(valid_ret.kind.call));
 }
@@ -6455,18 +6455,18 @@ test "lower-c reuses prebuilt verified MIR without changing output" {
 
     var rebuilt_output: std.ArrayList(u8) = .empty;
     defer rebuilt_output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.module.decls, &rebuilt_output, .kernel, "c_prebuilt_mir.mc", .{ .optimize = true }, false);
+    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.decls(), &rebuilt_output, .kernel, "c_prebuilt_mir.mc", .{ .optimize = true }, false);
 
     var reporter = diagnostics.Reporter.init(std.testing.allocator, "c_prebuilt_mir.mc", source);
     defer reporter.deinit();
-    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.module.decls, .{ .optimize = true });
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{ .optimize = true });
     defer module_mir.deinit();
     try mir.verifyBuiltMir(module_mir, &reporter);
     try std.testing.expect(!reporter.has_errors);
 
     var prebuilt_output: std.ArrayList(u8) = .empty;
     defer prebuilt_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &prebuilt_output, .kernel, "c_prebuilt_mir.mc", .{ .optimize = true }, false, &reporter);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &prebuilt_output, .kernel, "c_prebuilt_mir.mc", .{ .optimize = true }, false, &reporter);
 
     try std.testing.expectEqualSlices(u8, rebuilt_output.items, prebuilt_output.items);
 }
@@ -10089,7 +10089,7 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCDeclsTest(std.testing.allocator, parsed.module.decls, &output);
+    try appendCDeclsTest(std.testing.allocator, parsed.decls(), &output);
 
     try expectContains(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_load subject=gp provenance=global_storage reason=none source=");
     try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(gp));");
@@ -10195,7 +10195,7 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
 
     var mir_dump: std.ArrayList(u8) = .empty;
     defer mir_dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, parsed.module.decls, &mir_dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, parsed.decls(), &mir_dump);
     try expectCCommentSourceMatchesMirFact(
         output.items,
         mir_dump.items,
@@ -10205,7 +10205,7 @@ test "lower-c consumes MIR pointer provenance facts for direct scalar pointer de
 
     var llvm_output: std.ArrayList(u8) = .empty;
     defer llvm_output.deinit(std.testing.allocator);
-    try appendLlvmDeclsTest(std.testing.allocator, parsed.module.decls, &llvm_output);
+    try appendLlvmDeclsTest(std.testing.allocator, parsed.decls(), &llvm_output);
     const c_source = try commentSourceText(output.items, "/* mir pointer_provenance consumed fn=pointer_fact_global_load subject=gp provenance=global_storage reason=none source=");
     const llvm_comment = try std.fmt.allocPrint(
         std.testing.allocator,
@@ -10734,7 +10734,7 @@ test "lower-c consumes MIR pointer provenance facts for fixed pointer-array elem
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCDeclsTest(std.testing.allocator, parsed.module.decls, &output);
+    try appendCDeclsTest(std.testing.allocator, parsed.decls(), &output);
 
     const global_body = try cFunctionBody(output.items, "static uint32_t c_array_global_pointer_element_load(void)");
     try expectContains(global_body, "/* mir pointer_provenance consumed fn=c_array_global_pointer_element_load subject=ptrs element=0 provenance=global_storage reason=none source=");
@@ -10772,7 +10772,7 @@ test "lower-c consumes MIR pointer provenance facts for fixed pointer-array elem
 
     var mir_dump: std.ArrayList(u8) = .empty;
     defer mir_dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, parsed.module.decls, &mir_dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, parsed.decls(), &mir_dump);
     try expectCCommentSourceMatchesMirFact(
         output.items,
         mir_dump.items,
@@ -10782,7 +10782,7 @@ test "lower-c consumes MIR pointer provenance facts for fixed pointer-array elem
 
     var llvm_output: std.ArrayList(u8) = .empty;
     defer llvm_output.deinit(std.testing.allocator);
-    try appendLlvmDeclsTest(std.testing.allocator, parsed.module.decls, &llvm_output);
+    try appendLlvmDeclsTest(std.testing.allocator, parsed.decls(), &llvm_output);
     const c_source = try commentSourceText(output.items, "/* mir pointer_provenance consumed fn=c_array_global_pointer_element_load subject=ptrs element=0 provenance=global_storage reason=none source=");
     const llvm_comment = try std.fmt.allocPrint(
         std.testing.allocator,
@@ -11136,7 +11136,7 @@ test "lower-c consumes MIR pointer provenance facts for aggregate pointer reads"
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCDeclsTest(std.testing.allocator, parsed.module.decls, &output);
+    try appendCDeclsTest(std.testing.allocator, parsed.decls(), &output);
 
     const field_body = try cFunctionBody(output.items, "static uint32_t c_aggregate_pointer_field_load(void)");
     try expectContains(field_body, "/* mir pointer_provenance consumed fn=c_aggregate_pointer_field_load subject=p provenance=global_storage reason=none source=");
@@ -11229,7 +11229,7 @@ test "lower-c consumes MIR pointer provenance facts for aggregate pointer reads"
 
     var mir_dump: std.ArrayList(u8) = .empty;
     defer mir_dump.deinit(std.testing.allocator);
-    try mir.appendDumpFromDecls(std.testing.allocator, parsed.module.decls, &mir_dump);
+    try mir.appendDumpFromDecls(std.testing.allocator, parsed.decls(), &mir_dump);
     try expectCCommentSourceMatchesMirFact(
         output.items,
         mir_dump.items,
@@ -13727,7 +13727,7 @@ test "lower-c deferred drop release requires source-matched MIR explicit-drop ev
     var parsed = try test_support.parseModule("emit_c_drop_attr_defer_source_requires_event.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = for (module_mir.functions) |*candidate| {
         if (std.mem.eql(u8, candidate.name, "accept_deferred_resource_release")) break candidate;
@@ -13742,7 +13742,7 @@ test "lower-c deferred drop release requires source-matched MIR explicit-drop ev
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_drop_attr_defer_source_requires_event.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_drop_attr_defer_source_requires_event.mc", .{}, false, null));
 }
 
 test "lower-c ordinary defer requires source-matched MIR cleanup marker" {
@@ -13756,7 +13756,7 @@ test "lower-c ordinary defer requires source-matched MIR cleanup marker" {
     var parsed = try test_support.parseModule("emit_c_ordinary_defer_requires_marker.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = for (module_mir.functions) |*candidate| {
         if (std.mem.eql(u8, candidate.name, "ordinary_defer_marker")) break candidate;
@@ -13774,7 +13774,7 @@ test "lower-c ordinary defer requires source-matched MIR cleanup marker" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_requires_marker.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_requires_marker.mc", .{}, false, null));
 }
 
 test "lower-c ordinary defer rejects unsupported expression fallback" {
@@ -13787,13 +13787,13 @@ test "lower-c ordinary defer rejects unsupported expression fallback" {
     var parsed = try test_support.parseModule("emit_c_ordinary_defer_expression_fallback.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try mir.validateLoweringAdmission(module_mir);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_expression_fallback.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_expression_fallback.mc", .{}, false, null));
 }
 
 test "lower-c ordinary direct defer requires MIR call marker" {
@@ -13807,7 +13807,7 @@ test "lower-c ordinary direct defer requires MIR call marker" {
     var parsed = try test_support.parseModule("emit_c_ordinary_defer_requires_call_marker.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = for (module_mir.functions) |*candidate| {
         if (std.mem.eql(u8, candidate.name, "ordinary_defer_call_marker")) break candidate;
@@ -13825,7 +13825,7 @@ test "lower-c ordinary direct defer requires MIR call marker" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_requires_call_marker.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_requires_call_marker.mc", .{}, false, null));
 }
 
 test "lower-c ordinary direct defer with arguments requires MIR call marker" {
@@ -13839,7 +13839,7 @@ test "lower-c ordinary direct defer with arguments requires MIR call marker" {
     var parsed = try test_support.parseModule("emit_c_ordinary_defer_arg_requires_call_marker.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = for (module_mir.functions) |*candidate| {
         if (std.mem.eql(u8, candidate.name, "ordinary_defer_arg_call_marker")) break candidate;
@@ -13857,7 +13857,7 @@ test "lower-c ordinary direct defer with arguments requires MIR call marker" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_arg_requires_call_marker.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_arg_requires_call_marker.mc", .{}, false, null));
 }
 
 test "lower-c ordinary direct defer with arguments requires MIR argument facts" {
@@ -13871,7 +13871,7 @@ test "lower-c ordinary direct defer with arguments requires MIR argument facts" 
     var parsed = try test_support.parseModule("emit_c_ordinary_defer_arg_requires_fact.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = for (module_mir.functions) |*candidate| {
         if (std.mem.eql(u8, candidate.name, "ordinary_defer_arg_fact")) break candidate;
@@ -13895,7 +13895,7 @@ test "lower-c ordinary direct defer with arguments requires MIR argument facts" 
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_arg_requires_fact.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_arg_requires_fact.mc", .{}, false, null));
 }
 
 test "lower-c ordinary direct defer with discarded result requires MIR result fact" {
@@ -13909,7 +13909,7 @@ test "lower-c ordinary direct defer with discarded result requires MIR result fa
     var parsed = try test_support.parseModule("emit_c_ordinary_defer_result_requires_fact.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = for (module_mir.functions) |*candidate| {
         if (std.mem.eql(u8, candidate.name, "ordinary_defer_result_fact")) break candidate;
@@ -13917,7 +13917,7 @@ test "lower-c ordinary direct defer with discarded result requires MIR result fa
     _ = function;
     try mir.validateLoweringAdmission(module_mir);
     var drifted_callee_span = false;
-    for (parsed.module.decls) |*decl| switch (decl.kind) {
+    for (parsed.decls()) |*decl| switch (decl.kind) {
         .fn_decl => |*fn_decl| {
             if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_result_fact")) continue;
             const body = fn_decl.body orelse return error.TestUnexpectedResult;
@@ -13938,7 +13938,7 @@ test "lower-c ordinary direct defer with discarded result requires MIR result fa
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_result_requires_fact.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_result_requires_fact.mc", .{}, false, null));
 }
 
 test "lower-c ordinary direct defer may discard call result" {
@@ -13954,7 +13954,7 @@ test "lower-c ordinary direct defer may discard call result" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.module.decls, &output, .kernel, "emit_c_ordinary_defer_discard_result.mc", .{}, false);
+    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.decls(), &output, .kernel, "emit_c_ordinary_defer_discard_result.mc", .{}, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "record") != null);
 }
@@ -13969,11 +13969,11 @@ test "lower-c ordinary call-target defer requires MIR call-target fact" {
     var parsed = try test_support.parseModule("emit_c_ordinary_defer_call_target_requires_fact.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try mir.validateLoweringAdmission(module_mir);
     var drifted_callee_span = false;
-    for (parsed.module.decls) |*decl| switch (decl.kind) {
+    for (parsed.decls()) |*decl| switch (decl.kind) {
         .fn_decl => |*fn_decl| {
             if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_call_target_fact")) continue;
             const body = fn_decl.body orelse return error.TestUnexpectedResult;
@@ -13994,7 +13994,7 @@ test "lower-c ordinary call-target defer requires MIR call-target fact" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_call_target_requires_fact.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_call_target_requires_fact.mc", .{}, false, null));
 }
 
 test "lower-c ordinary call-target defer emits typed cleanup" {
@@ -14009,7 +14009,7 @@ test "lower-c ordinary call-target defer emits typed cleanup" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.module.decls, &output, .kernel, "emit_c_ordinary_defer_call_target_cleanup.mc", .{}, false);
+    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.decls(), &output, .kernel, "emit_c_ordinary_defer_call_target_cleanup.mc", .{}, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();") != null);
 }
@@ -14026,11 +14026,11 @@ test "lower-c ordinary raw-store defer requires MIR target facts" {
     var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_raw_store_requires_fact.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try mir.validateLoweringAdmission(module_mir);
     var drifted_call_span = false;
-    for (parsed.module.decls) |*decl| switch (decl.kind) {
+    for (parsed.decls()) |*decl| switch (decl.kind) {
         .fn_decl => |*fn_decl| {
             if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_raw_store_fact")) continue;
             const body = fn_decl.body orelse return error.TestUnexpectedResult;
@@ -14053,7 +14053,7 @@ test "lower-c ordinary raw-store defer requires MIR target facts" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_raw_store_requires_fact.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_raw_store_requires_fact.mc", .{}, false, null));
 }
 
 test "lower-c ordinary raw-store defer emits typed cleanup" {
@@ -14070,7 +14070,7 @@ test "lower-c ordinary raw-store defer emits typed cleanup" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.module.decls, &output, .kernel, "emit_c_ordinary_defer_raw_store_cleanup.mc", .{}, false);
+    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.decls(), &output, .kernel, "emit_c_ordinary_defer_raw_store_cleanup.mc", .{}, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_raw_store_u32") != null);
 }
@@ -14088,11 +14088,11 @@ test "lower-c ordinary MMIO write defer requires MIR call-target facts" {
     var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_mmio_write_requires_fact.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try mir.validateLoweringAdmission(module_mir);
     var drifted_defer_span = false;
-    for (parsed.module.decls) |*decl| switch (decl.kind) {
+    for (parsed.decls()) |*decl| switch (decl.kind) {
         .fn_decl => |*fn_decl| {
             if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_mmio_write_fact")) continue;
             const body = fn_decl.body orelse return error.TestUnexpectedResult;
@@ -14110,7 +14110,7 @@ test "lower-c ordinary MMIO write defer requires MIR call-target facts" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_mmio_write_requires_fact.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_mmio_write_requires_fact.mc", .{}, false, null));
 }
 
 test "lower-c ordinary MMIO write defer emits typed cleanup" {
@@ -14128,7 +14128,7 @@ test "lower-c ordinary MMIO write defer emits typed cleanup" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.module.decls, &output, .kernel, "emit_c_ordinary_defer_mmio_write_cleanup.mc", .{}, false);
+    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.decls(), &output, .kernel, "emit_c_ordinary_defer_mmio_write_cleanup.mc", .{}, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_write_u32(&dev->raw") != null);
@@ -14147,11 +14147,11 @@ test "lower-c ordinary MMIO read defer requires MIR call-target facts" {
     var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_mmio_read_requires_fact.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try mir.validateLoweringAdmission(module_mir);
     var drifted_defer_span = false;
-    for (parsed.module.decls) |*decl| switch (decl.kind) {
+    for (parsed.decls()) |*decl| switch (decl.kind) {
         .fn_decl => |*fn_decl| {
             if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_mmio_read_fact")) continue;
             const body = fn_decl.body orelse return error.TestUnexpectedResult;
@@ -14169,7 +14169,7 @@ test "lower-c ordinary MMIO read defer requires MIR call-target facts" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_mmio_read_requires_fact.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_mmio_read_requires_fact.mc", .{}, false, null));
 }
 
 test "lower-c ordinary MMIO read defer emits typed cleanup" {
@@ -14187,7 +14187,7 @@ test "lower-c ordinary MMIO read defer emits typed cleanup" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.module.decls, &output, .kernel, "emit_c_ordinary_defer_mmio_read_cleanup.mc", .{}, false);
+    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.decls(), &output, .kernel, "emit_c_ordinary_defer_mmio_read_cleanup.mc", .{}, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_mmio_read_u32(&dev->raw);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after();") != null);
@@ -14205,11 +14205,11 @@ test "lower-c ordinary DMA cache defer requires MIR call-target facts" {
     var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_dma_cache_requires_fact.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try mir.validateLoweringAdmission(module_mir);
     var drifted_defer_span = false;
-    for (parsed.module.decls) |*decl| switch (decl.kind) {
+    for (parsed.decls()) |*decl| switch (decl.kind) {
         .fn_decl => |*fn_decl| {
             if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_dma_cache_fact")) continue;
             const body = fn_decl.body orelse return error.TestUnexpectedResult;
@@ -14227,7 +14227,7 @@ test "lower-c ordinary DMA cache defer requires MIR call-target facts" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_dma_cache_requires_fact.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_dma_cache_requires_fact.mc", .{}, false, null));
 }
 
 test "lower-c ordinary DMA cache defer emits typed cleanup" {
@@ -14245,7 +14245,7 @@ test "lower-c ordinary DMA cache defer emits typed cleanup" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.module.decls, &output, .kernel, "emit_c_ordinary_defer_dma_cache_cleanup.mc", .{}, false);
+    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.decls(), &output, .kernel, "emit_c_ordinary_defer_dma_cache_cleanup.mc", .{}, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_release_before") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_barrier_acquire_after") != null);
@@ -14263,11 +14263,11 @@ test "lower-c ordinary MaybeUninit write defer requires MIR call-target facts" {
     var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_maybe_uninit_write_requires_fact.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try mir.validateLoweringAdmission(module_mir);
     var drifted_defer_span = false;
-    for (parsed.module.decls) |*decl| switch (decl.kind) {
+    for (parsed.decls()) |*decl| switch (decl.kind) {
         .fn_decl => |*fn_decl| {
             if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_maybe_uninit_write_fact")) continue;
             const body = fn_decl.body orelse return error.TestUnexpectedResult;
@@ -14285,7 +14285,7 @@ test "lower-c ordinary MaybeUninit write defer requires MIR call-target facts" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_maybe_uninit_write_requires_fact.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_maybe_uninit_write_requires_fact.mc", .{}, false, null));
 }
 
 test "lower-c ordinary MaybeUninit write defer emits typed cleanup" {
@@ -14302,7 +14302,7 @@ test "lower-c ordinary MaybeUninit write defer emits typed cleanup" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.module.decls, &output, .kernel, "emit_c_ordinary_defer_maybe_uninit_write_cleanup.mc", .{}, false);
+    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.decls(), &output, .kernel, "emit_c_ordinary_defer_maybe_uninit_write_cleanup.mc", .{}, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "slot = value;") != null);
 }
@@ -14318,11 +14318,11 @@ test "lower-c ordinary atomic store defer requires MIR call-target facts" {
     var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_atomic_store_requires_fact.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try mir.validateLoweringAdmission(module_mir);
     var drifted_defer_span = false;
-    for (parsed.module.decls) |*decl| switch (decl.kind) {
+    for (parsed.decls()) |*decl| switch (decl.kind) {
         .fn_decl => |*fn_decl| {
             if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_atomic_store_fact")) continue;
             const body = fn_decl.body orelse return error.TestUnexpectedResult;
@@ -14340,7 +14340,7 @@ test "lower-c ordinary atomic store defer requires MIR call-target facts" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_atomic_store_requires_fact.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_atomic_store_requires_fact.mc", .{}, false, null));
 }
 
 test "lower-c ordinary atomic store defer emits typed cleanup" {
@@ -14356,7 +14356,7 @@ test "lower-c ordinary atomic store defer emits typed cleanup" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.module.decls, &output, .kernel, "emit_c_ordinary_defer_atomic_store_cleanup.mc", .{}, false);
+    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.decls(), &output, .kernel, "emit_c_ordinary_defer_atomic_store_cleanup.mc", .{}, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__atomic_store_n(&counter, value, __ATOMIC_RELEASE);") != null);
 }
@@ -14372,11 +14372,11 @@ test "lower-c ordinary va.end defer requires MIR call-target facts" {
     var parsed = try test_support.parseCheckedModule("emit_c_ordinary_defer_va_end_requires_fact.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try mir.validateLoweringAdmission(module_mir);
     var drifted_defer_span = false;
-    for (parsed.module.decls) |*decl| switch (decl.kind) {
+    for (parsed.decls()) |*decl| switch (decl.kind) {
         .fn_decl => |*fn_decl| {
             if (!std.mem.eql(u8, fn_decl.name.text, "ordinary_defer_va_end_fact")) continue;
             const body = fn_decl.body orelse return error.TestUnexpectedResult;
@@ -14394,7 +14394,7 @@ test "lower-c ordinary va.end defer requires MIR call-target facts" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "emit_c_ordinary_defer_va_end_requires_fact.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "emit_c_ordinary_defer_va_end_requires_fact.mc", .{}, false, null));
 }
 
 test "lower-c ordinary va.end defer emits typed cleanup" {
@@ -14410,7 +14410,7 @@ test "lower-c ordinary va.end defer emits typed cleanup" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.module.decls, &output, .kernel, "emit_c_ordinary_defer_va_end_cleanup.mc", .{}, false);
+    try appendCProfileWithSourcePathDeclsTest(std.testing.allocator, parsed.decls(), &output, .kernel, "emit_c_ordinary_defer_va_end_cleanup.mc", .{}, false);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "__builtin_va_end") != null);
 }
@@ -14480,14 +14480,14 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     var parsed = try test_support.parseModule("c_drop_glue_mir_facts.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try std.testing.expectEqual(@as(usize, 1), module_mir.drop_glue_facts.len);
     try std.testing.expectEqual(@as(usize, 1), module_mir.type_ownership_facts.len);
 
     var valid_output: std.ArrayList(u8) = .empty;
     defer valid_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &valid_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &valid_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null);
     try expectContains(valid_output.items, "close_guard(&g);");
 
     const saved_events = for (module_mir.functions) |*function| {
@@ -14499,7 +14499,7 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     } else return error.TestUnexpectedResult;
     var missing_auto_drop_event_output: std.ArrayList(u8) = .empty;
     defer missing_auto_drop_event_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &missing_auto_drop_event_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &missing_auto_drop_event_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
     for (module_mir.functions) |*function| {
         if (std.mem.eql(u8, function.name, "auto_drop_from_mir_fact")) {
             function.ownership_events = saved_events;
@@ -14511,14 +14511,14 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     module_mir.type_ownership_facts = &[_]mir.TypeOwnershipFact{};
     var missing_ownership_output: std.ArrayList(u8) = .empty;
     defer missing_ownership_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirDropGlueFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &missing_ownership_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &missing_ownership_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
     module_mir.type_ownership_facts = saved_ownership_facts;
 
     const saved_kind = module_mir.type_ownership_facts[0].kind;
     module_mir.type_ownership_facts[0].kind = .copy;
     var stale_ownership_output: std.ArrayList(u8) = .empty;
     defer stale_ownership_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirDropGlueFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &stale_ownership_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &stale_ownership_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
     module_mir.type_ownership_facts[0].kind = saved_kind;
 
     const make_guard_symbol = for (module_mir.functions) |function| {
@@ -14529,14 +14529,14 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     module_mir.type_ownership_facts[0].drop_glue_symbol_id = make_guard_symbol;
     var stale_ownership_symbol_output: std.ArrayList(u8) = .empty;
     defer stale_ownership_symbol_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirDropGlueFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &stale_ownership_symbol_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &stale_ownership_symbol_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
     module_mir.type_ownership_facts[0].drop_glue_symbol_id = saved_ownership_drop_symbol;
 
     const saved_facts = module_mir.drop_glue_facts;
     module_mir.drop_glue_facts = &[_]mir.DropGlueFact{};
     var missing_output: std.ArrayList(u8) = .empty;
     defer missing_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &missing_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &missing_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
     module_mir.drop_glue_facts = saved_facts;
 
     const saved_fn = module_mir.drop_glue_facts[0].release_fn;
@@ -14549,7 +14549,7 @@ test "lower-c consumes MIR drop glue facts and fails closed when absent or stale
     }
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.InvalidMirDropGlueFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &stale_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
+    try std.testing.expectError(error.InvalidMirDropGlueFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &stale_output, .kernel, "c_drop_glue_mir_facts.mc", .{}, false, null));
 }
 
 test "lower-c cancels auto-drop when affine move local is explicitly transferred" {
@@ -14584,7 +14584,7 @@ test "lower-c rejects auto-drop transfer authorization with stale MIR resource t
     var parsed = try test_support.parseModule("c_drop_attr_transfer_stale_resource.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const stale_resource_symbol = for (module_mir.functions) |function| {
         if (std.mem.eql(u8, function.name, "make_guard")) break function.typed_symbol_id;
@@ -14602,7 +14602,7 @@ test "lower-c rejects auto-drop transfer authorization with stale MIR resource t
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_drop_attr_transfer_stale_resource.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_drop_attr_transfer_stale_resource.mc", .{}, false, null));
 }
 
 test "lower-c move auto-drop cancellation requires MIR move-out event" {
@@ -14619,7 +14619,7 @@ test "lower-c move auto-drop cancellation requires MIR move-out event" {
     var parsed = try test_support.parseModule("c_drop_attr_transfer_requires_move_out.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const drop_glue = module_mir.drop_glue_facts[0];
     const function = for (module_mir.functions) |*candidate| {
@@ -14644,7 +14644,7 @@ test "lower-c move auto-drop cancellation requires MIR move-out event" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_drop_attr_transfer_requires_move_out.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_drop_attr_transfer_requires_move_out.mc", .{}, false, null));
 }
 
 test "lower-c move auto-drop cancellation requires source-matched MIR move-out event" {
@@ -14661,7 +14661,7 @@ test "lower-c move auto-drop cancellation requires source-matched MIR move-out e
     var parsed = try test_support.parseModule("c_drop_attr_transfer_move_out_source.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = for (module_mir.functions) |*candidate| {
         if (std.mem.eql(u8, candidate.name, "transfer_auto_drop")) break candidate;
@@ -14676,7 +14676,7 @@ test "lower-c move auto-drop cancellation requires source-matched MIR move-out e
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_drop_attr_transfer_move_out_source.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_drop_attr_transfer_move_out_source.mc", .{}, false, null));
 }
 
 test "lower-c loop bodies restore auto-drop cleanup state" {
@@ -14745,7 +14745,7 @@ test "lower-c explicit drop release cancellation requires MIR explicit-drop even
     var parsed = try test_support.parseModule("c_drop_attr_release_requires_mir_event.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = for (module_mir.functions) |*candidate| {
         if (std.mem.eql(u8, candidate.name, "explicit_release_keeps_other_auto_drop")) break candidate;
@@ -14768,7 +14768,7 @@ test "lower-c explicit drop release cancellation requires MIR explicit-drop even
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_drop_attr_release_requires_mir_event.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_drop_attr_release_requires_mir_event.mc", .{}, false, null));
 }
 
 test "lower-c explicit drop release cancellation requires source-matched MIR explicit-drop event" {
@@ -14787,7 +14787,7 @@ test "lower-c explicit drop release cancellation requires source-matched MIR exp
     var parsed = try test_support.parseModule("c_drop_attr_release_source_requires_event.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = for (module_mir.functions) |*candidate| {
         if (std.mem.eql(u8, candidate.name, "explicit_release_keeps_other_auto_drop")) break candidate;
@@ -14802,7 +14802,7 @@ test "lower-c explicit drop release cancellation requires source-matched MIR exp
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.module.decls, &module_mir, &output, .kernel, "c_drop_attr_release_source_requires_event.mc", .{}, false, null));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_drop_attr_release_source_requires_event.mc", .{}, false, null));
 }
 
 test "lower-c rejects auto-drop ownership holes before lowering" {
@@ -14994,7 +14994,7 @@ test "lower-c rejects non-static global initializers instead of zeroing" {
     try std.testing.expect(hasTestDiagnosticCode(parsed.reporter, "E_GLOBAL_INITIALIZER_NOT_STATIC"));
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try std.testing.expectError(error.UnsupportedCEmission, appendCDeclsTest(std.testing.allocator, parsed.module.decls, &output));
+    try std.testing.expectError(error.UnsupportedCEmission, appendCDeclsTest(std.testing.allocator, parsed.decls(), &output));
 }
 
 test "lower-c rejects two MMIO reads in one short-circuit operand" {

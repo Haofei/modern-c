@@ -4200,7 +4200,7 @@ test "MIR ownership event admission rejects explicit drop without glue identity"
     var parsed = try test_support.parseModule("mir_explicit_drop_requires_glue.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer bad_mir.deinit();
     const function = functionByNameMut(&bad_mir, "discard_values") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 1), function.ownership_events.len);
@@ -4233,7 +4233,7 @@ test "MIR ownership event admission rejects symbol-root drop glue type drift" {
     var parsed = try test_support.parseModule("mir_drop_glue_type_drift.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer bad_mir.deinit();
     try std.testing.expectEqual(@as(usize, 2), bad_mir.drop_glue_facts.len);
     const guard_fact = bad_mir.drop_glue_facts[0];
@@ -4276,7 +4276,7 @@ test "MIR ownership event admission rejects local-root drop glue type drift" {
     var parsed = try test_support.parseModule("mir_local_drop_glue_type_drift.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer bad_mir.deinit();
     try std.testing.expectEqual(@as(usize, 2), bad_mir.drop_glue_facts.len);
     const other_fact = bad_mir.drop_glue_facts[1];
@@ -4369,7 +4369,7 @@ test "MIR records canonical type ownership facts" {
     var parsed = try test_support.parseModule("mir_type_ownership_facts.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try std.testing.expectEqual(@as(usize, 7), module_mir.type_ownership_facts.len);
     try std.testing.expectEqual(mir.TypeOwnershipKind.copy, typeOwnershipByName(module_mir, "Plain").?.kind);
@@ -4412,13 +4412,13 @@ test "MIR type ownership fact admission rejects symbol and duplicate drift" {
     var parsed = try test_support.parseModule("mir_type_ownership_fact_admission.mc", source);
     defer parsed.deinit();
 
-    var symbol_drift = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var symbol_drift = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer symbol_drift.deinit();
     try std.testing.expectEqual(@as(usize, 1), symbol_drift.type_ownership_facts.len);
     symbol_drift.type_ownership_facts[0].typed_type_symbol_id = .invalid;
     try std.testing.expectError(error.InvalidMirTypeOwnershipFacts, mir.validateLoweringAdmission(symbol_drift));
 
-    var drop_drift = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var drop_drift = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer drop_drift.deinit();
     try std.testing.expectEqual(@as(usize, 1), drop_drift.type_ownership_facts.len);
     drop_drift.type_ownership_facts[0].drop_glue_symbol_id = .invalid;
@@ -4426,7 +4426,7 @@ test "MIR type ownership fact admission rejects symbol and duplicate drift" {
     drop_drift.type_ownership_facts[0].drop_glue_symbol_id = mir.SymbolId.fromIndex(4096);
     try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(drop_drift));
 
-    var duplicate = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var duplicate = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer duplicate.deinit();
     try std.testing.expectEqual(@as(usize, 1), duplicate.type_ownership_facts.len);
     const original = duplicate.type_ownership_facts;
@@ -4454,25 +4454,25 @@ test "MIR drop glue fact admission rejects unknown and duplicate release facts" 
     var parsed = try test_support.parseModule("mir_drop_glue_fact_admission.mc", source);
     defer parsed.deinit();
 
-    var unknown = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var unknown = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer unknown.deinit();
     try std.testing.expectEqual(@as(usize, 1), unknown.drop_glue_facts.len);
     unknown.drop_glue_facts[0].release_fn = "missing_close_guard";
     try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(unknown));
 
-    var release_drift = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var release_drift = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer release_drift.deinit();
     try std.testing.expectEqual(@as(usize, 1), release_drift.drop_glue_facts.len);
     release_drift.drop_glue_facts[0].typed_release_symbol_id = .invalid;
     try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(release_drift));
 
-    var resource_drift = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var resource_drift = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer resource_drift.deinit();
     try std.testing.expectEqual(@as(usize, 1), resource_drift.drop_glue_facts.len);
     resource_drift.drop_glue_facts[0].typed_resource_symbol_id = .invalid;
     try std.testing.expectError(error.InvalidMirDropGlueFacts, mir.validateLoweringAdmission(resource_drift));
 
-    var duplicate = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var duplicate = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer duplicate.deinit();
     try std.testing.expectEqual(@as(usize, 1), duplicate.drop_glue_facts.len);
     const original = duplicate.drop_glue_facts;
@@ -4500,7 +4500,7 @@ test "MIR ownership events are admitted and dumped through typed MIR" {
     var parsed = try test_support.parseModule("mir_ownership_event.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try std.testing.expectEqual(@as(usize, 1), module_mir.drop_glue_facts.len);
     const drop_fact = module_mir.drop_glue_facts[0];
@@ -4624,7 +4624,7 @@ test "MIR ownership event admission rejects missing simple local cleanup" {
     var parsed = try test_support.parseModule("mir_missing_simple_local_cleanup.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer bad_mir.deinit();
     const use_guard = functionByNameMut(&bad_mir, "use_guard") orelse return error.TestUnexpectedResult;
     const generated_events = use_guard.ownership_events;
@@ -4658,7 +4658,7 @@ test "MIR ownership event admission rejects storage-dead without auto-drop" {
     var parsed = try test_support.parseModule("mir_storage_dead_without_auto_drop.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer bad_mir.deinit();
     const use_guard = functionByNameMut(&bad_mir, "use_guard") orelse return error.TestUnexpectedResult;
     const generated_events = use_guard.ownership_events;
@@ -4694,7 +4694,7 @@ test "MIR ownership event admission rejects auto-drop without storage-dead" {
     var parsed = try test_support.parseModule("mir_auto_drop_without_storage_dead.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer bad_mir.deinit();
     const use_guard = functionByNameMut(&bad_mir, "use_guard") orelse return error.TestUnexpectedResult;
     const generated_events = use_guard.ownership_events;
@@ -4727,7 +4727,7 @@ test "MIR records local reinit ownership events" {
     var parsed = try test_support.parseModule("mir_ownership_reinit.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = functionByName(module_mir, "reassign_local") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
@@ -4766,7 +4766,7 @@ test "MIR ownership event admission accepts sibling copy locals with reused name
     var parsed = try test_support.parseModule("mir_sibling_copy_locals.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try mir.validateLoweringAdmission(module_mir);
 
@@ -4789,7 +4789,7 @@ test "MIR records forget events for no-drop move resources" {
     var parsed = try test_support.parseModule("mir_no_drop_forget.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = functionByName(module_mir, "forget_token") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
@@ -4811,7 +4811,7 @@ test "MIR cleanup cfg records ordinary defer cleanup actions" {
     var parsed = try test_support.parseModule("mir_cleanup_cfg_defer.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = functionByName(module_mir, "use_defer") orelse return error.TestUnexpectedResult;
     var cleanup_plan = try mir.buildOwnershipCleanupPlan(std.testing.allocator, module_mir, function);
@@ -4847,7 +4847,7 @@ test "MIR ownership authority does not let forget authorize auto-drop registrati
     var parsed = try test_support.parseModule("mir_forget_not_auto_drop_authority.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = functionByName(module_mir, "forget_guard") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
@@ -4877,7 +4877,7 @@ test "MIR records explicit drop glue call ownership events" {
     var parsed = try test_support.parseModule("mir_explicit_drop_glue_call.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = functionByName(module_mir, "release_one") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 7), function.ownership_events.len);
@@ -4927,7 +4927,7 @@ test "MIR records explicit drop glue call ownership events" {
     try std.testing.expectEqual(mir.CleanupActionKind.auto_drop, scope_cleanup_edge.actions[0].kind);
     try std.testing.expect(mir.ownershipCleanupEdgeTableValid(module_mir, function, built_cleanup_plan, cleanup_edge_table));
 
-    const release_decl = for (parsed.module.decls) |decl| {
+    const release_decl = for (parsed.decls()) |decl| {
         if (decl.kind != .fn_decl) continue;
         if (!std.mem.eql(u8, decl.kind.fn_decl.name.text, "release_one")) continue;
         break decl.kind.fn_decl;
@@ -4992,7 +4992,7 @@ test "MIR reinit ownership events require mutable locals" {
     var parsed = try test_support.parseModule("mir_ownership_reinit_mutable.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try std.testing.expectEqual(@as(usize, 1), countOwnershipEventsByKind(functionByName(module_mir, "accept_var").?, .reinit));
     try std.testing.expectEqual(@as(usize, 0), countOwnershipEventsByKind(functionByName(module_mir, "reject_let").?, .reinit));
@@ -5013,7 +5013,7 @@ test "MIR records simple move-out ownership events" {
     var parsed = try test_support.parseModule("mir_ownership_move_out.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = functionByName(module_mir, "return_guard") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
@@ -5054,7 +5054,7 @@ test "MIR ownership authority skips cleanup registration for move-out" {
     var parsed = try test_support.parseModule("mir_ownership_registration_decision.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = functionByName(module_mir, "return_guard") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 3), function.ownership_events.len);
@@ -5086,7 +5086,7 @@ test "MIR cleanup producer ignores move-out events that cannot reach fallthrough
     var parsed = try test_support.parseModule("mir_path_sensitive_cleanup_after_loop.mc", source);
     defer parsed.deinit();
 
-    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     const function = functionByName(module_mir, "transfer_in_loop") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 1), countOwnershipEventsByKind(function, .move_out));
@@ -5108,7 +5108,7 @@ test "MIR ownership event admission rejects duplicate local consumption" {
     var parsed = try test_support.parseModule("mir_ownership_duplicate_consume.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer bad_mir.deinit();
     const function = functionByNameMut(&bad_mir, "return_guard") orelse return error.TestUnexpectedResult;
     const generated_events = function.ownership_events;
@@ -5141,7 +5141,7 @@ test "MIR ownership event admission enforces local generations" {
     var parsed = try test_support.parseModule("mir_ownership_generation.mc", source);
     defer parsed.deinit();
 
-    var good_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var good_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer good_mir.deinit();
     const good_function = functionByNameMut(&good_mir, "return_guard") orelse return error.TestUnexpectedResult;
     const generated_good_events = good_function.ownership_events;
@@ -5157,7 +5157,7 @@ test "MIR ownership event admission enforces local generations" {
     std.testing.allocator.free(generated_good_events);
     try mir.validateLoweringAdmission(good_mir);
 
-    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer bad_mir.deinit();
     const bad_function = functionByNameMut(&bad_mir, "return_guard") orelse return error.TestUnexpectedResult;
     const generated_bad_events = bad_function.ownership_events;
@@ -5172,7 +5172,7 @@ test "MIR ownership event admission enforces local generations" {
     std.testing.allocator.free(generated_bad_events);
     try std.testing.expectError(error.InvalidMirOwnershipEvents, mir.validateLoweringAdmission(bad_mir));
 
-    var stale_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var stale_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer stale_mir.deinit();
     const stale_function = functionByNameMut(&stale_mir, "return_guard") orelse return error.TestUnexpectedResult;
     const generated_stale_events = stale_function.ownership_events;
@@ -5205,7 +5205,7 @@ test "MIR ownership event admission rejects malformed event identity" {
     var parsed = try test_support.parseModule("mir_bad_ownership_event.mc", source);
     defer parsed.deinit();
 
-    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.module.decls);
+    var bad_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer bad_mir.deinit();
     try std.testing.expectEqual(@as(usize, 1), bad_mir.drop_glue_facts.len);
     const drop_fact = bad_mir.drop_glue_facts[0];

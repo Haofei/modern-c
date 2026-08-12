@@ -9,17 +9,24 @@ const sema = @import("sema.zig");
 pub const ParsedModule = struct {
     reporter: diagnostics.Reporter,
     arena: std.heap.ArenaAllocator,
-    module: ast.Module,
+    decls_slice: []ast.Decl,
+    visibility_mode: ast.VisibilityMode,
+    qualified_owners: [][]const u8,
+    qualified_symbols: []const ast.QualifiedSymbol,
+
+    pub fn decls(self: ParsedModule) []ast.Decl {
+        return self.decls_slice;
+    }
 
     pub fn deinit(self: *ParsedModule) void {
-        self.module.deinit(self.arena.allocator());
+        self.arena.allocator().free(self.decls_slice);
         self.arena.deinit();
         self.reporter.deinit();
     }
 
     pub fn check(self: *ParsedModule) void {
         var checker = sema.Checker.init(&self.reporter);
-        checker.checkDecls(self.module.decls, self.module.visibility_mode, self.module.qualified_owners);
+        checker.checkDecls(self.decls(), self.visibility_mode, self.qualified_owners);
     }
 
     pub fn expectNoErrors(self: *const ParsedModule) !void {
@@ -37,13 +44,14 @@ pub fn parseModule(source_name: []const u8, source: []const u8) !ParsedModule {
     var p = parser.Parser.init(source, &reporter);
     const syntax_module = try p.parseModule(arena.allocator());
     const resolved_decls = try name_resolve.transformDeclsWithSymbols(arena.allocator(), syntax_module.decls, syntax_module.qualified_symbols, null);
-    const module = syntax_module.withDecls(resolved_decls);
-    errdefer module.deinit(arena.allocator());
 
     var parsed = ParsedModule{
         .reporter = reporter,
         .arena = arena,
-        .module = module,
+        .decls_slice = resolved_decls,
+        .visibility_mode = syntax_module.visibility_mode,
+        .qualified_owners = syntax_module.qualified_owners,
+        .qualified_symbols = syntax_module.qualified_symbols,
     };
     try parsed.expectNoErrors();
     return parsed;
