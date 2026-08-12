@@ -105,6 +105,7 @@ def main() -> int:
     for needle in (
         "module.visibility_mode = self.visibility_mode;",
         "name_resolve.transformDeclsWithSymbols(allocator, module.decls, module.qualified_symbols, self.module_graph)",
+        "async_lower.transformDecls(allocator, resolved.decls, resolved.qualified_owners, diag)",
         "parsed_out.* = try module_parser.parseSourceDatabase(parse_allocator, project.graph, project.source_db, reporter);",
         "resolved_out.* = try module_parser.resolveParsedSourceDatabase(parse_allocator, parsed_out.*);",
         "generic_precheck.checkDecls(allocator, lowered.decls, lowered.visibility_mode, diag, self.file_boundaries)",
@@ -126,6 +127,8 @@ def main() -> int:
     session_text = read(session_zig)
     if "name_resolve.transformWithGraph(allocator, module" in session_text:
         fail("CompilationSession must not call the retired module-shaped name resolver API")
+    if "async_lower.transform(allocator, resolved" in session_text:
+        fail("CompilationSession must not call the retired module-shaped async lowering API")
     if session_text.count("var checker = sema.Checker.init") != 1:
         fail("sema checker construction must stay centralized in CompilationSession.checkModule")
     if "generic_precheck.check(allocator, lowered" in session_text:

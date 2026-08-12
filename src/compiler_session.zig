@@ -167,9 +167,15 @@ pub const CompilationSession = struct {
         // monomorphize/sema, so the move/borrow checker and both backends only
         // ever see ordinary MC. No-op for modules without any `async fn`
         // (passes the module through untouched).
-        const lowered = async_lower.transform(allocator, resolved, diag) catch |err| {
+        const lowered_result = async_lower.transformDecls(allocator, resolved.decls, resolved.qualified_owners, diag) catch |err| {
             if (render_errors) diag.render();
             return err;
+        };
+        const lowered = ast.Module{
+            .decls = lowered_result.decls,
+            .qualified_owners = lowered_result.qualified_owners,
+            .qualified_symbols = resolved.qualified_symbols,
+            .visibility_mode = resolved.visibility_mode,
         };
         try generic_precheck.checkDecls(allocator, lowered.decls, lowered.visibility_mode, diag, self.file_boundaries);
         if (diag.has_errors) {

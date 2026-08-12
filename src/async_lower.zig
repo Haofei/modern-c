@@ -248,11 +248,21 @@ fn recordLocalCarrierTypes(low: *Lowerer, b: ast.Block) Error!void {
     };
 }
 
-pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter) Error!ast.Module {
+pub const TransformResult = struct {
+    decls: []ast.Decl,
+    qualified_owners: [][]const u8,
+};
+
+pub fn transformDecls(
+    arena: std.mem.Allocator,
+    decls: []ast.Decl,
+    qualified_owners: [][]const u8,
+    reporter: ?*diagnostics.Reporter,
+) Error!TransformResult {
     // `await` is ONLY valid inside an `async fn` — the transform rewrites those away. Any `await`
     // surviving in a non-async fn would reach sema as an unhandled `await_expr` (a compiler crash),
     // so reject it here with a diagnostic. This runs UNCONDITIONALLY (even with no async fns).
-    for (module.decls) |d| {
+    for (decls) |d| {
         if (d.kind != .fn_decl) continue;
         const fd = d.kind.fn_decl;
         if (fd.is_async) continue; // an async fn's own awaits are handled by the transform
@@ -265,10 +275,10 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
 
     // Quick pass: does any async fn exist? If not, pass through untouched.
     var has_async = false;
-    for (module.decls) |d| {
+    for (decls) |d| {
         if (d.kind == .fn_decl and d.kind.fn_decl.is_async) has_async = true;
     }
-    if (!has_async) return module;
+    if (!has_async) return .{ .decls = decls, .qualified_owners = qualified_owners };
 
     var low = Lowerer{
         .arena = arena,
@@ -282,7 +292,7 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
 
     // E2 pass 0: record each struct's field -> field-type-name map (and array fields' element type
     // under key "[]"), so a field/index await can resolve its CONCRETE future type without sema.
-    for (module.decls) |d| {
+    for (decls) |d| {
         if (d.kind != .struct_decl) continue;
         const sd = d.kind.struct_decl;
         if (sd.is_move or sd.is_linear) try low.explicit_resource_types.put(sd.name.text, {});
@@ -296,10 +306,10 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
         }
         try low.struct_fields.put(sd.name.text, fm);
     }
-    try collectAsyncResourceAggregates(&low, module);
+    try collectAsyncResourceAggregates(&low, decls);
 
     // Pass 1: record every fn's return-type name, and each async fn's generated future ABI.
-    for (module.decls) |d| {
+    for (decls) |d| {
         switch (d.kind) {
             .fn_decl, .extern_fn => |fd| {
                 if (fd.return_type) |rt| {
@@ -322,7 +332,7 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
 
     // Pass 2: rewrite. Non-async decls pass through; each async fn expands to several decls.
     var out: std.ArrayList(ast.Decl) = .empty;
-    for (module.decls) |d| {
+    for (decls) |d| {
         if (d.kind == .fn_decl and d.kind.fn_decl.is_async) {
             try lowerAsyncFn(&low, &out, d);
         } else {
@@ -348,11 +358,11 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
         }
         // Extend qualified_owners with the generated future names (dedup against existing).
         var owners: std.ArrayList([]const u8) = .empty;
-        try owners.appendSlice(arena, module.qualified_owners);
+        try owners.appendSlice(arena, qualified_owners);
         var fit = futs.keyIterator();
         while (fit.next()) |k| {
             var present = false;
-            for (module.qualified_owners) |o| {
+            for (qualified_owners) |o| {
                 if (std.mem.eql(u8, o, k.*)) {
                     present = true;
                     break;
@@ -363,12 +373,10 @@ pub fn transform(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagn
         return .{
             .decls = try out.toOwnedSlice(arena),
             .qualified_owners = try owners.toOwnedSlice(arena),
-            .qualified_symbols = module.qualified_symbols,
-            .visibility_mode = module.visibility_mode,
         };
     }
 
-    return module.withDecls(try out.toOwnedSlice(arena));
+    return .{ .decls = try out.toOwnedSlice(arena), .qualified_owners = qualified_owners };
 }
 
 // ---- Pass-3 UFCS patcher: rewrite `G.poll` member exprs (G a generated future) to `ident(G__poll)`
@@ -2822,11 +2830,11 @@ fn uninitExpr(span: ast.Span) ast.Expr {
     return .{ .span = span, .kind = .uninit_literal };
 }
 
-fn collectAsyncResourceAggregates(low: *Lowerer, module: ast.Module) Error!void {
+fn collectAsyncResourceAggregates(low: *Lowerer, decls: []const ast.Decl) Error!void {
     var changed = true;
     while (changed) {
         changed = false;
-        for (module.decls) |d| {
+        for (decls) |d| {
             if (d.kind != .struct_decl) continue;
             const sd = d.kind.struct_decl;
             if (low.explicit_resource_types.contains(sd.name.text)) continue;
