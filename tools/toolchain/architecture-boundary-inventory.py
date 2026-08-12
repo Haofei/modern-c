@@ -167,6 +167,8 @@ EXACT_FILE_COUNTS = {
     ("src/main.zig", "try appendModuleTests(allocator, module, &out)"): 0,
     ("src/main.zig", "ir.appendFacts(allocator, module, &facts)"): 0,
     ("src/main.zig", "ir.appendLowerIr(allocator, module, &output)"): 0,
+    ("src/main.zig", "fn backendUnsupportedFallbackSpan("): 0,
+    ("src/main.zig", "reportBackendUnsupportedFallback(&diag, module"): 0,
     ("src/symbols.zig", "sources.files"): 0,
     ("src/symbols.zig", "sources.collectDecls"): 1,
     ("src/ir_inspection.zig", "sources.files"): 0,

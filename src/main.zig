@@ -760,7 +760,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
         .opts = lower_opts,
     }) catch |err| switch (err) {
         error.UnsupportedCEmission => {
-            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
+            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, "C");
             diag.render();
             return error.EmitCFailed;
         },
@@ -812,7 +812,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
         .opts = lower_opts,
     }) catch |err| switch (err) {
         error.UnsupportedCEmission => {
-            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
+            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, "C");
             diag.render();
             return error.BuildFailed;
         },
@@ -1182,7 +1182,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
         },
     }) catch |err| switch (err) {
         error.UnsupportedCEmission => {
-            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "C");
+            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, "C");
             diag.render();
             return error.EmitCFailed;
         },
@@ -1251,7 +1251,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
         .opts = lower_opts,
     }) catch |err| switch (err) {
         error.UnsupportedLlvmEmission => {
-            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, module, "LLVM");
+            if (!diag.has_errors) reportBackendUnsupportedFallback(&diag, "LLVM");
             diag.render();
             return error.EmitLlvmFailed;
         },
@@ -1264,25 +1264,8 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
     try session.writeArtifactWithMetadata(output.items, output_path, bundle);
 }
 
-fn reportBackendUnsupportedFallback(diag: *diagnostics.Reporter, module: ast.Module, backend_name: []const u8) void {
-    diag.err(backendUnsupportedFallbackSpan(module), "E_BACKEND_UNSUPPORTED: {s} backend does not yet support this construct", .{backend_name});
-}
-
-fn backendUnsupportedFallbackSpan(module: ast.Module) ast.Span {
-    for (module.decls) |decl| {
-        switch (decl.kind) {
-            .fn_decl => |fn_decl| {
-                if (fn_decl.body) |body| {
-                    if (body.items.len > 0) return body.items[0].span;
-                    return fn_decl.name.span;
-                }
-            },
-            .global_decl => |global| if (global.init) |init| return init.span else return global.name.span,
-            else => {},
-        }
-    }
-    if (module.decls.len > 0) return module.decls[0].span;
-    return .{ .offset = 0, .len = 1, .line = 1, .column = 1 };
+fn reportBackendUnsupportedFallback(diag: *diagnostics.Reporter, backend_name: []const u8) void {
+    diag.err(.{ .offset = 0, .len = 1, .line = 1, .column = 1 }, "E_BACKEND_UNSUPPORTED: {s} backend does not yet support this construct", .{backend_name});
 }
 
 // `emit-layout`: emit a generated C header asserting MC's authoritative layout (sizeof + each
