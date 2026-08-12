@@ -281,7 +281,17 @@ fn runMain(init: std.process.Init) !void {
     defer module_parse_arena.deinit();
     var parsed_sources: module_parser.ParsedSourceDatabase = undefined;
     var resolved_sources: module_parser.ResolvedSourceDatabase = undefined;
-    try session.attachLoadedProjectSyntax(&loaded, module_parse_arena.allocator(), &load_diag, &parsed_sources, &resolved_sources);
+    session.attachLoadedProjectSyntax(&loaded, module_parse_arena.allocator(), &load_diag, &parsed_sources, &resolved_sources) catch |err| {
+        if (std.mem.eql(u8, command, "check") and options.json_diagnostics) {
+            var out: std.ArrayList(u8) = .empty;
+            defer out.deinit(allocator);
+            try load_diag.appendJson(&out);
+            try session.writeStdout(out.items);
+        } else {
+            load_diag.render();
+        }
+        return err;
+    };
     defer session.resolved_sources = null;
     defer resolved_sources.deinit(module_parse_arena.allocator());
     defer parsed_sources.deinit(module_parse_arena.allocator());
@@ -345,6 +355,7 @@ fn isExpectedCliFailure(err: anyerror) bool {
         error.LexFailed,
         error.SymbolsFailed,
         error.ParseFailed,
+        error.MonomorphizationLimit,
         error.AsyncLowerFailed,
         error.CheckFailed,
         error.FactsFailed,

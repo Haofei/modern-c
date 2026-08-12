@@ -74,8 +74,21 @@ pub fn parseSourceDatabase(
 
     for (graph.files) |file| {
         const parser_source = sources.parserSourceForFile(file.id) orelse return error.MissingModuleSource;
+        const saved_path = reporter.path;
+        const saved_source = reporter.source;
+        const saved_boundaries = reporter.file_boundaries;
+        reporter.path = file.display_path;
+        reporter.source = parser_source;
+        reporter.file_boundaries = null;
+        var parsed_ok = false;
+        defer if (parsed_ok) {
+            reporter.path = saved_path;
+            reporter.source = saved_source;
+            reporter.file_boundaries = saved_boundaries;
+        };
         var file_parser = parser.Parser.init(parser_source, reporter);
         const parsed = try file_parser.parseModule(allocator);
+        parsed_ok = true;
         var parsed_transferred = false;
         errdefer if (!parsed_transferred) parsed.deinit(allocator);
         try files.append(allocator, .{

@@ -409,6 +409,41 @@ assert d["source"]["highlight_length"] == 4, d
 assert d["source"]["caret"] == "^~~~", d
 PY
 
+cat >"$WORK/root_import_parse.mc" <<'MC'
+import "bad_parse.mc";
+
+export fn main() -> u32 {
+    return 0;
+}
+MC
+
+cat >"$WORK/bad_parse.mc" <<'MC'
+fn broken( -> u32 {
+    return 1;
+}
+MC
+
+import_parse_json=""
+if import_parse_json=$("$MCC" check "$WORK/root_import_parse.mc" --json); then
+    echo "FAIL: diagnostics-test — imported-file parse error JSON unexpectedly succeeded"
+    exit 1
+fi
+JSON_OUT="$import_parse_json" python3 - <<'PY'
+import json
+import os
+
+payload = json.loads(os.environ["JSON_OUT"])
+diags = payload.get("diagnostics")
+assert isinstance(diags, list) and len(diags) == 1, payload
+d = diags[0]
+assert d["code"] == "E_PARSE_EXPECTED_PARAMETER_NAME", d
+assert d["path"].endswith("bad_parse.mc"), d
+assert d["file"] == d["path"], d
+assert d["line"] == 1, d
+assert "expected parameter name" in d["message"], d
+assert payload["error_count"] == 1 and payload["warning_count"] == 0, payload
+PY
+
 cat >"$WORK/root_import_bom.mc" <<'MC'
 import "lib_bom.mc";
 
