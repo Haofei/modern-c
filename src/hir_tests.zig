@@ -5,7 +5,7 @@ const hir = @import("hir_inspection.zig");
 const parser = @import("parser.zig");
 
 const appendDump = hir.appendDump;
-const appendVerificationFacts = hir.appendVerificationFacts;
+const appendVerificationFactsFromDecls = hir.appendVerificationFactsFromDecls;
 const build = hir.build;
 const verify = hir.verify;
 
@@ -64,7 +64,7 @@ test "HIR dump and verification facts declare inspection-only contract" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try appendVerificationFacts(std.testing.allocator, module, &facts);
+    try appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
     try std.testing.expect(std.mem.startsWith(u8, facts.items, hir.inspection_only_header));
 }
 
@@ -118,7 +118,7 @@ test "HIR verifier reports fallthrough and no_lang_trap trap edges" {
 
     var facts: std.ArrayList(u8) = .empty;
     defer facts.deinit(std.testing.allocator);
-    try appendVerificationFacts(std.testing.allocator, module, &facts);
+    try appendVerificationFactsFromDecls(std.testing.allocator, module.decls, &facts);
 
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "hir verify fn=missing_return finding=fallthrough") != null);
     try std.testing.expect(std.mem.indexOf(u8, facts.items, "hir verify fn=checked_add finding=trap_edge detail=IntegerOverflow no_lang_trap=true") != null);

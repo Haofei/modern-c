@@ -577,7 +577,7 @@ test "tests/spec fixtures produce declared IR inspection facts" {
                 var hir_facts: std.ArrayList(u8) = .empty;
                 defer hir_facts.deinit(allocator);
                 if (std.mem.eql(u8, check, "no-language-trap-edge")) {
-                    try hir.appendVerificationFacts(allocator, module, &hir_facts);
+                    try hir.appendVerificationFactsFromDecls(allocator, module.decls, &hir_facts);
                     if (!hasHirVerifierEvidenceForCheck(hir_facts.items, check)) {
                         std.debug.print("{s}: expected HIR verifier evidence for {s}\nHIR verifier:\n{s}", .{ path, check, hir_facts.items });
                         try std.testing.expect(false);

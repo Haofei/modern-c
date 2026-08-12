@@ -429,7 +429,7 @@ fn runVerifyHir(session: *CompilationSession, path: []const u8, source: []const 
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try hir.appendVerificationFacts(allocator, module, &output);
+    try hir.appendVerificationFactsFromDecls(allocator, module.decls, &output);
     try session.writeStdout(output.items);
 }
 

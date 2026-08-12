@@ -459,6 +459,7 @@ removing backend authority before adding new abstractions:
 | 271 | Narrow the remaining spec-harness lower-IR API to declaration slices. | Complete: `ir_inspection.buildModuleIr(...)` was first renamed as spec-harness compatibility and then narrowed to `buildModuleIrFromDeclSliceForSpecHarness(...)`; inventory gates keep the generic and module-shaped names at zero and make the remaining spec harness dependency explicit. |
 | 272 | Delete module-shaped IR facts helpers. | Complete: `ir_inspection.appendFacts(...)` now accepts `[]const ast.Decl`, public/internal `writeFacts(...)` helpers were removed, and `ModuleFactCollector` no longer has module-shaped fact collection; `spec_tests` passes `module.decls` at its explicit compatibility edge. |
 | 273 | Delete module-shaped symbols emission. | Complete: `symbols.emitJson(allocator, ast.Module, ...)`, `collectModule(...)`, and `walkModule(...)` were removed after CLI symbols moved to `emitJsonFromResolvedSources(...)`; inventory gates keep the symbols module-shaped entrypoint and helpers at zero. |
+| 274 | Narrow HIR verification facts to declaration slices. | Complete: `hir_inspection.appendVerificationFacts(...)` was replaced by `appendVerificationFactsFromDecls(...)`, `buildFromDecls(...)` owns the shared HIR construction loop, and CLI/spec/HIR tests now pass `module.decls` at their explicit compatibility edge. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

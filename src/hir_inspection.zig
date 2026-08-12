@@ -78,10 +78,14 @@ pub const Module = struct {
 };
 
 pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
+    return buildFromDecls(allocator, module.decls);
+}
+
+pub fn buildFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !Module {
     var function_summaries = std.StringHashMap(bool).init(allocator);
     defer function_summaries.deinit();
 
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
                 try function_summaries.put(fn_decl.name.text, hasNoLangTrap(decl.attrs));
@@ -102,7 +106,7 @@ pub fn build(allocator: std.mem.Allocator, module: ast.Module) !Module {
         functions.deinit(allocator);
     }
 
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
                 if (fn_decl.body) |body| {
@@ -148,8 +152,8 @@ pub fn appendDump(allocator: std.mem.Allocator, module: ast.Module, out: *std.Ar
     }
 }
 
-pub fn appendVerificationFacts(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    var hir = try build(allocator, module);
+pub fn appendVerificationFactsFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl, out: *std.ArrayList(u8)) !void {
+    var hir = try buildFromDecls(allocator, decls);
     defer hir.deinit();
 
     try out.appendSlice(allocator, inspection_only_header);
