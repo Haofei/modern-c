@@ -66,6 +66,8 @@ def main() -> int:
         "pub fn publishExistingArtifactWithMetadata(",
         "pub fn initReporter(self: *CompilationSession, path: []const u8, source: []const u8) diagnostics.Reporter {",
         "pub fn attachLoadedProjectSyntax(",
+        "pub const ParsedModule = struct {",
+        "pub fn parseModuleOrReport(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ParsedModule {",
         "pub fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
         "pub fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
         "pub fn parseCheckedModuleOrReport(",

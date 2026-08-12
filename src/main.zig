@@ -396,8 +396,8 @@ fn runLowerHir(session: *CompilationSession, path: []const u8, source: []const u
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
-    defer module.deinit(parse_allocator);
+    const parsed = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    defer parsed.deinit(parse_allocator);
 
     if (diag.has_errors) {
         diag.render();
@@ -406,7 +406,7 @@ fn runLowerHir(session: *CompilationSession, path: []const u8, source: []const u
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try hir.appendDumpFromDecls(allocator, module.decls, &output);
+    try hir.appendDumpFromDecls(allocator, parsed.decls(), &output);
     try session.writeStdout(output.items);
 }
 
@@ -419,8 +419,8 @@ fn runVerifyHir(session: *CompilationSession, path: []const u8, source: []const 
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
-    defer module.deinit(parse_allocator);
+    const parsed = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    defer parsed.deinit(parse_allocator);
 
     if (diag.has_errors) {
         diag.render();
@@ -429,7 +429,7 @@ fn runVerifyHir(session: *CompilationSession, path: []const u8, source: []const 
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try hir.appendVerificationFactsFromDecls(allocator, module.decls, &output);
+    try hir.appendVerificationFactsFromDecls(allocator, parsed.decls(), &output);
     try session.writeStdout(output.items);
 }
 
@@ -666,8 +666,8 @@ fn runTrap(session: *CompilationSession, path: []const u8, source: []const u8) !
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
-    defer module.deinit(parse_allocator);
+    const parsed = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    defer parsed.deinit(parse_allocator);
 
     if (diag.has_errors) {
         diag.render();
@@ -682,7 +682,7 @@ fn runTrap(session: *CompilationSession, path: []const u8, source: []const u8) !
     }
 
     for (expectations.items) |expectation| {
-        const actual = try eval.runTrapExpectationFromDecls(allocator, module.decls, expectation.function_name, expectation.args);
+        const actual = try eval.runTrapExpectationFromDecls(allocator, parsed.decls(), expectation.function_name, expectation.args);
         if (actual == null or actual.? != expectation.trap) {
             std.debug.print(
                 "{s}:{d}: expected run {s}(...) to trap .{s}, got {s}\n",
@@ -706,8 +706,8 @@ fn runLowerC(session: *CompilationSession, path: []const u8, source: []const u8)
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseModuleOrReport(source, parse_allocator, &diag);
-    defer module.deinit(parse_allocator);
+    const parsed = try session.parseModuleOrReport(source, parse_allocator, &diag);
+    defer parsed.deinit(parse_allocator);
 
     if (diag.has_errors) {
         diag.render();
@@ -716,7 +716,7 @@ fn runLowerC(session: *CompilationSession, path: []const u8, source: []const u8)
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(allocator);
-    try lower_c.appendInspection(allocator, module, &output);
+    try lower_c.appendInspection(allocator, parsed.moduleForInspection(), &output);
     try session.writeStdout(output.items);
 }
 

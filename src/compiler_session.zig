@@ -41,6 +41,22 @@ pub const CheckedModule = struct {
     }
 };
 
+pub const ParsedModule = struct {
+    module: ast.Module,
+
+    pub fn decls(self: ParsedModule) []ast.Decl {
+        return self.module.decls;
+    }
+
+    pub fn moduleForInspection(self: ParsedModule) ast.Module {
+        return self.module;
+    }
+
+    pub fn deinit(self: ParsedModule, allocator: std.mem.Allocator) void {
+        self.module.deinit(allocator);
+    }
+};
+
 pub const CompilationSession = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -135,8 +151,8 @@ pub const CompilationSession = struct {
         parsed_ready = false;
     }
 
-    pub fn parseModuleOrReport(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ast.Module {
-        return self.parseModuleOrReportMode(source, allocator, diag, true);
+    pub fn parseModuleOrReport(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter) !ParsedModule {
+        return .{ .module = try self.parseModuleOrReportMode(source, allocator, diag, true) };
     }
 
     pub fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {
