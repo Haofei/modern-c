@@ -326,13 +326,6 @@ pub const TraitDeclArtifact = struct {
             .methods = trait_decl.methods,
         };
     }
-
-    pub fn toDecl(self: TraitDeclArtifact) ast.TraitDecl {
-        return .{
-            .name = self.name,
-            .methods = self.methods,
-        };
-    }
 };
 
 pub const ImplTraitArtifact = struct {
@@ -345,14 +338,6 @@ pub const ImplTraitArtifact = struct {
             .trait_name = impl_trait.trait_name,
             .type_name = impl_trait.type_name,
             .methods = impl_trait.methods,
-        };
-    }
-
-    pub fn toDecl(self: ImplTraitArtifact) ast.ImplTrait {
-        return .{
-            .trait_name = self.trait_name,
-            .type_name = self.type_name,
-            .methods = self.methods,
         };
     }
 };

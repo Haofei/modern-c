@@ -358,7 +358,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .tagged_unions = std.StringHashMap(ast_bridge.UnionDecl).init(allocator),
         .struct_types = std.StringHashMap(ast_bridge.StructDecl).init(allocator),
         .fn_sigs = std.StringHashMap(FnSig).init(allocator),
-        .trait_decls = std.StringHashMap(ast_bridge.TraitDecl).init(allocator),
+        .trait_decls = std.StringHashMap(declaration_artifacts.TraitDeclArtifact).init(allocator),
         .impl_methods = std.StringHashMap([]const ast_bridge.ImplTraitMethod).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
@@ -458,7 +458,7 @@ const LlvmEmitter = struct {
     // Tier 2 trait objects (traits-design §8): every `trait` by name (vtable layout +
     // dispatch slot resolution) and each `impl Trait for Type`'s mangled methods (the
     // rodata vtable's function-pointer list).
-    trait_decls: std.StringHashMap(ast_bridge.TraitDecl) = undefined,
+    trait_decls: std.StringHashMap(declaration_artifacts.TraitDeclArtifact) = undefined,
     impl_methods: std.StringHashMap([]const ast_bridge.ImplTraitMethod) = undefined,
     // `bind(scalar, f)` closures whose env is a non-pointer integer scalar. The
     // closure's env slot is `ptr`, so the scalar is widened via `inttoptr` and the
@@ -728,7 +728,7 @@ const LlvmEmitter = struct {
             try self.collectGlobal(global);
         }
         for (self.trait_decl_artifacts) |trait_decl| {
-            try self.trait_decls.put(trait_decl.name.text, trait_decl.toDecl());
+            try self.trait_decls.put(trait_decl.name.text, trait_decl);
         }
         for (self.impl_trait_artifacts) |impl_trait| {
             const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.trait_name.text, impl_trait.type_name.text });
@@ -7394,7 +7394,7 @@ const LlvmEmitter = struct {
 
     // ----- Tier 2 trait objects (traits-design §8) ------------------------------
     // The LLVM struct type of a `*dyn Trait`'s vtable: one `ptr` per trait method.
-    fn dynVtableLlvmType(self: *LlvmEmitter, trait: ast_bridge.TraitDecl) ![]const u8 {
+    fn dynVtableLlvmType(self: *LlvmEmitter, trait: declaration_artifacts.TraitDeclArtifact) ![]const u8 {
         var buf: std.ArrayList(u8) = .empty;
         try buf.appendSlice(self.scratch.allocator(), "{ ");
         for (trait.methods, 0..) |_, i| {
@@ -7556,7 +7556,7 @@ const LlvmEmitter = struct {
     }
 
     // If `callee` is `d.method` where `d` has a `*dyn Trait` type, return its TraitDecl.
-    fn dynDispatchTrait(self: *LlvmEmitter, callee: ast_bridge.Expr) ?ast_bridge.TraitDecl {
+    fn dynDispatchTrait(self: *LlvmEmitter, callee: ast_bridge.Expr) ?declaration_artifacts.TraitDeclArtifact {
         const member = memberExpr(callee) orelse return null;
         const base_ty = self.exprType(member.base.*) orelse return null;
         const trait_name = switch (self.resolveAliasType(base_ty).kind) {
@@ -7568,7 +7568,7 @@ const LlvmEmitter = struct {
 
     // `d.method(args)` -> load the method slot from `d.vtable`, call it with `d.data`
     // first. A genuine load-through-vtable indirect call (no devirtualization).
-    fn emitDynDispatch(self: *LlvmEmitter, call: anytype, trait: ast_bridge.TraitDecl) ![]const u8 {
+    fn emitDynDispatch(self: *LlvmEmitter, call: anytype, trait: declaration_artifacts.TraitDeclArtifact) ![]const u8 {
         const member = memberCallee(call) orelse return error.UnsupportedLlvmEmission;
         const slot = traitMethodIndex(trait, member.name.text) orelse return error.UnsupportedLlvmEmission;
         const msig = trait.methods[slot];

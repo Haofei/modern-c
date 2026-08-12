@@ -6,6 +6,7 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const eval = @import("eval.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -242,7 +243,7 @@ pub fn isVoidLiteralExpr(expr: ast_bridge.Expr) bool {
     };
 }
 
-pub fn cTraitIsObjectSafe(t: ast_bridge.TraitDecl) bool {
+pub fn cTraitIsObjectSafe(t: declaration_artifacts.TraitDeclArtifact) bool {
     for (t.methods) |m| {
         switch (m.self_mode) {
             .by_ptr, .by_mut_ptr => {},

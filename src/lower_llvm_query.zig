@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const eval = @import("eval.zig");
 const lower_llvm_model = @import("lower_llvm_model.zig");
 const lower_llvm_type = @import("lower_llvm_type.zig");
@@ -56,7 +57,7 @@ pub fn structLiteralField(fields: []const ast_bridge.StructLiteralField, field_n
 }
 
 // The slot index of trait method `name` (the vtable lists methods in declaration order).
-pub fn traitMethodIndex(trait: ast_bridge.TraitDecl, name: []const u8) ?usize {
+pub fn traitMethodIndex(trait: declaration_artifacts.TraitDeclArtifact, name: []const u8) ?usize {
     for (trait.methods, 0..) |m, i| {
         if (std.mem.eql(u8, m.name.text, name)) return i;
     }
@@ -64,7 +65,7 @@ pub fn traitMethodIndex(trait: ast_bridge.TraitDecl, name: []const u8) ?usize {
 }
 
 // Mirrors sema.traitIsObjectSafe; the backend emits a vtable only for object-safe traits.
-pub fn llvmTraitIsObjectSafe(t: ast_bridge.TraitDecl) bool {
+pub fn llvmTraitIsObjectSafe(t: declaration_artifacts.TraitDeclArtifact) bool {
     for (t.methods) |m| {
         switch (m.self_mode) {
             .by_ptr, .by_mut_ptr => {},

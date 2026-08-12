@@ -6,6 +6,7 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
@@ -145,7 +146,7 @@ pub fn emitClosureCall(ctx: Context, node: anytype, clos: ast_bridge.TypeExpr, l
 pub fn emitVtables(
     ctx: Context,
     impl_methods: *std.StringHashMap([]const ast_bridge.ImplTraitMethod),
-    trait_decls: *std.StringHashMap(ast_bridge.TraitDecl),
+    trait_decls: *std.StringHashMap(declaration_artifacts.TraitDeclArtifact),
 ) !void {
     var it = impl_methods.iterator();
     while (it.next()) |entry| {
@@ -158,7 +159,7 @@ fn emitVtable(
     ctx: Context,
     key: []const u8,
     methods: []const ast_bridge.ImplTraitMethod,
-    trait_decls: *std.StringHashMap(ast_bridge.TraitDecl),
+    trait_decls: *std.StringHashMap(declaration_artifacts.TraitDeclArtifact),
 ) !void {
     const sep = std.mem.indexOfScalar(u8, key, 0) orelse return;
     const trait_name = key[0..sep];
@@ -170,7 +171,7 @@ fn emitVtable(
     try ctx.out.appendSlice(ctx.allocator, " };\n");
 }
 
-fn emitVtableSlots(ctx: Context, trait: ast_bridge.TraitDecl, methods: []const ast_bridge.ImplTraitMethod) !void {
+fn emitVtableSlots(ctx: Context, trait: declaration_artifacts.TraitDeclArtifact, methods: []const ast_bridge.ImplTraitMethod) !void {
     for (trait.methods, 0..) |method, i| {
         if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
         const mangled = implMethodMangled(methods, method.name.text) orelse return error.UnsupportedCEmission;
@@ -181,7 +182,7 @@ fn emitVtableSlots(ctx: Context, trait: ast_bridge.TraitDecl, methods: []const a
 }
 
 // The cast type for a vtable slot: `RET (*)(void *, P...)`.
-fn appendVtableSlotCastType(ctx: Context, trait: ast_bridge.TraitDecl, method: ast_bridge.TraitMethodSig) !void {
+fn appendVtableSlotCastType(ctx: Context, trait: declaration_artifacts.TraitDeclArtifact, method: ast_bridge.TraitMethodSig) !void {
     const ret_ty: ast_bridge.TypeExpr = method.return_type orelse ast_bridge.TypeExpr{ .span = trait.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.name.span } } };
     try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, ret_ty));
     try ctx.out.appendSlice(ctx.allocator, " (*)(void *");

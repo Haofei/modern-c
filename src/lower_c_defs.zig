@@ -7,6 +7,7 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const lower_c_type = @import("lower_c_type.zig");
@@ -273,7 +274,7 @@ pub fn emitClosureTypes(ctx: Context, closure_types: *std.StringHashMap(ast_brid
     }
 }
 
-pub fn emitDynTraitTypes(ctx: Context, trait_decls: *std.StringHashMap(ast_bridge.TraitDecl)) !void {
+pub fn emitDynTraitTypes(ctx: Context, trait_decls: *std.StringHashMap(declaration_artifacts.TraitDeclArtifact)) !void {
     var it = trait_decls.iterator();
     while (it.next()) |entry| {
         const trait = entry.value_ptr.*;
@@ -288,7 +289,7 @@ pub fn emitDynTraitTypes(ctx: Context, trait_decls: *std.StringHashMap(ast_bridg
     }
 }
 
-fn appendVtableSlotType(ctx: Context, trait: ast_bridge.TraitDecl, method: ast_bridge.TraitMethodSig) !void {
+fn appendVtableSlotType(ctx: Context, trait: declaration_artifacts.TraitDeclArtifact, method: ast_bridge.TraitMethodSig) !void {
     const ret_ty: ast_bridge.TypeExpr = method.return_type orelse ast_bridge.TypeExpr{ .span = trait.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.name.span } } };
     try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, ret_ty));
     try ctx.out.appendSlice(ctx.allocator, " (*");

@@ -292,7 +292,7 @@ pub const CEmitter = struct {
     // `*dyn Trait` knows its vtable layout and a dispatch resolves the slot. `impl_methods`:
     // (Trait,Type) → the mangled `Type__m` function names, in trait-method order, so the
     // rodata vtable initializer lists the right function pointers.
-    trait_decls: std.StringHashMap(ast_bridge.TraitDecl),
+    trait_decls: std.StringHashMap(declaration_artifacts.TraitDeclArtifact),
     impl_methods: std.StringHashMap([]const ast_bridge.ImplTraitMethod),
     mir_module: *const mir.Module,
     source_path: ?[]const u8,
@@ -362,7 +362,7 @@ pub const CEmitter = struct {
             .fn_ptr_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
             .closure_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
             .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
-            .trait_decls = std.StringHashMap(ast_bridge.TraitDecl).init(allocator),
+            .trait_decls = std.StringHashMap(declaration_artifacts.TraitDeclArtifact).init(allocator),
             .impl_methods = std.StringHashMap([]const ast_bridge.ImplTraitMethod).init(allocator),
             .mir_module = mir_module,
             .source_path = source_path,
@@ -502,7 +502,7 @@ pub const CEmitter = struct {
         trait_artifacts: []const declaration_artifacts.TraitDeclArtifact,
         impl_artifacts: []const declaration_artifacts.ImplTraitArtifact,
     ) anyerror!void {
-        for (trait_artifacts) |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl.toDecl());
+        for (trait_artifacts) |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl);
         for (impl_artifacts) |impl_trait| try self.collectImplTraitArtifact(impl_trait);
     }
 
