@@ -466,6 +466,7 @@ removing backend authority before adding new abstractions:
 | 278 | Remove MIR-internal module-shaped fact collectors. | Complete: MIR drop-glue, type-ownership, aggregate-return, and direct-global pointer-return collectors now accept declaration slices directly; `buildOptFromDecls(...)` no longer traverses `module.decls`, and inventory gates keep MIR helper `module: ast.Module` parameters at zero while the remaining eval compatibility wrapper is explicitly counted. |
 | 279 | Delete eval const-global module wrapper from MIR build. | Complete: `eval.collectConstGlobalsWithOptions(allocator, ast.Module, ...)` was removed; MIR now calls `collectConstGlobalsFromDeclsWithOptions(...)` directly, and inventory gates keep the old eval module wrapper and MIR `ast.Module{ .decls = decls }` compatibility object at zero. |
 | 280 | Narrow eval run-trap expectations to declaration slices. | Complete: `eval.runTrapExpectation(...)` no longer accepts `ast.Module`; CLI/spec run-trap checks call `runTrapExpectationFromDecls(...)`, and inventory gates keep the old module-shaped eval entrypoint at zero. |
+| 281 | Wrap checked frontend output before semantic handoff. | Complete: `parseCheckedModuleOrReport(...)` now returns `CheckedModule` instead of naked `ast.Module`; compile-like CLI commands use `checked.decls()` for MIR/backend handoff, and inventory gates prevent returning to `buildVerifiedProgramFromDecls(module.decls, ...)`. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

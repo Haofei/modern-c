@@ -442,11 +442,11 @@ fn runLowerMir(session: *CompilationSession, path: []const u8, source: []const u
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);
-    defer module.deinit(parse_allocator);
+    const checked = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);
+    defer checked.deinit(parse_allocator);
 
     var module_mir: mir.Module = undefined;
-    _ = try session.buildVerifiedProgramFromDecls(module.decls, &diag, optimize, &module_mir, error.LowerMirFailed);
+    _ = try session.buildVerifiedProgramFromDecls(checked.decls(), &diag, optimize, &module_mir, error.LowerMirFailed);
     defer module_mir.deinit();
 
     var output: std.ArrayList(u8) = .empty;
@@ -464,10 +464,10 @@ fn runVerify(session: *CompilationSession, path: []const u8, source: []const u8,
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.VerifyFailed);
-    defer module.deinit(parse_allocator);
+    const checked = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.VerifyFailed);
+    defer checked.deinit(parse_allocator);
 
-    try mir.verifyOptFromDecls(allocator, module.decls, &diag, .{ .optimize = optimize });
+    try mir.verifyOptFromDecls(allocator, checked.decls(), &diag, .{ .optimize = optimize });
     if (diag.has_errors) {
         diag.render();
         return error.VerifyFailed;
@@ -554,18 +554,18 @@ fn runCheck(session: *CompilationSession, path: []const u8, source: []const u8, 
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, false, error.CheckFailed) catch |err| {
+    const checked = session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, false, error.CheckFailed) catch |err| {
         if (diag.has_errors) {
             try emitCheckDiagnostics(session, &diag, json_diagnostics);
         }
         return err;
     };
-    defer module.deinit(parse_allocator);
+    defer checked.deinit(parse_allocator);
 
     if (json_diagnostics) {
         try emitCheckDiagnostics(session, &diag, true);
     } else {
-        std.debug.print("parsed {d} top-level declarations\n", .{module.decls.len});
+        std.debug.print("parsed {d} top-level declarations\n", .{checked.decls().len});
     }
 }
 
@@ -731,12 +731,12 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.EmitCFailed);
-    defer module.deinit(parse_allocator);
+    const checked = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.EmitCFailed);
+    defer checked.deinit(parse_allocator);
 
     var module_mir: mir.Module = undefined;
     var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, module.decls, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, checked.decls(), &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
     defer module_mir.deinit();
     defer early_metadata.deinit(allocator);
 
@@ -785,12 +785,12 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, true, error.BuildFailed);
-    defer module.deinit(parse_allocator);
+    const checked = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, true, error.BuildFailed);
+    defer checked.deinit(parse_allocator);
 
     var module_mir: mir.Module = undefined;
     var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, module.decls, &diag, false, &module_mir, &early_metadata, error.BuildFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, checked.decls(), &diag, false, &module_mir, &early_metadata, error.BuildFailed);
     defer module_mir.deinit();
     defer early_metadata.deinit(allocator);
 
@@ -1154,12 +1154,12 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.EmitCFailed);
-    defer module.deinit(parse_allocator);
+    const checked = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.EmitCFailed);
+    defer checked.deinit(parse_allocator);
 
     var module_mir: mir.Module = undefined;
     var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, module.decls, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, checked.decls(), &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
     defer module_mir.deinit();
     defer early_metadata.deinit(allocator);
 
@@ -1221,12 +1221,12 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.EmitLlvmFailed);
-    defer module.deinit(parse_allocator);
+    const checked = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.EmitLlvmFailed);
+    defer checked.deinit(parse_allocator);
 
     var module_mir: mir.Module = undefined;
     var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, module.decls, &diag, optimize, &module_mir, &early_metadata, error.EmitLlvmFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, checked.decls(), &diag, optimize, &module_mir, &early_metadata, error.EmitLlvmFailed);
     defer module_mir.deinit();
     defer early_metadata.deinit(allocator);
 
@@ -1280,8 +1280,8 @@ fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []const
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, true, error.EmitLayoutFailed);
-    defer module.deinit(parse_allocator);
+    const checked = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, true, error.EmitLayoutFailed);
+    defer checked.deinit(parse_allocator);
 
     // Split `A,B,C` into struct names (arena-allocated so they outlive the loop).
     var names: std.ArrayList([]const u8) = .empty;
@@ -1297,7 +1297,7 @@ fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []const
     defer output.deinit(allocator);
     var typed_mir: mir.Module = undefined;
     var artifacts = driver_codegen_inputs.DeclarationArtifacts.empty;
-    try driver_codegen_inputs.buildCArtifactInputs(session, module.decls, &typed_mir, &artifacts);
+    try driver_codegen_inputs.buildCArtifactInputs(session, checked.decls(), &typed_mir, &artifacts);
     defer typed_mir.deinit();
     defer artifacts.deinit(allocator);
     lower_c.appendLayoutAssertsWithMirArtifacts(allocator, artifacts, &typed_mir, &output, names.items) catch |err| switch (err) {
@@ -1329,8 +1329,8 @@ fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []cons
     defer arena.deinit();
     const parse_allocator = arena.allocator();
 
-    const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, true, error.EmitCStructFailed);
-    defer module.deinit(parse_allocator);
+    const checked = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, false, true, error.EmitCStructFailed);
+    defer checked.deinit(parse_allocator);
 
     var names: std.ArrayList([]const u8) = .empty;
     defer names.deinit(allocator);
@@ -1345,7 +1345,7 @@ fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []cons
     defer output.deinit(allocator);
     var typed_mir: mir.Module = undefined;
     var artifacts = driver_codegen_inputs.DeclarationArtifacts.empty;
-    try driver_codegen_inputs.buildCArtifactInputs(session, module.decls, &typed_mir, &artifacts);
+    try driver_codegen_inputs.buildCArtifactInputs(session, checked.decls(), &typed_mir, &artifacts);
     defer typed_mir.deinit();
     defer artifacts.deinit(allocator);
     lower_c.appendStructDeclsWithMirArtifacts(allocator, artifacts, &typed_mir, &output, names.items) catch |err| switch (err) {

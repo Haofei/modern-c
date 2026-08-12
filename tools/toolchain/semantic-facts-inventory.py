@@ -727,7 +727,7 @@ ANCHORS: dict[str, list[str]] = {
         'std.mem.eql(u8, command, "lower-mir")',
         'std.mem.eql(u8, command, "lower-ir")',
         "try ir.appendFacts",
-        "try session.buildVerifiedProgramFromDecls(module.decls, &diag, optimize, &module_mir, error.LowerMirFailed)",
+        "try session.buildVerifiedProgramFromDecls(checked.decls(), &diag, optimize, &module_mir, error.LowerMirFailed)",
         "try mir.appendDumpFromMir",
         "try ir.appendLowerIr",
     ],

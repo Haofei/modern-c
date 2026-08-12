@@ -29,6 +29,18 @@ pub const StageFailure = error{
     EmitCStructFailed,
 };
 
+pub const CheckedModule = struct {
+    module: ast.Module,
+
+    pub fn decls(self: CheckedModule) []ast.Decl {
+        return self.module.decls;
+    }
+
+    pub fn deinit(self: CheckedModule, allocator: std.mem.Allocator) void {
+        self.module.deinit(allocator);
+    }
+};
+
 pub const CompilationSession = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -180,7 +192,7 @@ pub const CompilationSession = struct {
         optimize: bool,
         render_errors: bool,
         failure_error: StageFailure,
-    ) !ast.Module {
+    ) !CheckedModule {
         const module = try self.parseModuleOrReportMode(source, allocator, diag, render_errors);
         if (diag.has_errors) {
             if (render_errors) diag.render();
@@ -191,7 +203,7 @@ pub const CompilationSession = struct {
             if (render_errors) diag.render();
             return failure_error;
         }
-        return module;
+        return .{ .module = module };
     }
 
     pub fn buildVerifiedProgramFromDecls(

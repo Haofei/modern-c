@@ -93,10 +93,10 @@ def main() -> int:
         "session.module_graph = &loaded.graph;",
         "session.attachLoadedProjectSyntax(&loaded, module_parse_arena.allocator(), &load_diag, &parsed_sources, &resolved_sources) catch |err| {",
         "try load_diag.appendJson(&out);",
-        "const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);",
-        "_ = try session.buildVerifiedProgramFromDecls(module.decls, &diag, optimize, &module_mir, error.LowerMirFailed);",
+        "const checked = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);",
+        "_ = try session.buildVerifiedProgramFromDecls(checked.decls(), &diag, optimize, &module_mir, error.LowerMirFailed);",
         "try mir.appendDumpFromMir(allocator, module_mir, &output);",
-        "const program = try driver_codegen_inputs.buildBackendInputs(session, module.decls, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);",
+        "const program = try driver_codegen_inputs.buildBackendInputs(session, checked.decls(), &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);",
     ):
         require_contains(main_zig, needle)
 
@@ -157,6 +157,10 @@ def main() -> int:
         fail("driver codegen inputs must not accept ast.Module")
     if main_text.count("session.parseCheckedModuleOrReport(") < 7:
         fail("compile-like CLI commands must share CompilationSession.parseCheckedModuleOrReport")
+    if main_text.count("checked.decls()") != 9:
+        fail("compile-like CLI commands must use CheckedModule.decls() at semantic handoff points")
+    if "buildVerifiedProgramFromDecls(module.decls" in main_text:
+        fail("compile-like CLI commands must not pass naked ast.Module decls to VerifiedProgram construction")
     if main_text.count("session.checkModule(") != 0:
         fail("compile-like CLI commands must not bypass parseCheckedModuleOrReport")
     if re.search(r'@import\("[^"]*_tests\.zig"\)', main_text):
