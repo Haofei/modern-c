@@ -417,6 +417,7 @@ removing backend authority before adding new abstractions:
 | 229 | Delete the early declaration metadata shim. | Complete: `early_declaration_metadata.zig` was removed after all callers moved to `declaration_artifacts.zig`; architecture inventory now forbids re-importing the retired shim. |
 | 230 | Remove no-op opaque type artifacts from backend prepasses. | Complete: `TypeArtifact` no longer carries `opaque_decl: ast.Ident`; opaque declarations remain represented only in source-map artifacts, while C/LLVM type prepasses no longer receive or ignore a no-op AST payload. |
 | 231 | Split trait declarations out of callable/value artifacts. | Complete: `EarlyDeclarationArtifacts` now carries `trait_artifacts` separately from function/global artifacts; C and LLVM collect trait declarations/impl methods from the explicit trait slice, and inventory gates prevent trait/impl nodes from being appended to `callable_value_artifacts`. |
+| 232 | Delete callable/value declaration artifact union. | Complete: `CallableValueArtifact` was removed; early declaration artifacts now carry separate `function_artifacts` and `global_artifacts`, C and LLVM collect functions/globals through explicit slices, and inventory gates keep the old mixed `callable_value_artifacts` path at zero. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

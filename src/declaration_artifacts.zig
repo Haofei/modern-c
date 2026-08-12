@@ -17,14 +17,17 @@ pub const SyntaxDeclarationSlice = []const ast.Decl;
 /// but declaration enumeration is isolated here instead of being exposed
 /// through backend lowering requests as a generic legacy view.
 pub const EarlyDeclarationArtifacts = struct {
-    callable_value_artifacts: []const CallableValueArtifact,
+    function_artifacts: []const FunctionArtifact,
+    global_artifacts: []const ast.GlobalDecl,
     trait_artifacts: []const TraitArtifact,
     type_artifacts: []const TypeArtifact,
     source_map_artifacts: []const SourceMapArtifact,
 
     pub fn collectFromSyntaxDecls(allocator: std.mem.Allocator, decls: SyntaxDeclarationSlice) !EarlyDeclarationArtifacts {
-        var callable_value_artifacts: std.ArrayList(CallableValueArtifact) = .empty;
-        errdefer callable_value_artifacts.deinit(allocator);
+        var function_artifacts: std.ArrayList(FunctionArtifact) = .empty;
+        errdefer function_artifacts.deinit(allocator);
+        var global_artifacts: std.ArrayList(ast.GlobalDecl) = .empty;
+        errdefer global_artifacts.deinit(allocator);
         var trait_artifacts: std.ArrayList(TraitArtifact) = .empty;
         errdefer trait_artifacts.deinit(allocator);
         var type_artifacts: std.ArrayList(TypeArtifact) = .empty;
@@ -34,15 +37,15 @@ pub const EarlyDeclarationArtifacts = struct {
 
         for (decls) |decl| switch (decl.kind) {
             .fn_decl => |fn_decl| {
-                try callable_value_artifacts.append(allocator, .{ .function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
+                try function_artifacts.append(allocator, .{ .fn_decl = fn_decl, .attrs = decl.attrs, .is_extern = false });
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .extern_fn => |fn_decl| {
-                try callable_value_artifacts.append(allocator, .{ .extern_function = .{ .fn_decl = fn_decl, .attrs = decl.attrs } });
+                try function_artifacts.append(allocator, .{ .fn_decl = fn_decl, .attrs = decl.attrs, .is_extern = true });
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .global_decl => |global| {
-                try callable_value_artifacts.append(allocator, .{ .global = global });
+                try global_artifacts.append(allocator, global);
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .type_alias => |alias| {
@@ -82,8 +85,10 @@ pub const EarlyDeclarationArtifacts = struct {
             },
         };
 
-        const owned_callable_value_artifacts = try callable_value_artifacts.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_callable_value_artifacts);
+        const owned_function_artifacts = try function_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_function_artifacts);
+        const owned_global_artifacts = try global_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_global_artifacts);
         const owned_trait_artifacts = try trait_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_trait_artifacts);
         const owned_type_artifacts = try type_artifacts.toOwnedSlice(allocator);
@@ -92,7 +97,8 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer allocator.free(owned_source_map_artifacts);
 
         return .{
-            .callable_value_artifacts = owned_callable_value_artifacts,
+            .function_artifacts = owned_function_artifacts,
+            .global_artifacts = owned_global_artifacts,
             .trait_artifacts = owned_trait_artifacts,
             .type_artifacts = owned_type_artifacts,
             .source_map_artifacts = owned_source_map_artifacts,
@@ -100,7 +106,8 @@ pub const EarlyDeclarationArtifacts = struct {
     }
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
-        allocator.free(self.callable_value_artifacts);
+        allocator.free(self.function_artifacts);
+        allocator.free(self.global_artifacts);
         allocator.free(self.trait_artifacts);
         allocator.free(self.type_artifacts);
         allocator.free(self.source_map_artifacts);
@@ -108,7 +115,8 @@ pub const EarlyDeclarationArtifacts = struct {
     }
 
     pub const empty = EarlyDeclarationArtifacts{
-        .callable_value_artifacts = &.{},
+        .function_artifacts = &.{},
+        .global_artifacts = &.{},
         .trait_artifacts = &.{},
         .type_artifacts = &.{},
         .source_map_artifacts = &.{},
@@ -128,10 +136,7 @@ pub const ComptimeDeclarationArtifacts = struct {
         var structs: std.ArrayList(ast.StructDecl) = .empty;
         errdefer structs.deinit(allocator);
 
-        for (artifacts.callable_value_artifacts) |artifact| switch (artifact) {
-            .global => |global| try globals.append(allocator, global),
-            else => {},
-        };
+        try globals.appendSlice(allocator, artifacts.global_artifacts);
         for (artifacts.type_artifacts) |artifact| switch (artifact) {
             .type_alias => |alias| try type_aliases.append(allocator, alias),
             .struct_decl => |struct_decl| try structs.append(allocator, struct_decl),
@@ -182,15 +187,10 @@ fn declOrigin(decl: ast.Decl) []const u8 {
     return if (std.meta.activeTag(decl.kind) == .extern_fn) "external" else "source";
 }
 
-pub const CallableValueArtifact = union(enum) {
-    global: ast.GlobalDecl,
-    function: Function,
-    extern_function: Function,
-
-    pub const Function = struct {
-        fn_decl: ast.FnDecl,
-        attrs: []const ast.Attr,
-    };
+pub const FunctionArtifact = struct {
+    fn_decl: ast.FnDecl,
+    attrs: []const ast.Attr,
+    is_extern: bool,
 };
 
 pub const TraitArtifact = union(enum) {

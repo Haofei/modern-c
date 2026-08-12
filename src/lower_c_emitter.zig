@@ -455,13 +455,10 @@ pub const CEmitter = struct {
         // mangling resolve during the artifact-collection pass below. Const global
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
-        for (artifacts.callable_value_artifacts) |artifact| switch (artifact) {
-            .function => |function| {
-                const fn_decl = function.fn_decl;
-                if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
-            },
-            else => {},
-        };
+        for (artifacts.function_artifacts) |function| {
+            const fn_decl = function.fn_decl;
+            if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+        }
         const declarations = self.comptime_declarations orelse return error.UnsupportedCEmission;
         for (declarations.globals) |global| {
             if (!global.is_const) continue;
@@ -489,17 +486,18 @@ pub const CEmitter = struct {
     }
 
     pub fn collectDeclArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
-        try self.collectCallableValueArtifacts(artifacts.callable_value_artifacts);
+        try self.collectFunctionArtifacts(artifacts.function_artifacts);
+        try self.collectGlobalArtifacts(artifacts.global_artifacts);
         try self.collectTraitArtifacts(artifacts.trait_artifacts);
         try self.collectTypeArtifactsFromArtifacts(artifacts.type_artifacts);
     }
 
-    fn collectCallableValueArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.CallableValueArtifact) anyerror!void {
-        for (artifacts) |artifact| switch (artifact) {
-            .global => |global| try self.collectGlobalDeclArtifact(global),
-            .function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, false),
-            .extern_function => |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, true),
-        };
+    fn collectFunctionArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.FunctionArtifact) anyerror!void {
+        for (artifacts) |function| try self.collectFnDeclArtifact(function.fn_decl, function.attrs, function.is_extern);
+    }
+
+    fn collectGlobalArtifacts(self: *CEmitter, artifacts: []const ast_bridge.GlobalDecl) anyerror!void {
+        for (artifacts) |global| try self.collectGlobalDeclArtifact(global);
     }
 
     fn collectTraitArtifacts(self: *CEmitter, artifacts: []const declaration_artifacts.TraitArtifact) anyerror!void {

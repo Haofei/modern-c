@@ -362,7 +362,8 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .impl_methods = std.StringHashMap([]const ast_bridge.ImplTraitMethod).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
-        .callable_value_artifacts = early_metadata.callable_value_artifacts,
+        .function_artifacts = early_metadata.function_artifacts,
+        .global_artifacts = early_metadata.global_artifacts,
         .trait_artifacts = early_metadata.trait_artifacts,
         .type_artifacts = early_metadata.type_artifacts,
         .global_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
@@ -404,7 +405,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
     });
     try ctx.collectNonStructTypeArtifacts();
     try ctx.collectStructArtifacts();
-    try ctx.collectCallableAndValueDeclArtifacts();
+    try ctx.collectFunctionGlobalAndTraitArtifacts();
     try ctx.validateDropGlueFactsAgainstDecls();
     try ctx.collectMirAggregateReturnPointerFieldFacts();
     // Tier 2: one rodata vtable global per `impl Trait for Type` of an object-safe
@@ -462,7 +463,8 @@ const LlvmEmitter = struct {
     // alias `@Y = alias <fnty>, ptr @name` so the override symbol is linkable (the C backend
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
-    callable_value_artifacts: []const declaration_artifacts.CallableValueArtifact = &.{},
+    function_artifacts: []const declaration_artifacts.FunctionArtifact = &.{},
+    global_artifacts: []const ast_bridge.GlobalDecl = &.{},
     trait_artifacts: []const declaration_artifacts.TraitArtifact = &.{},
     type_artifacts: []const declaration_artifacts.TypeArtifact = &.{},
     struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
@@ -586,13 +588,10 @@ const LlvmEmitter = struct {
     }
 
     fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
-        for (artifacts.callable_value_artifacts) |artifact| switch (artifact) {
-            .function => |function| {
-                const fn_decl = function.fn_decl;
-                if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
-            },
-            else => {},
-        };
+        for (artifacts.function_artifacts) |function| {
+            const fn_decl = function.fn_decl;
+            if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+        }
         for (artifacts.type_artifacts) |artifact| switch (artifact) {
             .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
             .enum_decl => |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl),
@@ -715,19 +714,13 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn collectCallableAndValueDeclArtifacts(self: *LlvmEmitter) !void {
-        for (self.callable_value_artifacts) |artifact| {
-            switch (artifact) {
-                .function => |function| {
-                    try self.collectFunction(function.fn_decl, function.attrs);
-                    try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = function.fn_decl, .attrs = function.attrs, .is_extern = false });
-                },
-                .extern_function => |function| {
-                    try self.collectFunction(function.fn_decl, function.attrs);
-                    try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = function.fn_decl, .attrs = function.attrs, .is_extern = true });
-                },
-                .global => |global| try self.collectGlobal(global),
-            }
+    fn collectFunctionGlobalAndTraitArtifacts(self: *LlvmEmitter) !void {
+        for (self.function_artifacts) |function| {
+            try self.collectFunction(function.fn_decl, function.attrs);
+            try self.function_decl_artifacts.append(self.allocator, .{ .fn_decl = function.fn_decl, .attrs = function.attrs, .is_extern = function.is_extern });
+        }
+        for (self.global_artifacts) |global| {
+            try self.collectGlobal(global);
         }
         for (self.trait_artifacts) |artifact| {
             switch (artifact) {
