@@ -123,11 +123,11 @@ than giving the backend a full `ast.Module`, but it is not the final semantic
 boundary. Source-map row enumeration is isolated in `source_map_rows.zig`, and
 `EmitMapRequest` carries collected `SourceMapRows` artifacts rather than an AST
 declaration view. Declaration-artifact mechanics live in
-`declaration_artifacts.zig`; source-map row mechanics live separately in
-`source_map_rows.zig`; `backend.zig` imports only `codegen_request.zig` so the
-core backend seam does not directly import AST declarations. New backend work
-should prefer MIR identities and typed facts and should avoid adding new
-semantic decisions to syntax-backed views.
+`declaration_artifacts.zig`; `source_map_rows.zig` aliases the collected
+`SourceMapArtifact` payload and no longer imports AST directly; `backend.zig`
+imports only `codegen_request.zig` so the core backend seam does not directly
+import AST declarations. New backend work should prefer MIR identities and typed
+facts and should avoid adding new semantic decisions to syntax-backed views.
 
 CLI/backend commands assemble the transitional request in
 `driver_codegen_inputs.zig`. That file is the only driver-owned syntax

@@ -82,8 +82,10 @@ EXACT_FILE_COUNTS = {
     ("src/declaration_artifacts.zig", "pub const SyntaxDeclarationSlice = []const ast.Decl"): 1,
     ("src/declaration_artifacts.zig", "pub const EarlyDeclarationArtifacts = struct"): 1,
     ("src/source_map_rows.zig", "[]const ast.Decl"): 0,
+    ("src/source_map_rows.zig", '@import("ast.zig")'): 0,
     ("src/source_map_rows.zig", "pub const SourceMapRows = struct"): 1,
-    ("src/source_map_rows.zig", "pub const RowArtifact = union(enum)"): 1,
+    ("src/source_map_rows.zig", "pub const RowArtifact = union(enum)"): 0,
+    ("src/source_map_rows.zig", "pub const RowArtifact = declaration_artifacts.SourceMapArtifact"): 1,
     ("src/mir_facts_view.zig", "targetTypeFactAtWithModuleFallback"): 0,
     ("src/mir_facts_view.zig", "targetTypeFactAtOwnedWithModuleFallback"): 0,
     ("src/mir_facts_view.zig", "targetTypeFactAtCurrentSpan"): 1,
@@ -203,7 +205,7 @@ REQUIRED_ANCHORS = {
     ),
     "src/source_map_rows.zig": (
         "Transitional source-map row artifacts",
-        "enumeration is isolated here",
+        "enumeration is isolated in `declaration_artifacts.zig`",
     ),
     "src/loader.zig": (
         "MC has no",
