@@ -174,7 +174,7 @@ pub fn mmioFieldFromType(ty: ast_bridge.TypeExpr) ?MmioField {
 
 pub fn overlayFieldLayout(
     ty: ast_bridge.TypeExpr,
-    const_fns: *const std.StringHashMap(ast_bridge.FnDecl),
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     reflect_env: *lower_c_reflect.ReflectEnv,
 ) ?OverlayLayout {

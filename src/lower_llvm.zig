@@ -344,7 +344,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         .need_sadd = std.StringHashMap(void).init(allocator),
         .need_ssub = std.StringHashMap(void).init(allocator),
         .need_smul = std.StringHashMap(void).init(allocator),
-        .const_fns = std.StringHashMap(ast_bridge.FnDecl).init(allocator),
+        .const_fns = std.StringHashMap(eval.ComptimeFunction).init(allocator),
         .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
         .const_global_widths = std.StringHashMap(u16).init(allocator),
         .const_global_domains = std.StringHashMap(eval.DomainWidth).init(allocator),
@@ -432,7 +432,7 @@ const LlvmEmitter = struct {
     need_sadd: std.StringHashMap(void) = undefined,
     need_ssub: std.StringHashMap(void) = undefined,
     need_smul: std.StringHashMap(void) = undefined,
-    const_fns: std.StringHashMap(ast_bridge.FnDecl) = undefined,
+    const_fns: std.StringHashMap(eval.ComptimeFunction) = undefined,
     const_globals: std.StringHashMap(eval.ComptimeValue) = undefined,
     const_global_widths: std.StringHashMap(u16) = undefined,
     const_global_domains: std.StringHashMap(eval.DomainWidth) = undefined,
@@ -582,8 +582,7 @@ const LlvmEmitter = struct {
     fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
-                const fn_decl = declaration_artifacts.comptimeFnDeclFromArtifact(function);
-                if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+                if (function.is_const and !self.const_fns.contains(function.name.text)) try self.const_fns.put(function.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));
             },
             .type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),

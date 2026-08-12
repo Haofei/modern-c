@@ -5,6 +5,7 @@ const eval = @import("eval.zig");
 const layout = @import("layout.zig");
 
 const ComptimeScope = eval.ComptimeScope;
+const ComptimeFunction = eval.ComptimeFunction;
 const ComptimeValue = eval.ComptimeValue;
 const foldComptimeAssign = eval.foldComptimeAssign;
 const foldComptimeExpr = eval.foldComptimeExpr;
@@ -201,9 +202,9 @@ test "const fn parameter metadata OOM does not silently use untyped arithmetic" 
         .exported = false,
     };
 
-    var funcs = std.StringHashMap(ast.FnDecl).init(std.testing.allocator);
+    var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("checked_add", fn_decl);
+    try funcs.put("checked_add", ComptimeFunction.fromFnDecl(fn_decl));
 
     const call = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .call = .{
         .callee = try testIdent(a, "checked_add"),
@@ -266,9 +267,9 @@ test "foldComptimeExpr evaluates const fn calls" {
         .exported = false,
     };
 
-    var funcs = std.StringHashMap(ast.FnDecl).init(std.testing.allocator);
+    var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("is_power_of_two", fn_decl);
+    try funcs.put("is_power_of_two", ComptimeFunction.fromFnDecl(fn_decl));
 
     var scope = ComptimeScope.init(std.testing.allocator);
     defer scope.deinit();
@@ -319,9 +320,9 @@ test "foldComptimeExpr evaluates assert statements in const fn calls" {
         .exported = false,
     };
 
-    var funcs = std.StringHashMap(ast.FnDecl).init(std.testing.allocator);
+    var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("require_four", fn_decl);
+    try funcs.put("require_four", ComptimeFunction.fromFnDecl(fn_decl));
 
     var scope = ComptimeScope.init(std.testing.allocator);
     defer scope.deinit();
@@ -386,9 +387,9 @@ test "foldComptimeExpr evaluates a const fn with a while loop and fuel" {
         .exported = false,
     };
 
-    var funcs = std.StringHashMap(ast.FnDecl).init(std.testing.allocator);
+    var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("count_down", fn_decl);
+    try funcs.put("count_down", ComptimeFunction.fromFnDecl(fn_decl));
 
     var scope = ComptimeScope.init(std.testing.allocator);
     defer scope.deinit();
@@ -487,9 +488,9 @@ test "foldComptimeExpr folds a const fn with a for loop over an array" {
         .exported = false,
     };
 
-    var funcs = std.StringHashMap(ast.FnDecl).init(std.testing.allocator);
+    var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("sum", fn_decl);
+    try funcs.put("sum", ComptimeFunction.fromFnDecl(fn_decl));
 
     // Arena-backed scope so folded array temporaries are freed with the arena.
     var scope = ComptimeScope.init(a);
@@ -530,9 +531,9 @@ test "foldComptimeExpr folds a const fn with a comptime switch" {
         .exported = false,
     };
 
-    var funcs = std.StringHashMap(ast.FnDecl).init(std.testing.allocator);
+    var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("classify", fn_decl);
+    try funcs.put("classify", ComptimeFunction.fromFnDecl(fn_decl));
 
     var scope = ComptimeScope.init(a);
     defer scope.deinit();

@@ -34,7 +34,7 @@ pub const ReflectEnv = struct {
     packed_bits: *const std.StringHashMap(PackedBitsInfo),
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
     tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
-    const_fns: *const std.StringHashMap(ast_bridge.FnDecl),
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
 };
 

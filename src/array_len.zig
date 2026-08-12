@@ -21,11 +21,11 @@ pub fn constIndexLiteral(index: ast.Expr) ?usize {
     };
 }
 
-pub fn parseArrayLen(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
+pub fn parseArrayLen(expr: ast.Expr, funcs: ?*const std.StringHashMap(eval.ComptimeFunction), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
     return parseArrayLenWithReflect(expr, funcs, globals, null, null);
 }
 
-pub fn parseArrayLenWithReflect(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
+pub fn parseArrayLenWithReflect(expr: ast.Expr, funcs: ?*const std.StringHashMap(eval.ComptimeFunction), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
     return switch (expr.kind) {
         .int_literal => |literal| parseUsizeLiteral(literal),
         .char_literal => |literal| if (parseCharLiteral(literal)) |value|
@@ -53,7 +53,7 @@ pub fn parseArrayLenWithReflect(expr: ast.Expr, funcs: ?*const std.StringHashMap
     };
 }
 
-fn parseArrayLenBlock(block: ast.Block, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
+fn parseArrayLenBlock(block: ast.Block, funcs: ?*const std.StringHashMap(eval.ComptimeFunction), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
     if (block.items.len != 1) return null;
     const returned = switch (block.items[0].kind) {
         .@"return" => |maybe| maybe orelse return null,
@@ -65,11 +65,11 @@ fn parseArrayLenBlock(block: ast.Block, funcs: ?*const std.StringHashMap(ast.FnD
 // Fold a comptime expression to a usize using the const-fn evaluator. A
 // stack buffer backs the evaluator's scopes so this stays callable from
 // type-level array-length helpers without a checker or function builder.
-pub fn comptimeUsizeValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
+pub fn comptimeUsizeValue(expr: ast.Expr, funcs: ?*const std.StringHashMap(eval.ComptimeFunction), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?usize {
     return comptimeUsizeValueWithReflect(expr, funcs, globals, null, null);
 }
 
-pub fn comptimeUsizeValueWithReflect(expr: ast.Expr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
+pub fn comptimeUsizeValueWithReflect(expr: ast.Expr, funcs: ?*const std.StringHashMap(eval.ComptimeFunction), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
     if (funcs == null and globals == null) return null;
     var fb_arena: ?std.heap.ArenaAllocator = null;
     defer if (fb_arena) |*a| a.deinit();
@@ -93,7 +93,7 @@ pub fn comptimeUsizeValueWithReflect(expr: ast.Expr, funcs: ?*const std.StringHa
     };
 }
 
-pub fn fixedArrayType(ty: ast.TypeExpr, funcs: ?*const std.StringHashMap(ast.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?FixedArrayInfo {
+pub fn fixedArrayType(ty: ast.TypeExpr, funcs: ?*const std.StringHashMap(eval.ComptimeFunction), globals: ?*const std.StringHashMap(eval.ComptimeValue)) ?FixedArrayInfo {
     return switch (ty.kind) {
         .array => |node| .{ .len = parseArrayLen(node.len, funcs, globals) orelse return null, .child = node.child.* },
         .qualified => |node| fixedArrayType(node.child.*, funcs, globals),

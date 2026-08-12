@@ -339,7 +339,7 @@ pub const Checker = struct {
     optimize: bool = false,
     // Registry of `const fn` declarations, populated for the duration of
     // checkModule so comptime folding can evaluate const-fn calls (section 22).
-    const_fns: ?*const std.StringHashMap(ast.FnDecl) = null,
+    const_fns: ?*const std.StringHashMap(eval.ComptimeFunction) = null,
     // Folded values of `const NAME: T = …` globals (section 22), so comptime
     // folding can resolve named compile-time constants.
     const_globals: ?*const std.StringHashMap(eval.ComptimeValue) = null,
@@ -558,7 +558,7 @@ pub const Checker = struct {
         // above (the impl methods are `Type__m` functions keyed on the opaque owner).
         self.checkTraits(decls, safe_module);
 
-        var const_fns = std.StringHashMap(ast.FnDecl).init(self.reporter.allocator);
+        var const_fns = std.StringHashMap(eval.ComptimeFunction).init(self.reporter.allocator);
         defer const_fns.deinit();
         for (decls) |decl| {
             const fn_decl = switch (decl.kind) {
@@ -566,7 +566,7 @@ pub const Checker = struct {
                 else => continue,
             };
             if (fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) {
-                const_fns.put(fn_decl.name.text, fn_decl) catch {
+                const_fns.put(fn_decl.name.text, eval.ComptimeFunction.fromFnDecl(fn_decl)) catch {
                     self.oom = true;
                 };
             }

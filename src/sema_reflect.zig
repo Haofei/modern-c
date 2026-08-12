@@ -35,7 +35,7 @@ pub const ReflectEnv = struct {
     tagged_unions: *const std.StringHashMap(UnionInfo),
     enums: *const std.StringHashMap(EnumInfo),
     aliases: *const std.StringHashMap(ast.TypeExpr),
-    const_fns: ?*const std.StringHashMap(ast.FnDecl) = null,
+    const_fns: ?*const std.StringHashMap(eval.ComptimeFunction) = null,
     const_globals: ?*const std.StringHashMap(eval.ComptimeValue) = null,
 };
 

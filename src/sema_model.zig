@@ -198,7 +198,7 @@ pub const Context = struct {
     trait_decls: ?*const std.StringHashMap(ast.TraitDecl) = null,
     // `const fn` bodies, for evaluating comptime const-fn calls (e.g. when a
     // const-fn result drives a fixed-array length - section 22 comptime<->type).
-    const_fns: ?*const std.StringHashMap(ast.FnDecl) = null,
+    const_fns: ?*const std.StringHashMap(eval.ComptimeFunction) = null,
     // Folded `const NAME: T = …` global values, for resolving named compile-time
     // constants in comptime contexts and array lengths.
     const_globals: ?*const std.StringHashMap(eval.ComptimeValue) = null,

@@ -42,7 +42,7 @@ pub const ReflectEnv = struct {
     overlay_unions: *const std.StringHashMap(OverlayUnionInfo),
     tagged_unions: *const std.StringHashMap(ast_bridge.UnionDecl),
     struct_types: *const std.StringHashMap(ast_bridge.StructDecl),
-    const_fns: *const std.StringHashMap(ast_bridge.FnDecl),
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     const_global_widths: *const std.StringHashMap(u16),
     const_global_domains: *const std.StringHashMap(eval.DomainWidth),

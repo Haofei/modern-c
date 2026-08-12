@@ -330,6 +330,6 @@ pub fn constBinaryProvenNoOverflow(node: anytype, target_name: []const u8, local
     return result >= @as(i256, range.min) and result <= @as(i256, range.max);
 }
 
-pub fn constArrayLenValue(expr: ast_bridge.Expr, funcs: ?*const std.StringHashMap(ast_bridge.FnDecl), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
+pub fn constArrayLenValue(expr: ast_bridge.Expr, funcs: ?*const std.StringHashMap(eval.ComptimeFunction), globals: ?*const std.StringHashMap(eval.ComptimeValue), reflect: ?eval.ReflectFn, reflect_ctx: ?*anyopaque) ?usize {
     return array_len.parseArrayLenWithReflect(expr, funcs, globals, reflect, reflect_ctx);
 }

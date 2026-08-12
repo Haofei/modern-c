@@ -256,7 +256,7 @@ pub const CEmitter = struct {
     // `const fn` bodies and folded `const` global values, for folding comptime
     // const-fn calls / named constants in fixed-array lengths (section 22
     // comptime↔type feedback).
-    const_fns: std.StringHashMap(ast_bridge.FnDecl),
+    const_fns: std.StringHashMap(eval.ComptimeFunction),
     const_globals: std.StringHashMap(eval.ComptimeValue),
     const_global_widths: std.StringHashMap(u16),
     const_global_domains: std.StringHashMap(eval.DomainWidth),
@@ -343,7 +343,7 @@ pub const CEmitter = struct {
             .type_aliases = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
             .functions = std.StringHashMap(FnInfo).init(allocator),
             .backend_names = std.StringHashMap([]const u8).init(allocator),
-            .const_fns = std.StringHashMap(ast_bridge.FnDecl).init(allocator),
+            .const_fns = std.StringHashMap(eval.ComptimeFunction).init(allocator),
             .const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator),
             .const_global_widths = std.StringHashMap(u16).init(allocator),
             .const_global_domains = std.StringHashMap(eval.DomainWidth).init(allocator),
@@ -457,8 +457,7 @@ pub const CEmitter = struct {
         // consult the reflection environment.
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
-                const fn_decl = declaration_artifacts.comptimeFnDeclFromArtifact(function);
-                if (fn_decl.is_const and !self.const_fns.contains(fn_decl.name.text)) try self.const_fns.put(fn_decl.name.text, fn_decl);
+                if (function.is_const and !self.const_fns.contains(function.name.text)) try self.const_fns.put(function.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));
             },
             else => {},
         };

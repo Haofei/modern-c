@@ -480,7 +480,7 @@ pub const ComptimeScope = struct {
     // borrows them for the duration of the fold.
     type_bindings: std.StringHashMap(ast.TypeExpr),
     // Registry of `const fn` declarations callable at comptime (section 22).
-    funcs: ?*const std.StringHashMap(ast.FnDecl) = null,
+    funcs: ?*const std.StringHashMap(ComptimeFunction) = null,
     // Narrow declaration view used to resolve global types, aliases, and
     // aggregate field types while folding. AST storage is owned by the caller,
     // but callers do not need to expose a generic top-level declaration slice.
@@ -587,6 +587,31 @@ pub const ComptimeScope = struct {
             };
             try self.bindWidth(name, dw.bits);
         }
+    }
+};
+
+pub const ComptimeFunction = struct {
+    name: ast.Ident,
+    params: []const ast.Param,
+    return_type: ?ast.TypeExpr,
+    body: ?ast.Block,
+
+    pub fn fromFnDecl(fn_decl: ast.FnDecl) ComptimeFunction {
+        return .{
+            .name = fn_decl.name,
+            .params = fn_decl.params,
+            .return_type = fn_decl.return_type,
+            .body = fn_decl.body,
+        };
+    }
+
+    pub fn fromDeclarationArtifact(function: declaration_artifacts.FunctionArtifact) ComptimeFunction {
+        return .{
+            .name = function.name,
+            .params = function.params,
+            .return_type = function.return_type,
+            .body = function.body,
+        };
     }
 };
 
@@ -818,7 +843,7 @@ pub const CollectConstGlobalsOptions = struct {
 pub fn collectConstGlobalsFromDeclsWithOptions(
     allocator: std.mem.Allocator,
     decls: []const ast.Decl,
-    funcs: *const std.StringHashMap(ast.FnDecl),
+    funcs: *const std.StringHashMap(ComptimeFunction),
     out: *std.StringHashMap(ComptimeValue),
     options: CollectConstGlobalsOptions,
 ) !void {
@@ -828,7 +853,7 @@ pub fn collectConstGlobalsFromDeclsWithOptions(
 pub fn collectConstGlobalsFromDeclItemsWithOptions(
     allocator: std.mem.Allocator,
     decl_items: anytype,
-    funcs: *const std.StringHashMap(ast.FnDecl),
+    funcs: *const std.StringHashMap(ComptimeFunction),
     out: *std.StringHashMap(ComptimeValue),
     options: CollectConstGlobalsOptions,
 ) !void {
@@ -838,7 +863,7 @@ pub fn collectConstGlobalsFromDeclItemsWithOptions(
 pub fn collectConstGlobalsFromDeclarationsWithOptions(
     allocator: std.mem.Allocator,
     declarations: ComptimeDeclarations,
-    funcs: *const std.StringHashMap(ast.FnDecl),
+    funcs: *const std.StringHashMap(ComptimeFunction),
     out: *std.StringHashMap(ComptimeValue),
     options: CollectConstGlobalsOptions,
 ) !void {
@@ -849,7 +874,7 @@ fn collectConstGlobalsFromDeclItemsWithScope(
     allocator: std.mem.Allocator,
     declarations: ComptimeDeclarations,
     decl_items: anytype,
-    funcs: *const std.StringHashMap(ast.FnDecl),
+    funcs: *const std.StringHashMap(ComptimeFunction),
     out: *std.StringHashMap(ComptimeValue),
     options: CollectConstGlobalsOptions,
 ) !void {

@@ -850,7 +850,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
 
     var summaries = std.StringHashMap(FunctionSummary).init(allocator);
     defer summaries.deinit();
-    var const_fns = std.StringHashMap(ast.FnDecl).init(allocator);
+    var const_fns = std.StringHashMap(eval.ComptimeFunction).init(allocator);
     defer const_fns.deinit();
     var const_globals = std.StringHashMap(eval.ComptimeValue).init(allocator);
     defer eval.deinitConstGlobals(allocator, &const_globals);
@@ -873,7 +873,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     .return_type_expr = fn_decl.return_type,
                     .params = fn_decl.params,
                 });
-                if (decl.kind == .fn_decl and fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, fn_decl);
+                if (decl.kind == .fn_decl and fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, eval.ComptimeFunction.fromFnDecl(fn_decl));
             },
             .global_decl => |global| {
                 if (global.ty) |ty| {
@@ -5181,7 +5181,7 @@ const FunctionBuilder = struct {
     packed_bits: *const std.StringHashMap(PackedBitsSummary),
     aliases: *const std.StringHashMap(ast.TypeExpr),
     traits: *const std.StringHashMap(ast.TraitDecl),
-    const_fns: *const std.StringHashMap(ast.FnDecl),
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     const_globals: *const std.StringHashMap(eval.ComptimeValue),
     globals: *const std.StringHashMap(ValueType),
     global_type_exprs: *const std.StringHashMap(ast.TypeExpr),
@@ -5262,7 +5262,7 @@ const FunctionBuilder = struct {
     next_contract_region_id: usize = 1,
     next_target_fact_group_id: usize = 1,
 
-    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
+    fn init(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "entry" });
@@ -5345,7 +5345,7 @@ const FunctionBuilder = struct {
         return builder;
     }
 
-    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(ast.FnDecl), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
+    fn initGlobal(allocator: std.mem.Allocator, name: []const u8, ty: ast.TypeExpr, span: ast.Span, drop_glue_facts: []const DropGlueFact, type_ownership_facts: []const TypeOwnershipFact, summaries: *const std.StringHashMap(FunctionSummary), enums: *const std.StringHashMap(EnumSummary), structs: *const std.StringHashMap(StructSummary), unions: *const std.StringHashMap(UnionSummary), packed_bits: *const std.StringHashMap(PackedBitsSummary), aliases: *const std.StringHashMap(ast.TypeExpr), traits: *const std.StringHashMap(ast.TraitDecl), const_fns: *const std.StringHashMap(eval.ComptimeFunction), const_globals: *const std.StringHashMap(eval.ComptimeValue), globals: *const std.StringHashMap(ValueType), global_type_exprs: *const std.StringHashMap(ast.TypeExpr), mutable_globals: *const std.StringHashMap(void), pointer_return_summaries: *const std.StringHashMap(PointerReturnProvenanceSummary)) !FunctionBuilder {
         var blocks: std.ArrayList(MutableBlock) = .empty;
         errdefer blocks.deinit(allocator);
         try blocks.append(allocator, .{ .id = 0, .kind = "global_init" });

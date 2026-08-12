@@ -192,7 +192,7 @@ pub const CloneCtx = struct {
 const Rewriter = struct {
     arena: std.mem.Allocator,
     type_generic: *const std.StringHashMap(TypeGenericInfo),
-    const_fns: *const std.StringHashMap(ast.FnDecl),
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     // Instances are arena-allocated (stable pointers) so adding one mid-pass — which a
     // generic fn calling another generic fn does — never dangles an in-progress subst.
     // The maps dedup by structural generic identity; the lists drive the worklist passes.
@@ -243,7 +243,7 @@ pub fn transformDeclsReport(arena: std.mem.Allocator, decls: []ast.Decl, reporte
 
 pub fn transformDeclsReportOptions(arena: std.mem.Allocator, decls: []ast.Decl, reporter: ?*diagnostics.Reporter, options: Options) ![]ast.Decl {
     var type_generic = std.StringHashMap(TypeGenericInfo).init(arena);
-    var const_fns = std.StringHashMap(ast.FnDecl).init(arena);
+    var const_fns = std.StringHashMap(eval.ComptimeFunction).init(arena);
     var generic_structs = std.StringHashMap(GenericStructInfo).init(arena);
     var generic_unions = std.StringHashMap(GenericUnionInfo).init(arena);
     var int_consts = std.StringHashMap(i128).init(arena);
@@ -267,7 +267,7 @@ pub fn transformDeclsReportOptions(arena: std.mem.Allocator, decls: []ast.Decl, 
     for (decls) |decl| {
         switch (decl.kind) {
             .fn_decl => |fn_decl| {
-                if (fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, fn_decl);
+                if (fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, eval.ComptimeFunction.fromFnDecl(fn_decl));
                 if (try typeGenericParams(arena, fn_decl)) |params| {
                     try type_generic.put(fn_decl.name.text, .{ .decl = fn_decl, .comptime_params = params, .attrs = decl.attrs, .is_pub = decl.is_pub });
                 }
@@ -1155,7 +1155,7 @@ fn foldConst(rw: *Rewriter, expr: ast.Expr) ?i128 {
 // module consts (so a `const` can stand in for an integer literal, e.g. as a const-
 // generic argument). Returns null if it isn't a comptime integer.
 fn foldIntConst(
-    const_fns: *const std.StringHashMap(ast.FnDecl),
+    const_fns: *const std.StringHashMap(eval.ComptimeFunction),
     int_consts: *const std.StringHashMap(i128),
     expr: ast.Expr,
 ) std.mem.Allocator.Error!?i128 {

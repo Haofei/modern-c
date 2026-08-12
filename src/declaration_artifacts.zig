@@ -144,23 +144,6 @@ pub const FunctionArtifact = struct {
     }
 };
 
-pub fn comptimeFnDeclFromArtifact(function: FunctionArtifact) ast.FnDecl {
-    return .{
-        .name = function.name,
-        .associated_owner = function.associated_owner,
-        .abi = function.abi,
-        .params = function.params,
-        .return_type = function.return_type,
-        .return_borrow_source = function.return_borrow_source,
-        .body = function.body,
-        .is_const = function.is_const,
-        .exported = function.exported,
-        .is_variadic = function.is_variadic,
-        .bounds = function.bounds,
-        .is_async = function.is_async,
-    };
-}
-
 pub const GlobalArtifact = struct {
     name: ast.Ident,
     ty: ?ast.TypeExpr,
