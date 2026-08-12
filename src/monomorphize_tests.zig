@@ -65,12 +65,12 @@ test "monomorphize detects comptime parameter in block array length" {
     const module = try p.parseModule(arena.allocator());
     try testing.expect(!reporter.has_errors);
 
-    const specialized = try monomorphize.transformReport(arena.allocator(), module, &reporter);
+    const specialized = try monomorphize.transformDeclsReport(arena.allocator(), module.decls, &reporter);
     try testing.expect(!reporter.has_errors);
 
     var saw_specialized = false;
     var saw_template = false;
-    for (specialized.decls) |decl| {
+    for (specialized) |decl| {
         if (decl.kind != .fn_decl) continue;
         const fn_decl = decl.kind.fn_decl;
         if (std.mem.eql(u8, fn_decl.name.text, "block_len_size")) saw_template = true;
@@ -97,13 +97,13 @@ test "monomorphize discovers generic instances used only by type aliases and ext
     const module = try p.parseModule(arena.allocator());
     try testing.expect(!reporter.has_errors);
 
-    const specialized = try monomorphize.transformReport(arena.allocator(), module, &reporter);
+    const specialized = try monomorphize.transformDeclsReport(arena.allocator(), module.decls, &reporter);
     try testing.expect(!reporter.has_errors);
     var saw_u32 = false;
     var saw_u64 = false;
     var alias_rewritten = false;
     var extern_rewritten = false;
-    for (specialized.decls) |decl| switch (decl.kind) {
+    for (specialized) |decl| switch (decl.kind) {
         .struct_decl => |sd| {
             if (std.mem.eql(u8, sd.name.text, "Box__u32")) saw_u32 = true;
             if (std.mem.eql(u8, sd.name.text, "Box__u64")) saw_u64 = true;
@@ -140,10 +140,10 @@ test "monomorphize preserves named loop break and continue targets" {
     const module = try p.parseModule(arena.allocator());
     try testing.expect(!reporter.has_errors);
 
-    const specialized = try monomorphize.transformReport(arena.allocator(), module, &reporter);
+    const specialized = try monomorphize.transformDeclsReport(arena.allocator(), module.decls, &reporter);
     try testing.expect(!reporter.has_errors);
     var found = false;
-    for (specialized.decls) |decl| {
+    for (specialized) |decl| {
         if (decl.kind != .fn_decl or !std.mem.eql(u8, decl.kind.fn_decl.name.text, "sized__3")) continue;
         found = true;
         const body = decl.kind.fn_decl.body.?;
@@ -156,7 +156,7 @@ test "monomorphize preserves named loop break and continue targets" {
     try testing.expect(found);
 
     var checker = sema.Checker.init(&reporter);
-    checker.checkModule(specialized);
+    checker.checkModule(module.withDecls(specialized));
     try testing.expect(!reporter.has_errors);
 }
 
@@ -195,7 +195,7 @@ test "monomorphize rejects generated names that collide with user declarations" 
 
     try testing.expectError(
         error.GenericLinkageCollision,
-        monomorphize.transformReport(arena.allocator(), module, &reporter),
+        monomorphize.transformDeclsReport(arena.allocator(), module.decls, &reporter),
     );
     try testing.expect(hasDiagnosticMessage(&reporter, "E_GENERATED_NAME_COLLISION"));
 }
@@ -235,7 +235,7 @@ test "monomorphize keeps delimiter-colliding generic instances distinct" {
     const module = try p.parseModule(arena.allocator());
     try testing.expect(!reporter.has_errors);
 
-    const specialized = try monomorphize.transformReport(arena.allocator(), module, &reporter);
+    const specialized = try monomorphize.transformDeclsReport(arena.allocator(), module.decls, &reporter);
     try testing.expect(!reporter.has_errors);
 
     var pair_names: [2][]const u8 = undefined;
@@ -248,7 +248,7 @@ test "monomorphize keeps delimiter-colliding generic instances distinct" {
     var pick_param_types: [2][]const u8 = undefined;
     var pick_count: usize = 0;
 
-    for (specialized.decls) |decl| switch (decl.kind) {
+    for (specialized) |decl| switch (decl.kind) {
         .struct_decl => |sd| {
             const identity = (sd.semantic_identity orelse sd.name).text;
             if (!std.mem.eql(u8, identity, "Pair")) continue;
@@ -311,7 +311,8 @@ test "monomorphize preserves qualified-owner metadata and diagnostics" {
     try testing.expectEqual(@as(usize, 1), module.qualified_symbols.len);
     try testing.expectEqualStrings("Reserved", module.qualified_owners[0]);
 
-    const specialized = try monomorphize.transformReport(arena.allocator(), module, &reporter);
+    const specialized_decls = try monomorphize.transformDeclsReport(arena.allocator(), module.decls, &reporter);
+    const specialized = module.withDecls(specialized_decls);
     try testing.expectEqual(@as(usize, 1), specialized.qualified_owners.len);
     try testing.expectEqual(@as(usize, 1), specialized.qualified_symbols.len);
     try testing.expectEqualStrings("Reserved", specialized.qualified_owners[0]);
@@ -358,7 +359,7 @@ test "monomorphize total specialization cap reports a focused diagnostic" {
     const module = try p.parseModule(arena.allocator());
     try testing.expect(!reporter.has_errors);
 
-    try testing.expectError(error.MonomorphizationLimit, monomorphize.transformReportOptions(arena.allocator(), module, &reporter, .{
+    try testing.expectError(error.MonomorphizationLimit, monomorphize.transformDeclsReportOptions(arena.allocator(), module.decls, &reporter, .{
         .limits = .{ .max_instances = 3 },
     }));
 
@@ -395,7 +396,7 @@ test "monomorphize instantiation depth cap reports a focused diagnostic" {
     const module = try p.parseModule(arena.allocator());
     try testing.expect(!reporter.has_errors);
 
-    try testing.expectError(error.MonomorphizationLimit, monomorphize.transformReportOptions(arena.allocator(), module, &reporter, .{
+    try testing.expectError(error.MonomorphizationLimit, monomorphize.transformDeclsReportOptions(arena.allocator(), module.decls, &reporter, .{
         .limits = .{ .max_depth = 2 },
     }));
 
@@ -439,7 +440,7 @@ test "monomorphize OOM fail-closes instead of returning a clean transform" {
     var reporter = diagnostics.Reporter.init(testing.allocator, "mono_oom.mc", source);
     defer reporter.deinit();
 
-    const result = monomorphize.transformReport(fail_arena.allocator(), module, &reporter);
+    const result = monomorphize.transformDeclsReport(fail_arena.allocator(), module.decls, &reporter);
     if (result) |_| {
         try testing.expect(reporter.has_errors);
     } else |err| {
@@ -480,7 +481,7 @@ test "monomorphize trait-bound diagnostic OOM fail-closes" {
         var reporter = diagnostics.Reporter.init(testing.allocator, "mono_bound_oom.mc", source);
         defer reporter.deinit();
 
-        const result = monomorphize.transformReport(fail_arena.allocator(), module, &reporter);
+        const result = monomorphize.transformDeclsReport(fail_arena.allocator(), module.decls, &reporter);
         if (result) |_| {
             try testing.expect(reporter.has_errors);
         } else |err| {
@@ -528,7 +529,7 @@ test "monomorphize specialization registration OOM fail-closes" {
         var reporter = diagnostics.Reporter.init(testing.allocator, "mono_register_oom.mc", source);
         defer reporter.deinit();
 
-        const result = monomorphize.transformReport(fail_arena.allocator(), module, &reporter);
+        const result = monomorphize.transformDeclsReport(fail_arena.allocator(), module.decls, &reporter);
         if (result) |_| {
             try testing.expect(!reporter.has_errors);
             saw_success = true;
@@ -575,7 +576,7 @@ test "monomorphize limit diagnostic OOM fail-closes" {
         var reporter = diagnostics.Reporter.init(testing.allocator, "mono_limit_oom.mc", source);
         defer reporter.deinit();
 
-        const result = monomorphize.transformReportOptions(fail_arena.allocator(), module, &reporter, .{
+        const result = monomorphize.transformDeclsReportOptions(fail_arena.allocator(), module.decls, &reporter, .{
             .limits = .{ .max_instances = 0 },
         });
         if (result) |_| {
@@ -633,7 +634,7 @@ test "monomorphize trait member direct-call OOM fail-closes" {
         var reporter = diagnostics.Reporter.init(testing.allocator, "mono_trait_member_oom.mc", source);
         defer reporter.deinit();
 
-        const result = monomorphize.transformReport(fail_arena.allocator(), module, &reporter);
+        const result = monomorphize.transformDeclsReport(fail_arena.allocator(), module.decls, &reporter);
         if (result) |_| {
             try testing.expect(!reporter.has_errors);
             saw_success = true;
@@ -670,7 +671,7 @@ test "monomorphize limit rejects before producing a partial specialization modul
     const module = try p.parseModule(parse_arena.allocator());
     try testing.expect(!parse_reporter.has_errors);
 
-    try testing.expectError(error.MonomorphizationLimit, monomorphize.transformReportOptions(parse_arena.allocator(), module, &parse_reporter, .{
+    try testing.expectError(error.MonomorphizationLimit, monomorphize.transformDeclsReportOptions(parse_arena.allocator(), module.decls, &parse_reporter, .{
         .limits = .{ .max_instances = 0 },
     }));
     try testing.expect(parse_reporter.has_errors);

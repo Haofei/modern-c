@@ -832,7 +832,8 @@ fn parseSpecModule(source: []const u8, allocator: std.mem.Allocator, reporter: *
     const resolved_decls = try name_resolve.transformDeclsWithSymbols(allocator, module.decls, module.qualified_symbols, null);
     const resolved = module.withDecls(resolved_decls);
     try generic_precheck.checkDecls(allocator, resolved.decls, resolved.visibility_mode, reporter, null);
-    return try monomorphize.transformReport(allocator, resolved, reporter);
+    const specialized_decls = try monomorphize.transformDeclsReport(allocator, resolved.decls, reporter);
+    return resolved.withDecls(specialized_decls);
 }
 
 fn parseSpecModuleForExpectedDiagnostics(source: []const u8, allocator: std.mem.Allocator, reporter: *diagnostics.Reporter) !?ast.Module {

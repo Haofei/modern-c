@@ -176,10 +176,11 @@ pub const CompilationSession = struct {
             if (render_errors) diag.render();
             return error.ParseFailed;
         }
-        const specialized = monomorphize.transformReport(allocator, lowered, diag) catch |err| {
+        const specialized_decls = monomorphize.transformDeclsReport(allocator, lowered.decls, diag) catch |err| {
             if (render_errors) diag.render();
             return err;
         };
+        const specialized = lowered.withDecls(specialized_decls);
         if (diag.has_errors) {
             if (render_errors) diag.render();
             return error.ParseFailed;

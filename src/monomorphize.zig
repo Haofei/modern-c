@@ -237,11 +237,11 @@ const Rewriter = struct {
     oom: bool = false,
 };
 
-pub fn transformReport(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter) !ast.Module {
-    return transformReportOptions(arena, module, reporter, .{});
+pub fn transformDeclsReport(arena: std.mem.Allocator, decls: []ast.Decl, reporter: ?*diagnostics.Reporter) ![]ast.Decl {
+    return transformDeclsReportOptions(arena, decls, reporter, .{});
 }
 
-pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, reporter: ?*diagnostics.Reporter, options: Options) !ast.Module {
+pub fn transformDeclsReportOptions(arena: std.mem.Allocator, decls: []ast.Decl, reporter: ?*diagnostics.Reporter, options: Options) ![]ast.Decl {
     var type_generic = std.StringHashMap(TypeGenericInfo).init(arena);
     var const_fns = std.StringHashMap(ast.FnDecl).init(arena);
     var generic_structs = std.StringHashMap(GenericStructInfo).init(arena);
@@ -251,7 +251,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
     var fn_names = std.StringHashMap(void).init(arena);
     var source_names = std.StringHashMap(void).init(arena);
     var conformance = ConformanceSet.init(arena);
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         if (sourceDeclName(decl)) |name| try source_names.put(name, {});
         switch (decl.kind) {
             .fn_decl, .extern_fn => |fn_decl| {
@@ -264,7 +264,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
             else => {},
         }
     }
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         switch (decl.kind) {
             .fn_decl => |fn_decl| {
                 if (fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, fn_decl);
@@ -303,7 +303,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
 
     // No-op for the common case: a module with no type-generic functions or
     // generic structs is returned unchanged, so existing code is untouched.
-    if (type_generic.count() == 0 and generic_structs.count() == 0 and generic_unions.count() == 0) return module;
+    if (type_generic.count() == 0 and generic_structs.count() == 0 and generic_unions.count() == 0) return decls;
 
     var instances = InstanceMap.init(arena);
     var struct_instances = StructInstanceMap.init(arena);
@@ -339,7 +339,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
     // generic-struct type uses (collecting the instantiations they need).
     // Generic functions and generic structs are themselves dropped.
     var out: std.ArrayList(ast.Decl) = .empty;
-    for (module.decls) |decl| {
+    for (decls) |decl| {
         switch (decl.kind) {
             .fn_decl => |fn_decl| {
                 if (type_generic.contains(fn_decl.name.text)) continue; // dropped; replaced by instances
@@ -510,7 +510,7 @@ pub fn transformReportOptions(arena: std.mem.Allocator, module: ast.Module, repo
     }
     if (rewriter.oom) return error.OutOfMemory;
 
-    return module.withDecls(try out.toOwnedSlice(arena));
+    return out.toOwnedSlice(arena);
 }
 
 // A `{ return unreachable; }` body for a bound-failed specialization. `unreachable`

@@ -108,6 +108,7 @@ def main() -> int:
         "parsed_out.* = try module_parser.parseSourceDatabase(parse_allocator, project.graph, project.source_db, reporter);",
         "resolved_out.* = try module_parser.resolveParsedSourceDatabase(parse_allocator, parsed_out.*);",
         "generic_precheck.checkDecls(allocator, lowered.decls, lowered.visibility_mode, diag, self.file_boundaries)",
+        "monomorphize.transformDeclsReport(allocator, lowered.decls, diag)",
         "mangle_private.transformDecls(allocator, specialized.decls, specialized.visibility_mode, self.file_boundaries)",
         "checker.file_boundaries = self.file_boundaries;",
         "module_mir.* = try mir.buildOptFromDecls(self.allocator, decls, .{ .optimize = optimize });",
@@ -129,6 +130,8 @@ def main() -> int:
         fail("sema checker construction must stay centralized in CompilationSession.checkModule")
     if "generic_precheck.check(allocator, lowered" in session_text:
         fail("CompilationSession must not call the retired module-shaped generic precheck API")
+    if "monomorphize.transformReport(allocator, lowered" in session_text:
+        fail("CompilationSession must not call the retired module-shaped monomorphize API")
     if "mangle_private.transform(allocator, specialized" in session_text:
         fail("CompilationSession must not call the retired module-shaped private-mangling API")
     if "pub fn parseModuleOrReportMode(" in session_text:

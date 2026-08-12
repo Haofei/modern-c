@@ -2474,7 +2474,7 @@ test "allocation failure across parse monomorphize and sema never reports clean 
         var reporter = diagnostics.Reporter.init(std.testing.allocator, "mono_oom_pipeline.mc", source);
         defer reporter.deinit();
 
-        const specialized = monomorphize.transformReport(mono_arena.allocator(), module, &reporter);
+        const specialized = monomorphize.transformDeclsReport(mono_arena.allocator(), module.decls, &reporter);
         if (specialized) |_| {
             try std.testing.expect(reporter.has_errors);
         } else |err| {
@@ -2500,7 +2500,8 @@ test "allocation failure across parse monomorphize and sema never reports clean 
 
         const module = try parseWithAllocator(source, arena.allocator(), &parse_reporter);
         try std.testing.expect(!parse_reporter.has_errors);
-        const specialized = try monomorphize.transformReport(arena.allocator(), module, &parse_reporter);
+        const specialized_decls = try monomorphize.transformDeclsReport(arena.allocator(), module.decls, &parse_reporter);
+        const specialized = module.withDecls(specialized_decls);
         try std.testing.expect(!parse_reporter.has_errors);
 
         var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
