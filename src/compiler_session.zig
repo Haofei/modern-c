@@ -194,15 +194,15 @@ pub const CompilationSession = struct {
         return module;
     }
 
-    pub fn buildVerifiedProgram(
+    pub fn buildVerifiedProgramFromDecls(
         self: *CompilationSession,
-        module: ast.Module,
+        decls: []ast.Decl,
         diag: *diagnostics.Reporter,
         optimize: bool,
         module_mir: *mir.Module,
         failure_error: StageFailure,
     ) !backend.VerifiedProgram {
-        module_mir.* = try mir.buildOptFromDecls(self.allocator, module.decls, .{ .optimize = optimize });
+        module_mir.* = try mir.buildOptFromDecls(self.allocator, decls, .{ .optimize = optimize });
         errdefer module_mir.deinit();
         const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {
             if (diag.has_errors) return failure_error;

@@ -69,7 +69,7 @@ def main() -> int:
         "pub fn parseModuleOrReportMode(self: *CompilationSession, source: []const u8, allocator: std.mem.Allocator, diag: *diagnostics.Reporter, render_errors: bool) !ast.Module {",
         "pub fn checkModule(self: *CompilationSession, module: ast.Module, diag: *diagnostics.Reporter, optimize: bool) void {",
         "pub fn parseCheckedModuleOrReport(",
-        "pub fn buildVerifiedProgram(",
+        "pub fn buildVerifiedProgramFromDecls(",
         "pub fn artifactMetadataPath(allocator: std.mem.Allocator, output_path: []const u8) ![]const u8 {",
     ):
         require_contains(session_zig, needle)
@@ -94,9 +94,9 @@ def main() -> int:
         "session.attachLoadedProjectSyntax(&loaded, module_parse_arena.allocator(), &load_diag, &parsed_sources, &resolved_sources) catch |err| {",
         "try load_diag.appendJson(&out);",
         "const module = try session.parseCheckedModuleOrReport(source, parse_allocator, &diag, optimize, true, error.LowerMirFailed);",
-        "_ = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.LowerMirFailed);",
+        "_ = try session.buildVerifiedProgramFromDecls(module.decls, &diag, optimize, &module_mir, error.LowerMirFailed);",
         "try mir.appendDumpFromMir(allocator, module_mir, &output);",
-        "const program = try driver_codegen_inputs.buildBackendInputs(session, module, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);",
+        "const program = try driver_codegen_inputs.buildBackendInputs(session, module.decls, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);",
     ):
         require_contains(main_zig, needle)
 
@@ -108,7 +108,7 @@ def main() -> int:
         "generic_precheck.check(allocator, lowered, diag, self.file_boundaries)",
         "mangle_private.transform(allocator, specialized, self.file_boundaries)",
         "checker.file_boundaries = self.file_boundaries;",
-        "module_mir.* = try mir.buildOptFromDecls(self.allocator, module.decls, .{ .optimize = optimize });",
+        "module_mir.* = try mir.buildOptFromDecls(self.allocator, decls, .{ .optimize = optimize });",
         "const program = backend.VerifiedProgram.init(module_mir, diag) catch |err| {",
         'test "CompilationSession keeps parse context request scoped"',
         'test "CompilationSession attaches per-file resolved module syntax"',
@@ -150,8 +150,11 @@ def main() -> int:
     if (main_text + session_text).count("backend.VerifiedProgram.initFromDecls(") != 0:
         fail("VerifiedProgram declaration-slice construction must not be used")
     if session_text.count("backend.VerifiedProgram.init(") != 1:
-        fail("VerifiedProgram construction must stay centralized in CompilationSession.buildVerifiedProgram")
-    require_contains("src/driver_codegen_inputs.zig", "const program = try session.buildVerifiedProgram(module, diag, optimize, module_mir, failure_error);")
+        fail("VerifiedProgram construction must stay centralized in CompilationSession.buildVerifiedProgramFromDecls")
+    require_contains("src/driver_codegen_inputs.zig", "const program = try session.buildVerifiedProgramFromDecls(decls, diag, optimize, module_mir, failure_error);")
+    driver_codegen_inputs = read("src/driver_codegen_inputs.zig")
+    if "module: ast.Module" in driver_codegen_inputs:
+        fail("driver codegen inputs must not accept ast.Module")
     if main_text.count("session.parseCheckedModuleOrReport(") < 7:
         fail("compile-like CLI commands must share CompilationSession.parseCheckedModuleOrReport")
     if main_text.count("session.checkModule(") != 0:

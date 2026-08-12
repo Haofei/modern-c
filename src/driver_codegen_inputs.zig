@@ -21,14 +21,14 @@ const StageFailure = compiler_session.StageFailure;
 
 pub fn buildBackendInputs(
     session: *CompilationSession,
-    module: ast.Module,
+    decls: []ast.Decl,
     diag: *diagnostics.Reporter,
     optimize: bool,
     module_mir: *mir.Module,
     artifacts: *DeclarationArtifacts,
     failure_error: StageFailure,
 ) !backend.VerifiedProgram {
-    const program = try session.buildVerifiedProgram(module, diag, optimize, module_mir, failure_error);
+    const program = try session.buildVerifiedProgramFromDecls(decls, diag, optimize, module_mir, failure_error);
     errdefer module_mir.deinit();
     artifacts.* = try collectDeclarationArtifacts(session);
     errdefer artifacts.deinit(session.allocator);
@@ -37,11 +37,11 @@ pub fn buildBackendInputs(
 
 pub fn buildCArtifactInputs(
     session: *CompilationSession,
-    module: ast.Module,
+    decls: []ast.Decl,
     module_mir: *mir.Module,
     artifacts: *DeclarationArtifacts,
 ) !void {
-    module_mir.* = try mir.buildOptFromDecls(session.allocator, module.decls, .{ .optimize = false });
+    module_mir.* = try mir.buildOptFromDecls(session.allocator, decls, .{ .optimize = false });
     errdefer module_mir.deinit();
     artifacts.* = try collectDeclarationArtifacts(session);
     errdefer artifacts.deinit(session.allocator);

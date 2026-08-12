@@ -446,7 +446,7 @@ fn runLowerMir(session: *CompilationSession, path: []const u8, source: []const u
     defer module.deinit(parse_allocator);
 
     var module_mir: mir.Module = undefined;
-    _ = try session.buildVerifiedProgram(module, &diag, optimize, &module_mir, error.LowerMirFailed);
+    _ = try session.buildVerifiedProgramFromDecls(module.decls, &diag, optimize, &module_mir, error.LowerMirFailed);
     defer module_mir.deinit();
 
     var output: std.ArrayList(u8) = .empty;
@@ -736,7 +736,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
 
     var module_mir: mir.Module = undefined;
     var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, module, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, module.decls, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
     defer module_mir.deinit();
     defer early_metadata.deinit(allocator);
 
@@ -790,7 +790,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
 
     var module_mir: mir.Module = undefined;
     var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, module, &diag, false, &module_mir, &early_metadata, error.BuildFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, module.decls, &diag, false, &module_mir, &early_metadata, error.BuildFailed);
     defer module_mir.deinit();
     defer early_metadata.deinit(allocator);
 
@@ -1159,7 +1159,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
 
     var module_mir: mir.Module = undefined;
     var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, module, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, module.decls, &diag, optimize, &module_mir, &early_metadata, error.EmitCFailed);
     defer module_mir.deinit();
     defer early_metadata.deinit(allocator);
 
@@ -1226,7 +1226,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
 
     var module_mir: mir.Module = undefined;
     var early_metadata = driver_codegen_inputs.DeclarationArtifacts.empty;
-    const program = try driver_codegen_inputs.buildBackendInputs(session, module, &diag, optimize, &module_mir, &early_metadata, error.EmitLlvmFailed);
+    const program = try driver_codegen_inputs.buildBackendInputs(session, module.decls, &diag, optimize, &module_mir, &early_metadata, error.EmitLlvmFailed);
     defer module_mir.deinit();
     defer early_metadata.deinit(allocator);
 
@@ -1297,7 +1297,7 @@ fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []const
     defer output.deinit(allocator);
     var typed_mir: mir.Module = undefined;
     var artifacts = driver_codegen_inputs.DeclarationArtifacts.empty;
-    try driver_codegen_inputs.buildCArtifactInputs(session, module, &typed_mir, &artifacts);
+    try driver_codegen_inputs.buildCArtifactInputs(session, module.decls, &typed_mir, &artifacts);
     defer typed_mir.deinit();
     defer artifacts.deinit(allocator);
     lower_c.appendLayoutAssertsWithMirArtifacts(allocator, artifacts, &typed_mir, &output, names.items) catch |err| switch (err) {
@@ -1345,7 +1345,7 @@ fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []cons
     defer output.deinit(allocator);
     var typed_mir: mir.Module = undefined;
     var artifacts = driver_codegen_inputs.DeclarationArtifacts.empty;
-    try driver_codegen_inputs.buildCArtifactInputs(session, module, &typed_mir, &artifacts);
+    try driver_codegen_inputs.buildCArtifactInputs(session, module.decls, &typed_mir, &artifacts);
     defer typed_mir.deinit();
     defer artifacts.deinit(allocator);
     lower_c.appendStructDeclsWithMirArtifacts(allocator, artifacts, &typed_mir, &output, names.items) catch |err| switch (err) {
