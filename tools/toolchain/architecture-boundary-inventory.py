@@ -130,8 +130,11 @@ EXACT_FILE_COUNTS = {
     ("src/loader.zig", "*textual inclusion*"): 1,
     ("src/loader.zig", "pub const ModuleGraph = struct"): 0,
     ("src/loader.zig", "pub const LoadedProject = struct"): 0,
+    ("src/loader.zig", "fn recordSourceFile("): 1,
     ("src/module_graph.zig", "pub const ModuleGraph = struct"): 1,
+    ("src/module_graph.zig", "pub const SourceDatabase = struct"): 1,
     ("src/module_graph.zig", "pub const LoadedProject = struct"): 1,
+    ("src/module_graph.zig", "source_db: SourceDatabase"): 1,
     ("src/module_graph.zig", "combined textual source"): 1,
     ("src/hir_inspection.zig", "inspection_only_header"): 3,
     ("src/mir_facts_view.zig", "pub const MirFactsView = struct"): 1,
@@ -228,6 +231,7 @@ REQUIRED_ANCHORS = {
     "src/module_graph.zig": (
         "stable file/import identity model",
         "expanded byte offsets as semantic identity",
+        "per-file source ownership",
     ),
     "src/hir_inspection.zig": (
         'pub const inspection_only_header = "hir mode=inspection-only production_boundary=false\\n";',

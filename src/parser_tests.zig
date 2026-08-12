@@ -541,7 +541,10 @@ test "loader publishes stable module graph identities and edges" {
     try std.testing.expect(graphHasEdge(wide.graph, right, common));
     try std.testing.expect(wide.graph.files[@intFromEnum(left)].source_start < wide.graph.files[@intFromEnum(common)].source_start);
     try std.testing.expect(wide.graph.files[@intFromEnum(common)].source_start < wide.graph.files[@intFromEnum(right)].source_start);
+    try std.testing.expectEqual(wide.graph.files.len, wide.source_db.files.len);
     for (wide.graph.files) |file| {
+        const file_source = wide.source_db.sourceForFile(file.id) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(file_source.len > 0);
         try std.testing.expect(file.source_len > 0);
         var found_boundary = false;
         for (wide.boundaries) |boundary| {
@@ -552,6 +555,11 @@ test "loader publishes stable module graph identities and edges" {
         }
         try std.testing.expect(found_boundary);
     }
+    const root_file = wide.graph.files[@intFromEnum(root)];
+    const root_raw_source = wide.source_db.sourceForFile(root).?;
+    const root_combined_source = wide.source[root_file.source_start..][0..root_file.source_len];
+    try std.testing.expect(std.mem.indexOf(u8, root_raw_source, "import \"./import_wide_left.mc\";") != null);
+    try std.testing.expect(std.mem.indexOf(u8, root_combined_source, "import \"./import_wide_left.mc\";") == null);
 
     const cycle_path = "tests/spec_support/import_cycle_a.mc";
     const cycle_source = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, cycle_path, std.testing.allocator, .limited(1 << 20));

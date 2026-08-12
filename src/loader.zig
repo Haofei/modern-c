@@ -70,11 +70,14 @@ pub const FileId = module_graph.FileId;
 pub const ModuleFile = module_graph.ModuleFile;
 pub const ImportEdge = module_graph.ImportEdge;
 pub const ModuleGraph = module_graph.ModuleGraph;
+pub const SourceFile = module_graph.SourceFile;
+pub const SourceDatabase = module_graph.SourceDatabase;
 pub const LoadedProject = module_graph.LoadedProject;
 
 const GraphBuilder = struct {
     files: std.ArrayList(ModuleFile) = .empty,
     imports: std.ArrayList(ImportEdge) = .empty,
+    sources: std.ArrayList(SourceFile) = .empty,
 };
 
 const PendingFile = struct {
@@ -221,8 +224,10 @@ pub fn loadProjectOptionsReport(
             allocator.free(file.canonical_path);
             allocator.free(file.display_path);
         }
+        for (graph_builder.sources.items) |source_file| allocator.free(source_file.source);
         graph_builder.files.deinit(allocator);
         graph_builder.imports.deinit(allocator);
+        graph_builder.sources.deinit(allocator);
     }
     const initial_reported_diagnostics = if (reporter) |r| r.diagnostics.items.len else 0;
     const initial_diagnostic_oom = if (reporter) |r| r.diagnostic_oom else false;
@@ -244,6 +249,11 @@ pub fn loadProjectOptionsReport(
         }
         allocator.free(files);
     }
+    const source_files = try graph_builder.sources.toOwnedSlice(allocator);
+    errdefer {
+        for (source_files) |source_file| allocator.free(source_file.source);
+        allocator.free(source_files);
+    }
     return .{
         .source = source,
         .boundaries = boundary_slice,
@@ -251,6 +261,7 @@ pub fn loadProjectOptionsReport(
             .files = files,
             .imports = try graph_builder.imports.toOwnedSlice(allocator),
         },
+        .source_db = .{ .files = source_files },
     };
 }
 
@@ -370,6 +381,7 @@ fn expandAll(
         const file_source = stripUtf8Bom(item.source);
         const file_start = out.items.len;
         setSourceRange(graph, item.id, file_start, file_source.len);
+        try recordSourceFile(allocator, graph, item.id, file_source);
         if (boundaries) |b| {
             const boundary_path = try allocator.dupe(u8, item.display_path);
             errdefer allocator.free(boundary_path);
@@ -551,6 +563,22 @@ fn setSourceRange(graph: ?*GraphBuilder, id: FileId, source_start: usize, source
     if (graph) |builder| {
         builder.files.items[@intFromEnum(id)].source_start = source_start;
         builder.files.items[@intFromEnum(id)].source_len = source_len;
+    }
+}
+
+fn recordSourceFile(
+    allocator: std.mem.Allocator,
+    graph: ?*GraphBuilder,
+    id: FileId,
+    source: []const u8,
+) std.mem.Allocator.Error!void {
+    if (graph) |builder| {
+        const source_copy = try allocator.dupe(u8, source);
+        errdefer allocator.free(source_copy);
+        try builder.sources.append(allocator, .{
+            .id = id,
+            .source = source_copy,
+        });
     }
 }
 
