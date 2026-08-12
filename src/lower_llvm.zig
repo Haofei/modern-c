@@ -5958,7 +5958,7 @@ const LlvmEmitter = struct {
     }
 
     fn mirTargetTypeFactAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
-        return mir_source_bridge.targetTypeFactAtWithModuleFallback(&self.mir_module, self.currentMirFunction(), kind, span);
+        return mir_source_bridge.targetTypeFactAtSpanWithExplicitModuleFallback(&self.mir_module, self.currentMirFunction(), kind, span);
     }
 
     fn contextualTargetTypeAt(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, generated_ty: ast_bridge.TypeExpr) ?ast_bridge.TypeExpr {
@@ -5994,7 +5994,7 @@ const LlvmEmitter = struct {
     }
 
     fn mirTargetTypeFactAtOwned(self: *LlvmEmitter, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
-        return mir_source_bridge.targetTypeFactAtOwnedWithModuleFallback(&self.mir_module, self.currentMirFunction(), kind, span, target_owner, target_index);
+        return mir_source_bridge.targetTypeFactAtOwnedSpanWithExplicitModuleFallback(&self.mir_module, self.currentMirFunction(), kind, span, target_owner, target_index);
     }
 
     fn mirConstGetIndexAt(self: *LlvmEmitter, span: ast_bridge.Span) ?usize {

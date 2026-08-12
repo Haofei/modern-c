@@ -13,6 +13,7 @@ const mir_facts_view = @import("mir_facts_view.zig");
 const type_bridge = @import("type_bridge.zig");
 
 const MirFactsView = mir_facts_view.MirFactsView;
+pub const TargetTypeLookupKey = mir_facts_view.TargetTypeLookupKey;
 
 pub fn sourcePointMatchesSpan(source: mir.SourcePoint, span: ast_bridge.Span) bool {
     return mir_facts_view.sourcePointExactMatches(source, mir.sourcePointFromSpan(span));
@@ -38,7 +39,11 @@ pub fn hasCallTargetKindAt(module: *const mir.Module, current: ?*const mir.Funct
     return MirFactsView.init(module).hasCallTargetKindAt(current, kind, mir.sourcePointFromSpan(span), strict_call_source);
 }
 
-pub fn targetTypeFactAtWithModuleFallback(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
+pub fn targetTypeFactById(module: *const mir.Module, current: *const mir.Function, key: TargetTypeLookupKey) ?mir.TargetTypeFact {
+    return MirFactsView.init(module).targetTypeFactById(current, key);
+}
+
+pub fn targetTypeFactAtSpanWithExplicitModuleFallback(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span) ?mir.TargetTypeFact {
     return MirFactsView.init(module).targetTypeFactAtWithModuleFallback(current, kind, mir.sourcePointFromSpan(span));
 }
 
@@ -86,7 +91,7 @@ pub fn atomicInitPayloadTypeAt(module: *const mir.Module, current: ?*const mir.F
     return matched_payload_ty;
 }
 
-pub fn targetTypeFactAtOwnedWithModuleFallback(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
+pub fn targetTypeFactAtOwnedSpanWithExplicitModuleFallback(module: *const mir.Module, current: ?*const mir.Function, kind: mir.TargetTypeKind, span: ast_bridge.Span, target_owner: []const u8, target_index: ?usize) ?mir.TargetTypeFact {
     return MirFactsView.init(module).targetTypeFactAtOwnedWithModuleFallback(current, kind, mir.sourcePointFromSpan(span), target_owner, target_index);
 }
 
