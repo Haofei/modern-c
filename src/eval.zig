@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const numeric = @import("numeric.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const string_literal = @import("string_literal.zig");
 const target_layout = @import("target_layout.zig");
 
@@ -594,12 +595,17 @@ pub const ComptimeDeclarations = struct {
     type_aliases: []const ast.TypeAlias = &.{},
     structs: []const ast.StructDecl = &.{},
     legacy_decls: ?[]const ast.Decl = null,
+    decl_artifacts: ?[]const declaration_artifacts.DeclArtifact = null,
 
     pub fn fromDecls(decls: []const ast.Decl) ComptimeDeclarations {
         // Compatibility adapter for older frontend call sites. It keeps the
         // generic declaration scan inside eval instead of leaking it into
         // backend lowering state.
         return .{ .legacy_decls = decls };
+    }
+
+    pub fn fromDeclarationArtifacts(artifacts: declaration_artifacts.EarlyDeclarationArtifacts) ComptimeDeclarations {
+        return .{ .decl_artifacts = artifacts.decl_artifacts };
     }
 };
 
@@ -879,6 +885,13 @@ fn collectConstGlobalsFromDeclItemsWithScope(
         }
         return;
     }
+    if (declarations.decl_artifacts) |decl_artifacts| {
+        for (decl_artifacts) |artifact| switch (artifact) {
+            .global => |global| try collectConstGlobalArtifact(allocator, &scope, global, out, options),
+            else => {},
+        };
+        return;
+    }
     for (declarations.globals) |global| try collectConstGlobal(allocator, &scope, global, out, options);
 }
 
@@ -910,6 +923,23 @@ fn collectConstGlobal(
         else => {},
     }
     if (scope.hasOom()) return error.OutOfMemory;
+}
+
+fn collectConstGlobalArtifact(
+    allocator: std.mem.Allocator,
+    scope: *ComptimeScope,
+    global: declaration_artifacts.GlobalArtifact,
+    out: *std.StringHashMap(ComptimeValue),
+    options: CollectConstGlobalsOptions,
+) !void {
+    return collectConstGlobal(allocator, scope, .{
+        .name = global.name,
+        .ty = global.ty,
+        .init = global.init,
+        .is_const = global.is_const,
+        .exported = global.exported,
+        .is_extern = global.is_extern,
+    }, out, options);
 }
 
 fn comptimeIdentValue(scope: *const ComptimeScope, name: []const u8) ?ComptimeValue {
@@ -1017,6 +1047,16 @@ fn moduleAliasType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr 
         }
         return null;
     }
+    if (declarations.decl_artifacts) |decl_artifacts| {
+        for (decl_artifacts) |artifact| switch (artifact) {
+            .type_decl => |type_decl| switch (type_decl) {
+                .type_alias => |alias| if (std.mem.eql(u8, alias.name.text, name)) return alias.ty,
+                else => {},
+            },
+            else => {},
+        };
+        return null;
+    }
     for (declarations.type_aliases) |alias| {
         if (std.mem.eql(u8, alias.name.text, name)) return alias.ty;
     }
@@ -1035,6 +1075,13 @@ fn moduleGlobalType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr
         }
         return null;
     }
+    if (declarations.decl_artifacts) |decl_artifacts| {
+        for (decl_artifacts) |artifact| switch (artifact) {
+            .global => |global| if (std.mem.eql(u8, global.name.text, name)) return global.ty,
+            else => {},
+        };
+        return null;
+    }
     for (declarations.globals) |global| {
         if (std.mem.eql(u8, global.name.text, name)) return global.ty;
     }
@@ -1051,6 +1098,16 @@ fn moduleStructDecl(scope: *const ComptimeScope, name: []const u8) ?ast.StructDe
             };
             if (std.mem.eql(u8, struct_decl.name.text, name)) return struct_decl;
         }
+        return null;
+    }
+    if (declarations.decl_artifacts) |decl_artifacts| {
+        for (decl_artifacts) |artifact| switch (artifact) {
+            .type_decl => |type_decl| switch (type_decl) {
+                .struct_decl => |struct_decl| if (std.mem.eql(u8, struct_decl.name.text, name)) return struct_decl,
+                else => {},
+            },
+            else => {},
+        };
         return null;
     }
     for (declarations.structs) |struct_decl| {

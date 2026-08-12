@@ -316,9 +316,7 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
         else => return err,
     };
     if (!source_spelling.validateAgainstMir(module_mir.*)) return error.UnsupportedLlvmEmission;
-    var owned_comptime_declarations = try declaration_artifacts.ComptimeDeclarationArtifacts.collectFromArtifacts(allocator, early_metadata);
-    defer owned_comptime_declarations.deinit(allocator);
-    const comptime_declarations = owned_comptime_declarations.view();
+    const comptime_declarations = eval.ComptimeDeclarations.fromDeclarationArtifacts(early_metadata);
     const ksan = checks.ksan;
     const msan = checks.msan;
     const csan = checks.csan;

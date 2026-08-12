@@ -2,7 +2,6 @@
 //! Backends consume these through `codegen_request`, not raw declaration slices.
 
 const ast = @import("ast.zig");
-const eval = @import("eval.zig");
 const module_parser = @import("module_parser.zig");
 const std = @import("std");
 
@@ -101,65 +100,6 @@ pub const EarlyDeclarationArtifacts = struct {
     };
 };
 
-pub const ComptimeDeclarationArtifacts = struct {
-    globals: []const ast.GlobalDecl,
-    type_aliases: []const ast.TypeAlias,
-    structs: []const ast.StructDecl,
-
-    pub fn collectFromArtifacts(allocator: std.mem.Allocator, artifacts: EarlyDeclarationArtifacts) !ComptimeDeclarationArtifacts {
-        var globals: std.ArrayList(ast.GlobalDecl) = .empty;
-        errdefer globals.deinit(allocator);
-        var type_aliases: std.ArrayList(ast.TypeAlias) = .empty;
-        errdefer type_aliases.deinit(allocator);
-        var structs: std.ArrayList(ast.StructDecl) = .empty;
-        errdefer structs.deinit(allocator);
-
-        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .global => |global| try globals.append(allocator, globalDeclFromArtifact(global)),
-            .type_decl => |type_decl| switch (type_decl) {
-                .type_alias => |alias| try type_aliases.append(allocator, alias),
-                .struct_decl => |struct_decl| try structs.append(allocator, struct_decl),
-                else => {},
-            },
-            else => {},
-        };
-
-        const owned_globals = try globals.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_globals);
-        const owned_type_aliases = try type_aliases.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_type_aliases);
-        const owned_structs = try structs.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_structs);
-
-        return .{
-            .globals = owned_globals,
-            .type_aliases = owned_type_aliases,
-            .structs = owned_structs,
-        };
-    }
-
-    pub fn deinit(self: *ComptimeDeclarationArtifacts, allocator: std.mem.Allocator) void {
-        allocator.free(self.globals);
-        allocator.free(self.type_aliases);
-        allocator.free(self.structs);
-        self.* = empty;
-    }
-
-    pub fn view(self: ComptimeDeclarationArtifacts) eval.ComptimeDeclarations {
-        return .{
-            .globals = self.globals,
-            .type_aliases = self.type_aliases,
-            .structs = self.structs,
-        };
-    }
-
-    pub const empty = ComptimeDeclarationArtifacts{
-        .globals = &.{},
-        .type_aliases = &.{},
-        .structs = &.{},
-    };
-};
-
 fn declOrigin(decl: ast.Decl) []const u8 {
     for (decl.attrs) |attr| switch (attr.kind) {
         .origin => |origin| return origin,
@@ -240,17 +180,6 @@ pub const GlobalArtifact = struct {
         };
     }
 };
-
-fn globalDeclFromArtifact(global: GlobalArtifact) ast.GlobalDecl {
-    return .{
-        .name = global.name,
-        .ty = global.ty,
-        .init = global.init,
-        .is_const = global.is_const,
-        .exported = global.exported,
-        .is_extern = global.is_extern,
-    };
-}
 
 pub const TraitDeclArtifact = struct {
     name: ast.Ident,

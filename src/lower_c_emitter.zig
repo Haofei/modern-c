@@ -260,7 +260,6 @@ pub const CEmitter = struct {
     const_globals: std.StringHashMap(eval.ComptimeValue),
     const_global_widths: std.StringHashMap(u16),
     const_global_domains: std.StringHashMap(eval.DomainWidth),
-    owned_comptime_declarations: declaration_artifacts.ComptimeDeclarationArtifacts = .empty,
     comptime_declarations: ?eval.ComptimeDeclarations = null,
     structs: std.StringHashMap(ast_bridge.StructDecl),
     aggregate_decl_artifacts: std.ArrayList(AggregateDeclArtifact) = .empty,
@@ -426,7 +425,6 @@ pub const CEmitter = struct {
         self.const_global_widths.deinit();
         self.const_global_domains.deinit();
         self.const_fns.deinit();
-        self.owned_comptime_declarations.deinit(self.allocator);
         eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.static_initializers.deinit();
         self.global_decl_artifacts.deinit(self.allocator);
@@ -439,7 +437,7 @@ pub const CEmitter = struct {
     }
 
     fn collectModule(self: *CEmitter, early_metadata: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
-        try self.setComptimeDeclarationsFromArtifacts(early_metadata);
+        self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectConstGlobals();
         try self.collectDeclArtifacts(early_metadata);
@@ -447,10 +445,8 @@ pub const CEmitter = struct {
         try self.collectBindThunks();
     }
 
-    pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
-        self.owned_comptime_declarations.deinit(self.allocator);
-        self.owned_comptime_declarations = try declaration_artifacts.ComptimeDeclarationArtifacts.collectFromArtifacts(self.allocator, artifacts);
-        self.comptime_declarations = self.owned_comptime_declarations.view();
+    pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) void {
+        self.comptime_declarations = eval.ComptimeDeclarations.fromDeclarationArtifacts(artifacts);
     }
 
     pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
