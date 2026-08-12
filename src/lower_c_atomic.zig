@@ -7,13 +7,13 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const mir = @import("mir.zig");
 const type_syntax = @import("type_syntax.zig");
 
-const isIdentNamed = expr_syntax.isIdentNamed;
-const memberCallee = expr_syntax.memberCallee;
+const isIdentNamed = syntax_bridge.isIdentNamed;
+const memberCallee = syntax_bridge.memberCallee;
 const typeName = type_syntax.typeName;
 const LocalInfo = lower_c_model.LocalInfo;
 

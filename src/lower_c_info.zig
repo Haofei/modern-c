@@ -8,7 +8,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
@@ -29,7 +29,7 @@ const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const intTypeRange = lower_c_type.intTypeRange;
 const isOpaqueAddressTypeName = type_syntax.isOpaqueAddressTypeName;
 const mmioPointee = type_syntax.mmioPointee;
-const calleeIdentName = expr_syntax.calleeIdentName;
+const calleeIdentName = syntax_bridge.calleeIdentName;
 const typeName = type_syntax.typeName;
 const widthBits = lower_c_op.widthBits;
 

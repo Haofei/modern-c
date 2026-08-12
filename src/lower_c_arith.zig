@@ -6,7 +6,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
@@ -33,10 +33,10 @@ const genericChildType = lower_c_shape.genericChildType;
 const intTypeRange = lower_c_type.intTypeRange;
 const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
 const isNoTrapBitwiseInfixOp = lower_c_op.isNoTrapBitwiseInfixOp;
-const isIdentNamed = expr_syntax.isIdentNamed;
+const isIdentNamed = syntax_bridge.isIdentNamed;
 const isSatType = type_syntax.isSatType;
 const isWrapType = type_syntax.isWrapType;
-const memberCallee = expr_syntax.memberCallee;
+const memberCallee = syntax_bridge.memberCallee;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const satHelperParts = lower_c_op.satHelperParts;
 const signedTypeSuffix = lower_c_type.signedTypeSuffix;

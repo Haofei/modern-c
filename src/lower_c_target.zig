@@ -2,7 +2,7 @@
 
 const std = @import("std");
 
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_atomic = @import("lower_c_atomic.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
@@ -18,10 +18,10 @@ const globalInfoFromType = lower_c_shape.globalInfoFromType;
 const isAtomicIntegerPayload = lower_c_atomic.isAtomicIntegerPayload;
 const isAtomicLoadOrdering = lower_c_atomic.isAtomicLoadOrdering;
 const isAtomicStoreOrdering = lower_c_atomic.isAtomicStoreOrdering;
-const calleeIdentName = expr_syntax.calleeIdentName;
-const isIdentNamed = expr_syntax.isIdentNamed;
-const memberExpr = expr_syntax.memberExpr;
-const isSatPreservingBinary = expr_syntax.isSatPreservingBinary;
+const calleeIdentName = syntax_bridge.calleeIdentName;
+const isIdentNamed = syntax_bridge.isIdentNamed;
+const memberExpr = syntax_bridge.memberExpr;
+const isSatPreservingBinary = syntax_bridge.isSatPreservingBinary;
 const isWrapPreservingBinary = lower_c_op.isWrapPreservingBinary;
 const widthBits = lower_c_op.widthBits;
 

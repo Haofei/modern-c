@@ -6,7 +6,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const mir = @import("mir.zig");
@@ -15,7 +15,7 @@ const type_syntax = @import("type_syntax.zig");
 const LocalInfo = lower_c_model.LocalInfo;
 const intTypeRange = lower_c_type.intTypeRange;
 const isNumericStorageType = lower_c_type.isNumericStorageType;
-const memberCallee = expr_syntax.memberCallee;
+const memberCallee = syntax_bridge.memberCallee;
 const primitiveCTypeName = lower_c_type.primitiveCTypeName;
 const simpleNameType = type_syntax.simpleNameType;
 const typeName = type_syntax.typeName;

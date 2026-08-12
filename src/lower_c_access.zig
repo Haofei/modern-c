@@ -3,7 +3,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
@@ -12,10 +12,10 @@ const mir = @import("mir.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
 const type_syntax = @import("type_syntax.zig");
 
-const callExpr = expr_syntax.callExpr;
-const calleeIdentName = expr_syntax.calleeIdentName;
+const callExpr = syntax_bridge.callExpr;
+const calleeIdentName = syntax_bridge.calleeIdentName;
 const exprContainsCall = lower_c_expr.exprContainsCall;
-const indexExpr = expr_syntax.indexExpr;
+const indexExpr = syntax_bridge.indexExpr;
 const ConstGetCallInfo = lower_c_model.ConstGetCallInfo;
 const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
 const GlobalAccess = lower_c_model.GlobalAccess;
@@ -27,7 +27,7 @@ const SliceAccess = lower_c_model.SliceAccess;
 const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const TryReplacement = lower_c_model.TryReplacement;
 const arrayElementType = lower_c_shape.arrayElementType;
-const memberCallee = expr_syntax.memberCallee;
+const memberCallee = syntax_bridge.memberCallee;
 const simpleNameType = type_syntax.simpleNameType;
 const sliceElementType = lower_c_shape.sliceElementType;
 const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;

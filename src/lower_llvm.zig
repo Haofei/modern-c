@@ -6,7 +6,7 @@ const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const early_declaration_metadata = @import("early_declaration_metadata.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
@@ -14,12 +14,12 @@ const mir_source_bridge = @import("mir_source_bridge.zig");
 const numeric = @import("numeric.zig");
 const type_syntax = @import("type_syntax.zig");
 
-const isIdentNamed = expr_syntax.isIdentNamed;
+const isIdentNamed = syntax_bridge.isIdentNamed;
 const typeName = type_syntax.typeName;
-const byteViewAddressTarget = expr_syntax.byteViewAddressTarget;
-const calleeIdentName = expr_syntax.calleeIdentName;
-const memberExpr = expr_syntax.memberExpr;
-const indexExpr = expr_syntax.indexExpr;
+const byteViewAddressTarget = syntax_bridge.byteViewAddressTarget;
+const calleeIdentName = syntax_bridge.calleeIdentName;
+const memberExpr = syntax_bridge.memberExpr;
+const indexExpr = syntax_bridge.indexExpr;
 const isSourceSpan = mir_source_bridge.isSourceSpan;
 const sourcePointFromOptionalSpan = mir_source_bridge.sourcePointFromOptionalSpan;
 const sourcePointMatchesSpan = mir_source_bridge.sourcePointMatchesSpan;
@@ -28,8 +28,8 @@ const isStringLiteralTarget = type_syntax.isStringLiteralTarget;
 const isMmioStructAbi = type_syntax.isMmioStructAbi;
 const overlayByteArrayElementType = type_syntax.overlayByteArrayElementType;
 const overlayArrayElementType = type_syntax.overlayArrayElementType;
-const overlayMemberFromIndexBase = expr_syntax.overlayMemberFromIndexBase;
-const taggedUnionCase = expr_syntax.taggedUnionCase;
+const overlayMemberFromIndexBase = syntax_bridge.overlayMemberFromIndexBase;
+const taggedUnionCase = syntax_bridge.taggedUnionCase;
 
 const backend_mod = @import("backend.zig");
 const lower_llvm_lookup = @import("lower_llvm_lookup.zig");
@@ -139,9 +139,9 @@ const LlvmReflectEnv = lower_llvm_reflect.ReflectEnv;
 // `lower_llvm_atomic.zig`. Re-exported here so call sites read unchanged.
 const lower_llvm_atomic = @import("lower_llvm_atomic.zig");
 const AtomicOrderContext = lower_llvm_atomic.AtomicOrderContext;
-const atomicOrderingArg = expr_syntax.atomicOrderingArg;
-const atomicOrderingExpr = expr_syntax.atomicOrderingExpr;
-const orderingArg = expr_syntax.atomicOrderingExpr;
+const atomicOrderingArg = syntax_bridge.atomicOrderingArg;
+const atomicOrderingExpr = syntax_bridge.atomicOrderingExpr;
+const orderingArg = syntax_bridge.atomicOrderingExpr;
 const atomicLlvmOrdering = lower_llvm_atomic.atomicLlvmOrdering;
 const LocalSlot = lower_llvm_model.LocalSlot;
 const LocalSlotKind = lower_llvm_model.LocalSlotKind;
@@ -867,7 +867,7 @@ const LlvmEmitter = struct {
             return try self.comptimeValueInitializer(value, semantic_ty);
         }
         if (lower_llvm_shape.atomicPayloadType(&self.type_aliases, resolved_ty)) |payload_ty| {
-            if (expr_syntax.callExpr(expr)) |call| {
+            if (syntax_bridge.callExpr(expr)) |call| {
                 if (self.mirHasCallTargetKindAt(.atomic_init, call.callee.*.span)) {
                     const fact_payload_ty = self.atomicInitPayloadTypeAt(call.callee.*.span, semantic_ty) orelse return error.UnsupportedLlvmEmission;
                     if (call.type_args.len != 0 or call.args.len != 1) return error.UnsupportedLlvmEmission;
@@ -1361,7 +1361,7 @@ const LlvmEmitter = struct {
                 try self.out.print(self.allocator, "){s}{s}{s} {{\n{s}:\n", .{ attr_str, section_str, align_str, entry_label });
             }
             self.temp_index = 0;
-            try self.emitAsmStmt(expr_syntax.nakedAsmStmt(body) orelse return error.UnsupportedLlvmEmission);
+            try self.emitAsmStmt(syntax_bridge.nakedAsmStmt(body) orelse return error.UnsupportedLlvmEmission);
             try self.out.appendSlice(self.allocator, "  unreachable\n}\n\n");
             return;
         }
@@ -2041,7 +2041,7 @@ const LlvmEmitter = struct {
     }
 
     fn ordinaryDeferDirectCallCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
-        const call = expr_syntax.callExpr(expr) orelse return null;
+        const call = syntax_bridge.callExpr(expr) orelse return null;
         if (call.type_args.len != 0) return null;
         const fn_name = calleeIdentName(call.callee.*) orelse return null;
         const sig = self.fn_sigs.get(fn_name) orelse return null;
@@ -2051,14 +2051,14 @@ const LlvmEmitter = struct {
     }
 
     fn ordinaryDeferCallTargetCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.CallTargetDeferCleanup {
-        const call = expr_syntax.callExpr(expr) orelse return null;
+        const call = syntax_bridge.callExpr(expr) orelse return null;
         const kind = self.mirCallTargetKindAt(call.callee.*.span) orelse return null;
         switch (kind) {
             .cpu_pause, .fence_full, .fence_release, .fence_acquire => {
                 if (call.type_args.len != 0 or call.args.len != 0) return null;
             },
             .raw_store => {
-                if (!expr_syntax.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
+                if (!syntax_bridge.isRawStoreCall(call.callee.*) or call.type_args.len != 1 or call.args.len != 2) return null;
             },
             .mmio_write => {
                 if (call.type_args.len != 0 or call.args.len != 2) return null;
@@ -6923,7 +6923,7 @@ const LlvmEmitter = struct {
         return self.aggregateIndexUsesRaceTolerantLowering(indexed.base.*, element_ty);
     }
 
-    fn indexedMemberRoot(self: *LlvmEmitter, expr: ast.Expr) ?expr_syntax.IndexExpr {
+    fn indexedMemberRoot(self: *LlvmEmitter, expr: ast.Expr) ?syntax_bridge.IndexExpr {
         if (indexExpr(expr)) |indexed| return indexed;
         return switch (expr.kind) {
             .grouped => |inner| self.indexedMemberRoot(inner.*),
@@ -8717,7 +8717,7 @@ const LlvmEmitter = struct {
     // the callee owner (not a target type). Returns null when the owner is not a known
     // tagged union (an inherent/associated call, or an intrinsic).
     fn emitQualifiedUnionConstructor(self: *LlvmEmitter, call: anytype, union_ty: ast.TypeExpr) !?[]const u8 {
-        const q = expr_syntax.qualifiedMemberCallee(call.callee.*) orelse return null;
+        const q = syntax_bridge.qualifiedMemberCallee(call.callee.*) orelse return null;
         const union_name = typeName(self.resolveAliasType(union_ty)) orelse return null;
         if (!std.mem.eql(u8, union_name, q.owner)) return error.UnsupportedLlvmEmission;
         const union_decl = self.tagged_unions.get(union_name) orelse return null;
@@ -9568,9 +9568,9 @@ const LlvmEmitter = struct {
 
     fn rawCallInfo(self: *LlvmEmitter, call: anytype, kind: mir.CallTargetKind) ?RawCallInfo {
         const valid_shape = switch (kind) {
-            .raw_load => expr_syntax.isRawLoadCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
-            .raw_ptr => expr_syntax.isRawPtrCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
-            .raw_store => expr_syntax.isRawStoreCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 2,
+            .raw_load => syntax_bridge.isRawLoadCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
+            .raw_ptr => syntax_bridge.isRawPtrCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 1,
+            .raw_store => syntax_bridge.isRawStoreCall(call.callee.*) and call.type_args.len == 1 and call.args.len == 2,
             else => false,
         };
         if (!valid_shape) return null;
@@ -10469,8 +10469,8 @@ const LlvmEmitter = struct {
         const value = switch (info.kind) {
             .reflection_size => lower_llvm_reflect.comptimeSizeOf(&env, info.target_ty, 0),
             .reflection_alignment => lower_llvm_reflect.comptimeAlignOf(&env, info.target_ty, 0),
-            .reflection_field_offset => lower_llvm_reflect.comptimeFieldOffset(&env, info.target_ty, expr_syntax.reflectionFieldName(call.args[0]) orelse return null, 0),
-            .reflection_bit_offset => lower_llvm_reflect.comptimeBitOffset(&env, info.target_ty, expr_syntax.reflectionFieldName(call.args[0]) orelse return null),
+            .reflection_field_offset => lower_llvm_reflect.comptimeFieldOffset(&env, info.target_ty, syntax_bridge.reflectionFieldName(call.args[0]) orelse return null, 0),
+            .reflection_bit_offset => lower_llvm_reflect.comptimeBitOffset(&env, info.target_ty, syntax_bridge.reflectionFieldName(call.args[0]) orelse return null),
             .reflection_repr => lower_llvm_reflect.comptimeReprOf(&env, info.target_ty, 0),
             else => null,
         } orelse return null;

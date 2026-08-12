@@ -29,7 +29,7 @@ EXACT_BACKEND_COUNTS = {
     '@import("ast.zig")': 41,
     '@import("attr_syntax.zig")': 2,
     '@import("ast_query.zig")': 0,
-    '@import("expr_syntax.zig")': 21,
+    '@import("expr_syntax.zig")': 0,
     '@import("sema': 0,
     '@import("early_declaration_metadata.zig")': 4,
     '@import("mir_facts_view.zig")': 0,
@@ -199,6 +199,10 @@ REQUIRED_ANCHORS = {
     "src/mir_source_bridge.zig": (
         "Transitional AST-span to MIR-source-point bridge.",
         "VerifiedProgram boundary is being",
+    ),
+    "src/syntax_bridge.zig": (
+        "Transitional backend syntax-shape bridge.",
+        "expression-shape helper access behind this narrow bridge",
     ),
     "src/type_syntax.zig": (
         "pub const ViewType = struct",

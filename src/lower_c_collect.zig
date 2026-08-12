@@ -3,7 +3,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
@@ -17,8 +17,8 @@ const PackedBitsField = lower_c_model.PackedBitsField;
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const ResultInfo = lower_c_model.ResultInfo;
 const SliceInfo = lower_c_model.SliceInfo;
-const calleeIdentName = expr_syntax.calleeIdentName;
-const memberCallee = expr_syntax.memberCallee;
+const calleeIdentName = syntax_bridge.calleeIdentName;
+const memberCallee = syntax_bridge.memberCallee;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
 const typeName = type_syntax.typeName;
 

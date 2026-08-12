@@ -6,7 +6,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
@@ -17,7 +17,7 @@ const type_syntax = @import("type_syntax.zig");
 const AggregateEmitUnit = lower_c_model.AggregateEmitUnit;
 const ArrayInfo = lower_c_model.ArrayInfo;
 const cPayloadFieldName = lower_c_type.cPayloadFieldName;
-const calleeIdentName = expr_syntax.calleeIdentName;
+const calleeIdentName = syntax_bridge.calleeIdentName;
 const GlobalAccess = lower_c_model.GlobalAccess;
 const LocalInfo = lower_c_model.LocalInfo;
 const OverlayUnionInfo = lower_c_model.OverlayUnionInfo;
@@ -27,7 +27,7 @@ const resolvedArrayChildType = lower_c_shape.resolvedArrayChildType;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
 const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const structFieldType = lower_c_shape.structFieldType;
-const taggedUnionCase = expr_syntax.taggedUnionCase;
+const taggedUnionCase = syntax_bridge.taggedUnionCase;
 const typeName = type_syntax.typeName;
 const simpleNameType = type_syntax.simpleNameType;
 
@@ -495,7 +495,7 @@ pub fn emitTaggedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std
 // `Union.variant(...)` — qualified, self-typed tagged-union constructor. The union is
 // the callee owner (not a target type), so this lowers the same in any position.
 pub fn emitQualifiedUnionConstructor(ctx: EmitContext, call: anytype, locals: ?*std.StringHashMap(LocalInfo), union_ty: ast.TypeExpr) !bool {
-    const q = expr_syntax.qualifiedMemberCallee(call.callee.*) orelse return false;
+    const q = syntax_bridge.qualifiedMemberCallee(call.callee.*) orelse return false;
     const union_name = typeName(union_ty) orelse return false;
     if (!std.mem.eql(u8, union_name, q.owner)) return error.UnsupportedCEmission;
     const union_decl = ctx.tagged_unions.get(union_name) orelse return false;

@@ -6,7 +6,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_arith = @import("lower_c_arith.zig");
 const lower_c_atomic = @import("lower_c_atomic.zig");
@@ -31,8 +31,8 @@ const SequencedArgTemp = lower_c_model.SequencedArgTemp;
 const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;
 const appendGlobalStorePrefix = lower_c_global.appendGlobalStorePrefix;
 const appendGlobalStoreSuffix = lower_c_global.appendGlobalStoreSuffix;
-const calleeIdentName = expr_syntax.calleeIdentName;
-const memberExpr = expr_syntax.memberExpr;
+const calleeIdentName = syntax_bridge.calleeIdentName;
+const memberExpr = syntax_bridge.memberExpr;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
 const mmioFieldWidthBytes = lower_c_type.mmioFieldWidthBytes;
 const orderingArg = lower_c_atomic.orderingArg;
@@ -333,7 +333,7 @@ pub fn emitInlineReadCall(ctx: EmitContext, call: anytype, locals_opt: ?*std.Str
 }
 
 pub fn emitWriteStmt(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = expr_syntax.callExpr(expr) orelse return false;
+    const call = syntax_bridge.callExpr(expr) orelse return false;
     return emitWriteCall(ctx, call.callee.*, call.args, locals);
 }
 
@@ -384,7 +384,7 @@ pub fn emitDirectReadReturn(ctx: EmitContext, call: anytype, locals: *std.String
 }
 
 pub fn emitDirectReadReturnExpr(ctx: EmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = expr_syntax.callExpr(expr) orelse return false;
+    const call = syntax_bridge.callExpr(expr) orelse return false;
     return emitDirectReadReturn(ctx, call, locals);
 }
 
@@ -400,12 +400,12 @@ pub fn emitDirectReadLocalInit(ctx: EmitContext, name: []const u8, decl_ty: ast.
 }
 
 pub fn emitDirectReadLocalInitExpr(ctx: EmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = expr_syntax.callExpr(initializer) orelse return false;
+    const call = syntax_bridge.callExpr(initializer) orelse return false;
     return emitDirectReadLocalInit(ctx, name, decl_ty, call, locals);
 }
 
 pub fn emitDirectReadAssignment(ctx: EmitContext, replacement_ctx: ReplacementEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = expr_syntax.callExpr(assignment.value) orelse return false;
+    const call = syntax_bridge.callExpr(assignment.value) orelse return false;
     const read = (try directReadAccess(ctx, call, locals)) orelse return false;
 
     const temp_name = try std.fmt.allocPrint(ctx.scratch, "mc_tmp{d}", .{ctx.temp_index.*});
@@ -432,7 +432,7 @@ pub fn emitDirectReadInferredLocalInit(ctx: EmitContext, name: []const u8, initi
 }
 
 pub fn emitDirectReadInferredLocalInitExpr(ctx: EmitContext, name: []const u8, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = expr_syntax.callExpr(initializer) orelse return false;
+    const call = syntax_bridge.callExpr(initializer) orelse return false;
     const info = (try emitDirectReadInferredLocalInit(ctx, name, initializer.span, call, locals)) orelse return false;
     try locals.put(name, info);
     return true;
@@ -648,7 +648,7 @@ pub fn emitReadExprReturn(ctx: CallEmitContext, expr: ast.Expr, locals: *std.Str
 }
 
 pub fn emitReadCallReturn(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = expr_syntax.callExpr(expr) orelse return false;
+    const call = syntax_bridge.callExpr(expr) orelse return false;
     if (call.args.len == 0) return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
 
@@ -686,7 +686,7 @@ pub fn emitReadExprLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: as
 }
 
 pub fn emitReadCallLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: ast.TypeExpr, initializer: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = expr_syntax.callExpr(initializer) orelse return false;
+    const call = syntax_bridge.callExpr(initializer) orelse return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
     if (!fn_info.acceptsArgCount(call.args.len)) return false;
@@ -699,7 +699,7 @@ pub fn emitReadCallLocalInit(ctx: CallEmitContext, name: []const u8, decl_ty: as
 }
 
 pub fn emitReadCallAssignment(ctx: CallEmitContext, assignment: anytype, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = expr_syntax.callExpr(assignment.value) orelse return false;
+    const call = syntax_bridge.callExpr(assignment.value) orelse return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
     const call_return_ty = fn_info.return_type orelse return false;
@@ -714,7 +714,7 @@ pub fn emitReadCallAssignment(ctx: CallEmitContext, assignment: anytype, locals:
 }
 
 pub fn emitReadCallExprStmt(ctx: CallEmitContext, expr: ast.Expr, locals: *std.StringHashMap(LocalInfo)) !bool {
-    const call = expr_syntax.callExpr(expr) orelse return false;
+    const call = syntax_bridge.callExpr(expr) orelse return false;
     if (!argsContainRead(ctx.emit, call.args, locals)) return false;
     const fn_info = if (calleeIdentName(call.callee.*)) |callee_name| ctx.replacement.functions.get(callee_name) orelse return false else return false;
     if (!fn_info.acceptsArgCount(call.args.len)) return false;

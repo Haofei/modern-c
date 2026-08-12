@@ -1,14 +1,14 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const lower_c_type = @import("lower_c_type.zig");
 const type_syntax = @import("type_syntax.zig");
 
-const calleeIdentName = expr_syntax.calleeIdentName;
+const calleeIdentName = syntax_bridge.calleeIdentName;
 const binaryCOp = lower_c_op.binaryCOp;
 const isCheckedBinaryOp = lower_c_op.isCheckedBinaryOp;
 const isComparisonOp = lower_c_op.isComparisonOp;

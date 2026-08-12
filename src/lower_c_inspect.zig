@@ -4,7 +4,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const builtin_syntax = @import("builtin_syntax.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_atomic = @import("lower_c_atomic.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_model = @import("lower_c_model.zig");
@@ -38,19 +38,19 @@ const atomicAccess = lower_c_target.atomicAccess;
 const atomicOrderCConstant = lower_c_atomic.atomicOrderCConstant;
 const atomicOrderSynchronizes = lower_c_atomic.atomicOrderSynchronizes;
 const arithmeticDomainForBinary = lower_c_target.arithmeticDomainForBinary;
-const calleeIdentName = expr_syntax.calleeIdentName;
+const calleeIdentName = syntax_bridge.calleeIdentName;
 const contractMatchesCallee = builtin_syntax.contractMatchesCallee;
-const contractName = expr_syntax.contractName;
+const contractName = syntax_bridge.contractName;
 const dmaAddrHandoffObject = lower_c_target.dmaAddrHandoffObject;
 const dmaBufInfo = type_syntax.dmaBufInfo;
 const dmaOperation = lower_c_target.dmaOperation;
 const exprType = lower_c_target.exprType;
 const isBitcastCall = lower_c_expr.isBitcastCall;
 const isFixtureLocalAccess = lower_c_target.isFixtureLocalAccess;
-const isIdentNamed = expr_syntax.isIdentNamed;
-const memberCallee = expr_syntax.memberCallee;
-const memberExpr = expr_syntax.memberExpr;
-const isRawStoreCall = expr_syntax.isRawStoreCall;
+const isIdentNamed = syntax_bridge.isIdentNamed;
+const memberCallee = syntax_bridge.memberCallee;
+const memberExpr = syntax_bridge.memberExpr;
+const isRawStoreCall = syntax_bridge.isRawStoreCall;
 const knownContractCalleeName = builtin_syntax.knownContractCalleeName;
 const localOrdinaryTarget = lower_c_target.localOrdinaryTarget;
 const mmioPointee = type_syntax.mmioPointee;
@@ -401,7 +401,7 @@ const Inspector = struct {
     }
 
     fn writeFloatReduceMetadata(self: *Inspector, call: anytype, ctx: *FnContext) !void {
-        const kind = expr_syntax.reduceCallKind(call.callee.*) orelse return;
+        const kind = syntax_bridge.reduceCallKind(call.callee.*) orelse return;
         const member = memberCallee(call.callee.*) orelse return;
         const is_left = kind == .sum_left;
         const is_fast = kind == .sum_fast;

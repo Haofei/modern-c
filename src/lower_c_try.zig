@@ -7,7 +7,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const error_from = @import("error_from.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_arith = @import("lower_c_arith.zig");
 const lower_c_call = @import("lower_c_call.zig");
@@ -29,8 +29,8 @@ const TryReplacement = lower_c_model.TryReplacement;
 const appendGlobalStoreValue = lower_c_global.appendGlobalStoreValue;
 const appendGlobalStorePrefix = lower_c_global.appendGlobalStorePrefix;
 const appendGlobalStoreSuffix = lower_c_global.appendGlobalStoreSuffix;
-const calleeIdentName = expr_syntax.calleeIdentName;
-const callExpr = expr_syntax.callExpr;
+const calleeIdentName = syntax_bridge.calleeIdentName;
+const callExpr = syntax_bridge.callExpr;
 const resultPayloadTypeForTag = lower_c_shape.resultPayloadTypeForTag;
 
 pub const TryPredicateFn = *const fn (ctx: *anyopaque, operand: ast.Expr) bool;

@@ -3,7 +3,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
-const expr_syntax = @import("expr_syntax.zig");
+const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_access = @import("lower_c_access.zig");
 const lower_c_const = @import("lower_c_const.zig");
 const lower_c_model = @import("lower_c_model.zig");
@@ -21,10 +21,10 @@ const ResultSwitchSubject = lower_c_model.ResultSwitchSubject;
 const TaggedUnionSwitchBranch = lower_c_model.TaggedUnionSwitchBranch;
 const TaggedUnionSwitchSubject = lower_c_model.TaggedUnionSwitchSubject;
 
-const calleeIdentName = expr_syntax.calleeIdentName;
+const calleeIdentName = syntax_bridge.calleeIdentName;
 const cPayloadFieldName = lower_c_type.cPayloadFieldName;
 const nullableInnerTypeExpr = lower_c_type.nullableInnerTypeExpr;
-const taggedUnionCase = expr_syntax.taggedUnionCase;
+const taggedUnionCase = syntax_bridge.taggedUnionCase;
 
 pub const EmitExprFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo)) anyerror!void;
 pub const EmitReadExprWithReplacementsFn = *const fn (ctx: *anyopaque, expr: ast.Expr, locals: ?*std.StringHashMap(LocalInfo), target_ty: ?ast.TypeExpr, replacements: []const MmioReadReplacement) anyerror!void;
@@ -79,7 +79,7 @@ pub fn emitSwitchPatternLabel(allocator: std.mem.Allocator, out: *std.ArrayList(
             try out.appendSlice(allocator, "case ");
             try emitSwitchCaseValue(allocator, out, expr);
             try out.appendSlice(allocator, ":\n");
-        } else if (expr_syntax.boolLiteralValue(expr)) |value| {
+        } else if (syntax_bridge.boolLiteralValue(expr)) |value| {
             try out.print(allocator, "case {d}:\n", .{@intFromBool(value)});
         } else {
             try out.print(allocator, "/* unsupported switch pattern: {s} */\n", .{@tagName(pattern.kind)});
