@@ -1072,9 +1072,11 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     "src/declaration_artifacts.zig": {
         '@import("ast.zig")': 1,
         '@import("early_declaration_metadata.zig")': 0,
+        "pub const SyntaxDeclarationSlice = []const ast.Decl": 1,
         "pub const EarlyDeclarationMetadataView = struct": 0,
         "pub const EarlyDeclarationArtifacts = struct": 1,
         "decls: []const ast.Decl": 1,
+        "pub fn collectFromSyntaxDecls(allocator: std.mem.Allocator, decls: SyntaxDeclarationSlice) !EarlyDeclarationArtifacts": 1,
         "pub fn collectFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !EarlyDeclarationArtifacts": 1,
         "pub const SourceMapArtifact = union(enum)": 1,
         "pub const CallableValueArtifact = union(enum)": 1,
@@ -1086,7 +1088,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub const DeclarationArtifacts = declaration_artifacts.EarlyDeclarationArtifacts": 1,
         "pub fn buildBackendInputs(": 1,
         "pub fn buildCArtifactInputs(": 1,
-        "DeclarationArtifacts.collectFromDecls(session.allocator, module.decls)": 2,
+        "DeclarationArtifacts.collectFromDecls(session.allocator, module.decls)": 0,
+        "DeclarationArtifacts.collectFromSyntaxDecls(session.allocator, module.decls)": 2,
     },
     "src/source_map_rows.zig": {
         '@import("ast.zig")': 1,

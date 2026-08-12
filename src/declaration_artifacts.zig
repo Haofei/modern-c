@@ -9,6 +9,8 @@ const ast = @import("ast.zig");
 const eval = @import("eval.zig");
 const std = @import("std");
 
+pub const SyntaxDeclarationSlice = []const ast.Decl;
+
 /// Transitional declaration artifacts.
 ///
 /// Codegen compatibility prepasses still read top-level syntax declarations,
@@ -19,7 +21,7 @@ pub const EarlyDeclarationArtifacts = struct {
     type_artifacts: []const TypeArtifact,
     source_map_artifacts: []const SourceMapArtifact,
 
-    pub fn collectFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !EarlyDeclarationArtifacts {
+    pub fn collectFromSyntaxDecls(allocator: std.mem.Allocator, decls: SyntaxDeclarationSlice) !EarlyDeclarationArtifacts {
         var callable_value_artifacts: std.ArrayList(CallableValueArtifact) = .empty;
         errdefer callable_value_artifacts.deinit(allocator);
         var type_artifacts: std.ArrayList(TypeArtifact) = .empty;
@@ -90,6 +92,10 @@ pub const EarlyDeclarationArtifacts = struct {
             .type_artifacts = owned_type_artifacts,
             .source_map_artifacts = owned_source_map_artifacts,
         };
+    }
+
+    pub fn collectFromDecls(allocator: std.mem.Allocator, decls: []const ast.Decl) !EarlyDeclarationArtifacts {
+        return collectFromSyntaxDecls(allocator, decls);
     }
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {

@@ -129,6 +129,12 @@ core backend seam does not directly import AST declarations. New backend work
 should prefer MIR identities and typed facts and should avoid adding new
 semantic decisions to syntax-backed views.
 
+CLI/backend commands assemble the transitional request in
+`driver_codegen_inputs.zig`. That file is the only driver-owned syntax
+compatibility edge that may combine `VerifiedProgram` construction with
+declaration-artifact collection; `main.zig` and backend lowerers must not call
+the declaration collector directly.
+
 Artifact envelope metadata is not owned by the backend seam. `.mcmeta` and `.mcmap` use `artifact_model.ArtifactBundle`; backend lowering only receives the source digest through `LowerOptions`.
 
 ## Error boundary

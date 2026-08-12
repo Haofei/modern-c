@@ -28,7 +28,7 @@ pub fn buildBackendInputs(
 ) !backend.VerifiedProgram {
     const program = try session.buildVerifiedProgram(module, diag, optimize, module_mir, failure_error);
     errdefer module_mir.deinit();
-    artifacts.* = try DeclarationArtifacts.collectFromDecls(session.allocator, module.decls);
+    artifacts.* = try DeclarationArtifacts.collectFromSyntaxDecls(session.allocator, module.decls);
     errdefer artifacts.deinit(session.allocator);
     return program;
 }
@@ -41,6 +41,6 @@ pub fn buildCArtifactInputs(
 ) !void {
     module_mir.* = try mir.buildOpt(session.allocator, module, .{ .optimize = false });
     errdefer module_mir.deinit();
-    artifacts.* = try DeclarationArtifacts.collectFromDecls(session.allocator, module.decls);
+    artifacts.* = try DeclarationArtifacts.collectFromSyntaxDecls(session.allocator, module.decls);
     errdefer artifacts.deinit(session.allocator);
 }
