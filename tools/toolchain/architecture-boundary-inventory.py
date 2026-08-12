@@ -145,6 +145,8 @@ EXACT_FILE_COUNTS = {
     ("src/lower_c_emitter.zig", "mir_facts_view.PointerFactQuery"): 0,
     ("src/lower_llvm.zig", "mir_facts_view.PointerFactQuery"): 0,
     ("src/lower_c_access.zig", "mir.sourcePointFromSpan("): 0,
+    ("src/lower_c_access.zig", "fn replacementForSource("): 0,
+    ("src/lower_c_access.zig", "fn sameSource("): 0,
     ("src/lower_c_try.zig", "mir.sourcePointFromSpan("): 0,
     ("src/lower_c_mmio.zig", "mir.sourcePointFromSpan("): 0,
     ("src/lower_c_emitter.zig", "targetTypeFactMatchesFamily(function, result_fact, .atomic_init_result"): 0,

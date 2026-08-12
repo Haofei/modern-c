@@ -865,13 +865,6 @@ fn replacementForSpan(comptime Replacement: type, span: ast.Span, replacements: 
     return null;
 }
 
-fn replacementForSource(comptime Replacement: type, source: mir.SourcePoint, replacements: []const Replacement) ?Replacement {
-    for (replacements) |replacement| {
-        if (sameSource(source, replacement.source)) return replacement;
-    }
-    return null;
-}
-
 pub fn mmioReadReplacementValueTypeForExpr(expr: ast.Expr, replacements: []const MmioReadReplacement) ?[]const u8 {
     return switch (expr.kind) {
         .grouped => |inner| mmioReadReplacementValueTypeForExpr(inner.*, replacements),
@@ -887,8 +880,4 @@ fn nextTempName(ctx: EmitContext) ![]const u8 {
 
 fn writeIndent(ctx: EmitContext) !void {
     for (0..ctx.indent.*) |_| try ctx.out.appendSlice(ctx.allocator, "    ");
-}
-
-fn sameSource(left: mir.SourcePoint, right: mir.SourcePoint) bool {
-    return left.offset == right.offset and left.len == right.len and left.line == right.line and left.column == right.column;
 }
