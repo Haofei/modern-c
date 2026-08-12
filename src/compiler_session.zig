@@ -30,14 +30,14 @@ pub const StageFailure = error{
 };
 
 pub const CheckedModule = struct {
-    module: ast.Module,
+    decls_slice: []ast.Decl,
 
     pub fn decls(self: CheckedModule) []ast.Decl {
-        return self.module.decls;
+        return self.decls_slice;
     }
 
     pub fn deinit(self: CheckedModule, allocator: std.mem.Allocator) void {
-        self.module.deinit(allocator);
+        allocator.free(self.decls_slice);
     }
 };
 
@@ -224,7 +224,7 @@ pub const CompilationSession = struct {
             if (render_errors) diag.render();
             return failure_error;
         }
-        return .{ .module = module };
+        return .{ .decls_slice = module.decls };
     }
 
     pub fn buildVerifiedProgramFromDecls(
