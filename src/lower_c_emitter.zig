@@ -632,13 +632,12 @@ pub const CEmitter = struct {
         // declared later in the (possibly import-merged) source resolves — MC
         // resolves calls module-wide, independent of declaration order.
         for (self.function_decl_artifacts.items) |artifact| {
-            const fn_decl = artifact.toDecl();
             if (artifact.is_extern) {
                 // Extern prototypes must precede any function body that calls them;
                 // an imported `extern fn` can be merged after its caller.
-                try self.emitExternFunction(fn_decl);
-            } else if (fn_decl.body != null) {
-                try self.emitFunctionForwardDecl(fn_decl);
+                try self.emitExternFunction(artifact);
+            } else if (artifact.body != null) {
+                try self.emitFunctionForwardDecl(artifact);
             }
         }
     }
@@ -666,15 +665,14 @@ pub const CEmitter = struct {
 
     pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
         for (self.function_decl_artifacts.items) |artifact| {
-            const fn_decl = artifact.toDecl();
             if (artifact.is_extern) {
                 // Extern prototypes were already emitted in the forward-declaration pass.
                 continue;
             }
-            if (fn_decl.body) |body| {
-                try self.emitFunction(fn_decl, body, artifact.attrs);
+            if (artifact.body) |body| {
+                try self.emitFunction(artifact, body, artifact.attrs);
             } else {
-                try self.emitFunctionPrototype(fn_decl);
+                try self.emitFunctionPrototype(artifact);
             }
         }
     }
@@ -1144,7 +1142,7 @@ pub const CEmitter = struct {
         try lower_c_defs.emitArrayType(self.defsContext(), array);
     }
 
-    fn emitFunctionPrototype(self: *CEmitter, fn_decl: ast_bridge.FnDecl) !void {
+    fn emitFunctionPrototype(self: *CEmitter, fn_decl: anytype) !void {
         try self.emitFunctionSignature(fn_decl, false, true);
         try self.out.appendSlice(self.allocator, ";\n\n");
     }
@@ -1152,16 +1150,16 @@ pub const CEmitter = struct {
     // Forward declaration for a *defined* function, matching the definition's
     // storage class (non-exported functions are `static`) so the prototype and
     // body agree.
-    fn emitFunctionForwardDecl(self: *CEmitter, fn_decl: ast_bridge.FnDecl) !void {
+    fn emitFunctionForwardDecl(self: *CEmitter, fn_decl: anytype) !void {
         try self.emitFunctionSignature(fn_decl, !fn_decl.exported, true);
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
-    fn emitExternFunction(self: *CEmitter, fn_decl: ast_bridge.FnDecl) !void {
+    fn emitExternFunction(self: *CEmitter, fn_decl: anytype) !void {
         try self.emitFunctionPrototype(fn_decl);
     }
 
-    fn emitFunction(self: *CEmitter, fn_decl: ast_bridge.FnDecl, body: ast_bridge.Block, attrs: []const ast_bridge.Attr) anyerror!void {
+    fn emitFunction(self: *CEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: []const ast_bridge.Attr) anyerror!void {
         try self.writeLineDirective(fn_decl.name.span);
         try attr_syntax.emitCFunctionAttrs(self.allocator, self.out, attrs);
         if (hasNakedAttr(attrs)) {
@@ -1171,14 +1169,14 @@ pub const CEmitter = struct {
         try self.emitFunctionBody(fn_decl, body);
     }
 
-    fn emitNakedFunction(self: *CEmitter, fn_decl: ast_bridge.FnDecl, body: ast_bridge.Block) !void {
+    fn emitNakedFunction(self: *CEmitter, fn_decl: anytype, body: ast_bridge.Block) !void {
         try self.emitFunctionSignature(fn_decl, !fn_decl.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
         try self.emitNakedAsmBody(body);
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn emitFunctionBody(self: *CEmitter, fn_decl: ast_bridge.FnDecl, body: ast_bridge.Block) anyerror!void {
+    fn emitFunctionBody(self: *CEmitter, fn_decl: anytype, body: ast_bridge.Block) anyerror!void {
         try self.emitFunctionSignature(fn_decl, !fn_decl.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
 
@@ -1203,7 +1201,7 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn functionVariadicLastParam(fn_decl: ast_bridge.FnDecl) ?[]const u8 {
+    fn functionVariadicLastParam(fn_decl: anytype) ?[]const u8 {
         if (!fn_decl.is_variadic or fn_decl.params.len == 0) return null;
         return fn_decl.params[fn_decl.params.len - 1].name.text;
     }
@@ -1243,7 +1241,7 @@ pub const CEmitter = struct {
         self.indent -= 1;
     }
 
-    fn emitFunctionSignature(self: *CEmitter, fn_decl: ast_bridge.FnDecl, is_static: bool, with_asm_label: bool) !void {
+    fn emitFunctionSignature(self: *CEmitter, fn_decl: anytype, is_static: bool, with_asm_label: bool) !void {
         try lower_c_defs.emitFunctionSignature(self.defsContext(), fn_decl, is_static, with_asm_label);
     }
 

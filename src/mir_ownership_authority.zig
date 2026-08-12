@@ -38,23 +38,6 @@ pub const FunctionDeclArtifact = struct {
             .is_extern = is_extern,
         };
     }
-
-    pub fn toDecl(self: FunctionDeclArtifact) ast.FnDecl {
-        return .{
-            .name = self.name,
-            .associated_owner = self.associated_owner,
-            .abi = self.abi,
-            .params = self.params,
-            .return_type = self.return_type,
-            .return_borrow_source = self.return_borrow_source,
-            .body = self.body,
-            .is_const = self.is_const,
-            .exported = self.exported,
-            .is_variadic = self.is_variadic,
-            .bounds = self.bounds,
-            .is_async = self.is_async,
-        };
-    }
 };
 
 pub const AutoDropLocalCleanup = struct {

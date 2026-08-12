@@ -848,11 +848,10 @@ const LlvmEmitter = struct {
 
     fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {
         for (self.function_decl_artifacts.items) |artifact| {
-            const fn_decl = artifact.toDecl();
             if (artifact.is_extern) {
-                try self.emitExternFunction(fn_decl);
-            } else if (fn_decl.body) |body| {
-                try self.emitFunction(fn_decl, body, artifact.attrs);
+                try self.emitExternFunction(artifact);
+            } else if (artifact.body) |body| {
+                try self.emitFunction(artifact, body, artifact.attrs);
             }
         }
     }
@@ -1273,7 +1272,7 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitFunction(self: *LlvmEmitter, fn_decl: ast_bridge.FnDecl, body: ast_bridge.Block, attrs: []const ast_bridge.Attr) !void {
+    fn emitFunction(self: *LlvmEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: []const ast_bridge.Attr) !void {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
         const fn_sig = self.fn_sigs.get(fn_decl.name.text) orelse return error.UnsupportedLlvmEmission;
@@ -1457,7 +1456,7 @@ const LlvmEmitter = struct {
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn emitExternFunction(self: *LlvmEmitter, fn_decl: ast_bridge.FnDecl) !void {
+    fn emitExternFunction(self: *LlvmEmitter, fn_decl: anytype) !void {
         // The KASAN shadow hooks (D2.1) get weak no-op `define`s in emitTrapDecl so every
         // build links; skip the `declare` here to avoid an LLVM declare-vs-define clash.
         if (isKsanHook(fn_decl.name.text)) return;

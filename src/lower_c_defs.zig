@@ -126,7 +126,7 @@ pub fn emitTaggedUnionType(ctx: Context, union_decl: ast_bridge.UnionDecl) !void
     try ctx.out.print(ctx.allocator, "}} {s};\n\n", .{union_decl.name.text});
 }
 
-pub fn emitFunctionSignature(ctx: Context, fn_decl: ast_bridge.FnDecl, is_static: bool, with_asm_label: bool) !void {
+pub fn emitFunctionSignature(ctx: Context, fn_decl: anytype, is_static: bool, with_asm_label: bool) !void {
     const ret = if (fn_decl.return_type) |ret_ty| try ctx.c_type(ctx.emit_ctx, ret_ty) else "void";
     const cname = try ctx.c_ident(ctx.emit_ctx, fn_decl.name.text);
     try emitFunctionSignaturePrefix(ctx, ret, cname, is_static);
@@ -143,7 +143,7 @@ fn emitFunctionSignaturePrefix(ctx: Context, ret: []const u8, cname: []const u8,
     }
 }
 
-fn emitFunctionSignatureParams(ctx: Context, fn_decl: ast_bridge.FnDecl) !void {
+fn emitFunctionSignatureParams(ctx: Context, fn_decl: anytype) !void {
     if (fn_decl.params.len == 0) {
         try ctx.out.appendSlice(ctx.allocator, if (fn_decl.is_variadic) "" else "void");
     } else {
@@ -157,7 +157,7 @@ fn emitFunctionSignatureParams(ctx: Context, fn_decl: ast_bridge.FnDecl) !void {
     }
 }
 
-fn emitFunctionBackendAsmLabel(ctx: Context, fn_decl: ast_bridge.FnDecl, with_asm_label: bool) !void {
+fn emitFunctionBackendAsmLabel(ctx: Context, fn_decl: anytype, with_asm_label: bool) !void {
     if (!with_asm_label) return;
     const backend = ctx.backend_names.get(fn_decl.name.text) orelse return;
     try ctx.out.appendSlice(ctx.allocator, " __asm__(\"");
