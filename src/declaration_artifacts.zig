@@ -20,7 +20,12 @@ pub const EarlyDeclarationArtifacts = struct {
     function_artifacts: []const FunctionArtifact,
     global_artifacts: []const ast.GlobalDecl,
     trait_artifacts: []const TraitArtifact,
-    type_artifacts: []const TypeArtifact,
+    type_alias_artifacts: []const ast.TypeAlias,
+    struct_artifacts: []const ast.StructDecl,
+    enum_artifacts: []const ast.EnumDecl,
+    union_artifacts: []const ast.UnionDecl,
+    packed_bits_artifacts: []const ast.PackedBitsDecl,
+    overlay_union_artifacts: []const ast.OverlayUnionDecl,
     source_map_artifacts: []const SourceMapArtifact,
 
     pub fn collectFromSyntaxDecls(allocator: std.mem.Allocator, decls: SyntaxDeclarationSlice) !EarlyDeclarationArtifacts {
@@ -30,8 +35,18 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer global_artifacts.deinit(allocator);
         var trait_artifacts: std.ArrayList(TraitArtifact) = .empty;
         errdefer trait_artifacts.deinit(allocator);
-        var type_artifacts: std.ArrayList(TypeArtifact) = .empty;
-        errdefer type_artifacts.deinit(allocator);
+        var type_alias_artifacts: std.ArrayList(ast.TypeAlias) = .empty;
+        errdefer type_alias_artifacts.deinit(allocator);
+        var struct_artifacts: std.ArrayList(ast.StructDecl) = .empty;
+        errdefer struct_artifacts.deinit(allocator);
+        var enum_artifacts: std.ArrayList(ast.EnumDecl) = .empty;
+        errdefer enum_artifacts.deinit(allocator);
+        var union_artifacts: std.ArrayList(ast.UnionDecl) = .empty;
+        errdefer union_artifacts.deinit(allocator);
+        var packed_bits_artifacts: std.ArrayList(ast.PackedBitsDecl) = .empty;
+        errdefer packed_bits_artifacts.deinit(allocator);
+        var overlay_union_artifacts: std.ArrayList(ast.OverlayUnionDecl) = .empty;
+        errdefer overlay_union_artifacts.deinit(allocator);
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
         errdefer source_map_artifacts.deinit(allocator);
 
@@ -49,27 +64,27 @@ pub const EarlyDeclarationArtifacts = struct {
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .type_alias => |alias| {
-                try type_artifacts.append(allocator, .{ .type_alias = alias });
+                try type_alias_artifacts.append(allocator, alias);
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .struct_decl => |struct_decl| {
-                try type_artifacts.append(allocator, .{ .struct_decl = struct_decl });
+                try struct_artifacts.append(allocator, struct_decl);
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .enum_decl => |enum_decl| {
-                try type_artifacts.append(allocator, .{ .enum_decl = enum_decl });
+                try enum_artifacts.append(allocator, enum_decl);
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .union_decl => |union_decl| {
-                try type_artifacts.append(allocator, .{ .union_decl = union_decl });
+                try union_artifacts.append(allocator, union_decl);
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .packed_bits_decl => |packed_bits_decl| {
-                try type_artifacts.append(allocator, .{ .packed_bits = packed_bits_decl });
+                try packed_bits_artifacts.append(allocator, packed_bits_decl);
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .overlay_union_decl => |overlay_union| {
-                try type_artifacts.append(allocator, .{ .overlay_union = overlay_union });
+                try overlay_union_artifacts.append(allocator, overlay_union);
                 if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
             },
             .opaque_decl => {
@@ -91,8 +106,18 @@ pub const EarlyDeclarationArtifacts = struct {
         errdefer allocator.free(owned_global_artifacts);
         const owned_trait_artifacts = try trait_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_trait_artifacts);
-        const owned_type_artifacts = try type_artifacts.toOwnedSlice(allocator);
-        errdefer allocator.free(owned_type_artifacts);
+        const owned_type_alias_artifacts = try type_alias_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_type_alias_artifacts);
+        const owned_struct_artifacts = try struct_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_struct_artifacts);
+        const owned_enum_artifacts = try enum_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_enum_artifacts);
+        const owned_union_artifacts = try union_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_union_artifacts);
+        const owned_packed_bits_artifacts = try packed_bits_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_packed_bits_artifacts);
+        const owned_overlay_union_artifacts = try overlay_union_artifacts.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_overlay_union_artifacts);
         const owned_source_map_artifacts = try source_map_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_source_map_artifacts);
 
@@ -100,7 +125,12 @@ pub const EarlyDeclarationArtifacts = struct {
             .function_artifacts = owned_function_artifacts,
             .global_artifacts = owned_global_artifacts,
             .trait_artifacts = owned_trait_artifacts,
-            .type_artifacts = owned_type_artifacts,
+            .type_alias_artifacts = owned_type_alias_artifacts,
+            .struct_artifacts = owned_struct_artifacts,
+            .enum_artifacts = owned_enum_artifacts,
+            .union_artifacts = owned_union_artifacts,
+            .packed_bits_artifacts = owned_packed_bits_artifacts,
+            .overlay_union_artifacts = owned_overlay_union_artifacts,
             .source_map_artifacts = owned_source_map_artifacts,
         };
     }
@@ -109,7 +139,12 @@ pub const EarlyDeclarationArtifacts = struct {
         allocator.free(self.function_artifacts);
         allocator.free(self.global_artifacts);
         allocator.free(self.trait_artifacts);
-        allocator.free(self.type_artifacts);
+        allocator.free(self.type_alias_artifacts);
+        allocator.free(self.struct_artifacts);
+        allocator.free(self.enum_artifacts);
+        allocator.free(self.union_artifacts);
+        allocator.free(self.packed_bits_artifacts);
+        allocator.free(self.overlay_union_artifacts);
         allocator.free(self.source_map_artifacts);
         self.* = empty;
     }
@@ -118,7 +153,12 @@ pub const EarlyDeclarationArtifacts = struct {
         .function_artifacts = &.{},
         .global_artifacts = &.{},
         .trait_artifacts = &.{},
-        .type_artifacts = &.{},
+        .type_alias_artifacts = &.{},
+        .struct_artifacts = &.{},
+        .enum_artifacts = &.{},
+        .union_artifacts = &.{},
+        .packed_bits_artifacts = &.{},
+        .overlay_union_artifacts = &.{},
         .source_map_artifacts = &.{},
     };
 };
@@ -137,11 +177,8 @@ pub const ComptimeDeclarationArtifacts = struct {
         errdefer structs.deinit(allocator);
 
         try globals.appendSlice(allocator, artifacts.global_artifacts);
-        for (artifacts.type_artifacts) |artifact| switch (artifact) {
-            .type_alias => |alias| try type_aliases.append(allocator, alias),
-            .struct_decl => |struct_decl| try structs.append(allocator, struct_decl),
-            else => {},
-        };
+        try type_aliases.appendSlice(allocator, artifacts.type_alias_artifacts);
+        try structs.appendSlice(allocator, artifacts.struct_artifacts);
 
         const owned_globals = try globals.toOwnedSlice(allocator);
         errdefer allocator.free(owned_globals);
@@ -196,15 +233,6 @@ pub const FunctionArtifact = struct {
 pub const TraitArtifact = union(enum) {
     trait_decl: ast.TraitDecl,
     impl_trait: ast.ImplTrait,
-};
-
-pub const TypeArtifact = union(enum) {
-    type_alias: ast.TypeAlias,
-    struct_decl: ast.StructDecl,
-    enum_decl: ast.EnumDecl,
-    union_decl: ast.UnionDecl,
-    packed_bits: ast.PackedBitsDecl,
-    overlay_union: ast.OverlayUnionDecl,
 };
 
 pub const SourceMapArtifact = union(enum) {
