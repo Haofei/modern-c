@@ -453,6 +453,7 @@ removing backend authority before adding new abstractions:
 | 265 | Delete CLI list-tests combined-module fallback. | Complete: `runListTests` now requires `CompilationSession.resolved_sources`; the old fallback parse plus `appendModuleTests(...)` helper was removed, and inventory gates keep that direct `module.decls` test enumeration path at zero. |
 | 266 | Delete CLI symbols combined-module fallback. | Complete: `runSymbols` now requires the resolved-source pipeline and no longer reparses the combined module to call `symbols.emitJson(...)`; if resolved sources are missing, it emits an incomplete JSON result and fails closed. |
 | 267 | Delete backend-unsupported AST span fallback. | Complete: backend unsupported diagnostics no longer rescan `ast.Module.decls` for a best-effort source span; the CLI emits the generic backend unsupported diagnostic at the stable reporter fallback span, and inventory gates keep the AST span helper removed. |
+| 268 | Delete unused module-shaped lower-ir text wrapper. | Complete: the public `ir_inspection.appendLowerIr(allocator, ast.Module, ...)` wrapper was removed after CLI `lower-ir` moved to `appendLowerIrFromResolvedSources(...)`; inventory gates keep the module-shaped text-IR wrapper at zero. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower kernel-profile regression fails.
 

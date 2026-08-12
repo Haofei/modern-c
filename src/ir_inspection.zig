@@ -162,12 +162,6 @@ pub fn buildModuleIrFromDecls(allocator: std.mem.Allocator, decls: []const modul
     return .{ .allocator = allocator, .functions = try functions.toOwnedSlice(allocator) };
 }
 
-pub fn appendLowerIr(allocator: std.mem.Allocator, module: ast.Module, out: *std.ArrayList(u8)) !void {
-    var module_ir = try buildModuleIr(allocator, module);
-    defer module_ir.deinit();
-    try appendModuleIrText(allocator, module_ir, out);
-}
-
 pub fn appendLowerIrFromResolvedSources(
     allocator: std.mem.Allocator,
     sources: module_parser.ResolvedSourceDatabase,
