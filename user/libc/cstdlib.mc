@@ -53,7 +53,7 @@ fn lc_swap(a: usize, b: usize, size: usize) -> void {
 
 // qsort(base, nmemb, size, cmp): insertion sort. O(n^2) but correct for any input; the arrays the
 // engine sorts (native-symbol tables) are small, sorted once at load. A stable, allocation-free sort
-// is preferable here to a recursive quicksort in the confined agent.
+// is preferable here to a recursive quicksort in the confined guest.
 #[mc_abi]
 export fn qsort(base: *mut u8, nmemb: usize, size: usize,
                 cmp: fn(*const u8, *const u8) -> i32) -> void {

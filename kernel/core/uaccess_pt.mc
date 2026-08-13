@@ -1,7 +1,7 @@
 // kernel/core/uaccess_pt — the page-table-aware user/kernel copy path, arch-neutral.
 //
 // This is the single shared implementation of the `UserAddrSpace` copy contract used by the
-// confined agents on every architecture. It is ARCH-NEUTRAL: it only calls the uniform paging
+// confined guests on every architecture. It is ARCH-NEUTRAL: it only calls the uniform paging
 // interface (page_table_lookup / mapping_is_user / mapping_is_writable / page_table_translate)
 // that each `kernel/arch/<arch>/paging.mc` exposes identically. It imports that paging module
 // through the arch-selection seam (`kernel/arch/active/...`, plan R0b): the per-arch kernel
@@ -11,7 +11,7 @@
 //
 // Scope: only the page-table path. The full kernel/core/uaccess.mc additionally carries the
 // numeric `UserSpace` bring-up path and the snapshot/taint generics; the confined app
-// agent uses only the `UserAddrSpace` path here.
+// guest uses only the `UserAddrSpace` path here.
 //
 // Read side: a present, user-accessible page is readable on x86-64 (no separate readable bit)
 // and aarch64 (EL0 AP implies read), so the read check needs only `mapping_is_user` — present

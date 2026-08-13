@@ -7,7 +7,7 @@
 // these — neither side hardcodes its own copy, so the ABI cannot drift.
 
 export const SYS_WRITE: u64 = 0; // (fd, buf, len) -> bytes written (>=0) | -errno
-export const SYS_READ: u64 = 1; // (buf, max) -> bytes delivered (>=0) | -errno  (§0 agent ingress)
+export const SYS_READ: u64 = 1; // (buf, max) -> bytes delivered (>=0) | -errno
 export const SYS_GETPID: u64 = 2; // () -> pid
 // SYS_EXIT is 3 to match the shared M-mode trap path (usermode_runtime.c handles a7==3
 // specially: it returns control to the kernel rather than back to U-mode).
@@ -26,10 +26,10 @@ export const SYS_EXIT: u64 = 3; // (code) -> noreturn
 export const SYS_SUBMIT: u64 = 4; // (req_ptr) -> request id (>=0) | -errno
 export const SYS_POLL: u64 = 5; // (events_ptr, max, timeout) -> count delivered (0..max) | -E_FAULT
 // Demand-grown guest heap (docs: the fixed 14 MiB static libc arena is replaced by frames the
-// kernel maps on demand). Classic sbrk: grow the agent's break by `delta` bytes (rounded up to whole
+// kernel maps on demand). Classic sbrk: grow the guest break by `delta` bytes (rounded up to whole
 // pages), mapping fresh R|W|U frames CONTIGUOUSLY at the running break VA, and return the OLD break VA
 // (>=0). `delta == 0` queries the current break. On exhaustion / over-cap it returns a negative errno
-// (-E_NOMEM) WITHOUT mapping anything, so a hostile or greedy agent gets NULL from malloc, never a trap.
+// (-E_NOMEM) WITHOUT mapping anything, so a hostile or greedy guest gets NULL from malloc, never a trap.
 export const SYS_SBRK: u64 = 6; // (delta) -> old break VA (>=0) | -E_NOMEM
 
 // Negative-errno results returned through the syscall ABI (Linux-compatible values).
@@ -41,8 +41,8 @@ export const E_NOCAP: i64 = -105;    // ENOBUFS: request exceeds a hard capacity
 export const E_TIMEDOUT: i64 = -110; // ETIMEDOUT: the op did not complete within its deadline
 export const E_CANCELED: i64 = -125; // ECANCELED: the request was cancelled before completion
 
-// Tool ABI quotas (per agent). Hard bounds on what one agent can have outstanding / move per
-// request; the kernel owns buffers of exactly these sizes, so a hostile agent cannot make the
+// Runtime request ABI quotas (per guest). Hard bounds on what one guest can have outstanding / move per
+// request; the kernel owns buffers of exactly these sizes, so a hostile guest cannot make the
 // kernel allocate or copy unbounded data.
 export const MAX_INFLIGHT: u32 = 8;    // max concurrent pending requests (== completion queue depth)
 export const MAX_REQ_BYTES: u32 = 256; // max request-payload bytes copied IN per request
@@ -68,7 +68,7 @@ export const TOOL_OP_SPURIOUS: u32 = 5; // TEST-ONLY: completes carrying a BOGUS
 // Result: ToolEvent.status = 0 on success or -errno; ToolEvent.result = bytes written/read (or the
 // directory count). For FS_READ the file bytes are staged into the request's out_ptr (<= out_cap).
 // with out_len set, so the host resolves the read with the returned string.
-export const TOOL_OP_FS_WRITE: u32 = 6; // write data to a path under the agent's workspace cap
+export const TOOL_OP_FS_WRITE: u32 = 6; // write data to a path under the guest workspace cap
 export const TOOL_OP_FS_READ: u32 = 7;  // read a path's bytes back (staged to out_ptr)
 export const TOOL_OP_FS_MKDIR: u32 = 8; // create a directory (DENIED unless allowlisted)
 

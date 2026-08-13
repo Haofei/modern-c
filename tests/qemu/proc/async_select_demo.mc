@@ -1,8 +1,8 @@
 // select / cancel-the-loser over the real broker: two in-flight requests are RACED; a timer ISR
 // completes ONE of them (the winner); the race then CANCELS the loser, reclaiming its MAX_INFLIGHT
 // slot. The acceptance is that the broker's active-slot count returns to ZERO — proof that a
-// dropped (losing) request leaks nothing. This is the cancellation-dependent agent primitive:
-// "race two tool calls, cancel the loser." (Timeout is the same shape — race the operation against
+// dropped (losing) request leaks nothing. This is the cancellation-dependent runtime primitive:
+// "race two requests, cancel the loser." (Timeout is the same shape — race the operation against
 // a deadline request; whichever loses is cancelled.)
 //
 // E1 makes `cancel` a `Future` trait method, so the race can run over TYPE-ERASED `*mut dyn Future`

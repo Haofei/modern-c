@@ -175,7 +175,7 @@ pending up the poll chain, never a park.
 
 **3. Cancellation / drop — LANDED.** A started future that holds a `SlotFuture` owns a live
 `MAX_INFLIGHT` slot (and an enqueued waiter) until it completes and its result is taken — and
-`MAX_INFLIGHT` is tiny on an agent OS, so a leaked slot eventually wedges submission. This is now
+`MAX_INFLIGHT` is tiny in the validation broker, so a leaked slot eventually wedges submission. This is now
 fixed: the broker exposes `async_cancel(b, t, id)` (frees the slot, releases any parked waiter,
 idempotent; a late completion on the canceled id is a no-op), `SlotFuture` carries an injected
 `cancel`, and the transform GENERATES `f__Fut_cancel(self)` that walks the currently-active child

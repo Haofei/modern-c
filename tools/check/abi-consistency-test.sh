@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # abi-consistency gate (pure host check — no toolchain, never skips).
 #
-# user/abi.mc is the SINGLE source of truth for the confined-agent syscall numbers. The C
-# agent userspace runtime and the kernel-side agent dispatchers must hardcode the SAME
+# user/abi.mc is the SINGLE source of truth for the confined-guest syscall numbers. The C
+# agent userspace runtime and the kernel-side dispatchers must hardcode the SAME
 # numbers (they cannot `import` the .mc constant). This gate fails the build if any of those
 # C `#define SYS_<NAME> <N>` drift from abi.mc — the same belt-and-suspenders philosophy the
 # virtqueue layout uses with `_Static_assert`.
@@ -15,7 +15,7 @@ HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "
 TEST_NAME="abi-consistency-test"
 ABI="$HERE/user/abi.mc"
 
-# Files that share the canonical agent ABI with abi.mc (C side, which must hardcode it).
+# Files that share the canonical guest ABI with abi.mc (C side, which must hardcode it).
 AGENT_FILES=(
     user/runtime/usys.h
 )
@@ -28,7 +28,7 @@ AGENT_FILES=(
 # are checked by the MC type system, not here.
 
 # abi_num NAME -> the canonical number from abi.mc, or empty if NAME is not a canonical
-# agent-ABI constant. (No associative arrays: portable to macOS bash 3.2 and Docker bash.)
+# guest-ABI constant. (No associative arrays: portable to macOS bash 3.2 and Docker bash.)
 abi_num() {
     grep -E "^export const $1:" "$ABI" \
         | sed -n 's/^export const SYS_[A-Z_]*:[^=]*=[[:space:]]*\([0-9][0-9]*\).*$/\1/p' \
@@ -50,7 +50,7 @@ for rel in "${AGENT_FILES[@]}"; do
         num=$(printf '%s'  "$d" | sed -n 's/^#define[[:space:]]*SYS_[A-Z_]*[[:space:]]*\([0-9][0-9]*\).*$/\1/p')
         [ -n "$name" ] || continue
         want=$(abi_num "$name")
-        # Only enforce names that exist in the canonical agent ABI.
+        # Only enforce names that exist in the canonical guest ABI.
         [ -n "$want" ] || continue
         if [ "$num" != "$want" ]; then
             echo "FAIL: $TEST_NAME — $rel defines $name=$num but abi.mc says $want"
@@ -60,4 +60,4 @@ for rel in "${AGENT_FILES[@]}"; do
 done
 
 if [ "$fail" -ne 0 ]; then exit 1; fi
-echo "PASS: $TEST_NAME — agent-ABI C defines (crt0/usys/app_traps + agent dispatchers) match user/abi.mc ($n_const constants in abi.mc, ${#AGENT_FILES[@]} files checked)"
+echo "PASS: $TEST_NAME — guest ABI C defines (crt0/usys/app_traps + dispatchers) match user/abi.mc ($n_const constants in abi.mc, ${#AGENT_FILES[@]} files checked)"

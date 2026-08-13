@@ -1,10 +1,10 @@
 // kernel/fs/treefs — a hierarchical, in-memory tree filesystem.
 //
 // Where `ramfs` is a FLAT namespace (one table of named byte streams, no
-// directories), `treefs` adds the structure the agent sandbox needs: real
+// directories), `treefs` adds the structure the guest sandbox needs: real
 // directories, absolute path resolution (`/a/b/c`), `.`/`..` traversal, and
 // `getdents`-style directory listing. It is the M2 unblocker — the FS tool
-// server resolves an agent's workspace-rooted paths through this tree, and a
+// server resolves an guest workspace-rooted paths through this tree, and a
 // capability check on the resolved node is what denies a `/etc` escape.
 //
 // Storage follows ramfs's discipline: a fixed node table plus two flat pools

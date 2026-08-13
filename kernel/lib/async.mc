@@ -221,7 +221,7 @@ export fn async_complete(b: *mut AsyncBroker, t: *mut ProcTable, id: u64, result
 // by `async_submit`, and a late `async_complete(id)` (e.g. a device interrupt for an op whose
 // future was dropped) finds nothing and is a harmless no-op. This is the broker primitive behind
 // dropping a still-pending future: without it a dropped future LEAKS its `MAX_INFLIGHT` slot
-// (and an enqueued waiter), which on an agent OS — tiny `MAX_INFLIGHT` — eventually wedges
+// (and an enqueued waiter), which in the validation broker — tiny `MAX_INFLIGHT` — eventually wedges
 // submission. Returns false if `id` is not an active request (idempotent: a second cancel, or a
 // cancel of an already-completed/consumed id, is a no-op).
 //

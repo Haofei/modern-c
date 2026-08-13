@@ -18,13 +18,14 @@
 
 ## 1. Introduction & Scope
 
-The MC microkernel is a **capability microkernel in the MINIX/seL4 lineage**, written
-entirely in the MC language, whose intended and only workload is **AI agents** —
-semi-trusted, long-running, communication-heavy principals. It is *not* a
-general-purpose OS. It does **not** target POSIX compatibility or general-purpose hardware
-breadth; those mechanisms (a POSIX-shaped syscall demo, drivers, filesystems, ELF loading,
-TCP/IP) exist **only where they serve agent confinement, communication, storage, or
-bootstrapping** — never for their own sake.
+The MC microkernel is a **capability microkernel validation workload** in the MINIX/seL4
+lineage, written entirely in the MC language. It exists to exercise the compiler on
+freestanding, privilege-sensitive, low-level code. It is *not* a general-purpose OS and it
+is not a product runtime. It does **not** target POSIX compatibility or general-purpose
+hardware breadth; those mechanisms (a POSIX-shaped syscall demo, drivers, filesystems,
+ELF loading, TCP/IP) exist only where they validate language/compiler behavior such as
+address classes, privilege transitions, ABI layout, user-copy, async, ownership, and
+backend parity.
 
 What distinguishes it from a production C kernel is that a large class of kernel bugs are
 **compile errors** rather than runtime faults: opaque address classes, linear/`move`
@@ -37,7 +38,7 @@ agree (§8.3 distinguishes this from CPU-architecture support).
 
 | Area | Directory |
 |------|-----------|
-| Core (process, ipc, sched, capability, memory, agent, governance) | `kernel/core/` |
+| Core (process, ipc, sched, capability, memory, resource governance) | `kernel/core/` |
 | Arch HAL (riscv64 primary, x86_64/aarch64 partial) | `kernel/arch/<arch>/` |
 | Library types (resacct, granttab, supervisor, mailbox, fdspace, registry) | `kernel/lib/` |
 | Filesystems & storage | `kernel/fs/` |
@@ -74,15 +75,12 @@ region, or the QEMU envelope.
 
 **In scope** (the kernel aims to defend against these today):
 
-- buggy or malicious **agents** — unintentional exhaustion, crashes, malformed messages,
-  and code actively trying to escape/escalate/exfiltrate within granted authority;
-- **hijacked** agents (tier 3 of the vision threat model) — prompt-injected agents wielding
-  their *legitimate* authority maliciously; defended by bounding blast radius (governance)
-  and total provenance (observability), not by reachability alone;
+- buggy or malicious **guest/user tasks** — unintentional exhaustion, crashes, malformed
+  messages, and code actively trying to escape/escalate/exfiltrate within granted authority;
 - compromised **userspace-shaped services**;
 - **stale endpoints** and **revoked grants** (generation-checked, fail-closed);
 - **malformed user pointers** and **untrusted ELF inputs** (validated, bounds-checked);
-- **resource exhaustion by a live agent** (the governance keystone, §14).
+- **resource exhaustion by a live guest task** (§14).
 
 **Out of scope today:**
 
@@ -94,10 +92,9 @@ region, or the QEMU envelope.
   not machine-checked proof);
 - production multi-tenant hardening at scale.
 
-The kernel is the **sensor + actuator** (see everything, act instantly); deciding whether
-an agent is *misbehaving* is a policy plane **above** the kernel (vision § Policy plane). A
-tier-3 agent acts within its authority, so no kernel rule fires by construction — that
-verdict is not the kernel's job.
+The kernel validation workload tests mechanism, not product policy. Deciding whether a
+guest task is *misbehaving* beyond concrete kernel invariants is outside this repository's
+core language/compiler goal.
 
 ---
 
@@ -343,12 +340,12 @@ Runnability is **derived** (`Ready|Running` ∧ `block_reasons == 0`), never set
 reused; `endpoint_slot` fails `DeadEndpoint` on generation mismatch. Gates: `exec-test`,
 `endpoint-test`.
 
-### 10.3 Tool ABI fixtures — GATED, not a kernel product layer
+### 10.3 Runtime ABI fixtures — GATED, not a kernel product layer
 
 The dedicated kernel policy runtime and network broker fixtures have been removed. Kernel tests
-now use smaller tool-ABI fixtures to exercise userspace calls, async polling, confinement, and
-C/LLVM lowering. These fixtures are not a production agent capability broker and do not define a
-native agent OS surface.
+now use smaller runtime ABI fixtures to exercise userspace calls, async polling, isolation, and
+C/LLVM lowering. These fixtures are not a production capability broker and do not define a
+native OS surface.
 
 Gates: `cap-test`, `app-run-test`.
 
@@ -497,10 +494,8 @@ monotonic `seq` so a drainer can detect gaps. Two disjoint instances:
 **Exact audit coverage (faithful to code):** `g_cap_trace` records **every `kcall` attempt,
 allowed or denied**, and **every *dispatched* tool call**. Note the deliberate asymmetry —
 for tool calls, only dispatched calls are recorded; **Denied / Exhausted / NoSuchTool
-attempts are *not* audited today.** (Auditing denied tool attempts with reason codes would be
-a reasonable hardening step for an agent OS, but it is not the current behavior, and this
-spec reflects the code.) Recording is observe-only — zero effect on delivery semantics or
-return values.
+attempts are *not* audited today.** Recording is observe-only — zero effect on delivery
+semantics or return values.
 
 ---
 
@@ -653,7 +648,7 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | mmap / demand paging / COW | mmap **GATED**; demand paging & COW **DEMO-SCOPE** (single-region / one-page) |
 | Process lifecycle, attenuation, endpoints | **GATED** · demo-scale (`MAX_PROCS=8`) |
 | Scheduler (RR/priority/fair-share, preemption) | **GATED**; SMP **DEMO-SCOPE** (`NCORES=2`) |
-| Agent sandbox + tool-call ABI | **DEMO-SCOPE**. Remaining tool ops exercise syscall/async/runtime mechanics, not a production agent broker. |
+| User isolation + runtime ABI | **DEMO-SCOPE**. Remaining request ops exercise syscall/async/runtime mechanics, not part of a product broker. |
 | Capabilities, grants + delegation/cascade | **GATED** |
 | IPC (sync rendezvous + notify, endpoint-safe) | **GATED** (copying, not zero-copy) |
 | Resource governance: quota + OOM-kill + fault containment | **GATED** (mechanism under explicit charge sites; full allocator wiring follow-up) |

@@ -1,7 +1,7 @@
 #ifndef _ERRNO_H
 #define _ERRNO_H
 
-/* A single-threaded errno (the agent runs one JS context). Defined in stubs.c. */
+/* A single-threaded errno (the validation runtime). Defined in stubs.c. */
 extern int errno;
 
 #define EPERM    1

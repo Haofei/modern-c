@@ -7,7 +7,7 @@
 # double-cancel is idempotent) through the selected backend, links it with the context-switch
 # runtime into a bare riscv64 image, and runs it under QEMU. The trace `FXR` (filled / canceled /
 # reused) plus `ASYNC-CANCEL-OK` proves a dropped pending request does not leak its MAX_INFLIGHT
-# slot — the correctness gap that, unfixed, eventually wedges submission on an agent OS.
+# slot — the correctness gap that, unfixed, eventually wedges submission on the validation broker.
 #
 # Usage: tools/proc/async-cancel-test.sh <path-to-mcc> [c|llvm]
 # Skips (exit 0) when the riscv toolchain or QEMU is unavailable.

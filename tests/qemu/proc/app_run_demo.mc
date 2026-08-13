@@ -22,16 +22,16 @@ import "kernel/fs/treefs.mc";       // Tree + tree_init / tree_mkdir / tree_crea
 const SATP_SV39: u64 = 0x8000_0000_0000_0000;
 const COMP_CAP: usize = 8;
 const USER_BASE: usize = 0x10000;
-// Upper bound for ELF admission and initial uaccess validation. Must cover the agent's whole
-// initial VA span — for confined C app/WAMR agents that includes multi-MiB text/rodata plus a large
-// static data/bss segment. 32 MiB covers the larger S-mode WASM agents after strict ELF segment
+// Upper bound for ELF admission and initial uaccess validation. Must cover the guest's whole
+// initial VA span — for confined C app fixtures that includes multi-MiB text/rodata plus a large
+// static data/bss segment. 32 MiB covers the larger S-mode app fixtures after strict ELF segment
 // validation while staying far below the demand-grown heap and linear-memory windows.
 const USER_LIMIT: usize = 0x0200_0000;
 const KBUF: usize = 256;
 const AGENT_PID: u64 = 7;
 
 // ----- demand-grown guest heap (SYS_SBRK) -----
-// The confined agent's libc heap no longer relies solely on a fixed static arena baked into the ELF's
+// The confined guest libc heap no longer relies solely on a fixed static arena baked into the ELF's
 // .bss: when it runs dry, libc calls SYS_SBRK, and the kernel maps fresh R|W|U frames CONTIGUOUSLY at
 // the agent's break VA. Structural page-table frames still come from `g_heap` (the region pool); the
 // bulk DATA frames come from a dedicated window of physical RAM well above the kernel image + region
@@ -191,7 +191,7 @@ global g_next_req: u64;                       // monotonic request-id counter
 global g_reqbuf: [REQ_BYTES]u8;               // bounded copy-IN scratch for request payloads
 
 // ----- Simple app-run FS world -----
-// Keep this as a language/runtime fixture, not an agent product broker: FS_WRITE/FS_READ are
+// Keep this as a language/runtime fixture, not a product broker: FS_WRITE/FS_READ are
 // allowed only under "/ws"; FS_MKDIR is denied so userspace still exercises the typed-denial path.
 const FS_PATH_MAX: usize = 128; // bound on a tool path (kernel-resident copy)
 global g_tree: Tree;            // the tool filesystem (kernel-owned)

@@ -26,7 +26,7 @@ import "user/libc/lcommon.mc";
 // init + evaluation needs several MiB; the WASM path needs more — the wasm3 engine allocates its
 // per-function M3 code pages AND the guest's linear memory from this heap, and larger confined app workloads
 // (the Phase-4 keystone, docs/wasm-migration-plan.md §4 "Javy double-layering cost") stacks a JS
-// heap inside that linear memory on top. 14 MiB is the most that fits the confined agent: it sits
+// heap inside that linear memory on top. 14 MiB is the most that fits the confined guest: it sits
 // just under the elf_loader's 16 MiB-per-segment cap (with the 512 KiB stack) and within the
 // confined runtime's 16 MiB frame region. NOBITS .bss (no file cost); QEMU runs with -m 256.
 const ARENA_BYTES: usize = 14680064; // 14 MiB
@@ -51,12 +51,12 @@ fn ensure_init() -> void {
 //
 // When the arena is exhausted, allocations spill into a SECOND heap backed by frames the kernel maps
 // ON DEMAND at HEAP_BASE (through the __sbrk seam). Keeping the two heaps separate leaves the arena
-// path byte-for-byte unchanged for the common case (an agent that stays within the arena never sbrk's
-// and never touches this code), while letting a hungry agent — e.g. a WASM engine growing its linear
+// path byte-for-byte unchanged for the common case (a guest that stays within the arena never sbrk's
+// and never touches this code), while letting a hungry guest runtime growing its linear
 // memory — grow into real RAM instead of a compile-time .bss array. free()/realloc route by address:
 // anything at or above HEAP_BASE lives in the grown heap. __sbrk is a WEAK default here that reports
 // "growth unavailable" (returns the -1 sentinel); user/libc/syscall_user.mc overrides it with the real
-// ecall, so ONLY a confined agent that can ecall actually grows — plain host-side libc users keep the
+// ecall, so ONLY a confined guest that can ecall actually grows — plain host-side libc users keep the
 // fixed arena and identical behaviour.
 const SBRK_FAIL: usize = 0xFFFF_FFFF_FFFF_FFFF;
 const GROW_CHUNK: usize = 4194304;            // 4 MiB per SYS_SBRK, amortizing the syscall over small mallocs
@@ -65,12 +65,12 @@ const GROW_PAGE: usize = 4096;
 global g_grown: Heap;
 global g_grown_inited: u8;
 
-// Demand growth is OPT-IN. Default OFF: an agent (and every host-side libc user) keeps the fixed 14
+// Demand growth is OPT-IN. Default OFF: a guest (and every host-side libc user) keeps the fixed 14
 // MiB arena and prior behaviour byte-for-byte — malloc returns NULL at arena exhaustion, exactly as
-// before. An agent that wants to grow into real RAM calls mc_heap_grow_enable() once at start. This
+// before. A guest that wants to grow into real RAM calls mc_heap_grow_enable() once at start. This
 // keeps the WASM host's linear-memory bound unchanged for now: correct large-scale WASM memory.grow
 // (WAMR reallocs the whole linear buffer, an O(n^2) copy pattern) is a separate, later step — until
-// then only agents that explicitly opt in grow.
+// then only guests that explicitly opt in grow.
 global g_grow_enabled: u8;
 
 export fn mc_heap_grow_enable() -> void {
@@ -207,8 +207,8 @@ fn malloc_addr(size: usize) -> usize {
     switch heap_try_alloc(&g_heap, total, HEADER) {
         ok(b) => { block = b; }
         err(e) => {
-            // Arena exhausted. If the agent opted into demand growth, spill into the sbrk-backed
-            // grown heap (returns 0/NULL if growth is unavailable or the per-agent cap is reached —
+            // Arena exhausted. If the guest opted into demand growth, spill into the sbrk-backed
+            // grown heap (returns 0/NULL if growth is unavailable or the per-guest cap is reached —
             // never a trap). Otherwise fail exactly as the fixed arena always did.
             if g_grow_enabled == 0 {
                 return 0;
@@ -235,7 +235,7 @@ fn free_addr(user: usize) -> void {
     // came from g_heap; anything else was carved from the demand-grown heap. (Routing by a fixed
     // HEAP_BASE is wrong — in M-mode/host builds the .bss arena itself sits above HEAP_BASE, so an
     // arena block would misroute into the uninitialized grown heap and trap. The arena-range test is
-    // correct in both the confined agent and the flat host layout.)
+    // correct in both the confined guest and the flat host layout.)
     if in_arena(user) {
         heap_free(&g_heap, block, total);
     } else {

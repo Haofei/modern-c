@@ -1,5 +1,5 @@
 // user/libc/stubs — the small C-ABI surface freestanding C objects may reference but that has no real behavior in
-// a confined agent: process control (abort/assert -> trap), wall-clock time (epoch stubs; Date
+// a confined guest: process control (abort/assert -> trap), wall-clock time (epoch stubs; Date
 // is not yet wired to a capability clock), and the stdio stream objects. All in MC.
 
 import "std/addr.mc";
@@ -16,7 +16,7 @@ export fn __assert_fail(expr: *const u8, file: *const u8, line: i32, func: *cons
     unreachable;
 }
 
-// exit(code): a confined agent has no host process to exit; treat as abort for now (Phase 6
+// exit(code): a confined guest has no host process to exit; treat as abort for now (Phase 6
 // routes this to SYS_EXIT via the app runtime).
 export fn exit(code: i32) -> void {
     unreachable;

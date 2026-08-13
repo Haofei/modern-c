@@ -9,7 +9,7 @@ pub fn register(ctx: *h.Ctx) void {
     // ABI consistency: the confined-agent syscall numbers in user/abi.mc are the single source
     // of truth; the C agent userspace (crt0/usys/app_traps) + agent dispatchers must hardcode the
     // same numbers. Pure source scan (no mcc), so it always runs and never silently skips.
-    _ = h.addScriptTestOpts(ctx, "abi-consistency-test", "Check the C agent-ABI #defines (crt0/usys/app_traps + agent dispatchers) match user/abi.mc", &.{ "bash", "tools/check/abi-consistency-test.sh" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "abi-consistency-test", "Check the C guest-ABI #defines (crt0/usys/app_traps + dispatchers) match user/abi.mc", &.{ "bash", "tools/check/abi-consistency-test.sh" }, .{ .install = false });
 
     // Arch-selection seam (R0b): emit-c the portable core modules under every --arch. Pure host
     // (no ld.lld/QEMU), so it catches active-import regressions the x86/ARM QEMU gates would miss
@@ -807,7 +807,7 @@ pub fn register(ctx: *h.Ctx) void {
     // (egress allowlist -> budget -> endpoint). Endpoint 1 allowed (107/108), endpoint 9 DENIED
 
 
-    // from JS. Full JS-agent broker parity, completing the keystone. Both backends.
+    // from JS. JS broker product parity was removed; remaining fixtures only cover bounded runtime request mechanics.
 
 
     // guest uses the mc.tool_submit / mc.tool_poll surface to keep multiple ops in flight and drain
@@ -825,22 +825,22 @@ pub fn register(ctx: *h.Ctx) void {
     // ELF, but the kernel runs in S-mode under REAL OpenSBI (kernel mapped supervisor-only). Mirrors
 
 
-    // fails GRACEFULLY (malloc -> NULL at the cap, no trap, agent stays confined) — an untrusted agent
+    // fails GRACEFULLY (malloc -> NULL at the cap, no trap, guest stays confined) — an untrusted guest
     // cannot exhaust host memory and OOM is a normal confined error, not a crash.
 
     // the guest's own stdout survives the large grow).
 
-    // Demand-grown guest heap (Increment 1): a confined agent's libc heap grows ON DEMAND past the
+    // Demand-grown guest heap (Increment 1): a confined guest libc heap grows ON DEMAND past the
     // fixed static arena via SYS_SBRK — the kernel maps fresh frames at the running break, so the heap
-    // scales with real RAM instead of a compile-time .bss array. The agent malloc()s far past the arena
+    // scales with real RAM instead of a compile-time .bss array. The guest malloc()s far past the arena
     // and writes+reads every page, proving the demand-mapped frames are real.
-    _ = h.addScriptTest(ctx, "sbrk-grow-test", "Demand-grown heap: a confined agent's libc heap grows past the static arena via SYS_SBRK (40 MiB, every page written+read) under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-sbrk-grow-test", "Demand-grown heap (LLVM): a confined agent's libc heap grows past the static arena via SYS_SBRK under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "sbrk-cap-test", "Demand-grown heap cap: a confined agent grows past the arena then hits the unified-ledger memory ceiling with a clean NULL (no trap) under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "c", "examples/apps/sbrk_cap.c", "SBRK-CAP-OK", "sbrk-cap" });
-    _ = h.addScriptTest(ctx, "llvm-sbrk-cap-test", "Demand-grown heap cap (LLVM): a confined agent grows past the arena then hits the unified-ledger memory ceiling with a clean NULL under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/sbrk_cap.c", "SBRK-CAP-OK", "sbrk-cap" });
+    _ = h.addScriptTest(ctx, "sbrk-grow-test", "Demand-grown heap: a confined guest libc heap grows past the static arena via SYS_SBRK (40 MiB, every page written+read) under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-sbrk-grow-test", "Demand-grown heap (LLVM): a confined guest libc heap grows past the static arena via SYS_SBRK under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "sbrk-cap-test", "Demand-grown heap cap: a confined guest grows past the arena then hits the unified-ledger memory ceiling with a clean NULL (no trap) under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "c", "examples/apps/sbrk_cap.c", "SBRK-CAP-OK", "sbrk-cap" });
+    _ = h.addScriptTest(ctx, "llvm-sbrk-cap-test", "Demand-grown heap cap (LLVM): a confined guest grows past the arena then hits the unified-ledger memory ceiling with a clean NULL under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/sbrk_cap.c", "SBRK-CAP-OK", "sbrk-cap" });
 
     // preempted by the machine-timer watchdog and KILLED past its CPU budget — a coarse liveness
-    // bound (NOT deterministic fuel) proving an untrusted agent cannot wedge the system.
+    // bound (NOT deterministic fuel) proving an untrusted guest cannot wedge the system.
 
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
 
@@ -851,10 +851,10 @@ pub fn register(ctx: *h.Ctx) void {
 
     // SYS_SUBMIT/SYS_POLL with back-pressure, but the kernel runs in S-mode under the real OpenSBI
     // firmware (no `-bios none`) and the kernel is mapped supervisor-only (unreachable from U). The
-    // async agent is purely polled (no interrupts), so M3a's S-mode syscall dispatch already serves
+    // async guest runtime is purely polled (no interrupts), so M3a's S-mode syscall dispatch already serves
 
 
-    // async host I/O while the kernel stays unmapped (supervisor-only) from the agent.
+    // async host I/O while the kernel stays unmapped (supervisor-only) from the guest.
 
 
     // async ABI (SYS_SUBMIT/SYS_POLL). The shared app_run_demo broker dispatches host_fs_write /
@@ -862,7 +862,7 @@ pub fn register(ctx: *h.Ctx) void {
     // EXPECT "fs: ok" is reached only AFTER both the read-back and the denied mkdir.
 
 
-    // drains the job queue (JS_ExecutePendingJob) — the microtask concurrency real agents need
+    // drains the job queue (JS_ExecutePendingJob) — the microtask-style concurrency runtime fixtures exercise
 
 
     // the completion and resolves it (the .then then runs). IO=42, never blocking. Both backends.

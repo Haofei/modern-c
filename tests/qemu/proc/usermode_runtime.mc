@@ -77,7 +77,7 @@ fn write_mepc(v: u64) -> void {
 // ---- CPU-runaway watchdog (Phase-5 coarse liveness bound; NOT deterministic fuel) ----
 // A machine-timer interrupt preempts the U-mode agent every WD_INTERVAL mtime ticks; after
 // `mc_watchdog_ticks()` preemptions WITHOUT the agent exiting, the agent is killed (the machine
-// halts after a marker). This bounds a runaway/infinite-loop agent's CPU so an untrusted agent
+// halts after a marker). This bounds a runaway/infinite-loop guest's CPU so an untrusted guest
 // cannot wedge the system. It is OPT-IN: the weak default returns 0 (timer never armed → zero
 // change for every existing confined gate); the watchdog gate links a strong override returning a
 // small budget. QEMU's CLINT: mtime @ 0x0200_BFF8, hart-0 mtimecmp @ 0x0200_4000; mtime is 10 MHz.

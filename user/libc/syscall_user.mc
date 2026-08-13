@@ -1,6 +1,6 @@
 // user/libc/syscall_user — the U-mode platform shim for a CONFINED agent: routes the libc's
 // console output (sys_write, mc_console_write) through the SYS_WRITE ecall instead of touching
-// hardware. The confined agent reaches the kernel ONLY through this syscall path.
+// hardware. The confined guest reaches the kernel ONLY through this syscall path.
 //
 // Imports ONLY user/abi.mc (which itself imports nothing — pure const definitions), so the
 // syscall numbers come from the single ABI source of truth without pulling in std/* and
@@ -41,7 +41,7 @@ export fn sys_read(buf: usize, max: usize) -> i64 {
 
 // Demand-grown heap: the libc allocator's break primitive. Grow the heap by `delta` bytes and return
 // the OLD break VA, or a negative errno (as usize) on failure. This is the STRONG definition that
-// overrides the weak "growth unavailable" default in user/libc/alloc.mc, so only a confined agent that
+// overrides the weak "growth unavailable" default in user/libc/alloc.mc, so only a confined guest that
 // links this shim (i.e. can ecall) actually gets a growable heap; plain host-side libc users keep the
 // fixed arena. `delta == 0` queries the current break.
 export fn __sbrk(delta: usize) -> usize {

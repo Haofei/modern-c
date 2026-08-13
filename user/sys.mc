@@ -1,9 +1,9 @@
-// user/sys — userspace syscall wrappers. A confined agent reaches the kernel ONLY through
+// user/sys — userspace syscall wrappers. A confined guest reaches the kernel ONLY through
 // these; each issues a single `ecall` via the C shim `mc_ecall` (user/runtime/crt0.c), which
 // loads the number into a7 and args into a0..a2 and traps to the kernel. This module imports
 // NOTHING from the kernel — it is pure user code, linked into the app ELF.
 //
-// The kernel side copies any user buffer in/out through the agent's page table
+// The kernel side copies any user buffer in/out through the guest page table
 // (copy_*_user_pt); the wrappers just pass the pointer as an integer.
 
 import "user/abi.mc";
@@ -23,12 +23,12 @@ export fn print(buf: usize, len: usize) -> i64 {
     return write(FD_STDOUT, buf, len);
 }
 
-// getpid(): the agent's process id (its identity for capability attribution).
+// getpid(): the guest process id (its identity for capability attribution).
 export fn getpid() -> u64 {
     return mc_ecall(SYS_GETPID, 0, 0, 0);
 }
 
-// read(buf, max): copy up to `max` bytes of the kernel-held agent source into `buf` (the §0
+// read(buf, max): copy up to `max` bytes of the kernel-held guest source into `buf` (the §0
 // ingress). Returns the byte count, or -E_FAULT (bitcast of negative) if `buf` is unwritable.
 export fn read(buf: usize, max: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_READ, buf as u64, max as u64, 0));

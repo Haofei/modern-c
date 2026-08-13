@@ -84,7 +84,7 @@ export fn ReqFut_cancel(self: *mut ReqFut) -> void {
 // `ReqRace2` races two in-flight broker requests: it completes when EITHER finishes and CANCELS
 // the loser (`ReqFut_cancel` -> `async_cancel_slot`), so the loser's MAX_INFLIGHT slot is
 // reclaimed rather than leaked. `winner` records which finished first (0 = a, 1 = b; -1 while
-// undecided). This is the cancellation-dependent primitive an agent needs to race two tool calls
+// undecided). This is the cancellation-dependent primitive a guest runtime needs to race two requests
 // (or to time one out: race the operation against a deadline request — whichever loses is
 // cancelled). E1 RESOLVED the vtable gap: `cancel` is now a `Future` trait method, so the generic
 // `std/task.mc` `Race2` over `*mut dyn Future` also cancels its loser (see async_select_demo, which
@@ -173,7 +173,7 @@ export fn drive_irq(f: *mut dyn Future, irq_off: fn() -> void, irq_on: fn() -> v
 // E6 — a MULTI-FUTURE cooperative executor. `drive_many` generalizes `drive_irq` from ONE
 // top-level future to a fixed array of N `*mut dyn Future`, driving ALL of them to completion
 // while sleeping in `wfi` between ISR-delivered completions. This is the kernel-side concurrency
-// the agent OS needs: several independent async operations (each holding its own broker request
+// the validation runtime needs: several independent async operations (each holding its own broker request
 // id) make progress INTERLEAVED as their child completions arrive from interrupt context, rather
 // than serially via N sequential `drive_irq` calls — one `wfi`-idle services whichever future's
 // completion the ISR delivered next.
