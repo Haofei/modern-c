@@ -503,9 +503,9 @@ RULES: tuple[Rule, ...] = (
         "persisted mcfuzz regression corpus changes need corpus replay",
     ),
     Rule(
-        ("kernel/**/*", "std/**/*", "tests/qemu/**/*", "tools/arch/*", "tools/proc/*", "tools/mem/*", "tools/net/*", "tools/fs/*"),
+        ("kernel/**/*", "std/**/*", "tests/qemu/**/*", "tools/arch/*", "tools/proc/*", "tools/mem/*"),
         ("fast", "riscv-qemu-validation"),
-        "kernel/std/QEMU changes need host confidence plus the focused RISC-V board surrogate",
+        "kernel/std/QEMU changes need host confidence plus the focused RISC-V QEMU validation surrogate",
         excludes=(
             "tools/arch/qemu-mmio-test.sh",
         ),

@@ -31,7 +31,7 @@ CLI composition root.
 - new language surface area;
 - new backends;
 - editor integration or persistent service work;
-- deployable kernel, Agent, runtime, package, or hardware claims;
+- deployable kernel, Agent, runtime, package, or hardware scope;
 - validation workloads defining compiler semantics.
 
 ## Active phases

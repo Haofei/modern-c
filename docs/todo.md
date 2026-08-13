@@ -28,8 +28,8 @@ history; this file should describe only current compiler-core direction.
 ## Non-goals in the core backlog
 
 - Kernel deliverable features.
-- Filesystems, networking stacks, storage stacks, package ecosystems, service
-  supervisors, and update/recovery systems.
+- Filesystem, networking, storage, package, service-supervisor, and
+  update/recovery work outside language-validation fixtures.
 - Board certification, fleet operations, shipped-image policy, or support
   process.
 - New language surface before the current semantic authority boundary is stable.
