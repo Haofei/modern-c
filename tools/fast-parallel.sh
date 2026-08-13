@@ -32,7 +32,7 @@ esac
 INNER_DEFAULT="$(mc_inner_jobs "$OUTER_JOBS" "$HOST_JOBS")"
 export JOBS="${JOBS:-${MC_FAST_INNER_JOBS:-$INNER_DEFAULT}}"
 
-OUT=".wamr-cache/fastp-logs"
+OUT=".mc-cache/fastp-logs"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
@@ -55,7 +55,7 @@ done < <(awk '/const fast_step = b.step/{f=1} /const c0_step = b.step/{f=0} f' b
 }
 
 # Longest-processing-time-first when prior timing data exists.
-TIMES=".wamr-cache/step-times.tsv"
+TIMES=".mc-cache/step-times.tsv"
 if [ -s "$TIMES" ]; then
     ORDERED=()
     while IFS= read -r gate; do
@@ -74,7 +74,7 @@ S=$(date +%s)
 set +e
 printf '%s\n' "${GATES[@]}" | xargs -P "$OUTER_JOBS" -I{} bash -c '
     g="$1"
-    if zig build "$g" >".wamr-cache/fastp-logs/$g.log" 2>&1; then
+    if zig build "$g" >".mc-cache/fastp-logs/$g.log" 2>&1; then
         echo "PASS $g"
     else
         echo "FAIL $g"

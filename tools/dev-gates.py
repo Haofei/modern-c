@@ -308,9 +308,9 @@ RULES: tuple[Rule, ...] = (
         ("git diff --check",),
     ),
     Rule(
-        ("tools/toolchain/safe-release-parity.sh",),
-        ("safe-release-parity",),
-        "SAFE/RELEASE parity harness changes need the safe release parity gate",
+        ("tools/toolchain/checks-elision-parity.sh",),
+        ("checks-elision-parity",),
+        "checks=all/checks=elide-proven parity harness changes need the safe checks elision parity gate",
     ),
     Rule(
         ("CHANGELOG.md",),

@@ -76,10 +76,10 @@ kernel_boot_compile_mc_object() {
     local src="$2"
     local out="$3"
     local work="$4"
-    # Build-safety profile (D2.5). The kernel DEFAULTS to SAFE: every runtime trap check is
-    # kept. Set MC_CHECKS=elide-proven to build the RELEASE profile (the fact-gated MIR
+    # Build-safety profile (D2.5). The kernel defaults to checks=all: every runtime trap check is
+    # kept. set MC_CHECKS=elide-proven to build the checks=elide-proven profile (the fact-gated MIR
     # optimizer elides only checks it proved can never trap, annex E.4) — used by the parity
-    # boot. MC_CHECKS=all is the explicit SAFE form and matches the no-flag default.
+    # boot. MC_CHECKS=all is the explicit checks=all form and matches the no-flag default.
     local checks="${MC_CHECKS:-all}"
     local checks_flag=()
     [ "$checks" != "all" ] && checks_flag=(--checks="$checks")

@@ -81,8 +81,8 @@ const usage =
     \\                         in the .mcmap header.
     \\
     \\build-safety profile (orthogonal to the --profile target axis):
-    \\  --checks=all           SAFE build (DEFAULT): keep every runtime trap check.
-    \\  --checks=elide-proven  RELEASE build: elide ONLY the checks the fact-gated MIR
+    \\  --checks=all           checks=all (default): keep every runtime trap check.
+    \\  --checks=elide-proven  checks=elide-proven: elide ONLY the checks the fact-gated MIR
     \\                         optimizer (annex E.4) proved can never trap; all other
     \\                         checks are kept. Observable behavior is identical to
     \\                         --checks=all on every non-trapping program, since a

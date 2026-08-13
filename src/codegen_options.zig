@@ -17,7 +17,7 @@ pub const Profile = enum { kernel, hosted };
 /// the legal combinations at flag-parse time; the emitters assume a legal value.
 pub const Checks = struct {
     /// Whether optimization-dependent lowering is enabled (mir.buildOpt): the
-    /// RELEASE build (`--checks=elide-proven`) vs the SAFE default (`--checks=all`).
+    /// checks=elide-proven (`--checks=elide-proven`) versus the checks=all default (`--checks=all`).
     optimize: bool = false,
     /// KASAN profile (D2.1): instrumented memory accesses (raw.load / raw.store)
     /// emit a shadow-memory check (`mc_ksan_check`) that traps on a poisoned access.

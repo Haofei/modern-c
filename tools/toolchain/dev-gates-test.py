@@ -277,8 +277,8 @@ def main() -> None:
     )
     assert_gates(
         module,
-        ["tools/toolchain/safe-release-parity.sh"],
-        ["safe-release-parity"],
+        ["tools/toolchain/checks-elision-parity.sh"],
+        ["checks-elision-parity"],
     )
 
     print("PASS: dev-gates-test - routing contracts are stable")

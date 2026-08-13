@@ -186,9 +186,9 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("opt-equiv-test"));
     // reproducible-build-test validates emitted C + LLVM text is byte-identical across two compiles.
     m0_full_step.dependOn(ctx.cmd("reproducible-build-test"));
-    // safe-release-parity (D2.5): SAFE/RELEASE profiles agree functionally; RELEASE elides
-    // only the optimizer-proven-dead checks SAFE keeps.
-    m0_full_step.dependOn(ctx.cmd("safe-release-parity"));
+    // checks-elision-parity (D2.5): checks=all/checks=elide-proven profiles agree functionally; checks=elide-proven elides
+    // only the optimizer-proven-dead checks=all keeps.
+    m0_full_step.dependOn(ctx.cmd("checks-elision-parity"));
     // comptime-fold-test validates comptime-only folds (byte strings, wrap/sat domains).
     m0_full_step.dependOn(ctx.cmd("comptime-fold-test"));
     // asm-targets-test validates per-architecture precise-asm register vocabularies.

@@ -2,7 +2,7 @@ const std = @import("std");
 const h = @import("helpers.zig");
 
 // Opt-in static audits (unsafe boundary / double-fetch / taint / capability mint / coverage),
-// the ASan/UBSan sanitize pass, the SAFE/RELEASE parity gate, and the KASAN/KMSAN/KCSAN
+// the ASan/UBSan sanitize pass, the checks=all/checks=elide-proven parity gate, and the KASAN/KMSAN/KCSAN
 // + redzone sanitizer-profile QEMU boots.
 pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "sanitize", "Run the host-driver corpus under ASan + UBSan over the emitted C", &.{ "bash", "tools/toolchain/sanitize-test.sh", "zig-out/bin/mcc" });
@@ -33,10 +33,10 @@ pub fn register(ctx: *h.Ctx) void {
     // K1: source-level audit of capability mint authority.
     _ = h.addScriptTestOpts(ctx, "capability-mint-audit", "Audit capability authority roots: flag direct cap_mint/rcap_mint calls outside kernel/core/capability.mc (K1)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "capability-mint" }, .{ .install = false });
 
-    // D2.5: explicit SAFE vs RELEASE build-safety profile (`--checks=all|elide-proven`).
-    // Asserts the two profiles agree functionally and that RELEASE elides exactly the
-    // checks SAFE keeps (the optimizer-proven-dead ones).
-    _ = h.addScriptTest(ctx, "safe-release-parity", "D2.5: SAFE (--checks=all) and RELEASE (--checks=elide-proven) agree functionally; RELEASE elides only proven-dead checks", &.{ "bash", "tools/toolchain/safe-release-parity.sh", "zig-out/bin/mcc" });
+    // D2.5: explicit checks=all vs checks=elide-proven build-safety profile (`--checks=all|elide-proven`).
+    // Asserts the two profiles agree functionally and that checks=elide-proven elides exactly the
+    // checks=all keeps (the optimizer-proven-dead ones).
+    _ = h.addScriptTest(ctx, "checks-elision-parity", "D2.5: checks=all and checks=elide-proven agree functionally; checks=elide-proven elides only proven-dead checks", &.{ "bash", "tools/toolchain/checks-elision-parity.sh", "zig-out/bin/mcc" });
 
     // D2.4: heap-redzone + stack-canary runtime detection under QEMU.
     _ = h.addScriptTest(ctx, "redzone-test", "Boot the redzone+canary demo under QEMU (detects heap overflow + smashed canary)", &.{ "bash", "tools/mem/redzone-test.sh", "zig-out/bin/mcc", "c" });

@@ -547,7 +547,7 @@ Unary `-` is not defined for unsigned checked integers. Use checked subtraction 
 
 The compiler may remove the check only if it proves overflow impossible.
 
-Debug/release parity is semantic:
+Debug/checks elision parity is semantic:
 
 ```txt
 Same abstract inputs produce same abstract outcomes.
@@ -4535,24 +4535,24 @@ check** (each elided check's operand source point is recorded so the C and LLVM 
 exactly it). It is **off by default**; the standard pipeline emits identical MIR and identical
 code, so an unfinished or unsound transform can never silently affect a normal build.
 
-**Build-safety profile — SAFE vs RELEASE (D2.5).** This optimizer *is* the explicit build-safety
+**Build-safety profile — checks=all vs checks=elide-proven (D2.5).** This optimizer *is* the explicit build-safety
 knob, selected with `mcc verify|lower-mir|emit-c|emit-llvm <file> --checks=all|elide-proven`
 (orthogonal to the `--profile=kernel|hosted` *target* axis):
 
-- **`--checks=all` — SAFE (the default).** Every runtime trap check is kept; the optimizer
+- **`--checks=all` (default).** Every runtime trap check is kept; the optimizer
   elides nothing. This is what the kernel builds with (the kernel-boot path passes no
-  `--checks`, i.e. SAFE).
-- **`--checks=elide-proven` — RELEASE.** The optimizer is enabled and elides *only* the checks
+  `--checks`, i.e. checks=all).
+- **`--checks=elide-proven`.** The optimizer is enabled and elides *only* the checks
   it proved can never trap (the transforms below); every check it cannot discharge is kept.
 
-`--optimize` is a deprecated alias for `--checks=elide-proven`. Because RELEASE drops *only*
-provably-dead checks, **SAFE and RELEASE are functionally identical on every non-trapping
+`--optimize` is a deprecated alias for `--checks=elide-proven`. Because checks=elide-proven drops *only*
+provably-dead checks, **checks=all and checks=elide-proven are functionally identical on every non-trapping
 program** — a proven-dead check could never have fired, so removing it changes no observable
-behavior. (This is purely a code-size/speed choice, not a safety trade-off: RELEASE never
-removes a check that could trap, and SAFE never relies on the optimizer.) The
-`safe-release-parity` gate pins this — it compiles the optimizer fixture under both profiles,
-runs them, asserts identical output, and asserts SAFE keeps exactly the index/slice/divisor
-checks RELEASE elides.
+behavior. (This is purely a code-size/speed choice, not a safety trade-off: checks=elide-proven never
+removes a check that could trap, and checks=all never relies on the optimizer.) The
+`checks-elision-parity` gate pins this — it compiles the optimizer fixture under both profiles,
+runs them, asserts identical output, and asserts checks=all keeps exactly the index/slice/divisor
+checks=elide-proven elides.
 
 **Discipline — every transform must state, and a test must enforce:**
 
@@ -4620,10 +4620,10 @@ construction guard is elided — through the C and LLVM backends, default and `-
 all four, and asserts identical results — and that each optimized build actually dropped the
 check while the default kept it. So eliding the provably-dead checks is verified
 behavior-preserving across both backends, not merely a verification-precision change. The
-`safe-release-parity` gate restates the same property through the documented profile names —
-SAFE (`--checks=all`) vs RELEASE (`--checks=elide-proven`) agree functionally, and RELEASE
-elides exactly the checks SAFE keeps — and the `kmain` boot runs in both profiles to confirm
-each yields a bootable kernel image (SAFE is the kernel default).
+`checks-elision-parity` gate restates the same property through the documented profile names —
+`--checks=all` vs `--checks=elide-proven` agree functionally, and checks=elide-proven
+elides exactly the checks=all keeps — and the `kmain` boot runs in both profiles to confirm
+each yields a bootable kernel image (`--checks=all` is the kernel default).
 
 ---
 

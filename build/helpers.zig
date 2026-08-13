@@ -56,7 +56,7 @@ pub fn addScriptTest(ctx: *Ctx, name: []const u8, desc: []const u8, argv: []cons
 }
 
 /// When MC_TIME_STEPS is set at configure time, prepend the timed-step.sh wrapper so each gate's wall
-/// time lands in .wamr-cache/step-times.tsv. A pure profiling aid: the wrapper execs argv unchanged.
+/// time lands in .mc-cache/step-times.tsv. A pure profiling aid: the wrapper execs argv unchanged.
 fn timed(b: *std.Build, name: []const u8, argv: []const []const u8) []const []const u8 {
     if (b.graph.environ_map.get("MC_TIME_STEPS") == null) return argv;
     const out = b.allocator.alloc([]const u8, argv.len + 4) catch @panic("OOM");

@@ -59,7 +59,7 @@ prepare_workroot() {
             --exclude '.zig-cache' \
             --exclude 'zig-cache' \
             --exclude 'zig-out' \
-            --exclude '.wamr-cache' \
+            --exclude '.mc-cache' \
             "$SRC_ROOT"/ "$WORKROOT"/
     else
         (

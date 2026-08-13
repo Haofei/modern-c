@@ -40,8 +40,8 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 LL="$TMP_DIR/module.ll"
 
-# Build-safety profile (D2.5): MC_CHECKS=all (default, SAFE) keeps every trap check;
-# MC_CHECKS=elide-proven (RELEASE) elides only the optimizer-proven-dead ones (annex E.4).
+# Build-safety profile (D2.5): MC_CHECKS=all (default, checks=all) keeps every trap check;
+# MC_CHECKS=elide-proven (checks=elide-proven) elides only the optimizer-proven-dead ones (annex E.4).
 CHECKS_FLAG=()
 [ "${MC_CHECKS:-all}" != "all" ] && CHECKS_FLAG=(--checks="${MC_CHECKS}")
 # Arch-selection seam (R0b): MC_ARCH picks which arch a `kernel/arch/active/...` import

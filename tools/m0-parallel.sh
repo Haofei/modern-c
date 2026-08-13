@@ -11,7 +11,7 @@
 # Usage: tools/m0-parallel.sh [jobs]      (jobs default: host CPU count)
 #
 # On every completed run the runner writes both a machine-readable ranking and
-# a short top-20 bottleneck report under .wamr-cache/. These reports are
+# a short top-20 bottleneck report under .mc-cache/. These reports are
 # telemetry only: they never participate in a gate's pass/fail result.
 set -euo pipefail
 cd "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,7 +30,7 @@ esac
 # gate to independently consume all host CPUs.
 INNER_DEFAULT="$(mc_inner_jobs "$J" "$HOST_JOBS")"
 export JOBS="${JOBS:-${MC_M0_INNER_JOBS:-$INNER_DEFAULT}}"
-OUT=".wamr-cache/m0p-logs"; rm -rf "$OUT"; mkdir -p "$OUT"
+OUT=".mc-cache/m0p-logs"; rm -rf "$OUT"; mkdir -p "$OUT"
 
 # Build the compiler ONCE up front so the parallel gate processes don't race to build/install it.
 echo "[m0-parallel] building compiler (zig build install) ..."
@@ -66,10 +66,10 @@ GATES=("${PARALLEL_GATES[@]}")
 # profile is still recorded and can be selected explicitly with
 # MC_M0_USE_PARALLEL_PROFILE=1. Missing timings are estimated conservatively so
 # known-heavy fuzz/coverage gates do not get stranded at the tail.
-PROFILE_TIMES=".wamr-cache/m0-parallel-times.tsv"
-REPORT_TSV=".wamr-cache/m0-parallel-report.tsv"
-REPORT_SUMMARY=".wamr-cache/m0-parallel-report.txt"
-TIMES=".wamr-cache/step-times.tsv"
+PROFILE_TIMES=".mc-cache/m0-parallel-times.tsv"
+REPORT_TSV=".mc-cache/m0-parallel-report.tsv"
+REPORT_SUMMARY=".mc-cache/m0-parallel-report.txt"
+TIMES=".mc-cache/step-times.tsv"
 if [ "${MC_M0_USE_PARALLEL_PROFILE:-0}" = 1 ] && [ -s "$PROFILE_TIMES" ]; then
     TIMES="$PROFILE_TIMES"
 fi
@@ -110,8 +110,8 @@ S=$(date +%s)
 mkdir -p "$OUT/times"
 printf '%s\n' "${GATES[@]}" | xargs -P "$J" -I{} bash -c '
     g="$1"
-    log=".wamr-cache/m0p-logs/$g.log"
-    time_log=".wamr-cache/m0p-logs/times/$g.tsv"
+    log=".mc-cache/m0p-logs/$g.log"
+    time_log=".mc-cache/m0p-logs/times/$g.tsv"
     start=$(date +%s)
     rc=0
     if zig build "$g" >"$log" 2>&1; then
