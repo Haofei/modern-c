@@ -44,7 +44,7 @@ export fn guard_check(g: *StackGuard) -> void {
 
 // Test hook: deliberately smash a guard, the way an overflowing write would. Used by
 // the demo to prove `guard_check` actually fires on corruption (vs. passing a clean
-// guard). Not for production paths.
+// guard). Test hook only; normal code should use `guard_init`/`guard_check`.
 export fn guard_smash(g: *mut StackGuard) -> void {
     g.magic = 0;
 }

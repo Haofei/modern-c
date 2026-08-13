@@ -5,7 +5,7 @@ freestanding software. It explores a specific question: how much low-level
 machine behavior can be made explicit and checkable without hiding allocation,
 control flow, hardware access, or optimizer assumptions?
 
-MC is a research prototype, not a production C replacement. The compiler has
+MC is a research prototype, not a general C replacement. The compiler has
 two differentially validated backend paths for the documented, implemented subset:
 
 - checked C emission;
@@ -269,7 +269,7 @@ tools/toolchain/mcc-llvm-cc.sh path/to/file.mc -o file.o
 
 The `kernel/` and QEMU fixtures are compiler-validation workloads. They exercise
 freestanding ABI boundaries, address classes, ownership, unsafe operations, MMIO,
-interrupts, and backend lowering. They are not an OS product roadmap.
+interrupts, and backend lowering. They are not an OS deliverable track.
 
 Use `zig build riscv-qemu-validation` only when a change needs the retained
 RISC-V OpenSBI/QEMU surrogate. See

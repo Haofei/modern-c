@@ -1,6 +1,6 @@
 # Diagnostic code inventory
 
-`tools/toolchain/diagnostic-code-inventory.py --check` extracts production
+`tools/toolchain/diagnostic-code-inventory.py --check` extracts compiler
 `E_*` diagnostics from non-test `src/*.zig` files and requires each code to be
 owned by either:
 
@@ -20,5 +20,4 @@ fails on redundant or stale entries.
 |---|---|
 | `E_DIAGNOSTIC_OOM` | Defensive emergency diagnostic emitted when the reporter cannot allocate ordinary diagnostics; covered by `Reporter records emergency diagnostic when allocation fails`. |
 | `E_INTERNAL_OOM` | Defensive compiler out-of-memory diagnostic. It should not be forced through a deterministic fixture. |
-| `E_PARSE_FAILED` | Structured `mcc symbols` partial-result status for parse diagnostics; the exact JSON protocol is covered by the symbol-index tests rather than a reject fixture. |
 | `E_SYMBOLS_INTERNAL` | Structured `mcc symbols` partial-result status for internal indexing errors; kept allowlisted because deterministic source fixtures should not synthesize internal failures. |

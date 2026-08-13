@@ -186,24 +186,24 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
         "src/verified_program.zig": ["try mir.validateLoweringAdmission(typed_mir.*)"],
         "src/lower_llvm.zig": ["VerifiedProgram.init(module_mir"],
     },
-    "mir-pointer-provenance-production": {
-        "docs/typed-semantic-facts.md": ["| `mir-pointer-provenance-production` |"],
+    "mir-pointer-provenance-producers": {
+        "docs/typed-semantic-facts.md": ["| `mir-pointer-provenance-producers` |"],
         "src/mir.zig": [
             "fn recordPointerProvenanceForLocalInitializer",
             "fn appendPointerFieldProvenanceFact",
             "fn recordPointerProvenanceAddressEscape",
         ],
     },
-    "mir-aggregate-return-production": {
-        "docs/typed-semantic-facts.md": ["| `mir-aggregate-return-production` |"],
+    "mir-aggregate-return-producers": {
+        "docs/typed-semantic-facts.md": ["| `mir-aggregate-return-producers` |"],
         "src/mir.zig": [
             "fn appendAggregateReturnPointerFact",
             "fn collectSequentialSwitchAggregateReturnLiteralPathsFrom",
             "max_aggregate_return_literal_paths",
         ],
     },
-    "mir-bounds-range-production": {
-        "docs/typed-semantic-facts.md": ["| `mir-bounds-range-production` |"],
+    "mir-bounds-range-producers": {
+        "docs/typed-semantic-facts.md": ["| `mir-bounds-range-producers` |"],
         "src/mir.zig": [
             "fn addRangeFactForUncheckedCall",
             "fn addAggregateRangeFactForUncheckedExpr",

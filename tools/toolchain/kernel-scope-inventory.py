@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep the kernel scoped as a language-validation workload, not a product roadmap."""
+"""Keep the kernel scoped as a language-validation workload, not an OS deliverable track."""
 
 from __future__ import annotations
 
@@ -98,9 +98,9 @@ def main() -> int:
                 violations.append(f"{rel}:{line_no}: {label}: {line.strip()}")
 
     if violations:
-        return fail("kernel product-scope wording is not explicitly out of scope:\n" + "\n".join(violations))
+        return fail("kernel OS-deliverable wording is not explicitly out of scope:\n" + "\n".join(violations))
 
-    print(f"PASS: kernel-scope-inventory-test - scanned {scanned} docs/kernel files; kernel product-scope wording stays out of current scope")
+    print(f"PASS: kernel-scope-inventory-test - scanned {scanned} docs/kernel files; kernel OS-deliverable wording stays out of current scope")
     return 0
 
 

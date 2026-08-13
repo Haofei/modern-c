@@ -21,7 +21,7 @@ These are still useful as day-to-day references or rationale companions:
 | Backend seam | [`backend-abstraction.md`](backend-abstraction.md) | Where C/LLVM backends plug into `mcc`. |
 | Refactoring | [`refactoring-plan.md`](refactoring-plan.md) | Ordered code-facing refactoring phases for the compiler core. |
 | Change log | [`../CHANGELOG.md`](../CHANGELOG.md) | Development-line changes. |
-| Gate inventory | [`gate-manifest.json`](gate-manifest.json) | Test selection input; not a product-readiness source of truth. |
+| Gate inventory | [`gate-manifest.json`](gate-manifest.json) | Test selection input; not a release-claim source of truth. |
 | Testing | [`test-architecture.md`](test-architecture.md), [`qemu-validation-checklist.md`](qemu-validation-checklist.md) | Fixture contracts, gate layers, manifest discipline, and the local/CI QEMU surrogate checklist. |
 | Unsafe/UB audit | [`unsafe-boundary.md`](unsafe-boundary.md), [`c-ub-matrix.md`](c-ub-matrix.md), [`lowering-coverage.md`](lowering-coverage.md) | Unsafe syntax, C-UB handling, and lowering coverage reports. |
 | Traits rationale | [`traits-design.md`](traits-design.md) | Design reasoning behind implemented trait and dynamic-dispatch behavior. |

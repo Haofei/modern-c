@@ -134,7 +134,7 @@ def render(root: Path) -> str:
     lines: list[str] = [
         "# MC compiler diagnostics",
         "",
-        "This file is generated from `E_*` diagnostic codes emitted by production Zig sources under `src/`.",
+        "This file is generated from `E_*` diagnostic codes emitted by compiler Zig sources under `src/`.",
         "Regenerate it with:",
         "",
         "```sh",

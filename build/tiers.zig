@@ -436,7 +436,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("move-projection-inventory-test")); // projection admission map stays explicit
     c0_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test")); // advanced ownership forms stay outside the stable v0 surface
     c0_step.dependOn(ctx.cmd("kernel-contract-inventory-test")); // bounded region/effect/FFI profile stays explicit
-    c0_step.dependOn(ctx.cmd("kernel-scope-inventory-test")); // kernel remains a language-validation workload, not a product roadmap
+    c0_step.dependOn(ctx.cmd("kernel-scope-inventory-test")); // kernel remains a language-validation workload, not an OS deliverable track
     c0_step.dependOn(ctx.cmd("numeric-comptime-matrix-test")); // every fixed-width arithmetic domain keeps its comptime semantics
     c0_step.dependOn(ctx.cmd("parallel-runner-test")); // full-tier acceleration retains the exact gate inventory and CPU budget
     c0_step.dependOn(ctx.cmd("std-api-docs-test")); // generated stdlib API index stays current

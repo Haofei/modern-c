@@ -12,7 +12,7 @@ global g_clock: u64 = 0;
 fn tick_idle() -> void { g_clock = g_clock + 1; }
 
 // ---- leaf: a mock async value, ready at `deadline`, yielding `val`. The poll/take_result
-// shape a broker *readiness* future would expose (the value lives in the concrete future). ----
+// shape a broker future would expose (the value lives in the concrete future). ----
 struct ValFuture { deadline: u64, val: i32 }
 fn valfuture_init(f: *mut ValFuture, deadline: u64, val: i32) -> void {
     f.deadline = deadline;
