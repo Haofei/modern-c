@@ -9,7 +9,6 @@ const lower_c_global = @import("lower_c_global.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
-const mir_source_bridge = @import("mir_source_bridge.zig");
 const type_bridge = @import("type_bridge.zig");
 
 const callExpr = syntax_bridge.callExpr;
@@ -860,7 +859,13 @@ pub fn mmioReadReplacementForSpan(span: ast_bridge.Span, replacements: []const M
 
 fn replacementForSpan(comptime Replacement: type, span: ast_bridge.Span, replacements: []const Replacement) ?Replacement {
     for (replacements) |replacement| {
-        if (mir_source_bridge.replacementSourceMatchesSpan(replacement.source, span)) return replacement;
+        if (replacement.source.line == span.line and
+            replacement.source.column == span.column and
+            replacement.source.offset == span.offset and
+            replacement.source.len == span.len)
+        {
+            return replacement;
+        }
     }
     return null;
 }

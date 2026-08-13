@@ -8,7 +8,6 @@
 const expr_syntax = @import("expr_syntax.zig");
 const ast_bridge = @import("ast_bridge.zig");
 const mir = @import("mir.zig");
-const mir_facts_view = @import("mir_facts_view.zig");
 
 pub const CallExpr = expr_syntax.CallExpr;
 pub const IndexExpr = expr_syntax.IndexExpr;
@@ -46,7 +45,14 @@ pub const taggedUnionCase = expr_syntax.taggedUnionCase;
 
 pub fn deferExprForRefInBlock(block: ast_bridge.Block, ref: mir.DeferCleanupRef) ?ast_bridge.Expr {
     for (block.items) |stmt| {
-        if (stmt.kind == .@"defer" and mir_facts_view.sourcePointExactMatches(ref.source, mir.sourcePointFromSpan(stmt.span))) return stmt.kind.@"defer";
+        if (stmt.kind == .@"defer" and
+            ref.source.line == stmt.span.line and
+            ref.source.column == stmt.span.column and
+            ref.source.offset == stmt.span.offset and
+            ref.source.len == stmt.span.len)
+        {
+            return stmt.kind.@"defer";
+        }
         switch (stmt.kind) {
             .block, .comptime_block, .unsafe_block => |nested| {
                 if (deferExprForRefInBlock(nested, ref)) |expr| return expr;

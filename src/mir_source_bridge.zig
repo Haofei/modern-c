@@ -157,11 +157,3 @@ pub fn directDeferCallCleanupForSpans(function: mir.Function, defer_ref: mir.Def
 pub fn callTargetDeferCleanupForSpans(function: mir.Function, defer_ref: mir.DeferCleanupRef, call_span: ast_bridge.Span, callee_span: ast_bridge.Span, kind: mir.CallTargetKind) bool {
     return mir.callTargetDeferCleanupForRef(function, defer_ref, mir.sourcePointFromSpan(call_span), mir.sourcePointFromSpan(callee_span), kind);
 }
-
-pub fn replacementSourceFromSpan(span: ast_bridge.Span) mir.SourcePoint {
-    return mir.sourcePointFromSpan(span);
-}
-
-pub fn replacementSourceMatchesSpan(source: mir.SourcePoint, span: ast_bridge.Span) bool {
-    return mir_facts_view.sourcePointExactMatches(source, mir.sourcePointFromSpan(span));
-}

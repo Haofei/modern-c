@@ -1371,8 +1371,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn deferCleanupRefAtSpan(": 1,
         "pub fn directDeferCallCleanupForSpans(": 1,
         "pub fn callTargetDeferCleanupForSpans(": 1,
-        "pub fn replacementSourceFromSpan(": 1,
-        "pub fn replacementSourceMatchesSpan(": 1,
+        "pub fn replacementSourceFromSpan(": 0,
+        "pub fn replacementSourceMatchesSpan(": 0,
     },
     "src/syntax_bridge.zig": {
         "Transitional backend syntax-shape bridge.": 1,
