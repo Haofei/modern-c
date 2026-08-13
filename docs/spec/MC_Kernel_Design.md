@@ -537,26 +537,20 @@ Storage gates: `bcache-test`, `blockfs-test`, and blobstore host coverage.
 
 ---
 
-## 19. Network Stack — GATED
+## 19. Network Validation — GATED
 
-`kernel/net/`. A **substantial QEMU-tested TCP/IP stack supporting real DNS, TCP, and
-HTTP demos over slirp** (gateway `10.0.2.2`).
+`kernel/net/` is retained only for link/IP packet helpers and virtio-net driver validation.
+The former UDP socket, DNS, TCP, RX demux, and parser-fuzz product stack was removed from
+the core workload.
 
-> **Scope honesty:** "substantial," not "complete." The TCP connection logic implements the
-> RFC 793 state machine, modular send/recv windowing, out-of-order reassembly (8 segments),
-> and an RTO retransmit timer — enough for real single-connection DNS/HTTP demos. It is
-> **not** a claim of congestion control, PMTU discovery, IPv4 fragmentation/reassembly, full
-> TCP options, multi-connection stress hardening, or production resolver/security
-> completeness. Treat per-protocol coverage as "demo-exercised," not "RFC-complete."
+> **Scope honesty:** this is not a network stack claim. The retained code exists to exercise
+> address classes, checksummed packet construction, MMIO/DMA virtio-net bring-up, and QEMU
+> backend parity.
 
 - **Link/IP:** `ethernet`, `arp` + `arp_cache` (8-entry), `ipv4` (RFC 1071 checksum),
-  `icmp`, `inet_checksum`, `packet` (typed `Ipv4Addr` + bounds cursor), `net_rx`.
-- **UDP:** `udp`, `udp_socket` (`MAX_SOCKETS=8`, typed `NoListener`).
-- **TCP:** `tcp`, `tcp_conn` (RFC 793 state machine), `tcp_window`, `tcp_reasm`, `tcp_rtx`,
-  `tcp_socket` (integration + segment-hold), `tcp_tx`.
+  `icmp`, `inet_checksum`, `packet` (typed `Ipv4Addr` + bounds cursor).
 
-Gates: packet/parser and device-level validation remain; end-to-end HTTP/DNS/TCP server product
-fixtures have been removed from the core gate set.
+Gates: device-level virtio-net validation remains; protocol product fixtures are absent.
 
 ---
 
@@ -664,7 +658,7 @@ scope. Gate names are verified against `build.zig`.
 | Rights/capabilities attenuate only (child = parent ∩ keep) | `capability.mc`, `std/rights.mc` | `cap-test`, `llvm-cap-test` | compile-time + QEMU |
 | Grant revoke invalidates outstanding refs; cascade revokes subtree | `kernel/lib/granttab.mc` | `grant-test`, `granttab-test` | riscv64 QEMU |
 | `UserPtr<T>` cannot be dereferenced in the kernel | `uaccess.mc` + compiler diagnostic `E_USER_PTR_DEREF` | compile-time spec fixtures | compile-time |
-| Packet/network parser validation | `kernel/net/*` | `dns-parser-test`, `parser-fuzz-test`, `net-test` | host + QEMU |
+| Virtio-net ARP/ICMP validation | `kernel/net/*`, `kernel/drivers/virtio/*` | `net-test`, `llvm-net-test` | QEMU |
 | `page_free` is real O(1) reclaim (not a no-op) | `page_alloc.mc` | `page-test`, `llvm-page-test` | riscv64 QEMU |
 
 ---

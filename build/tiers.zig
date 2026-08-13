@@ -157,7 +157,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-smp-lock-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-ipi-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-virtio-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-udp-net-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-blk-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-blk-smode-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-timer-test"));
@@ -173,7 +172,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-net-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-nic-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-e1000-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-net-rx-live-test"));
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
@@ -307,8 +305,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("net-smode-irq-test"));
     m0_full_step.dependOn(ctx.cmd("net-smode-rx-irq-test"));
     m0_full_step.dependOn(ctx.cmd("net-smode-test"));
-    // udp-net-test transmits a real UDP datagram over virtio-net (pcap-verified).
-    m0_full_step.dependOn(ctx.cmd("udp-net-test"));
     // smp-test boots multiple harts synchronizing on a shared atomic under QEMU.
     m0_full_step.dependOn(ctx.cmd("smp-test"));
     // smp-lock-test contends a ticket spinlock across harts under QEMU.
@@ -340,9 +336,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("elf-test"));
     // blockfs-test links + runs the block-backed file store (needs clang).
     m0_full_step.dependOn(ctx.cmd("blockfs-test"));
-    // udp-test links + runs the UDP build/parse + checksum (needs clang).
-    m0_full_step.dependOn(ctx.cmd("udp-test"));
-    m0_full_step.dependOn(ctx.cmd("dns-parser-test"));
     // alloc-test links + runs the type-erased Allocator (needs clang).
     m0_full_step.dependOn(ctx.cmd("alloc-test"));
     m0_full_step.dependOn(ctx.cmd("arc-test"));
@@ -450,7 +443,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("arena-test"));
     m0_full_step.dependOn(ctx.cmd("genref-test"));
     m0_full_step.dependOn(ctx.cmd("owned-test"));
-    m0_full_step.dependOn(ctx.cmd("net-arena-test"));
     m0_full_step.dependOn(ctx.cmd("dma-try-test"));
     m0_full_step.dependOn(ctx.cmd("pool-test"));
     // closure-test links + runs a bind() capturing closure (needs clang).
@@ -461,29 +453,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("trace-test"));
     // log-test links + runs the leveled tracepoint logger (needs clang).
     m0_full_step.dependOn(ctx.cmd("log-test"));
-    // tcp-test links + runs the TCP build/parse + checksum (needs clang).
-    m0_full_step.dependOn(ctx.cmd("tcp-test"));
-    // tcp-conn-test links + runs the TCP connection state machine (needs clang).
-    m0_full_step.dependOn(ctx.cmd("tcp-conn-test"));
-    // tcp-window-test links + runs the TCP window/data-plane bookkeeping (needs clang).
-    m0_full_step.dependOn(ctx.cmd("tcp-window-test"));
-    // tcp-reasm-test links + runs TCP reassembly + go-back-N retransmit (needs clang).
-    m0_full_step.dependOn(ctx.cmd("tcp-reasm-test"));
-    // tcp-rtx-test links + runs the TCP retransmit timer (needs clang).
-    m0_full_step.dependOn(ctx.cmd("tcp-rtx-test"));
     // symbols-test links + runs the symbol table / address symbolizer (needs clang).
     m0_full_step.dependOn(ctx.cmd("symbols-test"));
-    // socket-test links + runs the UDP socket bind/deliver/recv layer (needs clang).
-    m0_full_step.dependOn(ctx.cmd("socket-test"));
-    // net-rx-test links + runs the RX demux path (frame -> socket_deliver) (needs clang).
-    m0_full_step.dependOn(ctx.cmd("net-rx-test"));
-    // net-fuzz-test fuzzes the RX parser with random frames (needs clang).
-    m0_full_step.dependOn(ctx.cmd("net-fuzz-test"));
-    // parser-fuzz-test (P1) fuzzes the DNS+TCP parsers with malformed/truncated bytes:
-    // every parse is total over its finite buffer — no over-read, garbage rejected (clang).
-    m0_full_step.dependOn(ctx.cmd("parser-fuzz-test"));
-    // net-rx-live-test routes a real virtio-net RX frame through net_rx_deliver under QEMU.
-    m0_full_step.dependOn(ctx.cmd("net-rx-live-test"));
     // backtrace-test walks the frame-pointer chain + symbolizes under QEMU.
     m0_full_step.dependOn(ctx.cmd("backtrace-test"));
     // paging-test links + runs the Sv39 page-table map/translate (needs clang).

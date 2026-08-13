@@ -403,8 +403,8 @@ pub fn nic_arp_resolve(dev: *NetDevice, src_mac: *MacAddr, src_ip: u32, target_i
 
 // Receive one RX frame (bounded wait) and copy the Ethernet frame (past the 12-byte
 // virtio-net header) into `dst`; returns its length (0 on timeout). The decoupled
-// real-RX primitive: the caller routes the bytes onward (e.g. to net_rx_deliver),
-// keeping the driver independent of the protocol layers.
+// real-RX primitive: the caller may inspect the bytes, keeping the driver independent
+// of higher protocol layers.
 pub fn nic_rx_into(dev: *NetDevice, dst: usize, max: usize) -> usize {
     let regs: MmioPtr<VirtioMmio> = net_regs(dev);
     let rxq: *mut Virtq = dev.rxq;

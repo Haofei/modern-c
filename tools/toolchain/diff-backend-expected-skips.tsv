@@ -15,11 +15,6 @@ pipe-test	current host/corpus C build gap; additional skipped fixtures remain co
 elf-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 arc-pkt-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 arc-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-net-arena-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-net-fuzz-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-net-rx-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-tcp-conn-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-socket-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 registry2-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 log-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 scan-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
@@ -39,7 +34,6 @@ blobstore-test	current host/corpus C build gap; additional skipped fixtures rema
 procmem-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 ipcprov-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 attenuate-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-dns-parser-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 pause-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 ipcsample-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 capaudit-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
@@ -48,7 +42,6 @@ oom-test	current LLVM backend unsupported fixture; additional skipped fixtures r
 ipcfast-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 heapfree-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 showcase-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-parser-fuzz-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 fuzz-atomics-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-task-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-async-lowering-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions

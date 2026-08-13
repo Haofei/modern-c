@@ -188,8 +188,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "net-smode-rx-irq-test", "Build and run async virtio-net RX completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/net-smode-rx-irq-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-net-smode-rx-irq-test", "Build and run LLVM-lowered async virtio-net RX completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/net-smode-rx-irq-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "udp-net-test", "Transmit a real UDP datagram over virtio-net under QEMU (pcap-verified)", &.{ "bash", "tools/net/udp-net-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-udp-net-test", "Transmit a real LLVM-lowered UDP datagram over virtio-net under QEMU", &.{ "bash", "tools/net/udp-net-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "smp-test", "Boot multiple harts and synchronize on a shared atomic under QEMU", &.{ "bash", "tools/proc/smp-test.sh", "zig-out/bin/mcc", "c" });
 
@@ -239,9 +237,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "blockfs-test", "Link + run the block-backed file store (block device vtable)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "blockfs-test" });
 
-    _ = h.addScriptTest(ctx, "udp-test", "Link + run the UDP datagram build/parse + checksum", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "udp-test" });
 
-    _ = h.addScriptTest(ctx, "dns-parser-test", "Link + run the DNS A-query build + response parse (host fixture)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "dns-parser-test" });
 
     _ = h.addScriptTest(ctx, "arena-test", "move Arena: bump alloc, reset/reuse, destroy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arena-test" });
 
@@ -249,7 +245,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "owned-test", "create<T> typed linear allocation, leak-checked", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "owned-test" });
 
-    _ = h.addScriptTest(ctx, "net-arena-test", "RX scratch from a move Arena + generational handle", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "net-arena-test" });
     _ = h.addScriptTest(ctx, "dma-try-test", "std/dma typed fallible alloc: try_alloc -> err(OutOfMemory) on exhaustion", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "dma-try-test" });
 
     _ = h.addScriptTest(ctx, "pool-test", "generational pool: use-after-free/double-free caught", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "pool-test" });
@@ -535,31 +530,17 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "log-test", "Link + run the leveled tracepoint logger (threshold/levels)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "log-test" });
 
-    _ = h.addScriptTest(ctx, "tcp-test", "Link + run the TCP segment build/parse + checksum", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tcp-test" });
 
-    _ = h.addScriptTest(ctx, "tcp-conn-test", "Link + run the TCP connection state machine (handshake/close)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tcp-conn-test" });
 
-    _ = h.addScriptTest(ctx, "tcp-window-test", "Link + run the TCP send/recv window + ACK processing (data plane)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tcp-window-test" });
 
-    _ = h.addScriptTest(ctx, "tcp-reasm-test", "Link + run TCP reassembly + go-back-N retransmit", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tcp-reasm-test" });
 
-    _ = h.addScriptTest(ctx, "tcp-rtx-test", "Link + run the TCP retransmit timer (RTO -> go-back-N)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tcp-rtx-test" });
 
     _ = h.addScriptTest(ctx, "symbols-test", "Link + run the symbol table (symbolize address -> function+offset)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "symbols-test" });
 
-    _ = h.addScriptTest(ctx, "socket-test", "Link + run the UDP socket layer (bind/deliver/recv demux)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "socket-test" });
 
-    _ = h.addScriptTest(ctx, "net-rx-test", "Link + run the RX demux path (frame -> socket_deliver -> recv)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "net-rx-test" });
 
-    _ = h.addScriptTest(ctx, "net-fuzz-test", "Fuzz the RX parser with random frames (no OOB)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "net-fuzz-test" });
 
-    // P1: parser fuzz oracle — drive the DNS + TCP parsers over a million random /
-    // truncated / malformed byte buffers; every parse must terminate and never over-read
-    // (each read now routes through std/bytes' total checked reader, br_try_*).
-    _ = h.addScriptTest(ctx, "parser-fuzz-test", "Fuzz the DNS+TCP parsers with malformed bytes (total, no over-read)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "parser-fuzz-test" });
 
-    _ = h.addScriptTest(ctx, "net-rx-live-test", "Route a real virtio-net RX frame through net_rx_deliver under QEMU", &.{ "bash", "tools/net/net-rx-live-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-net-rx-live-test", "Route a real LLVM-lowered virtio-net RX frame through net_rx_deliver under QEMU", &.{ "bash", "tools/net/net-rx-live-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
     _ = h.addScriptTest(ctx, "backtrace-test", "Walk the frame-pointer chain and symbolize the frames under QEMU", &.{ "bash", "tools/lang/backtrace-test.sh", "zig-out/bin/mcc", "c" });

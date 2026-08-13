@@ -78,7 +78,7 @@ estimate_ms() {
     case "$gate" in
         lowering-coverage)
             echo 45000 ;;
-        parser-fuzz-test|sched-difftest)
+        sched-difftest)
             echo 25000 ;;
         fuzz-*|*-fuzz)
             echo 5000 ;;

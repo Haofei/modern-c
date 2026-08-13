@@ -575,11 +575,6 @@ RULES: tuple[Rule, ...] = (
         "persisted mcfuzz regression corpus changes need corpus replay",
     ),
     Rule(
-        ("tools/fuzz/parser-fuzz.sh",),
-        ("parser-fuzz-test",),
-        "parser fuzz wrapper changes need the parser fuzz host gate",
-    ),
-    Rule(
         ("kernel/**/*", "std/**/*", "tests/qemu/**/*", "tools/arch/*", "tools/proc/*", "tools/mem/*", "tools/net/*", "tools/fs/*"),
         ("fast", "riscv-qemu-validation"),
         "kernel/std/QEMU changes need host confidence plus the focused RISC-V board surrogate",
