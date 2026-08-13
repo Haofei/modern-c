@@ -7,9 +7,9 @@
 # prone lowering paths that no fixture or fuzz program ever hits are exactly where
 # miscompiles hide (the overlay-read miscompile lived in such an uncovered branch).
 #
-# MECHANISM (and its honest fidelity): there is no kcov in the dev image, and Zig 0.16's
-# self-hosted compiler exposes no -fprofile-instr-generate / source-coverage flag for its
-# own output, so true llvm-cov line/branch coverage of the `mcc` binary is unavailable.
+# MECHANISM (and its honest fidelity): there is no kcov in the dev image, and the Zig
+# 0.16 compiler exposes no -fprofile-instr-generate / source-coverage flag for the
+# `mcc` build, so true llvm-cov line/branch coverage of the `mcc` binary is unavailable.
 # Instead this script does FUNCTION-LEVEL coverage by source instrumentation:
 #   1. inject a `lower_cov.hit("<file>:<fn>:<line>")` probe at the top of every function
 #      in each backend implementation module (tools/toolchain/lowering-cov-instrument.py),

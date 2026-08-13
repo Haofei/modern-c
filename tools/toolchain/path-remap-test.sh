@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Gate source artifact path remapping for release reproducibility/auditability.
+# Gate deterministic artifact path remapping.
 set -euo pipefail
 
 MCC="${1:-zig-out/bin/mcc}"
@@ -20,7 +20,7 @@ export fn answer() -> u32 {
 }
 MC
 
-LOGICAL_ROOT="/mc/release-src"
+LOGICAL_ROOT="/mc/src"
 REMAPPED_PATH="$LOGICAL_ROOT/project/main.mc"
 C_OUT="$WORK/out.c"
 MAP_OUT="$WORK/out.mcmap"

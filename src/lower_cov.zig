@@ -3,9 +3,9 @@
 //! This module provides a *function-level* coverage tracker for the split C and LLVM
 //! backend modules (`lower_c*.zig`, `lower_llvm*.zig`) and the front-end/semantic
 //! modules measured by `tools/toolchain/compiler-coverage.sh`. The Zig toolchain in
-//! the dev image ships `llvm-cov`/`llvm-profdata` but Zig 0.16's self-hosted
-//! compiler exposes no `-fprofile-instr-generate`/source-coverage flag for *its own*
-//! output, and `kcov` is not installed, so true line/branch coverage of the `mcc`
+//! the dev image ships `llvm-cov`/`llvm-profdata` but the Zig 0.16 compiler
+//! exposes no `-fprofile-instr-generate`/source-coverage flag for the `mcc` build,
+//! and `kcov` is not installed, so true line/branch coverage of the `mcc`
 //! binary is not available. Instead, the coverage scripts inject a
 //! `lower_cov.hit("<fn>")` probe at the top of every function in a temporary
 //! checkout, build that instrumented `mcc`, and run it over a deterministic corpus.

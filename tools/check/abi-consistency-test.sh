@@ -2,12 +2,12 @@
 # abi-consistency gate (pure host check — no toolchain, never skips).
 #
 # user/abi.mc is the SINGLE source of truth for the confined-guest syscall numbers. The C
-# agent userspace runtime and the kernel-side dispatchers must hardcode the SAME
+# guest userspace runtime and the kernel-side dispatchers must hardcode the SAME
 # numbers (they cannot `import` the .mc constant). This gate fails the build if any of those
 # C `#define SYS_<NAME> <N>` drift from abi.mc — the same belt-and-suspenders philosophy the
 # virtqueue layout uses with `_Static_assert`.
 #
-# SCOPE: only files that consume the canonical AGENT ABI are checked. The standalone M6/M8
+# SCOPE: only files that consume the canonical guest ABI are checked. The standalone M6/M8
 # user-hello demos and the older kernel demos deliberately use their OWN self-contained
 # mini-ABIs (e.g. SYS_EXIT=2) and are intentionally NOT covered here.
 set -euo pipefail
@@ -16,7 +16,7 @@ TEST_NAME="abi-consistency-test"
 ABI="$HERE/user/abi.mc"
 
 # Files that share the canonical guest ABI with abi.mc (C side, which must hardcode it).
-AGENT_FILES=(
+GUEST_ABI_FILES=(
     user/runtime/usys.h
 )
 # NB: ALL the crt0/app_traps runtimes are now pure MC (user/runtime/crt0{,_x86,_aarch64}.mc +
@@ -41,7 +41,7 @@ if [ "$n_const" -eq 0 ]; then
 fi
 
 fail=0
-for rel in "${AGENT_FILES[@]}"; do
+for rel in "${GUEST_ABI_FILES[@]}"; do
     f="$HERE/$rel"
     [ -e "$f" ] || { echo "FAIL: $TEST_NAME (missing file $rel)"; fail=1; continue; }
     # Each `#define SYS_<NAME> <N>[uUlL]*` whose NAME is in the canonical ABI must match.
@@ -60,4 +60,4 @@ for rel in "${AGENT_FILES[@]}"; do
 done
 
 if [ "$fail" -ne 0 ]; then exit 1; fi
-echo "PASS: $TEST_NAME — guest ABI C defines (crt0/usys/app_traps + dispatchers) match user/abi.mc ($n_const constants in abi.mc, ${#AGENT_FILES[@]} files checked)"
+echo "PASS: $TEST_NAME — guest ABI C defines match user/abi.mc ($n_const constants in abi.mc, ${#GUEST_ABI_FILES[@]} files checked)"

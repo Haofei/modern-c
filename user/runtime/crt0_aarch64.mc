@@ -1,5 +1,5 @@
-// user/runtime/crt0_aarch64 — the AArch64 userspace entry + syscall primitive for a confined MC app
-// agent (M9), in PURE MC (the all-MC replacement for crt0_aarch64.c). The AArch64 sibling of
+// user/runtime/crt0_aarch64 — the AArch64 userspace entry + syscall primitive for a confined MC
+// guest (M9), in PURE MC (the all-MC replacement for crt0_aarch64.c). The AArch64 sibling of
 // crt0.mc / crt0_x86.mc:
 //   - mc_ecall: x8=number, x0/x1/x2=args, `svc #0`, result in x0 — matching the M8/M9 kernel EL1
 //     SVC dispatcher. Values feed via generic `"r"` operands, `mov`'d into the ABI registers in the

@@ -3,8 +3,7 @@
 //
 // A hosted MC program has no ambient `argc`/`argv`: the freestanding entry MC
 // emits is nullary, and a bare-metal kernel has no process arguments at all.
-// This module is the OPT-IN bridge that lets a hosted program (e.g. a
-// self-hosting `mcc2 in.mc -o out.c`) see its arguments — and, like `hosted_io`,
+// This module is the OPT-IN bridge that lets a hosted program see its arguments — and, like `hosted_io`,
 // it is strictly opt-in: a program enters the hosted profile by importing this
 // file (the language-level opt-in) and linking against the tiny C runtime shim
 // `tools/toolchain/hosted_args_rt.c` (the toolchain-level opt-in).

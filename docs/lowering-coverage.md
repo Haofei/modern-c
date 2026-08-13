@@ -17,8 +17,8 @@ bash tools/toolchain/lowering-coverage.sh        # or: zig build lowering-covera
 
 ## Mechanism and fidelity (honest)
 
-There is **no `kcov`** in the dev image, and **Zig 0.16's self-hosted compiler
-exposes no `-fprofile-instr-generate` / source-coverage flag** for its own output
+There is **no `kcov`** in the dev image, and **the Zig 0.16 compiler
+exposes no `-fprofile-instr-generate` / source-coverage flag** for the `mcc` build
 (`llvm-cov`/`llvm-profdata` are installed but only instrument LLVM-emitted
 binaries, which the Zig compiler does not produce for `mcc` here). So true
 `llvm-cov` line/branch coverage of the `mcc` binary is **not available**.

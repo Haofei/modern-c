@@ -21,7 +21,7 @@ export const SYS_SBRK: u64 = 4; // (delta) -> old break VA (>=0) | -E_NOMEM
 
 // Negative-errno results returned through the syscall ABI (Linux-compatible values).
 export const E_AGAIN: i64 = -11;     // EAGAIN: no capacity right now (back-pressure, retryable)
-export const E_NOMEM: i64 = -12;     // ENOMEM: out of memory / over the per-agent grow cap (not retryable)
+export const E_NOMEM: i64 = -12;     // ENOMEM: out of memory / over the per-guest grow cap (not retryable)
 export const E_DENIED: i64 = -13;    // EACCES: policy denied this op (not retryable)
 export const E_FAULT: i64 = -14;     // EFAULT: a user pointer could not be accessed
 

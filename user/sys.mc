@@ -34,7 +34,7 @@ export fn read(buf: usize, max: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_READ, buf as u64, max as u64, 0));
 }
 
-// sys_exit(code): terminate the agent. The kernel reclaims it and does not return; the
+// sys_exit(code): terminate the guest. The kernel reclaims it and does not return; the
 // returned `i64` is never actually observed (named `sys_exit`, not `exit`, to avoid clashing
 // with the C library's `exit` builtin in the emitted C).
 export fn sys_exit(code: u64) -> i64 {

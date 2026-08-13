@@ -1,4 +1,4 @@
-// user/libc/syscall_user — the U-mode platform shim for a CONFINED agent: routes the libc's
+// user/libc/syscall_user — the U-mode platform shim for a confined guest: routes the libc's
 // console output (sys_write, mc_console_write) through the SYS_WRITE ecall instead of touching
 // hardware. The confined guest reaches the kernel ONLY through this syscall path.
 //
@@ -20,8 +20,8 @@ export fn mc_console_write(buf: usize, len: usize) -> void {
     let ignored: u64 = mc_ecall(SYS_WRITE, 1, buf as u64, len as u64);
 }
 
-// §0 ingress: read the agent source the kernel holds into `buf` (up to `max` bytes); returns the
-// number of bytes delivered. The host calls this at boot instead of embedding the agent.
+// §0 ingress: read the guest source the kernel holds into `buf` (up to `max` bytes); returns the
+// number of bytes delivered. The host calls this at boot instead of embedding the guest.
 export fn sys_read(buf: usize, max: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_READ, buf as u64, max as u64, 0));
 }

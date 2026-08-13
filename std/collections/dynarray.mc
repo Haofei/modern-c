@@ -15,14 +15,13 @@
 //
 // GROWTH MODEL: the `Allocator` trait (std/alloc) exposes only `alloc`/`free` — no
 // `realloc` — so growth is allocate-new + copy + free-old. Amortized O(1) push via
-// capacity doubling (start 4, then ×2). See docs/self-host.md (§1) §3 step 0.0.
+// capacity doubling (start 4, then ×2).
 //
 // ELEMENT ACCESS: every get/set/grow-copy mints a typed `*mut T` with `raw.ptr<T>` and
 // dereferences it (`p.* = x` / `out = p.*`). This is deliberate: `raw.load<T>`/`raw.store<T>`
 // only lower for SCALAR T on the C backend (an aggregate T yields UnsupportedCEmission), but
 // `raw.ptr<T>` + whole-struct deref lowers for both scalar AND struct T on both backends —
-// so `Vec<T>` works for struct element types (e.g. `Vec<Token>`, `Vec<AstNode>`), which the
-// self-hosting compiler needs pervasively. (Self-host gap ledger G19.)
+// so `Vec<T>` works for struct element types (e.g. `Vec<Token>`, `Vec<AstNode>`).
 //
 // The allocator is stored in the Vec (its provenance, like `Arc`), so element ops don't
 // re-thread it; it is borrowed and must outlive the Vec.

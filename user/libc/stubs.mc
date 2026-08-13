@@ -7,7 +7,7 @@ import "std/mem.mc";
 import "user/libc/lcommon.mc";
 
 // abort()/assert-failure are unrecoverable: diverge into the MC trap path (the runtime's
-// mc_trap_Unreachable handler halts the agent). Both are C `noreturn`.
+// mc_trap_Unreachable handler halts the guest). Both are C `noreturn`.
 export fn abort() -> void {
     unreachable;
 }

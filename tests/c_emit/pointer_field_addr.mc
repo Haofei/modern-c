@@ -8,8 +8,8 @@
 // by-value local aggregate's field/element) is a real dangling escape and stays rejected.
 //
 // This fixture proves the accepted forms alias the REAL field: it takes `&e.val` through a
-// pointer parameter, `&e.arr[i]` through a pointer parameter, and (the actual self-hosting
-// repro) `&p.field` where `p` is a LOCAL holding a pointer copy — then mutates through each
+// pointer parameter, `&e.arr[i]` through a pointer parameter, and `&p.field` where `p` is a
+// LOCAL holding a pointer copy — then mutates through each
 // returned pointer and re-reads the underlying object to confirm the alias.
 
 struct Entry { val: u32, arr: [4]u32 }
@@ -24,7 +24,7 @@ fn arr_slot_ptr(e: *mut Entry, i: usize) -> *mut u32 {
     return &e.arr[i];
 }
 
-// (3) The self-hosting repro: `&p.val` where `p` is a LOCAL that holds a pointer COPY.
+// (3) `&p.val` where `p` is a LOCAL that holds a pointer COPY.
 // The lvalue root goes through the pointer `p`, so `&p.val` is `&p->val` — not a local
 // stack slot.
 fn slot_ptr_via_local(e: *mut Entry) -> *mut u32 {
