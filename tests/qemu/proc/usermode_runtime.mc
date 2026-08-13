@@ -111,9 +111,9 @@ export fn trap_entry(f: usize) -> void {
         unsafe { raw.store<u64>(phys(f + F_A0), res); }
         write_mepc(read_mepc() + 4);
     } else if mcause == CAUSE_LOAD_PAGE_FAULT || mcause == CAUSE_STORE_PAGE_FAULT {
-        // A U-mode load/store page fault. If it lands in a confined WASM host's reserved linear-memory
-        // window, mc_lm_fault maps a fresh frame and we RETRY the instruction (no mepc bump). Any other
-        // page fault (outside the window, or no override linked) fails closed — confinement unchanged.
+        // A U-mode load/store page fault. If an override owns the faulting range, mc_lm_fault maps a
+        // fresh frame and we RETRY the instruction (no mepc bump). Any other page fault (outside the
+        // window, or no override linked) fails closed — confinement unchanged.
         if mc_lm_fault(read_mtval()) != 0 {
             return;
         }

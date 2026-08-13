@@ -823,9 +823,9 @@ pub fn heap_is_frontier_block(h: *mut Heap, addr: PAddr, len: usize) -> bool {
 // bump-frontier block (its end == h.next, i.e. nothing was allocated after it) and the backing range
 // still has room. Returns true on success (h.next advanced to addr+new_len), false otherwise (the
 // caller must fall back to allocate-copy-free, or heap_extend the range and retry). This is what turns
-// a repeatedly-realloc'd growing buffer (e.g. a WASM engine enlarging its linear memory) from an
-// O(n^2) copy chain into O(n): after the first move the buffer sits at the frontier and every later
-// grow just bumps h.next. Shrink/equal (new_len <= old_len) is reported as success with no change —
+// a repeatedly-realloc'd growing buffer from an O(n^2) copy chain into O(n): after the first move
+// the buffer sits at the frontier and every later grow just bumps h.next. Shrink/equal
+// (new_len <= old_len) is reported as success with no change —
 // the block is already big enough; realloc's shrink path keeps the original block.
 pub fn heap_try_grow_in_place(h: *mut Heap, addr: PAddr, old_len: usize, new_len: usize) -> bool {
     if new_len <= old_len {

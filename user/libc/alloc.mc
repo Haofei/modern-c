@@ -22,14 +22,10 @@ import "std/addr.mc";
 import "std/mem.mc";
 import "user/libc/lcommon.mc";
 
-// Arena size. Lives in .bss, so the cost is page-table coverage, not file size. Confined C app runtime
-// init + evaluation needs several MiB; the WASM path needs more — the wasm3 engine allocates its
-// per-function M3 code pages AND the guest's linear memory from this heap, and larger confined app workloads
-// (the Phase-4 keystone, docs/wasm-migration-plan.md §4 "Javy double-layering cost") stacks a JS
-// heap inside that linear memory on top. 14 MiB is the most that fits the confined guest: it sits
-// just under the elf_loader's 16 MiB-per-segment cap (with the 512 KiB stack) and within the
-// confined runtime's 16 MiB frame region. NOBITS .bss (no file cost); QEMU runs with -m 256.
-const ARENA_BYTES: usize = 14680064; // 14 MiB
+// Arena size. This allocator is retained as C-ABI validation for MC lowering and
+// heap reuse, not as a general confined-app runtime heap. Keep the footprint
+// small and explicit; larger integration workloads should bring their own arena.
+const ARENA_BYTES: usize = 1048576; // 1 MiB
 
 // 16-byte header in front of every user block: keeps the user pointer 16-aligned and stores
 // the total (header + payload) block size so free() can return it to the free-list.
@@ -198,9 +194,9 @@ fn malloc_addr(size: usize) -> usize {
     // C malloc must return NULL on failure, NEVER trap. `heap_alloc` is the INFALLIBLE allocator —
     // it traps (unreachable) on exhaustion / no-fit, and a plain `heap_available >= total` pre-check
     // does not match its real requirement (alignment slack), so a near-full or fragmented heap could
-    // pass the check yet trap inside heap_alloc. That trap is reachable from untrusted guest code
-    // (e.g. a WASM engine's allocations) and surfaces as an illegal-instruction crash. Route through
-    // the FALLIBLE `heap_try_alloc` and fail closed (return NULL) on any error instead.
+    // pass the check yet trap inside heap_alloc. That trap is reachable from guest allocation
+    // requests and surfaces as an illegal-instruction crash. Route through the FALLIBLE
+    // `heap_try_alloc` and fail closed (return NULL) on any error instead.
     var block: PAddr = uninit;
     switch heap_try_alloc(&g_heap, total, HEADER) {
         ok(b) => { block = b; }
@@ -262,9 +258,8 @@ fn realloc_addr(old: usize, size: usize) -> usize {
     let new_total: usize = size + HEADER;
 
     // GROW-IN-PLACE fast path: if this block is the topmost frontier block of its heap, extend it
-    // without moving a byte. This is what makes a repeatedly-grown buffer (a WASM engine enlarging its
-    // linear memory through realloc) O(n) instead of O(n^2). Falls through to allocate-copy-free when
-    // the block isn't at the frontier.
+    // without moving a byte. This keeps repeatedly-grown buffers O(n) instead of O(n^2). Falls
+    // through to allocate-copy-free when the block isn't at the frontier.
     if in_arena(old) {
         if heap_try_grow_in_place(&g_heap, block, old_total, new_total) {
             unsafe { raw.store<usize>(block, new_total); }

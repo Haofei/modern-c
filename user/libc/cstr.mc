@@ -34,10 +34,8 @@ export fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
     if d < s {
         // Destination below source: a FORWARD copy (low->high) is correct even when the ranges
         // overlap. Do it directly here — do NOT delegate to mem_copy, which `unreachable`-traps on
-        // ANY overlap (it is a non-overlapping primitive). A real overlapping forward memmove —
-        // e.g. a guest WASM `memory.copy` relocating a large buffer down in memory — is valid and
-        // must not trap. (Regression coverage: a larger confined app workload did a multi-MiB overlapping
-        // memory.copy, wasm3 routed it to this memmove, and the old mem_copy delegation trapped.)
+        // ANY overlap (it is a non-overlapping primitive). A real overlapping forward memmove is
+        // valid and must not trap.
         var i: usize = 0;
         while i < n {
             lc_st8(d + i, lc_ld8(s + i));

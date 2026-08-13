@@ -12,8 +12,7 @@ export const SYS_GETPID: u64 = 2; // () -> pid
 // SYS_EXIT is 3 to match the shared M-mode trap path (usermode_runtime.c handles a7==3
 // specially: it returns control to the kernel rather than back to U-mode).
 export const SYS_EXIT: u64 = 3; // (code) -> noreturn
-// Demand-grown guest heap (docs: the fixed 14 MiB static libc arena is replaced by frames the
-// kernel maps on demand). Classic sbrk: grow the guest break by `delta` bytes (rounded up to whole
+// Optional demand-grown guest heap. Classic sbrk: grow the guest break by `delta` bytes (rounded up to whole
 // pages), mapping fresh R|W|U frames CONTIGUOUSLY at the running break VA, and return the OLD break VA
 // (>=0). `delta == 0` queries the current break. On exhaustion / over-cap it returns a negative errno
 // (-E_NOMEM) WITHOUT mapping anything, so a hostile or greedy guest gets NULL from malloc, never a trap.
