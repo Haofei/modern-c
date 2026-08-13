@@ -13,75 +13,6 @@ import "std/mask.mc";
 import "kernel/lib/mailbox.mc";
 import "kernel/core/process.mc";
 import "kernel/core/proc_sched.mc";
-import "kernel/core/ipc_trace.mc";
-
-// ----- IPC provenance (observe-only) -----
-//
-// A bounded, non-blocking trace of who sent what to whom, emitted from the kernel's IPC
-// mediation path. This is PURE observability: it records a provenance event on each
-// successful delivery WITHOUT changing IPC semantics, return values, or control flow. The
-// record call is O(1), never blocks, and is skipped entirely when provenance is disabled
-// (the hot-channel opt-out lever for the future fast path). Kept self-contained in this
-// module so it stays disjoint from process.mc.
-global g_ipc_trace: IpcTrace;
-// Default DISABLED in production: the hot IPC send path must not pay for provenance unless a
-// drainer/observer explicitly turns it on (ipc_provenance_set_enabled(true)). When off, the send
-// funnel does a single global-flag load and skips the emit entirely — no function call, no
-// sample-counter work (see ipc_send_try_id_prov's call site).
-global g_ipc_provenance_enabled: bool = false;
-
-// Sampling lever: record only 1 of every `g_ipc_sample` messages. n=1 records every message;
-// n=0 records none (equivalent to disabled). `g_ipc_sample_counter` counts candidate messages
-// (those seen while enabled) so the selection is deterministic and testable: a message is
-// recorded when (counter % n) == 0. This keeps provenance cheap on a hot channel — observe a
-// representative fraction instead of every send — without changing delivery behavior.
-global g_ipc_sample: u32 = 1;
-global g_ipc_sample_counter: u32 = 0;
-
-// Initialize (or reset) the IPC provenance ring. Call once after proc_table_init.
-export fn ipc_provenance_init() -> void {
-    ipc_trace_init(&g_ipc_trace);
-}
-
-// The provenance ring, for a drainer service to read/drain recorded events.
-export fn ipc_provenance() -> *mut IpcTrace {
-    return &g_ipc_trace;
-}
-
-// Hot-channel opt-out: when off, the IPC path records no provenance (delivery is unchanged).
-// Enabled by default. This is the per-build lever the future IPC fast path flips to stay off
-// the trace path entirely.
-export fn ipc_provenance_set_enabled(on: bool) -> void {
-    g_ipc_provenance_enabled = on;
-}
-
-// Sampling lever for a hot channel: record only 1 of every `n` messages. n=1 records every
-// message; n=0 records none (equivalent to disabled). Resets the deterministic sample counter
-// so the next selected message is the very next candidate (counter restarts at 0). This is the
-// fast-path knob — turn the sample rate down to keep provenance cheap when a channel is hot.
-export fn ipc_provenance_set_sample(n: u32) -> void {
-    g_ipc_sample = n;
-    g_ipc_sample_counter = 0;
-}
-
-// Record one provenance event for a successful delivery, subject to the enable toggle AND the
-// sample lever. Disabled (or sample n=0) records nothing. Otherwise the candidate counter is
-// advanced and the message is recorded only when (counter % n) == 0 — i.e. 1 of every n. The
-// Message carries no explicit payload length (its a0/a1/a2 are fixed inline words), so `size`
-// is 0. Observe-only: the caller's delivery result is unaffected by recording or by sampling.
-fn ipc_provenance_emit(from: u32, to: u32, msg: *Message) -> void {
-    if !g_ipc_provenance_enabled {
-        return;
-    }
-    if g_ipc_sample == 0 {
-        return; // sampling off — equivalent to disabled
-    }
-    let selected: bool = (g_ipc_sample_counter % g_ipc_sample) == 0;
-    g_ipc_sample_counter = g_ipc_sample_counter + 1;
-    if selected {
-        ipc_trace_record(&g_ipc_trace, from, to, msg.tag, 0); // seq is observe-only; discard
-    }
-}
 
 // The reserved IPC tag the kernel delivers to a receiver that was blocked on a process which
 // then died: the message's `from` is the dead pid and `tag` is TAG_DEAD, so the receiver
@@ -113,9 +44,9 @@ fn wake_if_blocked(t: *mut ProcTable, dst: usize) -> void {
 }
 
 // Release one in-flight IPC message on receive/drain — the dual of the charge in the send funnel
-// (ipc_send_try_id_prov) — and meter IpcRecv. Called only when a message is actually TAKEN from a
+// (ipc_send_try_id) — and meter IpcRecv. Called only when a message is actually TAKEN from a
 // mailbox (never on a synthesized out-of-band DEAD result). Every receive releases exactly one charge;
-// this is sound ONLY because EVERY post charges exactly one (charged_post / ipc_send_try_id_prov) — so
+// this is sound ONLY because EVERY post charges exactly one (charged_post / ipc_send_try_id) — so
 // the in-flight count is authoritative. (ledger_release still refuses on zero as a belt-and-suspenders.)
 fn ipc_recv_release(t: *mut ProcTable) -> void {
     switch ledger_release(&t.ledger, .IpcMessages, 1) {
@@ -163,13 +94,8 @@ fn proc_make_msg(t: *mut ProcTable, tag: u32, a0: u64, a1: u64, a2: u64, call_id
     };
 }
 
-// Try-post a message carrying an explicit correlation id (0 = not a call). `record_prov`
-// selects the per-message bookkeeping: the normal path passes true (emit provenance on a
-// successful delivery); the hot-channel fast path passes false to skip the provenance emit —
-// the ONLY difference between the two paths. Delivery itself (the mailbox post, the wake, and
-// the success/failure outcome) is identical regardless, so this single funnel keeps the fast
-// path and the normal path in lockstep on semantics while differing only on observability.
-fn ipc_send_try_id_prov(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, call_id: u64, record_prov: bool) -> bool {
+// Try-post a message carrying an explicit correlation id (0 = not a call).
+fn ipc_send_try_id(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, call_id: u64) -> bool {
     let dst: usize = dst_pid as usize;
     if !proc_is_live(t, dst) {
         return false; // no such process, or it has exited/died — never post into a dead slot
@@ -185,18 +111,6 @@ fn ipc_send_try_id_prov(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: 
     let msg: Message = proc_make_msg(t, tag, a0, a1, a2, call_id);
     if mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid) {
         wake_if_blocked(t, dst);
-        if record_prov {
-            // Observe-only: record provenance for this successful delivery. Does not affect the
-            // result — the same sends succeed/fail exactly as before. The fast path skips this
-            // (and, with it, the sampling-counter advance inside ipc_provenance_emit).
-            //
-            // HOT-PATH OPT-OUT: gate the emit on the enable flag HERE so the disabled default
-            // (production) costs a single branchless global-flag load and NO function call / no
-            // sample-counter work. ipc_provenance_emit re-checks the flag as belt-and-suspenders.
-            if g_ipc_provenance_enabled {
-                ipc_provenance_emit(msg.from, dst_pid, &msg);
-            }
-        }
         return true;
     }
     // Post failed (mailbox full): refund the charge so a later retry does not double-count the
@@ -208,47 +122,8 @@ fn ipc_send_try_id_prov(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: 
     return false; // mailbox full
 }
 
-// Normal try-post: full bookkeeping, including the provenance emit.
-fn ipc_send_try_id(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64, call_id: u64) -> bool {
-    return ipc_send_try_id_prov(t, dst_pid, tag, a0, a1, a2, call_id, true);
-}
-
 export fn ipc_send_try(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> bool {
     return ipc_send_try_id(t, dst_pid, tag, a0, a1, a2, 0);
-}
-
-// ----- hot-channel fast path (the observability/fast-path co-design lever) -----
-//
-// Streamlined send for a channel the caller has designated "hot": SAME delivery semantics as
-// the normal try-send — same allow_mask permission check, same liveness re-check, same mailbox
-// post, same receiver wake, same success/failure outcomes and return type as ipc_try_send — but
-// with the per-message provenance bookkeeping SKIPPED. Provenance (P1.2/P1.4) is exactly the
-// per-message work that would otherwise tax a hot channel, so the documented opt-out is to skip
-// the emit (and the sampling-counter advance) here, lowering per-message overhead.
-//
-// HONEST SCOPE: for this kernel a Message is small fixed inline words (already a cheap value
-// copy), so the meaningful fast-path win is minimal-bookkeeping + provenance-skipped delivery,
-// NOT zero-copy of large payloads. Literal zero-copy / batching of large buffers is future work
-// and not meaningful for this Message shape. This is an ADDITIONAL path: it does not change
-// normal-send behavior or semantics in any way.
-export fn ipc_fast_send(t: *mut ProcTable, dst_pid: u32, tag: u32, a0: u64, a1: u64, a2: u64) -> bool {
-    let cur: usize = t.current;
-    if !mask32_contains(&t.procs[cur].allow_mask, dst_pid) {
-        return false; // not permitted to send to this peer (same gate as ipc_try_send)
-    }
-    let dst: usize = dst_pid as usize;
-    var sending: bool = true;
-    while sending {
-        if !proc_is_live(t, dst) {
-            return false; // destination gone (never existed, or exited while we waited) — not sent
-        }
-        // Identical to ipc_try_send's inner post, minus the provenance emit (record_prov=false).
-        if ipc_send_try_id_prov(t, dst_pid, tag, a0, a1, a2, 0, false) {
-            return true; // delivered
-        }
-        proc_yield_or_idle(t); // mailbox full -- let the receiver drain it, or idle if none runnable
-    }
-    return false;
 }
 
 // Privilege-checked send: deliver only if the caller is allowed to reach `dst_pid`. Returns

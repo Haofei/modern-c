@@ -314,7 +314,7 @@ struct Process {
     satp,                                  // address space (0 = share kernel's)
     inbox: Mailbox<Message, IPC_SLOTS>,
     block_reasons: Mask32,                 // runnable iff empty (derived state)
-    wait_slot, wait_gen, pending_sig: Mask32,
+    wait_slot, wait_gen,
     allow_mask: Mask32,                    // bit p = may IPC-send to pid p
     kcall_mask: Mask32,                    // bit op = may invoke kernel call op
     priority, quantum, ticks, sched_endpoint,
@@ -347,15 +347,6 @@ C/LLVM lowering. These fixtures are not a production capability broker and do no
 native OS surface.
 
 Gates: `cap-test`, `uaccess-pt-test`.
-
-### 10.4 Signals — IMPLEMENTED (kernel primitive only)
-
-`kernel/core/proc_signals.mc`. Signals 0..31 are bits in `pending_sig`. `proc_kill` (raw
-pid) and `proc_kill_ep` (generation-safe) set a bit and wake a `BLOCK_RECV` process;
-`proc_sigtake` clears+returns the lowest pending. **No user-mode handler dispatch** — a
-process-manager service would build POSIX signal semantics on top.
-
----
 
 ## 11. Scheduler — GATED · SMP scaffold-scale
 
@@ -413,8 +404,8 @@ grant **and its entire delegation subtree**). Gates: `grant-test`, `granttab-tes
 ### 12.4 Per-process authority masks — GATED
 
 `allow_mask` (which pids you may IPC) and `kcall_mask` (which kernel ops you may invoke) are
-`Mask32` on each `Process`. `kcall(t, op, arg)` checks `kcall_mask` and **audits the
-attempt** (allowed or denied) into `cap_audit` (§15). Attenuated spawn intersects both masks.
+`Mask32` on each `Process`. `kcall(t, op, arg)` checks `kcall_mask`. Attenuated spawn
+intersects both masks.
 
 ---
 
@@ -476,26 +467,7 @@ surface. **Deferred (ABSENT):** comprehensive live accounting across all allocat
 
 ---
 
-## 15. Observability & Provenance — GATED
-
-`kernel/core/ipc_trace.mc`. An `IpcTrace` is a bounded ring (`IPC_TRACE_CAP = 16`) of
-`IpcEvent { seq, from, to, tag, size }`. `ipc_trace_record` is **O(1), non-blocking,
-allocation-free**, overwrites the oldest on overflow (bumping `dropped`), and hands out a
-monotonic `seq` so a drainer can detect gaps. Two disjoint instances:
-
-- **`g_ipc_trace`** — message provenance. Sampling (`ipc_provenance_set_sample(n)`) and
-  per-channel opt-out keep it off the future fast path.
-- **`g_cap_trace`** (`cap_audit`) — authority use.
-
-**Exact audit coverage (faithful to code):** `g_cap_trace` records **every `kcall` attempt,
-allowed or denied**, and **every *dispatched* tool call**. Note the deliberate asymmetry —
-for tool calls, only dispatched calls are recorded; **Denied / Exhausted / NoSuchTool
-attempts are *not* audited today.** Recording is observe-only — zero effect on delivery
-semantics or return values.
-
----
-
-## 16. Supervisor & Service Manifests — REMOVED
+## 15. Supervisor & Service Manifests — REMOVED
 
 The service-supervisor and manifest runtime was removed from the validation kernel scope. It
 was OS policy surface, not language-core evidence. Process, IPC, capability, and scheduler
@@ -503,7 +475,7 @@ mechanisms remain covered by narrower fixtures.
 
 ---
 
-## 17. Syscall ABI & User Boundary
+## 16. Syscall ABI & User Boundary
 
 `kernel/core/syscall.mc`. `SyscallTable { handlers[SYS_MAX], registered[SYS_MAX] }`,
 `SYS_MAX = 16`. `syscall_dispatch(number, a0, a1, a2)` is bounds-checked and returns
@@ -517,11 +489,12 @@ is **ABSENT**; the user-boundary safety machinery (§9.3) is GATED.
 
 ---
 
-## 18. Filesystem & Storage
+## 17. Filesystem & Storage
 
-`kernel/fs/` is retained only for low-level storage and driver validation. The product-style
-VFS, mount table, in-memory hierarchy, disk filesystem, and syscall filesystem demos were
-removed from the core workload.
+`kernel/fs/` is retained only for the minimal `BlockDevice` trait used by low-level driver
+validation. The product-style VFS, mount table, in-memory hierarchy, disk filesystem,
+block-backed file store, write-back cache, blob store, and persistence demos were removed
+from the core workload.
 
 | File | Role | Capacity |
 |------|------|----------|

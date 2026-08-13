@@ -19,9 +19,7 @@ import "kernel/core/ledger.mc";  // unified per-dimension resource ledger (charg
 // by path, so every existing `import "kernel/core/process.mc"` consumer transitively gets
 // the full process API (scheduling, signals, IPC) without changing any consumer import site.
 import "kernel/core/proc_sched.mc";
-import "kernel/core/proc_signals.mc";
 import "kernel/core/proc_ipc.mc";
-import "kernel/core/ipc_trace.mc"; // capability-use audit trace (also pulled transitively via proc_ipc)
 
 const MAX_PROCS: usize = 8;
 const IPC_SLOTS: usize = 4; // mailbox depth per process
@@ -90,7 +88,6 @@ struct Process {
     block_reasons: Mask32,       // set of BLOCK_* reasons; runnable iff empty (derived state)
     wait_slot: usize,            // the slot this process is blocked receiving-from (for death cleanup)
     wait_gen: u32,               // the generation of wait_slot when it began waiting
-    pending_sig: Mask32,         // pending-signal set (a PM server builds on this)
     allow_mask: Mask32,          // least privilege: bit p = may IPC-send to pid p
     kcall_mask: Mask32,          // least privilege: bit op = may invoke kernel call `op`
     priority: u32,               // scheduling priority (policy set externally; higher runs first)
@@ -225,7 +222,6 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].block_reasons = mask32_zero();
         t.procs[i].wait_slot = MAX_PROCS; // no waiter target
         t.procs[i].wait_gen = 0;
-        t.procs[i].pending_sig = mask32_zero();
         t.procs[i].allow_mask = mask32_zero();
         t.procs[i].kcall_mask = mask32_zero();
         t.procs[i].priority = 0;
@@ -316,7 +312,6 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     t.procs[slot].block_reasons = mask32_zero();
     t.procs[slot].wait_slot = MAX_PROCS;
     t.procs[slot].wait_gen = 0;
-    t.procs[slot].pending_sig = mask32_zero();
     t.procs[slot].allow_mask = mask32_zero();
     t.procs[slot].kcall_mask = mask32_zero();
     t.procs[slot].priority = 0;
@@ -700,7 +695,7 @@ fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     // whatever the subsystem owner registered (a no-op if none).
     let death_hook: fn(u32, u32) -> void = t.death_hook;
     death_hook(dead_pid, dead_gen);
-    // Drop the dead process's own pending IPC + signals + wait state, and close its open file
+    // Drop the dead process's own pending IPC + wait state, and close its open file
     // descriptors — a zombie holds only its exit status, never live resources, so a later
     // spawn that reuses this slot can never inherit a ghost descriptor.
     // Refund the unified ledger for every charged in-flight IPC message still queued in the dead
@@ -719,7 +714,6 @@ fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     mailbox_init(Message, IPC_SLOTS, &t.procs[dead].inbox);
     fd_init(&t.procs[dead].fds);
     resacct_reset(&t.procs[dead].macct); // a zombie holds no charged memory — release the account
-    t.procs[dead].pending_sig = mask32_zero();
     t.procs[dead].wait_slot = MAX_PROCS;
     // Wake anyone blocked receiving-from this exact incarnation. We do NOT post a DEAD message
     // (a full inbox could swallow it); instead the woken receiver re-checks the source's
@@ -888,46 +882,12 @@ export fn proc_set_kcall_mask(t: *mut ProcTable, pid: u32, mask: u32) -> void {
     }
 }
 
-// ----- capability-use audit (P1.3): observe-only trace of kcall invocations -----
-//
-// A DEDICATED provenance ring, disjoint from proc_ipc's `g_ipc_trace`. Where the IPC
-// trace records *messages* (who sent what to whom), this records *authority use*: each
-// time a process exercises its `kcall_mask` to invoke a kernel op, we append one event
-// (from=caller pid, tag=op). The audit is pure observation — it never changes kcall's
-// permission decision or its return value. Off the critical path by construction
-// (`ipc_trace_record` is O(1), non-blocking, overwrite-oldest on overflow).
-global g_cap_trace: IpcTrace;
-global g_cap_audit_enabled: bool = true; // default enabled; opt out via cap_audit_set_enabled
-
-// Reset the cap-audit ring to empty. Call after proc_table_init in any context that
-// wants a clean audit history.
-export fn cap_audit_init() -> void {
-    ipc_trace_init(&g_cap_trace);
-}
-
-// The dedicated cap-use trace, for a drainer to read back recorded authority use.
-export fn cap_audit() -> *mut IpcTrace {
-    return &g_cap_trace;
-}
-
-// Toggle cap-use recording. When off, kcall behaves identically but emits no events.
-export fn cap_audit_set_enabled(on: bool) -> void {
-    g_cap_audit_enabled = on;
-}
-
 // Kernel-call gateway: a server requests a privileged op through one checked entry
 // point. Denied unless the caller's kcall_mask permits `op`. (The op itself is a
 // stand-in here; a real kernel would map/grant/program IRQs behind this gate.)
 #[mc_abi]
 export fn kcall(t: *mut ProcTable, op: u32, arg: u64) -> Result<u64, KError> {
     let cur: usize = t.current;
-    // Capability-use audit: record the invocation BEFORE the permission decision, so the
-    // trace covers every attempt to exercise authority (allowed or denied), not just the
-    // ops that happened to pass the mask check. Observe-only — does not affect the result.
-    if g_cap_audit_enabled {
-        let caller_pid: u32 = t.procs[cur].pid;
-        ipc_trace_record(&g_cap_trace, caller_pid, 0, op, 0);
-    }
     if !mask32_contains(&t.procs[cur].kcall_mask, op) {
         return err(.Denied);
     }
