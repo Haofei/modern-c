@@ -1,5 +1,5 @@
 // Bare-metal riscv64 M-mode runtime for the variadic-function demo — in PURE MC (no C).
-// The all-MC replacement for kernel/arch/riscv64/vararg_runtime.c: it calls the C-ABI
+// The all-MC validation runtime: it calls the C-ABI
 // variadic MC function `sum_args` (tests/qemu/lang/vararg_demo.mc) with several argument
 // counts — matching the C-ABI shape used by the printf-family shims — verifies the sums,
 // and reports on the bare 16550 UART.
@@ -15,8 +15,8 @@
 // The boot seam (naked `_start` in `.text.start`) and the console (mmio_console over the
 // bare 16550) are the shared M-mode template modules.
 
-import "kernel/core/mmio_console.mc";
-import "kernel/core/console.mc";
+import "tests/qemu/support/core/mmio_console.mc";
+import "tests/qemu/support/core/console.mc";
 
 const FINISHER: usize = 0x0010_0000;       // SiFive test finisher
 const FINISHER_HALT: u32 = 0x5555;         // power-off / end-of-run code

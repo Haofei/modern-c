@@ -1,13 +1,13 @@
-// kernel/arch/riscv64/trap — the machine trap handler (called by the asm stub).
+// tests/qemu/support/arch/riscv64/trap — the machine trap handler fixture (called by the asm stub).
 //
 // The asm vector (in the runtime) saves caller state, calls `handle_trap` with
 // mcause/mepc, then restores and `mret`s. Here we only need the timer interrupt:
 // count the tick and rearm the comparator. Arch-specific in its mcause encoding;
 // the tick bookkeeping is portable.
 
-import "kernel/drivers/timer/clint.mc";
-import "kernel/arch/riscv64/hart.mc";
-import "kernel/core/panic.mc";
+import "tests/qemu/support/drivers/timer/clint.mc";
+import "tests/qemu/support/arch/riscv64/hart.mc";
+import "tests/qemu/support/core/panic.mc";
 import "std/time.mc";
 
 // mcause for a machine timer interrupt: interrupt bit (MSB) set, exception code 7.
@@ -15,7 +15,7 @@ const MCAUSE_MACHINE_TIMER: u64 = 0x8000_0000_0000_0007;
 const TICK_INTERVAL: u64 = 1_000_000;            // CLINT ticks between interrupts (~0.1s)
 const TICK_DEMO_TIMEOUT_TICKS: u64 = 50_000_000; // give up after ~5s of no ticks
 
-// The tick counter is written from the timer ISR and read from normal kernel
+// The tick counter is written from the timer ISR and read from normal validation
 // context, so it is an explicit `atomic<u32>` (interrupt-shared cell): the ISR
 // does a release-ordered increment, readers an acquire-ordered load.
 global g_ticks: atomic<u32> = atomic.init(0);

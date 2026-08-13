@@ -1,7 +1,7 @@
 const std = @import("std");
 const h = @import("helpers.zig");
 
-// QEMU kernel/arch boot tests, the host-driver link/run suite, and every other
+// QEMU validation boot tests, the host-driver link/run suite, and every other
 // per-fixture gate. The bulk of the corpus.
 pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "move-fuzz", "Generate move-resource programs; assert every resource is released once (live_count==0) on both backends", &.{ "bash", "tools/toolchain/move-fuzz.sh", "zig-out/bin/mcc" });

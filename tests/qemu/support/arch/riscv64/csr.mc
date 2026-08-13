@@ -1,7 +1,7 @@
-// kernel/arch/riscv64/csr — raw machine-mode CSR access via inline assembly.
+// tests/qemu/support/arch/riscv64/csr — raw machine-mode CSR access via inline assembly.
 // (QEMU `virt -bios none` boots in M-mode, so the kernel uses the machine CSRs:
 // mtvec, mstatus.MIE, mie.MTIE.) This is the only riscv64-specific file the hart
-// typestate needs; an ARM port provides the same operations over its own system
+// typestate fixture needs; another target can provide the same operations over its own system
 // registers. Each is a thin, audited wrapper so the typed layer never open-codes
 // assembly.
 
@@ -74,7 +74,7 @@ export fn enable_timer_interrupt() -> void {
     }
 }
 
-// Enable the machine external interrupt source (set mie.MEIE) — PLIC-routed device IRQs.
+// Enable the machine external interrupt source (set mie.MEIE).
 export fn enable_external_interrupt() -> void {
     let bit: usize = MIE_MEIE;
     #[unsafe_contract(precise_asm)] {

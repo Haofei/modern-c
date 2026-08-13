@@ -1,6 +1,6 @@
-// kernel/core/panic — fail closed with diagnostics.
+// tests/qemu/support/core/panic — fail closed with diagnostics.
 //
-// Called for any trap the kernel does not handle. Prints the cause, faulting PC,
+// Called for any trap the validation fixture does not handle. Prints the cause, faulting PC,
 // and trap value to the debug console, then halts the machine — so an unexpected
 // fault never silently `mret`s (which, for a synchronous fault, would re-execute
 // the faulting instruction forever).

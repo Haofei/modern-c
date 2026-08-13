@@ -2,7 +2,7 @@
 // a caller-supplied sink. A "sink" is any `fn(u8) -> void` — a console `putc` such
 // as `console_putc`, a firmware console putchar, or a COM1/PL011 emitter.
 //
-// This is the digit/nibble arithmetic that kernel/core/mmio_console and the three
+// This is the digit/nibble arithmetic that tests/qemu/support/core/mmio_console and the
 // arch consoles (firmware console, aarch64/pl011, x86_64/port_io) used to carry
 // as four byte-identical copies. It lives here once; each console keeps only its
 // one-byte primitive and forwards to these. No heap, no buffers beyond a fixed

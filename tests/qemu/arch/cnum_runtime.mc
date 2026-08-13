@@ -1,6 +1,6 @@
 // Bare-metal riscv64 M-mode runtime exercising the MC ctype + integer-parsing core
 // (user/libc/cnum.mc) through the standard C prototypes — in PURE MC
-// (no C). The all-MC replacement for kernel/arch/riscv64/cnum_runtime.c.
+// (no C). The all-MC validation runtime.
 //
 // cnum's strtol/strtoul take a `char**` endptr (typed `*mut u8` in the MC ABI) and store
 // the end address THROUGH it as a usize. We pass the address of an 8-byte global cell as
@@ -9,8 +9,8 @@
 // console are the shared M-mode template modules; linked as a SECOND MC object beside
 // cnum.mc.
 
-import "kernel/core/mmio_console.mc";
-import "kernel/core/console.mc";
+import "tests/qemu/support/core/mmio_console.mc";
+import "tests/qemu/support/core/console.mc";
 
 const FINISHER: usize = 0x0010_0000;
 const FINISHER_HALT: u32 = 0x5555;

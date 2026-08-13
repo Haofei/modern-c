@@ -106,26 +106,26 @@ It is a *lint*, not the compiler: it parses with `awk` and is deliberately conse
 authoritative gate is `sema`; this gives the greppable, human-auditable view and a clean
 inventory.
 
-## Audited inventory — `kernel/` + `std/` (101 `.mc` files)
+## Audited inventory — `kernel/` + `std/` (51 `.mc` files)
 
 Snapshot from `tools/toolchain/mc-audit.sh --mode unsafe` at S0.2. **Result: clean** — every gated unsafe op
 sits inside an `unsafe`/`unsafe_contract` region (re-run the lint for the live count).
 
 | Category | Count | Gate | Where the load-bearing ones live |
 |---|---:|---|---|
-| `raw.load` / `raw.store` | 100 | unsafe block | The raw-register/MMIO path. Concentrated in the MMIO/runtime layers: `std/mmio.mc`, `std/bytes.mc`, `std/mem.mc`, `std/libc.mc`, `kernel/drivers/timer/clint.mc`, `std/dma.mc`, `std/vec.mc`. This is the **S0.3 strict-aliasing** surface. |
+| `raw.load` / `raw.store` | 61 | unsafe block | The raw-register/MMIO path. Concentrated in the MMIO/runtime layers: `std/mmio.mc`, `std/bytes.mc`, `std/mem.mc`, `std/libc.mc`, `std/dma.mc`, `std/vec.mc`. This is the **S0.3 strict-aliasing** surface. |
 | `mmio.map<T>` | 0 | unsafe block | — none currently. |
-| `raw.ptr<T>` | 20 | tracked | Mostly typed address wrappers and hosted/runtime plumbing. Minting only; derefs are checked. |
+| `raw.ptr<T>` | 18 | tracked | Mostly typed address wrappers and hosted/runtime plumbing. Minting only; derefs are checked. |
 | raw-many `.offset()` | 0 | unsafe block | — none currently. |
-| `forget_unchecked` | 28 | unsafe block | Resource handoff/release paths — transferring a linear value's ownership out of the checker. |
+| `forget_unchecked` | 11 | unsafe block | Resource handoff/release paths — transferring a linear value's ownership out of the checker. |
 | `arc_get_mut` | 1 | unsafe block | `std/arc.mc` (definition); call sites require `unsafe`. |
-| inline `asm` | 15 | unsafe block | Architecture context/CSR/paging paths. The precise forms carry `#[unsafe_contract(precise_asm)]`. |
+| inline `asm` | 0 | unsafe block | — none currently in kernel/std. QEMU support fixtures carry their own precise asm contracts outside this inventory. |
 | `unchecked.{add,…}` | 0 | `#[unsafe_contract(no_overflow)]` | — none currently in kernel/std. |
 | `assume_noalias_unchecked` | 0 | `#[unsafe_contract(noalias)]` | — none currently in kernel/std. |
 | `bitcast<T>` | 8 | tracked | `std/vec.mc` (typed-slot reinterpret). Alias-safe (memcpy). |
-| `uninit` | 32 | tracked | Buffers written before read across std/kernel/tests. Unspecified-not-UB. |
-| **TOTAL (constructs)** | **204** | | |
-| `extern` declarations (FFI) | 59 | trust boundary | The non-MC call surface (runtime, libc shims, platform hooks). Callee correctness is not MC-checked. |
+| `uninit` | 18 | tracked | Buffers written before read across std/kernel. Unspecified-not-UB. |
+| **TOTAL (constructs)** | **117** | | |
+| `extern` declarations (FFI) | 38 | trust boundary | The non-MC call surface (runtime, libc shims, platform hooks). Callee correctness is not MC-checked. |
 
 ### Reading the inventory
 

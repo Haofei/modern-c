@@ -45,7 +45,6 @@ pub const LoadLimits = struct {
 
 pub const LoadOptions = struct {
     arch: ?[]const u8 = null,
-    platform: ?[]const u8 = null,
     std_dir: ?[]const u8 = null,
     mc_path: []const []const u8 = &.{},
     limits: LoadLimits = .{},
@@ -121,24 +120,6 @@ const ResolvedImport = struct {
 // origin file by taking the last boundary whose `start <= span.offset`. The orphan rule in
 // sema uses this to compare the defining file of an `opaque struct` against the file of a
 // peer `impl` accessor, so a cross-file `impl` can no longer forge access to private fields.
-// The virtual arch directory: an `import "kernel/arch/active/<x>"` is rewritten to
-// `import "kernel/arch/<arch>/<x>"` where <arch> is the `--arch` selection (default
-// "riscv64"). This is the arch-selection seam (plan R0b): generic freestanding
-// validation modules can import `active`, and the selected arch is picked at compile
-// time — no duplicated per-arch source copies.
-pub const arch_active_prefix = "kernel/arch/active/";
-pub const default_arch = "riscv64";
-
-// The virtual platform directory: an `import "kernel/platform/active/<x>"` is rewritten to
-// `import "kernel/platform/<platform>/<x>"` where <platform> is the `--platform` selection
-// (default "qemu_virt"). This is the platform-selection seam (kernel-layering plan, Wave 0):
-// a generic core module keeps its stable import path and pulls its board/device backend
-// (fixed MMIO addresses for board devices such as the UART console and RTC) from
-// `active`, so swapping boards is a compile-time selection — not a source edit of the 45
-// modules that import the console interface.
-pub const platform_active_prefix = "kernel/platform/active/";
-pub const default_platform = "qemu_virt";
-
 pub fn loadCombinedSource(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -150,9 +131,9 @@ pub fn loadCombinedSource(
 
 // As `loadCombinedSource`, but if `boundaries` is non-null it is filled (appended) with one
 // `FileBoundary` per contributing file. The boundary `path` strings are allocated with
-// `allocator` and owned by the caller (free each `.path`, then the list). `arch` selects the
-// `kernel/arch/active/` alias target (null => default_arch); `platform` selects the
-// `kernel/platform/active/` alias target (null => default_platform).
+// `allocator` and owned by the caller (free each `.path`, then the list). `arch` and
+// `platform` are retained for CLI/API compatibility; imports name concrete support
+// files directly.
 pub fn loadCombinedSourceWithBoundaries(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -160,11 +141,10 @@ pub fn loadCombinedSourceWithBoundaries(
     root_source: []const u8,
     boundaries: ?*std.ArrayList(FileBoundary),
     arch: ?[]const u8,
-    platform: ?[]const u8,
+    _: ?[]const u8,
 ) LoadError![]u8 {
     return loadCombinedSourceWithBoundariesOptionsReport(allocator, io, root_path, root_source, boundaries, .{
         .arch = arch,
-        .platform = platform,
     }, null);
 }
 
@@ -175,12 +155,11 @@ pub fn loadCombinedSourceWithBoundariesReport(
     root_source: []const u8,
     boundaries: ?*std.ArrayList(FileBoundary),
     arch: ?[]const u8,
-    platform: ?[]const u8,
+    _: ?[]const u8,
     reporter: ?*diagnostics.Reporter,
 ) LoadError![]u8 {
     return loadCombinedSourceWithBoundariesOptionsReport(allocator, io, root_path, root_source, boundaries, .{
         .arch = arch,
-        .platform = platform,
     }, reporter);
 }
 
@@ -317,8 +296,6 @@ fn loadCombinedSourceGraph(
         root_source,
         &out,
         boundaries,
-        options.arch orelse default_arch,
-        options.platform orelse default_platform,
         sandbox_root,
         installed_roots.items,
         reporter,
@@ -354,8 +331,6 @@ fn expandAll(
     source: []const u8,
     out: *std.ArrayList(u8),
     boundaries: ?*std.ArrayList(FileBoundary),
-    arch: []const u8,
-    platform: []const u8,
     sandbox_root: []const u8,
     installed_roots: []const InstalledRoot,
     reporter: ?*diagnostics.Reporter,
@@ -397,8 +372,6 @@ fn expandAll(
             io,
             item.path,
             file_source,
-            arch,
-            platform,
             sandbox_root,
             installed_roots,
             reporter,
@@ -649,8 +622,6 @@ fn scanImports(
     io: std.Io,
     path: []const u8,
     source: []const u8,
-    arch: []const u8,
-    platform: []const u8,
     sandbox_root: []const u8,
     installed_roots: []const InstalledRoot,
     outer_reporter: ?*diagnostics.Reporter,
@@ -677,7 +648,7 @@ fn scanImports(
             const semi = lx.next();
             if (str.kind == .string_literal and semi.kind == .semicolon) {
                 const storage = try arena.alloc(u8, str.lexeme.len - 2);
-                var rel = string_literal.decodeInto(storage, str.lexeme) catch {
+                const rel = string_literal.decodeInto(storage, str.lexeme) catch {
                     if (outer_reporter) |r| {
                         r.err(.{
                             .offset = file_start + str.span.offset,
@@ -702,13 +673,6 @@ fn scanImports(
                         return error.ImportNotFound;
                     }
                     continue;
-                }
-                // Arch-selection seam: rewrite `kernel/arch/active/<x>` to the chosen arch.
-                if (std.mem.startsWith(u8, rel, arch_active_prefix)) {
-                    rel = try std.fmt.allocPrint(arena, "kernel/arch/{s}/{s}", .{ arch, rel[arch_active_prefix.len..] });
-                } else if (std.mem.startsWith(u8, rel, platform_active_prefix)) {
-                    // Platform-selection seam: rewrite `kernel/platform/active/<x>` to the board.
-                    rel = try std.fmt.allocPrint(arena, "kernel/platform/{s}/{s}", .{ platform, rel[platform_active_prefix.len..] });
                 }
                 const resolved = try resolveImportPath(arena, io, path, rel, sandbox_root, installed_roots);
                 try refs.append(arena, .{

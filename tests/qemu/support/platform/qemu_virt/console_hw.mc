@@ -1,8 +1,7 @@
-// kernel/platform/qemu_virt/console_hw — QEMU virt UART backend for validation debug output.
+// tests/qemu/support/platform/qemu_virt/console_hw — QEMU virt UART backend for validation debug output.
 //
 // This is the ONE place that knows the QEMU `virt` machine's 16550 UART transmit-hold
-// register address. The kernel/core/console interface imports this through the retained
-// `kernel/platform/active/` seam.
+// register address. The support console imports this directly.
 //
 // The single `unsafe` block is isolated here and justified: it is the one raw write to the
 // platform's fixed debug-UART register, behind a safe typed API.

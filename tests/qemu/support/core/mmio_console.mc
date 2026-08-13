@@ -1,11 +1,11 @@
-// kernel/core/mmio_console — tiny number/string formatting over the bare 16550
-// UART sink (`console_putc`), in PURE MC. An M-mode kernel booted with
+// tests/qemu/support/core/mmio_console — tiny number/string formatting over the bare 16550
+// UART sink (`console_putc`), in PURE MC. An M-mode validation image booted with
 // `-bios none` has NO firmware, so MMIO UART remains the minimal console path:
-// it writes bytes straight to the 16550 transmit register (kernel/core/console).
+// it writes bytes straight to the 16550 transmit register (tests/qemu/support/core/console).
 //
 // The digit/nibble arithmetic lives once in `std/fmt_sink` (`fmt_put_*`); this module
 // is the thin binding of those renderers to the bare-UART `console_putc` sink, so
-// the rest of the M-mode kernel sweep keeps calling `put_str`/`put_dec`/`put_hex`
+// the rest of the M-mode sweep keeps calling `put_str`/`put_dec`/`put_hex`
 // unchanged. `put_hex` is the 16-nibble (u64) form (handy for dumping an
 // mcause/fault value).
 

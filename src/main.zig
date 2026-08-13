@@ -233,7 +233,6 @@ fn runMain(init: std.process.Init) !void {
     }
     var loaded = loader.loadProjectOptionsReport(allocator, init.io, loader_root_path, root_source, .{
         .arch = options.arch_flag,
-        .platform = options.platform_flag,
         .std_dir = options.std_dir,
         .mc_path = mc_path_entries.items,
     }, &load_diag) catch |err| switch (err) {

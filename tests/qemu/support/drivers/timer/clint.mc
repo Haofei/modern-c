@@ -1,6 +1,6 @@
-// kernel/drivers/timer/clint — RISC-V CLINT machine timer. Reads `mtime` and arms
+// tests/qemu/support/drivers/timer/clint — RISC-V CLINT machine timer fixture. Reads `mtime` and arms
 // `mtimecmp` to schedule the next timer interrupt. Stateless MMIO (no typestate);
-// the interrupt it raises is handled through the IRQ/trap path. An ARM port swaps
+// the interrupt it raises is handled through the trap fixture. Another target swaps
 // this for the generic timer (CNTP_*) behind the same two functions.
 
 const CLINT_MTIME: usize = 0x0200_BFF8;    // 64-bit monotonic counter

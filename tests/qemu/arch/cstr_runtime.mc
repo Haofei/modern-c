@@ -1,6 +1,6 @@
 // Bare-metal riscv64 M-mode runtime exercising the MC mem/string core (user/libc/cstr.mc)
 // through the standard C prototypes — in PURE MC (no C). The all-MC
-// replacement for kernel/arch/riscv64/cstr_runtime.c.
+// replacement for the old C validation runtime.
 //
 // cstr.mc IS the only mem/str libc in the image (linked WITHOUT freestanding.c), so this
 // runtime declares its symbols `extern fn` and DRIVES them: memset/memcpy/memcmp,
@@ -9,8 +9,8 @@
 // address arithmetic the C runtime did with `s1 + 2`. Boot seam + console are the shared
 // M-mode template modules. Linked as a SECOND MC object alongside cstr.mc.
 
-import "kernel/core/mmio_console.mc";
-import "kernel/core/console.mc";
+import "tests/qemu/support/core/mmio_console.mc";
+import "tests/qemu/support/core/console.mc";
 
 const FINISHER: usize = 0x0010_0000;
 const FINISHER_HALT: u32 = 0x5555;

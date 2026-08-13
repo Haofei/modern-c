@@ -67,8 +67,7 @@ Two rules keep the taxonomy honest:
 
 Beyond the outcome, a fixture (or its manifest row) carries the axes a gate must honor:
 
-- **arch** — the target ISA. For kernel modules it is the `kernel/arch/<arch>/` path; for
-  inline-asm fixtures it is the ISA the asm is written in. Gates compile per-arch
+- **arch** — the target ISA. For inline-asm fixtures it is the ISA the asm is written in. Gates compile per-arch
   or pin a deterministic triple (`llvm-spec-obj-sweep`,
   `demo-test`) — never the host default.
 - **profile** — kernel vs hosted (the C0/C1 split); selects CFLAGS (`-ffreestanding`,

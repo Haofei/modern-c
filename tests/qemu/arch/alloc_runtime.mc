@@ -1,6 +1,6 @@
 // Bare-metal riscv64 M-mode runtime exercising the MC C-ABI allocator (user/libc/alloc.mc)
 // through the standard prototypes — malloc/free/calloc/realloc —
-// in PURE MC (no C). The all-MC replacement for kernel/arch/riscv64/alloc_runtime.c.
+// in PURE MC (no C). The all-MC validation runtime.
 //
 // Verifies distinct non-overlapping allocations, write/read round-trips, reuse after free,
 // calloc zeroing, realloc content preservation, and that overflowing calloc returns NULL
@@ -9,8 +9,8 @@
 // access the C runtime's `p[i]` did. Boot seam + console are the shared M-mode template
 // modules; linked as a SECOND MC object beside alloc.mc.
 
-import "kernel/core/mmio_console.mc";
-import "kernel/core/console.mc";
+import "tests/qemu/support/core/mmio_console.mc";
+import "tests/qemu/support/core/console.mc";
 
 const FINISHER: usize = 0x0010_0000;
 const FINISHER_HALT: u32 = 0x5555;

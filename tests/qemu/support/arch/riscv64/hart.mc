@@ -1,4 +1,4 @@
-// kernel/arch/riscv64/hart — the boot hart as a linear typestate.
+// tests/qemu/support/arch/riscv64/hart — the boot hart as a linear typestate fixture.
 //
 // A hart progresses Boot → TrapReady → IrqsOn, and each CSR-touching transition
 // is the *only* place that step is legal: you cannot enable interrupts before the

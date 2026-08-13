@@ -1,5 +1,5 @@
 // Bare-metal riscv64 M-mode runtime exercising the MC printf family (user/libc) — in PURE
-// MC (no C). The all-MC replacement for kernel/arch/riscv64/stdio_runtime.c: it DEFINES the
+// MC (no C). The all-MC validation runtime: it DEFINES the
 // `mc_console_write` hook (which stdio.mc declares `extern fn` and streams formatted output
 // through), then checks snprintf output against expected strings across the integer/string/
 // char/pointer specifiers, then exercises printf-to-console.
@@ -14,8 +14,8 @@
 // the formatter reads back as a `usize`. Boot seam + console are the shared M-mode template
 // modules; linked as a SECOND MC object beside the aggregated libc.
 
-import "kernel/core/mmio_console.mc";
-import "kernel/core/console.mc";
+import "tests/qemu/support/core/mmio_console.mc";
+import "tests/qemu/support/core/console.mc";
 
 const FINISHER: usize = 0x0010_0000;
 const FINISHER_HALT: u32 = 0x5555;

@@ -1,5 +1,5 @@
 // Bare-metal M-mode platform primitives — in PURE MC. These DEFINE the symbols
-// that kernel/core/panic.mc and std/time.mc declare `extern fn` (mc_halt,
+// that tests/qemu/support/core/panic.mc and std/time.mc declare `extern fn` (mc_halt,
 // mc_read_ticks, mc_udelay): an `export fn` lowers to its unmangled C-ABI symbol,
 // so the externs resolve to these at link time. They live in their OWN compilation
 // unit (this file imports neither panic.mc nor std/time.mc) so the `extern fn`
@@ -38,7 +38,7 @@ export fn mc_udelay(us: u32) -> void {
     }
 }
 
-// Stop the machine (kernel/core/panic.mc `extern fn mc_halt`). On QEMU virt that's
+// Stop the machine (support panic `extern fn mc_halt`). On QEMU virt that's
 // the SiFive test finisher.
 export fn mc_halt() -> void {
     unsafe { raw.store<u32>(phys(PLAT_FINISHER), PLAT_FINISHER_HALT); }

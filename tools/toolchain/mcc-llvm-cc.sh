@@ -44,9 +44,8 @@ LL="$TMP_DIR/module.ll"
 # MC_CHECKS=elide-proven (checks=elide-proven) elides only the optimizer-proven-dead ones (annex E.4).
 CHECKS_FLAG=()
 [ "${MC_CHECKS:-all}" != "all" ] && CHECKS_FLAG=(--checks="${MC_CHECKS}")
-# Arch-selection seam (R0b): MC_ARCH picks which arch a `kernel/arch/active/...` import
-# resolves to. When callers pass only llc's -mtriple, infer the same MC arch so LLVM lowering
-# gets target ABI details such as va_list storage right for retained user-libc validation objects too.
+# Target-selection seam: MC_ARCH picks LLVM lowering target ABI details such as
+# va_list storage for retained user-libc validation objects.
 EFFECTIVE_MC_ARCH="${MC_ARCH:-}"
 HAVE_MTRIPLE=0
 for arg in ${LLC_ARGS[@]+"${LLC_ARGS[@]}"}; do

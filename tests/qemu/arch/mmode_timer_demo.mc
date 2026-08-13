@@ -4,16 +4,16 @@
 // to the CLINT directly for the timer (mtime/mtimecmp MMIO — reachable in M-mode,
 // unlike under OpenSBI), and prints over the bare 16550 UART (no SBI ecall).
 //
-// The typed kernel (kernel/arch/riscv64/trap.mc) installs the naked M-mode trap
+// The typed support trap fixture installs the naked M-mode trap
 // vector below through the hart typestate, enables M-timer interrupts, and counts
 // CLINT timer ticks; an unexpected trap (here a deliberate M-mode `ecall`) fails
-// closed through kernel/core/panic.mc with diagnostics rather than silently
+// closed through tests/qemu/support/core/panic.mc with diagnostics rather than silently
 // `mret`-ing. The boot seam — naked `_start` in `.text.start` + the naked trap
 // vector — is the reusable M-mode template the rest of the sweep copies.
 
-import "kernel/arch/riscv64/trap.mc";
-import "kernel/core/mmio_console.mc";
-import "kernel/core/console.mc";
+import "tests/qemu/support/arch/riscv64/trap.mc";
+import "tests/qemu/support/core/mmio_console.mc";
+import "tests/qemu/support/core/console.mc";
 
 // SiFive test finisher: writing this code powers the machine off / ends the run.
 // (The platform primitives mc_halt/mc_read_ticks/mc_udelay live in the separate

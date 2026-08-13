@@ -12,7 +12,6 @@ pub const Options = struct {
     json_diagnostics: bool = false,
     structs_flag: ?[]const u8 = null,
     arch_flag: ?[]const u8 = null,
-    platform_flag: ?[]const u8 = null,
     std_dir: ?[]const u8 = null,
     visibility_mode: ast.VisibilityMode = .legacy_pub_opt_in,
     output_path: ?[]const u8 = null,
@@ -30,7 +29,6 @@ pub const Options = struct {
         var saw_profile_flag = false;
         var saw_checks_flag = false;
         var saw_arch_flag = false;
-        var saw_platform_flag = false;
         var saw_stub_asm_flag = false;
         var saw_linux_kernel_flag = false;
         var saw_std_dir_flag = false;
@@ -50,15 +48,6 @@ pub const Options = struct {
                     std.mem.eql(u8, value, "aarch64"))
                 {
                     opts.arch_flag = value;
-                } else {
-                    return error.InvalidArgs;
-                }
-            } else if (std.mem.startsWith(u8, flag, "--platform=")) {
-                if (saw_platform_flag) return duplicateOption("--platform");
-                saw_platform_flag = true;
-                const value = flag["--platform=".len..];
-                if (std.mem.eql(u8, value, "qemu_virt")) {
-                    opts.platform_flag = value;
                 } else {
                     return error.InvalidArgs;
                 }
@@ -143,7 +132,6 @@ pub const Options = struct {
             .saw_profile_flag = saw_profile_flag,
             .saw_checks_flag = saw_checks_flag,
             .saw_arch_flag = saw_arch_flag,
-            .saw_platform_flag = saw_platform_flag,
             .saw_stub_asm_flag = saw_stub_asm_flag,
             .saw_linux_kernel_flag = saw_linux_kernel_flag,
             .saw_std_dir_flag = saw_std_dir_flag,
@@ -306,7 +294,6 @@ pub const Options = struct {
         saw_profile_flag: bool,
         saw_checks_flag: bool,
         saw_arch_flag: bool,
-        saw_platform_flag: bool,
         saw_stub_asm_flag: bool,
         saw_linux_kernel_flag: bool,
         saw_std_dir_flag: bool,
@@ -335,7 +322,6 @@ pub const Options = struct {
         if (seen.saw_linux_kernel_flag and !std.mem.eql(u8, command, "emit-llvm"))
             return invalidOptionForCommand("--linux-kernel", command);
         if (seen.saw_arch_flag and !accepts_checks) return invalidOptionForCommand("--arch", command);
-        if (seen.saw_platform_flag and !accepts_checks) return invalidOptionForCommand("--platform", command);
         if (seen.saw_std_dir_flag and !isSourceLoadingCommand(command)) return invalidOptionForCommand("--std-dir", command);
         if (seen.saw_visibility_flag and !isSourceLoadingCommand(command)) return invalidOptionForCommand("--visibility", command);
         if (seen.saw_output_flag and !accepts_output_path) return invalidOptionForCommand("-o", command);

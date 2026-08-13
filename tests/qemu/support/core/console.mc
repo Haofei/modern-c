@@ -1,9 +1,9 @@
-// kernel/core/console — panic-safe debug output for retained QEMU validation fixtures.
+// tests/qemu/support/core/console — panic-safe debug output for retained QEMU validation fixtures.
 //
 // Writes single bytes through the selected validation platform backend, so it works from trap
 // handlers without depending on allocation or driver setup. The fixed UART register address stays
-// behind `kernel/platform/active/console_hw.mc`.
-import "kernel/platform/active/console_hw.mc";
+// behind the QEMU support console backend.
+import "tests/qemu/support/platform/qemu_virt/console_hw.mc";
 import "std/fmt/fmt_sink.mc";
 
 #[mc_abi]

@@ -1,5 +1,5 @@
 // Shared freestanding libc for the bare-metal kernel images — in PURE MC.
-// The all-MC replacement for kernel/arch/riscv64/freestanding.c. Every QEMU kernel image links
+// The all-MC freestanding support object. Every QEMU validation image links
 // this single object (kernel_boot_compile_rt). It supplies the mem*/str* symbols the freestanding
 // link needs: the backends emit calls to memset/memcpy/memmove for aggregate init/copy, and the
 // Some freestanding C shims additionally reference memcmp/strlen.
@@ -11,7 +11,7 @@
 // here. Signatures match the C ABI by name + pointer-size: usize == void*/size_t, i32 == int.
 //
 // PERF: mem*/memmove copy/fill 8 bytes (one u64 word) at a time for the aligned bulk (~6-8x on
-// large copies — these are the ELF-load / DMA / aggregate-copy hot path). Shape is byte HEAD (to
+// large copies — these are the DMA / aggregate-copy hot path). Shape is byte HEAD (to
 // align dst to 8) + word BODY + byte TAIL. SAFETY: the word path for memcpy/memmove is taken ONLY
 // when src and dst share the same alignment mod 8 (`(d ^ s) & 7 == 0`); otherwise a u64 access
 // would be unaligned and fault on strict-align pre-MMU code, so we fall back to the byte loop.
