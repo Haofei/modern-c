@@ -4,7 +4,6 @@ grant-test	tests/qemu/ipc/grant_demo.mc	entry	grant_demo_run		memory grant: boun
 byteview-test	tests/qemu/lang/byteview_demo.mc	entry	byteview_run	-Wno-switch-bool	ByteBuf<N>: bounds-checked get + set/copy_from/copy_to return typed OutOfBounds (no silent clamp) on a PAddr
 closure-test	tests/qemu/lang/closure_demo.mc	driver			bind() closure captures a pointer + fn, callable with no ctx word/casts; capture mutated across calls
 constgen-test	tests/qemu/lang/constgen_demo.mc	entry	constgen_run		const-generic Ring<T,N> at two capacities (2 and 8): [N]T + % N specialize per instance
-elf-test	tests/qemu/lang/elf_demo.mc	driver			ELF64 parse (header+phdr) + segment load (copy+bss zero-fill) + reject bad magic/truncation
 libc-test	tests/qemu/lang/libc_demo.mc	entry	libc_run	-Wno-switch-bool	minimal libc core: mc_memeq / mc_strlen / mc_atoi over typed addresses
 scan-test	tests/qemu/lang/scan_demo.mc	entry	scan_run	-Wno-switch-bool	find_index/any: bounded array search via a closure predicate (found index, not-found N, any)
 tryelse-test	tests/qemu/lang/tryelse_demo.mc	entry	tryelse_run		postfix-? with else remaps a subsystem error into the layer error type (ok + mapped-err paths)

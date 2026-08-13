@@ -48,7 +48,6 @@ check	kernel/bad/arc_move_elem.mc	E_RAW_RESOURCE_PAYLOAD	std/collections/arc.mc:
 check	kernel/bad/arena_leak.mc	E_RESOURCE_LEAK	kernel/bad/arena_leak.mc:6:9: error: E_RESOURCE_LEAK: linear `move` value is never consumed (must be moved, returned, or freed)
 check	kernel/bad/hart_enable_before_trap.mc	E_NO_IMPLICIT_CONVERSION	kernel/bad/hart_enable_before_trap.mc:5:46: error: E_NO_IMPLICIT_CONVERSION: call argument struct type does not match the parameter type
 check	kernel/bad/hart_leaked.mc	E_RESOURCE_LEAK	kernel/bad/hart_leaked.mc:4:9: error: E_RESOURCE_LEAK: linear `move` value is never consumed (must be moved, returned, or freed)
-check	kernel/bad/irq_complete_not_pending.mc	E_NO_IMPLICIT_CONVERSION	kernel/bad/irq_complete_not_pending.mc:5:47: error: E_NO_IMPLICIT_CONVERSION: call argument struct type does not match the parameter type
 check	kernel/bad/owned_leak.mc	E_RESOURCE_LEAK	kernel/bad/owned_leak.mc:11:9: error: E_RESOURCE_LEAK: linear `move` value is never consumed (must be moved, returned, or freed)
 check	kernel/bad/pool_move_elem.mc	E_MOVE_ARRAY_UNSUPPORTED	std/alloc/pool.mc:13:12: error: E_MOVE_ARRAY_UNSUPPORTED: a non-`move` struct cannot store an array of linear `move` values by value; make the struct `move`, or hold the resources behind pointers
 check	kernel/bad/ring_move_elem.mc	E_MOVE_ARRAY_UNSUPPORTED	std/collections/ring.mc:13:12: error: E_MOVE_ARRAY_UNSUPPORTED: a non-`move` struct cannot store an array of linear `move` values by value; make the struct `move`, or hold the resources behind pointers

@@ -3,7 +3,6 @@
 # A listed fixture may still compare successfully on a host/toolchain that supports it.
 grant-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 byteview-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-elf-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 arc-pkt-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 arc-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 scan-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions

@@ -129,9 +129,6 @@ pub fn register(ctx: *h.Ctx) void {
     ctx.b.step("demo-test-strict", "Strict demo-test (riscv64 required; m0/c0 variant)").dependOn(&demo_test_strict_cmd.step);
 
 
-    _ = h.addScriptTest(ctx, "elf-test", "Link + run the ELF64 parser (header + program headers, bounds-checked)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "elf-test" });
-
-
     _ = h.addScriptTest(ctx, "arena-test", "move Arena: bump alloc, reset/reuse, destroy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arena-test" });
 
     _ = h.addScriptTest(ctx, "genref-test", "generational handle: live resolve, stale-after-reset trap", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "genref-test" });

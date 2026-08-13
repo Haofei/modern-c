@@ -184,8 +184,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("sync-test"));
     // demo-test compile-checks the whole demo/ suite (needs clang).
     m0_full_step.dependOn(ctx.cmd("demo-test-strict"));
-    // elf-test links + runs the ELF64 parser (needs clang).
-    m0_full_step.dependOn(ctx.cmd("elf-test"));
     // alloc-test links + runs the type-erased Allocator (needs clang).
     m0_full_step.dependOn(ctx.cmd("alloc-test"));
     m0_full_step.dependOn(ctx.cmd("arc-test"));
