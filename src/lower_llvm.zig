@@ -112,8 +112,6 @@ fn hasNamedAttr(attrs: []const ast_bridge.Attr, name: []const u8) bool {
     return false;
 }
 
-const DropGlueDeclArtifact = mir_ownership_authority.DropGlueDeclArtifact;
-
 // LLVM backend AST/call-shape queries and small pure lowering helpers.
 const lower_llvm_query = @import("lower_llvm_query.zig");
 const assignmentIdent = lower_llvm_query.assignmentIdent;
@@ -461,7 +459,6 @@ const LlvmEmitter = struct {
     decl_artifacts: []const declaration_artifacts.DeclArtifact = &.{},
     struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
     function_decl_artifacts: std.ArrayList(declaration_artifacts.FunctionArtifact) = .empty,
-    drop_glue_decl_artifacts: std.ArrayList(DropGlueDeclArtifact) = .empty,
     global_decl_artifacts: std.ArrayList(declaration_artifacts.GlobalArtifact) = .empty,
     global_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
@@ -556,7 +553,6 @@ const LlvmEmitter = struct {
         self.backend_names.deinit();
         self.struct_decl_artifacts.deinit(self.allocator);
         self.function_decl_artifacts.deinit(self.allocator);
-        self.drop_glue_decl_artifacts.deinit(self.allocator);
         self.global_decl_artifacts.deinit(self.allocator);
         self.global_types.deinit();
         self.global_is_const.deinit();
@@ -716,7 +712,6 @@ const LlvmEmitter = struct {
             .function => |function| {
                 try self.collectFunctionArtifact(function);
                 try self.function_decl_artifacts.append(self.allocator, function);
-                try self.drop_glue_decl_artifacts.append(self.allocator, dropGlueDeclArtifact(function));
             },
             .global => |global| try self.collectGlobal(global),
             .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),
@@ -729,16 +724,7 @@ const LlvmEmitter = struct {
     }
 
     fn validateDropGlueFactsAgainstDecls(self: *LlvmEmitter) !void {
-        if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(&self.mir_module, self.drop_glue_decl_artifacts.items)) return error.UnsupportedLlvmEmission;
-    }
-
-    fn dropGlueDeclArtifact(function: declaration_artifacts.FunctionArtifact) DropGlueDeclArtifact {
-        return .{
-            .name = function.name,
-            .params = function.params,
-            .attrs = function.attrs,
-            .is_extern = function.is_extern,
-        };
+        if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(&self.mir_module, self.function_decl_artifacts.items)) return error.UnsupportedLlvmEmission;
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {

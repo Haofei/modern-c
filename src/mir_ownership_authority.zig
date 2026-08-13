@@ -4,13 +4,6 @@ const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
 const mir = @import("mir.zig");
 
-pub const DropGlueDeclArtifact = struct {
-    name: ast.Ident,
-    params: []ast.Param,
-    attrs: []const ast.Attr,
-    is_extern: bool,
-};
-
 pub const AutoDropLocalCleanup = struct {
     fn_name: []const u8,
     local_name: []const u8,
@@ -76,7 +69,7 @@ pub fn dropGlueDeclMatches(module: *const mir.Module, type_name: []const u8, rel
 
 pub fn dropGlueFactsMatchDeclArtifacts(
     module: *const mir.Module,
-    artifacts: []const DropGlueDeclArtifact,
+    artifacts: anytype,
 ) bool {
     for (module.drop_glue_facts) |fact| {
         var matched = false;
@@ -93,7 +86,7 @@ pub fn dropGlueFactsMatchDeclArtifacts(
 fn dropGlueDeclArtifactMatches(
     module: *const mir.Module,
     fact: mir.DropGlueFact,
-    artifact: DropGlueDeclArtifact,
+    artifact: anytype,
 ) bool {
     if (artifact.is_extern) return false;
     if (!std.mem.eql(u8, artifact.name.text, fact.release_fn)) return false;
