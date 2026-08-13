@@ -107,24 +107,23 @@ test "lower-c nullable narrowing with long identifiers never falls back to const
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (0)") == null);
 }
 
-test "lower-c runtime hook suppression uses MIR source spelling view" {
+test "lower-c runtime hook suppression uses VerifiedProgram runtime hook facts" {
     const source =
         \\export fn mc_ksan_check(addr: usize, size: usize) -> void {}
         \\export fn mc_ksan_store(addr: usize, size: usize) -> void {}
     ;
-    var parsed = try test_support.parseModule("c_runtime_hook_source_spelling.mc", source);
+    var parsed = try test_support.parseModule("c_runtime_hook_facts.mc", source);
     defer parsed.deinit();
 
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
+    const program = try backend_mod.VerifiedProgram.init(&module_mir, &parsed.reporter);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    const source_spelling = backend_mod.SourceSpellingView{ .symbols = module_mir.symbol_identities };
     try lower_c_runtime.appendHeaderAndSanitizerHooks(
         std.testing.allocator,
-        source_spelling,
-        module_mir,
+        program.runtime_hooks,
         &output,
         "/* test-profile */\n",
     );

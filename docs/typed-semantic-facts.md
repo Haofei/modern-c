@@ -62,10 +62,11 @@ mirror. Hand-built compatibility MIR may still leave unrelated typed fields
 invalid, but it cannot make a representation fact and its instruction drift
 together back to untyped result-type or line/column matching.
 
-`VerifiedProgram` now exposes a `SourceSpellingView` backed by the verified MIR
-`SymbolIdentity` table. Backend entrypoints can resolve function symbol spelling
-through this explicit view instead of treating the AST as the source-spelling
-table. `VerifiedProgram` no longer stores a general `ast.Module` or raw
+`VerifiedProgram` now exposes narrow `RuntimeHookFacts` derived from verified
+MIR symbol identities instead of a general source-spelling table. Backend
+entrypoints can decide whether to emit weak/default trap and sanitizer hook
+bodies, but cannot perform arbitrary source-name queries through a spelling
+view. `VerifiedProgram` no longer stores a general `ast.Module` or raw
 declaration slice. Declaration-list mechanics now go through collected
 `EarlyDeclarationArtifacts`, carried by `LowerRequest` instead of being stored
 on `VerifiedProgram`. Source-map row syntax enumeration is isolated in
@@ -75,11 +76,9 @@ now pre-collects const fn/global/type/aggregate categories while still carrying
 ordered declaration artifacts for C declaration collection. It still carries
 declaration slices for not-yet-normalized comptime and LLVM callable/global
 mechanics, but the remaining syntax-shaped ingress is named and exact-gated by
-the inventory. C and LLVM runtime hook suppression already consume the shared
-`SourceSpellingView.definesFunctionSpelling` query when deciding whether to
-emit weak/default trap and sanitizer hook bodies; per-backend
-`moduleDefinesHook` helpers are exact-zero gated, and the AST is no longer the
-authority for that prelude symbol-spelling decision.
+the inventory. Per-backend `moduleDefinesHook` helpers and spelling-view
+prelude queries are exact-zero gated, and the AST is no longer the authority
+for runtime hook suppression.
 
 Artifact metadata consumers are also converging on the shared
 `artifact_model.ArtifactBundle` contract instead of local header checks.

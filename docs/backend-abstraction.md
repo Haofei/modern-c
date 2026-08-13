@@ -113,7 +113,7 @@ first:
 
 It then exposes:
 
-- `source_spelling`: MIR-owned spelling by typed symbol id.
+- `runtime_hooks`: MIR-owned facts for default trap/sanitizer hook suppression.
 
 A transitional declaration slice still exists behind collected
 `EarlyDeclarationArtifacts`, carried by the named

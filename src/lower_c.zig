@@ -118,7 +118,7 @@ fn appendCProfileWithVerifiedProgram(
         .kernel => "/* mc-profile: kernel (freestanding) */\n",
         .hosted => "/* mc-profile: hosted (links libc + -lm) */\n",
     };
-    try lower_c_runtime.appendHeaderAndSanitizerHooks(allocator, program.source_spelling, program.typed_mir.*, out, profile_marker);
+    try lower_c_runtime.appendHeaderAndSanitizerHooks(allocator, program.runtime_hooks, out, profile_marker);
     try lower_c_runtime.appendCheckedArithmeticHelpers(allocator, out);
     try lower_c_runtime.appendMemoryAccessHelpers(allocator, out, checks.ksan, checks.msan, checks.csan);
 

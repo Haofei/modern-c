@@ -15,7 +15,9 @@ pub const LowerError = lower_error.LowerError;
 pub const lowerErrorFromAny = lower_error.lowerErrorFromAny;
 pub const LowerRequest = codegen_request.LowerRequest;
 pub const EmitMapRequest = codegen_request.EmitMapRequest;
-pub const SourceSpellingView = verified_program.SourceSpellingView;
+pub const RuntimeHookFacts = verified_program.RuntimeHookFacts;
+pub const trap_hook_names = verified_program.trap_hook_names;
+pub const sanitizer_hook_names = verified_program.sanitizer_hook_names;
 pub const VerifiedProgram = verified_program.VerifiedProgram;
 
 /// A code-generation backend: the seam at which `main.zig` selects a target and

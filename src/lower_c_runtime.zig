@@ -8,25 +8,16 @@ const std = @import("std");
 
 const backend = @import("backend.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
-const mir = @import("mir.zig");
 
-// The sanitizer shadow-hook symbols (mirrors `sanitizer_hooks` in lower_llvm.zig). Each gets a
+// The sanitizer shadow-hook symbols. Each gets a
 // weak no-op `define` in the C preamble that a linked sanitizer runtime overrides — UNLESS the
 // module itself defines the hook in MC, in which case the weak stub is suppressed to avoid a C
 // `redefinition` error.
-const sanitizer_hooks = [_][]const u8{
-    "mc_ksan_poison",
-    "mc_ksan_unpoison",
-    "mc_ksan_check",
-    "mc_ksan_store",
-    "mc_csan_read",
-    "mc_csan_write",
-};
+const sanitizer_hooks = backend.sanitizer_hook_names;
 
 pub fn appendHeaderAndSanitizerHooks(
     allocator: std.mem.Allocator,
-    source_spelling: backend.SourceSpellingView,
-    module_mir: mir.Module,
+    runtime_hooks: backend.RuntimeHookFacts,
     out: *std.ArrayList(u8),
     profile_marker: []const u8,
 ) !void {
@@ -103,8 +94,8 @@ pub fn appendHeaderAndSanitizerHooks(
     // KMSAN init-tracking is `mc_ksan_store` (D2.2); KCSAN watchpoints are `mc_csan_read`/
     // `mc_csan_write` (D2.3). Only module-defined hooks are suppressed; all others keep the
     // weak no-op the linked sanitizer runtime overrides with a strong definition.
-    for (sanitizer_hooks) |hook| {
-        if (source_spelling.definesFunctionSpelling(module_mir, hook)) continue;
+    for (sanitizer_hooks, 0..) |hook, index| {
+        if (runtime_hooks.definesSanitizerHook(index)) continue;
         try out.print(allocator, "MC_WEAK void {s}(uintptr_t addr, uintptr_t size) {{ (void)addr; (void)size; }}\n", .{hook});
     }
 }

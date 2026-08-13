@@ -148,21 +148,21 @@ test "LLVM Linux kernel profile externalizes runtime and emits x86 hardening met
     try expectContains(output.items, "!\"function_return_thunk_extern\", i32 1");
 }
 
-test "LLVM runtime hook suppression uses MIR source spelling view" {
+test "LLVM runtime hook suppression uses VerifiedProgram runtime hook facts" {
     const source =
         \\export fn mc_trap_Bounds() -> void {}
         \\export fn mc_ksan_check(addr: usize, size: usize) -> void {}
     ;
-    var parsed = try test_support.parseModule("llvm_runtime_hook_source_spelling.mc", source);
+    var parsed = try test_support.parseModule("llvm_runtime_hook_facts.mc", source);
     defer parsed.deinit();
 
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
+    const program = try backend_mod.VerifiedProgram.init(&module_mir, &parsed.reporter);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    const source_spelling = backend_mod.SourceSpellingView{ .symbols = module_mir.symbol_identities };
-    try lower_llvm_prelude.emitTrapDecl(std.testing.allocator, &output, source_spelling, module_mir);
+    try lower_llvm_prelude.emitTrapDecl(std.testing.allocator, &output, program.runtime_hooks);
 
     try expectNotContains(output.items, "define weak void @mc_trap_Bounds()");
     try expectContains(output.items, "define weak void @mc_trap_IntegerOverflow()");

@@ -328,9 +328,9 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     try out.appendSlice(allocator, "; semantic checks: sema + MIR policy/CFG verification\n\n");
     try emitTargetTypeDecls(allocator, out, target_arch);
     if (linux_kernel)
-        try emitExternalRuntimeDecls(allocator, out, program.source_spelling, program.typed_mir.*)
+        try emitExternalRuntimeDecls(allocator, out, program.runtime_hooks)
     else
-        try emitTrapDecl(allocator, out, program.source_spelling, program.typed_mir.*);
+        try emitTrapDecl(allocator, out, program.runtime_hooks);
 
     var ctx = LlvmEmitter{
         .allocator = allocator,

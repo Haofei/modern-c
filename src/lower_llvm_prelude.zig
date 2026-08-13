@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const backend = @import("backend.zig");
-const mir = @import("mir.zig");
 
 // The sanitizer shadow-hook symbols. SINGLE source of truth: this one list drives both the
 // weak no-op `define`s in `emitTrapDecl` AND `isKsanHook` (which suppresses a redundant MC
@@ -9,16 +8,10 @@ const mir = @import("mir.zig");
 // poison/unpoison/check hooks (D2.1), the KMSAN init-tracking store hook (D2.2), and the KCSAN
 // read/write watchpoint hooks (D2.3). All get weak no-op defaults the linked runtime overrides
 // with strong definitions.
-const sanitizer_hooks = [_][]const u8{
-    "mc_ksan_poison",
-    "mc_ksan_unpoison",
-    "mc_ksan_check",
-    "mc_ksan_store",
-    "mc_csan_read",
-    "mc_csan_write",
-};
+const sanitizer_hooks = backend.sanitizer_hook_names;
+const trap_hooks = backend.trap_hook_names;
 
-pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source_spelling: backend.SourceSpellingView, module_mir: mir.Module) !void {
+pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), runtime_hooks: backend.RuntimeHookFacts) !void {
     // The checked-arithmetic / bounds / unreachable trap hooks. Like the C backend (which emits
     // them as per-unit `static inline ... __builtin_trap()`), emit a WEAK trapping `define` for
     // each in EVERY LLVM object: a default build self-provides a halting handler (llvm.trap ->
@@ -26,13 +19,8 @@ pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), sourc
     // hook itself (a custom handler) overrides via its strong `export fn`; a linked C runtime with
     // STRONG definitions likewise wins over these weak ones.
     try out.appendSlice(allocator, "declare void @llvm.trap()\n");
-    const trap_hooks = [_][]const u8{
-        "mc_trap_IntegerOverflow",       "mc_trap_DivideByZero", "mc_trap_InvalidShift",
-        "mc_trap_InvalidRepresentation", "mc_trap_Bounds",       "mc_trap_Assert",
-        "mc_trap_NullUnwrap",            "mc_trap_Unreachable",
-    };
-    for (trap_hooks) |hook| {
-        if (source_spelling.definesFunctionSpelling(module_mir, hook)) continue;
+    for (trap_hooks, 0..) |hook, index| {
+        if (runtime_hooks.definesTrapHook(index)) continue;
         try out.print(allocator, "define weak void @{s}() noreturn {{\n  call void @llvm.trap()\n  unreachable\n}}\n", .{hook});
     }
     try out.appendSlice(allocator, "\n");
@@ -45,11 +33,11 @@ pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), sourc
     // identically when no sanitizer runtime is present. A linked runtime (the ksan/msan/csan
     // profiles) provides STRONG definitions that override these; a default build never calls
     // them. See `sanitizer_hooks`.
-    for (sanitizer_hooks) |hook| {
+    for (sanitizer_hooks, 0..) |hook, index| {
         // If the module defines this hook itself (a pure-MC sanitizer runtime), yield to that
         // definition: its `export fn` is emitted through normal MIR emission. Emitting the auto
         // weak `define` here too would doubly-define the symbol.
-        if (source_spelling.definesFunctionSpelling(module_mir, hook)) continue;
+        if (runtime_hooks.definesSanitizerHook(index)) continue;
         try out.print(allocator, "define weak void @{s}(i64 %a, i64 %b) {{\n  ret void\n}}\n", .{hook});
     }
     try out.appendSlice(allocator, "\n");
@@ -57,15 +45,10 @@ pub fn emitTrapDecl(allocator: std.mem.Allocator, out: *std.ArrayList(u8), sourc
 
 /// Linux owns the final trap and sanitizer policy. This profile leaves only
 /// declarations, so an unreferenced hook contributes no hidden object text.
-pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayList(u8), source_spelling: backend.SourceSpellingView, module_mir: mir.Module) !void {
+pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayList(u8), runtime_hooks: backend.RuntimeHookFacts) !void {
     try out.appendSlice(allocator, "declare void @llvm.trap()\n");
-    const trap_hooks = [_][]const u8{
-        "mc_trap_IntegerOverflow",       "mc_trap_DivideByZero", "mc_trap_InvalidShift",
-        "mc_trap_InvalidRepresentation", "mc_trap_Bounds",       "mc_trap_Assert",
-        "mc_trap_NullUnwrap",            "mc_trap_Unreachable",
-    };
-    for (trap_hooks) |hook| {
-        if (!source_spelling.definesFunctionSpelling(module_mir, hook))
+    for (trap_hooks, 0..) |hook, index| {
+        if (!runtime_hooks.definesTrapHook(index))
             try out.print(allocator, "declare void @{s}() noreturn\n", .{hook});
     }
     try out.appendSlice(allocator,
@@ -75,8 +58,8 @@ pub fn emitExternalRuntimeDecls(allocator: std.mem.Allocator, out: *std.ArrayLis
         \\declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
         \\
     );
-    for (sanitizer_hooks) |hook| {
-        if (!source_spelling.definesFunctionSpelling(module_mir, hook))
+    for (sanitizer_hooks, 0..) |hook, index| {
+        if (!runtime_hooks.definesSanitizerHook(index))
             try out.print(allocator, "declare void @{s}(i64, i64)\n", .{hook});
     }
     try out.appendSlice(allocator, "\n");
