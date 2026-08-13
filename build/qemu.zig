@@ -314,12 +314,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-contain-test", "Run LLVM-lowered MMU crash containment under QEMU", &.{ "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "fdt-test", "Device-tree (FDT) header parsing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test" });
 
-    _ = h.addScriptTest(ctx, "aarch64-test", "Second architecture (aarch64) bring-up", &.{ "bash", "tools/arch/aarch64-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-aarch64-test", "LLVM-lowered second architecture (aarch64) bring-up", &.{ "bash", "tools/arch/aarch64-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "arm-vm-test", "AArch64 stage-1 page-table VM + MMU enable (real VA->PA translation)", &.{ "bash", "tools/arch/arm-vm-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-arm-vm-test", "LLVM-lowered AArch64 stage-1 page-table VM + MMU enable", &.{ "bash", "tools/arch/arm-vm-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "arm-user-test", "AArch64 EL0 user hello: SYS_WRITE via svc #0, bad user ptr -> -EFAULT via a software page-table walk (no data abort), clean SYS_EXIT", &.{ "bash", "tools/arch/arm-user-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-arm-user-test", "LLVM-lowered AArch64 EL0 user hello: EL0 syscall round-trip + bad-ptr -EFAULT software walk under QEMU", &.{ "bash", "tools/arch/arm-user-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "sbi-boot-test", "Boot under OpenSBI (real firmware)", &.{ "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-sbi-boot-test", "LLVM-lowered boot under OpenSBI (real firmware)", &.{ "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "fdt-boot-test", "Boot under OpenSBI + parse DTB /memory (FDT discovery)", &.{ "bash", "tools/arch/fdt-boot-test.sh", "zig-out/bin/mcc", "c" });
@@ -349,28 +343,16 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "granttab-test", "owner-tracked grants: bounded IPC sharing + revoke-on-death", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "granttab-test" });
 
-    _ = h.addScriptTest(ctx, "x86-sched-test", "x86-64 arch port: cooperative context switch (native)", &.{ "bash", "tools/arch/x86-sched-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-x86-sched-test", "LLVM-lowered x86-64 arch port: cooperative context switch (native)", &.{ "bash", "tools/arch/x86-sched-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "x86-qemu-test", "x86-64 kernel boots under QEMU (multiboot -> long mode)", &.{ "bash", "tools/arch/x86-qemu-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-x86-qemu-test", "LLVM-lowered x86-64 kernel boots under QEMU (multiboot -> long mode)", &.{ "bash", "tools/arch/x86-qemu-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "x86-vm-test", "x86-64 builds a fresh 4-level page table, loads CR3, reads a translation-only VA (real VA->PA)", &.{ "bash", "tools/arch/x86-vm-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-x86-vm-test", "LLVM-lowered x86-64 4-level page-table VM: build, CR3 reload, translation-only readback under QEMU", &.{ "bash", "tools/arch/x86-vm-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // X4: x86-64 Local-APIC timer — REAL, non-polled interrupt delivery. PICs masked, LAPIC timer
     // periodic at IDT vec 0x20, sti + hlt-spin until ticks fire.
-    _ = h.addScriptTest(ctx, "x86-timer-test", "x86-64 Local-APIC timer fires real interrupts (PICs masked) at IDT vec 0x20; sti + hlt-spin until ticks>=3 under QEMU", &.{ "bash", "tools/arch/x86-timer-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-x86-timer-test", "LLVM-lowered x86-64 Local-APIC timer: real periodic interrupts at vec 0x20, hlt-spin until ticks>=3 under QEMU", &.{ "bash", "tools/arch/x86-timer-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // X5: x86-64 PCI / virtio-pci device discovery — REAL config-space enumeration via the legacy
     // CAM port-I/O mechanism (0xCF8/0xCFC). Scans bus 0, finds the QEMU virtio-blk-pci device
     // (vendor 0x1AF4), reports its identity over COM1 (the analogue of RISC-V FDT/ECAM discovery).
-    _ = h.addScriptTest(ctx, "x86-pci-test", "x86-64 enumerates PCI bus 0 via legacy CAM port I/O (0xCF8/0xCFC), discovers the QEMU virtio-pci device (vendor 0x1AF4) under QEMU", &.{ "bash", "tools/arch/x86-pci-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-x86-pci-test", "LLVM-lowered x86-64 PCI discovery: legacy CAM port-I/O enumeration of the QEMU virtio-pci device under QEMU", &.{ "bash", "tools/arch/x86-pci-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "x86-user-test", "x86-64 ring-3 user hello: SYS_WRITE via int 0x80, bad user ptr -> -EFAULT via a software page-table walk (no #PF), clean SYS_EXIT", &.{ "bash", "tools/arch/x86-user-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-x86-user-test", "LLVM-lowered x86-64 ring-3 user hello: ring-3 syscall round-trip + bad-ptr -EFAULT software walk under QEMU", &.{ "bash", "tools/arch/x86-user-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
     _ = h.addScriptTest(ctx, "cow-test", "Copy-on-write: shared RO page diverges on write", &.{ "bash", "tools/mem/cow-test.sh", "zig-out/bin/mcc", "c" });

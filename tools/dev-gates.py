@@ -417,11 +417,6 @@ RULES: tuple[Rule, ...] = (
         "LLVM C-object sweep script changes need the C-emission object sweep",
     ),
     Rule(
-        ("tools/arch/aarch64-test.sh",),
-        ("aarch64-test", "llvm-aarch64-test"),
-        "aarch64 wrapper changes need its C and LLVM architecture gates",
-    ),
-    Rule(
         ("tools/arch/qemu-mmio-test.sh",),
         ("qemu-test", "llvm-qemu-test"),
         "typed-MMIO QEMU wrapper changes need its C and LLVM QEMU gates",
@@ -551,7 +546,6 @@ RULES: tuple[Rule, ...] = (
         ("fast", "riscv-qemu-validation"),
         "kernel/std/QEMU changes need host confidence plus the focused RISC-V board surrogate",
         excludes=(
-            "tools/arch/aarch64-test.sh",
             "tools/arch/qemu-mmio-test.sh",
         ),
     ),

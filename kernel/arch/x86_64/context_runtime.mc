@@ -4,7 +4,8 @@
 //
 // The MC replacement for kernel/arch/x86_64/context_runtime.c. The switch asm is
 // position-independent and touches only the System V callee-saved set, so it runs identically
-// on a bare-metal x86 kernel and (for the x86-sched-test gate) natively on an x86-64 host.
+// on a bare-metal x86 kernel. The former x86 scheduler execution gate was removed from
+// the core validation workload.
 //
 // The two switch primitives and the first-switch trampoline are `#[naked]`: `#[naked]` emits
 // no prologue/epilogue, so on entry the arguments are sitting in their System V registers

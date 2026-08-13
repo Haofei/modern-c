@@ -5586,9 +5586,7 @@ llvm-preempt-test`, `zig build llvm-smp-test`, `zig build
 llvm-smp-lock-test`, `zig build llvm-ipi-test`, `zig build llvm-virtio-test`, and `zig build
 llvm-blk-test`, `zig build llvm-net-test`,
 `zig build llvm-nic-test`,
-`zig build llvm-sbi-boot-test`,
-`zig build llvm-aarch64-test`, `zig build llvm-x86-sched-test`,
-`zig build llvm-x86-qemu-test`
+`zig build llvm-sbi-boot-test`
 gates boot LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer
 traps, cooperative context switching, round-robin scheduling, syscall dispatch,
 U-mode entry, process lifecycle, ELF load/run,
@@ -5603,8 +5601,7 @@ server syscalls, backtrace symbolization, char-device driver dispatch, timer
 preemption, SMP boot/sync, SMP ticket-lock mutual exclusion, inter-processor
 interrupts, virtio-net device bring-up, virtio-blk sector reads, ARP/ICMP
 gateway round trips over virtio-net, driver-library synthetic NIC transmit,
-OpenSBI firmware boot, aarch64 QEMU boot, and x86-64 native/QEMU scheduler
-boot, plus selected U-mode exit traps.
+OpenSBI firmware boot, plus selected U-mode exit traps.
 The `zig build llvm-page-test`, `zig build llvm-heap-test`, and `zig build
 llvm-paging-test` gates link and run LLVM-lowered host checks for the frame
 allocator, kernel heap allocator, and Sv39 page-table map/translate helpers.

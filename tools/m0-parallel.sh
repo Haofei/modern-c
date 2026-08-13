@@ -84,7 +84,7 @@ estimate_ms() {
             echo 5000 ;;
         llvm-host-suite-test|diff-backend|sanitize|*sweep*)
             echo 60000 ;;
-        *smode*|arm-*|llvm-arm-*|aarch64*|llvm-aarch64*)
+        *smode*)
             echo 30000 ;;
         *)
             echo 1000 ;;
