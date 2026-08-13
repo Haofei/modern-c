@@ -252,22 +252,7 @@ def main() -> None:
         ["unsafe-audit", "double-fetch-audit", "taint-audit", "capability-mint-audit"],
         ["bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '"],
     )
-    assert_checks(
-        module,
-        ["tools/toolchain/unsafe-audit.sh"],
-        ["bash tools/toolchain/unsafe-audit.sh --self-test 2>&1 | rg '^VIOLATION '"],
-    )
     assert_route(module, ["docs/unsafe-boundary.md"], ["unsafe-audit"], ["git diff --check"])
-    assert_checks(
-        module,
-        ["tools/toolchain/double-fetch-audit.sh"],
-        ["bash tools/toolchain/double-fetch-audit.sh --self-test 2>&1 | rg '^DOUBLE-FETCH '"],
-    )
-    assert_checks(
-        module,
-        ["tools/toolchain/taint-audit.sh"],
-        ["bash tools/toolchain/taint-audit.sh --self-test 2>&1 | rg '^TAINT '"],
-    )
     assert_gates(module, ["tools/check/abi-consistency-test.sh"], ["abi-consistency-test"])
     assert_gates(module, ["tools/check/arch-emit-test.sh"], ["arch-emit-test"])
     assert_route(module, ["docs/std-api.md"], ["std-api-docs-test"], ["git diff --check"])

@@ -290,27 +290,9 @@ RULES: tuple[Rule, ...] = (
         ("bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '",),
     ),
     Rule(
-        ("tools/toolchain/unsafe-audit.sh",),
-        (),
-        "unsafe audit shim changes need the shim self-test because the Zig gate calls mc-audit directly",
-        ("bash tools/toolchain/unsafe-audit.sh --self-test 2>&1 | rg '^VIOLATION '",),
-    ),
-    Rule(
         ("docs/unsafe-boundary.md",),
         ("unsafe-audit",),
         "unsafe-boundary docs need the unsafe audit gate",
-    ),
-    Rule(
-        ("tools/toolchain/double-fetch-audit.sh",),
-        (),
-        "double-fetch audit shim changes need the shim self-test because the Zig gate calls mc-audit directly",
-        ("bash tools/toolchain/double-fetch-audit.sh --self-test 2>&1 | rg '^DOUBLE-FETCH '",),
-    ),
-    Rule(
-        ("tools/toolchain/taint-audit.sh",),
-        (),
-        "taint audit shim changes need the shim self-test because the Zig gate calls mc-audit directly",
-        ("bash tools/toolchain/taint-audit.sh --self-test 2>&1 | rg '^TAINT '",),
     ),
     Rule(
         ("tools/check/abi-consistency-test.sh",),

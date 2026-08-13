@@ -10,7 +10,7 @@ defines that boundary, the marker that contains it, and the audited inventory of
 > **Scope (honesty).** This item is *audit + greppable-discipline + a lint*. MC already
 > **type-enforces** the boundary (see below), so this is not a new type-system feature — it
 > documents the existing rule, enumerates the constructs, and adds an independent source-level
-> auditor (`tools/toolchain/unsafe-audit.sh`) that produces the inventory and flags any escape.
+> auditor (`tools/toolchain/mc-audit.sh --mode unsafe`) that produces the inventory and flags any escape.
 > A deeper *whole-function safe/unsafe effect system* (e.g. propagating "this fn is unsafe" to
 > callers, or a `#[safe]` attribute the compiler verifies) is a larger follow-up — see
 > [Follow-up](#follow-up).
@@ -62,7 +62,7 @@ So an unsafe op outside its marker is a **compile error**, not a lint warning. T
 
 These are the MC constructs that can introduce UB or require programmer-asserted care. Each row
 cross-references the C-UB class it relates to in [`docs/c-ub-matrix.md`](c-ub-matrix.md). The
-**Gate** column is what `unsafe-audit.sh` enforces.
+**Gate** column is what `mc-audit.sh --mode unsafe` enforces.
 
 | Construct | What it can do | Marker (gate) | Related C-UB class |
 |---|---|---|---|
@@ -85,7 +85,7 @@ they are the one place a *flag* (`-fno-strict-aliasing`) — not an MC check —
 emitted C well-defined. Everything else MC offers as a reinterpretation feature (`bitcast`, overlay
 unions) is already alias-safe via `memcpy`.
 
-## The lint: `tools/toolchain/unsafe-audit.sh`
+## The lint: `tools/toolchain/mc-audit.sh --mode unsafe`
 
 Scans every `.mc` under `kernel/` and `std/`, tracks `unsafe`/`unsafe_contract` regions by brace
 depth (with comment/string stripping), and:
@@ -99,7 +99,7 @@ depth (with comment/string stripping), and:
 Run it:
 
 ```sh
-bash tools/toolchain/unsafe-audit.sh
+bash tools/toolchain/mc-audit.sh --mode unsafe
 ```
 
 It is a *lint*, not the compiler: it parses with `awk` and is deliberately conservative. The
@@ -108,7 +108,7 @@ inventory.
 
 ## Audited inventory — `kernel/` + `std/` (142 `.mc` files)
 
-Snapshot from `tools/toolchain/unsafe-audit.sh` at S0.2. **Result: clean** — every gated unsafe op
+Snapshot from `tools/toolchain/mc-audit.sh --mode unsafe` at S0.2. **Result: clean** — every gated unsafe op
 sits inside an `unsafe`/`unsafe_contract` region (re-run the lint for the live count).
 
 | Category | Count | Gate | Where the load-bearing ones live |
@@ -156,7 +156,7 @@ scope (larger follow-ups):
 
 ## Gates
 
-- `bash tools/toolchain/unsafe-audit.sh` → clean inventory, exit 0.
+- `bash tools/toolchain/mc-audit.sh --mode unsafe` → clean inventory, exit 0.
 - `zig build unsafe-audit` → same, via the build graph.
 - Kernel still builds + boots after this item (no source changes to `kernel/`/`std/` were needed —
   the boundary already held): `bash tools/proc/kmain-test.sh zig-out/bin/mcc c` → `KERNEL-OK`.
