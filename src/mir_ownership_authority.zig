@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const mir = @import("mir.zig");
 
 pub const AutoDropLocalCleanup = struct {
@@ -69,12 +70,13 @@ pub fn dropGlueDeclMatches(module: *const mir.Module, type_name: []const u8, rel
 
 pub fn dropGlueFactsMatchDeclArtifacts(
     module: *const mir.Module,
-    artifacts: anytype,
+    artifacts: []const declaration_artifacts.DeclArtifact,
 ) bool {
     for (module.drop_glue_facts) |fact| {
         var matched = false;
         for (artifacts) |artifact| {
-            if (!dropGlueDeclArtifactMatches(module, fact, artifact)) continue;
+            if (artifact != .function) continue;
+            if (!dropGlueDeclArtifactMatches(module, fact, artifact.function)) continue;
             matched = true;
             break;
         }

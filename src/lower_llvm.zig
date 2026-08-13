@@ -458,7 +458,6 @@ const LlvmEmitter = struct {
     backend_names: std.StringHashMap([]const u8) = undefined,
     decl_artifacts: []const declaration_artifacts.DeclArtifact = &.{},
     struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
-    function_decl_artifacts: std.ArrayList(declaration_artifacts.FunctionArtifact) = .empty,
     global_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
     global_initializers: std.StringHashMap(ast_bridge.Expr) = undefined,
@@ -551,7 +550,6 @@ const LlvmEmitter = struct {
         self.bind_thunks.deinit();
         self.backend_names.deinit();
         self.struct_decl_artifacts.deinit(self.allocator);
-        self.function_decl_artifacts.deinit(self.allocator);
         self.global_types.deinit();
         self.global_is_const.deinit();
         self.global_initializers.deinit();
@@ -707,10 +705,7 @@ const LlvmEmitter = struct {
 
     fn collectFunctionGlobalAndTraitArtifacts(self: *LlvmEmitter) !void {
         for (self.decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| {
-                try self.collectFunctionArtifact(function);
-                try self.function_decl_artifacts.append(self.allocator, function);
-            },
+            .function => |function| try self.collectFunctionArtifact(function),
             .global => |global| try self.collectGlobal(global),
             .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),
             .impl_trait => |impl_trait| {
@@ -722,7 +717,7 @@ const LlvmEmitter = struct {
     }
 
     fn validateDropGlueFactsAgainstDecls(self: *LlvmEmitter) !void {
-        if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(&self.mir_module, self.function_decl_artifacts.items)) return error.UnsupportedLlvmEmission;
+        if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(&self.mir_module, self.decl_artifacts)) return error.UnsupportedLlvmEmission;
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {
@@ -816,13 +811,16 @@ const LlvmEmitter = struct {
     }
 
     fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {
-        for (self.function_decl_artifacts.items) |artifact| {
-            if (artifact.is_extern) {
-                try self.emitExternFunction(artifact);
-            } else if (artifact.body) |body| {
-                try self.emitFunction(artifact, body, artifact.attrs);
-            }
-        }
+        for (self.decl_artifacts) |artifact| switch (artifact) {
+            .function => |function| {
+                if (function.is_extern) {
+                    try self.emitExternFunction(function);
+                } else if (function.body) |body| {
+                    try self.emitFunction(function, body, function.attrs);
+                }
+            },
+            else => {},
+        };
     }
 
     fn emitGlobalInitializer(self: *LlvmEmitter, expr: ast_bridge.Expr, ty: ast_bridge.TypeExpr) ![]const u8 {
