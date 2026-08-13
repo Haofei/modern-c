@@ -5571,18 +5571,11 @@ llvm-thread-test`, `zig build llvm-sched-test`, `zig build llvm-syscall-test`,
 `zig build llvm-sbi-boot-test`
 gates boot LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer
 traps, cooperative context switching, round-robin scheduling, syscall dispatch,
-U-mode entry, process lifecycle, ELF load/run,
-exec, `satp` address-space switching, per-process page tables, context switches
-that swap address spaces, scheduler VM switching, IPC request/reply,
-multi-slot IPC, registry lookup, IPC timeout, signal delivery,
-capability-scoped server access, restart supervision, heartbeat liveness,
-least-privilege gates, userspace-set scheduling policy, Sv39 activation,
-demand paging, anonymous mmap, crash containment, copy-on-write, per-server MMU
-isolation, user-mode block-device validation, RTC MMIO, user-mode
-server syscalls, backtrace symbolization, char-device driver dispatch, timer
-preemption, SMP boot/sync, SMP ticket-lock mutual exclusion, inter-processor
-interrupts, char-device driver dispatch,
-OpenSBI firmware boot, plus selected U-mode exit traps.
+U-mode entry, process lifecycle, ELF load/run, Sv39 activation, user-copy
+boundaries, timer preemption, OpenSBI/FDT boot discovery, and selected U-mode
+exit traps. Product OS surfaces such as demand paging, mmap/COW, block devices,
+networking, service registries, SMP product demos, and driver-framework demos are
+outside the compiler-core gate.
 The `zig build llvm-page-test`, `zig build llvm-heap-test`, and `zig build
 llvm-paging-test` gates link and run LLVM-lowered host checks for the frame
 allocator, kernel heap allocator, and Sv39 page-table map/translate helpers.
