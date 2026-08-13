@@ -20,8 +20,8 @@ Use this for the retained RISC-V OpenSBI/QEMU language-validation surrogate.
 
 - The command exits 0.
 - CI/local logs do not contain `SKIP:` for the QEMU surrogate.
-- Retained RISC-V OpenSBI/QEMU gates pass when FDT, BootInfo, interrupt, MMIO,
-  or backend-lowering code changes.
+- Retained RISC-V OpenSBI/QEMU gates pass when FDT, interrupt, MMIO, or backend-lowering code
+  changes.
 
 QEMU evidence is a surrogate. It keeps selected OpenSBI, FDT, interrupt, MMIO,
 and backend paths honest, but it is not hardware qualification or a

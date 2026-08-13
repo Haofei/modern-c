@@ -114,7 +114,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-async-select-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-privilege-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-cap-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-driver-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-preempt-test"));
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
     m0_full_step.dependOn(ctx.cmd("llvm-ledger-test"));
@@ -316,10 +315,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-sbi-boot-test"));
     m0_full_step.dependOn(ctx.cmd("smode-user-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-user-test"));
-    m0_full_step.dependOn(ctx.cmd("bootinfo-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-bootinfo-test"));
-    m0_full_step.dependOn(ctx.cmd("uart-driver-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-uart-driver-test"));
     m0_full_step.dependOn(ctx.cmd("grant-test"));
     m0_full_step.dependOn(ctx.cmd("ipc-test"));
     m0_full_step.dependOn(ctx.cmd("async-test"));
@@ -364,8 +359,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("uaccess-pt-test"));
     m0_full_step.dependOn(ctx.cmd("elf-loader-test"));
     m0_full_step.dependOn(ctx.cmd("uaccess-taint-test"));
-    // driver-test runs the char-device driver framework (vtable dispatch) under QEMU.
-    m0_full_step.dependOn(ctx.cmd("driver-test"));
 
     // fast: the inner-loop gate for deterministic host-only confidence. It
     // covers the spec/unit harness, emit-C sweep, C-vs-LLVM differential, and

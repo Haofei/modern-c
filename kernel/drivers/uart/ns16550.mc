@@ -1,11 +1,8 @@
 // kernel/drivers/uart/ns16550 — a first-class, polled NS16550 UART driver.
 //
-// Unlike kernel/core/console.mc (the panic-safe fallback that writes a HARDCODED
+// Unlike kernel/core/console.mc (the panic-safe fallback that writes a hardcoded
 // 16550 THR with no readiness check), this driver is parameterized by a base
-// address discovered from the firmware device tree (kernel/core/bootinfo.mc's
-// `bootinfo_console_pa`) and polls the Line Status Register's THRE bit before
-// each byte — so it never drops a byte at speed and works at whatever base the
-// platform reports.
+// address and polls the Line Status Register's THRE bit before each byte.
 //
 // Arch-neutral by construction: the MMIO base is just a `usize` parameter and the
 // register layout is the standard 16550 (reg-shift 0, as on the QEMU virt
@@ -32,7 +29,7 @@ pub struct Ns16550 {
     base: usize,
 }
 
-// Construct a handle for the 16550 at `base` (e.g. from bootinfo_console_pa).
+// Construct a handle for the 16550 at `base`.
 pub fn ns16550_at(base: usize) -> Ns16550 {
     return .{ .base = base };
 }

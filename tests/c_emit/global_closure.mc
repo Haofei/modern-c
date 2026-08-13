@@ -1,5 +1,5 @@
 // Regression: globals whose fields are closures or function pointers — the substrate for a
-// driver/provider table shape (for example, kernel/bus/chardev.mc).
+// provider-table shape.
 //
 // Three lowerings were broken and are fixed here:
 //   1. a whole-struct store into a global (`g = .{ … }`) must adopt the global's type so the

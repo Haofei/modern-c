@@ -269,12 +269,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-sbi-boot-test", "LLVM-lowered boot under OpenSBI (real firmware)", &.{ "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "fdt-boot-test", "Boot under OpenSBI + parse DTB /memory (FDT discovery)", &.{ "bash", "tools/arch/fdt-boot-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-fdt-boot-test", "LLVM-lowered boot under OpenSBI + parse DTB /memory", &.{ "bash", "tools/arch/fdt-boot-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "fdt-devices-test", "Boot under OpenSBI + discover UART/PLIC/virtio-mmio via FDT compatible strings", &.{ "bash", "tools/arch/fdt-devices-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-fdt-devices-test", "LLVM-lowered boot under OpenSBI + discover UART/PLIC/virtio-mmio via FDT", &.{ "bash", "tools/arch/fdt-devices-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "bootinfo-test", "Boot under OpenSBI + normalize FDT into the arch-neutral BootInfo (§3.1)", &.{ "bash", "tools/arch/bootinfo-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-bootinfo-test", "LLVM-lowered boot under OpenSBI + normalize FDT into the arch-neutral BootInfo", &.{ "bash", "tools/arch/bootinfo-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "uart-driver-test", "Boot under OpenSBI + discover UART base from FDT + drive first-class LSR-polled NS16550 driver", &.{ "bash", "tools/arch/uart-driver-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-uart-driver-test", "LLVM-lowered boot under OpenSBI + FDT-discovered first-class NS16550 driver", &.{ "bash", "tools/arch/uart-driver-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "smode-user-test", "S-mode U-mode hello under OpenSBI (SYS_WRITE + bad-ptr -EFAULT)", &.{ "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-smode-user-test", "LLVM-lowered S-mode U-mode hello under OpenSBI", &.{ "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "llvm" });
 
@@ -511,11 +505,6 @@ pub fn register(ctx: *h.Ctx) void {
 
 
     // evaluating 6*7=42 confined. Proves the host need not be C either. Both backends.
-
-
-    _ = h.addScriptTest(ctx, "driver-test", "Run the char-device driver framework (vtable dispatch) under QEMU", &.{ "bash", "tools/arch/driver-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-driver-test", "Run LLVM-lowered char-device driver framework under QEMU", &.{ "bash", "tools/arch/driver-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
     // Preflight: explicit toolchain check for the QEMU milestone gates (clang/ld.lld/llc/qemu +
