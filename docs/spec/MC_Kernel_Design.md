@@ -499,15 +499,11 @@ semantics or return values.
 
 ---
 
-## 16. Supervisor & Service Manifests — GATED · demo-scale capacity (`SVC_MAX = 8`)
+## 16. Supervisor & Service Manifests — REMOVED
 
-`kernel/lib/supervisor.mc`. Privileges are **data**: a `ServiceManifest { name_key, endpoint,
-allowed_ipc, allowed_kcalls, restart, priority }` declares identity, least-privilege
-authority, and restart policy (`Never` = core/fatal, `OnFailure` = auto-restart). The
-`Supervisor` registers services with a spawn closure, starts them in **dependency
-(topological) order**, and `supervisor_tick` restarts failed `OnFailure` services. Applying a
-manifest = `proc_set_allow_mask` + `proc_set_kcall_mask` + `proc_set_priority`; the kernel's
-per-op checks then enforce it.
+The service-supervisor and manifest runtime was removed from the validation kernel scope. It
+was OS policy surface, not language-core evidence. Process, IPC, capability, and scheduler
+mechanisms remain covered by narrower fixtures.
 
 ---
 
@@ -654,7 +650,6 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | IPC (sync rendezvous + notify, endpoint-safe) | **GATED** (copying, not zero-copy) |
 | Resource governance: quota + OOM-kill + fault containment | **GATED** (mechanism under explicit charge sites; full allocator wiring follow-up) |
 | Provenance + cap audit | **GATED** (kcall audits allowed+denied; tool calls audit dispatched only) |
-| Supervisor + manifests | **GATED** · demo-scale (`SVC_MAX=8`) |
 | Syscall table mechanism | **GATED**; registered surface **DEMO-SCOPE** (5 POSIX calls) |
 | Filesystems / storage | **GATED**; flat stores + **hierarchical `treefs`** (mkdir/`..`/getdents) |
 | Network stack (real DNS/TCP/HTTP demos) | **GATED** (demo-exercised, not RFC-complete) |

@@ -60,13 +60,11 @@ tcp-test	tests/qemu/net/tcp_demo.mc	driver			TCP segment build/parse (ports/seq/
 tcp-window-test	tests/qemu/net/tcp_window_demo.mc	driver			TCP send window + ACK processing (dup/unsent rejected) + in-order receive + sequence wraparound
 udp-test	tests/qemu/net/udp_demo.mc	driver			UDP datagram build/parse + pseudo-header checksum (incl. corruption detection) correct
 info-test	tests/qemu/proc/info_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	info/snapshot service: top-style count/pid/state queries answered over the IPC service loop from a stable proc_snapshot
-manifest-test	tests/qemu/proc/manifest_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	enforced manifests: a service manifest's IPC allowlist + kcall mask applied to the process, then enforced by ipc_try_send/kcall
 perm-test	tests/qemu/proc/perm_demo.mc	entry	perm_run		POSIX uid/gid + rwx-mode permission checks (owner/group/other, root bypass)
 pgroup-test	tests/qemu/proc/pgroup_demo.mc	entry	pgroup_run		process groups + sessions: setsid/setpgid/getpgid/getsid
 scheduler-test	tests/qemu/proc/scheduler_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	scheduler service: kernel ticks/accounts quantum, notifies the sched endpoint on the expiry edge (from=expired task), service refreshes policy
 smprq-test	tests/qemu/proc/smprq_demo.mc	entry	smprq_run	-Wno-switch-bool	SMP per-core run queues + work stealing: an idle core steals from the busiest (FIFO, load-balanced)
 snapshot-test	tests/qemu/proc/snapshot_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	proc_snapshot (kernel/lib): stable pid/state enumeration + state summary, unaffected by later spawn/exit
-supervisor-test	tests/qemu/proc/supervisor_demo.mc	entry	supervisor_run	-Wno-switch-bool	service supervisor (kernel/lib): declarative manifests (privileges+policy as data), name discovery, restart OnFailure, core failure Fatal
 waitqueue-test	tests/qemu/proc/waitqueue_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	WaitQueue (kernel/lib): block current (park+yield), FIFO wake_one/wake_all, empty no-op, idle yield
 death-hook-test	tests/qemu/ipc/death_hook_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter -Wno-unused-variable	process-death global cleanup: one installed death hook revokes the dead pid's memory grants and unregisters its services on proc_exit (resources cannot outlive their owner)
 time-test	tests/qemu/lang/time_demo.mc	driver			std/time counter<u64> timeout arithmetic: wrap-correct delta_mod across a u64 rollover and the >= timeout boundary

@@ -384,11 +384,7 @@ pub fn register(ctx: *h.Ctx) void {
     // Reproduces the stale-cache regression that reverted the first O(1)/O(children) attempt.
     _ = h.addScriptTest(ctx, "sched-difftest", "differential scheduler gate: next_runnable pick == independent authoritative scan across randomized transitions (stale-cache regression guard)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "sched-difftest" });
 
-    _ = h.addScriptTest(ctx, "supervisor-test", "service supervisor: declarative manifests + restart policy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "supervisor-test" });
-
     _ = h.addScriptTest(ctx, "registry2-test", "Registry v2: multiple-per-class, generations, unregister-on-death", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "registry2-test" });
-
-    _ = h.addScriptTest(ctx, "manifest-test", "enforced service manifests: privileges applied + enforced", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "manifest-test" });
 
     _ = h.addScriptTest(ctx, "scheduler-test", "scheduler service: quantum expiry notify + refresh", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "scheduler-test" });
 
@@ -442,10 +438,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-mmap-test", "Run LLVM-lowered anonymous mmap under QEMU", &.{ "bash", "tools/mem/mmap-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "diskfs-test", "On-disk FS: persistent format + inodes + named lookup", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "diskfs-test" });
-
-    _ = h.addScriptTest(ctx, "heartbeat-test", "Reincarnation with heartbeat liveness detection", &.{ "bash", "tools/proc/heartbeat-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-heartbeat-test", "Run LLVM-lowered heartbeat restart detection under QEMU", &.{ "bash", "tools/proc/heartbeat-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "timeout-test", "IPC timeout: bounded receive, no infinite block", &.{ "bash", "tools/ipc/timeout-test.sh", "zig-out/bin/mcc", "c" });
 
@@ -543,10 +535,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-cap-test", "Run LLVM-lowered capability least-privilege server under QEMU", &.{ "bash", "tools/proc/cap-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "restart-test", "reincarnation: supervisor restarts a crashed server", &.{ "bash", "tools/proc/restart-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-restart-test", "Run LLVM-lowered reincarnation restart under QEMU", &.{ "bash", "tools/proc/restart-test.sh", "zig-out/bin/mcc", "llvm" });
-
     _ = h.addScriptTest(ctx, "arc-test", "Arc<T> shared ownership: clone/last-drop-frees, handles leak-checked", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arc-test" });
 
     _ = h.addScriptTest(ctx, "arc-pkt-test", "packet Arc-shared between two consumers (skb/mbuf pattern)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arc-pkt-test" });
@@ -615,17 +603,9 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-preempt-test", "Run LLVM-lowered timer-driven preemption under QEMU", &.{ "bash", "tools/proc/preempt-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
-    _ = h.addScriptTest(ctx, "proc-supervisor-test", "Run the running supervisor loop (proc_supervisor_scan) over 3 supervised PROCESSES under QEMU: one healthy, one restarted once, one given up exactly once", &.{ "bash", "tools/proc/proc-supervisor-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-proc-supervisor-test", "Run the LLVM-lowered running supervisor loop (proc_supervisor_scan) over 3 supervised PROCESSES under QEMU", &.{ "bash", "tools/proc/proc-supervisor-test.sh", "zig-out/bin/mcc", "llvm" });
-
     _ = h.addScriptTest(ctx, "ledger-test", "Run the unified resource ledger (charge/release + overflow-edge) under QEMU", &.{ "bash", "tools/proc/ledger-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-ledger-test", "Run the LLVM-lowered unified resource ledger under QEMU", &.{ "bash", "tools/proc/ledger-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "soak-test", "Run the single-boot soak workload (thousands of spawn/charge/supervise/reclaim/reap cycles return to baseline, no leak/overflow) under QEMU", &.{ "bash", "tools/proc/soak-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-soak-test", "Run the LLVM-lowered single-boot soak workload under QEMU", &.{ "bash", "tools/proc/soak-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "syscall-test", "Run the ecall syscall dispatch skeleton under QEMU", &.{ "bash", "tools/lang/syscall-test.sh", "zig-out/bin/mcc", "c" });
 

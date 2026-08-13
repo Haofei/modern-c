@@ -138,10 +138,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-async-net-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-select-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-usched-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-heartbeat-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-privilege-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-cap-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-restart-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-contain-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-cow-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-isolation-test"));
@@ -152,12 +150,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-backtrace-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-driver-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-preempt-test"));
-    // llvm-proc-supervisor-test runs the LLVM-lowered running supervisor loop (proc_supervisor_scan) under QEMU.
-    m0_full_step.dependOn(ctx.cmd("llvm-proc-supervisor-test"));
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
     m0_full_step.dependOn(ctx.cmd("llvm-ledger-test"));
-    // llvm-soak-test runs the LLVM-lowered single-boot soak workload under QEMU.
-    m0_full_step.dependOn(ctx.cmd("llvm-soak-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-page-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-heap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-paging-test"));
@@ -363,7 +357,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("signal-test"));
     m0_full_step.dependOn(ctx.cmd("privilege-test"));
     m0_full_step.dependOn(ctx.cmd("timeout-test"));
-    m0_full_step.dependOn(ctx.cmd("heartbeat-test"));
     m0_full_step.dependOn(ctx.cmd("diskfs-test"));
     m0_full_step.dependOn(ctx.cmd("mmap-test"));
     m0_full_step.dependOn(ctx.cmd("demand-test"));
@@ -405,9 +398,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("plugin-test"));
     m0_full_step.dependOn(ctx.cmd("endpoint-test"));
     m0_full_step.dependOn(ctx.cmd("sched-difftest"));
-    m0_full_step.dependOn(ctx.cmd("supervisor-test"));
     m0_full_step.dependOn(ctx.cmd("registry2-test"));
-    m0_full_step.dependOn(ctx.cmd("manifest-test"));
     m0_full_step.dependOn(ctx.cmd("scheduler-test"));
     m0_full_step.dependOn(ctx.cmd("info-test"));
     m0_full_step.dependOn(ctx.cmd("granttab-test"));
@@ -471,7 +462,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("async-net-test"));
     m0_full_step.dependOn(ctx.cmd("async-select-test"));
     m0_full_step.dependOn(ctx.cmd("cap-test"));
-    m0_full_step.dependOn(ctx.cmd("restart-test"));
     m0_full_step.dependOn(ctx.cmd("arc-pkt-test"));
     m0_full_step.dependOn(ctx.cmd("arena-test"));
     m0_full_step.dependOn(ctx.cmd("genref-test"));
@@ -524,13 +514,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("sched-test"));
     // preempt-test runs the timer-driven preemptive scheduler under QEMU.
     m0_full_step.dependOn(ctx.cmd("preempt-test"));
-    // proc-supervisor-test runs the running supervisor loop (proc_supervisor_scan) over supervised PROCESSES under QEMU.
-    m0_full_step.dependOn(ctx.cmd("proc-supervisor-test"));
     // ledger-test runs the unified resource ledger (charge/release + overflow-edge) under QEMU.
     m0_full_step.dependOn(ctx.cmd("ledger-test"));
-    // soak-test runs the single-boot soak workload (thousands of spawn/charge/supervise/reclaim/
-    // reap cycles return to baseline; no leak, no counter-overflow trap) under QEMU.
-    m0_full_step.dependOn(ctx.cmd("soak-test"));
     // syscall-test runs the ecall syscall dispatch skeleton under QEMU.
     m0_full_step.dependOn(ctx.cmd("syscall-test"));
     // user-test runs the M->U privilege drop + user-mode syscalls under QEMU.

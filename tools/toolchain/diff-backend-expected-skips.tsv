@@ -26,14 +26,12 @@ net-rx-test	current host/corpus C build gap; additional skipped fixtures remain 
 tcp-conn-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 socket-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 info-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-manifest-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 registry2-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 posix-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 log-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 scan-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 symbols-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 smprq-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-supervisor-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 scheduler-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 time-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 vqfault-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
