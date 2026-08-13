@@ -1,8 +1,8 @@
 # Async/await scope
 
 Current scope: compiler async lowering and the pure `std/task.mc` future vocabulary remain in the
-language core. The former kernel completion-broker runtime and QEMU broker gates were removed from
-the compiler-core workload.
+language core. Kernel async runtimes and QEMU async runtime gates were removed from the
+compiler-core workload.
 
 Retained evidence:
 
@@ -15,9 +15,8 @@ Retained evidence:
 
 Out of scope for the core goal:
 
-- kernel park/wake completion brokers;
+- kernel park/wake completion runtimes;
 - IRQ-backed async runtime demos;
-- broker-backed `ReqFut` leaves;
 - select/cancel-the-loser over real kernel slots;
 - device IRQ integration.
 

@@ -3,7 +3,7 @@
 // touch a receiver's memory and the receiver learns the sender's pid from `from` (stamped
 // by the kernel, unforgeable). Each process has a multi-slot mailbox; send blocks (yields)
 // only when the mailbox is full, then wakes a blocked receiver. Receive can take any
-// message or filter by sender. The reserved IPC tags (TAG_DEAD / TAG_QUANTUM) live here.
+// message or filter by sender. The reserved IPC tag (TAG_DEAD) lives here.
 //
 // The process table, endpoints, the block/unblock + yield mechanism, and the pure Message
 // data leaf (kernel/core/ipc.mc) live in their own modules. Split out of process.mc (pure move).
@@ -21,14 +21,6 @@ const TAG_DEAD: u32 = 0xDEAD;
 
 export fn ipc_tag_dead() -> u32 {
     return TAG_DEAD;
-}
-
-// The IPC tag the kernel sends to a process's scheduler service when its quantum expires; the
-// notification's `from` is the expired process, so the scheduler knows whom to reschedule.
-pub const TAG_QUANTUM: u32 = 0xDEAD + 1;
-
-export fn ipc_tag_quantum() -> u32 {
-    return TAG_QUANTUM;
 }
 
 // ----- kernel-mediated IPC (the microkernel backbone) -----
@@ -111,7 +103,7 @@ fn ipc_send_ep_id(t: *mut ProcTable, ep: Endpoint, tag: u32, a0: u64, a1: u64, a
     switch endpoint_slot(t, ep) {
         ok(dst) => {
             let msg: Message = proc_make_msg(t, tag, a0, a1, a2, call_id);
-            return ok(mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid))
+            return ok(mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid));
         }
         err(e) => {
             return err(.DeadEndpoint);
@@ -179,7 +171,7 @@ export fn ipc_notify(t: *mut ProcTable, dst_pid: u32, tag: u32) -> bool {
         return false; // never notify a free/exited/dead slot
     }
     let msg: Message = proc_make_msg(t, tag, 0, 0, 0, 0);
-    return mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid)
+    return mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid);
 }
 
 // Endpoint-validated notify: rejects a stale endpoint with DeadEndpoint; ok(false) = dropped
@@ -188,7 +180,7 @@ pub fn ipc_notify_ep(t: *mut ProcTable, ep: Endpoint, tag: u32) -> Result<bool, 
     switch endpoint_slot(t, ep) {
         ok(dst) => {
             let msg: Message = proc_make_msg(t, tag, 0, 0, 0, 0);
-            return ok(mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid))
+            return ok(mailbox_post(Message, IPC_SLOTS, &t.procs[dst].inbox, msg, t.procs[t.current].pid));
         }
         err(e) => {
             return err(.DeadEndpoint);

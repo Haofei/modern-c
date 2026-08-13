@@ -46,9 +46,8 @@ export fn proc_next_runnable_probe(t: *mut ProcTable, from: usize) -> usize {
     }
 }
 
-// ----- userspace-set scheduling policy. The kernel keeps the *mechanism* (context
-// switch); the *policy* (per-process priority) is set from outside — a scheduler server
-// — and the kernel just runs the highest-priority runnable process. -----
+// ----- scheduling policy knobs. The validation kernel keeps the mechanism small:
+// priority and quantum can be set explicitly, without a scheduler-service protocol. -----
 
 // Set a process's scheduling priority (the policy decision; higher runs first).
 export fn proc_set_priority(t: *mut ProcTable, pid: u32, prio: u32) -> void {
@@ -58,22 +57,17 @@ export fn proc_set_priority(t: *mut ProcTable, pid: u32, prio: u32) -> void {
     }
 }
 
-// schedctl: the single sanctioned path for setting scheduling policy (priority, quantum, and
-// the scheduler endpoint to notify on expiry). The kernel owns the mechanism (run queues,
-// context switch); policy is set here by the scheduler service, not poked field-by-field by
-// arbitrary code — so accounting and quantum stay consistent.
-export fn proc_schedctl(t: *mut ProcTable, pid: u32, prio: u32, quantum: u32, sched_endpoint: u32) -> void {
+// schedctl: the single path for setting the retained scheduling knobs.
+export fn proc_schedctl(t: *mut ProcTable, pid: u32, prio: u32, quantum: u32) -> void {
     let p: usize = pid as usize;
     if p < t.count {
         t.procs[p].priority = prio;
         t.procs[p].quantum = quantum;
-        t.procs[p].sched_endpoint = sched_endpoint;
     }
 }
 
 // Account one timer tick to the current process; returns true if its quantum just expired
-// (the kernel marks it out-of-time and the timer path notifies its scheduler endpoint to
-// pick the next process / refresh the quantum — policy stays in the scheduler service).
+// (the caller can decide whether to yield, refresh, or keep running).
 //
 // `#[irq_context]`: bounded counter/quantum updates on the current slot, no blocking or context
 // switch — so the timer ISR can account a tick directly (see proc_preempt_tick). Callable from
@@ -107,36 +101,12 @@ export fn proc_ticks(t: *mut ProcTable, pid: u32) -> u64 {
     }
     return 0;
 }
-export fn proc_sched_endpoint(t: *mut ProcTable, pid: u32) -> u32 {
-    let p: usize = pid as usize;
-    if p < t.count {
-        return t.procs[p].sched_endpoint;
-    }
-    return 0;
-}
-
-// Refresh a process's quantum (the scheduler service's policy action after an expiry).
+// Refresh a process's quantum.
 export fn proc_refresh_quantum(t: *mut ProcTable, pid: u32, quantum: u32) -> void {
     let p: usize = pid as usize;
     if p < t.count {
         t.procs[p].quantum = quantum;
     }
-}
-
-// Timer hook: account a tick to the current process and, when its quantum just expired (edge-
-// triggered), notify its scheduler service (TAG_QUANTUM, from = the expired process) so the
-// scheduler can apply policy — refresh the quantum, demote/boost, reassign CPU. The kernel
-// keeps the mechanism (accounting + the edge); the *policy* lives in the scheduler service.
-// Returns true on the expiry edge.
-export fn proc_tick_notify(t: *mut ProcTable) -> bool {
-    let expired: bool = proc_tick(t);
-    if expired {
-        let sched: u32 = t.procs[t.current].sched_endpoint;
-        if sched != 0 { // 0 = no scheduler service assigned
-            ipc_notify(t, sched, TAG_QUANTUM); // fire-and-forget expiry notification
-        }
-    }
-    return expired;
 }
 
 // ----- fair-share scheduling + throttle (alternative pick; purely additive) -----

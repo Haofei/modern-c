@@ -1,7 +1,7 @@
 // std/task.mc — pure async TASK VOCABULARY (async/await roadmap, Phase A).
 //
 // This module is PURE: it knows nothing about ProcTable, IRQs, wait queues, runtime slots,
-// or syscalls — only how to *poll* and *compose* futures. Kernel park/wake broker integration was removed from the core workload; `async`/`await` syntax is a stackless state-machine transform. Everything here is FIXED-SIZE with no hidden heap.
+// or syscalls — only how to *poll* and *compose* futures. `async`/`await` syntax is a stackless state-machine transform. Everything here is FIXED-SIZE with no hidden heap.
 //
 // Model. A `Future` is anything that can be polled to advance; `poll` returns `true` once the
 // future is COMPLETE and must keep returning `true` afterward (idempotent). `poll` MUST NOT
@@ -26,15 +26,15 @@ trait Future {
     fn cancel(self: *mut Self) -> void;
 }
 
-// ---- leaf: a request id mapped to a pending future (the broker seam, kept pure) ----
+// ---- leaf: a slot id mapped to a pending future ----
 //
 // `SlotFuture` is the shape "a submitted request id maps to a pending future". It stays pure
 // by INJECTING the completion source as `done(id) -> bool`: std never learns what the source
-// is (a runtime can supply `done` from any bounded completion table). Fixed-size — one per in-flight request — so callers keep the live count <= MAX_INFLIGHT.
+// is. Fixed-size — callers own any table capacity policy.
 //
 // Cancellation is ALSO injected, as `cancel(id) -> void` (a runtime supplies one that frees the injected resource). `slot_future_cancel` is what a generated
 // `async fn`'s `cancel` walks down to when this is the leaf still in flight: dropping a pending
-// future must release its runtime slot, or it leaks (see the injected cancel callback).
+// future must release its injected resource, or it leaks (see the injected cancel callback).
 // `cancel` is only meaningful while pending — once `ready`, the slot is already consumed.
 struct SlotFuture {
     id: u64,
@@ -108,10 +108,9 @@ impl Future for Join2 {
 // ---- combinator: race2 — complete when EITHER child completes ----
 //
 // `winner` records which finished first (0 = a, 1 = b; -1 while undecided). When a winner is
-// decided, the type-erased LOSER is CANCELLED through the `Future` vtable (E1: `cancel` is now a
-// trait method), so the loser's in-flight resource — e.g. a broker MAX_INFLIGHT slot — is reclaimed
-// rather than leaked. This is the cancellation-dependent agent primitive: "race two tool calls,
-// cancel the loser" (timeout is the same shape — race the op against a deadline future).
+// decided, the type-erased LOSER is CANCELLED through the `Future` vtable, so the loser's
+// in-flight resource is reclaimed rather than leaked. Timeout is the same shape — race the
+// operation against a deadline future.
 struct Race2 {
     a: *mut dyn Future,
     b: *mut dyn Future,

@@ -32,8 +32,8 @@ extern fn mc_dma_free_base(dev_addr: DmaAddr, cpu_addr: PAddr, len: usize) -> vo
 extern fn mc_dma_clean_for_device_base(dev_addr: DmaAddr, cpu_addr: PAddr, len: usize) -> void;
 extern fn mc_dma_invalidate_for_cpu_base(dev_addr: DmaAddr, len: usize) -> usize;
 
-// Why a non-trapping DMA allocation could not be satisfied. Production broker/device paths
-// use `try_alloc` to turn pool exhaustion into this typed error instead of trapping.
+// Why a non-trapping DMA allocation could not be satisfied. `try_alloc` turns pool
+// exhaustion into this typed error instead of trapping.
 pub enum DmaError {
     OutOfMemory, // the DMA pool had no room for `len` bytes (or its single buffer is in use)
 }
@@ -49,7 +49,7 @@ pub fn alloc(len: usize) -> CpuBuffer {
 
 // Fallible allocation: returns a typed `DmaError.OutOfMemory` on pool exhaustion instead of
 // trapping. Mints the `CpuBuffer` exactly like `alloc` when the provider returns a non-zero
-// base. For production broker/device paths that must degrade gracefully under load.
+// base. Useful for validation paths that must degrade gracefully under load.
 pub fn try_alloc(len: usize) -> Result<CpuBuffer, DmaError> {
     let base: usize = mc_dma_alloc_base_try(len);
     if base == 0 {

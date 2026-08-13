@@ -148,14 +148,6 @@ This trust base is small relative to a monolithic kernel, which is the point
 
 ```
             ┌─────────────────────────────────────────────────────────┐
-            │  Confined apps (validation workload only)   │
-            ├─────────────────────────────────────────────────────────┤
-   above    │  Policy plane / product runtime (out of current scope)│   ← not in kernel
- ───────────┼─────────────────────────────────────────────────────────┤
-            │  Services (service-shaped, kernel-linked today;          │
-            │            migration target: userspace processes)        │
-            │            VFS · net server · tool server                │
-   kernel   ├─────────────────────────────────────────────────────────┤
             │  CORE: process · scheduler · IPC · capability           │
             │        memory (page/heap/paging)                         │
             ├─────────────────────────────────────────────────────────┤
@@ -165,9 +157,8 @@ This trust base is small relative to a monolithic kernel, which is the point
                          riscv64 (full) · x86_64 / aarch64 (partial)
 ```
 
-Today the "services" band is **kernel-linked and service-*shaped*** (registry + supervisor
-+ manifests give it MINIX structure), with migration to true userspace processes as a
-roadmap item. The diagram's placement reflects intent, not present privilege separation.
+The diagram intentionally omits product service planes. They are not part of the current
+language-validation kernel.
 
 ---
 
@@ -313,7 +304,7 @@ struct Process {
     wait_slot, wait_gen,
     allow_mask: Mask32,                    // bit p = may IPC-send to pid p
     kcall_mask: Mask32,                    // bit op = may invoke kernel call op
-    priority, quantum, ticks, sched_endpoint,
+    priority, quantum, ticks,
     fds: FdSpace,                          // inherited on spawn, preserved on exec
     macct: ResourceAccount,
 }
@@ -337,9 +328,9 @@ reused; `endpoint_slot` fails `DeadEndpoint` on generation mismatch. Gate: `endp
 
 ### 10.3 Runtime ABI fixtures — GATED, not a kernel product layer
 
-The dedicated kernel policy runtime, broker, and driver-as-server fixtures have been removed.
+The dedicated kernel policy runtime and driver-as-server fixtures have been removed.
 Kernel tests now use smaller runtime ABI fixtures to exercise userspace calls and C/LLVM lowering.
-These fixtures are not a production capability broker and do not define a native OS surface.
+These fixtures do not define a native OS surface.
 
 Gates: `uaccess-pt-test`.
 
@@ -353,7 +344,7 @@ current core workload.
   (`proc_pick_fair`: least effective ticks, cost = `(ticks + throttle_penalty) /
   max(priority,1)`).
 - **Preemption:** timer-driven via the CLINT trap path (`preempt_runtime.c`,
-  `TICK_INTERVAL`); `proc_tick_notify` sends `TAG_QUANTUM` to the scheduler endpoint.
+  `TICK_INTERVAL`); `proc_tick` exposes the quantum-expiry edge to the caller.
 - **Blocking:** `proc_block`/`proc_unblock`; `proc_yield_or_idle` sleeps (`wfi`) rather than
   spins.
 - **Throttle / pause:** `proc_throttle` (deprioritize), `proc_pause`/`proc_resume`
@@ -419,10 +410,9 @@ with filtered receive.
 | `ipc_receive` / `_timeout` / `_from` | Blocking/filtered receive (sleeps, doesn't spin). |
 | `ipc_reply` | Replies to the *requester's endpoint* (slot+gen); dropped if reused (fail-closed). |
 
-Reserved tags: `TAG_DEAD = 0xDEAD` (synthesized when an awaited endpoint dies, so a receiver
-never blocks forever) and `TAG_QUANTUM = 0xDEAD+1`. IPC is **synchronous rendezvous with
-async notify**; messages are **copied, not zero-copy** (an optimized fast path is roadmap —
-vision § fast transport). Gates: `ipc-result-test`, `endpoint-test`.
+Reserved tag: `TAG_DEAD = 0xDEAD` (synthesized when an awaited endpoint dies, so a receiver
+never blocks forever). IPC is **synchronous rendezvous with async notify**; messages are
+**copied, not zero-copy**. Gates: `ipc-result-test`, `endpoint-test`.
 
 ---
 
@@ -548,7 +538,7 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | mmap / demand paging / COW | mmap **GATED**; demand paging & COW **DEMO-SCOPE** (single-region / one-page) |
 | Process lifecycle, attenuation, endpoints | **GATED** · demo-scale (`MAX_PROCS=8`) |
 | Scheduler (RR/priority/fair-share, preemption) | **GATED**; SMP product fixtures removed |
-| User isolation + runtime ABI | **DEMO-SCOPE**. Remaining request ops exercise syscall/async/runtime mechanics, not part of a product broker. |
+| User isolation + runtime ABI | **DEMO-SCOPE**. Remaining fixtures exercise syscall/runtime mechanics only. |
 | Capabilities and std grants | **library/spec scoped** |
 | IPC (sync rendezvous + notify, endpoint-safe) | **GATED** (copying, not zero-copy) |
 | Provenance + cap audit | **GATED** (kcall audits allowed+denied; tool calls audit dispatched only) |
@@ -576,14 +566,8 @@ scope. Gate names are verified against `build.zig`.
 
 ## 27. Roadmap
 
-Kernel product roadmap items are out of the current language-oriented scope. Historical frontier items:
-
-- **Hierarchical VFS** — *partially delivered*: `treefs.mc` provides real paths (nested
-  mkdir/create, `.`/`..`, `getdents`); the remaining work is mounting it as the primary VFS
-  surface and broadening the catalog (read/ls/grep/edit/find over real paths).
-- **Native tool catalog** — out of current language-kernel scope. The kernel tree now keeps only
-  demo-scope tool ops needed to exercise the userspace ABI and async runtime.
-- **Confined app execution** — retained only as validation workload: userspace ELF loading, syscall confinement, and C/LLVM backend parity are exercised by narrow app fixtures. Product runtimes and extra language engines are out of current scope.
-- **IPC fast path** — co-designed with sampling provenance.
+Kernel product roadmap items are out of the current language-oriented scope. Current kernel
+work should stay limited to fixtures that expose compiler, ABI, unsafe-boundary, or backend
+lowering behavior.
 
 Current roadmap: [`../todo.md`](../todo.md).

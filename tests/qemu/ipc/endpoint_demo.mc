@@ -79,10 +79,9 @@ export fn endpoint_run() -> u32 {
     proc_unblock(&g_t, 1, BLOCK_RECV);
     if proc_state_code(&g_t, 1) != 1 { pass = 0; } // Ready again
 
-    // ---- #2 schedctl: scheduling policy set via one path; quantum accounting ----
-    proc_schedctl(&g_t, 1, 7, 3, 4); // priority 7, quantum 3, scheduler endpoint 4
+    // ---- #2 schedctl: scheduling knobs set via one path; quantum accounting ----
+    proc_schedctl(&g_t, 1, 7, 3); // priority 7, quantum 3
     if proc_quantum(&g_t, 1) != 3 { pass = 0; }
-    if proc_sched_endpoint(&g_t, 1) != 4 { pass = 0; }
     // tick the current process (bootstrap, default quantum 10) until its quantum expires
     var k: u32 = 0;
     var expired: bool = false;

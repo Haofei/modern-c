@@ -348,7 +348,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     // next_runnable() round-robin pick. In the re-land the pick path is unchanged (design B),
     // so this stays the standing baseline tool; the algorithmic win was the O(children)
-    // supervisor cascade, not the pick.
+    // process-death cleanup path, not the pick.
 
 
     // fragment-and-coalesce free sequence that drives the free list to capacity — the
@@ -365,7 +365,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU (LLVM backend): a user-derived scalar must pass checked_len/checked_index/validate_bound before driving a copy length or index", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test" });
 
-    // (delay 1) request; the broker delivers fast first, so the resolve order is "FS". Both backends.
+    // (delay 1) request; retained only as a historical async ordering note.
 
 
     // completion carries a bogus id; the host must fail loudly ("host: unknown completion id").
@@ -405,9 +405,7 @@ pub fn register(ctx: *h.Ctx) void {
     // CALL_INDIRECT_OVERLONG support, so stock wasi-libc output loads without feature-pinning.
 
 
-    // async happy path in a single run — host_call (SUM resolve) -> host_fs_read (real cap-checked FS
-    // read) -> host_sleep (async timeout) -> cancel (in-flight ECANCELED) — and prints AGENT-SMOKE-OK
-    // only if every stage passed AND the host drained to inflight=0 with no unknown completion id.
+    // async happy path in a single run — retained host async validation note.
 
 
     // post-completion cancel is denied, a failed-submit cancel hits nothing, a late completion after

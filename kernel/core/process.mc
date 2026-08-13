@@ -92,7 +92,6 @@ struct Process {
     priority: u32,               // scheduling priority (policy set externally; higher runs first)
     quantum: u32,                // remaining scheduling quantum in ticks (0 = expired)
     ticks: u64,                  // saturating long-running accounting; never traps on uptime
-    sched_endpoint: u32,         // the scheduler service to notify on quantum expiry (0 = none)
     throttle: u32,               // fair-share throttle penalty (added to effective ticks; see proc_throttle)
     fds: FdSpace,                // open file descriptors; copied to a child on spawn (fork), kept across exec
     macct: ResourceAccount,      // per-process memory account; reset on spawn (fresh, from zero) and on exit
@@ -221,7 +220,6 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].priority = 0;
         t.procs[i].quantum = QUANTUM_DEFAULT;
         t.procs[i].ticks = 0;
-        t.procs[i].sched_endpoint = 0;
         t.procs[i].throttle = 0;
         fd_init(&t.procs[i].fds);
         resacct_init(&t.procs[i].macct, MEM_QUOTA_DEFAULT);
@@ -304,8 +302,7 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     t.procs[slot].priority = 0;
     t.procs[slot].quantum = QUANTUM_DEFAULT;
     t.procs[slot].ticks = 0;
-    t.procs[slot].sched_endpoint = 0;
-    t.procs[slot].throttle = 0;       // a reused slot must not inherit the old process's scheduler state
+        t.procs[slot].throttle = 0;       // a reused slot must not inherit the old process's scheduler state
     // fork fd semantics: the child inherits a COPY of the spawner's open descriptors at the
     // same fd numbers, sharing the underlying resources. Clear any stale fds from a reaped
     // slot first. (Empty child + equal capacity ⇒ inherit can never overflow.)
