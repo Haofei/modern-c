@@ -1374,6 +1374,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn replacementSourceFromSpan(": 1,
         "pub fn replacementSourceMatchesSpan(": 1,
     },
+    "src/syntax_bridge.zig": {
+        "Transitional backend syntax-shape bridge.": 1,
+        "pub fn deferExprForRefInBlock(": 1,
+    },
     "src/lower_c.zig": {
         "VerifiedProgram.init(typed_mir": 1,
         "program.syntax_module": 0,
@@ -1764,6 +1768,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         ".{ .trivial_expr = expr }": 0,
         ".{ .call_free_expr = expr }": 0,
         ".{ .raw_expr = expr }": 0,
+        "fn deferExprForRefInBlock(": 0,
         "try ownership_facts.makeDropPointerCall": 0,
         "ownership_facts.autoDropCleanupForLocalName": 0,
         "ownership_facts.autoDropMoveCancellation": 0,
@@ -2719,6 +2724,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         ".{ .trivial_expr = expr }": 0,
         ".{ .call_free_expr = expr }": 0,
         ".{ .raw_expr = expr }": 0,
+        "fn deferExprForRefInBlock(": 0,
         "try ownership_facts.makeDropPointerCall": 0,
         "ownership_facts.autoDropCleanupForLocalName": 0,
         "ownership_facts.autoDropMoveCancellation": 0,

@@ -91,7 +91,6 @@ const GlobalAccess = lower_c_model.GlobalAccess;
 const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
 const isSourceSpan = mir_source_bridge.isSourceSpan;
 const sourcePointFromOptionalSpan = mir_source_bridge.sourcePointFromOptionalSpan;
-const sourcePointMatchesSpan = mir_source_bridge.sourcePointMatchesSpan;
 const hasNakedAttr = attr_syntax.hasNakedAttr;
 const backendNameOverride = attr_syntax.backendNameOverride;
 const exprContainsCall = lower_c_expr.exprContainsCall;
@@ -3545,7 +3544,7 @@ pub const CEmitter = struct {
         const function = self.currentMirFunction() orelse return null;
         if (!mir.deferCleanupRefValid(function.*, ref)) return null;
         const body = self.current_function_body orelse return null;
-        return deferExprForRefInBlock(body, ref);
+        return syntax_bridge.deferExprForRefInBlock(body, ref);
     }
 
     fn ordinaryDeferDirectCallCleanup(self: *CEmitter, function: *const mir.Function, expr: ast_bridge.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedCEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {
@@ -8754,37 +8753,6 @@ pub const CEmitter = struct {
         return self.arrayLenTextForExpr(expr);
     }
 };
-
-fn deferExprForRefInBlock(block: ast_bridge.Block, ref: mir.DeferCleanupRef) ?ast_bridge.Expr {
-    for (block.items) |stmt| {
-        if (stmt.kind == .@"defer" and sourcePointMatchesSpan(ref.source, stmt.span)) return stmt.kind.@"defer";
-        switch (stmt.kind) {
-            .block, .comptime_block, .unsafe_block => |nested| {
-                if (deferExprForRefInBlock(nested, ref)) |expr| return expr;
-            },
-            .contract_block => |contract| {
-                if (deferExprForRefInBlock(contract.block, ref)) |expr| return expr;
-            },
-            .if_let => |node| {
-                if (deferExprForRefInBlock(node.then_block, ref)) |expr| return expr;
-                if (node.else_block) |else_block| {
-                    if (deferExprForRefInBlock(else_block, ref)) |expr| return expr;
-                }
-            },
-            .@"switch" => |node| {
-                for (node.arms) |arm| switch (arm.body) {
-                    .block => |nested| if (deferExprForRefInBlock(nested, ref)) |expr| return expr,
-                    .expr => {},
-                };
-            },
-            .loop => |node| {
-                if (deferExprForRefInBlock(node.body, ref)) |expr| return expr;
-            },
-            else => {},
-        }
-    }
-    return null;
-}
 
 fn spanFromSourcePoint(source: mir.SourcePoint) ast_bridge.Span {
     return .{

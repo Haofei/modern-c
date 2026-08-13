@@ -522,6 +522,7 @@ REQUIRED_ANCHORS = {
     "src/syntax_bridge.zig": (
         "Transitional backend syntax-shape bridge.",
         "expression-shape helper access behind this narrow bridge",
+        "pub fn deferExprForRefInBlock(",
     ),
     "src/type_bridge.zig": (
         "Transitional backend type-shape bridge.",
