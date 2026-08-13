@@ -197,19 +197,9 @@ RULES: tuple[Rule, ...] = (
         "third-party license checker changes need the license manifest gate",
     ),
     Rule(
-        (
-            "docs/profile-manifest.json",
-            "docs/scope-control-plan.md",
-            "docs/review-risk-register.yaml",
-            "tools/toolchain/profile-manifest-test.py",
-        ),
-        ("profile-manifest-test",),
-        "profile and risk-governance changes need the profile manifest gate",
-    ),
-    Rule(
         ("docs/component-manifest.json",),
-        ("profile-manifest-test", "vendoring-test"),
-        "component manifest changes need profile linkage and vendored provenance gates",
+        ("vendoring-test",),
+        "component manifest changes need vendored provenance gates",
     ),
     Rule(
         (

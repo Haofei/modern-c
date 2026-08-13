@@ -2,11 +2,8 @@
 
 This is the active code-facing refactoring plan for `modern-c`.
 
-Do not create another remediation/status roadmap for the same work. Open risk
-state lives in [`review-risk-register.yaml`](review-risk-register.yaml). Product
-profile scope lives in [`profile-manifest.json`](profile-manifest.json) and
-[`scope-control-plan.md`](scope-control-plan.md). This file only defines the
-execution order.
+Do not create another remediation/status roadmap for the same work. This file
+defines the execution order for code-facing compiler-core cleanup.
 
 ## Goal
 
@@ -153,8 +150,6 @@ status truth.
 
 Authoritative inputs:
 
-- `docs/review-risk-register.yaml`;
-- `docs/profile-manifest.json`;
 - `docs/component-manifest.json`;
 - `docs/gate-manifest.json`.
 

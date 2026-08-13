@@ -66,7 +66,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTestOpts(ctx, "vendoring-test", "Check vendored dependency provenance and license docs", &.{ "python3", "tools/toolchain/vendoring-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "third-party-licenses-test", "Check the aggregated third-party license manifest", &.{ "python3", "tools/toolchain/third-party-licenses-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "no-committed-private-keys-test", "Reject committed PEM private keys", &.{ "python3", "tools/toolchain/no-committed-private-keys.py" }, .{ .install = false });
-    _ = h.addScriptTestOpts(ctx, "profile-manifest-test", "Check product profiles reference known risks and registered gates", &.{ "python3", "tools/toolchain/profile-manifest-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "gate-manifest-test", "Check the gate manifest matches registered build tiers", &.{ "python3", "tools/toolchain/gate-manifest-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "qmp-ordering-test", "Verify QMP command responses and asynchronous events are never discarded under legal reorderings", &.{ "python3", "tools/qemu/test_qmp_hotplug.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "numeric-comptime-matrix-test", "Check width/domain arithmetic boundaries across every fixed integer width", &.{ "python3", "tools/toolchain/numeric-comptime-matrix.py", "zig-out/bin/mcc" }, .{ .install = true });

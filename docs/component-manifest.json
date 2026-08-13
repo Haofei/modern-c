@@ -1,88 +1,60 @@
 {
   "schema_version": 1,
   "source_of_truth": "docs/component-manifest.json",
-  "risk_register": "docs/review-risk-register.yaml",
   "components": [
     {
       "id": "zig-compiler",
       "category": "toolchain",
       "owner": "compiler",
-      "summary": "Zig compiler used to build and test the stage0 implementation.",
-      "profiles": [
-        "compiler-subset"
-      ]
+      "summary": "Zig compiler used to build and test the stage0 implementation."
     },
     {
       "id": "clang-for-c-artifact-checks",
       "category": "toolchain",
       "owner": "compiler",
-      "summary": "Clang used to compile generated C artifacts in compiler-subset gates.",
-      "profiles": [
-        "compiler-subset"
-      ]
+      "summary": "Clang used to compile generated C artifacts in compiler-subset gates."
     },
     {
       "id": "llvm-for-differential-checks",
       "category": "toolchain",
       "owner": "compiler",
-      "summary": "LLVM tools used by C/LLVM differential checks for the admitted compiler subset.",
-      "profiles": [
-        "compiler-subset"
-      ]
+      "summary": "LLVM tools used by C/LLVM differential checks for the admitted compiler subset."
     },
     {
       "id": "llvm-as",
       "category": "toolchain",
       "owner": "backend",
-      "summary": "LLVM assembler used by the experimental LLVM backend profile.",
-      "profiles": [
-        "llvm-experimental"
-      ]
+      "summary": "LLVM assembler used by the experimental LLVM backend profile."
     },
     {
       "id": "llc",
       "category": "toolchain",
       "owner": "backend",
-      "summary": "LLVM static compiler used by LLVM object and optimizer gates.",
-      "profiles": [
-        "llvm-experimental"
-      ]
+      "summary": "LLVM static compiler used by LLVM object and optimizer gates."
     },
     {
       "id": "clang",
       "category": "toolchain",
       "owner": "backend",
-      "summary": "Clang used by LLVM profile host and object checks.",
-      "profiles": [
-        "llvm-experimental"
-      ]
+      "summary": "Clang used by LLVM profile host and object checks."
     },
     {
       "id": "python3",
       "category": "toolchain",
       "owner": "developer-tools",
-      "summary": "Python runtime used by CI scripts and local verification helpers.",
-      "profiles": [
-        "developer-tools"
-      ]
+      "summary": "Python runtime used by CI scripts and local verification helpers."
     },
     {
       "id": "workspace-local-mcc",
       "category": "internal",
       "owner": "developer-tools",
-      "summary": "Workspace-built mcc binary invoked by local developer-tool gates.",
-      "profiles": [
-        "developer-tools"
-      ]
+      "summary": "Workspace-built mcc binary invoked by local developer-tool gates."
     },
     {
       "id": "qemu",
       "category": "emulator",
       "owner": "kernel",
-      "summary": "QEMU surrogate execution environment for kernel and Agent gates.",
-      "profiles": [
-        "kernel-qemu"
-      ]
+      "summary": "QEMU surrogate execution environment for kernel and Agent gates."
     },
     {
       "id": "opensbi",
@@ -91,10 +63,7 @@
       "summary": "OpenSBI firmware boundary used by S-mode QEMU integration workloads.",
       "upstream": "https://github.com/riscv-software-src/opensbi",
       "revision": "environment-provided",
-      "license": "BSD-2-Clause",
-      "profiles": [
-        "kernel-qemu"
-      ]
+      "license": "BSD-2-Clause"
     }
   ]
 }

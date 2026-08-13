@@ -1,7 +1,6 @@
 {
   "schema_version": 1,
   "source_of_truth": "docs/gate-manifest.json",
-  "profiles": "docs/profile-manifest.json",
   "scope": "compiler-core-and-governance",
   "tiers": {
     "pr": {
@@ -33,7 +32,6 @@
         "mcc-cli-test",
         "mcc-build-test",
         "mcmap-test",
-        "profile-manifest-test",
         "ownership-experimental-surface-inventory-test",
         "kernel-scope-inventory-test",
         "std-api-docs-test",
@@ -52,9 +50,6 @@
       "required_tools": [
         "python3"
       ],
-      "blocking_profiles": [
-        "compiler-subset"
-      ],
       "build_tiers": [
         "m0",
         "fast",
@@ -71,9 +66,6 @@
         "python3",
         "mcc"
       ],
-      "blocking_profiles": [
-        "compiler-subset"
-      ],
       "build_tiers": [
         "fast",
         "c0"
@@ -87,9 +79,6 @@
       "tier": "pr",
       "required_tools": [
         "python3"
-      ],
-      "blocking_profiles": [
-        "compiler-subset"
       ],
       "build_tiers": [
         "m0",
@@ -106,9 +95,6 @@
       "required_tools": [
         "python3"
       ],
-      "blocking_profiles": [
-        "compiler-subset"
-      ],
       "build_tiers": [
         "m0",
         "fast",
@@ -123,9 +109,6 @@
       "tier": "pr",
       "required_tools": [
         "python3"
-      ],
-      "blocking_profiles": [
-        "compiler-subset"
       ],
       "build_tiers": [
         "m0",
@@ -142,9 +125,6 @@
       "required_tools": [
         "python3"
       ],
-      "blocking_profiles": [
-        "compiler-subset"
-      ],
       "build_tiers": [
         "m0",
         "fast",
@@ -160,9 +140,6 @@
       "required_tools": [
         "python3"
       ],
-      "blocking_profiles": [
-        "compiler-subset"
-      ],
       "build_tiers": [
         "m0",
         "fast",
@@ -177,9 +154,6 @@
       "tier": "pr",
       "required_tools": [
         "python3"
-      ],
-      "blocking_profiles": [
-        "compiler-subset"
       ],
       "build_tiers": [
         "m0",
@@ -198,9 +172,6 @@
         "mcc",
         "clang"
       ],
-      "blocking_profiles": [
-        "compiler-subset"
-      ],
       "build_tiers": [
         "fast",
         "c0"
@@ -216,9 +187,6 @@
         "python3",
         "mcc",
         "clang"
-      ],
-      "blocking_profiles": [
-        "compiler-subset"
       ],
       "build_tiers": [
         "fast",
@@ -237,10 +205,6 @@
         "clang",
         "llvm"
       ],
-      "blocking_profiles": [
-        "compiler-subset",
-        "llvm-experimental"
-      ],
       "build_tiers": [
         "fast"
       ],
@@ -254,10 +218,6 @@
       "required_tools": [
         "bash",
         "mcc"
-      ],
-      "blocking_profiles": [
-        "compiler-subset",
-        "developer-tools"
       ],
       "build_tiers": [
         "m0",
@@ -276,9 +236,6 @@
         "mcc",
         "clang"
       ],
-      "blocking_profiles": [
-        "compiler-subset"
-      ],
       "build_tiers": [
         "m0",
         "fast",
@@ -294,9 +251,6 @@
       "required_tools": [
         "bash",
         "mcc"
-      ],
-      "blocking_profiles": [
-        "compiler-subset"
       ],
       "build_tiers": [
         "m0",
@@ -316,9 +270,6 @@
         "clang",
         "llvm"
       ],
-      "blocking_profiles": [
-        "compiler-subset"
-      ],
       "build_tiers": [
         "m0"
       ],
@@ -331,29 +282,6 @@
       "tier": "pr",
       "required_tools": [
         "python3"
-      ],
-      "blocking_profiles": [
-        "compiler-subset",
-        "developer-tools"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
-      "id": "profile-manifest-test",
-      "owner": "scope-control",
-      "category": "profile-risk-binding",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
-      ],
-      "blocking_profiles": [
-        "compiler-subset",
-        "developer-tools"
       ],
       "build_tiers": [
         "m0",
@@ -370,10 +298,6 @@
       "required_tools": [
         "python3"
       ],
-      "blocking_profiles": [
-        "kernel-qemu",
-        "developer-tools"
-      ],
       "build_tiers": [
         "m0",
         "fast",
@@ -388,10 +312,6 @@
       "tier": "pr",
       "required_tools": [
         "python3"
-      ],
-      "blocking_profiles": [
-        "compiler-subset",
-        "developer-tools"
       ],
       "build_tiers": [
         "m0",
@@ -408,10 +328,6 @@
       "required_tools": [
         "python3"
       ],
-      "blocking_profiles": [
-        "compiler-subset",
-        "developer-tools"
-      ],
       "build_tiers": [
         "m0",
         "fast",
@@ -426,10 +342,6 @@
       "tier": "pr",
       "required_tools": [
         "python3"
-      ],
-      "blocking_profiles": [
-        "compiler-subset",
-        "developer-tools"
       ],
       "build_tiers": [
         "m0",
@@ -447,10 +359,6 @@
         "python3",
         "git"
       ],
-      "blocking_profiles": [
-        "compiler-subset",
-        "developer-tools"
-      ],
       "build_tiers": [
         "m0",
         "fast",
@@ -465,10 +373,6 @@
       "tier": "pr",
       "required_tools": [
         "python3"
-      ],
-      "blocking_profiles": [
-        "compiler-subset",
-        "developer-tools"
       ],
       "build_tiers": [
         "m0",

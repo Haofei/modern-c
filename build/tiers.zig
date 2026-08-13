@@ -218,8 +218,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("third-party-licenses-test"));
     // no-committed-private-keys-test keeps test/private key material out of the repo.
     m0_full_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
-    // profile-manifest-test keeps product/profile claims tied to known risks and gates.
-    m0_full_step.dependOn(ctx.cmd("profile-manifest-test"));
     // gate-manifest-test pilots machine-readable gate ownership for compiler-core gates.
     m0_full_step.dependOn(ctx.cmd("gate-manifest-test"));
     // mcc-cli-test pins documented top-level help/version/usage behavior.
@@ -512,7 +510,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("mcc-build-test"));
     m0_step.dependOn(ctx.cmd("path-remap-test"));
     m0_step.dependOn(ctx.cmd("mcmap-test"));
-    m0_step.dependOn(ctx.cmd("profile-manifest-test"));
     m0_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
     m0_step.dependOn(ctx.cmd("kernel-scope-inventory-test"));
     m0_step.dependOn(ctx.cmd("std-api-docs-test"));
@@ -548,7 +545,6 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("vendoring-test"));
     fast_step.dependOn(ctx.cmd("third-party-licenses-test"));
     fast_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
-    fast_step.dependOn(ctx.cmd("profile-manifest-test"));
     fast_step.dependOn(ctx.cmd("gate-manifest-test"));
     fast_step.dependOn(ctx.cmd("mcc-cli-test"));
     fast_step.dependOn(ctx.cmd("mcc-build-test"));
@@ -595,7 +591,6 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("vendoring-test")); // third_party provenance and license process stay documented
     c0_step.dependOn(ctx.cmd("third-party-licenses-test")); // aggregated third-party license manifest stays complete
     c0_step.dependOn(ctx.cmd("no-committed-private-keys-test")); // test/private key material stays generated, not committed
-    c0_step.dependOn(ctx.cmd("profile-manifest-test")); // product/profile claims stay tied to known risks and gates
     c0_step.dependOn(ctx.cmd("gate-manifest-test")); // gate manifest stays tied to build tiers
     c0_step.dependOn(ctx.cmd("mcc-cli-test")); // top-level CLI help/version/usage behavior stays documented
     c0_step.dependOn(ctx.cmd("mcc-build-test")); // installed mcc build hosted executable driver remains functional

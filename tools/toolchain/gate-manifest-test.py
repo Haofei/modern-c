@@ -12,8 +12,6 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "docs" / "gate-manifest.json"
-PROFILE_MANIFEST = ROOT / "docs" / "profile-manifest.json"
-RISK_REGISTER = ROOT / "docs" / "review-risk-register.yaml"
 REFACTORING_PLAN = ROOT / "docs" / "refactoring-plan.md"
 BUILD_DIR = ROOT / "build"
 TIERS = BUILD_DIR / "tiers.zig"
@@ -24,7 +22,6 @@ REQUIRED_FIELDS = {
     "category",
     "tier",
     "required_tools",
-    "blocking_profiles",
     "build_tiers",
     "skip_policy",
 }
@@ -34,7 +31,6 @@ KNOWN_SKIP_POLICIES = {"no-skip", "tool-required", "documented-skip"}
 KNOWN_CI_PASS_ASSERTIONS = {"ci-m0-pass"}
 REQUIRED_GOVERNANCE_GATES = {
     "gate-manifest-test",
-    "profile-manifest-test",
     "vendoring-test",
     "third-party-licenses-test",
     "ci-pass-gates-test",
@@ -114,8 +110,6 @@ ARTIFACT_METADATA_ANCHORS: dict[str, list[str]] = {
         "require_sha_header source_map_payload_sha256",
     ],
 }
-RISK_ID_RE = re.compile(r"^\s*-\s+id:\s+([A-Z0-9][A-Z0-9-]+)\s*$", re.MULTILINE)
-REFACTOR_RISK_REF_RE = re.compile(r"`([A-Z0-9][A-Z0-9-]+)`")
 REFACTOR_ZIG_BUILD_RE = re.compile(r"\bzig\s+build\s+([A-Za-z0-9_.<>-]+)")
 
 
@@ -166,32 +160,6 @@ def tier_dependencies() -> dict[str, set[str]]:
         tier: set(re.findall(rf'{tier}_step\.dependOn\(ctx\.cmd\("([^"]+)"\)\);', block))
         for tier, block in blocks.items()
     }
-
-
-def risk_register_ids() -> set[str]:
-    try:
-        text = RISK_REGISTER.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        fail(f"missing {RISK_REGISTER.relative_to(ROOT)}")
-    ids = set(RISK_ID_RE.findall(text))
-    if not ids:
-        fail(f"{RISK_REGISTER.relative_to(ROOT)} contains no risk ids")
-    return ids
-
-
-def refactoring_plan_risk_refs() -> set[str]:
-    try:
-        text = REFACTORING_PLAN.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        fail(f"missing {REFACTORING_PLAN.relative_to(ROOT)}")
-    refs = {
-        ref
-        for ref in REFACTOR_RISK_REF_RE.findall(text)
-        if "-" in ref and not ref.endswith("-GATE")
-    }
-    if not refs:
-        fail(f"{REFACTORING_PLAN.relative_to(ROOT)} contains no risk references")
-    return refs
 
 
 def refactoring_plan_build_refs() -> set[str]:
@@ -281,19 +249,8 @@ def main() -> None:
     manifest = load_json(MANIFEST)
     if manifest.get("schema_version") != 1:
         fail("schema_version must be 1")
-    if manifest.get("profiles") != "docs/profile-manifest.json":
-        fail("profiles must point at docs/profile-manifest.json")
     if manifest.get("scope") != "compiler-core-and-governance":
         fail("scope must be compiler-core-and-governance")
-
-    profiles_manifest = load_json(PROFILE_MANIFEST)
-    known_profiles = {
-        profile["id"]
-        for profile in profiles_manifest.get("profiles", [])
-        if isinstance(profile, dict) and isinstance(profile.get("id"), str)
-    }
-    if not known_profiles:
-        fail("profile manifest contains no profiles")
 
     tiers = manifest.get("tiers")
     if not isinstance(tiers, dict) or set(tiers) != KNOWN_EXECUTION_TIERS:
@@ -305,17 +262,9 @@ def main() -> None:
 
     known_gates = registered_gates()
     dependencies = tier_dependencies()
-    known_risks = risk_register_ids()
-    refactor_risk_refs = refactoring_plan_risk_refs()
     refactor_build_refs = refactoring_plan_build_refs()
     validate_anchor_inventory("artifact metadata inventory", ARTIFACT_METADATA_ANCHORS)
     ci_pass_assertion_count = validate_ci_pass_assertions(manifest, known_gates, dependencies)
-    unknown_refactor_risks = sorted(refactor_risk_refs - known_risks)
-    if unknown_refactor_risks:
-        fail(
-            "refactoring plan references unknown risk ids: "
-            + ", ".join(unknown_refactor_risks)
-        )
     unknown_refactor_build_refs = sorted(refactor_build_refs - known_gates)
     if unknown_refactor_build_refs:
         fail(
@@ -350,9 +299,6 @@ def main() -> None:
         if gate_id not in known_gates:
             fail(f"gate {gate_id} is not registered in build/*.zig")
 
-        unknown_profiles = sorted(set(string_list(gate_id, gate, "blocking_profiles")) - known_profiles)
-        if unknown_profiles:
-            fail(f"gate {gate_id} references unknown profiles: {', '.join(unknown_profiles)}")
         string_list(gate_id, gate, "required_tools")
         build_tiers = string_list(gate_id, gate, "build_tiers")
         unknown_build_tiers = sorted(set(build_tiers) - KNOWN_BUILD_TIERS)
@@ -374,7 +320,6 @@ def main() -> None:
     print(
         "PASS: gate-manifest-test - "
         f"{len(gates)} manifest gates, {len(owners)} owners, "
-        f"{len(known_profiles)} profiles, {len(refactor_risk_refs)} refactor risk refs, "
         f"{len(refactor_build_refs)} refactor build refs, "
         f"{anchor_count(ARTIFACT_METADATA_ANCHORS)} artifact metadata anchors, "
         f"{ci_pass_assertion_count} CI PASS assertion gates"
