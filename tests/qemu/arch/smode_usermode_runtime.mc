@@ -1,4 +1,4 @@
-// S-mode trap vector + syscall dispatch + privilege drop for the CONFINED QuickJS agent under
+// S-mode trap vector + syscall dispatch + privilege drop for the confined app under
 // REAL OpenSBI — in PURE MC (replaces kernel/arch/riscv64/smode_usermode_runtime.c). The S-mode
 // CSRs (stvec/sscratch/sepc/scause/stval, sstatus.SPP, sret) + the legacy SBI console. The SAME
 // MC syscall table the M-mode path uses (syscall_setup / mc_syscall in app_run_demo.mc) is reused

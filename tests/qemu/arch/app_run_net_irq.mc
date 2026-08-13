@@ -1,4 +1,4 @@
-// S-mode virtio-net IRQ-backed provider for the JS `host_net_fetch` validation surface.
+// S-mode virtio-net IRQ-backed provider for the confined app network validation surface.
 //
 // app_run_demo owns SYS_SUBMIT/SYS_POLL and the user-copy rules. This module registers an
 // async net override: SYS_SUBMIT allocates a normal app_run_demo completion slot, this module

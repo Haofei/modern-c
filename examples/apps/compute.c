@@ -1,6 +1,6 @@
 // examples/apps/compute.c — a confined C app exercising the freestanding libc (malloc +
 // string + write). It allocates an array, sums it, and reports via SYS_WRITE — proving the
-// C-app + libc path that QuickJS (also C) will use. main returns 0 on success.
+// C-app + libc path that confined C app (also C) will use. main returns 0 on success.
 #include "user/runtime/usys.h"
 #include <stdint.h>
 #include <stddef.h>

@@ -50,8 +50,8 @@ Useful report fields:
 Security-sensitive compiler issues include crashes or hangs on user input, silent
 miscompiles, fail-open diagnostics, unsupported features accepted silently, and
 incorrect emitted runtime checks. Kernel validation-workload issues include
-violations of the agent isolation, capability, resource accounting, and
-hostile-input boundaries described in `docs/threat-model.md`.
+violations of isolation, capability, resource accounting, and hostile-input
+boundaries in retained compiler validation fixtures.
 
 Vendored third-party engines are validation dependencies where linked. Track
 upstream advisories for those projects as ordinary dependency maintenance.

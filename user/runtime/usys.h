@@ -1,4 +1,4 @@
-// user/runtime/usys.h — C syscall wrappers for a confined C app (QuickJS and its libc are C).
+// user/runtime/usys.h — C syscall wrappers for a confined C app.
 // Thin inline wrappers over mc_ecall (user/runtime/crt0.c); the ABI numbers mirror user/abi.mc.
 #ifndef MC_USYS_H
 #define MC_USYS_H

@@ -17,7 +17,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-# Compile the WHOLE aggregated libc (one unit) — the artifact QuickJS links: snprintf/printf +
+# Compile the WHOLE aggregated libc (one unit) — the artifact confined C app links: snprintf/printf +
 # the memset/memcpy the struct copies need, with no cross-object std/* duplication.
 LIBC="$HERE/user/libc/libc.mc"
 # The boot seam + driver is now PURE MC (no .c runtime): `_start` is `#[naked]` MC, the

@@ -22,7 +22,7 @@ const RT_KERNEL_VA: usize = 0x8000_0000;
 // allocates, page-aligned. A `[N]u8` global is .bss-resident (no file cost); the loader
 // only needs a 4 KiB-aligned base, which app_build derives from the region pointer.
 // Sized to 64 MiB so it can back a confined C app whose freestanding libc (user/libc, shared with
-// the QuickJS hosts) carries a 14 MiB malloc arena in .bss — the loader maps the whole PT_LOAD memsz, so the
+// the confined C app hosts) carries a 14 MiB malloc arena in .bss — the loader maps the whole PT_LOAD memsz, so the
 // region must exceed the app's largest segment plus its page tables. Matches the other confined
 // runtimes' 64 MiB region.
 const RT_REGION_LEN: usize = 64 * 1024 * 1024; // 64 MiB

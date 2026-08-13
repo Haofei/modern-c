@@ -1,7 +1,7 @@
 // examples/apps/mathtest.c — a confined C app exercising the freestanding libm (user/libc/math)
 // on real doubles. It proves the FPU is enabled for the app (mstatus.FS set by the kernel before
 // enter_user) and that the EXACT math functions are bit-correct. Reports "math-ok" via SYS_WRITE.
-// Phase 3 of the QuickJS-agent plan (the exact half of libm + hardware FP enablement).
+// Phase 3 of the confined app validation path (the exact half of libm + hardware FP enablement).
 #include "user/runtime/usys.h"
 #include <stddef.h>
 

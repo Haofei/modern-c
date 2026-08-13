@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a confined MC app into an isolated U-mode ELF (Phase 1 of the QuickJS-agent plan).
+# Build a confined MC app into an isolated U-mode ELF (Phase 1 of the confined app validation path).
 # Compiles the app MC (through the chosen backend) + the user crt0/ecall shim for the riscv
 # freestanding target, and links them with user/runtime/user.ld into a position-dependent,
 # multi-segment ELF (distinct R|X / R / R|W load segments) that kernel/core/elf_loader maps
@@ -33,7 +33,7 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# App -> riscv object. An MC app goes through the chosen backend; a C app (e.g. QuickJS)
+# App -> riscv object. An MC app goes through the chosen backend; a C app (e.g. confined C app)
 # compiles with clang and links the freestanding libc (user/libc).
 APP_OBJS=("$WORK/app.o")
 SUPPORT_OBJ=""

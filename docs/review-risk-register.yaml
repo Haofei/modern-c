@@ -14,7 +14,7 @@ risks:
     blocks:
       - unrestricted-production-compiler
       - stable-release
-    summary: Product surface spans compiler, dual backends, selfhost, kernel/QEMU workloads, Agent runtime demos, LSP, release provenance, and multiple runtime profiles before the core semantic boundary is stable; deployable kernel claims have been retired.
+    summary: Product surface spans compiler, dual backends, selfhost, kernel/QEMU workloads, kernel validation demos, LSP, release provenance, and multiple runtime profiles before the core semantic boundary is stable; deployable kernel claims have been retired.
 
   - id: ARCH-COMPILATION-SESSION
     severity: high

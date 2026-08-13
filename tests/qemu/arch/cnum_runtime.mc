@@ -1,5 +1,5 @@
 // Bare-metal riscv64 M-mode runtime exercising the MC ctype + integer-parsing core
-// (user/libc/cnum.mc) through the standard C prototypes, as QuickJS will — in PURE MC
+// (user/libc/cnum.mc) through the standard C prototypes, as confined C app will — in PURE MC
 // (no C). The all-MC replacement for kernel/arch/riscv64/cnum_runtime.c.
 //
 // cnum's strtol/strtoul take a `char**` endptr (typed `*mut u8` in the MC ABI) and store

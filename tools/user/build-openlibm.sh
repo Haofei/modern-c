@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the vendored openlibm (third_party/openlibm) into a freestanding riscv archive
-# libopenlibm.a — the full double-precision libm QuickJS's Math needs (pow/exp/log/sin/cos/
-# atan2/cbrt/hypot/...). Phase 3 of the QuickJS-agent plan: the transcendentals that can't be
+# libopenlibm.a — the full double-precision libm confined C app's Math needs (pow/exp/log/sin/cos/
+# atan2/cbrt/hypot/...). Phase 3 of the confined app validation path: the transcendentals that can't be
 # made exact by hand (the exact bit-functions live in user/libc, but openlibm supersedes them
 # as the single complete libm).
 #
@@ -23,7 +23,7 @@ HERE="$(kernel_boot_repo_root)"
 OLM="$HERE/third_party/openlibm"
 
 # Per-arch target flags. OLM_TARGET_FLAGS (env) overrides for the cross-arch callers; the default is
-# the riscv64 lp64d freestanding target the U-mode WASM/QuickJS agents use.
+# the riscv64 lp64d freestanding target the U-mode WASM/confined C app agents use.
 case "$ARCH" in
   x86_64)  DEFAULT_TGT=(--target=x86_64-unknown-elf -mno-red-zone) ;;
   aarch64) DEFAULT_TGT=(--target=aarch64-unknown-elf -march=armv8-a) ;;

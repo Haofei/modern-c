@@ -12,10 +12,10 @@ Current baseline:
 - `zig build riscv-qemu-validation` is the focused QEMU/OpenSBI validation gate
   for the retained RISC-V board-metadata fixture.
 - The C and LLVM backends both cover the current implemented spec surface.
-- RISC-V S-mode under OpenSBI, confined QuickJS fixtures, brokered FS/network tool
-  paths, resource governance, and many cross-architecture kernel gates are in
-  place.
-- The project is still a prototype. Kernel work is kept as language/runtime
+- RISC-V S-mode under OpenSBI, confined app loading, interrupt-driven driver
+  paths, resource governance, and selected cross-architecture kernel gates are
+  retained as validation evidence.
+- The project is still a prototype. Kernel work is kept as language/compiler
   validation evidence, not as a product track.
 
 ## Active priorities
@@ -23,9 +23,9 @@ Current baseline:
 | Priority | Area | Current state | Next work |
 |---|---|---|---|
 | P0 | Kernel validation workload | StarFive VisionFive 2 metadata remains as a board-resource fixture (`kernel/platform/starfive_visionfive2/profile.mc`): OpenSBI S-mode plus FDT-described UART/interrupt/storage/network expectations. `visionfive2-resource-test` / `llvm-visionfive2-resource-test` validate the profile's FDT-resource fixture against QEMU, but this is language/backend evidence, not hardware release evidence. | Keep the QEMU surrogate green. Use real hardware only when it exposes language, ABI, driver, async, MMIO, syscall, or backend-lowering gaps. |
-| P0 | Interrupt-driven I/O | S-mode timer, single-shot PLIC delivery, re-armed PLIC multishot, context-aware PLIC helper reuse, reusable S-mode PLIC dispatch, registered S-mode async virtio-blk / virtio-net TX/RX IRQ completion gates, JS `host_net_fetch` completion from a S-mode virtio-net PLIC interrupt through `SYS_POLL`, and JS `host_fs_read` completion from a S-mode virtio-blk PLIC interrupt through `SYS_POLL` all pass on both backends. | Keep the promoted IRQ gates green as language/backend evidence. Add hardware runs only when they expose language, ABI, driver, async, MMIO, syscall, or backend-lowering gaps. |
-| P1 | Tool/agent ABI fixtures | Confined QuickJS fixtures, structured submit/poll, real FS broker ops, brokered network demos, JS `host_net_fetch`, quota/backpressure/cancel handling, e2e showcases, TCP-backed JS `host_net_fetch` over virtio-net, IRQ-backed S-mode JS storage/network completion through `SYS_POLL`, and a versioned `SYS_SUBMIT` / `SYS_POLL` ABI contract are gated. | Keep the ABI fixtures useful for compiler/runtime validation. Product runtime roadmap work is outside current scope. |
-| P1 | Cross-architecture backend gaps | C-backed x86/aarch64 paths are substantially gated. LLVM now has target-aware `va_list`/`va_arg` lowering, emits target triples/data layouts for non-RISC-V QuickJS/user-libc objects, and the non-RISC-V LLVM QuickJS sync/async gates are in `m0`. | Keep the promoted gates green; add cross-architecture depth only when it validates compiler, ABI, runtime, or backend behavior. |
+| P0 | Interrupt-driven I/O | S-mode timer, single-shot PLIC delivery, re-armed PLIC multishot, context-aware PLIC helper reuse, reusable S-mode PLIC dispatch, and registered S-mode async virtio-blk / virtio-net TX/RX IRQ completion gates pass on both backends. | Keep the promoted IRQ gates green as language/backend evidence. Add hardware runs only when they expose language, ABI, driver, async, MMIO, syscall, or backend-lowering gaps. |
+| P1 | Confined app ABI fixtures | Confined app loading, structured submit/poll, bounded request validation, quota/backpressure/cancel handling, and a versioned `SYS_SUBMIT` / `SYS_POLL` ABI contract are retained where they validate compiler, ABI, async, and user-copy behavior. | Keep the fixtures narrow. Product runtime roadmap work is outside current scope. |
+| P1 | Cross-architecture backend gaps | C-backed x86/aarch64 paths are substantially gated. LLVM has target-aware `va_list`/`va_arg` lowering and emits target triples/data layouts for retained user-libc objects. | Keep promoted gates green; add cross-architecture depth only when it validates compiler, ABI, runtime, or backend behavior. |
 | P1 | Updates and recovery | Kernel update/live-update fixtures were removed from the current language-oriented scope. | Keep update/recovery out of the kernel validation workload unless a separate product profile is created. |
 | P1 | Persistence and recovery | Filesystems, block storage, checkpoint-like primitives, lifecycle, and basic BlockDevice persistence gates exist. | Keep only storage/recovery pieces required by active kernel validation fixtures. |
 | P1 | VFS/POSIX/network completeness | VFS, fdspace, ramfs/diskfs/blockfs, sockets, DNS/TCP, brokered net calls, and shell/userland tests exist. | Decide the retained syscall subset; add only the POSIX/VFS/network pieces the language/runtime validation workload actually needs. |
@@ -37,8 +37,7 @@ Current baseline:
 ## Historical work folded into this roadmap
 
 Completed campaign notes and experiment drafts live in git history, not as live
-documentation. Their current takeaways are folded into this roadmap and the
-platform plan.
+documentation. Their current takeaways are folded into this roadmap.
 
 ## Kernel validation boundary
 

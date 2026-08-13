@@ -1,4 +1,4 @@
-// user/runtime/crt0_aarch64 — the AArch64 userspace entry + syscall primitive for an MC/QuickJS
+// user/runtime/crt0_aarch64 — the AArch64 userspace entry + syscall primitive for a confined MC app
 // agent (M9), in PURE MC (the all-MC replacement for crt0_aarch64.c). The AArch64 sibling of
 // crt0.mc / crt0_x86.mc:
 //   - mc_ecall: x8=number, x0/x1/x2=args, `svc #0`, result in x0 — matching the M8/M9 kernel EL1
@@ -28,7 +28,7 @@ export fn mc_ecall(number: u64, a0: u64, a1: u64, a2: u64) -> u64 {
     return result;
 }
 
-// crt0: the ELF entry. __user_stack_top (link script user_qjs_aarch64.ld) tops the in-image stack
+// crt0: the ELF entry. __user_stack_top tops the in-image stack
 // (a NOBITS region the loader maps EL0 R|W). Set SP, 16-byte align (AAPCS64), call main,
 // SYS_EXIT(=3). SP can't be an AND operand, so align in x0 then move to SP.
 #[naked]

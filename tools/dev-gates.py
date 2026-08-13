@@ -474,22 +474,12 @@ RULES: tuple[Rule, ...] = (
         "typed-MMIO QEMU wrapper changes need its C and LLVM QEMU gates",
     ),
     Rule(
-        ("tools/lang/qjs-agent-smoke-test.sh",),
-        ("qjs-agent-smoke-test", "llvm-qjs-agent-smoke-test"),
-        "QuickJS agent smoke wrapper changes need its C and LLVM smoke gates",
-    ),
-    Rule(
         (
             "tests/qemu/proc/app_run_demo.mc",
-            "tests/qemu/lang/qjs_confined_runtime.mc",
-            "tests/qemu/arch/qjs_smode_demo.mc",
-            "tests/qemu/arch/qjs_smode_confined_runtime.mc",
             "tools/proc/app-run-test.sh",
-            "tools/lang/qjs-confined-test.sh",
-            "tools/arch/qjs-smode-confined-test.sh",
         ),
-        ("app-run-test", "qjs-confined-test", "qjs-smode-confined-test"),
-        "agent loader changes need raw app loading and the canonical M/S-mode confined runtimes",
+        ("app-run-test", "llvm-app-run-test"),
+        "confined app loader changes need raw app loading coverage on both backends",
     ),
     Rule(
         ("tools/qemu/kernel-boot-lib.sh",),
@@ -639,12 +629,7 @@ RULES: tuple[Rule, ...] = (
             "tools/mem/uaccess-bench.sh",
             "tools/net/kmain-net-test.sh",
             "tests/qemu/proc/app_run_demo.mc",
-            "tests/qemu/lang/qjs_confined_runtime.mc",
-            "tests/qemu/arch/qjs_smode_demo.mc",
-            "tests/qemu/arch/qjs_smode_confined_runtime.mc",
             "tools/proc/app-run-test.sh",
-            "tools/lang/qjs-confined-test.sh",
-            "tools/arch/qjs-smode-confined-test.sh",
         ),
     ),
 )

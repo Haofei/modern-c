@@ -38,7 +38,6 @@ These are still useful as day-to-day references or rationale companions:
 | Testing | [`test-architecture.md`](test-architecture.md), [`qemu-validation-checklist.md`](qemu-validation-checklist.md) | Fixture contracts, gate layers, manifest discipline, and the local/CI QEMU surrogate checklist. |
 | Unsafe/UB audit | [`unsafe-boundary.md`](unsafe-boundary.md), [`c-ub-matrix.md`](c-ub-matrix.md), [`lowering-coverage.md`](lowering-coverage.md) | Unsafe syntax, C-UB handling, and lowering coverage reports. |
 | Traits/async rationale | [`traits-design.md`](traits-design.md), [`async-plan.md`](async-plan.md) | Design reasoning behind implemented or mostly implemented features. |
-| Kernel validation workload | [`platform-portability-plan.md`](platform-portability-plan.md) | Rationale for retained kernel/QEMU language-validation workloads. Prefer `todo.md` for the repo-wide short list. |
 | Fuzzing backlog | [`mcfuzz-coverage-todo.md`](mcfuzz-coverage-todo.md) | Generator/oracle expansion notes. Some gating statements are historical; see `todo.md` for current gate status. |
 
 ## Historical records

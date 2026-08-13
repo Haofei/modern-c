@@ -1,7 +1,7 @@
 // Bare-metal riscv64 M-mode runtime for the variadic-function demo — in PURE MC (no C).
 // The all-MC replacement for kernel/arch/riscv64/vararg_runtime.c: it calls the C-ABI
 // variadic MC function `sum_args` (tests/qemu/lang/vararg_demo.mc) with several argument
-// counts — exactly as C (QuickJS) will call our printf-family shims — verifies the sums,
+// counts — exactly as C (confined C app) will call our printf-family shims — verifies the sums,
 // and reports on the bare 16550 UART.
 //
 // MC cannot pass a trailing `...` at a call site, so `sum_args` is declared here with a

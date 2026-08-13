@@ -11,7 +11,7 @@ claims, not to remove safety checks.
 ## Current imbalance
 
 The repository now contains a language/compiler, C and LLVM backends, selfhost
-experiments, kernel/Agent runtime work, LSP/editor tooling, QEMU suites, release
+experiments, kernel validation workloads, LSP/editor tooling, QEMU suites, release
 provenance, and vendored dependency metadata.
 
 Those pieces are useful, but they should not all be treated as one production

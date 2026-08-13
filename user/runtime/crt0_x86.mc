@@ -1,4 +1,4 @@
-// user/runtime/crt0_x86 — the x86-64 userspace entry + syscall primitive for an MC/QuickJS agent
+// user/runtime/crt0_x86 — the x86-64 userspace entry + syscall primitive for a confined MC app
 // (M7), in PURE MC (the all-MC replacement for crt0_x86.c). The x86-64 sibling of crt0.mc:
 //   - mc_ecall: RAX=number, RDI/RSI/RDX=args, `int $0x80`, result in RAX — matching the M6 kernel
 //     trap dispatcher (kernel/arch/x86_64/user_runtime.c). Values feed via generic `"r"` operands,
@@ -27,7 +27,7 @@ export fn mc_ecall(number: u64, a0: u64, a1: u64, a2: u64) -> u64 {
     return result;
 }
 
-// crt0: the ELF entry. __user_stack_top (link script user_qjs_x86.ld) tops the in-image stack (a
+// crt0: the ELF entry. __user_stack_top tops the in-image stack (a
 // NOBITS region the loader maps R|W|U). Set RSP, 16-byte align (System V), call main, SYS_EXIT(=3).
 #[naked]
 #[section(".text.start")]

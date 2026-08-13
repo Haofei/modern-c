@@ -15,7 +15,7 @@ import "user/sys.mc";
 import "user/abi.mc";
 
 // Write a string literal of known length to stdout. (Lengths are counted literally; the strings
-// below are fixed.) Casting a *const u8 to usize at the syscall boundary mirrors qjs_host.mc.
+// below are fixed.) Casting a *const u8 to usize at the syscall boundary mirrors the app host fixture.
 fn puts(s: *const u8, len: usize) -> void {
     let ignored: i64 = write(FD_STDOUT, s as usize, len);
 }

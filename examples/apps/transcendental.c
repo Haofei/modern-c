@@ -1,7 +1,7 @@
 // examples/apps/transcendental.c — a confined C app exercising the vendored openlibm
 // transcendentals (pow/exp/log/sin/cos/tan/atan2/cbrt/hypot/...) on real doubles. This is the
-// full libm QuickJS's Math needs; it proves the openlibm freestanding build links and runs
-// confined under hardware FP. Reports "trig-ok" via SYS_WRITE. Phase 3 of the QuickJS plan.
+// full libm confined C app's Math needs; it proves the openlibm freestanding build links and runs
+// confined under hardware FP. Reports "trig-ok" via SYS_WRITE. Phase 3 of the confined app validation path.
 #include "user/runtime/usys.h"
 #include <stddef.h>
 

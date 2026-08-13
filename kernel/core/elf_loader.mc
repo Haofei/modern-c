@@ -9,7 +9,7 @@
 // mapped frames page by page — leaving the bss tail (memsz > filesz) zero by virtue of
 // the frames being zeroed at allocation. The ELF entry point is returned on success.
 //
-// This is the Phase-1 substrate for running an untrusted QuickJS agent in its own
+// This is the substrate for running an untrusted confined app in its own
 // isolated Sv39 space: the loader never trusts a program-header field. Each segment's
 // vaddr/memsz is range-checked for overflow and against a sane page-count cap before a
 // single frame is touched, and the file-byte source range is validated by the parser's

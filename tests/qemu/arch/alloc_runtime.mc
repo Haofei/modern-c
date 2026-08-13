@@ -1,5 +1,5 @@
 // Bare-metal riscv64 M-mode runtime exercising the MC C-ABI allocator (user/libc/alloc.mc)
-// the way C (QuickJS) will — malloc/free/calloc/realloc through the standard prototypes —
+// the way C (confined C app) will — malloc/free/calloc/realloc through the standard prototypes —
 // in PURE MC (no C). The all-MC replacement for kernel/arch/riscv64/alloc_runtime.c.
 //
 // Verifies distinct non-overlapping allocations, write/read round-trips, reuse after free,

@@ -22,7 +22,7 @@
 ## What is kept
 
 The committed subset keeps the freestanding libm surface used by confined C
-apps, and QuickJS hosts:
+apps:
 
 - `include/` OpenLibm public headers.
 - `src/` libm sources and private headers.
@@ -53,4 +53,4 @@ final link rather than being stubbed.
 
 `tools/user/build-app.sh` links the archive last for confined C apps so only
 referenced math members are pulled. The archive supplies the double-precision
-transcendental functions used by QuickJS `Math` tests.
+transcendental functions used by confined C math validation tests.

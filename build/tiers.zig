@@ -22,18 +22,6 @@ pub fn register(ctx: *h.Ctx) void {
         "llvm-net-smode-irq-test",
         "net-smode-rx-irq-test",
         "llvm-net-smode-rx-irq-test",
-        "qjs-smode-confined-test",
-        "llvm-qjs-smode-confined-test",
-        "qjs-smode-agent-test",
-        "llvm-qjs-smode-agent-test",
-        "qjs-realtool-test",
-        "llvm-qjs-realtool-test",
-        "qjs-nettool-test",
-        "llvm-qjs-nettool-test",
-        "qjs-smode-net-irq-tool-test",
-        "llvm-qjs-smode-net-irq-tool-test",
-        "qjs-smode-blk-irq-tool-test",
-        "llvm-qjs-smode-blk-irq-tool-test",
         "visionfive2-resource-test",
         "llvm-visionfive2-resource-test",
     };
@@ -129,68 +117,24 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-trig-app-test"));
     m0_full_step.dependOn(ctx.cmd("vararg-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vararg-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-alloc-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-alloc-test"));
     m0_full_step.dependOn(ctx.cmd("cstr-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-cstr-test"));
     m0_full_step.dependOn(ctx.cmd("cnum-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-cnum-test"));
     m0_full_step.dependOn(ctx.cmd("stdio-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-stdio-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-run-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-run-test"));
     m0_full_step.dependOn(ctx.cmd("mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
     m0_full_step.dependOn(ctx.cmd("sbrk-grow-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-sbrk-grow-test"));
     m0_full_step.dependOn(ctx.cmd("sbrk-cap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-sbrk-cap-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-confined-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-confined-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-smode-confined-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-smode-confined-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-smode-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-smode-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-smode-async-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-smode-async-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-realtool-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-realtool-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-nettool-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-nettool-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-smode-net-irq-tool-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-smode-net-irq-tool-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-smode-blk-irq-tool-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-smode-blk-irq-tool-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-async-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-async-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-io-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-io-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-worker-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-worker-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-async-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-async-agent-test"));
     m0_full_step.dependOn(ctx.cmd("fault-probe-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-fault-probe-test"));
     m0_full_step.dependOn(ctx.cmd("quota-probe-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-quota-probe-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-quota-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-quota-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-cancel-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-cancel-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-agent-smoke-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-agent-smoke-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-cancel-edges-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-cancel-edges-test"));
     m0_full_step.dependOn(ctx.cmd("broker-probe-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-broker-probe-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-broker-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-broker-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-spurious-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-spurious-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("qjs-mc-host-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-qjs-mc-host-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-fs-syscall-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-socket-syscall-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-exec-test"));
@@ -584,10 +528,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-x86-pci-test"));
     m0_full_step.dependOn(ctx.cmd("x86-user-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-x86-user-test"));
-    m0_full_step.dependOn(ctx.cmd("x86-qjs-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-x86-qjs-test"));
-    m0_full_step.dependOn(ctx.cmd("x86-qjs-async-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-x86-qjs-async-test"));
     m0_full_step.dependOn(ctx.cmd("slotmap-test"));
     m0_full_step.dependOn(ctx.cmd("mask-test"));
     m0_full_step.dependOn(ctx.cmd("rights-test"));
@@ -616,10 +556,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-arm-vm-test"));
     m0_full_step.dependOn(ctx.cmd("arm-user-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-arm-user-test"));
-    m0_full_step.dependOn(ctx.cmd("arm-qjs-test"));
-    m0_full_step.dependOn(ctx.cmd("arm-qjs-async-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-arm-qjs-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-arm-qjs-async-test"));
     m0_full_step.dependOn(ctx.cmd("sbi-boot-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-sbi-boot-test"));
     m0_full_step.dependOn(ctx.cmd("smode-user-test"));

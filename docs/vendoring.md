@@ -3,8 +3,7 @@
 This repository vendors a small number of third-party components under
 `third_party/`:
 
-- `quickjs` for confined JavaScript agents.
-- `openlibm` for freestanding libm support used by C apps and QuickJS hosts.
+- `openlibm` for freestanding libm support used by confined C app validation.
 
 ## Required metadata
 
@@ -34,8 +33,7 @@ zig build vendoring-test
 ## Re-vendor process
 
 1. Identify the current local version from `README.vendored.md` and from source
-   evidence in the tree, such as `quickjs.h`, `core/version.h`, or upstream
-   license/source headers.
+   evidence in the tree, such as `upstream license/source headers.
 2. Fetch upstream in a temporary directory outside the checkout. Prefer an
    immutable tag or commit over a branch head. Record the tag/commit and an
    archive checksum in the dependency README.
@@ -48,7 +46,6 @@ zig build vendoring-test
    modifications. Reapply local changes deliberately and update the
    local-modifications section.
 6. Re-run the component gates:
-   `tools/user/build-qjs.sh` consumers for QuickJS and
    `tools/user/build-openlibm.sh` consumers for openlibm.
 7. Run the static gates:
    `python3 tools/toolchain/vendoring-test.py`, `zig build vendoring-test`,

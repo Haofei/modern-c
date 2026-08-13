@@ -10,7 +10,7 @@
 // uaccess_aarch64.mc, now deleted).
 //
 // Scope: only the page-table path. The full kernel/core/uaccess.mc additionally carries the
-// numeric `UserSpace` bring-up path and the snapshot/taint generics; the confined QuickJS
+// numeric `UserSpace` bring-up path and the snapshot/taint generics; the confined app
 // agent uses only the `UserAddrSpace` path here.
 //
 // Read side: a present, user-accessible page is readable on x86-64 (no separate readable bit)

@@ -1,5 +1,5 @@
 // kernel/core/bootinfo — the architecture-neutral BootInfo contract
-// (docs/platform-portability-plan.md §3.1). Every architecture normalizes its
+// Every architecture normalizes its
 // firmware input (FDT on RISC-V/AArch64, ACPI+Limine/Multiboot on x86_64) into
 // ONE structure so the rest of the kernel discovers RAM + console + devices
 // without hardcoded addresses or per-arch knowledge.

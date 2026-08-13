@@ -1,5 +1,5 @@
 // user/libc/cstr — the C-ABI mem/string core (memcpy/memmove/memset/memcmp, strlen/strcmp/
-// strncmp/strchr/memchr), in MC. The freestanding bytes QuickJS leans on constantly.
+// strncmp/strchr/memchr), in MC. Freestanding byte/string helpers used by confined C apps.
 //
 // Reuses std/mem (mem_copy/mem_set) for the bulk routines. Like the allocator, all work is done
 // on `usize` ADDRESSES — pointer params are consumed to an address immediately and result
@@ -36,7 +36,7 @@ export fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
         // overlap. Do it directly here — do NOT delegate to mem_copy, which `unreachable`-traps on
         // ANY overlap (it is a non-overlapping primitive). A real overlapping forward memmove —
         // e.g. a guest WASM `memory.copy` relocating a large buffer down in memory — is valid and
-        // must not trap. (This was the Phase-4b crash: QuickJS-on-wasm did a ~9 MiB overlapping
+        // must not trap. (Regression coverage: a larger confined app workload did a multi-MiB overlapping
         // memory.copy, wasm3 routed it to this memmove, and the old mem_copy delegation trapped.)
         var i: usize = 0;
         while i < n {

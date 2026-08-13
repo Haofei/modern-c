@@ -1,4 +1,4 @@
-// user/runtime/fenv_amd64_stub.c — minimal freestanding fenv for the confined x86-64 QuickJS
+// user/runtime/fenv_amd64_stub.c — minimal freestanding fenv for confined x86-64 C apps
 // agent.
 //
 // The vendored openlibm (third_party/openlibm) was imported riscv-first: on riscv its fenv ops
@@ -11,7 +11,7 @@
 //
 // So provide do-nothing stubs that manipulate the real SSE control/status word just enough to be
 // well-formed: feraiseexcept sets MXCSR exception flags, feholdexcept/feupdateenv save/restore
-// MXCSR (the SSE unit is the one ring-3 QuickJS uses; the x87 unit is left at its default). No FP
+// MXCSR (the SSE unit used by ring-3 C code; the x87 unit is left at its default). No FP
 // trap is ever enabled (boot.S masks all SSE exceptions), so these never change observed results.
 #include <stdint.h>
 

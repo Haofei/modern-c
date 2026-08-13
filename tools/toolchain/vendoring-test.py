@@ -10,33 +10,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 DEPENDENCIES = {
-    "quickjs": {
-        "license": "LICENSE",
-        "needles": [
-            "Upstream",
-            "Recorded version",
-            "Recorded tag",
-            "v0.15.1",
-            "Recorded commit",
-            "fd0a0210b7be00957751871e7e01b8291268fc29",
-            "Archive SHA-256",
-            "c4e813951b7c46845096a948e978c620b11ab4cf5fd622ca09c727ec31f42623",
-            "License",
-            "What is kept",
-            "dropped",
-            "Local modifications",
-            "quickjs.h",
-            "BUILDING_QJS_SHARED",
-            "QUICKJS_NG_MODULE_BUILD",
-            "How it is built and used",
-        ],
-        "forbidden": [
-            "Recorded commit:** unknown",
-            "exact upstream commit is unknown",
-            "exact recorded commit is currently unknown",
-            "next QuickJS re-vendor",
-        ],
-    },
     "openlibm": {
         "license": "LICENSE.md",
         "needles": [
@@ -65,7 +38,6 @@ DEPENDENCIES = {
 }
 
 DOC_NEEDLES = [
-    "quickjs",
     "openlibm",
     "README.vendored.md",
     "THIRD-PARTY-LICENSES.md",

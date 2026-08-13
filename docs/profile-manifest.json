@@ -20,8 +20,7 @@
         "experimental_or_excluded": [
           "selfhost/",
           "kernel product claims",
-          "advanced incremental LSP",
-          "QuickJS runtime profiles"
+          "advanced incremental LSP"
         ]
       },
       "blocking_risks": [
@@ -166,7 +165,7 @@
       "id": "kernel-qemu",
       "status": "qemu-surrogate",
       "production_claim": false,
-      "summary": "Kernel and Agent runtime evidence is QEMU/OpenSBI surrogate evidence. It is useful for language/runtime regression, not a deployable hardware claim.",
+      "summary": "Kernel runtime evidence is QEMU/OpenSBI surrogate evidence. It is useful for language/runtime regression, not a deployable hardware claim.",
       "scope": {
         "blocking": [
           "kernel/",
@@ -192,13 +191,11 @@
         "qemu-test",
         "kmain-test",
         "agentos-test",
-        "app-run-test",
-        "qjs-confined-test"
+        "app-run-test"
       ],
       "components": [
         "qemu",
         "opensbi",
-        "quickjs",
         "openlibm"
       ]
     }

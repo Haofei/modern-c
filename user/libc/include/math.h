@@ -1,6 +1,6 @@
 #ifndef _MATH_H
 #define _MATH_H
-/* Freestanding <math.h> for the QuickJS port: declarations backed by the
+/* Freestanding <math.h>: declarations backed by the
  * vendored openlibm (linked as libopenlibm.a). Classification is via compiler
  * builtins so no symbol is needed for isnan/isinf/etc. */
 
@@ -90,7 +90,7 @@ long long llrint(double);
 long   lround(double);
 long long llround(double);
 
-/* float variants QuickJS and the wasm3 interpreter may touch */
+/* float variants freestanding C workloads may touch */
 float fabsf(float);
 float floorf(float);
 float ceilf(float);

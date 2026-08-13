@@ -423,13 +423,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "e1000-test", "Real e1000 NIC PCI probe", &.{ "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-e1000-test", "LLVM-lowered real e1000 NIC PCI probe", &.{ "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // M9: confined QuickJS agent on AArch64 EL0 (the AArch64 analogue of x86 M7 / riscv M3).
-    _ = h.addScriptTest(ctx, "arm-qjs-test", "M9: run a PURE-JS agent (fixed generic C host) confined in an aarch64 EL0 space under QEMU, with async host I/O over svc #0", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-arm-qjs-test", "M9 (LLVM): run a PURE-JS agent confined in an aarch64 EL0 space under QEMU, with async host I/O", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "arm-qjs-async-test", "M9: a pure-JS agent proves overlap + back-pressure/denial over async host I/O in aarch64 EL0", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "arm-qjs-async" });
-
-    _ = h.addScriptTest(ctx, "llvm-arm-qjs-async-test", "M9 (LLVM): a pure-JS agent proves overlap + back-pressure/denial over async host I/O in aarch64 EL0", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "arm-qjs-async" });
-
     _ = h.addScriptTest(ctx, "snapshot-test", "proc_snapshot (kernel/lib): stable process enumeration", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "snapshot-test" });
 
     _ = h.addScriptTest(ctx, "waitqueue-test", "WaitQueue (kernel/lib): block/wake/idle policy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "waitqueue-test" });
@@ -480,13 +473,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "x86-user-test", "x86-64 ring-3 user hello: SYS_WRITE via int 0x80, bad user ptr -> -EFAULT via a software page-table walk (no #PF), clean SYS_EXIT", &.{ "bash", "tools/arch/x86-user-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-x86-user-test", "LLVM-lowered x86-64 ring-3 user hello: ring-3 syscall round-trip + bad-ptr -EFAULT software walk under QEMU", &.{ "bash", "tools/arch/x86-user-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // M7: confined QuickJS agent on x86_64 ring-3 (the x86 analogue of the riscv M3 qjs-smode-agent).
-    _ = h.addScriptTest(ctx, "x86-qjs-test", "M7: run a PURE-JS agent (fixed generic C host) confined in an x86-64 ring-3 space under QEMU, with async host I/O over int 0x80", &.{ "bash", "tools/arch/x86-qjs-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-x86-qjs-test", "M7 (LLVM): run a PURE-JS agent confined in an x86-64 ring-3 space under QEMU, with async host I/O", &.{ "bash", "tools/arch/x86-qjs-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "x86-qjs-async-test", "M7: a pure-JS agent proves overlap + back-pressure/denial over async host I/O in x86-64 ring 3", &.{ "bash", "tools/arch/x86-qjs-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "x86-qjs-async" });
-
-    _ = h.addScriptTest(ctx, "llvm-x86-qjs-async-test", "M7 (LLVM): a pure-JS agent proves overlap + back-pressure/denial over async host I/O in x86-64 ring 3", &.{ "bash", "tools/arch/x86-qjs-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "x86-qjs-async" });
 
     _ = h.addScriptTest(ctx, "cow-test", "Copy-on-write: shared RO page diverges on write", &.{ "bash", "tools/mem/cow-test.sh", "zig-out/bin/mcc", "c" });
 
@@ -782,7 +768,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-heap-bench", "Heap free-path microbenchmark under QEMU (LLVM backend): adversarial fragment+coalesce free sequence, HEAPFREE-CYCLES total", &.{ "bash", "tools/mem/heap-bench.sh", "zig-out/bin/mcc", "llvm" });
 
-    // kernel/core/elf_loader: real multi-segment ELF loader (Phase 1 of the QuickJS-agent
     // plan / review F3) — maps every PT_LOAD at its vaddr with per-segment perms, zeroes bss.
     _ = h.addScriptTest(ctx, "elf-loader-test", "Multi-segment ELF64 loader under QEMU: maps every PT_LOAD at its vaddr with per-segment R/W/X perms, copies file bytes, zeroes bss; synthetic 2-segment image, asserts mappings/content/bss/perms", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test" });
 
@@ -800,13 +785,12 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-agent-confined-test", "Step 0 (LLVM): load a separate ELF into an isolated Sv39 address space and run it confined in U-mode under QEMU", &.{ "bash", "tools/proc/agent-confined-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // QuickJS-agent Phase 1 spine: build a real MC app (examples/apps/hello.mc) into a
     // multi-segment U-mode ELF via the userspace SDK, load it with the real elf_loader into
     // an isolated Sv39 space, and run it confined under QEMU — prints via SYS_WRITE (uaccess),
     // exits via SYS_EXIT.
-    _ = h.addScriptTest(ctx, "app-run-test", "QuickJS-agent Phase 1: build an MC app into a multi-segment ELF, load it (real elf_loader) into an isolated U-mode space, run it confined under QEMU — SYS_WRITE via uaccess + SYS_EXIT", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "app-run-test", "Build an MC app into a multi-segment ELF, load it into an isolated U-mode space, run it confined under QEMU — SYS_WRITE via uaccess + SYS_EXIT", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-app-run-test", "QuickJS-agent Phase 1 (LLVM): build + run a confined MC app in an isolated U-mode space under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "llvm-app-run-test", "LLVM: build + run a confined MC app in an isolated U-mode space under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // Direct syscall-ABI fault test (review item 2): a confined MC app hands bad user pointers to
     // SYS_WRITE/SYS_READ/SYS_POLL and asserts -E_FAULT at runtime — proving the uaccess path fails
@@ -828,83 +812,54 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-broker-probe-test", "Mock-broker cancellation/timeout (LLVM) under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/broker_probe.mc", "BROKER-PROBE: PASS", "broker-probe" });
 
-    // Out-of-order delivery (review item 3): a pure-JS agent submits a slow (delay 5) then a fast
     // (delay 1) request; the broker delivers fast first, so the resolve order is "FS". Both backends.
-    _ = h.addScriptTest(ctx, "qjs-broker-agent-test", "A pure-JS agent proves out-of-order broker completion (Promise reorder) under QEMU", &.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_broker.js", "broker-agent: order=FS", "qjs-broker-agent" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-broker-agent-test", "A pure-JS agent proves out-of-order broker completion under QEMU (LLVM)", &.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_broker.js", "broker-agent: order=FS", "qjs-broker-agent" });
 
-    // Unknown completion id is fatal (review item 6): a pure-JS agent drives the spurious op, whose
     // completion carries a bogus id; the host must fail loudly ("host: unknown completion id").
-    _ = h.addScriptTest(ctx, "qjs-spurious-agent-test", "An unknown completion id is a fatal host error under QEMU", &.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_spurious.js", "host: unknown completion id", "qjs-spurious-agent" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-spurious-agent-test", "An unknown completion id is a fatal host error under QEMU (LLVM)", &.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_spurious.js", "host: unknown completion id", "qjs-spurious-agent" });
 
-    // QuickJS-agent Phase 2: a confined C app (examples/apps/compute.c) over the freestanding
-    // libc (user/libc: malloc arena + mem/str) — the C-app + libc path QuickJS (also C) uses.
-    _ = h.addScriptTest(ctx, "compute-app-test", "QuickJS-agent Phase 2: a confined C app over the freestanding libc (malloc+string) runs in an isolated U-mode space under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/compute.c", "compute-ok", "compute-app" });
+    _ = h.addScriptTest(ctx, "compute-app-test", "Confined C app over the freestanding libc (malloc+string) runs in an isolated U-mode space under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/compute.c", "compute-ok", "compute-app" });
 
-    _ = h.addScriptTest(ctx, "llvm-compute-app-test", "QuickJS-agent Phase 2 (LLVM kernel): a confined C app over the freestanding libc runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/compute.c", "compute-ok", "compute-app" });
+    _ = h.addScriptTest(ctx, "llvm-compute-app-test", "LLVM: confined C app over the freestanding libc runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/compute.c", "compute-ok", "compute-app" });
 
-    // QuickJS-agent Phase 3: a confined C app over the freestanding libm (user/libc/math —
     // the exact half: classification/rounding/fmod + hardware sqrt) on real doubles. Proves
     // hardware FP is enabled for the app (kernel sets mstatus.FS before enter_user) — the
-    // prerequisite for JS numbers.
-    _ = h.addScriptTest(ctx, "math-app-test", "QuickJS-agent Phase 3: a confined C app over the freestanding libm (exact functions + hardware sqrt, FP enabled) runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/mathtest.c", "math-ok", "math-app" });
+    _ = h.addScriptTest(ctx, "math-app-test", "Confined C app over the freestanding libm (exact functions + hardware sqrt, FP enabled) runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/mathtest.c", "math-ok", "math-app" });
 
-    _ = h.addScriptTest(ctx, "llvm-math-app-test", "QuickJS-agent Phase 3 (LLVM kernel): a confined C app over the freestanding libm runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/mathtest.c", "math-ok", "math-app" });
+    _ = h.addScriptTest(ctx, "llvm-math-app-test", "LLVM: confined C app over the freestanding libm runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/mathtest.c", "math-ok", "math-app" });
 
-    // QuickJS-agent Phase 3 (complete): a confined C app over the vendored-openlibm
     // transcendentals (pow/exp/log/sin/cos/tan/atan2/cbrt/hypot) — the full double libm JS
     // Math needs, built freestanding into a cached archive and linked confined under FP.
-    _ = h.addScriptTest(ctx, "trig-app-test", "QuickJS-agent Phase 3: a confined C app over the vendored openlibm transcendentals runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/transcendental.c", "trig-ok", "trig-app" });
+    _ = h.addScriptTest(ctx, "trig-app-test", "Confined C app over vendored openlibm transcendentals runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/transcendental.c", "trig-ok", "trig-app" });
 
-    _ = h.addScriptTest(ctx, "llvm-trig-app-test", "QuickJS-agent Phase 3 (LLVM kernel): a confined C app over the vendored openlibm transcendentals runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/transcendental.c", "trig-ok", "trig-app" });
+    _ = h.addScriptTest(ctx, "llvm-trig-app-test", "LLVM: confined C app over vendored openlibm transcendentals runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/transcendental.c", "trig-ok", "trig-app" });
 
-    // QuickJS-agent Phase 4: MC C-ABI varargs (the `va.*` intrinsics). A variadic MC function
     // is driven from a C runtime under QEMU on both backends — the printf-family interop the
-    // (all-MC) libc needs so QuickJS can call our snprintf/printf shims.
-    _ = h.addScriptTest(ctx, "vararg-test", "QuickJS-agent Phase 4: a C-ABI variadic MC fn (va.start/va.arg/va.end) runs under QEMU", &.{ "bash", "tools/lang/vararg-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "vararg-test", "C-ABI variadic MC fn (va.start/va.arg/va.end) runs under QEMU", &.{ "bash", "tools/lang/vararg-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-vararg-test", "QuickJS-agent Phase 4 (LLVM): a C-ABI variadic MC fn runs under QEMU", &.{ "bash", "tools/lang/vararg-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "llvm-vararg-test", "LLVM: C-ABI variadic MC fn runs under QEMU", &.{ "bash", "tools/lang/vararg-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // QuickJS-agent Phase 4: the all-MC C-ABI allocator (user/libc/alloc.mc), reusing
     // kernel/core/heap.mc's free-list. Driven via malloc/free/calloc/realloc from a C runtime
-    // under QEMU on both backends — the heap QuickJS allocates against.
-    _ = h.addScriptTest(ctx, "qjs-alloc-test", "QuickJS-agent Phase 4: the all-MC C-ABI allocator (reusing heap.mc) runs under QEMU", &.{ "bash", "tools/lang/alloc-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-alloc-test", "QuickJS-agent Phase 4 (LLVM): the all-MC C-ABI allocator runs under QEMU", &.{ "bash", "tools/lang/alloc-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // QuickJS-agent Phase 4: the all-MC mem/string core (user/libc/cstr.mc) — memcpy/memset/
     // memmove/memcmp/strlen/strcmp/strncmp/strchr/memchr, driven from a C runtime under QEMU on
-    // both backends. The freestanding bytes QuickJS leans on constantly.
-    _ = h.addScriptTest(ctx, "cstr-test", "QuickJS-agent Phase 4: the all-MC mem/string core runs under QEMU", &.{ "bash", "tools/lang/cstr-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "cstr-test", "All-MC mem/string core runs under QEMU", &.{ "bash", "tools/lang/cstr-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-cstr-test", "QuickJS-agent Phase 4 (LLVM): the all-MC mem/string core runs under QEMU", &.{ "bash", "tools/lang/cstr-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "llvm-cstr-test", "LLVM: all-MC mem/string core runs under QEMU", &.{ "bash", "tools/lang/cstr-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // QuickJS-agent Phase 4: the all-MC ctype + integer parsing (user/libc/cnum.mc) — is*/to*,
     // abs, strtol/strtoul/strtoll/strtoull/atoi (with endptr, sign, 0x/0 prefixes, wraparound),
     // driven from a C runtime under QEMU on both backends.
-    _ = h.addScriptTest(ctx, "cnum-test", "QuickJS-agent Phase 4: the all-MC ctype + integer parsing runs under QEMU", &.{ "bash", "tools/lang/cnum-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "cnum-test", "All-MC ctype + integer parsing runs under QEMU", &.{ "bash", "tools/lang/cnum-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-cnum-test", "QuickJS-agent Phase 4 (LLVM): the all-MC ctype + integer parsing runs under QEMU", &.{ "bash", "tools/lang/cnum-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "llvm-cnum-test", "LLVM: all-MC ctype + integer parsing runs under QEMU", &.{ "bash", "tools/lang/cnum-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // QuickJS-agent Phase 4: the all-MC printf family (user/libc/stdio.mc, built on the va.*
     // varargs intrinsics), compiled as part of the AGGREGATED libc (user/libc/libc.mc — the
-    // single-unit artifact QuickJS links). snprintf/printf checked against expected strings from
     // a C runtime under QEMU on both backends.
-    _ = h.addScriptTest(ctx, "stdio-test", "QuickJS-agent Phase 4: the all-MC printf family (aggregated libc) runs under QEMU", &.{ "bash", "tools/lang/stdio-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "stdio-test", "All-MC printf family (aggregated libc) runs under QEMU", &.{ "bash", "tools/lang/stdio-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-stdio-test", "QuickJS-agent Phase 4 (LLVM): the all-MC printf family runs under QEMU", &.{ "bash", "tools/lang/stdio-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "llvm-stdio-test", "LLVM: all-MC printf family runs under QEMU", &.{ "bash", "tools/lang/stdio-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // QuickJS-agent Phase 4 KEYSTONE: build the vendored QuickJS engine freestanding against the
-    // all-MC libc + openlibm, link the confined qjs_agent, and EVALUATE JavaScript under QEMU
     // (1 + 2*3 == 7). Both backends.
-    _ = h.addScriptTest(ctx, "qjs-run-test", "QuickJS-agent Phase 4: build QuickJS freestanding against the all-MC libc and evaluate JS under QEMU", &.{ "bash", "tools/lang/qjs-run-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-qjs-run-test", "QuickJS-agent Phase 4 (LLVM): build QuickJS freestanding and evaluate JS under QEMU", &.{ "bash", "tools/lang/qjs-run-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // engine confines, links, and reaches the kernel — the mirror of qjs-run-test. RETIRED with
 
 
     // _count_limit). The same burn() guest is terminated mid-loop under a low limit and completes
@@ -912,14 +867,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     // CALL_INDIRECT_OVERLONG support, so stock wasi-libc output loads without feature-pinning.
 
-    // tool ABI) confined via the comprehensive host (WASI P1 + mc net_fetch/tool_submit/tool_poll).
-
-
-
-    // full host's 1 MB operand stack carries QuickJS's eval recursion.
-
     // the all-MC libc into a U-mode ELF, load it with the real elf_loader into an isolated Sv39
-    // reaching the kernel only through SYS_WRITE/SYS_EXIT. The mirror of qjs-confined-test. Both
     // backends.
 
 
@@ -927,41 +875,25 @@ pub fn register(ctx: *h.Ctx) void {
     // routes these to TOOL_OP_FS_*. Write/read round-trip is ALLOWED; mkdir is DENIED and the guest
 
 
-    // general WASI sockets), which the shim maps to TOOL_OP_NET_FETCH through the net broker
     // (egress allowlist -> budget -> endpoint). Endpoint 1 allowed (107/108), endpoint 9 DENIED
 
 
-    // shim, confined. Proves JS agents survive the migration ("keep JS, retire the hack"). Both
-
-
-    // import, which the shim routes to TOOL_OP_NET_FETCH; the JS observes the broker's allow (107/108)
     // from JS. Full JS-agent broker parity, completing the keystone. Both backends.
 
 
     // guest uses the mc.tool_submit / mc.tool_poll surface to keep multiple ops in flight and drain
-    // completions by id — mirrors the QuickJS async agents.
     //   async  : 12 overlapping SUM ops; 8 accepted + complete, 4 denied -E_AGAIN (ok=8 rejected=4).
     //   cancel : a slow op cancelled (TOOL_OP_CANCEL) completes -E_CANCELED while a fast one resolves.
     //   quota  : the 9th submit on a full 8-deep queue returns exactly -E_AGAIN.
     //   spurious: the spurious op's completion carries a bogus id the guest must detect.
 
 
-
-
     // happy path in one run (async SUM resolve + capability-checked FS round-trip + timeout cancel);
     // cancel-edges asserts the broker rejects ill-formed cancels (post-completion + never-submitted
-
-
 
     // op and demultiplex its completion by id over SYS_SUBMIT/SYS_POLL, confined.
 
     // ELF, but the kernel runs in S-mode under REAL OpenSBI (kernel mapped supervisor-only). Mirrors
-    // the qjs-smode-* gates; one parameterized script covers confined / agent / async-agent by guest.
-
-
-
-    // through a REAL S-mode virtio PLIC interrupt + the gated SYS_POLL fixture. Mirror qjs-smode-{net,blk}-irq.
-
 
 
     // fails GRACEFULLY (malloc -> NULL at the cap, no trap, agent stays confined) — an untrusted agent
@@ -981,130 +913,58 @@ pub fn register(ctx: *h.Ctx) void {
     // preempted by the machine-timer watchdog and KILLED past its CPU budget — a coarse liveness
     // bound (NOT deterministic fuel) proving an untrusted agent cannot wedge the system.
 
-    // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
-    // evaluate JS in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.
-    _ = h.addScriptTest(ctx, "qjs-confined-test", "QuickJS-agent Phase 6: evaluate JS in a CONFINED isolated U-mode Sv39 space under QEMU", &.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-confined-test", "QuickJS-agent Phase 6 (LLVM): evaluate JS confined in an isolated U-mode space under QEMU", &.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // M3a (first half): the SAME confined QuickJS agent, but the KERNEL runs in S-mode under REAL
     // OpenSBI (no `-bios none`) instead of M-mode. The agent's space additionally maps the kernel
-    // as a supervisor-only gigapage (satp is effective in S-mode) + the UART MMIO page; JS is
     // evaluated in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.
-    _ = h.addScriptTest(ctx, "qjs-smode-confined-test", "M3a: evaluate JS in a CONFINED isolated U-mode Sv39 space under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-confined-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-smode-confined-test", "M3a (LLVM): evaluate JS confined in an isolated U-mode space under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-confined-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // M3 (M3b): the PURE-JS AGENT under REAL OpenSBI (S-mode). The S-mode analogue of
-    // qjs-agent-test: same fixed generic C host + embedded JS agent doing async host I/O over
     // SYS_SUBMIT/SYS_POLL with back-pressure, but the kernel runs in S-mode under the real OpenSBI
     // firmware (no `-bios none`) and the kernel is mapped supervisor-only (unreachable from U). The
     // async agent is purely polled (no interrupts), so M3a's S-mode syscall dispatch already serves
-    // it. Default agent.js -> "agent: done".
-    _ = h.addScriptTest(ctx, "qjs-smode-agent-test", "M3: run a PURE-JS agent (fixed generic C host) confined under REAL OpenSBI (S-mode), with async host I/O", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-smode-agent-test", "M3 (LLVM): run a PURE-JS agent confined under REAL OpenSBI (S-mode), with async host I/O", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // M3 (M3b) async-under-load: the same agent_async.js + EXPECT the M-mode qjs-async-agent-test
-    // uses, now under REAL OpenSBI (S-mode). Proves Promise overlap + back-pressure/denial over
     // async host I/O while the kernel stays unmapped (supervisor-only) from the agent.
-    _ = h.addScriptTest(ctx, "qjs-smode-async-agent-test", "M3: a pure-JS agent proves overlap + back-pressure/denial over async host I/O under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "qjs-smode-async-agent" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-smode-async-agent-test", "M3 (LLVM): a pure-JS agent proves overlap + back-pressure/denial over async host I/O under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "qjs-smode-async-agent" });
 
-    // M5b.2: a pure-JS agent drives the simple FS tool path through the SAME
     // async ABI (SYS_SUBMIT/SYS_POLL). The shared app_run_demo broker dispatches host_fs_write /
     // host_fs_read / host_fs_mkdir through TOOL_OP_FS_*; write/read are allowed and mkdir is denied.
     // EXPECT "fs: ok" is reached only AFTER both the read-back and the denied mkdir.
-    _ = h.addScriptTest(ctx, "qjs-realtool-test", "M5b.2: a pure-JS agent drives the simple FS tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_fs.js", "fs: ok", "qjs-realtool" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-realtool-test", "M5b.2 (LLVM): a pure-JS agent drives the simple FS tool path over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_fs.js", "fs: ok", "qjs-realtool" });
 
-    _ = h.addScriptTest(ctx, "qjs-nettool-test", "M5b.3: a pure-JS agent drives the deterministic network fetch fixture over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_net_tool.js", "net: ok", "qjs-nettool" });
-
-    _ = h.addScriptTest(ctx, "llvm-qjs-nettool-test", "M5b.3 (LLVM): a pure-JS agent drives the deterministic network fetch fixture over the async ABI under REAL OpenSBI (S-mode)", &.{ "bash", "tools/arch/qjs-smode-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_net_tool.js", "net: ok", "qjs-nettool" });
-
-    _ = h.addScriptTest(ctx, "qjs-smode-net-irq-tool-test", "M5b.5: a pure-JS host_net_fetch completes through the gated SYS_POLL fixture from a real S-mode virtio-net PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-qjs-smode-net-irq-tool-test", "M5b.5 (LLVM): a pure-JS host_net_fetch completes through the gated SYS_POLL fixture from a real S-mode virtio-net PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "qjs-smode-blk-irq-tool-test", "M5b.6: a pure-JS host_fs_read completes through the gated SYS_POLL fixture from a real S-mode virtio-blk PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-qjs-smode-blk-irq-tool-test", "M5b.6 (LLVM): a pure-JS host_fs_read completes through the gated SYS_POLL fixture from a real S-mode virtio-blk PLIC interrupt", &.{ "bash", "tools/arch/qjs-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // QuickJS-agent Phase 7: the EVENT LOOP. The confined agent evaluates a Promise chain and
     // drains the job queue (JS_ExecutePendingJob) — the microtask concurrency real agents need
-    // (Promise/async do nothing without it). ASYNC=42 after the loop runs. Both backends.
-    _ = h.addScriptTest(ctx, "qjs-async-test", "QuickJS-agent Phase 7: the confined agent's Promise/microtask event loop under QEMU", &.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/qjs_async_agent.c", "ASYNC=42", "qjs-async" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-async-test", "QuickJS-agent Phase 7 (LLVM): the confined agent's event loop under QEMU", &.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/qjs_async_agent.c", "ASYNC=42", "qjs-async" });
 
-    // QuickJS-agent Phase 7 (full): NON-BLOCKING kernel I/O resolving a JS Promise. The confined
-    // agent's host_async() does SYS_SUBMIT and returns a pending Promise; the event loop SYS_POLLs
     // the completion and resolves it (the .then then runs). IO=42, never blocking. Both backends.
-    _ = h.addScriptTest(ctx, "qjs-io-test", "QuickJS-agent Phase 7: non-blocking SYS_SUBMIT/SYS_POLL I/O resolving a JS Promise under QEMU", &.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/qjs_io_agent.c", "IO=42", "qjs-io" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-io-test", "QuickJS-agent Phase 7 (LLVM): non-blocking I/O resolving a JS Promise under QEMU", &.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/qjs_io_agent.c", "IO=42", "qjs-io" });
 
-    // QuickJS-agent Phase 8: WORKERS (single-core v0). The confined agent spawns a worker (a
-    // separate, isolated JS context), posts a message, runs its event loop, and gets a result
     // back — the spawn/mailbox substrate. WORKER=42 isolated=1 (the worker scope didn't leak).
-    _ = h.addScriptTest(ctx, "qjs-worker-test", "QuickJS-agent Phase 8: a confined agent spawns an isolated JS worker (message-passing) under QEMU", &.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/qjs_worker_agent.c", "WORKER=42 isolated=1", "qjs-worker" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-worker-test", "QuickJS-agent Phase 8 (LLVM): a confined agent spawns an isolated JS worker under QEMU", &.{ "bash", "tools/lang/qjs-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/qjs_worker_agent.c", "WORKER=42 isolated=1", "qjs-worker" });
 
-    // The payoff: a PURE-JS agent (examples/agents/agent.js — async/await over host I/O, no C) run
-    // by the FIXED generic host (qjs_host.c), confined under QEMU. You write the agent in JS only.
-    _ = h.addScriptTest(ctx, "qjs-agent-test", "Run a PURE-JS agent (fixed generic C host) confined under QEMU, with async host I/O", &.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-qjs-agent-test", "Run a PURE-JS agent confined under QEMU (LLVM)", &.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // Async-I/O UNDER LOAD: a pure-JS agent (examples/agents/agent_async.js) that fires overlapping
-    // host_async() requests (Promise.all) AND bursts past the kernel's 8-deep completion queue, so
-    // the excess is denied (-E_AGAIN) and those Promises REJECT instead of hanging. Proves overlap,
     // independent completion, and back-pressure/denial — not just the single-request happy path.
-    _ = h.addScriptTest(ctx, "qjs-async-agent-test", "A pure-JS agent proves overlap + back-pressure/denial over async host I/O under QEMU", &.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "qjs-async-agent" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-async-agent-test", "A pure-JS agent proves overlap + back-pressure/denial over async host I/O under QEMU (LLVM)", &.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "qjs-async-agent" });
 
-    // Structured-error surfacing (review item 4): a pure-JS agent bursts past the in-flight quota
     // and asserts the rejections arrive as structured { code:-11, name:"EAGAIN", retryable:true }
-    // objects, not bare integers. Proves the host surfaces tool-ABI errno into JS as structured
     // errors. Both backends.
-    _ = h.addScriptTest(ctx, "qjs-quota-agent-test", "A pure-JS agent proves tool-ABI back-pressure surfaces as a structured JS error under QEMU", &.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_quota.js", "quota-agent: reject code=-11 name=EAGAIN retryable=true", "qjs-quota-agent" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-quota-agent-test", "A pure-JS agent proves tool-ABI back-pressure surfaces as a structured JS error under QEMU (LLVM)", &.{ "bash", "tools/lang/qjs-agent-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_quota.js", "quota-agent: reject code=-11 name=EAGAIN retryable=true", "qjs-quota-agent" });
 
-    // A pure-JS agent CANCELS an in-flight async request (AbortController-like { promise, cancel }
     // handle from the host prelude): the cancelled request rejects with a structured ECANCELED, a
     // concurrent request still resolves, and the kernel broker slot is reclaimed (host inflight=0).
-    _ = h.addScriptTest(ctx, "qjs-cancel-test", "A pure-JS agent cancels an in-flight async request (structured ECANCELED reject + broker-slot reclamation) under QEMU", &.{ "bash", "tools/lang/qjs-cancel-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-cancel-test", "A pure-JS agent cancels an in-flight async request (structured ECANCELED reject + broker-slot reclamation) under QEMU (LLVM)", &.{ "bash", "tools/lang/qjs-cancel-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // THE canonical "agent async smoke" gate (item 3): ONE confined PURE-JS agent walks the whole
     // async happy path in a single run — host_call (SUM resolve) -> host_fs_read (real cap-checked FS
     // read) -> host_sleep (async timeout) -> cancel (in-flight ECANCELED) — and prints AGENT-SMOKE-OK
     // only if every stage passed AND the host drained to inflight=0 with no unknown completion id.
-    _ = h.addScriptTest(ctx, "qjs-agent-smoke-test", "Canonical agent async smoke: a confined pure-JS agent walks host_call+FS-read+timeout+cancel and reclaims every slot (AGENT-SMOKE-OK) under QEMU", &.{ "bash", "tools/lang/qjs-agent-smoke-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-agent-smoke-test", "Canonical agent async smoke (LLVM): host_call+FS-read+timeout+cancel, all slots reclaimed (AGENT-SMOKE-OK) under QEMU", &.{ "bash", "tools/lang/qjs-agent-smoke-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // Negative cancellation-edge gate (item 4) at the JS/host layer: a confined pure-JS agent proves
     // post-completion cancel is denied, a failed-submit cancel hits nothing, a late completion after
     // cancel produces NO fatal unknown-id, and an FS read resolves non-empty — each with a distinct
     // marker; the host drains to inflight=0.
-    _ = h.addScriptTest(ctx, "qjs-cancel-edges-test", "Negative cancellation edges (pure-JS): post-complete cancel denied, failed-submit cancel hits nothing, late completion is no unknown-id, FS read non-empty under QEMU", &.{ "bash", "tools/lang/qjs-cancel-edges-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-cancel-edges-test", "Negative cancellation edges (pure-JS, LLVM): post-complete/failed-submit/late-completion cancels are harmless, FS read non-empty under QEMU", &.{ "bash", "tools/lang/qjs-cancel-edges-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // The host ITSELF in MC (examples/apps/qjs_host.mc): MC drives the QuickJS C API directly —
-    // JSValue (the 16-byte struct) by value, JS_Eval/JS_GetPropertyStr/JS_ToInt32 from MC —
     // evaluating 6*7=42 confined. Proves the host need not be C either. Both backends.
-    _ = h.addScriptTest(ctx, "qjs-mc-host-test", "An MC host (not C) drives QuickJS and evaluates JS, confined under QEMU", &.{ "bash", "tools/lang/qjs-mc-host-test.sh", "zig-out/bin/mcc", "c", "", "6*7 -> 42", "qjs-mc-host" });
 
-    _ = h.addScriptTest(ctx, "llvm-qjs-mc-host-test", "An MC host drives QuickJS, confined under QEMU (LLVM)", &.{ "bash", "tools/lang/qjs-mc-host-test.sh", "zig-out/bin/mcc", "llvm", "", "6*7 -> 42", "qjs-mc-host" });
 
     _ = h.addScriptTest(ctx, "driver-test", "Run the char-device driver framework (vtable dispatch) under QEMU", &.{ "bash", "tools/arch/driver-test.sh", "zig-out/bin/mcc", "c" });
 

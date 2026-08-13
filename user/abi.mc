@@ -72,8 +72,8 @@ export const TOOL_OP_FS_WRITE: u32 = 6; // write data to a path under the agent'
 export const TOOL_OP_FS_READ: u32 = 7;  // read a path's bytes back (staged to out_ptr)
 export const TOOL_OP_FS_MKDIR: u32 = 8; // create a directory (DENIED unless allowlisted)
 
-// Brokered network fetch. The production agent runtime exposes this as a first-class JS tool op.
-// arg = endpoint id; flags = request token/audit size. The current S-mode QuickJS runtime dispatches
+// Brokered network fetch. Validation fixtures expose this as a deterministic brokered tool op.
+// arg = endpoint id; flags = request token/audit size. The current S-mode app runtime dispatches
 // through the shared network broker policy + mock endpoint transport (`net_fetch`) because that image
 // has no NIC yet; `net_fetch_tcp` is the real transport sibling for NIC-backed runtimes.
 export const TOOL_OP_NET_FETCH: u32 = 9;
@@ -81,7 +81,7 @@ export const TOOL_OP_NET_FETCH: u32 = 9;
 // ToolReq: a tool/net request, copied IN from user memory on SYS_SUBMIT (single snapshot, so it
 // is TOCTOU-safe). `in_ptr`/`in_len` point at a request payload (validated <= MAX_REQ_BYTES);
 // `out_ptr`/`out_cap` reserve where the result payload is copied OUT on poll (<= MAX_RES_BYTES).
-// Field order/sizes are mirrored byte-for-byte by the C host (examples/apps/qjs_host.c).
+// Field order/sizes are mirrored byte-for-byte by confined C app fixtures.
 struct ToolReq {
     op: u32,      // +0  one of TOOL_OP_*
     flags: u32,   // +4  reserved (0)

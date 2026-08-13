@@ -1,5 +1,5 @@
 // user/runtime/app_traps — confined-app platform glue, in PURE MC (the all-MC replacement for
-// app_traps.c). Provides ONLY the stdio stream DATA symbols that QuickJS's <stdio.h> references
+// app_traps.c). Provides ONLY the stdio stream DATA symbols that the freestanding app libc references
 // (stdout/stderr/stdin) — never dereferenced; the all-MC stdio.mc ignores the stream and routes
 // output through the SYS_WRITE host hook.
 //

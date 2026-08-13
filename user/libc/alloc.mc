@@ -22,9 +22,9 @@ import "std/addr.mc";
 import "std/mem.mc";
 import "user/libc/lcommon.mc";
 
-// Arena size. Lives in .bss, so the cost is page-table coverage, not file size. QuickJS runtime
+// Arena size. Lives in .bss, so the cost is page-table coverage, not file size. Confined C app runtime
 // init + evaluation needs several MiB; the WASM path needs more — the wasm3 engine allocates its
-// per-function M3 code pages AND the guest's linear memory from this heap, and QuickJS-on-wasm
+// per-function M3 code pages AND the guest's linear memory from this heap, and larger confined app workloads
 // (the Phase-4 keystone, docs/wasm-migration-plan.md §4 "Javy double-layering cost") stacks a JS
 // heap inside that linear memory on top. 14 MiB is the most that fits the confined agent: it sits
 // just under the elf_loader's 16 MiB-per-segment cap (with the 512 KiB stack) and within the

@@ -21,10 +21,10 @@ AGENT_FILES=(
 )
 # NB: ALL the crt0/app_traps runtimes are now pure MC (user/runtime/crt0{,_x86,_aarch64}.mc +
 # the shared app_traps.mc); each hardcodes SYS_EXIT=3 in its naked _start (an MC `mov`/`li`, not
-# a C #define), so they are excluded from this C-side grep — like the x86/aarch64 qjs user
+# a C #define), so they are excluded from this C-side grep — like the x86/aarch64 user
 # runtimes noted below. usys.h is the remaining C header that hardcodes the ABI numbers.
-# NB: the x86-64 and aarch64 qjs user runtimes are now pure MC (tests/x86/qjs_user_x86_runtime.mc,
-# tests/arm/qjs_user_arm_runtime.mc); they use `const SYS_EXIT: u64 = 3` (not a C #define), so they
+# NB: the x86-64 and aarch64 user runtimes are pure MC; they use `const SYS_EXIT: u64 = 3`
+# (not a C #define), so they
 # are checked by the MC type system, not here.
 
 # abi_num NAME -> the canonical number from abi.mc, or empty if NAME is not a canonical

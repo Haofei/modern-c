@@ -23,7 +23,7 @@ const SATP_SV39: u64 = 0x8000_0000_0000_0000;
 const COMP_CAP: usize = 8;
 const USER_BASE: usize = 0x10000;
 // Upper bound for ELF admission and initial uaccess validation. Must cover the agent's whole
-// initial VA span — for QuickJS/WAMR agents that includes multi-MiB text/rodata plus a large
+// initial VA span — for confined C app/WAMR agents that includes multi-MiB text/rodata plus a large
 // static data/bss segment. 32 MiB covers the larger S-mode WASM agents after strict ELF segment
 // validation while staying far below the demand-grown heap and linear-memory windows.
 const USER_LIMIT: usize = 0x0200_0000;
@@ -202,7 +202,7 @@ global g_fs_async_override_ready: bool;
 global g_fs_budget: u32;
 
 // ----- Simple network tool world -----
-// The JS host fixture exposes `host_net_fetch(endpoint, token)` through the same
+// The confined app fixture exposes a deterministic network request through the same
 // SYS_SUBMIT/SYS_POLL path as FS. Keep the default as a tiny deterministic fixture: endpoint 1
 // returns token+100, every other endpoint is denied, and the budget is two calls.
 const EP_WEB: u32 = 1;
@@ -716,7 +716,7 @@ fn sys_submit(req_ptr: u64, b: u64, c: u64) -> u64 {
     }
 
     // Brokered network op: shared egress allowlist + budget + audit control plane, surfaced through
-    // the JS SYS_SUBMIT/SYS_POLL tool ABI fixture.
+    // the confined app SYS_SUBMIT/SYS_POLL tool ABI fixture.
     if is_net_op(req.op) {
         return net_submit(&req);
     }

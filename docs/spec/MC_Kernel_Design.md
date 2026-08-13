@@ -151,9 +151,9 @@ This trust base is small relative to a monolithic kernel, which is the point
 
 ```
             ┌─────────────────────────────────────────────────────────┐
-            │  Agents (semi-trusted; JS/QuickJS today, future: WASM)   │
+            │  Confined apps (validation workload only)   │
             ├─────────────────────────────────────────────────────────┤
-   above    │  Policy plane / agent runtime (anomaly detection, verdict)│   ← not in kernel
+   above    │  Policy plane / product runtime (out of current scope)│   ← not in kernel
  ───────────┼─────────────────────────────────────────────────────────┤
             │  Services (service-shaped, kernel-linked today;          │
             │            migration target: userspace processes)        │
@@ -194,7 +194,7 @@ Legacy M-mode QEMU demos (`-bios none`, kernel at `0x8000_0000`) and S-mode/Open
 **coexist**: the M-mode path remains for the bare-metal bring-up demos, while a full set of
 S-mode gates runs under REAL OpenSBI — `sbi-boot-test`, `smode-user-test`, `smode-timer-test`,
 `blk-smode-test`, `net-smode-test`, and the
-`qjs-smode-{confined,agent,async-agent}-test` agents. Until paging is explicitly enabled, kernel
+retained S-mode confined app gates. Until paging is explicitly enabled, kernel
 and tasks execute in physical address space. **Status: GATED** (`kmain-test` / `llvm-kmain-test`
 for M-mode; the `*-smode-*` steps above for S-mode) · riscv64 only.
 
@@ -221,12 +221,8 @@ that enables interrupts then jumps to `entry`.
 | Arch | Boot | Run | User mode | Paging | Interrupts | Verdict |
 |------|------|-----|-----------|--------|------------|---------|
 | **riscv64** | ✓ M+S | ✓ full | ✓ (U-mode ecall dispatch) | ✓ Sv39 | ✓ CLINT+PLIC | **primary; GATED** |
-| **x86_64** | ✓ multiboot | ✓ ring-3 user + confined QuickJS¹ | ✓ (ring-3, `int 0x80`) | ✓ 4-level | ✓ LAPIC timer + PCI (CAM) | **GATED (boot/paging/user/IRQ; QuickJS¹); not full-kernel parity** |
-| **aarch64** | ✓ QEMU virt (EL1) | ✓ EL0 user + confined QuickJS¹ | ✓ (EL0, `svc #0`) | ✓ stage-1 4 KB | ✗ (no GIC/timer IRQ yet) | **GATED (boot/paging/user; QuickJS¹); IRQ pending** |
-
-¹ QuickJS gating is per-backend: **x86 sync + async** = C+LLVM-gated; **AArch64 sync + async** =
-C+LLVM-gated. The former LLVM tracking cases were promoted after target-aware `va_list` storage,
-target triples/data layouts, and explicit AArch64 `va_arg` lowering were proven under QEMU.
+| **x86_64** | ✓ multiboot | ✓ ring-3 confined user app | ✓ (ring-3, `int 0x80`) | ✓ 4-level | ✓ LAPIC timer + PCI (CAM) | **GATED (boot/paging/user/IRQ); not full-kernel parity** |
+| **aarch64** | ✓ QEMU virt (EL1) | ✓ EL0 confined user app | ✓ (EL0, `svc #0`) | ✓ stage-1 4 KB | ✗ (no GIC/timer IRQ yet) | **GATED (boot/paging/user); IRQ pending** |
 
 ### 8.3 "Both backends" ≠ "both architectures"
 
@@ -349,12 +345,12 @@ reused; `endpoint_slot` fails `DeadEndpoint` on generation mismatch. Gates: `exe
 
 ### 10.3 Tool ABI fixtures — GATED, not a kernel product layer
 
-The dedicated kernel agent runtime and network broker fixtures have been removed. Kernel tests
+The dedicated kernel policy runtime and network broker fixtures have been removed. Kernel tests
 now use smaller tool-ABI fixtures to exercise userspace calls, async polling, confinement, and
 C/LLVM lowering. These fixtures are not a production agent capability broker and do not define a
 native agent OS surface.
 
-Gates: `cap-test`, `app-run-test`, `qjs-realtool-test`.
+Gates: `cap-test`, `app-run-test`.
 
 ### 10.4 Signals — IMPLEMENTED (kernel primitive only)
 
@@ -697,12 +693,7 @@ The safety keystone (governance) has landed. The open frontier, per the vision d
   surface and broadening the catalog (read/ls/grep/edit/find over real paths).
 - **Native tool catalog** — out of current language-kernel scope. The kernel tree now keeps only
   demo-scope tool ops needed to exercise the userspace ABI and async runtime.
-- **Agent code execution** — *delivered*: QuickJS runs as a confined userspace ELF on all three
-  arches (riscv64 M+S-mode, x86_64 ring-3, AArch64 EL0), evaluating pure-JS agents under kernel
-  confinement. The remaining roadmap is broader: wider
-  capability-tool coverage, keeping the real network broker as a JS/tool ABI validation
-  fixture, cross-arch broker-fixture parity (x86/AArch64 still need confined-agent fixtures that
-  reuse the shared broker), and optionally a second runtime (e.g. WASM).
+- **Confined app execution** — retained only as validation workload: userspace ELF loading, syscall confinement, and C/LLVM backend parity are exercised by narrow app fixtures. Product runtimes and extra language engines are out of current scope.
 - **Allocator→charge wiring** — close the §9.6/§14 gap so governance enforces on every
   allocation path, not only explicit charge sites.
 - **IPC fast path** — co-designed with sampling provenance.

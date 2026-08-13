@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runtime test for the MC mem/string core (user/libc/cstr.mc) on riscv64. Lowers cstr.mc through
 # the selected backend and links it with a C runtime that drives memcpy/memset/memmove/memcmp/
-# strlen/strcmp/strncmp/strchr/memchr through the standard prototypes (as QuickJS will), then
+# strlen/strcmp/strncmp/strchr/memchr through the standard prototypes (as confined C app will), then
 # runs under QEMU. Linked WITHOUT freestanding.c so the MC definitions are the only mem/str libc.
 #
 # Usage: tools/lang/cstr-test.sh <path-to-mcc> [c|llvm]

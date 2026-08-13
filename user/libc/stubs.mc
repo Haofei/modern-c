@@ -1,4 +1,4 @@
-// user/libc/stubs — the small C-ABI surface QuickJS references but that has no real behavior in
+// user/libc/stubs — the small C-ABI surface freestanding C objects may reference but that has no real behavior in
 // a confined agent: process control (abort/assert -> trap), wall-clock time (epoch stubs; Date
 // is not yet wired to a capability clock), and the stdio stream objects. All in MC.
 
@@ -17,7 +17,7 @@ export fn __assert_fail(expr: *const u8, file: *const u8, line: i32, func: *cons
 }
 
 // exit(code): a confined agent has no host process to exit; treat as abort for now (Phase 6
-// routes this to SYS_EXIT via the agent runtime).
+// routes this to SYS_EXIT via the app runtime).
 export fn exit(code: i32) -> void {
     unreachable;
 }
@@ -53,5 +53,5 @@ export fn gmtime_r(timep: *const u8, result: *mut u8) -> *mut u8 {
 }
 
 // NOTE: the stdio stream objects (stdout/stderr/stdin) and the console/syscall hooks
-// (mc_console_write/sys_write) are PLATFORM symbols provided by the agent runtime (the crt/
-// syscall layer), not the libc — QuickJS only passes the streams to fprintf, which ignores them.
+// (mc_console_write/sys_write) are PLATFORM symbols provided by the app runtime (the crt/
+// syscall layer), not the libc — the minimal fprintf path ignores the stream payloads.

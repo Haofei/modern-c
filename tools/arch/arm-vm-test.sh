@@ -25,7 +25,7 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 # enforces NATURAL ALIGNMENT unconditionally (independent of SCTLR.A). Without these flags the
 # compiler may emit an unaligned access, or a 16-byte SIMD pair-store for struct init/copy to an
 # only-8-byte-aligned local, which faults as a data abort (ESR DFSC=0x21) on a strict qemu. Forcing
-# aligned, GP-register-only codegen avoids it (mirrors the arm-qjs / arm-wasm gates, which pass).
+# aligned, GP-register-only codegen avoids it (mirrors the retained arm user gates).
 CFLAGS=(--target=aarch64-unknown-elf -ffreestanding -nostdlib -fno-pic -mstrict-align -mgeneral-regs-only -O1 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function)
 case "$BACKEND" in
     c)

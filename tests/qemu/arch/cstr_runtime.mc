@@ -1,5 +1,5 @@
 // Bare-metal riscv64 M-mode runtime exercising the MC mem/string core (user/libc/cstr.mc)
-// through the standard C prototypes, as QuickJS will — in PURE MC (no C). The all-MC
+// through the standard C prototypes, as confined C app will — in PURE MC (no C). The all-MC
 // replacement for kernel/arch/riscv64/cstr_runtime.c.
 //
 // cstr.mc IS the only mem/str libc in the image (linked WITHOUT freestanding.c), so this

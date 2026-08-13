@@ -133,29 +133,10 @@
       ]
     },
     {
-      "id": "quickjs",
-      "category": "vendored",
-      "owner": "agent-runtime",
-      "summary": "QuickJS-NG engine for the confined JavaScript Agent profile.",
-      "upstream": "https://github.com/quickjs-ng/quickjs",
-      "revision": "fd0a0210b7be00957751871e7e01b8291268fc29",
-      "version": "0.15.1",
-      "archive_sha256": "c4e813951b7c46845096a948e978c620b11ab4cf5fd622ca09c727ec31f42623",
-      "license": "MIT",
-      "license_file": "third_party/quickjs/LICENSE",
-      "provenance_file": "third_party/quickjs/README.vendored.md",
-      "local_modifications": [
-        "third_party/quickjs/quickjs.h"
-      ],
-      "profiles": [
-        "kernel-qemu"
-      ]
-    },
-    {
       "id": "openlibm",
       "category": "vendored",
       "owner": "agent-runtime",
-      "summary": "Freestanding libm subset used by confined C apps and QuickJS hosts.",
+      "summary": "Freestanding libm subset used by confined C app validation.",
       "upstream": "https://github.com/JuliaMath/openlibm",
       "revision": "b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8",
       "archive_sha256": "b387919068d5ec49929cc012119375b889724175918e851851d3eacab92a665a",

@@ -3,7 +3,7 @@
 # U-mode ELF via the userspace SDK, load it with the real elf_loader into an ISOLATED Sv39
 # space (kernel UNMAPPED), and run it under QEMU. The app prints via SYS_WRITE (its user buffer
 # copied in through the agent's page table) and exits via SYS_EXIT — reaching the kernel only
-# through ecall. This is the end-to-end Phase-1 spine of the QuickJS-agent plan.
+# through ecall. This is the end-to-end confined app loader validation spine.
 #
 # Usage: tools/proc/app-run-test.sh <path-to-mcc> [c|llvm]
 # Skips (exit 0) when the riscv toolchain or QEMU is unavailable.

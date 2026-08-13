@@ -7,6 +7,6 @@
 // libc for a confined C app that reports via raw `SYS_WRITE` (from the crt0/ecall shim) and needs
 // no formatted output: the full `libc.mc` additionally imports `stdio.mc`, whose formatter needs a
 // `mc_console_write` host hook that a standalone app (compute/mathtest/transcendental) has no
-// provider for. Apps that do want stdio (e.g. the QuickJS host) link `libc.mc` instead.
+// provider for. Apps that do want stdio link `libc.mc` instead.
 import "user/libc/alloc.mc";
 import "user/libc/cstr.mc";

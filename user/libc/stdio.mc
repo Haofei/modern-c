@@ -1,6 +1,6 @@
 // user/libc/stdio — the C-ABI printf family (vsnprintf/snprintf/printf/fprintf + the character
 // and string output functions), in MC, built on the `va.*` varargs intrinsics. The formatting
-// QuickJS uses for diagnostics and internal string building.
+// confined C apps use for diagnostics and string building.
 //
 // Output is abstracted by a `Sink`: either a bounded user buffer (vsnprintf/snprintf, C99
 // truncation + count semantics) or the console (everything else), which streams through the

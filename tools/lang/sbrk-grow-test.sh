@@ -5,7 +5,7 @@
 # an ISOLATED Sv39 space (kernel UNMAPPED), drop to U-mode, and let it malloc() 40 MiB in chunks —
 # forcing the kernel (app_run_demo.mc sys_sbrk) to map fresh frames at the running break. PASS requires
 # confinement + the agent's SBRK-GROW-OK marker (it wrote+read every page of the grown region) + a
-# clean U-mode exit. Reaches the kernel ONLY through ecall (sys_write + SYS_SBRK). Mirrors qjs-confined.
+# clean U-mode exit. Reaches the kernel ONLY through ecall (sys_write + SYS_SBRK). Mirrors app-run.
 #
 # Usage: tools/lang/sbrk-grow-test.sh <mcc> [c|llvm]
 set -euo pipefail
@@ -23,7 +23,7 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
 SRC="$HERE/tests/qemu/proc/app_run_demo.mc"             # kernel side: ELF load + SYS_WRITE/SYS_SBRK + confine
-RUNTIME="$HERE/tests/qemu/lang/qjs_confined_runtime.mc" # kernel-side loader (generic; PURE MC)
+RUNTIME="$HERE/tests/qemu/proc/app_runtime.mc" # generic kernel-side confined app loader runtime (PURE MC)
 SHARED="$HERE/tests/qemu/proc/context_runtime.mc"
 USERMODE="$HERE/tests/qemu/proc/usermode_runtime.mc"
 LDSCRIPT="$HERE/tests/qemu/virt.ld"
@@ -52,7 +52,7 @@ MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$HERE/user/libc/syscall_user.m
 APP_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/app-support.o")"
 bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
 
-"$LLD" -T "$HERE/user/runtime/user_qjs.ld" \
+"$LLD" -T "$HERE/user/runtime/user.ld" \
     "$WORK/crt0.o" "$WORK/agent.o" \
     "$WORK/libc.o" "$WORK/sys.o" "$WORK/traps.o" $APP_SUPPORT "$WORK/libm.a" \
     -o "$WORK/agent.elf"

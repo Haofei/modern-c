@@ -112,11 +112,6 @@ def main() -> None:
             "fuzz-corpus",
         ],
     )
-    assert_gates(
-        module,
-        ["tests/qemu/proc/app_run_demo.mc", "tests/qemu/lang/qjs_confined_runtime.mc", "tests/qemu/arch/qjs_smode_demo.mc"],
-        ["app-run-test", "qjs-confined-test", "qjs-smode-confined-test"],
-    )
     assert_checks(module, ["docs/README.md"], ["git diff --check"])
     docs_only = subprocess.run(
         [sys.executable, str(DEV_GATES), "docs/README.md"],
@@ -260,11 +255,10 @@ def main() -> None:
     assert_route(module, ["THIRD-PARTY-LICENSES.md"], ["third-party-licenses-test"], ["git diff --check"])
     assert_route(
         module,
-        ["third_party/quickjs/README.vendored.md"],
+        ["third_party/openlibm/README.vendored.md"],
         ["vendoring-test", "third-party-licenses-test"],
         ["git diff --check"],
     )
-    assert_gates(module, ["third_party/quickjs/LICENSE"], ["vendoring-test", "third-party-licenses-test"])
     assert_route(
         module,
         ["third_party/openlibm/LICENSE.md"],
@@ -309,11 +303,8 @@ def main() -> None:
     assert_gates(module, ["tools/net/kmain-net-test.sh"], ["kmain-net-test", "llvm-kmain-net-test"])
     assert_gates(module, ["tools/arch/aarch64-test.sh"], ["aarch64-test", "llvm-aarch64-test"])
     assert_gates(module, ["tools/arch/qemu-mmio-test.sh"], ["qemu-test", "llvm-qemu-test"])
-    assert_gates(
-        module,
-        ["tools/lang/qjs-agent-smoke-test.sh"],
-        ["qjs-agent-smoke-test", "llvm-qjs-agent-smoke-test"],
-    )
+    assert_gates(module, ["tools/proc/app-run-test.sh"], ["app-run-test", "llvm-app-run-test"])
+    assert_gates(module, ["tests/qemu/proc/app_run_demo.mc"], ["app-run-test", "llvm-app-run-test"])
     assert_gates(module, ["tools/qemu/kernel-boot-lib.sh"], ["preflight", "riscv-qemu-validation"])
     assert_gates(
         module,

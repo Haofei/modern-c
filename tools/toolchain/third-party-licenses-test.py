@@ -13,29 +13,6 @@ MANIFEST = ROOT / "THIRD-PARTY-LICENSES.md"
 LICENSE_FILENAMES = ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")
 
 DEPENDENCIES = {
-    "quickjs": {
-        "heading": "QuickJS-NG",
-        "license": "third_party/quickjs/LICENSE",
-        "readme": "third_party/quickjs/README.vendored.md",
-        "needles": (
-            "Component: QuickJS-NG",
-            "https://github.com/quickjs-ng/quickjs",
-            "0.15.1",
-            "v0.15.1",
-            "fd0a0210b7be00957751871e7e01b8291268fc29",
-            "c4e813951b7c46845096a948e978c620b11ab4cf5fd622ca09c727ec31f42623",
-            "MIT",
-            "Redistribution note:",
-            "copyright notices",
-            "permission notice",
-            "warranty disclaimer",
-        ),
-        "forbidden": (
-            "exact recorded commit is currently unknown",
-            "exact upstream commit is unknown",
-            "next QuickJS re-vendor",
-        ),
-    },
     "openlibm": {
         "heading": "openlibm",
         "license": "third_party/openlibm/LICENSE.md",

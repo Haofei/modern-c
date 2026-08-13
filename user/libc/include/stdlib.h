@@ -6,7 +6,7 @@
 #define EXIT_FAILURE 1
 #define RAND_MAX 0x7fffffff
 
-/* alloca: stack allocation via the compiler builtin (QuickJS uses it without <alloca.h>). */
+/* alloca: stack allocation via the compiler builtin for freestanding C compatibility. */
 #define alloca(n) __builtin_alloca(n)
 
 void *malloc(size_t size);

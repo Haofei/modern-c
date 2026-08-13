@@ -5,7 +5,7 @@
 // API. Unlike x86 (port I/O instructions) the PL011 is plain MMIO, so there is NO inline
 // asm here at all — `console_putc` polls the flag register's TX-FIFO-full bit then stores
 // the byte to the data register through `raw.store<u8>`. This is the reusable ARM console
-// the rest of the aarch64 sweep (vm/user/qjs/context kmains) prints through.
+// the rest of the aarch64 sweep (vm/user/context kmains) prints through.
 
 import "std/fmt/fmt_sink.mc";
 

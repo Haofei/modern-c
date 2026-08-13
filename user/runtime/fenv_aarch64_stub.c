@@ -1,4 +1,4 @@
-// user/runtime/fenv_aarch64_stub.c — minimal freestanding fenv for the confined AArch64 QuickJS
+// user/runtime/fenv_aarch64_stub.c — minimal freestanding fenv for confined AArch64 C apps
 // agent.
 //
 // On AArch64, openlibm's fenv ops (openlibm_fenv_aarch64.h) are all INLINE (they manipulate FPCR/

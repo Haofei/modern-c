@@ -16,7 +16,7 @@ extern fn mc_ecall(number: u64, a0: u64, a1: u64, a2: u64) -> u64;
 // a request id >=0, or -errno). poll is the VECTOR drain: fill up to `max` ToolEvents at
 // `events_ptr` (i-th event at offset i*sizeof(ToolEvent)) for ready completions, advancing the
 // broker clock up to `timeout` extra ticks; returns the count delivered (0..max), or -E_FAULT.
-// The C host (examples/apps/qjs_host.c) calls this directly via `extern long sys_poll(...)`.
+// Confined C app fixtures may call this directly via `extern long sys_poll(...)`.
 export fn sys_submit(req_ptr: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_SUBMIT, req_ptr as u64, 0, 0));
 }
@@ -33,7 +33,7 @@ fn sys_poll_pump(events_ptr: usize, max: usize, timeout: usize) -> i64 {
     return sys_poll(events_ptr, max, timeout);
 }
 
-// write(2): the C-ABI used by qjs_agent. fd in a0, buffer address in a1, length in a2.
+// write(2): the C-ABI used by confined C apps. fd in a0, buffer address in a1, length in a2.
 export fn sys_write(fd: u64, buf: usize, len: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_WRITE, fd, buf as u64, len as u64));
 }
