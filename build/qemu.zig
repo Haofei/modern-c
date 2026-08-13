@@ -272,11 +272,6 @@ pub fn register(ctx: *h.Ctx) void {
     // X4: x86-64 Local-APIC timer — REAL, non-polled interrupt delivery. PICs masked, LAPIC timer
     // periodic at IDT vec 0x20, sti + hlt-spin until ticks fire.
 
-    // X5: x86-64 PCI / virtio-pci device discovery — REAL config-space enumeration via the legacy
-    // CAM port-I/O mechanism (0xCF8/0xCFC). Scans bus 0, finds the QEMU virtio-blk-pci device
-    // (vendor 0x1AF4), reports its identity over COM1 (the analogue of RISC-V FDT/ECAM discovery).
-
-
     _ = h.addScriptTest(ctx, "grant-test", "Memory grant: bounded delegation + revocation", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "grant-test" });
 
 

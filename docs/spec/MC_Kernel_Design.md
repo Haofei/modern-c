@@ -467,7 +467,6 @@ product work belongs to a separate validation/product profile if it is revived.
 
 | Driver | Hardware | Status |
 |--------|----------|--------|
-| `pci` | ECAM config | **IMPLEMENTED** — bus scan, BAR0. |
 | `irq/plic` | RISC-V PLIC | **GATED** — typestate `IrqLine<State>`, `#[irq_context]`-checked. |
 | `timer/clint` | RISC-V CLINT | **GATED** — `mtime`/`mtimecmp`. |
 
@@ -535,7 +534,7 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | Provenance + cap audit | **GATED** (kcall audits allowed+denied; tool calls audit dispatched only) |
 | Syscall table mechanism | **GATED**; production syscall surface absent |
 | Network validation | **GATED**; link/IP/driver validation only |
-| Drivers: plic, clint, rng | **GATED/validation scoped** |
+| Drivers: plic, clint | **GATED/validation scoped** |
 | ELF parse/load | **GATED**; dynamic linking absent |
 
 ---

@@ -106,20 +106,20 @@ It is a *lint*, not the compiler: it parses with `awk` and is deliberately conse
 authoritative gate is `sema`; this gives the greppable, human-auditable view and a clean
 inventory.
 
-## Audited inventory — `kernel/` + `std/` (142 `.mc` files)
+## Audited inventory — `kernel/` + `std/` (102 `.mc` files)
 
 Snapshot from `tools/toolchain/mc-audit.sh --mode unsafe` at S0.2. **Result: clean** — every gated unsafe op
 sits inside an `unsafe`/`unsafe_contract` region (re-run the lint for the live count).
 
 | Category | Count | Gate | Where the load-bearing ones live |
 |---|---:|---|---|
-| `raw.load` / `raw.store` | 142 | unsafe block | The raw-register/MMIO path. Concentrated in the driver/MMIO/runtime layers: `kernel/drivers/irq/plic.mc`, `std/mmio.mc`, `std/bytes.mc`, `std/mem.mc`, `std/libc.mc`, `kernel/drivers/timer/clint.mc`, `std/dma.mc`, `std/vec.mc`. This is the **S0.3 strict-aliasing** surface. |
-| `mmio.map<T>` | 1 | unsafe block | `kernel/drivers/rng/rng.mc:63` (`mmio.map<VirtioMmio>(phys(addr))`) — the typed-MMIO-view mint. |
+| `raw.load` / `raw.store` | 100 | unsafe block | The raw-register/MMIO path. Concentrated in the driver/MMIO/runtime layers: `kernel/drivers/irq/plic.mc`, `std/mmio.mc`, `std/bytes.mc`, `std/mem.mc`, `std/libc.mc`, `kernel/drivers/timer/clint.mc`, `std/dma.mc`, `std/vec.mc`. This is the **S0.3 strict-aliasing** surface. |
+| `mmio.map<T>` | 0 | unsafe block | — none currently. |
 | `raw.ptr<T>` | 20 | tracked | Mostly typed address wrappers and hosted/runtime plumbing. Minting only; derefs are checked. |
 | raw-many `.offset()` | 0 | unsafe block | — none currently. |
-| `forget_unchecked` | 43 | unsafe block | Driver completion/lock release paths: `kernel/drivers/virtio/*`, `kernel/drivers/irq/plic.mc`, etc. — transferring a linear value's ownership out of the checker. |
+| `forget_unchecked` | 28 | unsafe block | Driver completion/lock release paths such as `kernel/drivers/irq/plic.mc` — transferring a linear value's ownership out of the checker. |
 | `arc_get_mut` | 1 | unsafe block | `std/arc.mc` (definition); call sites require `unsafe`. |
-| inline `asm` | 23 | unsafe block | Architecture context/CSR/paging paths. The precise forms carry `#[unsafe_contract(precise_asm)]`. |
+| inline `asm` | 17 | unsafe block | Architecture context/CSR/paging paths. The precise forms carry `#[unsafe_contract(precise_asm)]`. |
 | `unchecked.{add,…}` | 0 | `#[unsafe_contract(no_overflow)]` | — none currently in kernel/std. |
 | `assume_noalias_unchecked` | 0 | `#[unsafe_contract(noalias)]` | — none currently in kernel/std. |
 | `bitcast<T>` | 8 | tracked | `std/vec.mc` (typed-slot reinterpret). Alias-safe (memcpy). |
