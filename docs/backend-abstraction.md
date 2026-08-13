@@ -21,9 +21,8 @@ backend.VerifiedProgram
         └── LLVM backend
 ```
 
-Backends should not receive a raw `ast.Module` through the registry interface.
-Legacy helper functions still exist for tests and compatibility, but the CLI
-artifact paths build `VerifiedProgram` before invoking the selected backend.
+Backends must not receive a raw `ast.Module` through the registry interface.
+CLI artifact paths build `VerifiedProgram` before invoking the selected backend.
 
 ## What it abstracts
 
@@ -115,25 +114,13 @@ It then exposes:
 
 - `runtime_hooks`: MIR-owned facts for default trap/sanitizer hook suppression.
 
-A transitional declaration slice still exists behind collected
-`EarlyDeclarationArtifacts`, carried by the named
-`LowerRequest.declaration_artifacts` artifact boundary rather than stored
-on `VerifiedProgram` or passed as a standalone backend parameter. It is narrower
-than giving the backend a full `ast.Module`, but it is not the final semantic
-boundary. Source-map rows are carried as collected
-`declaration_artifacts.SourceMapArtifact` values on
-`EmitMapRequest.source_map_artifacts` rather than through an AST declaration view
-or a separate wrapper module. Declaration-artifact mechanics live in
-`declaration_artifacts.zig`; `backend.zig` imports only `codegen_request.zig` so
-the core backend seam does not directly import AST declarations. New backend
-work should prefer MIR identities and typed facts and should avoid adding new
-semantic decisions to syntax-backed views.
-
-CLI/backend commands assemble the transitional request in
-`driver_codegen_inputs.zig`. That file is the only driver-owned syntax
-compatibility edge that may combine `VerifiedProgram` construction with
-declaration-artifact collection; `main.zig` and backend lowerers must not call
-the declaration collector directly.
+Collected `EarlyDeclarationArtifacts` and
+`declaration_artifacts.SourceMapArtifact` values remain a temporary mechanics
+bridge for declaration ordering and source-map output. They are not semantic
+authority and are not stored on `VerifiedProgram`. `driver_codegen_inputs.zig`
+is the only driver-owned compatibility edge that may assemble those artifacts
+next to `VerifiedProgram` construction; `main.zig` and backend lowerers must not
+call declaration collectors directly.
 
 Artifact envelope metadata is not owned by the backend seam. `.mcmeta` and `.mcmap` use `artifact_model.ArtifactBundle`; backend lowering only receives the source digest through `LowerOptions`.
 
@@ -173,32 +160,14 @@ All artifact commands pass the same source digest and sanitized/remapped source
 path into `LowerOptions`, so generated artifacts and metadata use the same
 source identity.
 
-## Adding a backend
+## Backend scope
 
-1. Implement `src/lower_<name>.zig`.
-2. Expose a constructor:
-
-   ```zig
-   const backend_mod = @import("backend.zig");
-
-   pub fn mcBackend() backend_mod.Backend {
-       return .{
-           .name = "<name>",
-           .artifact_ext = ".<ext>",
-           .supports_profiles = false,
-           .ctx = null,
-           .lowerFn = backendLower,
-       };
-   }
-   ```
-
-3. Make `backendLower` accept `backend.LowerRequest`, then return
-   `backend.LowerError!void`.
-4. Register the backend in `src/backend_registry.zig`.
-5. Add CLI dispatch in `src/main.zig` if it needs a first-class command.
-
-If the backend needs source-map output, provide `emitMapFn`; otherwise leave it
-null.
+The current scope is the two built-in backends: checked C and textual LLVM IR.
+Do not add another backend while the verified-program boundary, typed fact
+schema, module identity, layout/ABI tables, and cleanup/control MIR authority
+are still being narrowed. New lowering work should make the existing C/LLVM
+backends more mechanical rather than introducing another consumer of transitional
+facts.
 
 ## Shared lowerer inputs
 
@@ -215,5 +184,5 @@ These modules are legitimate shared inputs for backend work:
 - `string_literal.zig`: canonical decoded string bytes.
 
 `ast_query.zig` may be used for remaining syntax-shape compatibility helpers,
-but it should not become a new semantic authority. The long-term direction is
-for C/LLVM/native backends to consume typed MIR facts mechanically.
+but it must not become a new semantic authority. The long-term direction is for
+the two built-in backends to consume typed MIR facts mechanically.
