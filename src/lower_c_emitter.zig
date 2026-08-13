@@ -156,11 +156,6 @@ const isStringLiteralTarget = type_bridge.isStringLiteralTarget;
 const isMmioStructAbi = type_bridge.isMmioStructAbi;
 const dynCalleeMethodName = syntax_bridge.dynCalleeMethodName;
 
-const AggregateDeclArtifact = union(enum) {
-    struct_decl: ast_bridge.StructDecl,
-    tagged_union: ast_bridge.UnionDecl,
-};
-
 pub fn appendLayoutAsserts(
     allocator: std.mem.Allocator,
     artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
@@ -259,7 +254,6 @@ pub const CEmitter = struct {
     const_global_domains: std.StringHashMap(eval.DomainWidth),
     comptime_declarations: ?eval.ComptimeDeclarations = null,
     structs: std.StringHashMap(ast_bridge.StructDecl),
-    aggregate_decl_artifacts: std.ArrayList(AggregateDeclArtifact) = .empty,
     mmio_structs: std.StringHashMap(MmioStruct),
     packed_bits: std.StringHashMap(PackedBitsInfo),
     overlay_unions: std.StringHashMap(OverlayUnionInfo),
@@ -410,7 +404,6 @@ pub const CEmitter = struct {
         var mmio_structs = self.mmio_structs.valueIterator();
         while (mmio_structs.next()) |mmio_struct| mmio_struct.fields.deinit();
         self.mmio_structs.deinit();
-        self.aggregate_decl_artifacts.deinit(self.allocator);
         self.structs.deinit();
         self.type_aliases.deinit();
     }
@@ -516,7 +509,6 @@ pub const CEmitter = struct {
         }
         try self.structs.put(struct_decl.name.text, struct_decl);
         for (struct_decl.fields) |field| try self.collectTypeArtifacts(field.ty);
-        try self.aggregate_decl_artifacts.append(self.allocator, .{ .struct_decl = struct_decl });
     }
 
     fn collectFunctionArtifact(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
@@ -891,22 +883,26 @@ pub const CEmitter = struct {
     // declaration; by-value embedding still relies on definition ordering.
     fn emitAggregateForwardDeclarations(self: *CEmitter) !void {
         var emitted = false;
-        for (self.aggregate_decl_artifacts.items) |artifact| {
-            var keyword: []const u8 = "struct";
-            const name = switch (artifact) {
-                .struct_decl => |struct_decl| blk: {
+        for (self.decl_artifacts) |artifact| switch (artifact) {
+            .type_decl => |type_decl| switch (type_decl) {
+                .struct_decl => |struct_decl| {
                     if (!self.structs.contains(struct_decl.name.text)) continue;
                     // A `#[c_union]` is a real C `union`; its forward tag must
                     // match its definition tag (`typedef union U U;`), not the
                     // default `struct`.
-                    if (struct_decl.is_c_union) keyword = "union";
-                    break :blk struct_decl.name.text;
+                    const keyword: []const u8 = if (struct_decl.is_c_union) "union" else "struct";
+                    try self.out.print(self.allocator, "typedef {s} {s} {s};\n", .{ keyword, struct_decl.name.text, struct_decl.name.text });
+                    emitted = true;
                 },
-                .tagged_union => |union_decl| if (self.tagged_unions.contains(union_decl.name.text)) union_decl.name.text else continue,
-            };
-            try self.out.print(self.allocator, "typedef {s} {s} {s};\n", .{ keyword, name, name });
-            emitted = true;
-        }
+                .union_decl => |union_decl| {
+                    if (!self.tagged_unions.contains(union_decl.name.text)) continue;
+                    try self.out.print(self.allocator, "typedef struct {s} {s};\n", .{ union_decl.name.text, union_decl.name.text });
+                    emitted = true;
+                },
+                else => {},
+            },
+            else => {},
+        };
         {
             var it = self.array_types.valueIterator();
             while (it.next()) |array| {
@@ -1016,9 +1012,13 @@ pub const CEmitter = struct {
         var units: std.ArrayList(AggregateEmitUnit) = .empty;
         defer units.deinit(arena);
 
-        for (self.aggregate_decl_artifacts.items) |artifact| switch (artifact) {
-            .struct_decl => |s| if (self.structs.contains(s.name.text)) try units.append(arena, .{ .struct_decl = s }),
-            .tagged_union => |u| if (self.tagged_unions.contains(u.name.text)) try units.append(arena, .{ .tagged_union = u }),
+        for (self.decl_artifacts) |artifact| switch (artifact) {
+            .type_decl => |type_decl| switch (type_decl) {
+                .struct_decl => |s| if (self.structs.contains(s.name.text)) try units.append(arena, .{ .struct_decl = s }),
+                .union_decl => |u| if (self.tagged_unions.contains(u.name.text)) try units.append(arena, .{ .tagged_union = u }),
+                else => {},
+            },
+            else => {},
         };
         {
             var it = self.array_types.valueIterator();
@@ -2452,7 +2452,6 @@ pub const CEmitter = struct {
             if (case.ty) |ty| try self.collectTypeArtifacts(ty);
         }
         try self.tagged_unions.put(union_decl.name.text, union_decl);
-        try self.aggregate_decl_artifacts.append(self.allocator, .{ .tagged_union = union_decl });
     }
 
     fn overlayFieldLayout(self: *CEmitter, ty: ast_bridge.TypeExpr) ?OverlayLayout {
