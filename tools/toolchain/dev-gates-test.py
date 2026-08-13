@@ -276,32 +276,12 @@ def main() -> None:
     )
     assert_gates(module, ["tools/toolchain/llvm-c-emit-sweep.py"], ["llvm-c-sweep"])
     assert_gates(module, ["tools/toolchain/llvm-c-obj-sweep.py"], ["llvm-c-obj-sweep"])
-    assert_gates(module, ["tools/mem/heap-bench.sh"], ["heap-bench", "llvm-heap-bench"])
-    assert_gates(module, ["tools/mem/uaccess-bench.sh"], ["uaccess-bench", "llvm-uaccess-bench"])
     assert_gates(module, ["tools/arch/aarch64-test.sh"], ["aarch64-test", "llvm-aarch64-test"])
     assert_gates(module, ["tools/arch/qemu-mmio-test.sh"], ["qemu-test", "llvm-qemu-test"])
     assert_gates(module, ["tools/qemu/kernel-boot-lib.sh"], ["preflight", "riscv-qemu-validation"])
     assert_route(
         module,
         [".github/workflows/nightly-fuzz.yml"],
-        [],
-        ["git diff --check"],
-    )
-    assert_route(
-        module,
-        [".github/workflows/nightly-bench.yml"],
-        [],
-        ["git diff --check"],
-    )
-    assert_route(
-        module,
-        ["tools/ci/nightly-bench.py"],
-        [],
-        ["git diff --check"],
-    )
-    assert_route(
-        module,
-        ["tools/bench/nightly-baseline.tsv"],
         [],
         ["git diff --check"],
     )

@@ -347,9 +347,6 @@ RULES: tuple[Rule, ...] = (
     Rule(
         (
             ".github/workflows/nightly-fuzz.yml",
-            ".github/workflows/nightly-bench.yml",
-            "tools/ci/nightly-bench.py",
-            "tools/bench/nightly-baseline.tsv",
         ),
         (),
         "nightly workflow and benchmark metadata changes do not affect compiler-core gates",
@@ -428,16 +425,6 @@ RULES: tuple[Rule, ...] = (
         ("tools/toolchain/llvm-c-obj-sweep.py",),
         ("llvm-c-obj-sweep",),
         "LLVM C-object sweep script changes need the C-emission object sweep",
-    ),
-    Rule(
-        ("tools/mem/heap-bench.sh",),
-        ("heap-bench", "llvm-heap-bench"),
-        "heap benchmark wrapper changes need its C and LLVM benchmark gates",
-    ),
-    Rule(
-        ("tools/mem/uaccess-bench.sh",),
-        ("uaccess-bench", "llvm-uaccess-bench"),
-        "uaccess benchmark wrapper changes need its C and LLVM benchmark gates",
     ),
     Rule(
         ("tools/arch/aarch64-test.sh",),
@@ -576,8 +563,6 @@ RULES: tuple[Rule, ...] = (
         excludes=(
             "tools/arch/aarch64-test.sh",
             "tools/arch/qemu-mmio-test.sh",
-            "tools/mem/heap-bench.sh",
-            "tools/mem/uaccess-bench.sh",
         ),
     ),
 )
