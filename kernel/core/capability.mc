@@ -1,5 +1,5 @@
-// kernel/core/capability — capability-based least privilege (the MINIX lesson, made
-// stronger by MC's linear types). A `Cap<R>` is an *unforgeable, linear* grant of
+// kernel/core/capability — capability-style least privilege made explicit with
+// MC's linear types. A `Cap<R>` is an *unforgeable, linear* grant of
 // access to a resource R (e.g. a device's MMIO base, an IRQ line, a memory region):
 //
 //   - unforgeable: `Cap` is a `linear opaque struct` (section 31), so its `resource` field is
@@ -7,12 +7,10 @@
 //     `.{ .resource = X }` (that is `E_PRIVATE_FIELD`). `cap_mint` is the only public
 //     constructor, and it requires the explicit `BootAuthority` root token;
 //   - linear: a cap has exactly one owner and cannot be copied, so a process
-//     without the cap simply cannot name the resource — it must ask the server that
-//     holds it (via IPC). Transfer is explicit (move into a spawn or an IPC handoff).
+//     without the cap simply cannot name the resource. Transfer is explicit.
 //
-// This is least privilege enforced by the type system: in MINIX the kernel checks a
-// privilege table at runtime; here a driver that doesn't hold `Cap<Mmio>` can't even
-// express the access — and cannot forge one.
+// This is least privilege enforced by the type system: code that doesn't hold
+// `Cap<Mmio>` can't even express the access — and cannot forge one.
 //
 // `RCap<R>` (below) extends a cap with an UNFORGEABLE, MONOTONIC rights set (std/rights):
 // the same resource handle, plus an attenuable `Rights`. Sub-grants can only NARROW the

@@ -10195,7 +10195,6 @@ fn isThreadSpawnBoundaryCall(callee: ast.Expr, function: FunctionInfo) bool {
             std.mem.eql(u8, name, "task_spawn") or
             std.mem.eql(u8, name, "spawn") or
             std.mem.eql(u8, name, "proc_spawn") or
-            std.mem.eql(u8, name, "proc_spawn_attenuated") or
             std.mem.eql(u8, name, "sched_spawn") or
             std.mem.eql(u8, name, "agent_spawn") or
             std.mem.eql(u8, name, "mc_thread_init");

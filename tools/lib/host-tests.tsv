@@ -1,7 +1,6 @@
 # name	fixture	mode	spec	mcc_flags	description
 numeric-literal-boundaries-test	tests/exec/numeric_literal_boundaries_run.mc	entry	numeric_literal_boundaries_run		full-range u64/u128 constants, separated floats, folded inf/nan, and signed zero execute identically on C and LLVM
 fdt-test	tests/qemu/arch/fdt_demo.mc	entry	fdt_run	-Wno-switch-bool	device-tree (FDT) header parsing: magic validation + totalsize/version
-endpoint-test	tests/qemu/ipc/endpoint_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	MINIX hardening: generation-checked endpoints (stale fails closed), derived runnable state (block reasons), death cleanup (waiter released with DEAD)
 grant-test	tests/qemu/ipc/grant_demo.mc	entry	grant_demo_run		memory grant: bounded delegation (OOB rejected) + revocation (stale ref caught)
 mailbox-test	tests/qemu/ipc/mailbox_demo.mc	entry	mailbox_run	-Wno-switch-bool	Mailbox<T,N>: post/take, source-filtered take_from, drop-when-full
 args-test	tests/qemu/lang/args_demo.mc	entry	args_run	-Wno-switch-bool	argv/envp: packed NUL-terminated argument vector with per-arg offsets
@@ -30,13 +29,10 @@ wrap-test	tests/qemu/mem/wrap_demo.mc	entry	wrap_run	-Wno-unused-variable -Wno-u
 mmio-test	tests/qemu/mem/mmio_demo.mc	entry	mmio_run	-Wno-switch-bool	std/mmio: RegField get/set/mask + single-bit ops (masked, neighbour-safe) and ordered IO-memory block/word copy with the fence on the correct edge
 synclock-test	tests/qemu/mem/synclock_demo.mc	entry	synclock_run	-Wno-switch-bool	std/rwlock + std/seqlock: reader-count transitions, uncontended writer acquire, and seqlock read-snapshot retry detection
 guarded-test	tests/qemu/sync/guarded_demo.mc	entry	guarded_run		C1 lock-guards-data (std/guarded): data inside Guarded<T> reachable only via a linear Guard<T> (Rust Mutex<T> style); lock/mutate-through-guard/unlock, guard consumed; direct access E_PRIVATE_FIELD, use-after-unlock E_USE_AFTER_MOVE (tests/spec/lock_guards_data.mc)
-ipc-result-test	tests/qemu/ipc/ipc_result_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter -Wno-unused-variable	ipc_send_result: typed bounded send distinguishes delivered / Denied (allow_mask) / DeadTarget / Timeout (full mailbox)
 mutex-test	tests/qemu/proc/mutex_demo.mc	entry	mutex_run	-Wno-switch-bool -Wno-unused-variable	sleeping Mutex (kernel/lib): try_lock, blocking enqueue, FIFO direct hand-off on unlock, NotOwner rejection, re-acquire
 resacct-test	tests/qemu/mem/resacct_demo.mc	driver		-Wno-switch-bool	ResourceAccount (kernel/lib): charge fails closed at quota (no partial), uncharge no-underflow, available/reset
 heapfree-test	tests/qemu/mem/heapfree_demo.mc	driver		-Wno-switch-bool	heap reclamation (kernel/core): free returns blocks to the pool, alloc reuses freed holes, available recovers (no monotonic leak)
 procmem-test	tests/qemu/proc/procmem_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	per-process memory account (kernel/core/process): independent per-process quota, charge fails closed, released on exit
-attenuate-test	tests/qemu/proc/attenuate_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	capability attenuation (kernel/core/process): a child's authority is the intersection of the parent's mask and the requested subset (never exceeds parent)
-
 fuzz-offset-layout-test	tests/c_emit/fuzz_offset_layout.mc	entry	entry		explicit @offset(N) MMIO struct layouts (tight/gapped/mixed-width) observed via comptime sizeof + field_offset folded into the entry return; pins the comptimeStructLayout (src/layout.zig) explicit-offset path across C and LLVM
 fuzz-overlay-union-test	tests/c_emit/fuzz_overlay_union.mc	entry	entry		overlay unions (byte-aliasing storage): write one member, read aliased members + sizeof folded into the entry return; pins overlay-union layout agreement across C and LLVM
 fuzz-c-union-test	tests/c_emit/fuzz_c_union.mc	entry	c_union_run		addressable runtime-selected union (#[c_union], async §3.5 prerequisite): build into each arm, take &arm, mutate through the pointer across a suspend, read back byte-exact; union sized to the LARGEST arm (not the sum). Both backends must agree on union layout + alias-safe member access

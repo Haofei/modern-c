@@ -246,9 +246,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "synclock-test", "std/rwlock + std/seqlock reader-writer and sequence locks", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "synclock-test" });
 
-    _ = h.addScriptTest(ctx, "ipc-result-test", "ipc_send_result: typed bounded send (Denied/DeadTarget/Timeout)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "ipc-result-test" });
-
-
     _ = h.addScriptTest(ctx, "mutex-test", "sleeping Mutex: try_lock, blocking enqueue, FIFO hand-off on unlock", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mutex-test" });
 
     _ = h.addScriptTest(ctx, "fdt-test", "Device-tree (FDT) header parsing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test" });
@@ -260,8 +257,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "smode-user-test", "S-mode U-mode hello under OpenSBI (SYS_WRITE + bad-ptr -EFAULT)", &.{ "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-smode-user-test", "LLVM-lowered S-mode U-mode hello under OpenSBI", &.{ "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "llvm" });
 
-
-    _ = h.addScriptTest(ctx, "endpoint-test", "MINIX hardening: endpoints/generations, derived runnable, death cleanup", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "endpoint-test" });
 
     // Phase 2.2 re-land condition: differential scheduler gate — after each randomized runnability
     // transition, next_runnable's pick must equal an independent authoritative is_runnable scan.

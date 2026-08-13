@@ -272,14 +272,12 @@ pub fn register(ctx: *h.Ctx) void {
     // sort-test exercises std/sort on both backends.
     m0_full_step.dependOn(ctx.cmd("sort-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-sort-test"));
-    m0_full_step.dependOn(ctx.cmd("endpoint-test"));
     m0_full_step.dependOn(ctx.cmd("sched-difftest"));
     m0_full_step.dependOn(ctx.cmd("slotmap-test"));
     m0_full_step.dependOn(ctx.cmd("mask-test"));
     m0_full_step.dependOn(ctx.cmd("rights-test"));
     m0_full_step.dependOn(ctx.cmd("mmio-test"));
     m0_full_step.dependOn(ctx.cmd("synclock-test"));
-    m0_full_step.dependOn(ctx.cmd("ipc-result-test"));
     m0_full_step.dependOn(ctx.cmd("mutex-test"));
     m0_full_step.dependOn(ctx.cmd("mailbox-test"));
     m0_full_step.dependOn(ctx.cmd("tryelse-test"));

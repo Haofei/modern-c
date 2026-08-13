@@ -250,9 +250,9 @@ export fn proc_unblock(t: *mut ProcTable, slot: usize, reason: u32) -> void {
 // its block set is empty. Pausing sets a dedicated reason bit so the process becomes
 // non-runnable but stays alive (still Ready, just blocked); resuming clears that bit. We define
 // the reason here rather than in process.mc to keep this purely additive and disjoint from the
-// process table module. BLOCK_PAUSED must not collide with process.mc's BLOCK_RECV/SEND/WAIT
-// (bits 0/1/2), so it is bit 3.
-const BLOCK_PAUSED: u32 = 3;
+// process table module. BLOCK_PAUSED must not collide with process.mc's generic
+// park/wait reasons.
+const BLOCK_PAUSED: u32 = 2;
 
 // Freeze a process: it becomes non-runnable (the scheduler skips it) but is not killed — it
 // stays Ready with the PAUSED block reason set, ready to thaw exactly where it left off.
@@ -293,12 +293,12 @@ export fn proc_current_blocked(t: *mut ProcTable) -> bool {
 
 // Park the current process (generic block): non-runnable until woken.
 export fn proc_park(t: *mut ProcTable) -> void {
-    proc_block(t, t.current, BLOCK_RECV);
+    proc_block(t, t.current, BLOCK_PARK);
 }
 
-// Wake process `pid`: clear its receive-block so it can run again. No-op otherwise.
+// Wake process `pid`: clear its generic park reason so it can run again. No-op otherwise.
 export fn proc_wake(t: *mut ProcTable, pid: u32) -> void {
-    proc_unblock(t, pid as usize, BLOCK_RECV);
+    proc_unblock(t, pid as usize, BLOCK_PARK);
 }
 
 // Yield, choosing the next process by the priority policy instead of round-robin.

@@ -136,16 +136,16 @@ export fn sched_difftest_run() -> u32 {
         } else if op == 1 {
             let slot: usize = pick_live(&g_t, r);
             if slot < MAX_PROCS {
-                proc_block(&g_t, slot, BLOCK_RECV); // may become non-runnable
+                proc_block(&g_t, slot, BLOCK_PARK); // may become non-runnable
             }
         } else if op == 2 {
             let slot: usize = pick_live(&g_t, r);
             if slot < MAX_PROCS {
-                proc_unblock(&g_t, slot, BLOCK_RECV); // may become runnable again
+                proc_unblock(&g_t, slot, BLOCK_PARK); // may become runnable again
             }
         } else if op == 3 {
-            // DIRECT state poke to Zombie (bypasses every setter) — the endpoint_demo shape that
-            // made the reverted run_mask cache go stale.
+            // DIRECT state poke to Zombie (bypasses every setter) — a stale-cache shape that
+            // must still update the authoritative scan.
             let slot: usize = pick_live(&g_t, r);
             if slot < MAX_PROCS {
                 g_t.procs[slot].state = .Zombie;
@@ -166,29 +166,14 @@ export fn sched_difftest_run() -> u32 {
                 g_t.current = saved_current;
             }
         } else if op == 6 {
-            // death-cleanup-with-blocked-waiter: waiter A blocks receiving-from victim B, then B is
-            // exited; death cleanup must wake A (clearing its BLOCK_RECV) so the pick sees A
-            // runnable again.
-            let a: usize = pick_live(&g_t, r);
-            let b: usize = pick_live(&g_t, lcg(r));
-            if a < MAX_PROCS {
-                if b < MAX_PROCS {
-                    if a != b {
-                        g_t.procs[a].wait_slot = b;
-                        g_t.procs[a].wait_gen = g_t.procs[b].gen;
-                        proc_block(&g_t, a, BLOCK_RECV);
-                        if !check_all(&g_t) {
-                            return 0;
-                        }
-                        let saved_current: usize = g_t.current;
-                        g_t.current = b;
-                        proc_exit(&g_t, 0x56);
-                        g_t.current = saved_current;
-                    }
-                }
+            // direct park/unpark on a live slot through the generic block reason.
+            let slot2: usize = pick_live(&g_t, r);
+            if slot2 < MAX_PROCS {
+                proc_block(&g_t, slot2, BLOCK_PARK);
+                proc_unblock(&g_t, slot2, BLOCK_PARK);
             }
         } else {
-            // DIRECT Zombie -> Unused poke (bypasses proc_reap) — endpoint_demo line 67 shape.
+            // DIRECT Zombie -> Unused poke (bypasses proc_reap).
             let slot: usize = pick_zombie(&g_t, r);
             if slot < MAX_PROCS {
                 g_t.procs[slot].state = .Unused;

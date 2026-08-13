@@ -1,4 +1,5 @@
-// std/grant — bounded, revocable memory grants (the MINIX safe-sharing primitive).
+// std/grant — bounded, revocable memory grants used as a resource-protocol
+// validation fixture.
 //
 // When a client hands a server a buffer, passing a raw address lets the server touch
 // anything. A `Grant` delegates access to *exactly* a [base, len) region: every access

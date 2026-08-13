@@ -2,7 +2,6 @@
 # Format: fixture<TAB>reason
 # A listed fixture may still compare successfully on a host/toolchain that supports it.
 grant-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-endpoint-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 byteview-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 elf-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 arc-pkt-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
@@ -12,10 +11,8 @@ time-test	current host/corpus C build gap; additional skipped fixtures remain co
 vqfault-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 synclock-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 mutex-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-ipc-result-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 resacct-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 procmem-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-attenuate-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 heapfree-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 showcase-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 fuzz-atomics-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions

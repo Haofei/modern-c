@@ -1,7 +1,7 @@
 // S-mode-safe process context primitives for flat OpenSBI device IRQ demos.
 //
-// The IRQ demos import kernel/core/process.mc only for ProcTable/waitqueue ownership
-// and wake bookkeeping, but that module exports the full scheduler surface. Linking this
+// The IRQ demos import kernel/core/process.mc only for ProcTable and wake bookkeeping,
+// but that module exports the full scheduler surface. Linking this
 // object satisfies the context-switch symbols those unused scheduler functions reference.
 
 struct Context {

@@ -8,25 +8,20 @@
 
 import "kernel/arch/active/context.mc"; // arch-selection seam (R0b); --arch picks context, default riscv64
 import "kernel/core/aspace.mc";
-import "kernel/core/ipc.mc";
 import "std/math.mc";
 import "std/mask.mc";
-import "kernel/lib/mailbox.mc";
 import "kernel/lib/resacct.mc";
 // Re-export the concerns split out of this file. MC imports are textual inclusion deduped
 // by path, so every existing `import "kernel/core/process.mc"` consumer transitively gets
-// the full process API (scheduling, signals, IPC) without changing any consumer import site.
+// the full process scheduling API without changing any consumer import site.
 import "kernel/core/proc_sched.mc";
-import "kernel/core/proc_ipc.mc";
 
 const MAX_PROCS: usize = 8;
-const IPC_SLOTS: usize = 4; // mailbox depth per process
 
 enum ProcState {
     Unused,
     Ready,
     Running,
-    BlockedRecv, // blocked in ipc_receive waiting for a message (not runnable)
     Zombie,      // exited, awaiting reap by its parent
     Dead,
 }
@@ -44,50 +39,23 @@ struct ReapInfo {
     code: u32,
 }
 
-// A capability-style reference to a process: the slot plus the *generation* it held when the
-// reference was taken. Slots are reused (proc_spawn), so a bare slot/pid can silently refer
-// to a different process after reuse; an Endpoint is validated against the live generation,
-// so a stale reference fails closed (DeadEndpoint) instead of hitting the wrong process.
-struct Endpoint {
-    slot: usize,
-    gen: u32,
-}
-
-enum EpError {
-    DeadEndpoint, // the slot is free, or now holds a different generation
-}
-
-// Typed outcome of a bounded blocking send: a permission denial, a dead destination, and a
-// timeout are distinct failures the caller (or its logs) can act on differently.
-enum SendError {
-    Denied,     // the sender's allow_mask does not permit this destination
-    DeadTarget, // the destination never existed, or has exited/died
-    Timeout,    // the destination's mailbox stayed full for the whole yield budget
-}
-
 // Block reasons (bits in Process.block_reasons). A process is runnable only when its block
 // set is empty — runnable state is *derived* from these flags, not set ad hoc, so a missed
-// state transition can't leave a blocked process on the run queue (MINIX RTS_* pattern).
-const BLOCK_RECV: u32 = 0; // waiting to receive a message
-const BLOCK_SEND: u32 = 1; // waiting for room in a destination mailbox
-const BLOCK_WAIT: u32 = 2; // waiting for a child to exit
+// state transition can't leave a blocked process on the run queue.
+const BLOCK_PARK: u32 = 0; // generic parked process
+const BLOCK_WAIT: u32 = 1; // waiting for a child to exit
 
 struct Process {
     context: Context,
     state: ProcState,
     pid: u32,
-    gen: u32,       // generation: bumped each time this slot is (re)used, for Endpoint validation
+    gen: u32,       // generation: bumped each time this slot is reused
     parent: u32,    // pid of the spawning process (display/debug identity)
     parent_slot: usize, // spawning process slot, paired with parent_gen
     parent_gen: u32,    // spawning process generation; prevents stale-parent reuse
     exit_code: u32, // valid once state == Zombie
     aspace: AddressSpace, // this process's address space (opaque arch root); kernel() = share kernel's
-    inbox: Mailbox<Message, IPC_SLOTS>, // multi-slot mailbox for kernel-mediated IPC
     block_reasons: Mask32,       // set of BLOCK_* reasons; runnable iff empty (derived state)
-    wait_slot: usize,            // the slot this process is blocked receiving-from (for death cleanup)
-    wait_gen: u32,               // the generation of wait_slot when it began waiting
-    allow_mask: Mask32,          // least privilege: bit p = may IPC-send to pid p
-    kcall_mask: Mask32,          // least privilege: bit op = may invoke kernel call `op`
     priority: u32,               // scheduling priority (policy set externally; higher runs first)
     quantum: u32,                // remaining scheduling quantum in ticks (0 = expired)
     ticks: u64,                  // saturating long-running accounting; never traps on uptime
@@ -97,7 +65,7 @@ struct Process {
 
 const QUANTUM_DEFAULT: u32 = 10;
 // A generous default per-process memory quota. This is bookkeeping only for now; real policy
-// (and wiring into the allocator) comes later — kept as validation bookkeeping, not a product policy layer.
+// (and wiring into the allocator) comes later — kept as validation bookkeeping.
 const MEM_QUOTA_DEFAULT: usize = 0x100000;
 
 struct ProcTable {
@@ -113,9 +81,6 @@ struct ProcTable {
     // everything the dead process owned. The process table stays decoupled from those subsystems:
     // whoever owns them registers a function pointer via proc_set_death_hook. Defaults to a no-op.
     death_hook: fn(u32, u32) -> void,
-    // Monotonic source of correlation ids for synchronous calls (ipc_call / ipc_call_ep), so
-    // each outstanding call is distinguishable and its reply can be matched. Never reused.
-    next_call_id: u64,
 }
 
 // The no-op default idle action.
@@ -183,19 +148,9 @@ export fn proc_state_code(t: *mut ProcTable, idx: usize) -> u32 {
         .Unused => { return 0; }
         .Ready => { if blocked { return 3; } return 1; }   // Ready + block reasons = Blocked
         .Running => { if blocked { return 3; } return 2; } // a blocked process reads as Blocked
-        .BlockedRecv => { return 3; }
         .Zombie => { return 4; }
         .Dead => { return 5; }
     }
-}
-
-// How many messages are pending in a process's inbox (introspection: for an info/sched service).
-export fn proc_inbox_count(t: *mut ProcTable, pid: u32) -> usize {
-    let p: usize = pid as usize;
-    if p < t.count {
-        return mailbox_count(Message, IPC_SLOTS, &t.procs[p].inbox);
-    }
-    return 0;
 }
 
 export fn proc_table_init(t: *mut ProcTable) -> void {
@@ -209,12 +164,7 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].parent_gen = 0;
         t.procs[i].exit_code = 0;
         t.procs[i].aspace = AddressSpace.kernel(); // share the kernel map until given one
-        mailbox_init(Message, IPC_SLOTS, &t.procs[i].inbox);
         t.procs[i].block_reasons = mask32_zero();
-        t.procs[i].wait_slot = MAX_PROCS; // no waiter target
-        t.procs[i].wait_gen = 0;
-        t.procs[i].allow_mask = mask32_zero();
-        t.procs[i].kcall_mask = mask32_zero();
         t.procs[i].priority = 0;
         t.procs[i].quantum = QUANTUM_DEFAULT;
         t.procs[i].ticks = 0;
@@ -224,11 +174,8 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
     }
     // Slot 0 is the running bootstrap context (filled on first switch out).
     t.procs[0].state = .Running;
-    t.procs[0].allow_mask = mask32_from(0xFFFF_FFFF); // bootstrap can seed policy
-    t.procs[0].kcall_mask = mask32_from(0xFFFF_FFFF);
     t.count = 1;
     t.current = 0;
-    t.next_call_id = 1; // 0 means "not a call"; real call ids start at 1
     t.idle_hook = idle_noop; // platform overrides with wfi via proc_set_idle
     t.death_hook = death_noop; // subsystems override via proc_set_death_hook
 }
@@ -248,8 +195,7 @@ fn proc_idle(t: *mut ProcTable) -> void {
 }
 
 // Install the global resource-cleanup hook, run with (pid, gen) on every process death.
-// A microkernel installs one closure that revokes the dead pid's grants and unregisters
-// its services, so a dead owner's resources can never outlive it. See proc_death_cleanup.
+// Validation fixtures can use this to release resources owned by the dead process.
 #[mc_abi]
 export fn proc_set_death_hook(t: *mut ProcTable, hook: fn(u32, u32) -> void) -> void {
     t.death_hook = hook;
@@ -284,18 +230,13 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     mc_thread_init(&t.procs[slot].context, stack_top, entry);
     t.procs[slot].state = .Ready;
     t.procs[slot].pid = slot as u32;
-    t.procs[slot].gen = t.procs[slot].gen + 1; // a new incarnation: invalidates old endpoints
+    t.procs[slot].gen = t.procs[slot].gen + 1; // a new incarnation
     t.procs[slot].parent = t.procs[t.current].pid; // the spawner is the parent
     t.procs[slot].parent_slot = t.current;
     t.procs[slot].parent_gen = t.procs[t.current].gen;
     t.procs[slot].exit_code = 0;
     // Reset per-process state in case this slot was reaped from an earlier process.
-    mailbox_init(Message, IPC_SLOTS, &t.procs[slot].inbox);
     t.procs[slot].block_reasons = mask32_zero();
-    t.procs[slot].wait_slot = MAX_PROCS;
-    t.procs[slot].wait_gen = 0;
-    t.procs[slot].allow_mask = mask32_zero();
-    t.procs[slot].kcall_mask = mask32_zero();
     t.procs[slot].priority = 0;
     t.procs[slot].quantum = QUANTUM_DEFAULT;
     t.procs[slot].ticks = 0;
@@ -304,36 +245,6 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     // Re-init in case this slot was reaped from an earlier (possibly heavily-charged) process.
     resacct_init(&t.procs[slot].macct, MEM_QUOTA_DEFAULT);
     return slot as u32;
-}
-
-// Attenuated spawn: like proc_spawn, but the child is granted a SUBSET of the spawning
-// process's authority — never more. proc_spawn gives a child empty masks (least privilege);
-// this variant instead sets the child's masks to the intersection of the parent's authority
-// (t.current, the spawner) and the requested subset. A bit the parent lacks can never appear
-// in the child even if `*_subset` requests it (intersection is monotone-decreasing). Mask32
-// has no intersect op, so we AND the raw bits via mask32_raw and rebuild with mask32_from.
-fn proc_spawn_attenuated(t: *mut ProcTable, stack_top: usize, entry: fn() -> void, allow_subset: Mask32, kcall_subset: Mask32) -> u32 {
-    let pid: u32 = proc_spawn(t, stack_top, entry); // spawns with empty masks; parent = t.current
-    let slot: usize = pid as usize;
-    var parent_allow: Mask32 = t.procs[t.current].allow_mask;
-    var parent_kcall: Mask32 = t.procs[t.current].kcall_mask;
-    var allow_sub: Mask32 = allow_subset;
-    var kcall_sub: Mask32 = kcall_subset;
-    let allow_bits: u32 = mask32_raw(&parent_allow) & mask32_raw(&allow_sub);
-    let kcall_bits: u32 = mask32_raw(&parent_kcall) & mask32_raw(&kcall_sub);
-    t.procs[slot].allow_mask = mask32_from(allow_bits);
-    t.procs[slot].kcall_mask = mask32_from(kcall_bits);
-    return pid;
-}
-
-// Read a process's IPC allow-mask / kernel-call mask (introspection, e.g. for tests and a
-// policy server). Returned by value — Mask32 is a single-field struct, trivially copyable.
-fn proc_allow_mask(t: *mut ProcTable, slot: usize) -> Mask32 {
-    return t.procs[slot].allow_mask;
-}
-
-fn proc_kcall_mask(t: *mut ProcTable, slot: usize) -> Mask32 {
-    return t.procs[slot].kcall_mask;
 }
 
 // A mutable handle to a process's memory ResourceAccount — for the allocator to charge/uncharge
@@ -379,84 +290,7 @@ export fn proc_self(t: *mut ProcTable) -> u32 {
     return t.procs[t.current].pid;
 }
 
-// The endpoint (slot + current generation) of process `pid`.
-fn proc_endpoint(t: *mut ProcTable, pid: u32) -> Endpoint {
-    let s: usize = pid as usize;
-    if s < t.count {
-        return .{ .slot = s, .gen = t.procs[s].gen };
-    }
-    return .{ .slot = MAX_PROCS, .gen = 0 };
-}
-
-// The current process's endpoint.
-fn proc_self_endpoint(t: *mut ProcTable) -> Endpoint {
-    return proc_endpoint(t, proc_self(t));
-}
-
-// Validate an endpoint: returns its slot if it still refers to the same live incarnation,
-// else DeadEndpoint (the slot was freed, reused by a newer generation, or has died/exited).
-fn endpoint_slot(t: *mut ProcTable, ep: Endpoint) -> Result<usize, EpError> {
-    if ep.slot >= t.count {
-        return err(.DeadEndpoint);
-    }
-    if t.procs[ep.slot].gen != ep.gen {
-        return err(.DeadEndpoint);
-    }
-    let s: ProcState = t.procs[ep.slot].state;
-    if s == .Unused {
-        return err(.DeadEndpoint);
-    }
-    if s == .Zombie {
-        return err(.DeadEndpoint);
-    }
-    if s == .Dead {
-        return err(.DeadEndpoint);
-    }
-    return ok(ep.slot);
-}
-
-// IRQ-safe endpoint validation: the same generation/state check as `endpoint_slot`, but it
-// returns the slot index on success or `sentinel` on a stale/dead endpoint — NO `Result`. The
-// `Result`-constructing `endpoint_slot` cannot be `#[irq_context]` (each `ok(..)`/`err(..)` lowers
-// to a call-like instruction the MIR irq-context verifier rejects); this sentinel form is what the
-// ISR-style wake path (`wq_wake_one`) calls. Pass `t.count` as the sentinel (no live
-// slot equals it) and check `< t.count`.
-#[irq_context]
-fn endpoint_slot_or(t: *mut ProcTable, ep: Endpoint, sentinel: usize) -> usize {
-    if ep.slot >= t.count {
-        return sentinel;
-    }
-    if t.procs[ep.slot].gen != ep.gen {
-        return sentinel;
-    }
-    let s: ProcState = t.procs[ep.slot].state;
-    if s == .Unused {
-        return sentinel;
-    }
-    if s == .Zombie {
-        return sentinel;
-    }
-    if s == .Dead {
-        return sentinel;
-    }
-    return ep.slot;
-}
-
-// True if the endpoint still refers to the same live process.
-fn endpoint_live(t: *mut ProcTable, ep: Endpoint) -> bool {
-    switch endpoint_slot(t, ep) {
-        ok(s) => {
-            return true;
-        }
-        err(e) => {
-            return false;
-        }
-    }
-}
-
-// Central process-death cleanup: clear the dying process's IPC state and release everyone
-// waiting on it, so no caller is left blocked on a dead endpoint and a reused slot starts
-// clean. (MINIX clears IPC references on exit instead of leaving dangling waiters.)
+// Central process-death cleanup: release retained per-process accounting through one hook.
 fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     let dead_gen: u32 = t.procs[dead].gen;
     let dead_pid: u32 = t.procs[dead].pid;
@@ -465,26 +299,7 @@ fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     // whatever the subsystem owner registered (a no-op if none).
     let death_hook: fn(u32, u32) -> void = t.death_hook;
     death_hook(dead_pid, dead_gen);
-    // Drop the dead process's own pending IPC + wait state. A zombie holds only its exit
-    // status, so a later spawn that reuses this slot starts with clean validation state.
-    mailbox_init(Message, IPC_SLOTS, &t.procs[dead].inbox);
     resacct_reset(&t.procs[dead].macct); // a zombie holds no charged memory — release the account
-    t.procs[dead].wait_slot = MAX_PROCS;
-    // Wake anyone blocked receiving-from this exact incarnation. We do NOT post a DEAD message
-    // (a full inbox could swallow it); instead the woken receiver re-checks the source's
-    // liveness in ipc_receive_from and synthesizes the DEAD result out-of-band — guaranteed.
-    var i: usize = 0;
-    while i < t.count {
-        if i != dead {
-            if t.procs[i].wait_slot == dead {
-                if t.procs[i].wait_gen == dead_gen {
-                    t.procs[i].wait_slot = MAX_PROCS;
-                    proc_unblock(t, i, BLOCK_RECV);
-                }
-            }
-        }
-        i = i + 1;
-    }
 }
 
 // Terminate the current process with an exit code and switch to the next runnable
@@ -611,38 +426,4 @@ export fn proc_satp(t: *mut ProcTable, idx: usize) -> u64 {
 
 export fn proc_pid(t: *mut ProcTable) -> u32 {
     return t.procs[t.current].pid;
-}
-
-// ----- least privilege: per-process IPC allow-list + kernel-call gateway -----
-
-enum KError {
-    Denied, // the caller's kcall_mask does not permit this kernel call
-}
-
-// Restrict which peers a process may IPC-send to (bit p = may send to pid p).
-export fn proc_set_allow_mask(t: *mut ProcTable, pid: u32, mask: u32) -> void {
-    let p: usize = pid as usize;
-    if p < t.count {
-        t.procs[p].allow_mask = mask32_from(mask);
-    }
-}
-
-// Restrict which kernel calls a process may invoke (bit op = may call `op`).
-export fn proc_set_kcall_mask(t: *mut ProcTable, pid: u32, mask: u32) -> void {
-    let p: usize = pid as usize;
-    if p < t.count {
-        t.procs[p].kcall_mask = mask32_from(mask);
-    }
-}
-
-// Kernel-call gateway: a server requests a privileged op through one checked entry
-// point. Denied unless the caller's kcall_mask permits `op`. (The op itself is a
-// stand-in here; a real kernel would map/grant/program IRQs behind this gate.)
-#[mc_abi]
-export fn kcall(t: *mut ProcTable, op: u32, arg: u64) -> Result<u64, KError> {
-    let cur: usize = t.current;
-    if !mask32_contains(&t.procs[cur].kcall_mask, op) {
-        return err(.Denied);
-    }
-    return ok(arg); // performed (stand-in for the privileged operation's result)
 }
