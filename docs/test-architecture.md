@@ -39,7 +39,7 @@ Aggregate lanes compose these: **`fast`** = spec + emit-C + differential (no fuz
 `c0` + `kernel-test`; **`m0`** = the deterministic compiler-core validation set;
 it keeps C-backend smoke coverage but leaves the full `c-test` fixture sweep to
 `fast`/`c0`/`m0-full`; **`m0-full`** = the full conformance set including fuzz,
-runtime experiments, and QEMU.
+host-driver fixtures, and QEMU.
 
 ## The expected-outcome taxonomy
 

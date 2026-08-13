@@ -195,10 +195,10 @@ MC_REQUIRE_TOOLS=1 MC_LLVM_MAJOR=18 zig build m0-full
 `m0` covers the deterministic compiler-core validation path used for normal
 local and CI feedback. It intentionally omits the full `c-test` fixture compile
 sweep; use `fast`, `c0`, or `m0-full` when a change needs that C-backend
-coverage. `m0-full` preserves the broad validation matrix: unit and spec tests, C and
-LLVM fixture sweeps, IR assembly and object generation, optimizer compatibility,
-differential execution, fuzz oracles, selected host-driver tests, runtime
-experiments, and retained QEMU validation fixtures.
+coverage. `m0-full` preserves the broad validation matrix: unit and spec tests,
+C and LLVM fixture sweeps, IR assembly and object generation, optimizer
+compatibility, differential execution, fuzz oracles, selected host-driver
+tests, and retained QEMU validation fixtures.
 
 The canonical Zig aggregate executes side-effecting `Run` gates serially. For
 the same broad gate inventory with process-level parallelism, bounded nested
@@ -245,7 +245,7 @@ zig build cc-test
 
 The LLVM backend consumes the same semantic and MIR verification pipeline, emits
 textual IR, and uses `llc` for object generation. Its validated surface is
-established by IR assembly, object, optimizer, differential, runtime, and
+established by IR assembly, object, optimizer, differential, host-driver, and
 selected QEMU gates rather than by a claim that every language form is supported.
 Expected differential exclusions are explicit in the checked
 [`diff-backend-expected-skips.tsv`](tools/toolchain/diff-backend-expected-skips.tsv)
@@ -307,7 +307,7 @@ Other deliberate or current limitations include:
 - a token-preserving reindenter rather than a full pretty printer;
 - kernel code is a compiler-validation workload, not a board-certification
   target;
-- no stable public release yet.
+- no shipped-version guarantee.
 
 The repository-wide backlog is [`docs/todo.md`](docs/todo.md).
 

@@ -7,7 +7,7 @@ history; this file should describe only current compiler-core direction.
 
 - `zig build m0` is the normal local/CI compiler-core gate.
 - `zig build m0-full` is the broader validation matrix for the implemented
-  language, backends, fuzz oracles, runtime experiments, and retained QEMU
+  language, backends, fuzz oracles, host-driver fixtures, and retained QEMU
   fixtures.
 - Kernel code is a validation workload for language, MIR, ownership, ABI,
   unsafe-boundary, freestanding, and backend-lowering behavior. It is not a
