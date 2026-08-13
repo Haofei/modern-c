@@ -1,11 +1,8 @@
-// kernel/core/console — the kernel's panic-safe debug console (board-agnostic interface).
+// kernel/core/console — panic-safe debug output for retained QEMU validation fixtures.
 //
-// Writes single bytes through the platform's debug-UART backend, so it works from any
-// context — including a trap handler before any driver is initialized — without depending
-// on device setup, allocation, or runtime board config. The fixed UART register address
-// lives in the board backend (kernel/platform/<board>/console_hw.mc), reached here through
-// the `kernel/platform/active/` seam; this file stays free of any MMIO address so it never
-// needs editing to retarget a board.
+// Writes single bytes through the selected validation platform backend, so it works from trap
+// handlers without depending on allocation or driver setup. The fixed UART register address stays
+// behind `kernel/platform/active/console_hw.mc`.
 import "kernel/platform/active/console_hw.mc";
 import "std/fmt/fmt_sink.mc";
 

@@ -1,21 +1,15 @@
 // kernel/core/uaccess_pt — the page-table-aware user/kernel copy path, arch-neutral.
 //
-// This is the single shared implementation of the `UserAddrSpace` copy contract used by the
-// validation user address-space tests on every architecture. It is ARCH-NEUTRAL: it only calls the uniform paging
-// interface (page_table_lookup / mapping_is_user / mapping_is_writable / page_table_translate)
-// that each `kernel/arch/<arch>/paging.mc` exposes identically. It imports that paging module
-// through the arch-selection seam (`kernel/arch/active/...`, plan R0b): the per-arch kernel
-// binary is produced by compiling with `--arch=<arch>` (default riscv64), so x86_64 and
-// aarch64 no longer need their own copies of this file (the former uaccess_x86.mc /
-// uaccess_aarch64.mc, now deleted).
+// This is the shared implementation of the `UserAddrSpace` copy contract used by the retained
+// RISC-V/QEMU page-table validation tests. It calls the active paging seam so the same source path
+// remains useful to the compiler's import/target selection machinery.
 //
 // Scope: only the page-table path. The full kernel/core/uaccess.mc additionally carries the
-// numeric `UserSpace` bring-up path and the snapshot/taint generics; the confined app
-// guest uses only the `UserAddrSpace` path here.
+// numeric `UserSpace` bring-up path and the snapshot/taint generics.
 //
 // Read side: a present, user-accessible page is readable on x86-64 (no separate readable bit)
-// and aarch64 (EL0 AP implies read), so the read check needs only `mapping_is_user` — present
-// is implied by a successful lookup. Writes additionally require `mapping_is_writable`.
+// so the read check needs only `mapping_is_user` — present is implied by a successful lookup.
+// Writes additionally require `mapping_is_writable`.
 
 import "std/addr.mc";
 import "std/mem.mc";
