@@ -108,10 +108,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "mcc-inspection-modules-test", "Validate inspection artifacts consume per-file resolved modules across imports", &.{ "bash", "tools/toolchain/mcc-inspection-modules-test.sh", "zig-out/bin/mcc" });
     _ = h.addScriptTest(ctx, "mcc-list-tests-modules-test", "Validate list-tests consumes per-file resolved modules across imports", &.{ "bash", "tools/toolchain/mcc-list-tests-modules-test.sh", "zig-out/bin/mcc" });
 
-    _ = h.addScriptTestOpts(ctx, "editor-client-test", "Validate the VS Code editor client manifest/grammar/extension", &.{ "bash", "tools/toolchain/editor-client-test.sh" }, .{ .install = false });
-
-    _ = h.addScriptTest(ctx, "lsp-test", "Drive the mc-lsp language server and assert it publishes mcc diagnostics with matching E_ codes", &.{ "python3", "tools/lsp/lsp-test.py", "zig-out/bin/mcc" });
-
     _ = h.addScriptTest(ctx, "stack-test", "Build, link, and run the generic std/stack collection", &.{ "bash", "tools/toolchain/stack-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "vec-test", "Build, link, and run the generic heap-backed std/collections/dynarray (Vec<T>)", &.{ "bash", "tools/toolchain/vec-test.sh", "zig-out/bin/mcc" });

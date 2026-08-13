@@ -132,7 +132,7 @@ def main() -> None:
     )
     assert_route(module, ["docs/release-process.md"], ["release-metadata-test"], ["git diff --check"])
     assert_route(module, ["CHANGELOG.md"], ["release-metadata-test"], ["git diff --check"])
-    assert_gates(module, [".github/workflows/release.yml"], ["release-metadata-test", "package-release-test", "editor-client-test"])
+    assert_gates(module, [".github/workflows/release.yml"], ["release-metadata-test", "package-release-test"])
     assert_route(
         module,
         ["README.md", "src/ast.zig"],
@@ -283,8 +283,6 @@ def main() -> None:
         ["tools/toolchain/llvm-new-harness.sh"],
         ["llvm-test", "llvm-obj-test", "llvm-sweep", "llvm-c-obj-sweep"],
     )
-    assert_gates(module, ["tools/lsp/mc-lsp.py"], ["lsp-test"])
-    assert_gates(module, ["editors/vscode/package.json"], ["editor-client-test"])
     assert_gates(module, ["tools/toolchain/spec-emit-sweep.py"], ["test-lint", "sweep"])
     assert_gates(module, ["tools/toolchain/spec-llvm-sweep.py"], ["test-lint", "llvm-sweep"])
     assert_gates(module, ["tools/toolchain/spec-llvm-obj-sweep.py"], ["test-lint", "llvm-spec-obj-sweep"])

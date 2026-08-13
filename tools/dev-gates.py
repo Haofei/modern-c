@@ -384,8 +384,8 @@ RULES: tuple[Rule, ...] = (
             "build.zig.zon",
             ".zigversion",
         ),
-        ("release-metadata-test", "package-release-test", "editor-client-test"),
-        "release/distribution changes need artifact metadata, packager, and VSIX release hooks",
+        ("release-metadata-test", "package-release-test"),
+        "release/distribution changes need artifact metadata and packager checks",
     ),
     Rule(
         ("tools/toolchain/diagnostics-reference.py", "tools/toolchain/diagnostic-code-inventory.py", "docs/diagnostics.md", "docs/diagnostic-code-inventory.md"),
@@ -605,16 +605,6 @@ RULES: tuple[Rule, ...] = (
         ("tools/fuzz/parser-fuzz.sh",),
         ("parser-fuzz-test",),
         "parser fuzz wrapper changes need the parser fuzz host gate",
-    ),
-    Rule(
-        ("tools/lsp/*",),
-        ("lsp-test",),
-        "LSP server changes need protocol-level language-server checks",
-    ),
-    Rule(
-        ("editors/vscode/*", "editors/vscode/**/*"),
-        ("editor-client-test",),
-        "VS Code extension changes need editor client packaging and grammar checks",
     ),
     Rule(
         ("kernel/**/*", "std/**/*", "tests/qemu/**/*", "tools/arch/*", "tools/proc/*", "tools/mem/*", "tools/net/*", "tools/fs/*"),

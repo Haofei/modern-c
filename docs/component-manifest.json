@@ -61,7 +61,7 @@
       "id": "python3",
       "category": "toolchain",
       "owner": "developer-tools",
-      "summary": "Python runtime used by LSP, CI scripts, and local verification helpers.",
+      "summary": "Python runtime used by CI scripts and local verification helpers.",
       "profiles": [
         "developer-tools"
       ]
@@ -70,16 +70,7 @@
       "id": "workspace-local-mcc",
       "category": "internal",
       "owner": "developer-tools",
-      "summary": "Workspace-built mcc binary invoked by LSP and editor tooling.",
-      "profiles": [
-        "developer-tools"
-      ]
-    },
-    {
-      "id": "vscode-extension-runtime",
-      "category": "toolchain",
-      "owner": "developer-tools",
-      "summary": "VS Code extension host runtime for the editor adapter.",
+      "summary": "Workspace-built mcc binary invoked by local developer-tool gates.",
       "profiles": [
         "developer-tools"
       ]

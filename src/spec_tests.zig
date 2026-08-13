@@ -1612,8 +1612,8 @@ const coverage_exempt = [_][]const u8{
     "I.13",
     "I.14",
     "I.15",
-    // N.1 (editor tooling — formatter + language server) is exercised by `fmt-test` and
-    // `lsp-test`, not by a semantic fixture.
+    // N.1 (developer tooling) is exercised by `fmt-test` and `mcc-symbols-test`,
+    // not by a semantic fixture.
     "J",
     "K",
     "L",

@@ -303,17 +303,7 @@ The repository includes:
 
 - a token-preserving formatter through `mcc fmt`;
 - structured diagnostics and `mcc explain`;
-- JSON symbol indexing through `mcc symbols`;
-- a CLI-backed language server in `tools/lsp/mc-lsp.py` and a VS Code client in
-  `editors/vscode/`.
-
-The language server provides compiler diagnostics, hover, completion, navigation,
-references, rename, symbols, semantic tokens, signature help, call hierarchy,
-and formatting; cross-file navigation is qualified for files reachable through the current import
-graph. Workspace symbols also discover unopened `.mc` files under the workspace
-root under one end-to-end time budget plus file, byte, compiler-invocation,
-symbol-count, and result-size caps. Completion and formatting remain
-intentionally simpler than mature IDE toolchains.
+- JSON symbol indexing through `mcc symbols`.
 
 The formatter preserves every payload-bearing line inside a multiline block comment
 byte-for-byte. A complete inline block comment still permits indentation and trailing-space
@@ -350,7 +340,7 @@ The repository-wide backlog is [`docs/todo.md`](docs/todo.md).
 | `tests/c_emit/`, `tests/llvm/` | Backend fixtures |
 | `tests/qemu/` | Programs used by QEMU and host-driver gates |
 | `kernel/`, `user/` | Kernel runtime, MC modules, and user-mode components |
-| `tools/` | Drivers, fuzzers, LSP, and test harnesses |
+| `tools/` | Drivers, fuzzers, and test harnesses |
 | `demo/`, `examples/` | Hosted and hardware-oriented examples |
 | `docs/` | Specifications, reference material, qualification, and plans |
 

@@ -492,9 +492,9 @@ fn runFmt(session: *CompilationSession, path: []const u8, source: []const u8, ch
 }
 
 // `mcc symbols <file>` prints a JSON symbol index (defs + refs with spans) for
-// the language server. Parse failures are reported as structured incomplete
-// results; internal/resource failures return nonzero rather than masquerading as
-// a clean empty file.
+// local tooling. Parse failures are reported as structured incomplete results;
+// internal/resource failures return nonzero rather than masquerading as a clean
+// empty file.
 fn runSymbols(session: *CompilationSession, path: []const u8, source: []const u8) !void {
     const allocator = session.allocator;
     var diag = session.initReporter(path, source);

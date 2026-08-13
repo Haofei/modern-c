@@ -46,7 +46,7 @@ boundary is stable:
 
 - new language surface area;
 - LLVM as an equal production backend where facts are still incomplete;
-- advanced LSP/indexing work that requires a persistent query service;
+- editor-product and incremental-service work that requires a persistent query service;
 - deployable kernel, Agent product, or real hardware claims;
 - new vendored runtimes in the default compiler profile.
 
@@ -195,7 +195,7 @@ A patch is complete only if it includes:
 - the code change;
 - one focused regression, inventory check, or manifest check;
 - documentation/risk-register changes only when the claim changes;
-- no unrelated kernel/LSP/release edits.
+- no unrelated kernel/product/release edits.
 
 Split the patch if it:
 

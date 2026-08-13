@@ -1,12 +1,11 @@
-// `mcc symbols <file>` — a JSON symbol index for the language server.
+// `mcc symbols <file>` — a JSON symbol index for local tooling.
 //
 // Walks the parsed AST and resolves every identifier occurrence by lexical scope (params and
 // locals in the enclosing function, then module-level functions/globals/types), emitting
 // `defs` (every declaration: functions, globals, params, locals, types, with a stringified
 // type), `refs` (every identifier use, with the span of the declaration it resolves to), and
-// `fields` (aggregate fields keyed by owning type). The language server turns this into
-// go-to-definition, find-references, document-highlight, rename, hover, semantic tokens, and
-// completion — all from one CLI call.
+// `fields` (aggregate fields keyed by owning type). Tooling can use this for navigation,
+// refactoring, or inspection without becoming another semantic authority.
 //
 // This is a deliberately self-contained best-effort pass: it does not perturb sema and does
 // not do full type inference. An identifier that does not resolve (a builtin or an inferred

@@ -57,9 +57,9 @@ def registered_gates() -> set[str]:
     return gates
 
 
-def require_string_list(profile_id: str, profile: dict[str, Any], field: str) -> list[str]:
+def require_string_list(profile_id: str, profile: dict[str, Any], field: str, *, allow_empty: bool = False) -> list[str]:
     value = profile.get(field)
-    if not isinstance(value, list) or not value:
+    if not isinstance(value, list) or (not value and not allow_empty):
         fail(f"profile {profile_id} must define non-empty {field}")
     for item in value:
         if not isinstance(item, str) or not item:
@@ -144,7 +144,7 @@ def main() -> None:
             fail(f"profile {profile_id} must define summary")
 
         require_scope(profile_id, profile)
-        profile_risks = require_string_list(profile_id, profile, "blocking_risks")
+        profile_risks = require_string_list(profile_id, profile, "blocking_risks", allow_empty=True)
         profile_gates = require_string_list(profile_id, profile, "blocking_gates")
         profile_components = require_string_list(profile_id, profile, "components")
 

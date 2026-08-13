@@ -14,7 +14,7 @@ risks:
     blocks:
       - unrestricted-production-compiler
       - stable-release
-    summary: Product surface spans compiler, dual backends, kernel/QEMU workloads, kernel validation demos, LSP, release provenance, and multiple runtime profiles before the core semantic boundary is stable; deployable kernel claims have been retired.
+    summary: Product surface spans compiler, dual backends, kernel/QEMU workloads, kernel validation demos, release provenance, and multiple runtime profiles before the core semantic boundary is stable; deployable kernel and editor-product claims have been retired.
 
   - id: ARCH-COMPILATION-SESSION
     severity: high
@@ -78,15 +78,6 @@ risks:
     blocks:
       - generated-release-evidence
     summary: Compiler-core, governance, provenance, release, profile, vendoring, license, and CI anti-vacuity gates are checked against build tiers; full build/CI/release/docs generation from one manifest remains open.
-
-  - id: LSP-COMPILER-SERVICE
-    severity: medium
-    scope: developer-tools
-    status: open
-    admitted_subset_status: subprocess-isolated-lsp
-    blocks:
-      - low-latency-incremental-lsp-claim
-    summary: LSP currently has substantial subprocess orchestration because no persistent query-based compiler service exists yet.
 
   - id: KERNEL-CAPABILITY-MINT
     severity: high

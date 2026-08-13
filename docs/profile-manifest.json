@@ -19,7 +19,7 @@
         ],
         "experimental_or_excluded": [
           "kernel product claims",
-          "advanced incremental LSP"
+          "editor-product integration"
         ]
       },
       "blocking_risks": [
@@ -94,34 +94,27 @@
       "id": "developer-tools",
       "status": "supported-tools",
       "production_claim": false,
-      "summary": "Developer tooling is supported for diagnostics, formatting, symbols, editor smoke, and LSP resource-limit behavior; low-latency incremental service remains future work.",
+      "summary": "Developer tooling is limited to diagnostics, formatting, symbol indexing, CLI smoke tests, and local verification helpers.",
       "scope": {
         "blocking": [
-          "tools/lsp/",
-          "editors/vscode/",
           "formatter and symbol CLI paths"
         ],
         "experimental_or_excluded": [
           "persistent compiler-service claim",
-          "type-directed completion as production API",
+          "editor client packaging",
           "low-latency incremental workspace claim"
         ]
       },
-      "blocking_risks": [
-        "LSP-COMPILER-SERVICE"
-      ],
+      "blocking_risks": [],
       "blocking_gates": [
         "fmt-test",
         "mcc-symbols-test",
-        "lsp-test",
-        "editor-client-test",
         "mcc-cli-test",
         "dev-gates-test"
       ],
       "components": [
         "python3",
-        "workspace-local-mcc",
-        "vscode-extension-runtime"
+        "workspace-local-mcc"
       ]
     },
     {

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# `mcc symbols` index gate: the symbol index is the enabler for the language server's
-# navigation features (go-to-definition, references, rename, hover, semantic tokens), so this
-# asserts the JSON is well-formed and that identifier references resolve to the right
+# `mcc symbols` index gate: the symbol index is the enabler for local tooling and
+# navigation smoke tests, so this asserts the JSON is well-formed and that identifier references resolve to the right
 # declarations: a param use -> its param def, a local use -> its local def, a cross-function
 # global read -> the global def, a call -> the function def, a type used as a parameter ->
 # the type def, and aggregate fields -> their owner/type metadata. Needs mcc + python3.

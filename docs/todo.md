@@ -32,7 +32,7 @@ Current baseline:
 | P1 | Multi-architecture platform | RISC-V, x86_64, and AArch64 all have substantial boot/user/VM coverage; device depth varies. | Keep the RISC-V QEMU/OpenSBI path as the reference validation path. Defer x86 virtio-pci data-path depth, AArch64 GIC/timer/virtio depth, and COW/demand portability unless those become near-term validation targets. |
 | P2 | Fuzzing and independent oracles | The mcfuzz oracle family, including `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-reference`, and `fuzz-corpus`, is registered in `build/fuzz.zig` and wired into `m0-full`; `.github/workflows/nightly-fuzz.yml` also exists for the longer fuzz cadence. | Keep the promoted fuzz gates green in the full/nightly profiles; continue expanding generator surface and independent oracle coverage where backend/runtime support exists. |
 | P2 | Remaining mcfuzz generator surface | Most scalar/control-flow coverage has landed. Tagged unions, slices, multi-module programs, external-link programs, and coverage-guided throughput remain open or blocked. | Keep expanding `tools/fuzz/mcfuzz.py` where backend/runtime support exists; do not generate features that cannot yet lower into runnable programs. |
-| P2 | Tooling polish | `mcc fmt`, symbol indexing, LSP, and editor client are implemented and gated. | Improve formatter pretty-printing, type-directed completion, and developer diagnostics as needed by active language work. |
+| P2 | Tooling polish | `mcc fmt` and symbol indexing are implemented and gated. | Improve formatter pretty-printing and developer diagnostics as needed by active language work. |
 
 ## Historical work folded into this roadmap
 

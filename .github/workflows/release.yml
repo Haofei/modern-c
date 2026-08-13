@@ -39,12 +39,6 @@ jobs:
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
         with:
           version: 0.16.0
-      # actions/setup-node@v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: editors/vscode/package-lock.json
       - name: Install release qualification tools
         shell: bash
         run: |
@@ -124,30 +118,6 @@ jobs:
           cd zig-out/release
           sha256sum -c SHA256SUMS
 
-      - name: Package VS Code extension
-        shell: bash
-        working-directory: editors/vscode
-        run: |
-          set -euo pipefail
-          npm ci
-          npm run package
-
-      - name: Stage VS Code extension release asset
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          vsix=(editors/vscode/*.vsix)
-          if (( ${#vsix[@]} != 1 )); then
-            printf 'expected exactly one VSIX, found %d\n' "${#vsix[@]}" >&2
-            exit 1
-          fi
-          cp "${vsix[0]}" zig-out/release/
-          (
-            cd zig-out/release
-            sha256sum "$(basename "${vsix[0]}")" >> SHA256SUMS
-          )
-
       - name: Verify release checksum subjects
         shell: bash
         run: |
@@ -182,7 +152,6 @@ jobs:
             zig-out/release/SHA256SUMS
             zig-out/release/*inventory*.json
             zig-out/release/*sbom*.json
-            zig-out/release/*.vsix
           if-no-files-found: error
 
       - name: Publish GitHub Release assets
@@ -204,5 +173,4 @@ jobs:
             zig-out/release/*.tar.gz.mcmeta \
             zig-out/release/SHA256SUMS \
             zig-out/release/*inventory*.json \
-            zig-out/release/*sbom*.json \
-            zig-out/release/*.vsix
+            zig-out/release/*sbom*.json

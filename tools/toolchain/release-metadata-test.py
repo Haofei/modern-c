@@ -259,7 +259,6 @@ def require_release_artifact_metadata() -> None:
         "--commit \"$GITHUB_SHA\"",
         "tag-triggered releases must not publish development versions",
         "sha256sum -c SHA256SUMS",
-        "Stage VS Code extension release asset",
         "Verify release checksum subjects",
         "SHA256SUMS subject is not a file in zig-out/release",
         "actions/attest@v4",
@@ -271,7 +270,6 @@ def require_release_artifact_metadata() -> None:
         "zig-out/release/SHA256SUMS",
         "zig-out/release/*inventory*.json",
         "zig-out/release/*sbom*.json",
-        "zig-out/release/*.vsix",
         "startsWith(github.ref, 'refs/tags/v')",
         "gh release upload",
         "release assets are immutable",
@@ -528,7 +526,6 @@ def main() -> None:
     zon_paths = zon[zon.find(".paths"):]
     for path in (
         '"third_party"',
-        '"editors"',
         '".github"',
         '"SECURITY.md"',
         '"STABILITY.md"',
@@ -584,13 +581,10 @@ def main() -> None:
     readme = read("README.md")
     if "two verified backend paths" in readme:
         fail("README.md must describe bounded differential qualification, not verified backends")
-    if "a full language server" in readme:
-        fail("README.md must not claim the CLI-backed LSP is universally full")
     for needle in (
         "two differentially qualified backend paths",
         "documented, implemented subset",
-        "CLI-backed language server",
-        "cross-file navigation is qualified for files reachable through the current import",
+        "JSON symbol indexing through `mcc symbols`",
     ):
         if needle not in readme:
             fail(f"README.md does not contain qualified public positioning {needle!r}")
@@ -622,18 +616,6 @@ def main() -> None:
         fail("Dockerfile must not trust Zig download integrity from a build-time index fetch")
     if "sort -V | tail -n1" in dockerfile or "llvm-*" in dockerfile:
         fail("Dockerfile must select the pinned LLVM major, not the highest installed one")
-
-    lsp_docs = read("docs/lsp.md")
-    for needle in (
-        "passed to `mcc` over stdin",
-        "read-only trees",
-        "MC_LSP_MCC_TIMEOUT_SECONDS",
-        "imported-file diagnostics",
-        "import graph",
-        "unopened `.mc` files",
-    ):
-        if needle not in lsp_docs:
-            fail(f"docs/lsp.md does not document LSP hardening requirement {needle!r}")
 
     print("PASS: release-metadata-test - version, Docker/Zig/LLVM/action pins, nightly fuzz/bench, release artifacts, attestations, and process docs are in sync")
 

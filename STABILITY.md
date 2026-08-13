@@ -18,7 +18,7 @@ guarantees until a tagged release declares its supported surfaces.
 - The CLI is not a released installation interface yet.
 - `emit-c` and `emit-llvm` output formats are compiler artifacts, not stable public
   APIs.
-- Async, traits, kernel libraries, and editor integration remain subject to incompatible changes.
+- Async, traits, and kernel libraries remain subject to incompatible changes.
 
 ## Tagged Release Compatibility
 
@@ -26,8 +26,8 @@ The first `v*` tag may still be a development release, but it must state its
 supported surfaces in the changelog. Unless that release note says otherwise, only
 the release artifact layout, `mcc --version`, `mcc --help`, documented exit-code
 behavior, and diagnostic `E_*` code identities are compatibility surfaces for that
-tag. Language semantics, generated C/LLVM text, stdlib APIs, kernel libraries, and
-editor integration remain experimental through `0.x`.
+tag. Language semantics, generated C/LLVM text, stdlib APIs, and kernel libraries
+remain experimental through `0.x`.
 
 ## Changing Behavior
 

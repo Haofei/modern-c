@@ -93,9 +93,8 @@ The helper builds `mcc` with `zig build -Dtarget=<target> -Doptimize=ReleaseSafe
 deterministic tarball, writes a matching `.tar.gz.mcmeta` sidecar, emits release
 inventory and CycloneDX SBOM JSON files, and writes `SHA256SUMS`.
 
-The release workflow stages the VS Code extension into `zig-out/release`, appends
-it to `SHA256SUMS`, verifies that every checksum subject is a file in that
-directory, and then invokes `actions/attest` with `subject-checksums:
+The release workflow verifies that every checksum subject is a file in
+`zig-out/release`, and then invokes `actions/attest` with `subject-checksums:
 zig-out/release/SHA256SUMS`. The attestation is signed with the workflow's GitHub
 OIDC identity and stored by GitHub's artifact attestation service.
 
@@ -106,8 +105,8 @@ release directory:
 sha256sum -c SHA256SUMS
 ```
 
-Then verify the artifact attestation for each downloaded tarball, VSIX, inventory,
-or SBOM file named by the manifest:
+Then verify the artifact attestation for each downloaded tarball, inventory, or
+SBOM file named by the manifest:
 
 ```sh
 gh attestation verify --owner <owner> mcc-0.7.0-x86_64-linux-musl.tar.gz
@@ -120,7 +119,8 @@ review.
 
 ## Complete Source Package
 
-`build.zig.zon` includes the compiler, tests, vendored source and licenses, editor integration, workflows, and release metadata needed by the qualification surface. `zig build source-package-test` invokes `zig fetch` to
+`build.zig.zon` includes the compiler, tests, vendored source and licenses,
+workflows, and release metadata needed by the qualification surface. `zig build source-package-test` invokes `zig fetch` to
 materialize that exact `.paths` selection into a fresh directory without `.git`,
 then runs `zig build test` and `zig build release-metadata-test` there. This keeps
 the Zig source package and the repository checkout from becoming two different

@@ -306,14 +306,11 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("asm-targets-test"));
     // mcmap-test validates .mcmap stable IDs + object-symbol correlation on both backends.
     m0_full_step.dependOn(ctx.cmd("mcmap-test"));
-    // fmt-test validates the formatter; mcc-symbols-test the symbol index; lsp-test the server;
-    // editor-client-test the VS Code client.
+    // fmt-test validates the formatter; mcc-symbols-test validates the symbol index.
     m0_full_step.dependOn(ctx.cmd("fmt-test"));
     m0_full_step.dependOn(ctx.cmd("mcc-symbols-test"));
     m0_full_step.dependOn(ctx.cmd("mcc-inspection-modules-test"));
     m0_full_step.dependOn(ctx.cmd("mcc-list-tests-modules-test"));
-    m0_full_step.dependOn(ctx.cmd("lsp-test"));
-    m0_full_step.dependOn(ctx.cmd("editor-client-test"));
     // stack-test exercises the generic std/stack collection (needs clang).
     m0_full_step.dependOn(ctx.cmd("stack-test"));
     // vec-test exercises the generic heap-backed std/collections/dynarray Vec<T> (needs clang).
