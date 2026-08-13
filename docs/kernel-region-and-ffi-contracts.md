@@ -17,7 +17,7 @@ not silently treated as proven.
 | Guard | A `move` guard is the access capability. Pointers derived by borrowing it carry the guard place and become stale when unlock consumes the guard. | `tests/spec/lock_guards_data.mc`; `E_PRIVATE_FIELD`, `E_USE_AFTER_MOVE`, `E_RESOURCE_LEAK`. | Arbitrary alias relationships not rooted in a tracked capability. |
 | RCU read side | A linear read token bounds derived references; unlock consumes the token and invalidates those references. | `tests/spec/kernel_region_tokens.mc`. | Full Linux RCU flavor/grace-period verification. |
 | Callback registration | A linear registration token bounds callback data; unregister consumes it, invalidating derived references and preventing a forgotten unregister. | `tests/spec/kernel_region_tokens.mc`. | Proving an external C callback dispatcher obeys the token without an audited adapter. |
-| DMA ownership | CPU/device states are distinct move types; only CPU-owned state exposes an access API. | MC and Rust fixtures in `virtio_rng_lang`; `run-dma-ownership.sh`. | Raw aliases retained by common C remain trusted. |
+| DMA ownership | CPU/device states are distinct move types; only CPU-owned state exposes an access API. | `tests/spec/dma_cache.mc` and ownership diagnostics for stale or wrong-state access. | Raw aliases retained by common C remain trusted. |
 | Async/arena/module/device | No broad lifetime claim is made. New async capture forms remain frozen to the admitted lowering; arena/module/device lifetimes require a linear token adapter or an explicit unsafe boundary. | Compiler readiness and unsafe-boundary inventories. | General inferred regions or arbitrary self-referential values. |
 
 This is deliberately a capability-oriented region checker: it directly covers

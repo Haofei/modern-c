@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 
-SCRIPT = Path(__file__).with_name("qmp-hotplug.py")
+SCRIPT = Path(__file__).with_name("qmp_hotplug.py")
 SPEC = importlib.util.spec_from_file_location("qmp_hotplug", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 qmp_hotplug = importlib.util.module_from_spec(SPEC)
