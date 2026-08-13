@@ -154,8 +154,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "blk-test", "Build and run the virtio-blk driver reading a sector under QEMU", &.{ "bash", "tools/fs/blk-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-blk-test", "Build and run the LLVM-lowered virtio-blk driver under QEMU", &.{ "bash", "tools/fs/blk-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "blk-persist-test", "Persist-across-reboot: a sentinel written to virtio-blk survives a second QEMU boot (durable storage)", &.{ "bash", "tools/fs/blk-persist-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-blk-persist-test", "Persist-across-reboot (LLVM): virtio-blk write/read survives a real reboot under QEMU", &.{ "bash", "tools/fs/blk-persist-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "blk-smode-test", "Build and run the virtio-blk driver reading a sector under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-blk-smode-test", "Build and run the LLVM-lowered virtio-blk driver under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -235,7 +233,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "elf-test", "Link + run the ELF64 parser (header + program headers, bounds-checked)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "elf-test" });
 
 
-    _ = h.addScriptTest(ctx, "blockfs-test", "Link + run the block-backed file store (block device vtable)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "blockfs-test" });
 
 
 
@@ -254,7 +251,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "constgen-test", "Const-generic Ring<T,N> at two capacities", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "constgen-test" });
 
 
-    _ = h.addScriptTest(ctx, "bcache-test", "Write-back block cache", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "bcache-test" });
 
     _ = h.addScriptTest(ctx, "time-test", "std/time counter<u64> timeout arithmetic", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "time-test" });
 

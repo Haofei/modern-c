@@ -1,8 +1,6 @@
 # Fixture-level skips allowed by tools/toolchain/diff-backend.sh.
 # Format: fixture<TAB>reason
 # A listed fixture may still compare successfully on a host/toolchain that supports it.
-bcache-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-blockfs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 grant-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 granttab-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 grantcascade-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
@@ -21,7 +19,6 @@ synclock-test	current LLVM backend unsupported fixture; additional skipped fixtu
 mutex-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 ipc-result-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 resacct-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-blobstore-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 procmem-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 attenuate-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 heapfree-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions

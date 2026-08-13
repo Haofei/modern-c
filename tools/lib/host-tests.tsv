@@ -2,8 +2,6 @@
 numeric-literal-boundaries-test	tests/exec/numeric_literal_boundaries_run.mc	entry	numeric_literal_boundaries_run		full-range u64/u128 constants, separated floats, folded inf/nan, and signed zero execute identically on C and LLVM
 fb-test	tests/qemu/arch/fb_demo.mc	entry	fb_run	-Wno-switch-bool	linear framebuffer device: set/get independent 32-bit pixels by coordinate
 fdt-test	tests/qemu/arch/fdt_demo.mc	entry	fdt_run	-Wno-switch-bool	device-tree (FDT) header parsing: magic validation + totalsize/version
-bcache-test	tests/qemu/fs/bcache_demo.mc	entry	bcache_run	-Wno-switch-bool	write-back block cache: write stays dirty in cache, visible to reads, reaches device only on flush; hit/miss tracked
-blockfs-test	tests/qemu/fs/blockfs_demo.mc	driver			block-backed FS: multi-block write/read through the device vtable, data persisted on the block device, files on distinct blocks
 endpoint-test	tests/qemu/ipc/endpoint_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	MINIX hardening: generation-checked endpoints (stale fails closed), derived runnable state (block reasons), death cleanup (waiter released with DEAD)
 grant-test	tests/qemu/ipc/grant_demo.mc	entry	grant_demo_run		memory grant: bounded delegation (OOB rejected) + revocation (stale ref caught)
 granttab-test	tests/qemu/ipc/granttab_demo.mc	entry	granttab_run	-Wno-switch-bool	granttab (kernel/lib): owner-tracked grants, bounded IPC sharing, revoke-on-death
@@ -46,7 +44,6 @@ mutex-test	tests/qemu/proc/mutex_demo.mc	entry	mutex_run	-Wno-switch-bool -Wno-u
 resacct-test	tests/qemu/mem/resacct_demo.mc	driver		-Wno-switch-bool	ResourceAccount (kernel/lib): charge fails closed at quota (no partial), uncharge no-underflow, available/reset
 heapfree-test	tests/qemu/mem/heapfree_demo.mc	driver		-Wno-switch-bool	heap reclamation (kernel/core): free returns blocks to the pool, alloc reuses freed holes, available recovers (no monotonic leak)
 procmem-test	tests/qemu/proc/procmem_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	per-process memory account (kernel/core/process): independent per-process quota, charge fails closed, released on exit
-blobstore-test	tests/qemu/fs/blobstore_demo.mc	driver		-Wno-switch-bool	durable blob sink (kernel/fs): put/get/len by id, typed Full/NotFound/TooLarge, blob survives reopen
 attenuate-test	tests/qemu/proc/attenuate_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	capability attenuation (kernel/core/process): a child's authority is the intersection of the parent's mask and the requested subset (never exceeds parent)
 
 fuzz-offset-layout-test	tests/c_emit/fuzz_offset_layout.mc	entry	entry		explicit @offset(N) MMIO struct layouts (tight/gapped/mixed-width) observed via comptime sizeof + field_offset folded into the entry return; pins the comptimeStructLayout (src/layout.zig) explicit-offset path across C and LLVM

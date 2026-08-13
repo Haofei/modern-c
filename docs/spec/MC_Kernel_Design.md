@@ -526,10 +526,7 @@ removed from the core workload.
 | File | Role | Capacity |
 |------|------|----------|
 | `blockdev.mc` | `trait BlockDevice` (512 B) via `*dyn` dispatch. | — |
-| `bcache.mc` | 4-slot write-back block cache + hit/miss counters. | `NSLOTS=4` |
-| `blobstore.mc` | durable `u32 → bytes` blob sink; `blob_reopen`. | `MAX_BLOBS=8`, 4 KiB |
 
-Storage gates: `bcache-test`, `blockfs-test`, and blobstore host coverage.
 
 ---
 

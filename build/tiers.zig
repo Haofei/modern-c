@@ -283,8 +283,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("virtio-test"));
     // blk-test runs the virtio-blk driver reading a sector under QEMU.
     m0_full_step.dependOn(ctx.cmd("blk-test"));
-    m0_full_step.dependOn(ctx.cmd("blk-persist-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-blk-persist-test"));
     // blk-smode-test revalidates the same virtio-blk driver under REAL OpenSBI in S-mode.
     m0_full_step.dependOn(ctx.cmd("blk-smode-test"));
     // smode-timer-test proves REAL S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
@@ -327,8 +325,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("kcsan-test"));
     // elf-test links + runs the ELF64 parser (needs clang).
     m0_full_step.dependOn(ctx.cmd("elf-test"));
-    // blockfs-test links + runs the block-backed file store (needs clang).
-    m0_full_step.dependOn(ctx.cmd("blockfs-test"));
     // alloc-test links + runs the type-erased Allocator (needs clang).
     m0_full_step.dependOn(ctx.cmd("alloc-test"));
     m0_full_step.dependOn(ctx.cmd("arc-test"));
@@ -339,7 +335,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("demand-test"));
     m0_full_step.dependOn(ctx.cmd("isolation-test"));
     m0_full_step.dependOn(ctx.cmd("cow-test"));
-    m0_full_step.dependOn(ctx.cmd("bcache-test"));
     m0_full_step.dependOn(ctx.cmd("time-test"));
     m0_full_step.dependOn(ctx.cmd("vqfault-test"));
     m0_full_step.dependOn(ctx.cmd("wrap-test"));
