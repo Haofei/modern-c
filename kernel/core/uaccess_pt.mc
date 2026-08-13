@@ -1,7 +1,7 @@
 // kernel/core/uaccess_pt — the page-table-aware user/kernel copy path, arch-neutral.
 //
 // This is the single shared implementation of the `UserAddrSpace` copy contract used by the
-// confined guests on every architecture. It is ARCH-NEUTRAL: it only calls the uniform paging
+// validation user address-space tests on every architecture. It is ARCH-NEUTRAL: it only calls the uniform paging
 // interface (page_table_lookup / mapping_is_user / mapping_is_writable / page_table_translate)
 // that each `kernel/arch/<arch>/paging.mc` exposes identically. It imports that paging module
 // through the arch-selection seam (`kernel/arch/active/...`, plan R0b): the per-arch kernel

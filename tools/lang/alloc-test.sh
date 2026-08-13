@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runtime test for the MC C-ABI allocator (user/libc/alloc.mc) on riscv64. Lowers the allocator
-# through the selected backend, links it with a C runtime that drives malloc/free/calloc/realloc
-# through the standard prototypes (as confined C app will), and runs the image under QEMU. Proves the
+# through the selected backend, links it with a validation runtime that drives malloc/free/calloc/realloc
+# through the standard prototypes, and runs the image under QEMU. Proves the
 # all-MC allocator — which reuses kernel/core/heap.mc's free-list — is correct on both backends.
 #
 # Usage: tools/lang/alloc-test.sh <path-to-mcc> [c|llvm]

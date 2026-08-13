@@ -1,7 +1,7 @@
 // Variadic-function demo for the riscv64 target: a C-ABI variadic MC function exercised
 // end-to-end under QEMU. The `va.*` intrinsics (va.start / va.arg<T> / va.end) lower to the
 // platform varargs ABI on BOTH backends (emit-c -> __builtin_va_*, emit-llvm -> llvm.va_start
-// + the va_arg instruction). Called from the C runtime (vararg_runtime.c) the same way confined C app
+// + the va_arg instruction). Called from the C runtime (vararg_runtime.c) with the same C-ABI shape
 // will call our printf-family shims.
 //
 // `sum_args(count, ...)` reads `count` trailing i64 arguments off the varargs cursor and sums

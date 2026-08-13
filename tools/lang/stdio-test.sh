@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# Runtime test for the MC printf family (user/libc/stdio.mc) on riscv64. Lowers stdio.mc (+
-# cstr.mc, which supplies the memset/memcpy the struct copies need) through the selected backend,
-# links a C runtime that provides the mc_console_write hook and checks snprintf output against
-# expected strings, and runs under QEMU. Linked WITHOUT freestanding.c — the MC libc is the only
-# mem/str/stdio.
+# Runtime test for the retained MC printf validation libc on riscv64. Lowers the small
+# cstr/cnum/stdio aggregate through the selected backend, links a MC runtime that provides
+# the mc_console_write hook, checks snprintf output, and runs under QEMU.
 #
 # Usage: tools/lang/stdio-test.sh <path-to-mcc> [c|llvm]
 set -euo pipefail
@@ -17,8 +15,8 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 
 source "$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../qemu" && pwd)/kernel-boot-lib.sh"
 HERE="$(kernel_boot_repo_root)"
-# Compile the WHOLE aggregated libc (one unit) — the artifact confined C app links: snprintf/printf +
-# the memset/memcpy the struct copies need, with no cross-object std/* duplication.
+# Compile the retained aggregate as one unit: snprintf/printf plus the memcpy/memset helpers needed
+# by generated struct copies, with no cross-object helper duplication.
 LIBC="$HERE/user/libc/libc.mc"
 # The boot seam + driver is now PURE MC (no .c runtime): `_start` is `#[naked]` MC, the
 # console is mmio_console over the bare 16550, this runtime DEFINES the `mc_console_write`

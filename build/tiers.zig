@@ -30,7 +30,6 @@ pub fn register(ctx: *h.Ctx) void {
     // conformance tier, not only `fast`, so a contract regression can't slip into m0/c0/c1.
     m0_full_step.dependOn(ctx.cmd("test-lint"));
     m0_full_step.dependOn(ctx.cmd("bad-diagnostics-test"));
-    m0_full_step.dependOn(ctx.cmd("abi-consistency-test"));
     m0_full_step.dependOn(ctx.cmd("arch-emit-test"));
     m0_full_step.dependOn(ctx.cmd("lowering-coverage-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));

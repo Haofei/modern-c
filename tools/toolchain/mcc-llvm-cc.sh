@@ -46,7 +46,7 @@ CHECKS_FLAG=()
 [ "${MC_CHECKS:-all}" != "all" ] && CHECKS_FLAG=(--checks="${MC_CHECKS}")
 # Arch-selection seam (R0b): MC_ARCH picks which arch a `kernel/arch/active/...` import
 # resolves to. When callers pass only llc's -mtriple, infer the same MC arch so LLVM lowering
-# gets target ABI details such as va_list storage right for user-libc/confined C app objects too.
+# gets target ABI details such as va_list storage right for retained user-libc validation objects too.
 EFFECTIVE_MC_ARCH="${MC_ARCH:-}"
 HAVE_MTRIPLE=0
 for arg in ${LLC_ARGS[@]+"${LLC_ARGS[@]}"}; do

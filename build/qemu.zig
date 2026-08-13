@@ -6,11 +6,6 @@ const h = @import("helpers.zig");
 pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "move-fuzz", "Generate move-resource programs; assert every resource is released once (live_count==0) on both backends", &.{ "bash", "tools/toolchain/move-fuzz.sh", "zig-out/bin/mcc" });
 
-    // ABI consistency: the confined guest syscall numbers in user/abi.mc are the single source
-    // of truth; the C guest userspace (crt0/usys/app_traps) + dispatchers must hardcode the
-    // same numbers. Pure source scan (no mcc), so it always runs and never silently skips.
-    _ = h.addScriptTestOpts(ctx, "abi-consistency-test", "Check the C guest-ABI #defines match user/abi.mc", &.{ "bash", "tools/check/abi-consistency-test.sh" }, .{ .install = false });
-
     // Arch-selection seam (R0b): emit-c the portable core modules under every --arch. Pure host
     // (no ld.lld/QEMU), so it catches active-import regressions the x86/ARM QEMU gates would miss
     // when their cross toolchain is absent. Depends on the installed mcc.

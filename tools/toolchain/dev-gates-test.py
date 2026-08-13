@@ -235,7 +235,6 @@ def main() -> None:
         ["bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '"],
     )
     assert_route(module, ["docs/unsafe-boundary.md"], ["unsafe-audit"], ["git diff --check"])
-    assert_gates(module, ["tools/check/abi-consistency-test.sh"], ["abi-consistency-test"])
     assert_gates(module, ["tools/check/arch-emit-test.sh"], ["arch-emit-test"])
     assert_route(module, ["docs/std-api.md"], ["std-api-docs-test"], ["git diff --check"])
     assert_gates(module, ["tools/toolchain/abi-test.sh"], ["abi-test"])

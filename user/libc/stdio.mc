@@ -1,10 +1,10 @@
 // user/libc/stdio — the C-ABI printf family (vsnprintf/snprintf/printf/fprintf + the character
 // and string output functions), in MC, built on the `va.*` varargs intrinsics. The formatting
-// confined C apps use for diagnostics and string building.
+// retained for diagnostics, varargs, and C-ABI validation.
 //
 // Output is abstracted by a `Sink`: either a bounded user buffer (vsnprintf/snprintf, C99
 // truncation + count semantics) or the console (everything else), which streams through the
-// `mc_console_write` hook (SYS_WRITE in a confined app; UART in the bare-metal tests).
+// `mc_console_write` hook supplied by the validation runtime.
 //
 // This module covers the integer/string/char/pointer specifiers with full flags/width/precision/
 // length-modifier handling. Floating-point specifiers (%f/%e/%g) are a separate addition.
@@ -12,7 +12,7 @@
 import "std/addr.mc";
 import "user/libc/lcommon.mc";
 
-// Console output hook — provided by the runtime (UART under test; SYS_WRITE in the app).
+// Console output hook — provided by the validation runtime.
 extern fn mc_console_write(buf: usize, len: usize) -> void;
 
 const SINK_CHUNK: usize = 256;

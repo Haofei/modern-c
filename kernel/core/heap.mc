@@ -791,42 +791,12 @@ pub fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
     heap_release(h, faddr, fsize);
 }
 
-// Extend this heap's backing range by `added_len` bytes at its current end (demand-grown heap). The
-// caller must have just made [range.end, range.end + added_len) real, writable, and CONTIGUOUS with the
-// existing range — e.g. the libc allocator after SYS_SBRK mapped fresh frames at the running break. The
-// new tail becomes available to the bump frontier (no free-list slot is consumed), and because the
-// backing range now covers the grown span, `heap_free` of a block later carved from it validates and
-// coalesces exactly like any other block. Precondition: the added region is contiguous; a non-adjacent
-// region must go through the free list instead.
-pub fn heap_extend(h: *mut Heap, added_len: usize) -> void {
-    if added_len == 0 {
-        return;
-    }
-    let new_len: usize = pr_len(&h.range) + added_len; // checked: traps on overflow
-    h.range = phys_range(pr_start(&h.range), new_len);
-}
-
-// The end of this heap's backing range (one past the last usable byte). A demand-grown caller compares
-// it against a desired block end to decide how much more to SYS_SBRK before an in-place grow.
-pub fn heap_range_end(h: *mut Heap) -> PAddr {
-    return pr_end(&h.range);
-}
-
-// Is [addr, addr+len) the topmost bump-frontier block (its end == h.next)? A caller that owns a
-// growable backing store (e.g. the demand-grown libc heap) uses this to decide whether it is worth
-// SYS_SBRK-extending the range so a subsequent heap_try_grow_in_place can succeed.
-pub fn heap_is_frontier_block(h: *mut Heap, addr: PAddr, len: usize) -> bool {
-    return pa_eq(pa_offset(addr, len), h.next);
-}
-
 // Grow the block [addr, addr+old_len) to new_len IN PLACE — no copy — but ONLY when it is the topmost
 // bump-frontier block (its end == h.next, i.e. nothing was allocated after it) and the backing range
 // still has room. Returns true on success (h.next advanced to addr+new_len), false otherwise (the
-// caller must fall back to allocate-copy-free, or heap_extend the range and retry). This is what turns
-// a repeatedly-realloc'd growing buffer from an O(n^2) copy chain into O(n): after the first move
-// the buffer sits at the frontier and every later grow just bumps h.next. Shrink/equal
-// (new_len <= old_len) is reported as success with no change —
-// the block is already big enough; realloc's shrink path keeps the original block.
+// caller must fall back to allocate-copy-free). This keeps realloc fast for a topmost block inside a
+// fixed arena. Shrink/equal (new_len <= old_len) is reported as success with no change — the block is
+// already big enough; realloc's shrink path keeps the original block.
 pub fn heap_try_grow_in_place(h: *mut Heap, addr: PAddr, old_len: usize, new_len: usize) -> bool {
     if new_len <= old_len {
         return true;
@@ -837,7 +807,7 @@ pub fn heap_try_grow_in_place(h: *mut Heap, addr: PAddr, old_len: usize, new_len
     }
     let new_end: PAddr = pa_offset(addr, new_len); // checked: traps on overflow
     if pa_lt(pr_end(&h.range), new_end) {
-        return false; // backing range too short — caller may heap_extend then retry
+        return false; // backing range too short
     }
     heap_resize_live(h, addr, old_len, new_len);
     h.next = new_end;

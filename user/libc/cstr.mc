@@ -1,5 +1,5 @@
 // user/libc/cstr — the C-ABI mem/string core (memcpy/memmove/memset/memcmp, strlen/strcmp/
-// strncmp/strchr/memchr), in MC. Freestanding byte/string helpers used by confined C apps.
+// strncmp/strchr/memchr), in MC. Freestanding byte/string helpers retained for C-ABI validation.
 //
 // Reuses std/mem (mem_copy/mem_set) for the bulk routines. Like the allocator, all work is done
 // on `usize` ADDRESSES — pointer params are consumed to an address immediately and result

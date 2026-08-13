@@ -270,11 +270,6 @@ RULES: tuple[Rule, ...] = (
         "unsafe-boundary docs need the unsafe audit gate",
     ),
     Rule(
-        ("tools/check/abi-consistency-test.sh",),
-        ("abi-consistency-test",),
-        "ABI consistency checker changes need the ABI consistency gate",
-    ),
-    Rule(
         ("tools/check/arch-emit-test.sh",),
         ("arch-emit-test",),
         "arch emission checker changes need the arch emission gate",

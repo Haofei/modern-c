@@ -1,9 +1,8 @@
 // user/libc/alloc — the C-ABI heap allocator (malloc/free/realloc/calloc), in MC.
 //
-// This REUSES kernel/core/heap.mc — the project's proven, bounds-checked first-fit free-list
-// with coalescing — rather than hand-rolling an allocator in unsafe C. The arena is a static
-// byte region in the app's .bss (mapped + zeroed by the loader); heap_new builds the free-list
-// over it on first use.
+// This REUSES kernel/core/heap.mc — the project's bounds-checked first-fit free-list with
+// coalescing — rather than hand-rolling an allocator in unsafe C. The arena is a fixed static
+// byte region; heap_new builds the free-list over it on first use.
 //
 // The one impedance mismatch: C's `free(ptr)` carries no size, but `heap_free` needs one. So
 // every allocation is widened by a 16-byte header that stores the total block size; the user
@@ -43,43 +42,8 @@ fn ensure_init() -> void {
     }
 }
 
-// ---- demand growth past the fixed arena (SYS_SBRK) ----
-//
-// When the arena is exhausted, allocations spill into a SECOND heap backed by frames the kernel maps
-// ON DEMAND at HEAP_BASE (through the __sbrk seam). Keeping the two heaps separate leaves the arena
-// path byte-for-byte unchanged for the common case (a guest that stays within the arena never sbrk's
-// and never touches this code), while letting a hungry guest runtime growing its linear
-// memory — grow into real RAM instead of a compile-time .bss array. free()/realloc route by address:
-// anything at or above HEAP_BASE lives in the grown heap. __sbrk is a WEAK default here that reports
-// "growth unavailable" (returns the -1 sentinel); user/libc/syscall_user.mc overrides it with the real
-// ecall, so ONLY a confined guest that can ecall actually grows — plain host-side libc users keep the
-// fixed arena and identical behaviour.
-const SBRK_FAIL: usize = 0xFFFF_FFFF_FFFF_FFFF;
-const GROW_CHUNK: usize = 4194304;            // 4 MiB per SYS_SBRK, amortizing the syscall over small mallocs
-const GROW_PAGE: usize = 4096;
-
-global g_grown: Heap;
-global g_grown_inited: u8;
-
-// Demand growth is OPT-IN. Default OFF: a guest (and every host-side libc user) keeps the fixed 14
-// MiB arena and prior behaviour byte-for-byte — malloc returns NULL at arena exhaustion, exactly as
-// before. A guest that wants to grow into real RAM calls mc_heap_grow_enable() once at start. This
-// keeps large guest heaps opt-in instead of turning every libc consumer into a growable runtime.
-global g_grow_enabled: u8;
-
-export fn mc_heap_grow_enable() -> void {
-    g_grow_enabled = 1;
-}
-
-// Weak default: no syscall shim linked -> the heap is the fixed arena only (growth unavailable).
-#[weak]
-export fn __sbrk(delta: usize) -> usize {
-    return SBRK_FAIL;
-}
-
 // Does `user` point inside the static arena's payload region? Used to route free()/realloc() to the
-// right heap without assuming any absolute address layout (the arena may sit above OR below the grown
-// heap depending on M-mode/host vs confined-U-mode link). g_arena is a real object, so base + len
+// arena heap without assuming any absolute address layout. g_arena is a real object, so base + len
 // cannot overflow the address space.
 fn in_arena(user: usize) -> bool {
     let base: usize = (&g_arena[0]) as usize;
@@ -90,97 +54,6 @@ fn in_arena(user: usize) -> bool {
         return false;
     }
     return true;
-}
-
-// Is `sbrk`'s return an error (a negative errno, or the -1 unavailable sentinel)? Valid break VAs are
-// small positive addresses (the HEAP_BASE region), so the sign bit distinguishes cleanly.
-fn sbrk_failed(r: usize) -> bool {
-    return r >= 0x8000_0000_0000_0000;
-}
-
-// Lazily build the grown heap rooted at the current break. Returns false if growth is unavailable
-// (weak __sbrk) — callers then simply fail the allocation (NULL), exactly as the fixed arena did.
-fn grown_ensure_init() -> bool {
-    if g_grown_inited == 0 {
-        let base: usize = __sbrk(0); // query the current break without growing
-        if sbrk_failed(base) {
-            return false;
-        }
-        heap_init_untracked(&g_grown, phys_range(pa(base), 0)); // empty; extended as we sbrk
-        g_grown_inited = 1;
-    }
-    return true;
-}
-
-// Grow the grown heap by at least `min_bytes` (rounded up to GROW_CHUNK + a page of slack, page-aligned)
-// via SYS_SBRK, then extend the heap over the freshly-mapped, contiguous tail. Returns false on failure.
-fn grown_grow(min_bytes: usize) -> bool {
-    let usize_max: usize = 0xFFFF_FFFF_FFFF_FFFF;
-    // headroom for the block header + heap alignment slack so a request of exactly `min_bytes` fits.
-    if min_bytes > usize_max - GROW_PAGE {
-        return false;
-    }
-    var want: usize = min_bytes + GROW_PAGE;
-    if want < GROW_CHUNK {
-        want = GROW_CHUNK;
-    }
-    if want > usize_max - (GROW_PAGE - 1) {
-        return false;
-    }
-    want = ((want + (GROW_PAGE - 1)) / GROW_PAGE) * GROW_PAGE; // whole pages
-    let old: usize = __sbrk(want);
-    if sbrk_failed(old) {
-        return false;
-    }
-    // The kernel mapped [old, old+want) R|W|U and contiguously with the grown heap's current end.
-    heap_extend(&g_grown, want);
-    return true;
-}
-
-// Extend the grown heap's backing range (via SYS_SBRK) until its end reaches at least `target_end`.
-// Returns true once the range covers target_end. Used by realloc's in-place grow path so a topmost
-// linear-memory buffer can be enlarged without copying.
-fn grow_grown_to(target_end: usize) -> bool {
-    if !grown_ensure_init() {
-        return false;
-    }
-    var guard: u32 = 0;
-    while pa_value(heap_range_end(&g_grown)) < target_end {
-        let cur_end: usize = pa_value(heap_range_end(&g_grown));
-        let deficit: usize = target_end - cur_end; // target_end > cur_end by the loop condition
-        if !grown_grow(deficit) {
-            return false; // sbrk/cap reached
-        }
-        guard = guard + 1;
-        if guard > 4096 {
-            return false; // defensive: never spin
-        }
-    }
-    return true;
-}
-
-// Try to satisfy `total` bytes from the grown heap, growing it once if needed. 0 == failure.
-fn grown_alloc(total: usize) -> usize {
-    if !grown_ensure_init() {
-        return 0;
-    }
-    switch heap_try_alloc(&g_grown, total, HEADER) {
-        ok(b) => {
-            unsafe { raw.store<usize>(b, total); }
-            return pa_value(pa_offset(b, HEADER));
-        }
-        err(e) => {}
-    }
-    if !grown_grow(total) {
-        return 0;
-    }
-    switch heap_try_alloc(&g_grown, total, HEADER) {
-        ok(b) => {
-            unsafe { raw.store<usize>(b, total); }
-            return pa_value(pa_offset(b, HEADER));
-        }
-        err(e) => { return 0; }
-    }
 }
 
 // ---- internal allocator, entirely in usize addresses (0 == failure / NULL) ----
@@ -201,13 +74,7 @@ fn malloc_addr(size: usize) -> usize {
     switch heap_try_alloc(&g_heap, total, HEADER) {
         ok(b) => { block = b; }
         err(e) => {
-            // Arena exhausted. If the guest opted into demand growth, spill into the sbrk-backed
-            // grown heap (returns 0/NULL if growth is unavailable or the per-guest cap is reached —
-            // never a trap). Otherwise fail exactly as the fixed arena always did.
-            if g_grow_enabled == 0 {
-                return 0;
-            }
-            return grown_alloc(total);
+            return 0;
         }
     }
     unsafe {
@@ -225,15 +92,8 @@ fn free_addr(user: usize) -> void {
     unsafe {
         total = raw.load<usize>(block);
     }
-    // Route by the arena's ACTUAL range, not a fixed VA: a block that falls inside the static arena
-    // came from g_heap; anything else was carved from the demand-grown heap. (Routing by a fixed
-    // HEAP_BASE is wrong — in M-mode/host builds the .bss arena itself sits above HEAP_BASE, so an
-    // arena block would misroute into the uninitialized grown heap and trap. The arena-range test is
-    // correct in both the confined guest and the flat host layout.)
     if in_arena(user) {
         heap_free(&g_heap, block, total);
-    } else {
-        heap_free(&g_grown, block, total);
     }
 }
 
@@ -264,23 +124,6 @@ fn realloc_addr(old: usize, size: usize) -> usize {
         if heap_try_grow_in_place(&g_heap, block, old_total, new_total) {
             unsafe { raw.store<usize>(block, new_total); }
             return old;
-        }
-    } else {
-        if g_grown_inited != 0 {
-            // Try directly; if the block is topmost but the grown range is too short, SYS_SBRK more
-            // contiguous frames (grown_grow extends the range) and retry, then extend in place.
-            if heap_try_grow_in_place(&g_grown, block, old_total, new_total) {
-                unsafe { raw.store<usize>(block, new_total); }
-                return old;
-            }
-            if heap_is_frontier_block(&g_grown, block, old_total) {
-                if grow_grown_to(pa_value(pa_offset(block, new_total))) {
-                    if heap_try_grow_in_place(&g_grown, block, old_total, new_total) {
-                        unsafe { raw.store<usize>(block, new_total); }
-                        return old;
-                    }
-                }
-            }
         }
     }
 
