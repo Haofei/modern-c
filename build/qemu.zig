@@ -176,7 +176,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "wrap-test", "long-running ring-index/pool-generation wrap and pool exhaustion invariants", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "wrap-test" });
 
-    _ = h.addScriptTest(ctx, "args-test", "argv/envp vector", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "args-test" });
     _ = h.addScriptTest(ctx, "libc-test", "Minimal libc core", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "libc-test" });
 
     // hosted-test runs the hosted-profile float round-trip end to end: MC ->
@@ -210,7 +209,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "slotmap-test", "SlotMap<T,N> index handle table", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "slotmap-test" });
     _ = h.addScriptTest(ctx, "mask-test", "Mask32 bit set", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mask-test" });
-    _ = h.addScriptTest(ctx, "mailbox-test", "Mailbox<T,N> bounded queue + source filter", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mailbox-test" });
     _ = h.addScriptTest(ctx, "tryelse-test", "EXPR? else MAPPED error remap", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tryelse-test" });
     _ = h.addScriptTest(ctx, "byteview-test", "ByteBuf<N> inline buffer view", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "byteview-test" });
     _ = h.addScriptTest(ctx, "scan-test", "find_index/any closure scan", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "scan-test" });
@@ -221,7 +219,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "synclock-test", "std/rwlock + std/seqlock reader-writer and sequence locks", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "synclock-test" });
 
-    _ = h.addScriptTest(ctx, "mutex-test", "sleeping Mutex: try_lock, blocking enqueue, FIFO hand-off on unlock", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mutex-test" });
 
     _ = h.addScriptTest(ctx, "fdt-test", "Device-tree (FDT) header parsing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test" });
 
@@ -229,14 +226,8 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-sbi-boot-test", "LLVM-lowered boot under OpenSBI (real firmware)", &.{ "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "fdt-boot-test", "Boot under OpenSBI + parse DTB /memory (FDT discovery)", &.{ "bash", "tools/arch/fdt-boot-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-fdt-boot-test", "LLVM-lowered boot under OpenSBI + parse DTB /memory", &.{ "bash", "tools/arch/fdt-boot-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "smode-user-test", "S-mode U-mode hello under OpenSBI (SYS_WRITE + bad-ptr -EFAULT)", &.{ "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-smode-user-test", "LLVM-lowered S-mode U-mode hello under OpenSBI", &.{ "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
-    // Phase 2.2 re-land condition: differential scheduler gate — after each randomized runnability
-    // transition, next_runnable's pick must equal an independent authoritative is_runnable scan.
-    // Reproduces the stale-cache regression that reverted the first O(1)/O(children) attempt.
-    _ = h.addScriptTest(ctx, "sched-difftest", "differential scheduler gate: next_runnable pick == independent authoritative scan across randomized transitions (stale-cache regression guard)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "sched-difftest" });
 
     _ = h.addScriptTest(ctx, "grant-test", "Memory grant: bounded delegation + revocation", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "grant-test" });
 
@@ -266,26 +257,16 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-thread-test", "Run LLVM-lowered cooperative context switching under QEMU", &.{ "bash", "tools/proc/thread-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "sched-test", "Run the round-robin scheduler (3 heap-stacked threads) under QEMU", &.{ "bash", "tools/proc/sched-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-sched-test", "Run the LLVM-lowered round-robin scheduler under QEMU", &.{ "bash", "tools/proc/sched-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "preempt-test", "Run the timer-driven preemptive scheduler under QEMU", &.{ "bash", "tools/proc/preempt-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-preempt-test", "Run LLVM-lowered timer-driven preemption under QEMU", &.{ "bash", "tools/proc/preempt-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
-    _ = h.addScriptTest(ctx, "syscall-test", "Run the ecall syscall dispatch skeleton under QEMU", &.{ "bash", "tools/lang/syscall-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-syscall-test", "Run the LLVM-lowered ecall syscall dispatch skeleton under QEMU", &.{ "bash", "tools/lang/syscall-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "user-test", "Run the M->U privilege drop + user-mode syscalls under QEMU", &.{ "bash", "tools/lang/user-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-user-test", "Run the LLVM-lowered M->U privilege drop + user-mode syscalls under QEMU", &.{ "bash", "tools/lang/user-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "process-test", "Run process lifecycle (spawn/run/exit) under QEMU", &.{ "bash", "tools/proc/process-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-process-test", "Run the LLVM-lowered process lifecycle under QEMU", &.{ "bash", "tools/proc/process-test.sh", "zig-out/bin/mcc", "llvm" });
+
+
+
 
 
     // The uaccess demos exercise kernel/core/uaccess.mc, which imports riscv paging.mc

@@ -78,8 +78,6 @@ estimate_ms() {
     case "$gate" in
         lowering-coverage)
             echo 45000 ;;
-        sched-difftest)
-            echo 25000 ;;
         fuzz-*|*-fuzz)
             echo 5000 ;;
         llvm-host-suite-test|diff-backend|sanitize|*sweep*)

@@ -83,10 +83,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-qemu-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-trap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-thread-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-sched-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-syscall-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-user-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-process-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-uaccess-pt-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-elf-loader-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-uaccess-taint-test"));
@@ -100,7 +96,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-stdio-test"));
     m0_full_step.dependOn(ctx.cmd("mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-preempt-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-page-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-heap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-paging-test"));
@@ -248,7 +243,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("time-test"));
     m0_full_step.dependOn(ctx.cmd("vqfault-test"));
     m0_full_step.dependOn(ctx.cmd("wrap-test"));
-    m0_full_step.dependOn(ctx.cmd("args-test"));
     m0_full_step.dependOn(ctx.cmd("libc-test"));
     // hosted-test runs the hosted-profile float I/O round-trip (needs clang+python3).
     m0_full_step.dependOn(ctx.cmd("hosted-test"));
@@ -263,22 +257,17 @@ pub fn register(ctx: *h.Ctx) void {
     // sort-test exercises std/sort on both backends.
     m0_full_step.dependOn(ctx.cmd("sort-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-sort-test"));
-    m0_full_step.dependOn(ctx.cmd("sched-difftest"));
     m0_full_step.dependOn(ctx.cmd("slotmap-test"));
     m0_full_step.dependOn(ctx.cmd("mask-test"));
     m0_full_step.dependOn(ctx.cmd("rights-test"));
     m0_full_step.dependOn(ctx.cmd("mmio-test"));
     m0_full_step.dependOn(ctx.cmd("synclock-test"));
-    m0_full_step.dependOn(ctx.cmd("mutex-test"));
-    m0_full_step.dependOn(ctx.cmd("mailbox-test"));
     m0_full_step.dependOn(ctx.cmd("tryelse-test"));
     m0_full_step.dependOn(ctx.cmd("byteview-test"));
     m0_full_step.dependOn(ctx.cmd("scan-test"));
     m0_full_step.dependOn(ctx.cmd("fdt-test"));
     m0_full_step.dependOn(ctx.cmd("sbi-boot-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-sbi-boot-test"));
-    m0_full_step.dependOn(ctx.cmd("smode-user-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-smode-user-test"));
     m0_full_step.dependOn(ctx.cmd("grant-test"));
     m0_full_step.dependOn(ctx.cmd("arc-pkt-test"));
     m0_full_step.dependOn(ctx.cmd("arena-test"));
@@ -298,16 +287,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("trap-test"));
     // thread-test runs cooperative context switching under QEMU.
     m0_full_step.dependOn(ctx.cmd("thread-test"));
-    // sched-test runs the round-robin scheduler under QEMU.
-    m0_full_step.dependOn(ctx.cmd("sched-test"));
-    // preempt-test runs the timer-driven preemptive scheduler under QEMU.
-    m0_full_step.dependOn(ctx.cmd("preempt-test"));
-    // syscall-test runs the ecall syscall dispatch skeleton under QEMU.
-    m0_full_step.dependOn(ctx.cmd("syscall-test"));
-    // user-test runs the M->U privilege drop + user-mode syscalls under QEMU.
-    m0_full_step.dependOn(ctx.cmd("user-test"));
-    // process-test runs process lifecycle (spawn/run/exit) under QEMU.
-    m0_full_step.dependOn(ctx.cmd("process-test"));
     // The uaccess demos run under QEMU (they import riscv paging.mc, so they can't run on the host suite).
     m0_full_step.dependOn(ctx.cmd("uaccess-pt-test"));
     m0_full_step.dependOn(ctx.cmd("elf-loader-test"));

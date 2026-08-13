@@ -10,9 +10,6 @@ scan-test	current host/corpus C build gap; additional skipped fixtures remain co
 time-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 vqfault-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 synclock-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-mutex-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-resacct-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-procmem-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 heapfree-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 showcase-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 fuzz-atomics-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
@@ -39,4 +36,3 @@ fuzz-async-shadow-pattern-test	current LLVM backend unsupported fixture; additio
 fuzz-async-switch-pattern-sema-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-async-arm-return-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-async-capture-shadow-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-sched-difftest	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions

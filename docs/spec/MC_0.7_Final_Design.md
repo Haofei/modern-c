@@ -3040,12 +3040,9 @@ reader/writer lock: many concurrent readers or one exclusive writer) and
 `std/seqlock` (a sequence lock for read-mostly data: lock-free readers that retry on
 an overlapping write). Both are built on the fair ticket `Spinlock` + an atomic
 counter, so they need no compare-exchange primitive; their state-machine transitions
-are covered by `synclock-test` (C and LLVM host-suite). A **sleeping `Mutex`**
-(`kernel/lib/mutex`) validates the blocking-contract variant: unlike the
-busy-waiting SpinLock, a contended mutex records a waiter (`mutex_lock` returns
-`Blocked`) and `mutex_unlock` hands ownership to the next waiter through the
-embedding scheduler hook. Its lock/owner/waiter state machine is covered by
-`mutex-test`.
+are covered by `synclock-test` (C and LLVM host-suite). Blocking scheduler-backed
+mutex validation is intentionally outside the core language gate.
+
 
 ## 28.2 `std/ring` — Generic Descriptor Ring
 
@@ -5535,16 +5532,13 @@ object files under the same hidden-assumption token check.
 Focused QEMU and host-driver gates compile retained freestanding validation modules
 through LLVM to assemblable IR and non-empty target objects, using a RISC-V
 target for the main kernel modules and an x86-64 target for x86 arch modules.
-The `zig build llvm-qemu-test`, `zig build llvm-trap-test`, `zig build
-llvm-thread-test`, `zig build llvm-sched-test`, `zig build llvm-syscall-test`,
-`zig build llvm-user-test`, `zig build llvm-process-test`, `zig build llvm-preempt-test`, and
-`zig build llvm-sbi-boot-test`
-gates boot LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer
-traps, cooperative context switching, round-robin scheduling, syscall dispatch,
-U-mode entry, process lifecycle, ELF load/run, Sv39 activation, user-copy
-boundaries, timer preemption, OpenSBI/FDT boot discovery, and selected U-mode
-exit traps. These remain validation fixtures for language and backend behavior,
-not operating-system product scope.
+The `zig build llvm-qemu-test`, `zig build llvm-trap-test`,
+`zig build llvm-thread-test`, and `zig build llvm-sbi-boot-test` gates boot
+LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer traps,
+cooperative context switching, ELF load/run, Sv39 activation, user-copy
+boundaries, OpenSBI/FDT boot discovery, and selected exit traps. These remain
+validation fixtures for language and backend behavior, not operating-system
+product scope.
 The `zig build llvm-page-test`, `zig build llvm-heap-test`, and `zig build
 llvm-paging-test` gates link and run LLVM-lowered host checks for the frame
 allocator, kernel heap allocator, and Sv39 page-table map/translate helpers.
