@@ -38,7 +38,7 @@ LOWER_PHASE_RE = re.compile(r"\blower[-_]")
 
 REJECT_GLOBS = [
     "tests/c_emit/bad/*.mc",
-    "kernel/bad/*.mc",
+    "tests/diagnostics/bad/*.mc",
     "demo/bad/*.mc",
 ]
 SWEEP_FILES = [

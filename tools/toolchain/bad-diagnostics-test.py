@@ -46,7 +46,7 @@ def fixture_plan(root: Path) -> list[Fixture]:
     for pattern, command in (
         ("tests/c_emit/bad/*.mc", "emit-c"),
         ("demo/bad/*.mc", "check"),
-        ("kernel/bad/*.mc", "check"),
+        ("tests/diagnostics/bad/*.mc", "check"),
     ):
         for path in sorted(root.glob(pattern)):
             specs.append(Fixture(command=command, path=path.relative_to(root)))

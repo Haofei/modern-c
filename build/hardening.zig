@@ -21,7 +21,7 @@ pub fn register(ctx: *h.Ctx) void {
     // source scans (no mcc dependency), so they do not depend on the install step.
 
     // S0.2: source-level audit of the unsafe boundary.
-    _ = h.addScriptTestOpts(ctx, "unsafe-audit", "Audit the MC unsafe boundary: flag gated unsafe ops outside an unsafe/unsafe_contract region and inventory the audited sites in kernel/ + std/ (S0.2)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "unsafe" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "unsafe-audit", "Audit the MC unsafe boundary: flag gated unsafe ops outside an unsafe/unsafe_contract region and inventory the audited std/core-runtime sites (S0.2)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "unsafe" }, .{ .install = false });
 
     // Source-level audit of capability mint authority.
     _ = h.addScriptTestOpts(ctx, "capability-mint-audit", "Audit capability authority roots: flag direct cap_mint/rcap_mint calls outside approved capability/rights roots", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "capability-mint" }, .{ .install = false });

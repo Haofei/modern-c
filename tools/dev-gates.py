@@ -487,9 +487,9 @@ RULES: tuple[Rule, ...] = (
         "persisted mcfuzz regression corpus changes need corpus replay",
     ),
     Rule(
-        ("kernel/**/*", "std/**/*", "tests/qemu/**/*", "tools/arch/*", "tools/proc/*", "tools/mem/*"),
+        ("std/**/*", "tests/qemu/**/*", "tools/arch/*", "tools/proc/*", "tools/mem/*"),
         ("fast",),
-        "kernel/std/QEMU changes need host confidence",
+        "std/QEMU freestanding changes need host confidence",
         excludes=(
             "tools/arch/qemu-mmio-test.sh",
         ),
@@ -540,7 +540,7 @@ def host_manifest_gates(path: str) -> tuple[list[str], list[str]]:
                 driver = f"tools/lib/host-drivers/{name}.c"
                 if fixture == path or (mode == "driver" and driver == path):
                     return [name], [
-                        f"{path} is owned by tools/lib/host-tests.tsv row {name}; run the exact host-harness gate instead of broad kernel/QEMU confidence tiers",
+                        f"{path} is owned by tools/lib/host-tests.tsv row {name}; run the exact host-harness gate instead of broad QEMU/freestanding confidence tiers",
                     ]
     except OSError:
         pass

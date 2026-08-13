@@ -7,7 +7,7 @@
 //
 // Harness: tools/toolchain/check-generated-c.sh runs `mcc emit-c` on every file under
 // tests/c_emit/bad/ and requires it to FAIL with the diagnostic this EXPECT line names —
-// exactly the kernel/bad/ reject convention, applied to the C-emit definite-init check.
+// exactly the tests/diagnostics/bad/ reject convention, applied to the C-emit definite-init check.
 
 fn read_materialized_uninit_scalar() -> u32 {
     var x: u32 = uninit;

@@ -1,7 +1,7 @@
 // Bare-metal riscv64 M-mode correctness gate for the word-aligned mem ops
 // (Phase 1.1 of the performance refactor). Self-contained: boots `-bios none`,
 // exercises std/mem's mem_copy/mem_set AND the freestanding C-ABI memcpy/memmove/
-// memset (provided by the linked kernel/lib/freestanding.mc object), and asserts
+// memset (provided by the linked tests/qemu/support/lib/freestanding.mc object), and asserts
 // byte-exact results across the tricky lengths and alignments the word path splits
 // on: 0,1,7,8,9,15,16,4096, aligned + misaligned src/dst (offset 1,3,7), and
 // memmove overlap in both directions.
@@ -10,7 +10,7 @@
 // MEM-TRAP (an unexpected fault — e.g. an unaligned u64 access on the word path).
 //
 // The freestanding mem* symbols are declared `extern` here (not imported) so this
-// unit does not re-define them — the harness links kernel/lib/freestanding.mc,
+// unit does not re-define them — the harness links tests/qemu/support/lib/freestanding.mc,
 // whose word-aligned bodies are the whole point of the test.
 
 import "std/addr.mc";
@@ -20,7 +20,7 @@ import "tests/qemu/lib/test_report.mc";
 const RT_FINISHER: usize = 0x0010_0000; // SiFive test finisher
 const RT_FINISHER_HALT: u32 = 0x5555;
 
-// Word-aligned freestanding libc under test (linked from kernel/lib/freestanding.mc).
+// Word-aligned freestanding libc under test (linked from tests/qemu/support/lib/freestanding.mc).
 extern fn memcpy(d: usize, s: usize, n: usize) -> usize;
 extern fn memmove(d: usize, s: usize, n: usize) -> usize;
 extern fn memset(d: usize, c: i32, n: usize) -> usize;

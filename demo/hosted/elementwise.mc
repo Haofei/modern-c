@@ -79,7 +79,7 @@ export fn hosted_kernel_run() -> i32 {
 
     // 3. the kernel: sqrt intrinsic + IEEE add, elementwise. `a`/`b` were filled by
     // read_exact through their raw addresses, which definite-init (S0.1) cannot see —
-    // re-read them through the same raw addresses (the kernel/core/uaccess.mc fetch
+    // re-read them through the same raw addresses (the user-access validation fetch
     // idiom; a whole-value [256]f32 literal would be absurd).
     var av: *[CAP]f32 = uninit;
     var bv: *[CAP]f32 = uninit;

@@ -3,7 +3,7 @@
 #
 # Lowers the self-contained mem-ops runtime (tests/qemu/mem/mem_ops_runtime.mc)
 # through the selected backend, links it with the freestanding libc object
-# (kernel/lib/freestanding.mc — whose word-aligned memcpy/memmove/memset are under
+# (tests/qemu/support/lib/freestanding.mc — whose word-aligned memcpy/memmove/memset are under
 # test) into a riscv64 image, and boots it `-bios none`. The runtime runs mem_copy/
 # mem_set/memmove across boundary lengths and alignments and prints MEM-OK iff every
 # case is byte-exact (MEM-BAD on a mismatch, MEM-TRAP on an unexpected fault).

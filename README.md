@@ -167,13 +167,13 @@ zig-out/bin/mcc explain E_UNKNOWN_IDENTIFIER
 ```
 
 Run `zig-out/bin/mcc --help` for profile, check-mode, import-path, remapping, and
-stdin options. `emit-c` defaults to the kernel/freestanding profile; hosted C is
+stdin options. `emit-c` defaults to the freestanding profile; hosted C is
 explicitly selected with `--profile=hosted`.
 
 ## Validation Gates
 
 Use the smallest gate that matches the work, then finish substantial compiler
-changes with the milestone gate. Run retained kernel/QEMU gates only when the
+changes with the milestone gate. Run retained QEMU gates only when the
 change touches freestanding, ABI, MMIO, interrupt, or backend-lowering behavior.
 
 ```sh
@@ -265,9 +265,9 @@ Object generation is available through:
 tools/toolchain/mcc-llvm-cc.sh path/to/file.mc -o file.o
 ```
 
-## Kernel Validation Workload
+## Freestanding Validation Workload
 
-The `kernel/` and retained QEMU fixtures are compiler-validation workloads. They
+The retained QEMU fixtures are compiler-validation workloads. They
 exercise freestanding ABI boundaries, address classes, ownership, unsafe
 operations, MMIO, traps, and backend lowering. They are not an OS deliverable
 track.
@@ -300,7 +300,7 @@ Other deliberate or current limitations include:
 - value-level comptime rather than unrestricted type computation;
 - no separate-compilation or mature incremental module graph;
 - a token-preserving reindenter rather than a full pretty printer;
-- kernel code is a compiler-validation workload, not a board-certification
+- freestanding/QEMU code is a compiler-validation workload, not a board-certification
   target;
 - no shipped-version guarantee.
 
@@ -314,8 +314,8 @@ The repository-wide backlog is [`docs/todo.md`](docs/todo.md).
 | `std/` | MC standard library |
 | `tests/spec/` | Normative language and diagnostic fixtures |
 | `tests/c_emit/`, `tests/llvm/` | Backend fixtures |
-| `tests/qemu/` | Programs used by QEMU and host-driver gates |
-| `kernel/`, `user/` | Freestanding validation modules and user-mode fixtures |
+| `tests/qemu/` | Freestanding programs and support used by QEMU and host-driver gates |
+| `user/` | User-mode C-ABI validation fixtures |
 | `tools/` | Drivers, fuzzers, and test harnesses |
 | `demo/`, `examples/` | Hosted and hardware-oriented examples |
 | `docs/` | Specifications, reference material, validation, and plans |

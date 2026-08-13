@@ -16,7 +16,7 @@ ALLOWLIST_ROW_RE = re.compile(r"^\|\s*`?(E_[A-Z0-9_]+)`?\s*\|\s*(.*?)\s*\|")
 FIXTURE_GLOBS = (
     "tests/spec/**/*.mc",
     "tests/c_emit/bad/*.mc",
-    "kernel/bad/*.mc",
+    "tests/diagnostics/bad/*.mc",
     "demo/bad/*.mc",
 )
 UNIT_TEST_GLOBS = (

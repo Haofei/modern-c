@@ -28,8 +28,8 @@
 # unapproved capability mint). A clean run prints the inventory and exits 0.
 #
 # Usage:
-#   mc-audit.sh --mode unsafe        [DIR ...]   (default dirs: kernel std)
-#   mc-audit.sh --mode capability-mint [DIR ...] (default dirs: kernel std tests/support)
+#   mc-audit.sh --mode unsafe        [DIR ...]   (default dirs: std)
+#   mc-audit.sh --mode capability-mint [DIR ...] (default dirs: std tests/support)
 #   mc-audit.sh --mode MODE --self-test          (run the built-in negative fixture)
 
 set -uo pipefail
@@ -56,20 +56,20 @@ esac
 
 # Default scan roots per mode.
 if [ ${#DIRS[@]} -eq 0 ]; then
-  DIRS=(kernel std)
-  [ "$MODE" = capability-mint ] && DIRS=(kernel std tests/support)
+  DIRS=(std)
+  [ "$MODE" = capability-mint ] && DIRS=(std tests/support)
 fi
 
 SELF_TMP=""
 if [ "$self_test" = 1 ]; then
   SELF_TMP="$(mktemp -d)"
-  mkdir -p "$SELF_TMP/kernel/core"
+  mkdir -p "$SELF_TMP/validation/core"
   case "$MODE" in
     unsafe)
       # NEGATIVE TEST (must be flagged): a gated unsafe op (`raw.load`) OUTSIDE any unsafe
       # region. The cross-line form is used on purpose: the `.load` sits on its own line, so a
       # per-physical-line matcher would MISS it — the join makes it visible.
-      cat > "$SELF_TMP/kernel/core/unsafe_bad.mc" <<'MC'
+      cat > "$SELF_TMP/validation/core/unsafe_bad.mc" <<'MC'
 import "std/addr.mc";
 
 // NEGATIVE TEST (must be flagged): `raw.load` is a gated unsafe op; here it sits OUTSIDE any
@@ -96,12 +96,12 @@ pub fn rights_authority_unchecked() -> RightsAuthority { return .{ .marker = 1 }
 pub fn rights_grant(auth: *RightsAuthority, bits: u32) -> u32 { return bits; }
 pub fn rights_single(auth: *RightsAuthority, bit: u32) -> u32 { return bit; }
 MC
-      mkdir -p "$SELF_TMP/kernel/driver"
-      cat > "$SELF_TMP/kernel/driver/bad_mint.mc" <<'MC'
+      mkdir -p "$SELF_TMP/validation/driver"
+      cat > "$SELF_TMP/validation/driver/bad_mint.mc" <<'MC'
 import "tests/support/capability.mc";
 import "std/rights.mc";
 
-// NEGATIVE TEST (must be flagged): ordinary kernel code must not directly call the
+// NEGATIVE TEST (must be flagged): ordinary validation code must not directly call the
 // privileged setup-time mint/root primitives. Authority should be delegated from
 // the boot authority root instead.
 export fn bad_driver_mint() -> usize {
@@ -113,9 +113,9 @@ export fn bad_driver_mint() -> usize {
 MC
       ;;
   esac
-  DIRS=("$SELF_TMP/kernel")
-  [ "$MODE" = unsafe ] && DIRS=("$SELF_TMP/kernel" "$SELF_TMP/std")
-  [ "$MODE" = capability-mint ] && DIRS=("$SELF_TMP/kernel" "$SELF_TMP/std" "$SELF_TMP/tests/support")
+  DIRS=("$SELF_TMP/validation")
+  [ "$MODE" = unsafe ] && DIRS=("$SELF_TMP/validation" "$SELF_TMP/std")
+  [ "$MODE" = capability-mint ] && DIRS=("$SELF_TMP/validation" "$SELF_TMP/std" "$SELF_TMP/tests/support")
 fi
 
 FILES=$(find "${DIRS[@]}" -name '*.mc' 2>/dev/null | sort)

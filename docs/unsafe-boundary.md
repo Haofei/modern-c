@@ -5,7 +5,7 @@ UB-introducing constructs catalogued in [`docs/c-ub-matrix.md`](c-ub-matrix.md) 
 **unsafe surface** is the small, explicit, reviewed set of constructs that the language *cannot*
 prove safe because they touch hardware, raw memory, the optimizer, or non-MC code. This document
 defines that boundary, the marker that contains it, and the audited inventory of unsafe sites in
-`kernel/` and `std/`.
+`std/` and core runtime support.
 
 > **Scope (honesty).** This item is *audit + greppable-discipline + a lint*. MC already
 > **type-enforces** the boundary (see below), so this is not a new type-system feature — it
@@ -87,7 +87,7 @@ unions) is already alias-safe via `memcpy`.
 
 ## The lint: `tools/toolchain/mc-audit.sh --mode unsafe`
 
-Scans every `.mc` under `kernel/` and `std/`, tracks `unsafe`/`unsafe_contract` regions by brace
+Scans every `.mc` under `std/` by default, tracks `unsafe`/`unsafe_contract` regions by brace
 depth (with comment/string stripping), and:
 
 - **flags** any *gated* unsafe op that sits **outside** an `unsafe`/`unsafe_contract` region as a
@@ -106,25 +106,25 @@ It is a *lint*, not the compiler: it parses with `awk` and is deliberately conse
 authoritative gate is `sema`; this gives the greppable, human-auditable view and a clean
 inventory.
 
-## Audited inventory — `kernel/` + `std/` (51 `.mc` files)
+## Audited inventory — `std/` (42 `.mc` files)
 
 Snapshot from `tools/toolchain/mc-audit.sh --mode unsafe` at S0.2. **Result: clean** — every gated unsafe op
 sits inside an `unsafe`/`unsafe_contract` region (re-run the lint for the live count).
 
 | Category | Count | Gate | Where the load-bearing ones live |
 |---|---:|---|---|
-| `raw.load` / `raw.store` | 61 | unsafe block | The raw-register/MMIO path. Concentrated in the MMIO/runtime layers: `std/mmio.mc`, `std/bytes.mc`, `std/mem.mc`, `std/libc.mc`, `std/dma.mc`, `std/vec.mc`. This is the **S0.3 strict-aliasing** surface. |
+| `raw.load` / `raw.store` | 37 | unsafe block | The raw-register/MMIO path. Concentrated in the MMIO/runtime layers: `std/mmio.mc`, `std/bytes.mc`, `std/mem.mc`, `std/libc.mc`, `std/dma.mc`, `std/vec.mc`. This is the **S0.3 strict-aliasing** surface. |
 | `mmio.map<T>` | 0 | unsafe block | — none currently. |
 | `raw.ptr<T>` | 18 | tracked | Mostly typed address wrappers and hosted/runtime plumbing. Minting only; derefs are checked. |
 | raw-many `.offset()` | 0 | unsafe block | — none currently. |
-| `forget_unchecked` | 11 | unsafe block | Resource handoff/release paths — transferring a linear value's ownership out of the checker. |
+| `forget_unchecked` | 10 | unsafe block | Resource handoff/release paths — transferring a linear value's ownership out of the checker. |
 | `arc_get_mut` | 1 | unsafe block | `std/arc.mc` (definition); call sites require `unsafe`. |
-| inline `asm` | 0 | unsafe block | — none currently in kernel/std. QEMU support fixtures carry their own precise asm contracts outside this inventory. |
-| `unchecked.{add,…}` | 0 | `#[unsafe_contract(no_overflow)]` | — none currently in kernel/std. |
-| `assume_noalias_unchecked` | 0 | `#[unsafe_contract(noalias)]` | — none currently in kernel/std. |
+| inline `asm` | 0 | unsafe block | — none currently in the core std inventory. QEMU support fixtures carry their own precise asm contracts outside this inventory. |
+| `unchecked.{add,…}` | 0 | `#[unsafe_contract(no_overflow)]` | — none currently in the core std inventory. |
+| `assume_noalias_unchecked` | 0 | `#[unsafe_contract(noalias)]` | — none currently in the core std inventory. |
 | `bitcast<T>` | 8 | tracked | `std/vec.mc` (typed-slot reinterpret). Alias-safe (memcpy). |
-| `uninit` | 18 | tracked | Buffers written before read across std/kernel. Unspecified-not-UB. |
-| **TOTAL (constructs)** | **117** | | |
+| `uninit` | 16 | tracked | Buffers written before read across std/runtime support. Unspecified-not-UB. |
+| **TOTAL (constructs)** | **90** | | |
 | `extern` declarations (FFI) | 38 | trust boundary | The non-MC call surface (runtime, libc shims, platform hooks). Callee correctness is not MC-checked. |
 
 ### Reading the inventory
@@ -158,5 +158,5 @@ scope (larger follow-ups):
 
 - `bash tools/toolchain/mc-audit.sh --mode unsafe` → clean inventory, exit 0.
 - `zig build unsafe-audit` → same, via the build graph.
-- Retained kernel validation gates still exercise the unsafe inventory boundary; the deleted
-  integrated kernel image gate is no longer part of the core language workload.
+- Retained QEMU validation gates still exercise freestanding unsafe-boundary behavior; those
+  fixtures are no longer part of the core std unsafe inventory.

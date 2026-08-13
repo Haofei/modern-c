@@ -1,6 +1,6 @@
 // user/libc/alloc — the C-ABI heap allocator (malloc/free/realloc/calloc), in MC.
 //
-// This REUSES kernel/core/heap.mc — the project's bounds-checked first-fit free-list with
+// This REUSES tests/support/heap.mc — the project's bounds-checked first-fit free-list with
 // coalescing — rather than hand-rolling an allocator in unsafe C. The arena is a fixed static
 // byte region; heap_new builds the free-list over it on first use.
 //
@@ -16,7 +16,7 @@
 // ABI-identical to `void*`: alloc.mc and any C-ABI driver are separate translation units, so
 // a C `void*` prototype and this `uint8_t*` definition never meet to conflict.
 
-import "kernel/core/heap.mc";
+import "tests/support/heap.mc";
 import "std/addr.mc";
 import "std/mem.mc";
 import "user/libc/lcommon.mc";

@@ -50,7 +50,7 @@ corpora:
 | Outcome | How it is declared | Gate that owns it | Asserted by |
 |---|---|---|---|
 | **Compiles** | default (a file in the must-compile glob) | `c-test`, `demo-test`, the spec sweeps | emit-c/llvm + clang/llc succeed |
-| **Rejected with a named diagnostic** | a `// EXPECT: E_CODE` line, in a `bad/` sibling dir | `c-test` (`tests/c_emit/bad/`), `demo-test` (`demo/bad/`), diagnostic inventory (`kernel/bad/`) | `mcc check`/`emit-c` fails *and* stderr contains `E_CODE` |
+| **Rejected with a named diagnostic** | a `// EXPECT: E_CODE` line, in a `bad/` sibling dir | `c-test` (`tests/c_emit/bad/`), `demo-test` (`demo/bad/`), diagnostic inventory (`tests/diagnostics/bad/`) | `mcc check`/`emit-c` fails *and* stderr contains `E_CODE` |
 | **Rejected (spec, per-declaration)** | a `// SPEC: ... EXPECT_ERROR` comment on the negative declaration | the spec sweeps strip it; `src/spec_tests.zig` validates the rejection | declaration removed before emit; reject checked in `spec_tests.zig` |
 | **Not lowerable (checker-only)** | a `phase=sema` fixture whose `check=` is all `E_*` diagnostics | `src/spec_tests.zig` (not the emit sweeps) | listed in the sweep's `OUT_OF_SCOPE` with a documented reason |
 | **Runtime output** | `tools/lib/host-tests.tsv` row, or a QEMU gate's expected serial/pcap | the host-harness / per-gate QEMU script | captured output matches |
@@ -97,7 +97,7 @@ Beyond the outcome, a fixture (or its manifest row) carries the axes a gate must
    header (positive) or an `EXPECT_ERROR` declaration (negative); or, for backend-emit cases,
    a `tests/c_emit/*.mc` fixture (must-compile) or `tests/c_emit/bad/*.mc` (`// EXPECT: E_CODE`).
 2. **A freestanding/kernel validation case** → put runnable behavior in a focused `tests/qemu/`
-   fixture or a host harness; typestate misuses can still live in `kernel/bad/` with an `EXPECT:`
+   fixture or a host harness; typestate misuses can still live in `tests/diagnostics/bad/` with an `EXPECT:`
    line for diagnostic inventory coverage.
 3. **A runtime/driver behavior** → a row in `tools/lib/host-tests.tsv` (host) and/or a QEMU gate.
 4. **A regression found by fuzzing** → distill it to a minimal fixture in the matching corpus,

@@ -5,7 +5,7 @@
 owned by either:
 
 - a negative fixture comment in `tests/spec/**/*.mc`, `tests/c_emit/bad/*.mc`,
-  `kernel/bad/*.mc`, or `demo/bad/*.mc`; or
+  `tests/diagnostics/bad/*.mc`, or `demo/bad/*.mc`; or
 - an explicit `// DIAGNOSTIC_UNIT: E_CODE` marker in `src/*_tests.zig`,
   placed next to a unit test assertion for the exact diagnostic code; or
 - an allowlist row below with a concrete reason.
