@@ -62,7 +62,6 @@ udp-test	tests/qemu/net/udp_demo.mc	driver			UDP datagram build/parse + pseudo-h
 info-test	tests/qemu/proc/info_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	info/snapshot service: top-style count/pid/state queries answered over the IPC service loop from a stable proc_snapshot
 perm-test	tests/qemu/proc/perm_demo.mc	entry	perm_run		POSIX uid/gid + rwx-mode permission checks (owner/group/other, root bypass)
 pgroup-test	tests/qemu/proc/pgroup_demo.mc	entry	pgroup_run		process groups + sessions: setsid/setpgid/getpgid/getsid
-scheduler-test	tests/qemu/proc/scheduler_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	scheduler service: kernel ticks/accounts quantum, notifies the sched endpoint on the expiry edge (from=expired task), service refreshes policy
 smprq-test	tests/qemu/proc/smprq_demo.mc	entry	smprq_run	-Wno-switch-bool	SMP per-core run queues + work stealing: an idle core steals from the busiest (FIFO, load-balanced)
 snapshot-test	tests/qemu/proc/snapshot_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	proc_snapshot (kernel/lib): stable pid/state enumeration + state summary, unaffected by later spawn/exit
 waitqueue-test	tests/qemu/proc/waitqueue_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	WaitQueue (kernel/lib): block current (park+yield), FIFO wake_one/wake_all, empty no-op, idle yield

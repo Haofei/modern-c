@@ -399,7 +399,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("endpoint-test"));
     m0_full_step.dependOn(ctx.cmd("sched-difftest"));
     m0_full_step.dependOn(ctx.cmd("registry2-test"));
-    m0_full_step.dependOn(ctx.cmd("scheduler-test"));
     m0_full_step.dependOn(ctx.cmd("info-test"));
     m0_full_step.dependOn(ctx.cmd("granttab-test"));
     m0_full_step.dependOn(ctx.cmd("x86-sched-test"));

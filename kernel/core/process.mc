@@ -98,20 +98,13 @@ struct Process {
     ticks: u64,                  // saturating long-running accounting; never traps on uptime
     sched_endpoint: u32,         // the scheduler service to notify on quantum expiry (0 = none)
     throttle: u32,               // fair-share throttle penalty (added to effective ticks; see proc_throttle)
-    hb_deadline: u64,            // supervision: max ticks allowed between heartbeats (0 = unsupervised)
-    hb_last: u64,                // supervision: tick of the most recent heartbeat
-    restart_count: u32,          // supervision: restarts attempted this incarnation (crash-loop guard)
-    sup_parent: usize,           // supervision tree: parent slot (MAX_PROCS = no supervision parent)
-    sup_parent_gen: u32,         // parent generation paired with sup_parent; prevents slot-reuse ABA
-    lease_expiry: u64,           // supervision lease: absolute tick the grant expires (0 = no lease)
-    lease_ttl: u64,              // supervision lease: the ttl last granted, so a re-arm recomputes expiry
     fds: FdSpace,                // open file descriptors; copied to a child on spawn (fork), kept across exec
     macct: ResourceAccount,      // per-process memory account; reset on spawn (fresh, from zero) and on exit
 }
 
 const QUANTUM_DEFAULT: u32 = 10;
 // A generous default per-process memory quota. This is bookkeeping only for now; real policy
-// (and wiring into the allocator) comes later — see the agent-os memory-accounting backlog.
+// (and wiring into the allocator) comes later — kept as validation bookkeeping, not a product policy layer.
 const MEM_QUOTA_DEFAULT: usize = 0x100000;
 
 struct ProcTable {
@@ -240,13 +233,6 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].ticks = 0;
         t.procs[i].sched_endpoint = 0;
         t.procs[i].throttle = 0;
-        t.procs[i].hb_deadline = 0;
-        t.procs[i].hb_last = 0;
-        t.procs[i].restart_count = 0;
-        t.procs[i].sup_parent = MAX_PROCS; // no supervision parent until linked
-        t.procs[i].sup_parent_gen = 0;
-        t.procs[i].lease_expiry = 0;       // no lease until granted
-        t.procs[i].lease_ttl = 0;
         fd_init(&t.procs[i].fds);
         resacct_init(&t.procs[i].macct, MEM_QUOTA_DEFAULT);
         i = i + 1;
@@ -338,13 +324,6 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     t.procs[slot].ticks = 0;
     t.procs[slot].sched_endpoint = 0;
     t.procs[slot].throttle = 0;       // a reused slot must not inherit the old process's scheduler state
-    t.procs[slot].hb_deadline = 0;    // ... supervision: not supervised until re-enrolled
-    t.procs[slot].hb_last = 0;
-    t.procs[slot].restart_count = 0;  // ... crash-loop count starts fresh for the new incarnation
-    t.procs[slot].sup_parent = MAX_PROCS; // ... no supervision parent until re-linked
-    t.procs[slot].sup_parent_gen = 0;
-    t.procs[slot].lease_expiry = 0;   // ... no lease until re-granted
-    t.procs[slot].lease_ttl = 0;
     // fork fd semantics: the child inherits a COPY of the spawner's open descriptors at the
     // same fd numbers, sharing the underlying resources. Clear any stale fds from a reaped
     // slot first. (Empty child + equal capacity ⇒ inherit can never overflow.)
@@ -421,7 +400,7 @@ export fn proc_uncharge_mem(t: *mut ProcTable, slot: usize, n: usize) -> void {
 
 // ----- P0.5: LIVE reclaim — OOM-kill a runaway that won't exit (the safety keystone) -----
 //
-// A cooperative process exits via proc_exit and releases its resources. A *runaway* agent never
+// A cooperative process exits via proc_exit and releases its resources. A *runaway* process never
 // does: it allocates without bound and stays LIVE, so its memory account and fds are never
 // released. Without an external reclaim mechanism such a process can OOM the host — defeating the
 // resource-isolation validation path. These three functions are that mechanism: select the worst

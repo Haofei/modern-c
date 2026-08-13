@@ -32,7 +32,6 @@ log-test	current host/corpus C build gap; additional skipped fixtures remain cov
 scan-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 symbols-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 smprq-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-scheduler-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 time-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 vqfault-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 snapshot-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions

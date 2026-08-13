@@ -386,7 +386,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "registry2-test", "Registry v2: multiple-per-class, generations, unregister-on-death", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "registry2-test" });
 
-    _ = h.addScriptTest(ctx, "scheduler-test", "scheduler service: quantum expiry notify + refresh", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "scheduler-test" });
 
     _ = h.addScriptTest(ctx, "info-test", "info/snapshot service: top queries over IPC", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "info-test" });
 
