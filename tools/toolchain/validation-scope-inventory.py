@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep the kernel scoped as a language-validation workload, not an OS deliverable track."""
+"""Keep freestanding validation scoped as language evidence, not an OS deliverable track."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCAN_ROOTS = [
     ROOT / "docs",
-    ROOT / "kernel",
     ROOT / "tests" / "qemu",
     ROOT / "tools" / "arch",
     ROOT / "tools" / "net",
@@ -23,7 +22,7 @@ INCLUDED_SUFFIXES = {".md", ".mc", ".sh", ".zig"}
 EXCLUDED_DOCS: set[Path] = set()
 
 FORBIDDEN = [
-    ("kernel product target", re.compile(r"\bproduction target\b", re.IGNORECASE)),
+    ("OS product target", re.compile(r"\bproduction target\b", re.IGNORECASE)),
     ("appliance kernel product claim", re.compile(r"\bappliance[- ]kernel\b", re.IGNORECASE)),
     ("hardware pilot claim", re.compile(r"\bfield pilot\b", re.IGNORECASE)),
     ("fixed-device product claim", re.compile(r"\bfixed-device production\b", re.IGNORECASE)),
@@ -39,9 +38,9 @@ FORBIDDEN = [
     ("production-grade fixture claim", re.compile(r"\bproduction-grade\b", re.IGNORECASE)),
     ("production decision in validation script", re.compile(r"\bproduction decision\b", re.IGNORECASE)),
     ("agent production surface roadmap", re.compile(r"\bAgent production surface\b", re.IGNORECASE)),
-    ("kernel production checklist", re.compile(r"\bMinimum production checklist\b", re.IGNORECASE)),
+    ("OS production checklist", re.compile(r"\bMinimum production checklist\b", re.IGNORECASE)),
     ("product runtime roadmap", re.compile(r"\bproduct runtime roadmap\b", re.IGNORECASE)),
-    ("kernel secure-update claim", re.compile(r"\b(secure boot|verified boot|signed bundle|anti-rollback|OTA/live-update|Kernel OTA|live-update gate)\b", re.IGNORECASE)),
+    ("OS secure-update claim", re.compile(r"\b(secure boot|verified boot|signed bundle|anti-rollback|OTA/live-update|Kernel OTA|live-update gate)\b", re.IGNORECASE)),
 ]
 
 ALLOWED_CONTEXT = (
@@ -57,7 +56,7 @@ ALLOWED_CONTEXT = (
 
 
 def fail(message: str) -> int:
-    print(f"FAIL: kernel-scope-inventory-test - {message}", file=sys.stderr)
+    print(f"FAIL: validation-scope-inventory-test - {message}", file=sys.stderr)
     return 1
 
 
@@ -98,9 +97,9 @@ def main() -> int:
                 violations.append(f"{rel}:{line_no}: {label}: {line.strip()}")
 
     if violations:
-        return fail("kernel OS-deliverable wording is not explicitly out of scope:\n" + "\n".join(violations))
+        return fail("freestanding OS-deliverable wording is not explicitly out of scope:\n" + "\n".join(violations))
 
-    print(f"PASS: kernel-scope-inventory-test - scanned {scanned} docs/kernel files; kernel OS-deliverable wording stays out of current scope")
+    print(f"PASS: validation-scope-inventory-test - scanned {scanned} docs/validation files; freestanding OS-deliverable wording stays out of current scope")
     return 0
 
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared runner for host-native MC-driver "logic tests".
 #
-# Compile an MC driver module (which `import`s the kernel/std module under test, so the
+# Compile an MC driver module (which `import`s the std/support module under test, so the
 # whole reachable graph is pulled into one object) through the selected backend, link a
 # minimal C harness (trap stubs + main calling the MC entry point), and run it on the host.
 #

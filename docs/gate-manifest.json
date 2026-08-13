@@ -30,7 +30,7 @@
         "mcc-build-test",
         "mcmap-test",
         "ownership-experimental-surface-inventory-test",
-        "kernel-scope-inventory-test",
+        "validation-scope-inventory-test",
         "std-api-docs-test",
         "no-committed-private-keys-test"
       ]
@@ -286,9 +286,9 @@
       "skip_policy": "no-skip"
     },
     {
-      "id": "kernel-scope-inventory-test",
+      "id": "validation-scope-inventory-test",
       "owner": "scope-control",
-      "category": "kernel-validation-scope",
+      "category": "validation-scope",
       "tier": "pr",
       "required_tools": [
         "python3"

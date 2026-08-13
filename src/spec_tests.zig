@@ -856,9 +856,9 @@ fn parseSpecModuleForExpectedDiagnostics(source: []const u8, allocator: std.mem.
 // A spec fixture's effective source, plus the import-flattened file boundaries needed to
 // enforce the cross-file orphan rule (sema). Most fixtures are single-file: `source` is then
 // the raw text and `boundaries` is empty. A fixture that begins with `import "..."` (e.g. the
-// soundness fixtures that pull in std/kernel opaque types) is expanded through the loader, with
+// soundness fixtures that pull in std/freestanding opaque types) is expanded through the loader, with
 // `rel_path` made absolute first so the loader's ancestor walk reaches the repo root — matching
-// how the real kernel/std build resolves rooted imports.
+// how the real std/freestanding validation build resolves rooted imports.
 const SpecSource = struct {
     source: []const u8,
     boundaries: []const loader.FileBoundary,

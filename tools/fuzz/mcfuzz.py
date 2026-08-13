@@ -745,7 +745,7 @@ class Gen:
             self.agg_fns.append((name, s, ft))
 
     def gen_kernel_decls(self, decls):
-        # G2 (kernel/driver surface): packed-bits register types — a struct of bool fields over an
+        # G2 (freestanding/driver surface): packed-bits register types — a struct of bool fields over an
         # integer storage word (no C bitfields; byte/bit storage lowering). Runnable and
         # deterministic, so the differential/sanitize/optlevel oracles all apply.
         for i in range(self.rng.randrange(0, 2)):
@@ -757,7 +757,7 @@ class Gen:
             decls.append("packed bits %s: u%d { %s }" % (name, store_w, ", ".join("%s: bool" % f for f in fields)))
 
     def gen_offset_overlay_decls(self, decls):
-        # G15 (kernel/driver surface): the backend-divergent LAYOUT constructs where a latent
+        # G15 (freestanding/driver surface): the backend-divergent LAYOUT constructs where a latent
         # `comptimeStructLayout` (src/layout.zig) C/LLVM divergence hid.
         #
         # (a) Explicit `@offset(N)` MMIO register structs. MMIO structs are NOT host-runnable

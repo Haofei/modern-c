@@ -118,7 +118,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("move-projection-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
-    m0_full_step.dependOn(ctx.cmd("kernel-scope-inventory-test"));
+    m0_full_step.dependOn(ctx.cmd("validation-scope-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("numeric-comptime-matrix-test"));
     m0_full_step.dependOn(ctx.cmd("parallel-runner-test"));
     m0_full_step.dependOn(ctx.cmd("m0-timing-report-test"));
@@ -279,7 +279,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("path-remap-test"));
     m0_step.dependOn(ctx.cmd("mcmap-test"));
     m0_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
-    m0_step.dependOn(ctx.cmd("kernel-scope-inventory-test"));
+    m0_step.dependOn(ctx.cmd("validation-scope-inventory-test"));
     m0_step.dependOn(ctx.cmd("std-api-docs-test"));
     m0_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
 
@@ -302,7 +302,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test"));
     fast_step.dependOn(ctx.cmd("move-projection-inventory-test"));
     fast_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
-    fast_step.dependOn(ctx.cmd("kernel-scope-inventory-test"));
+    fast_step.dependOn(ctx.cmd("validation-scope-inventory-test"));
     fast_step.dependOn(ctx.cmd("numeric-comptime-matrix-test"));
     fast_step.dependOn(ctx.cmd("parallel-runner-test"));
     fast_step.dependOn(ctx.cmd("std-api-docs-test"));
@@ -344,7 +344,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("move-pointer-pointee-boundary-inventory-test")); // pointer-pointee move-resource accept/reject policy stays explicit
     c0_step.dependOn(ctx.cmd("move-projection-inventory-test")); // projection admission map stays explicit
     c0_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test")); // advanced ownership forms stay outside the stable v0 surface
-    c0_step.dependOn(ctx.cmd("kernel-scope-inventory-test")); // kernel remains a language-validation workload, not an OS deliverable track
+    c0_step.dependOn(ctx.cmd("validation-scope-inventory-test")); // freestanding validation remains a language-validation workload, not an OS deliverable track
     c0_step.dependOn(ctx.cmd("numeric-comptime-matrix-test")); // every fixed-width arithmetic domain keeps its comptime semantics
     c0_step.dependOn(ctx.cmd("parallel-runner-test")); // full-tier acceleration retains the exact gate inventory and CPU budget
     c0_step.dependOn(ctx.cmd("std-api-docs-test")); // generated stdlib API index stays current

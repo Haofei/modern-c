@@ -42,7 +42,7 @@ CLI composition root.
 | 1 | Typed MIR identity | backend-critical type, symbol, value, ABI/layout, representation, control, and ownership facts are typed or verifier-owned. |
 | 2 | `VerifiedProgram` narrowing | C/LLVM entrypoints no longer expose AST as semantic input. |
 
-Phases 0–2 are the work. Artifact packaging, manifests, LSP, kernel/QEMU, and
+Phases 0–2 are the work. Artifact packaging, manifests, LSP, QEMU, and
 tooling polish must not displace these compiler-core phases.
 
 ## Current queue

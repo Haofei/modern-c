@@ -21,7 +21,7 @@ ENV MC_LLVM_MAJOR=${LLVM_MAJOR}
 
 # Toolchain:
 #   clang        — the C backend's compile-check + the LLVM cross-compiler for riscv64/aarch64
-#   lld          — ld.lld, the linker for the cross-compiled kernel/driver objects
+#   lld          — ld.lld, the linker for the cross-compiled freestanding/driver validation objects
 #   llvm         — llc / opt / llvm-as for the LLVM backend sweeps
 #   qemu-system-* — riscv64 (misc), aarch64 (arm), x86_64 — the integration tests boot real images
 #   binutils     — nm / ld / objcopy used by the toolchain scripts

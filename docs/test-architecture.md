@@ -96,7 +96,7 @@ Beyond the outcome, a fixture (or its manifest row) carries the axes a gate must
 1. **A language accept/reject case** → a spec fixture under `tests/spec/` with a `// SPEC:`
    header (positive) or an `EXPECT_ERROR` declaration (negative); or, for backend-emit cases,
    a `tests/c_emit/*.mc` fixture (must-compile) or `tests/c_emit/bad/*.mc` (`// EXPECT: E_CODE`).
-2. **A freestanding/kernel validation case** → put runnable behavior in a focused `tests/qemu/`
+2. **A freestanding validation case** → put runnable behavior in a focused `tests/qemu/`
    fixture or a host harness; typestate misuses can still live in `tests/diagnostics/bad/` with an `EXPECT:`
    line for diagnostic inventory coverage.
 3. **A runtime/driver behavior** → a row in `tools/lib/host-tests.tsv` (host) and/or a QEMU gate.
