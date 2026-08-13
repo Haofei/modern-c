@@ -30,8 +30,8 @@ by `zig build diff-backend`).
 
 ## UB-defining emit flags
 
-Applied to the emitted MC C in `tools/toolchain/mcc-cc.sh` (host object path) and in the
-kernel-image cc path `tools/proc/kmain-test.sh` (`CFLAGS`). These are **defense in depth**, not
+Applied to the emitted MC C in `tools/toolchain/mcc-cc.sh` (host object path) and the retained
+kernel validation wrappers. These are **defense in depth**, not
 the semantic foundation — MC's own checks/forbids already cover the cases below; the flags
 harden the residual inherited-C surface and pin down the one idiom (raw MMIO) that genuinely
 relies on a flag. They match the spec's recommended defensive flags

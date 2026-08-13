@@ -445,11 +445,6 @@ RULES: tuple[Rule, ...] = (
         "uaccess benchmark wrapper changes need its C and LLVM benchmark gates",
     ),
     Rule(
-        ("tools/proc/kmain-test.sh",),
-        ("kmain-test", "llvm-kmain-test"),
-        "integrated kernel wrapper changes need its C and LLVM boot gates",
-    ),
-    Rule(
         ("tools/arch/aarch64-test.sh",),
         ("aarch64-test", "llvm-aarch64-test"),
         "aarch64 wrapper changes need its C and LLVM architecture gates",
@@ -591,7 +586,6 @@ RULES: tuple[Rule, ...] = (
         excludes=(
             "tools/arch/aarch64-test.sh",
             "tools/arch/qemu-mmio-test.sh",
-            "tools/proc/kmain-test.sh",
             "tools/proc/sched-bench.sh",
             "tools/mem/heap-bench.sh",
             "tools/mem/uaccess-bench.sh",

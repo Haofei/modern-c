@@ -121,7 +121,7 @@
       "id": "kernel-qemu",
       "status": "qemu-surrogate",
       "production_claim": false,
-      "summary": "Kernel runtime evidence is QEMU/OpenSBI surrogate evidence. It is useful for language/runtime regression, not a deployable hardware claim.",
+      "summary": "Kernel runtime evidence is a narrow language/runtime validation workload, not a deployable hardware or OS-product claim.",
       "scope": {
         "blocking": [
           "kernel/",
@@ -129,7 +129,6 @@
           "tests/qemu/",
           "tools/arch/",
           "tools/proc/",
-          "tools/fs/",
           "tools/net/"
         ],
         "experimental_or_excluded": [
@@ -139,13 +138,11 @@
         ]
       },
       "blocking_risks": [
-        "KERNEL-CAPABILITY-MINT",
         "HARDWARE-PRODUCTION-QUALIFICATION"
       ],
       "blocking_gates": [
         "arch-emit-test",
-        "qemu-test",
-        "kmain-test"
+        "qemu-test"
       ],
       "components": [
         "qemu",

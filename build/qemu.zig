@@ -236,9 +236,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "elf-test", "Link + run the ELF64 parser (header + program headers, bounds-checked)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "elf-test" });
 
-    _ = h.addScriptTest(ctx, "ramfs-test", "Link + run the in-memory filesystem (create/write/read/lookup)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "ramfs-test" });
-
-    _ = h.addScriptTest(ctx, "vfs-test", "Link + run the fd-table VFS over ramfs (open/read/write/close)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "vfs-test" });
 
     _ = h.addScriptTest(ctx, "blockfs-test", "Link + run the block-backed file store (block device vtable)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "blockfs-test" });
 
@@ -284,9 +281,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "shell-test", "Minimal shell", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "shell-test" });
     _ = h.addScriptTest(ctx, "shell2-test", "Shell: tokenize + builtins with output", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "shell2-test" });
 
-    _ = h.addScriptTest(ctx, "vfsmount-test", "VFS mount switch", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "vfsmount-test" });
-
-    _ = h.addScriptTest(ctx, "treefs-test", "Hierarchical tree FS: nested mkdir/create, path resolution, ./.. traversal, getdents listing, typed errors", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "treefs-test" });
 
     // examples/feature_showcase.mc — one self-verifying tour of the language; emit-c via
     // the host harness here, emit-llvm auto-covered by llvm-host-suite-test. Returns 1 iff
@@ -430,7 +424,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-mmap-test", "Run LLVM-lowered anonymous mmap under QEMU", &.{ "bash", "tools/mem/mmap-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "diskfs-test", "On-disk FS: persistent format + inodes + named lookup", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "diskfs-test" });
 
     _ = h.addScriptTest(ctx, "timeout-test", "IPC timeout: bounded receive, no infinite block", &.{ "bash", "tools/ipc/timeout-test.sh", "zig-out/bin/mcc", "c" });
 
@@ -729,9 +722,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-driver-test", "Run LLVM-lowered char-device driver framework under QEMU", &.{ "bash", "tools/arch/driver-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "fs-syscall-test", "Run U-mode file syscalls (open/write/read/close) over the VFS under QEMU", &.{ "bash", "tools/fs/fs-syscall-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-fs-syscall-test", "Run LLVM-lowered U-mode file syscalls over the VFS under QEMU", &.{ "bash", "tools/fs/fs-syscall-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
     _ = h.addScriptTest(ctx, "exec-test", "Run sys_exec: a U-mode program loads + runs another ELF under QEMU", &.{ "bash", "tools/lang/exec-test.sh", "zig-out/bin/mcc", "c" });
@@ -742,9 +732,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-paging-activate-test", "Run LLVM-lowered Sv39 activation under QEMU", &.{ "bash", "tools/mem/paging-activate-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "kmain-test", "Boot one integrated kernel image (heap+console+log+VFS+scheduler) under QEMU", &.{ "bash", "tools/proc/kmain-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-kmain-test", "Boot one LLVM-lowered integrated kernel image under QEMU", &.{ "bash", "tools/proc/kmain-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "fault-isolation-test", "Boot the F1 fault-isolation keystone (a real agent trap is contained: faulting agent killed+reclaimed, kernel+others survive) under QEMU", &.{ "bash", "tools/proc/fault-isolation-test.sh", "zig-out/bin/mcc", "c" });
 

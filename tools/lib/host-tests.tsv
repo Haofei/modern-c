@@ -5,14 +5,9 @@ fdt-test	tests/qemu/arch/fdt_demo.mc	entry	fdt_run	-Wno-switch-bool	device-tree 
 plugin-test	tests/qemu/arch/plugin_demo.mc	entry	plugin_run	-Wno-switch-bool -Wno-unused-parameter	pluggable boot flow: platform devices -> bus probe/attach (closure providers) -> registry of device-class endpoints -> service discovery by class; NoDriver/Unavailable typed
 bcache-test	tests/qemu/fs/bcache_demo.mc	entry	bcache_run	-Wno-switch-bool	write-back block cache: write stays dirty in cache, visible to reads, reaches device only on flush; hit/miss tracked
 blockfs-test	tests/qemu/fs/blockfs_demo.mc	driver			block-backed FS: multi-block write/read through the device vtable, data persisted on the block device, files on distinct blocks
-diskfs-test	tests/qemu/fs/diskfs_demo.mc	entry	diskfs_run		on-disk FS: format + create + write, then remount and read the file back from the device (persistent superblock/inode/data)
 fdspace-test	tests/qemu/fs/fdspace_demo.mc	entry	fdspace_run	-Wno-switch-bool	FdSpace (kernel/lib): alloc/reuse, kind/handle, readiness+select, close, dup, inherit (fork: fd-number-preserving copy), BadFd/NoneReady (no sentinels)
 forkfd-test	tests/qemu/proc/forkfd_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	process fd-table (kernel/core/process) across fork/exec/wait: child inherits parent fds (fork copy at same numbers, independent), exec preserves fds, exit releases them
 pipe-test	tests/qemu/fs/pipe_demo.mc	entry	pipe_run		pipe FIFO: ordered write/read, full/empty backpressure
-ramfs-test	tests/qemu/fs/ramfs_demo.mc	driver			in-memory FS: create / write / read-back / lookup / independence / not-found all correct
-vfs-test	tests/qemu/fs/vfs_demo.mc	driver			fd-table VFS over ramfs: open/write/read with positions, re-open, EOF, close, use-after-close
-vfsmount-test	tests/qemu/fs/vfsmount_demo.mc	entry	vfsmount_run	-Wno-switch-bool	VFS mount switch: mount/umount/resolve dispatches a path to its backing FS (ramfs/diskfs)
-treefs-test	tests/qemu/fs/treefs_demo.mc	entry	treefs_run	-Wno-switch-bool -Wno-unused-parameter	hierarchical tree FS: mkdir/create nested paths, write/read, absolute resolution, ./.. traversal (no escape above root), getdents listing, typed errors (Exists/NotFound/NotDir/TooLarge/InvalidName)
 endpoint-test	tests/qemu/ipc/endpoint_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	MINIX hardening: generation-checked endpoints (stale fails closed), derived runnable state (block reasons), death cleanup (waiter released with DEAD)
 grant-test	tests/qemu/ipc/grant_demo.mc	entry	grant_demo_run		memory grant: bounded delegation (OOB rejected) + revocation (stale ref caught)
 granttab-test	tests/qemu/ipc/granttab_demo.mc	entry	granttab_run	-Wno-switch-bool	granttab (kernel/lib): owner-tracked grants, bounded IPC sharing, revoke-on-death

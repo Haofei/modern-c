@@ -184,16 +184,16 @@ which hands a physical region to `kmain(region_base, region_len)`. Ordered bring
 3. **Hart bring-up** — typestate `Hart<Boot> → TrapReady → IrqsOn` (`hart.mc`): claim boot
    hart, `install_trap_vector` (sets `mtvec`), `enable_interrupts`.
 4. **Timer** — arm CLINT (`timer_set_alarm`, `TICK_INTERVAL = 1_000_000` ≈ 100 ms @ 10 MHz).
-5. **Subsystems** — logger, VFS+ramfs round-trip, process table + scheduler, workload.
-6. **Report** — boot returns a stage bitmask; demos assert it (e.g. `0x3F`).
+5. **Subsystems** — logger, process table + scheduler, and focused driver/runtime workload.
+6. **Report** — boot returns a stage bitmask; demos assert it.
 
 Legacy M-mode QEMU demos (`-bios none`, kernel at `0x8000_0000`) and S-mode/OpenSBI demos now
 **coexist**: the M-mode path remains for the bare-metal bring-up demos, while a full set of
 S-mode gates runs under REAL OpenSBI — `sbi-boot-test`, `smode-user-test`, `smode-timer-test`,
 `blk-smode-test`, `net-smode-test`, and the
 retained S-mode confined app gates. Until paging is explicitly enabled, kernel
-and tasks execute in physical address space. **Status: GATED** (`kmain-test` / `llvm-kmain-test`
-for M-mode; the `*-smode-*` steps above for S-mode) · riscv64 only.
+and tasks execute in physical address space. **Status: GATED** by the retained focused
+M-mode/S-mode validation steps · riscv64 only.
 
 ---
 
@@ -515,31 +515,25 @@ mechanisms remain covered by narrower fixtures.
 convention: **`a7` = number, `a0/a1/a2` = args, `a0` = return**; the U-mode trap
 (`usermode_runtime.c`) decodes `mcause == 8`, dispatches, bumps `mepc += 4`, `mret`s.
 
-**Status:** the **table mechanism is GATED** (`fs-syscall-test`); the *registered* surface is
-a small POSIX **DEMO-SCOPE** layer (`posix.mc`): `getpid`, `open`, `read`, `write`, `close`
-over a single in-memory file. A production syscall surface is **ABSENT**; the user-boundary
-safety machinery (§9.3) is GATED.
+**Status:** the syscall table mechanism remains a language/runtime validation boundary. The
+former POSIX/VFS demo surface was removed from the core workload. A production syscall surface
+is **ABSENT**; the user-boundary safety machinery (§9.3) is GATED.
 
 ---
 
 ## 18. Filesystem & Storage
 
-`kernel/fs/`. All **IMPLEMENTED/GATED**. The flat/durable stores (`blobstore.mc`,
-`ramfs.mc`, `diskfs.mc`) remain; **hierarchical** paths now exist for real in
-`treefs.mc` (`treefs-test`: nested mkdir/create, `.`/`..` traversal, path resolution, `getdents`
-listing, typed errors).
+`kernel/fs/` is retained only for low-level storage and driver validation. The product-style
+VFS, mount table, in-memory hierarchy, disk filesystem, and syscall filesystem demos were
+removed from the core workload.
 
 | File | Role | Capacity |
 |------|------|----------|
-| `vfs.mc` | fd table over ramfs; `open/read/write/close/dup/stat`. | `MAX_FDS=16`, 512 B/file |
-| `vfsmount.mc` | mount table, one-byte prefix → fs type. | `MNT_MAX=4` |
-| `ramfs.mc` | flat in-memory files; typed errors, no silent truncation. | `MAX_FILES=8`, 4 KiB pool |
-| `diskfs.mc` | persistent superblock+inode fs (magic `MCFS`); survives remount. | one block/file |
 | `blockdev.mc` | `trait BlockDevice` (512 B) via `*dyn` dispatch. | — |
 | `bcache.mc` | 4-slot write-back block cache + hit/miss counters. | `NSLOTS=4` |
 | `blobstore.mc` | durable `u32 → bytes` blob sink; `blob_reopen`. | `MAX_BLOBS=8`, 4 KiB |
 
-Storage gates: `diskfs-test`, `bcache-test`, `blockfs-test`.
+Storage gates: `bcache-test`, `blockfs-test`, and blobstore host coverage.
 
 ---
 
@@ -621,10 +615,9 @@ drift between MC and mirrored C structs is a compile error via generated
 
 ## 24. Testing & Verification
 
-Every kernel capability has a gate, wired in `build.zig` (≈297 steps) and aggregated by the
-master `m0` step. The gates come in two forms: many **boot under QEMU on both compiler
+Retained kernel validation capabilities have gates wired through the build graph. The gates come in two forms: selected **boot under QEMU on both compiler
 backends** (`*-test` + `llvm-*-test`), while several capability layers run as **host fixtures**
-through `tools/lib/host-harness.sh` (e.g. `treefs-test`) — they exercise the host-compiled MC
+through `tools/lib/host-harness.sh` — they exercise the host-compiled MC
 logic directly, not under QEMU. The confined-agent **acceptance bar** (§6: a genuinely
 isolated U-mode agent under QEMU) is therefore met only by selected QEMU boots, not by the
 host fixtures. Fixtures are self-verifying (assert expected output / exit codes / typed

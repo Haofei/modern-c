@@ -117,9 +117,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-stdio-test"));
     m0_full_step.dependOn(ctx.cmd("mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-fs-syscall-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-exec-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-kmain-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vm-switch-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vmspace-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vmctx-test"));
@@ -340,10 +338,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("kcsan-test"));
     // elf-test links + runs the ELF64 parser (needs clang).
     m0_full_step.dependOn(ctx.cmd("elf-test"));
-    // ramfs-test links + runs the in-memory filesystem (needs clang).
-    m0_full_step.dependOn(ctx.cmd("ramfs-test"));
-    // vfs-test links + runs the fd-table VFS over ramfs (needs clang).
-    m0_full_step.dependOn(ctx.cmd("vfs-test"));
     // blockfs-test links + runs the block-backed file store (needs clang).
     m0_full_step.dependOn(ctx.cmd("blockfs-test"));
     // udp-test links + runs the UDP build/parse + checksum (needs clang).
@@ -357,7 +351,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("signal-test"));
     m0_full_step.dependOn(ctx.cmd("privilege-test"));
     m0_full_step.dependOn(ctx.cmd("timeout-test"));
-    m0_full_step.dependOn(ctx.cmd("diskfs-test"));
     m0_full_step.dependOn(ctx.cmd("mmap-test"));
     m0_full_step.dependOn(ctx.cmd("demand-test"));
     m0_full_step.dependOn(ctx.cmd("isolation-test"));
@@ -375,9 +368,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("hosted-test"));
     m0_full_step.dependOn(ctx.cmd("shell-test"));
     m0_full_step.dependOn(ctx.cmd("shell2-test"));
-    m0_full_step.dependOn(ctx.cmd("vfsmount-test"));
-    // treefs-test links + runs the hierarchical tree filesystem (needs clang); LLVM side via llvm-host-suite-test.
-    m0_full_step.dependOn(ctx.cmd("treefs-test"));
     // showcase-test links + runs the language feature showcase (emit-c); LLVM side via llvm-host-suite-test.
     m0_full_step.dependOn(ctx.cmd("showcase-test"));
     // mc-test runs the native #[test] facility (process-isolated) on both backends.
@@ -525,14 +515,10 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("uaccess-taint-test"));
     // driver-test runs the char-device driver framework (vtable dispatch) under QEMU.
     m0_full_step.dependOn(ctx.cmd("driver-test"));
-    // fs-syscall-test runs U-mode file syscalls over the VFS under QEMU.
-    m0_full_step.dependOn(ctx.cmd("fs-syscall-test"));
     // exec-test runs sys_exec: a U-mode program loads + runs another ELF under QEMU.
     m0_full_step.dependOn(ctx.cmd("exec-test"));
     // paging-activate-test activates Sv39 satp in S-mode + reads a translated VA.
     m0_full_step.dependOn(ctx.cmd("paging-activate-test"));
-    // kmain-test boots one integrated kernel image (heap+console+log+VFS+scheduler).
-    m0_full_step.dependOn(ctx.cmd("kmain-test"));
     // fault-isolation-test boots the F1 keystone: a real agent trap is CONTAINED (faulting agent
     // killed+reclaimed via the death path, kernel + other agents survive) under QEMU.
     m0_full_step.dependOn(ctx.cmd("fault-isolation-test"));

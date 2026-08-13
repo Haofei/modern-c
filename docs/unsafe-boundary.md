@@ -158,5 +158,5 @@ scope (larger follow-ups):
 
 - `bash tools/toolchain/mc-audit.sh --mode unsafe` → clean inventory, exit 0.
 - `zig build unsafe-audit` → same, via the build graph.
-- Kernel still builds + boots after this item (no source changes to `kernel/`/`std/` were needed —
-  the boundary already held): `bash tools/proc/kmain-test.sh zig-out/bin/mcc c` → `KERNEL-OK`.
+- Retained kernel validation gates still exercise the unsafe inventory boundary; the deleted
+  integrated kernel image gate is no longer part of the core language workload.

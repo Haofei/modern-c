@@ -2,10 +2,6 @@
 # Format: fixture<TAB>reason
 # A listed fixture may still compare successfully on a host/toolchain that supports it.
 bcache-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-diskfs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-ramfs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-vfs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-treefs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 blockfs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 fdspace-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 grant-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
