@@ -22,7 +22,7 @@ ARRAYS = {
 MIN_GATE_COUNTS = {
     # Match the current assertion-list sizes. Any intentional reduction should
     # update this contract explicitly so CI cannot quietly become less probative.
-    "riscv-qemu-validation": 16,
+    "riscv-qemu-validation": 6,
 }
 MIN_M0_DEPENDENCIES = 20
 

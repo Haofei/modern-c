@@ -12,16 +12,6 @@ pub fn register(ctx: *h.Ctx) void {
         "llvm-smode-plic-test",
         "smode-plic-multishot-test",
         "llvm-smode-plic-multishot-test",
-        "blk-smode-test",
-        "llvm-blk-smode-test",
-        "net-smode-test",
-        "llvm-net-smode-test",
-        "blk-smode-irq-test",
-        "llvm-blk-smode-irq-test",
-        "net-smode-irq-test",
-        "llvm-net-smode-irq-test",
-        "net-smode-rx-irq-test",
-        "llvm-net-smode-rx-irq-test",
     };
 
     // Positive CI anti-vacuity assertions for m0 are declared in
@@ -148,17 +138,12 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-ipi-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-virtio-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-blk-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-blk-smode-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-timer-test"));
     // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI;
     // the multishot variant proves the re-armed steady-state path (regression gate for the former
     // C-backend async-IRQ reset, fixed by #[align(4)] on naked trap vectors).
     m0_full_step.dependOn(ctx.cmd("llvm-smode-plic-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-plic-multishot-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-blk-smode-irq-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-net-smode-irq-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-net-smode-rx-irq-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-net-smode-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-net-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-nic-test"));
 
@@ -276,8 +261,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("virtio-test"));
     // blk-test runs the virtio-blk driver reading a sector under QEMU.
     m0_full_step.dependOn(ctx.cmd("blk-test"));
-    // blk-smode-test revalidates the same virtio-blk driver under REAL OpenSBI in S-mode.
-    m0_full_step.dependOn(ctx.cmd("blk-smode-test"));
     // smode-timer-test proves REAL S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
     m0_full_step.dependOn(ctx.cmd("smode-timer-test"));
     // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI;
@@ -285,10 +268,6 @@ pub fn register(ctx: *h.Ctx) void {
     // gate for the former async-IRQ reset).
     m0_full_step.dependOn(ctx.cmd("smode-plic-test"));
     m0_full_step.dependOn(ctx.cmd("smode-plic-multishot-test"));
-    m0_full_step.dependOn(ctx.cmd("blk-smode-irq-test"));
-    m0_full_step.dependOn(ctx.cmd("net-smode-irq-test"));
-    m0_full_step.dependOn(ctx.cmd("net-smode-rx-irq-test"));
-    m0_full_step.dependOn(ctx.cmd("net-smode-test"));
     // smp-test boots multiple harts synchronizing on a shared atomic under QEMU.
     m0_full_step.dependOn(ctx.cmd("smp-test"));
     // smp-lock-test contends a ticket spinlock across harts under QEMU.

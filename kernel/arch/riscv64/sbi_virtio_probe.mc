@@ -1,11 +1,9 @@
 // kernel/arch/riscv64/sbi_virtio_probe — virtio-mmio device discovery for the
-// S-mode/OpenSBI virtio runtimes, in PURE MC. Probes the 8 virtio-mmio slots on
+// RISC-V QEMU virtio runtimes, in PURE MC. Probes the 8 virtio-mmio slots on
 // QEMU virt for a device with a given device_id (blk=2, net=1) and mints the typed
 // `MmioPtr<VirtioMmio>` at the audited unsafe boundary. Imports only the virtio
 // register type (std/virtio.mc) and addr (std/addr.mc), so it can be imported
-// directly by the demo unit alongside the driver. (The DMA/time extern providers
-// live in a separate compilation unit, sbi_dma_time.mc, to avoid the
-// one-name-per-unit clash with the std extern declarations.)
+// directly by the demo unit alongside the driver.
 
 import "std/addr.mc";
 import "std/virtio.mc";

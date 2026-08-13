@@ -189,9 +189,10 @@ which hands a physical region to `kmain(region_base, region_len)`. Ordered bring
 
 Legacy M-mode QEMU demos (`-bios none`, kernel at `0x8000_0000`) and S-mode/OpenSBI demos now
 **coexist**: the M-mode path remains for the bare-metal bring-up demos, while a full set of
-S-mode gates runs under REAL OpenSBI — `sbi-boot-test`, `smode-user-test`, `smode-timer-test`,
-`blk-smode-test`, `net-smode-test`, and the
-retained S-mode confined app gates. Until paging is explicitly enabled, kernel
+S-mode gates runs under REAL OpenSBI — `sbi-boot-test`, `smode-user-test`,
+`smode-timer-test`, PLIC interrupt gates, BootInfo/FDT, and UART-driver
+validation. The former S-mode virtio block/network data-path and IRQ fixtures
+were removed from the core workload. Until paging is explicitly enabled, kernel
 and tasks execute in physical address space. **Status: GATED** by the retained focused
 M-mode/S-mode validation steps · riscv64 only.
 

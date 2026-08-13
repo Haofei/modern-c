@@ -2,11 +2,10 @@
 // The all-MC replacement for kernel/arch/riscv64/blk_runtime.c. Revalidates the
 // EXISTING MC virtio-blk driver (tests/qemu/fs/blk_demo.mc ->
 // kernel/drivers/virtio/virtio_blk.mc) under the M-mode `-bios none` path (QEMU
-// jumps straight to 0x80000000 in M-mode; there is NO firmware), distinct from the
-// S-mode/OpenSBI path (tests/qemu/arch/blk_smode_demo.mc).
+// jumps straight to 0x80000000 in M-mode; there is NO firmware).
 //
 // The device probe is the shared MC virtio-mmio probe (sbi_virtio_probe.mc — pure
-// MMIO, identical in M- and S-mode); the vring memory + the Virtq handle are zeroed
+// MMIO); the vring memory + the Virtq handle are zeroed
 // globals here (the driver lays out the split virtqueue over them); the driver call
 // (blk_demo_run) is IDENTICAL to the S-mode path. Console is the bare 16550 UART
 // (no SBI), and the std/dma + std/time platform primitives (CLINT mtime time source

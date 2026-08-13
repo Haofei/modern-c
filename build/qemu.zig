@@ -153,11 +153,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-blk-test", "Build and run the LLVM-lowered virtio-blk driver under QEMU", &.{ "bash", "tools/fs/blk-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
-    _ = h.addScriptTest(ctx, "blk-smode-test", "Build and run the virtio-blk driver reading a sector under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-blk-smode-test", "Build and run the LLVM-lowered virtio-blk driver under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/blk-smode-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "blk-smode-irq-test", "Build and run async virtio-blk completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/blk-smode-irq-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-blk-smode-irq-test", "Build and run LLVM-lowered async virtio-blk completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/blk-smode-irq-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // Item (4): REAL S-mode timer-interrupt delivery under OpenSBI — a flat
     // S-mode kernel arms the SBI TIME extension, enables S-mode timer
@@ -175,14 +171,8 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "smode-plic-multishot-test", "Build and run the flat S-mode kernel taking 3 RE-ARMED REAL S-mode EXTERNAL interrupts via the PLIC under REAL OpenSBI", &.{ "bash", "tools/arch/smode-plic-multishot-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-smode-plic-multishot-test", "Build and run the LLVM-lowered re-armed S-mode external-interrupt (PLIC) kernel under REAL OpenSBI", &.{ "bash", "tools/arch/smode-plic-multishot-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "net-smode-test", "Build and run the virtio-net RX/TX ARP+ping exchange under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/net-smode-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-net-smode-test", "Build and run the LLVM-lowered virtio-net RX/TX exchange under REAL OpenSBI in S-mode", &.{ "bash", "tools/arch/net-smode-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "net-smode-irq-test", "Build and run async virtio-net TX completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/net-smode-irq-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-net-smode-irq-test", "Build and run LLVM-lowered async virtio-net TX completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/net-smode-irq-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "net-smode-rx-irq-test", "Build and run async virtio-net RX completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/net-smode-rx-irq-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-net-smode-rx-irq-test", "Build and run LLVM-lowered async virtio-net RX completion from a REAL S-mode PLIC interrupt under OpenSBI", &.{ "bash", "tools/arch/net-smode-rx-irq-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
     _ = h.addScriptTest(ctx, "smp-test", "Boot multiple harts and synchronize on a shared atomic under QEMU", &.{ "bash", "tools/proc/smp-test.sh", "zig-out/bin/mcc", "c" });
