@@ -1,5 +1,4 @@
-// user/libc/cstdlib — the C stdlib search/sort/tokenize trio the all-MC libc was missing, added for
-// the WAMR engine (its symbol tables use bsearch/qsort; bh_common uses strtok_r). Standard C-ABI
+// user/libc/cstdlib — the C stdlib search/sort/tokenize trio for the all-MC libc. Standard C-ABI
 // semantics. Work is done on `usize` ADDRESSES (per the libc convention in lcommon.mc); `*mut u8`
 // pointers are minted only at the ABI boundary. MC does not yet have an ABI-qualified
 // C function-pointer type, so this all-MC libc export is deliberately marked

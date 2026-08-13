@@ -1,6 +1,6 @@
 // async/await roadmap: the VECTORED DRAIN `async_poll_many` (kernel/lib/async.mc) — harvest many
-// completed in-flight requests per wakeup in a single pass over the inflight table, the kernel
-// analogue of the broker's SYS_POLL(events, max). Single flow — drives the broker directly.
+// completed in-flight requests per wakeup in a single pass over the inflight table. Single flow —
+// drives the broker directly.
 //
 // Scenario: submit 4 requests; complete 3 of them OUT OF ORDER (leave one pending); drain with a
 // SMALL max (2) so the drain is capped and RE-ENTERABLE; drain again (harvest the remaining ready

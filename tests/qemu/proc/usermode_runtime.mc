@@ -64,12 +64,6 @@ fn read_mtval() -> u64 {
     #[unsafe_contract(precise_asm)] { unsafe { asm precise volatile { "csrr %0, mtval" out("r") v: u64, clobber("memory") } } }
     return v;
 }
-// Weak default for the WASM linear-memory demand-pager: "not my fault" (return 0). A confined WASM host
-// (tests/qemu/proc/app_run_demo.mc) provides the STRONG override that maps a frame in the reserved
-// linear-memory window. Every gate that does NOT link that override keeps the prior behaviour: an
-// unexpected page fault fails closed (mc_halt). Mirrors mc_watchdog_ticks's weak-default pattern.
-#[weak]
-export fn mc_lm_fault(stval: u64) -> u64 { return 0; }
 fn write_mepc(v: u64) -> void {
     #[unsafe_contract(precise_asm)] { unsafe { asm precise volatile { "csrw mepc, %0" in("r") v: u64, clobber("memory") } } }
 }

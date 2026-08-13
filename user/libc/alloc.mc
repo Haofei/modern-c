@@ -68,9 +68,7 @@ global g_grown_inited: u8;
 // Demand growth is OPT-IN. Default OFF: a guest (and every host-side libc user) keeps the fixed 14
 // MiB arena and prior behaviour byte-for-byte — malloc returns NULL at arena exhaustion, exactly as
 // before. A guest that wants to grow into real RAM calls mc_heap_grow_enable() once at start. This
-// keeps the WASM host's linear-memory bound unchanged for now: correct large-scale WASM memory.grow
-// (WAMR reallocs the whole linear buffer, an O(n^2) copy pattern) is a separate, later step — until
-// then only guests that explicitly opt in grow.
+// keeps large guest heaps opt-in instead of turning every libc consumer into a growable runtime.
 global g_grow_enabled: u8;
 
 export fn mc_heap_grow_enable() -> void {

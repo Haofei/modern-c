@@ -265,9 +265,7 @@ pub fn async_events_empty() -> AsyncEvents {
 
 // VECTORED drain: harvest up to `max` COMPLETED in-flight requests into `out.ev[0..]`, freeing each
 // drained slot, and return the count (also stored in `out.count`). One scheduler wakeup can collect
-// many completions in a single pass over the inflight table — the kernel-side analogue of the
-// broker's `SYS_POLL(events, max)` (the Phase-A note deferred this here: the drain iterates the
-// fixed, typed inflight table rather than doing `*dyn` fat-pointer arithmetic in pure std).
+// many completions in a single pass over the fixed, typed inflight table.
 //
 // This is the DRAIN-driven completion model: the caller owns dispatch of the harvested events. It
 // CONSUMES (frees) each ready slot, so do NOT also have a task parked in `async_await`/`_irq` on a

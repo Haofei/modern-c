@@ -486,8 +486,8 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-async-cancel-test", "LLVM-lowered async_cancel slot reclamation under QEMU", &.{ "bash", "tools/proc/async-cancel-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // async-pollmany-test: the VECTORED DRAIN kernel/lib/async.mc `async_poll_many` — harvest many
-    // completed in-flight requests per wakeup over the inflight table (the kernel analogue of
-    // SYS_POLL(events, max)). Capped + re-enterable drain; pending requests never harvested. SD + OK.
+    // completed in-flight requests per wakeup over the inflight table. Capped + re-enterable drain;
+    // pending requests never harvested. SD + OK.
     _ = h.addScriptTest(ctx, "async-pollmany-test", "async vectored drain: async_poll_many harvests many completions per wakeup over the inflight table", &.{ "bash", "tools/proc/async-pollmany-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-async-pollmany-test", "LLVM-lowered async_poll_many vectored drain under QEMU", &.{ "bash", "tools/proc/async-pollmany-test.sh", "zig-out/bin/mcc", "llvm" });
 
@@ -717,77 +717,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     // CALL_INDIRECT_OVERLONG support, so stock wasi-libc output loads without feature-pinning.
 
-    // the all-MC libc into a U-mode ELF, load it with the real elf_loader into an isolated Sv39
-    // backends.
-
-
-    // lowers to path_open/fd_read/fd_write/path_create_directory against the "/ws" preopen; the shim
-    // routes these to TOOL_OP_FS_*. Write/read round-trip is ALLOWED; mkdir is DENIED and the guest
-
-
-    // (egress allowlist -> budget -> endpoint). Endpoint 1 allowed (107/108), endpoint 9 DENIED
-
-
-    // from JS. JS broker product parity was removed; remaining fixtures only cover bounded runtime request mechanics.
-
-
-    // guest uses the mc.tool_submit / mc.tool_poll surface to keep multiple ops in flight and drain
-    //   async  : 12 overlapping SUM ops; 8 accepted + complete, 4 denied -E_AGAIN (ok=8 rejected=4).
-    //   cancel : a slow op cancelled (TOOL_OP_CANCEL) completes -E_CANCELED while a fast one resolves.
-    //   quota  : the 9th submit on a full 8-deep queue returns exactly -E_AGAIN.
-    //   spurious: the spurious op's completion carries a bogus id the guest must detect.
-
-
-    // happy path in one run (async SUM resolve + capability-checked FS round-trip + timeout cancel);
-    // cancel-edges asserts the broker rejects ill-formed cancels (post-completion + never-submitted
-
-    // op and demultiplex its completion by id over SYS_SUBMIT/SYS_POLL, confined.
-
-    // ELF, but the kernel runs in S-mode under REAL OpenSBI (kernel mapped supervisor-only). Mirrors
-
-
-    // fails GRACEFULLY (malloc -> NULL at the cap, no trap, guest stays confined) — an untrusted guest
-    // preempted by the machine-timer watchdog and KILLED past its CPU budget — a coarse liveness
-    // bound (NOT deterministic fuel) proving an untrusted guest cannot wedge the system.
-
-    // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and
-
-
-    // OpenSBI (no `-bios none`) instead of M-mode. The agent's space additionally maps the kernel
-    // evaluated in U-mode, reaching the kernel only via SYS_WRITE/SYS_EXIT. Both backends.
-
-
-    // SYS_SUBMIT/SYS_POLL with back-pressure, but the kernel runs in S-mode under the real OpenSBI
-    // firmware (no `-bios none`) and the kernel is mapped supervisor-only (unreachable from U). The
-    // async guest runtime is purely polled (no interrupts), so M3a's S-mode syscall dispatch already serves
-
-
-    // async host I/O while the kernel stays unmapped (supervisor-only) from the guest.
-
-
-    // async ABI (SYS_SUBMIT/SYS_POLL). The shared app_run_demo broker dispatches host_fs_write /
-    // host_fs_read / host_fs_mkdir through TOOL_OP_FS_*; write/read are allowed and mkdir is denied.
-    // EXPECT "fs: ok" is reached only AFTER both the read-back and the denied mkdir.
-
-
-    // drains the job queue (JS_ExecutePendingJob) — the microtask-style concurrency runtime fixtures exercise
-
-
-    // the completion and resolves it (the .then then runs). IO=42, never blocking. Both backends.
-
-
-    // back — the spawn/mailbox substrate. WORKER=42 isolated=1 (the worker scope didn't leak).
-
-
-    // independent completion, and back-pressure/denial — not just the single-request happy path.
-
-
-    // and asserts the rejections arrive as structured { code:-11, name:"EAGAIN", retryable:true }
-    // errors. Both backends.
-
-
-    // handle from the host prelude): the cancelled request rejects with a structured ECANCELED, a
-    // concurrent request still resolves, and the kernel broker slot is reclaimed (host inflight=0).
 
 
     // async happy path in a single run — host_call (SUM resolve) -> host_fs_read (real cap-checked FS

@@ -4,8 +4,7 @@
 // the block device completion path can run as an S-mode external interrupt:
 // submit an async virtio-blk read, park in wfi, claim the PLIC source through
 // kernel/drivers/irq/smode_plic.mc, reap the used ring with blk_irq_reap, and
-// drain the ready broker id through async_poll_many — the kernel-side shape that
-// backs SYS_POLL.
+// drain the ready broker id through async_poll_many.
 
 import "std/virtio.mc";
 import "std/virtqueue.mc";

@@ -4,7 +4,7 @@
 # Builds tests/qemu/arch/net_smode_irq_demo.mc as a flat S-mode kernel. The demo
 # submits an async TX frame, parks in wfi, takes the virtio-net S-mode PLIC
 # interrupt, reaps the TX used ring with net_irq_reap, and drains the completed
-# broker id through async_poll_many (the kernel-side SYS_POLL shape).
+# broker id through async_poll_many.
 set -euo pipefail
 
 MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
@@ -58,7 +58,7 @@ if printf '%s' "$OUT" | grep -qi "OpenSBI" \
    && printf '%s' "$OUT" | grep -q "NET-SMODE-IRQ-OK" \
    && [ -n "$IRQS" ] && [ "$IRQS" -ge 1 ] \
    && [ -n "$REAPED" ] && [ "$REAPED" -ge 1 ]; then
-    echo "PASS: $TEST_NAME — $BACKEND backend async virtio-net TX completed from a REAL S-mode PLIC interrupt under OpenSBI, then drained through async_poll_many/SYS_POLL shape (IRQS=$IRQS REAPED=$REAPED POLL=1)"
+    echo "PASS: $TEST_NAME — $BACKEND backend async virtio-net TX completed from a REAL S-mode PLIC interrupt under OpenSBI, then drained through async_poll_many (IRQS=$IRQS REAPED=$REAPED POLL=1)"
     exit 0
 fi
 echo "FAIL: $TEST_NAME — expected OpenSBI banner + NET-SMODE-IRQ RESULT=1 + POLL=1 + NET-SMODE-IRQ-OK + IRQS/REAPED >= 1"

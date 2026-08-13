@@ -34,26 +34,6 @@ export fn read(buf: usize, max: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_READ, buf as u64, max as u64, 0));
 }
 
-// submit(req_ptr): start a non-blocking tool op described by a ToolReq at `req_ptr`; returns a
-// request id (>=0), or -errno (E_FAULT/E_NOCAP/E_DENIED/E_AGAIN). poll(ev_ptr): fill a ToolEvent
-// at `ev_ptr` for one ready completion; returns 1 (delivered), 0 (none), or -E_FAULT.
-export fn submit(req_ptr: usize) -> i64 {
-    return bitcast<i64>(mc_ecall(SYS_SUBMIT, req_ptr as u64, 0, 0));
-}
-
-// poll_many(events_ptr, max, timeout): drain up to `max` ready completions into a user array
-// of ToolEvent[max] at `events_ptr`, advancing the broker's virtual clock up to `timeout` extra
-// ticks while looking for ready completions. Returns the count delivered (0..max), or -E_FAULT.
-export fn poll_many(events_ptr: usize, max: usize, timeout: usize) -> i64 {
-    return bitcast<i64>(mc_ecall(SYS_POLL, events_ptr as u64, max as u64, timeout as u64));
-}
-
-// poll(ev_ptr): single-event back-compat form — fill ONE ToolEvent at `ev_ptr`. Returns 1
-// (delivered), 0 (none ready), or -E_FAULT. Delegates to poll_many with max=1, timeout=0.
-export fn poll(ev_ptr: usize) -> i64 {
-    return poll_many(ev_ptr, 1, 0);
-}
-
 // sys_exit(code): terminate the agent. The kernel reclaims it and does not return; the
 // returned `i64` is never actually observed (named `sys_exit`, not `exit`, to avoid clashing
 // with the C library's `exit` builtin in the emitted C).

@@ -3,7 +3,7 @@
 // Posts a one-shot async RX buffer, sends an ARP request to QEMU slirp, takes the
 // virtio-net S-mode PLIC interrupt, reaps the RX used ring with net_irq_reap,
 // copies the received Ethernet frame into g_rx_frame, and drains the ready broker
-// id through async_poll_many — the kernel-side shape that backs SYS_POLL.
+// id through async_poll_many.
 
 import "std/virtio.mc";
 import "std/virtqueue.mc";

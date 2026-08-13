@@ -4,8 +4,7 @@
 # Builds tests/qemu/arch/net_smode_rx_irq_demo.mc as a flat S-mode kernel. The
 # demo posts an async RX buffer, transmits an ARP request to QEMU slirp, takes the
 # virtio-net S-mode PLIC interrupt, reaps the RX used ring with net_irq_reap, and
-# drains the completed broker id through async_poll_many (the kernel-side SYS_POLL
-# shape).
+# drains the completed broker id through async_poll_many.
 set -euo pipefail
 
 MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
@@ -60,7 +59,7 @@ if printf '%s' "$OUT" | grep -qi "OpenSBI" \
    && [ -n "$RX_LEN" ] && [ "$RX_LEN" -ge 42 ] \
    && [ -n "$IRQS" ] && [ "$IRQS" -ge 1 ] \
    && [ -n "$REAPED" ] && [ "$REAPED" -ge 1 ]; then
-    echo "PASS: $TEST_NAME — $BACKEND backend async virtio-net RX completed from a REAL S-mode PLIC interrupt under OpenSBI, then drained through async_poll_many/SYS_POLL shape (RX=$RX_LEN IRQS=$IRQS REAPED=$REAPED)"
+    echo "PASS: $TEST_NAME — $BACKEND backend async virtio-net RX completed from a REAL S-mode PLIC interrupt under OpenSBI, then drained through async_poll_many (RX=$RX_LEN IRQS=$IRQS REAPED=$REAPED)"
     exit 0
 fi
 echo "FAIL: $TEST_NAME — expected OpenSBI banner + NET-SMODE-RXIRQ TX=1 + RX>=42 + NET-SMODE-RXIRQ-OK + IRQS/REAPED >= 1"

@@ -26,14 +26,14 @@ in diff-backend (129/129 agree); kernel `async-cancel-test` / `llvm-async-cancel
 fill the quota, cancel one, reuse the reclaimed slot — FXR, ASYNC-CANCEL-OK).
 
 MC already has most of the async *runtime* and is missing the *vocabulary* and the *syntax*.
-Rather than start with `async`/`await` keywords, we start with the runtime semantics production
-needs, in four phases. A→B→C is the product feature; **D (syntax) is ergonomics and a separate
-compiler project.**
+Rather than start with `async`/`await` keywords, we start with the runtime semantics the
+validation workload needs, in four phases. A→B→C are runtime validation pieces; **D (syntax) is
+the compiler-facing project.**
 
 ## What already exists (do not reinvent)
 
-- **Vectored, id-tagged broker**: `SYS_SUBMIT`/`SYS_POLL` with `ToolReq`/`ToolEvent`, request-id
-  correlation, `MAX_INFLIGHT`/`MAX_REQ_BYTES`/`MAX_RES_BYTES` quotas (`user/abi.mc`).
+- **Vectored, id-tagged broker**: `kernel/lib/async.mc` exposes `async_submit`,
+  `async_complete`, and `async_poll_many` over a fixed in-kernel inflight table.
 - **Context switch + cooperative scheduler**: `mc_switch_context`, `sched_yield`
   (`kernel/core/sched.mc`, `kernel/arch/*/context.mc`).
 - **Block/wake**: `WaitQueue` (FIFO, endpoint-based), `block_reasons` mask, `proc_block`/

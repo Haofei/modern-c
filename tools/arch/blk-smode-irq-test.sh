@@ -4,7 +4,7 @@
 # Builds tests/qemu/arch/blk_smode_irq_demo.mc as a flat S-mode kernel. The demo
 # submits an async read of sector 0, parks in wfi, takes the virtio-blk S-mode
 # PLIC interrupt, reaps the used ring with blk_irq_reap, and drains the completed
-# broker id through async_poll_many (the kernel-side SYS_POLL shape).
+# broker id through async_poll_many.
 set -euo pipefail
 
 MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
@@ -60,7 +60,7 @@ if printf '%s' "$OUT" | grep -qi "OpenSBI" \
    && printf '%s' "$OUT" | grep -q "BLK-SMODE-IRQ-OK" \
    && [ -n "$IRQS" ] && [ "$IRQS" -ge 1 ] \
    && [ -n "$REAPED" ] && [ "$REAPED" -ge 1 ]; then
-    echo "PASS: $TEST_NAME — $BACKEND backend async virtio-blk read completed from a REAL S-mode PLIC interrupt under OpenSBI, then drained through async_poll_many/SYS_POLL shape (IRQS=$IRQS REAPED=$REAPED POLL=1, sector word DISK)"
+    echo "PASS: $TEST_NAME — $BACKEND backend async virtio-blk read completed from a REAL S-mode PLIC interrupt under OpenSBI, then drained through async_poll_many (IRQS=$IRQS REAPED=$REAPED POLL=1, sector word DISK)"
     exit 0
 fi
 echo "FAIL: $TEST_NAME — expected OpenSBI banner + BLK-SMODE-IRQ WORD=DISK + POLL=1 + BLK-SMODE-IRQ-OK + IRQS/REAPED >= 1"
