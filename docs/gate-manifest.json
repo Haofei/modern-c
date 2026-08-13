@@ -11,7 +11,7 @@
       "intent": "broader differential, fuzz, and platform sweeps"
     },
     "release": {
-      "intent": "full qualification and provenance"
+      "intent": "reserved for explicit tagged compiler snapshots"
     }
   },
   "ci_pass_assertions": {
@@ -33,8 +33,6 @@
         "mcc-cli-test",
         "mcc-build-test",
         "mcmap-test",
-        "release-metadata-test",
-        "package-release-test",
         "profile-manifest-test",
         "ownership-experimental-surface-inventory-test",
         "kernel-scope-inventory-test",
@@ -448,44 +446,6 @@
       "required_tools": [
         "python3",
         "git"
-      ],
-      "blocking_profiles": [
-        "compiler-subset",
-        "developer-tools"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
-      "id": "release-metadata-test",
-      "owner": "release",
-      "category": "release-metadata-integrity",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
-      ],
-      "blocking_profiles": [
-        "compiler-subset",
-        "developer-tools"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
-      "id": "package-release-test",
-      "owner": "release",
-      "category": "release-artifact-packaging",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
       ],
       "blocking_profiles": [
         "compiler-subset",

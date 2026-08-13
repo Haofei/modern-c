@@ -341,8 +341,8 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         (".github/workflows/ci.yml", "Dockerfile", "docker-compose.yml", "tools/preflight.sh"),
-        ("preflight", "release-metadata-test", "ci-pass-gates-test"),
-        "toolchain and CI changes need pinned-toolchain metadata plus preflight",
+        ("preflight", "ci-pass-gates-test"),
+        "toolchain and CI changes need preflight plus CI gate anti-vacuity checks",
     ),
     Rule(
         (
@@ -351,13 +351,9 @@ RULES: tuple[Rule, ...] = (
             "tools/ci/nightly-bench.py",
             "tools/bench/nightly-baseline.tsv",
         ),
-        ("release-metadata-test",),
-        "nightly workflow and benchmark metadata changes need the static release metadata gate",
-    ),
-    Rule(
-        ("tools/toolchain/release-safe-install-test.sh",),
-        ("release-safe-install-test",),
-        "ReleaseSafe install harness changes need the ReleaseSafe install gate",
+        (),
+        "nightly workflow and benchmark metadata changes do not affect compiler-core gates",
+        ("git diff --check",),
     ),
     Rule(
         ("tools/toolchain/safe-release-parity.sh",),
@@ -366,26 +362,21 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         (
-            "docs/release-process.md",
             "SECURITY.md",
             "STABILITY.md",
             "CHANGELOG.md",
         ),
-        ("release-metadata-test",),
-        "release/security/stability prose changes need metadata consistency, not release packaging or editor artifact checks",
+        (),
+        "security/stability prose changes do not affect compiler-core gates",
         ("git diff --check",),
     ),
     Rule(
         (
-            ".github/workflows/release.yml",
-            "tools/ci/package-release.py",
-            "tools/toolchain/package-release-test.py",
-            "tools/toolchain/release-metadata-test.py",
             "build.zig.zon",
             ".zigversion",
         ),
-        ("release-metadata-test", "package-release-test"),
-        "release/distribution changes need artifact metadata and packager checks",
+        ("preflight",),
+        "toolchain version metadata changes need preflight",
     ),
     Rule(
         ("tools/toolchain/diagnostics-reference.py", "tools/toolchain/diagnostic-code-inventory.py", "docs/diagnostics.md", "docs/diagnostic-code-inventory.md"),

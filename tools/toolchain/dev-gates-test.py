@@ -130,9 +130,7 @@ def main() -> None:
         ["diagnostics-reference-test", "diagnostic-code-inventory-test", "bad-diagnostics-test", "mcc-cli-test"],
         ["git diff --check"],
     )
-    assert_route(module, ["docs/release-process.md"], ["release-metadata-test"], ["git diff --check"])
-    assert_route(module, ["CHANGELOG.md"], ["release-metadata-test"], ["git diff --check"])
-    assert_gates(module, [".github/workflows/release.yml"], ["release-metadata-test", "package-release-test"])
+    assert_route(module, ["CHANGELOG.md"], [], ["git diff --check"])
     assert_route(
         module,
         ["README.md", "src/ast.zig"],
@@ -290,30 +288,29 @@ def main() -> None:
     assert_gates(module, ["tools/proc/app-run-test.sh"], ["app-run-test", "llvm-app-run-test"])
     assert_gates(module, ["tests/qemu/proc/app_run_demo.mc"], ["app-run-test", "llvm-app-run-test"])
     assert_gates(module, ["tools/qemu/kernel-boot-lib.sh"], ["preflight", "riscv-qemu-validation"])
-    assert_gates(
+    assert_route(
         module,
         [".github/workflows/nightly-fuzz.yml"],
-        ["release-metadata-test"],
+        [],
+        ["git diff --check"],
     )
-    assert_gates(
+    assert_route(
         module,
         [".github/workflows/nightly-bench.yml"],
-        ["release-metadata-test"],
+        [],
+        ["git diff --check"],
     )
-    assert_gates(
+    assert_route(
         module,
         ["tools/ci/nightly-bench.py"],
-        ["release-metadata-test"],
+        [],
+        ["git diff --check"],
     )
-    assert_gates(
+    assert_route(
         module,
         ["tools/bench/nightly-baseline.tsv"],
-        ["release-metadata-test"],
-    )
-    assert_gates(
-        module,
-        ["tools/toolchain/release-safe-install-test.sh"],
-        ["release-safe-install-test"],
+        [],
+        ["git diff --check"],
     )
     assert_gates(
         module,

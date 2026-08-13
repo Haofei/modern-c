@@ -249,11 +249,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("mcc-build-test"));
     // path-remap-test keeps generated C/source-map paths reproducible under temp build roots.
     m0_full_step.dependOn(ctx.cmd("path-remap-test"));
-    // release-metadata-test keeps version/process metadata present and consistent.
-    m0_full_step.dependOn(ctx.cmd("release-metadata-test"));
-    m0_full_step.dependOn(ctx.cmd("package-release-test"));
-    m0_full_step.dependOn(ctx.cmd("release-safe-install-test"));
-    m0_full_step.dependOn(ctx.cmd("source-package-test"));
     // ci-pass-gates-test prevents CI's positive PASS assertions from drifting away from tiers.zig.
     m0_full_step.dependOn(ctx.cmd("ci-pass-gates-test"));
     // dev-gates-test keeps focused local gate routing cheap and conservative.
@@ -626,8 +621,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("mcc-build-test"));
     m0_step.dependOn(ctx.cmd("path-remap-test"));
     m0_step.dependOn(ctx.cmd("mcmap-test"));
-    m0_step.dependOn(ctx.cmd("release-metadata-test"));
-    m0_step.dependOn(ctx.cmd("package-release-test"));
     m0_step.dependOn(ctx.cmd("profile-manifest-test"));
     m0_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
     m0_step.dependOn(ctx.cmd("kernel-scope-inventory-test"));
@@ -669,8 +662,6 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("mcc-cli-test"));
     fast_step.dependOn(ctx.cmd("mcc-build-test"));
     fast_step.dependOn(ctx.cmd("path-remap-test"));
-    fast_step.dependOn(ctx.cmd("release-metadata-test"));
-    fast_step.dependOn(ctx.cmd("package-release-test"));
     fast_step.dependOn(ctx.cmd("ci-pass-gates-test"));
     fast_step.dependOn(ctx.cmd("dev-gates-test"));
     fast_step.dependOn(ctx.cmd("c-test"));
@@ -718,8 +709,6 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("mcc-cli-test")); // top-level CLI help/version/usage behavior stays documented
     c0_step.dependOn(ctx.cmd("mcc-build-test")); // installed mcc build hosted executable driver remains functional
     c0_step.dependOn(ctx.cmd("path-remap-test")); // generated C/source-map source paths can be remapped for reproducibility
-    c0_step.dependOn(ctx.cmd("release-metadata-test")); // release/version/process metadata remains present
-    c0_step.dependOn(ctx.cmd("package-release-test")); // release packager remains smoke-tested without cross-builds
     c0_step.dependOn(ctx.cmd("ci-pass-gates-test")); // CI anti-vacuity assertions stay manifest-backed and tier-checked.
     c0_step.dependOn(ctx.cmd("test"));
     c0_step.dependOn(ctx.cmd("c-test"));

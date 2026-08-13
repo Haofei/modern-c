@@ -37,8 +37,6 @@ REQUIRED_GOVERNANCE_GATES = {
     "profile-manifest-test",
     "vendoring-test",
     "third-party-licenses-test",
-    "release-metadata-test",
-    "package-release-test",
     "ci-pass-gates-test",
 }
 ARTIFACT_METADATA_ANCHORS: dict[str, list[str]] = {

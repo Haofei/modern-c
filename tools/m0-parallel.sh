@@ -48,7 +48,7 @@ done < <(awk '/const m0_full_step = b.step/{f=1} /const m0_step = b.step/{f=0} f
 # Some gates operate on the whole source tree or otherwise contend badly with
 # unrelated build steps. Keep them out of the parallel pool and run them once
 # after the parallel pass.
-SERIAL_GATES=(compiler-coverage source-package-test)
+SERIAL_GATES=(compiler-coverage)
 PARALLEL_GATES=()
 for g in "${GATES[@]}"; do
     serial=0

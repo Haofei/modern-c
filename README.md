@@ -347,11 +347,7 @@ The repository-wide backlog is [`docs/todo.md`](docs/todo.md).
 Start with [`docs/README.md`](docs/README.md) to see which documents are current
 sources of truth and which are historical records.
 
-## Release And Security
-
-There is no stable public release yet. Release artifacts, checksums, SBOMs,
-attestations, version identity, and immutable publication controls are described
-in [`docs/release-process.md`](docs/release-process.md).
+## Security
 
 Report security issues through the private process in
 [`SECURITY.md`](SECURITY.md). Compatibility expectations are documented in
