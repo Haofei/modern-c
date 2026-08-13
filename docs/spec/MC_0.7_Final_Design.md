@@ -5574,13 +5574,8 @@ target for the main kernel modules and an x86-64 target for x86 arch modules.
 The `zig build llvm-qemu-test`, `zig build llvm-trap-test`, `zig build
 llvm-thread-test`, `zig build llvm-sched-test`, `zig build llvm-syscall-test`,
 `zig build llvm-user-test`, `zig build llvm-process-test`, `zig build
-llvm-vm-switch-test`, `zig build llvm-vmspace-test`, `zig build
-llvm-vmctx-test`, `zig build llvm-sched-vm-test`, `zig build llvm-ipc-test`,
-`zig build llvm-ipc2-test`, `zig build llvm-cap-test`,
+llvm-ipc-test`, `zig build llvm-ipc2-test`, `zig build llvm-cap-test`,
 `zig build llvm-privilege-test`, `zig build
-llvm-paging-activate-test`, `zig build llvm-demand-test`, `zig build
-llvm-mmap-test`, `zig build llvm-contain-test`, `zig build llvm-cow-test`, and
-`zig build llvm-isolation-test`, `zig build
 llvm-driver-test`, and `zig build
 llvm-preempt-test`, `zig build llvm-smp-test`, `zig build
 llvm-smp-lock-test`, `zig build llvm-ipi-test`,

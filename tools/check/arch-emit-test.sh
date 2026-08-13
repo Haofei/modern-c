@@ -7,9 +7,8 @@
 # EVERY arch, so an `active`-import regression (or a paging backend that drops a uniform hook,
 # e.g. mapping_is_readable) is caught cheaply on any host.
 #
-# Scope: only modules that import `kernel/arch/active/...` AND use exclusively the uniform paging
-# interface. RISC-V-specific demos (cow.mc, demand.mc — Sv39 gigapage + satp) import riscv paging
-# directly and are intentionally NOT covered here.
+# Scope: only retained core modules that import `kernel/arch/active/...` and use exclusively the
+# uniform paging interface. Product-style VM demos are not part of this compiler-core gate.
 set -euo pipefail
 HERE="$(d=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd); while [ "$d" != / ] && [ ! -e "$d/build.zig" ]; do d=$(dirname "$d"); done; printf %s "$d")"
 MCC="${1:-${MCC_UNDER_TEST:-$HERE/zig-out/bin/mcc}}"
@@ -19,7 +18,6 @@ MODULES=(
     kernel/core/elf_loader.mc
     kernel/core/uaccess_pt.mc
     kernel/core/uaccess.mc
-    kernel/core/mmap.mc
 )
 ARCHES=(riscv64 x86_64 aarch64)
 

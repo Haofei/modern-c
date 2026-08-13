@@ -113,18 +113,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "memstr-test", "Build, link, and run the allocation-free std/mem byte-slice string ops", &.{ "bash", "tools/toolchain/memstr-test.sh", "zig-out/bin/mcc" });
 
 
-
-
-
-
-
-
-
-
-
-
-
-
     _ = h.addScriptTest(ctx, "llvm-demo-test", "Compile supported demo drivers through LLVM to objects", &.{ "bash", "tools/toolchain/llvm-demo-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "llvm-kernel-test", "Compile kernel modules through LLVM to target objects", &.{ "bash", "tools/toolchain/llvm-kernel-test.sh", "zig-out/bin/mcc" });
@@ -144,11 +132,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "sync-test", "Build, link, and run a std/sync guarded critical section", &.{ "bash", "tools/toolchain/sync-test.sh", "zig-out/bin/mcc" });
 
 
-
-
-
-
-
     // Item (4): REAL S-mode timer-interrupt delivery under OpenSBI — a flat
     // S-mode kernel arms the SBI TIME extension, enables S-mode timer
     // interrupts, and counts ticks in its trap handler (re-arming each tick,
@@ -164,9 +147,6 @@ pub fn register(ctx: *h.Ctx) void {
     // vector → reserved stvec MODE; fixed by #[align(4)] / naked-defaults-to-4).
     _ = h.addScriptTest(ctx, "smode-plic-multishot-test", "Build and run the flat S-mode kernel taking 3 RE-ARMED REAL S-mode EXTERNAL interrupts via the PLIC under REAL OpenSBI", &.{ "bash", "tools/arch/smode-plic-multishot-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-smode-plic-multishot-test", "Build and run the LLVM-lowered re-armed S-mode external-interrupt (PLIC) kernel under REAL OpenSBI", &.{ "bash", "tools/arch/smode-plic-multishot-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
-
 
 
     _ = h.addScriptTest(ctx, "smp-test", "Boot multiple harts and synchronize on a shared atomic under QEMU", &.{ "bash", "tools/proc/smp-test.sh", "zig-out/bin/mcc", "c" });
@@ -213,9 +193,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "elf-test", "Link + run the ELF64 parser (header + program headers, bounds-checked)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "elf-test" });
 
 
-
-
-
     _ = h.addScriptTest(ctx, "arena-test", "move Arena: bump alloc, reset/reuse, destroy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arena-test" });
 
     _ = h.addScriptTest(ctx, "genref-test", "generational handle: live resolve, stale-after-reset trap", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "genref-test" });
@@ -227,9 +204,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "pool-test", "generational pool: use-after-free/double-free caught", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "pool-test" });
 
 
-
     _ = h.addScriptTest(ctx, "constgen-test", "Const-generic Ring<T,N> at two capacities", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "constgen-test" });
-
 
 
     _ = h.addScriptTest(ctx, "time-test", "std/time counter<u64> timeout arithmetic", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "time-test" });
@@ -246,7 +221,6 @@ pub fn register(ctx: *h.Ctx) void {
     // on stdin and verifying the f32 results on stdout. Self-skips without
     // clang/python3.
     _ = h.addScriptTest(ctx, "hosted-test", "Hosted-profile elementwise float kernel: stdin/stdout f32 round-trip via libc/libm", &.{ "bash", "demo/hosted/run.sh", "zig-out/bin/mcc" });
-
 
 
     // examples/feature_showcase.mc — one self-verifying tour of the language; emit-c via
@@ -287,11 +261,8 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "ipc-result-test", "ipc_send_result: typed bounded send (Denied/DeadTarget/Timeout)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "ipc-result-test" });
 
 
-
     _ = h.addScriptTest(ctx, "mutex-test", "sleeping Mutex: try_lock, blocking enqueue, FIFO hand-off on unlock", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mutex-test" });
 
-    _ = h.addScriptTest(ctx, "contain-test", "MMU crash containment", &.{ "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-contain-test", "Run LLVM-lowered MMU crash containment under QEMU", &.{ "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "fdt-test", "Device-tree (FDT) header parsing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test" });
 
     _ = h.addScriptTest(ctx, "sbi-boot-test", "Boot under OpenSBI (real firmware)", &.{ "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "c" });
@@ -308,9 +279,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-smode-user-test", "LLVM-lowered S-mode U-mode hello under OpenSBI", &.{ "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
-
-
-
     _ = h.addScriptTest(ctx, "endpoint-test", "MINIX hardening: endpoints/generations, derived runnable, death cleanup", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "endpoint-test" });
 
     // Phase 2.2 re-land condition: differential scheduler gate — after each randomized runnability
@@ -319,11 +287,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "sched-difftest", "differential scheduler gate: next_runnable pick == independent authoritative scan across randomized transitions (stale-cache regression guard)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "sched-difftest" });
 
 
-
-
     _ = h.addScriptTest(ctx, "granttab-test", "owner-tracked grants: bounded IPC sharing + revoke-on-death", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "granttab-test" });
-
-
 
 
     // X4: x86-64 Local-APIC timer — REAL, non-polled interrupt delivery. PICs masked, LAPIC timer
@@ -334,34 +298,9 @@ pub fn register(ctx: *h.Ctx) void {
     // (vendor 0x1AF4), reports its identity over COM1 (the analogue of RISC-V FDT/ECAM discovery).
 
 
-
-    _ = h.addScriptTest(ctx, "cow-test", "Copy-on-write: shared RO page diverges on write", &.{ "bash", "tools/mem/cow-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-cow-test", "Run LLVM-lowered copy-on-write fault handling under QEMU", &.{ "bash", "tools/mem/cow-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
-
-
-    _ = h.addScriptTest(ctx, "isolation-test", "Per-server MMU isolation + cross-AS IPC", &.{ "bash", "tools/proc/isolation-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-isolation-test", "Run LLVM-lowered per-server MMU isolation under QEMU", &.{ "bash", "tools/proc/isolation-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "demand-test", "Demand paging: fault -> map -> retry", &.{ "bash", "tools/mem/demand-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-demand-test", "Run LLVM-lowered demand paging under QEMU", &.{ "bash", "tools/mem/demand-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "mmap-test", "mmap anonymous pages into a page table (active satp)", &.{ "bash", "tools/mem/mmap-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-mmap-test", "Run LLVM-lowered anonymous mmap under QEMU", &.{ "bash", "tools/mem/mmap-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
-
-
     _ = h.addScriptTest(ctx, "privilege-test", "Least privilege: IPC allow-list + kernel-call gate", &.{ "bash", "tools/proc/privilege-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-privilege-test", "Run LLVM-lowered least-privilege IPC and kcall gates under QEMU", &.{ "bash", "tools/proc/privilege-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
 
 
     _ = h.addScriptTest(ctx, "ipc2-test", "IPC completeness: multi-slot + source filter + notify", &.{ "bash", "tools/ipc/ipc2-test.sh", "zig-out/bin/mcc", "c" });
@@ -373,7 +312,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "ipc-test", "kernel-mediated IPC: client/server message round-trip", &.{ "bash", "tools/ipc/ipc-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-ipc-test", "Run LLVM-lowered kernel-mediated IPC under QEMU", &.{ "bash", "tools/ipc/ipc-test.sh", "zig-out/bin/mcc", "llvm" });
-
 
 
     // async-test (async/await roadmap Phase B): request-id-keyed PARK/WAKE completion broker
@@ -444,21 +382,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "ring-test", "Link + run the generic in-place Ring<T> (push/pop/wrap)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "ring-test" });
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     _ = h.addScriptTest(ctx, "paging-test", "Link + run Sv39 page-table map/translate", &.{ "bash", "tools/mem/paging-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-paging-test", "Link + run the LLVM-lowered Sv39 page-table map/translate", &.{ "bash", "tools/mem/paging-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -499,7 +422,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-process-test", "Run the LLVM-lowered process lifecycle under QEMU", &.{ "bash", "tools/proc/process-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
-
     // The uaccess demos exercise kernel/core/uaccess.mc, which imports riscv paging.mc
     // (sfence.vma) — not host-assemblable — so they run under QEMU on the real target,
     // not on the host driver suite. One generic runtime+harness, parameterized by the
@@ -514,7 +436,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "mem-test", "Word-aligned mem ops under QEMU: mem_copy/mem_set/memmove byte-exact across lengths 0..4096, misaligned src/dst, memmove overlap both directions", &.{ "bash", "tools/mem/mem-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-mem-test", "Word-aligned mem ops under QEMU (LLVM backend): mem_copy/mem_set/memmove byte-exact across lengths+alignments, memmove overlap both directions", &.{ "bash", "tools/mem/mem-test.sh", "zig-out/bin/mcc", "llvm" });
-
 
 
     // through the page-table-aware copy_to_user_pt / copy_from_user_pt (single-pass walk).
@@ -535,7 +456,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-elf-loader-test", "Multi-segment ELF64 loader under QEMU (LLVM backend): per-segment perms, file copy, bss zero", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test" });
 
 
-
     _ = h.addScriptTest(ctx, "uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU: a user-derived scalar must pass checked_len/checked_index/validate_bound (fail closed) before driving a copy length or index", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test" });
 
     _ = h.addScriptTest(ctx, "llvm-uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU (LLVM backend): a user-derived scalar must pass checked_len/checked_index/validate_bound before driving a copy length or index", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test" });
@@ -544,7 +464,6 @@ pub fn register(ctx: *h.Ctx) void {
 
 
     // completion carries a bogus id; the host must fail loudly ("host: unknown completion id").
-
 
 
     // is driven from a C runtime under QEMU on both backends — the printf-family interop the
@@ -581,7 +500,6 @@ pub fn register(ctx: *h.Ctx) void {
     // CALL_INDIRECT_OVERLONG support, so stock wasi-libc output loads without feature-pinning.
 
 
-
     // async happy path in a single run — host_call (SUM resolve) -> host_fs_read (real cap-checked FS
     // read) -> host_sleep (async timeout) -> cancel (in-flight ECANCELED) — and prints AGENT-SMOKE-OK
     // only if every stage passed AND the host drained to inflight=0 with no unknown completion id.
@@ -599,35 +517,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-driver-test", "Run LLVM-lowered char-device driver framework under QEMU", &.{ "bash", "tools/arch/driver-test.sh", "zig-out/bin/mcc", "llvm" });
 
-
-
-
-
-    _ = h.addScriptTest(ctx, "paging-activate-test", "Activate Sv39 satp in S-mode and read a translation-only VA under QEMU", &.{ "bash", "tools/mem/paging-activate-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-paging-activate-test", "Run LLVM-lowered Sv39 activation under QEMU", &.{ "bash", "tools/mem/paging-activate-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
-    _ = h.addScriptTest(ctx, "fault-isolation-test", "Boot the F1 fault-isolation keystone (a real agent trap is contained: faulting agent killed+reclaimed, kernel+others survive) under QEMU", &.{ "bash", "tools/proc/fault-isolation-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-fault-isolation-test", "Boot the LLVM-lowered F1 fault-isolation keystone under QEMU", &.{ "bash", "tools/proc/fault-isolation-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
-    _ = h.addScriptTest(ctx, "vm-switch-test", "Switch satp between two address spaces under QEMU (per-process VM)", &.{ "bash", "tools/mem/vm-switch-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-vm-switch-test", "Run LLVM-lowered satp switching between two address spaces under QEMU", &.{ "bash", "tools/mem/vm-switch-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "vmspace-test", "Per-process page tables: switch satp by process slot under QEMU", &.{ "bash", "tools/mem/vmspace-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-vmspace-test", "Run LLVM-lowered per-process page tables under QEMU", &.{ "bash", "tools/mem/vmspace-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "vmctx-test", "Context switch that swaps satp per thread under QEMU", &.{ "bash", "tools/mem/vmctx-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-vmctx-test", "Run LLVM-lowered context switching with satp swaps under QEMU", &.{ "bash", "tools/mem/vmctx-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "sched-vm-test", "Scheduler switching per-process address spaces (proc_yield_vm) under QEMU", &.{ "bash", "tools/proc/sched-vm-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-sched-vm-test", "Run LLVM-lowered scheduler switching per-process address spaces under QEMU", &.{ "bash", "tools/proc/sched-vm-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // Preflight: explicit toolchain check for the QEMU milestone gates (clang/ld.lld/llc/qemu +
     // riscv64 target). `zig build preflight`. Milestone gates with MC_REQUIRE_TOOLS=1/CI=1 fail

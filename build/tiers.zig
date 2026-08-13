@@ -103,10 +103,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-stdio-test"));
     m0_full_step.dependOn(ctx.cmd("mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-vm-switch-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-vmspace-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-vmctx-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-sched-vm-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-ipc2-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-ipc-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-test"));
@@ -118,12 +114,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-async-select-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-privilege-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-cap-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-contain-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-cow-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-isolation-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-demand-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-mmap-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-paging-activate-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-driver-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-preempt-test"));
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
@@ -289,10 +279,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("constgen-test"));
     m0_full_step.dependOn(ctx.cmd("ipc2-test"));
     m0_full_step.dependOn(ctx.cmd("privilege-test"));
-    m0_full_step.dependOn(ctx.cmd("mmap-test"));
-    m0_full_step.dependOn(ctx.cmd("demand-test"));
-    m0_full_step.dependOn(ctx.cmd("isolation-test"));
-    m0_full_step.dependOn(ctx.cmd("cow-test"));
     m0_full_step.dependOn(ctx.cmd("time-test"));
     m0_full_step.dependOn(ctx.cmd("vqfault-test"));
     m0_full_step.dependOn(ctx.cmd("wrap-test"));
@@ -325,7 +311,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("tryelse-test"));
     m0_full_step.dependOn(ctx.cmd("byteview-test"));
     m0_full_step.dependOn(ctx.cmd("scan-test"));
-    m0_full_step.dependOn(ctx.cmd("contain-test"));
     m0_full_step.dependOn(ctx.cmd("fdt-test"));
     m0_full_step.dependOn(ctx.cmd("sbi-boot-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-sbi-boot-test"));
@@ -381,20 +366,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("uaccess-taint-test"));
     // driver-test runs the char-device driver framework (vtable dispatch) under QEMU.
     m0_full_step.dependOn(ctx.cmd("driver-test"));
-    // paging-activate-test activates Sv39 satp in S-mode + reads a translated VA.
-    m0_full_step.dependOn(ctx.cmd("paging-activate-test"));
-    // fault-isolation-test boots the F1 keystone: a real agent trap is CONTAINED (faulting agent
-    // killed+reclaimed via the death path, kernel + other agents survive) under QEMU.
-    m0_full_step.dependOn(ctx.cmd("fault-isolation-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-fault-isolation-test"));
-    // vm-switch-test switches satp between two address spaces (per-process VM).
-    m0_full_step.dependOn(ctx.cmd("vm-switch-test"));
-    // vmspace-test switches satp per process slot (per-process page tables).
-    m0_full_step.dependOn(ctx.cmd("vmspace-test"));
-    // vmctx-test: a context switch that swaps satp per thread (address space in the switch).
-    m0_full_step.dependOn(ctx.cmd("vmctx-test"));
-    // sched-vm-test: the scheduler switches per-process address spaces (proc_yield_vm).
-    m0_full_step.dependOn(ctx.cmd("sched-vm-test"));
 
     // fast: the inner-loop gate for deterministic host-only confidence. It
     // covers the spec/unit harness, emit-C sweep, C-vs-LLVM differential, and

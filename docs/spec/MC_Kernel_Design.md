@@ -271,17 +271,15 @@ These are enforced at compile time by the type checker and exercised by spec fix
 `kernel/arch/riscv64/paging.mc`. Three-level Sv39, 4 KiB pages + 1 GiB gigapages. PTE bits
 `V=1, R=2, W=4, X=8, U=16`. `page_table_try_map` returns `Result<bool, MapError>`
 (`MisalignedAddress`, `AlreadyMapped`, `ConflictWithLargePage`). `page_table_lookup` is a
-non-trapping walk returning `LeafMapping { phys, flags }` with permission accessors. Each
-`Process` holds its own `satp`. Gates: `page-test`, `paging-activate-test`.
+non-trapping walk returning `LeafMapping { phys, flags }` with permission accessors. Gates:
+`page-test`.
 
-### 9.5 mmap / demand paging / COW
+### 9.5 Removed VM product layer
 
-- **`mmap_anon` / `munmap`** — GATED (`mmap-test`): allocate a frame, map at a VA.
-- **Demand paging** — DEMO-SCOPE (`demand.mc`, `demand-test`): a **single global region**;
-  fill faults inside it, fail-closed outside.
-- **Copy-on-write** — DEMO-SCOPE (`cow.mc`, `cow-test`): **one shared read-only page**; the
-  write-fault handler copies and remaps writable. Fork-wide COW (share counts, COW PTEs on
-  every fork) is **ABSENT**.
+Anonymous mmap, demand paging, copy-on-write, per-process address-space switching, and
+fault-isolation QEMU demos were removed from the compiler-core workload. The retained kernel
+surface validates typed paging primitives and user-access boundaries; it does not define an OS
+virtual-memory product layer.
 
 ### 9.6 Resource accounting — GATED
 
@@ -362,7 +360,7 @@ current core workload.
 - **Preemption:** timer-driven via the CLINT trap path (`preempt_runtime.c`,
   `TICK_INTERVAL`); `proc_tick_notify` sends `TAG_QUANTUM` to the scheduler endpoint.
 - **Blocking:** `proc_block`/`proc_unblock`; `proc_yield_or_idle` sleeps (`wfi`) rather than
-  spins; `proc_yield_vm` switches address space.
+  spins.
 - **Throttle / pause:** `proc_throttle` (deprioritize), `proc_pause`/`proc_resume`
   (`BLOCK_PAUSED`).
 
@@ -603,7 +601,6 @@ scope. Gate names are verified against `build.zig`.
 | Claim | Source | Gate(s) | Scope |
 |-------|--------|---------|-------|
 | Endpoint generation prevents stale-slot IPC misdelivery | `process.mc`, `proc_ipc.mc` | `endpoint-test`, `llvm-endpoint-test` | riscv64 QEMU |
-| A faulting agent is killed + reclaimed; kernel survives | `process.mc:474-553` | `contain-test`, `fault-isolation-test` | riscv64 QEMU |
 | Rights/capabilities attenuate only (child = parent ∩ keep) | `capability.mc`, `std/rights.mc` | `cap-test`, `llvm-cap-test` | compile-time + QEMU |
 | Grant revoke invalidates outstanding refs; cascade revokes subtree | `kernel/lib/granttab.mc` | `grant-test`, `granttab-test` | riscv64 QEMU |
 | `UserPtr<T>` cannot be dereferenced in the kernel | `uaccess.mc` + compiler diagnostic `E_USER_PTR_DEREF` | compile-time spec fixtures | compile-time |

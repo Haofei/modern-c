@@ -386,29 +386,6 @@ export fn proc_yield_or_idle(t: *mut ProcTable) -> void {
     }
 }
 
-// Cooperatively yield, switching the address space too: the next process's page
-// table (its `satp`) is loaded as part of the context switch, so each process runs in
-// its own address space. Requires paging (S-mode). No-op if none other is ready.
-export fn proc_yield_vm(t: *mut ProcTable) -> void {
-    let from: usize = t.current;
-    var to: usize = from;
-    switch next_runnable(t, from) {
-        ok(n) => { to = n; }
-        err(e) => { return; } // nothing else runnable
-    }
-    let from_state: ProcState = t.procs[from].state;
-    if from_state == .Running {
-        t.procs[from].state = .Ready;
-    }
-    t.procs[to].state = .Running;
-    t.current = to;
-    // The address space is threaded as the opaque AddressSpace and unwrapped exactly once,
-    // here at the context-switch FFI: mc_switch_context_vm takes the raw satp word (the arch
-    // ABI), so we pass AddressSpace.raw — the same bits the field holds, no encoding in core.
-    let to_aspace: AddressSpace = t.procs[to].aspace;
-    mc_switch_context_vm(&t.procs[from].context, &t.procs[to].context, AddressSpace.raw(to_aspace));
-}
-
 // ----- timer-driven preemption (decision layer) -----
 // The scheduler is otherwise cooperative (the proc_yield* family switches only at explicit points).
 // Preemption adds a timer-driven RESCHEDULE REQUEST: the timer ISR accounts a tick and, when the
