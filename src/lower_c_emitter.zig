@@ -3390,7 +3390,7 @@ pub const CEmitter = struct {
 
     fn emitBlockDeferItem(self: *CEmitter, expr: ast_bridge.Expr, stmt_span: ast_bridge.Span) !void {
         const function = self.currentMirFunction() orelse return error.UnsupportedCEmission;
-        const deferred_drop = backend_cleanup.registerDeferredExplicitDropCleanup(self.mir_module, function, self.currentOwnershipCleanupPlan(), expr);
+        const deferred_drop = backend_cleanup.registerDeferredExplicitDropCleanup(self.mir_module, function, self.currentOwnershipCleanupPlan(), expr.span);
         switch (deferred_drop) {
             .ignored => {},
             .applied => {

@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
-const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 
@@ -97,11 +96,9 @@ pub fn registerDeferredExplicitDropCleanup(
     module: *const mir.Module,
     function: *const mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    expr: ast_bridge.Expr,
+    expr_span: ast_bridge.Span,
 ) AutoDropStackDecision {
-    const release = syntax_bridge.dropPointerLocalReleaseCall(expr) orelse return .ignored;
-    if (!dropGlueReleaseFunctionExists(module, release.fn_name)) return .ignored;
-    _ = explicitDropLocalCleanupFromMirAction(module, function, cleanup_plan, expr) orelse return .rejected;
+    _ = explicitDropLocalCleanupFromMirAction(module, function, cleanup_plan, mir.sourcePointFromSpan(expr_span)) orelse return .ignored;
     return .applied;
 }
 
@@ -347,18 +344,16 @@ fn explicitDropLocalCleanupFromMirAction(
     module: *const mir.Module,
     function: *const mir.Function,
     cleanup_plan: ?*const mir.OwnershipCleanupPlan,
-    expr: ast_bridge.Expr,
+    source: mir.SourcePoint,
 ) ?mir_ownership_authority.AutoDropLocalCleanup {
     const plan = cleanup_plan orelse return null;
-    const release = syntax_bridge.dropPointerLocalReleaseCall(expr) orelse return null;
-    const action_match = explicitDropActionEntryFromMirPlan(plan, mir.sourcePointFromSpan(expr.span)) orelse return null;
+    const action_match = explicitDropActionEntryFromMirPlan(plan, source) orelse return null;
     if (action_match.entry.place.root_symbol_id.isValid() or action_match.entry.place.projection_count != 0) return null;
     const root_value_id = action_match.entry.place.root_value_id;
     const local_name = localNameForValueId(function, root_value_id) orelse return null;
-    if (!std.mem.eql(u8, local_name, release.local_name)) return null;
     const ref: mir_ownership_authority.OwnershipCleanupActionRef = .{
         .local_name = local_name,
-        .source = mir.sourcePointFromSpan(expr.span),
+        .source = source,
         .cleanup_action_index = action_match.action_index,
         .root_value_id = root_value_id,
         .resource_type_symbol_id = action_match.entry.place.root_type_symbol_id,
@@ -384,13 +379,6 @@ fn explicitDropActionEntryFromMirPlan(
         matched = .{ .action_index = action_index, .entry = entry };
     }
     return matched;
-}
-
-fn dropGlueReleaseFunctionExists(module: *const mir.Module, release_fn: []const u8) bool {
-    for (module.drop_glue_facts) |fact| {
-        if (std.mem.eql(u8, fact.release_fn, release_fn)) return true;
-    }
-    return false;
 }
 
 fn localNameForValueId(function: *const mir.Function, value_id: mir.ValueId) ?[]const u8 {

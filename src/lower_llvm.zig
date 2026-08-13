@@ -1818,7 +1818,7 @@ const LlvmEmitter = struct {
             .assignment => |node| try self.emitAssignment(node.target, node.value, stmt.span),
             .@"defer" => |expr| {
                 const function = self.currentMirFunction() orelse return error.UnsupportedLlvmEmission;
-                const deferred_drop = backend_cleanup.registerDeferredExplicitDropCleanup(&self.mir_module, function, self.currentOwnershipCleanupPlan(), expr);
+                const deferred_drop = backend_cleanup.registerDeferredExplicitDropCleanup(&self.mir_module, function, self.currentOwnershipCleanupPlan(), expr.span);
                 switch (deferred_drop) {
                     .ignored => {},
                     .applied => {
