@@ -1,4 +1,4 @@
-// std/seqlock — a sequence lock (spec §28 planned extension) for read-mostly data, built on the
+// std/seqlock — a sequence lock for read-mostly data, built on the
 // fair ticket `Spinlock` plus an atomic sequence counter.
 //
 // A reader takes no lock: it snapshots the sequence before reading and checks it after, retrying

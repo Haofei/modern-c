@@ -311,20 +311,20 @@ Source: `std/collections/dynarray.mc`
 
 | Signature | Source |
 |---|---|
-| <code>pub struct Vec&lt;T&gt;</code> | `std/collections/dynarray.mc:33` |
+| <code>pub struct Vec&lt;T&gt;</code> | `std/collections/dynarray.mc:32` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>pub fn vec_new(comptime T: type, a: *mut dyn Allocator) -&gt; Vec&lt;T&gt;</code> | `std/collections/dynarray.mc:41` |
-| <code>pub fn vec_len(comptime T: type, v: *Vec&lt;T&gt;) -&gt; usize</code> | `std/collections/dynarray.mc:46` |
-| <code>pub fn vec_push(comptime T: type, v: *mut Vec&lt;T&gt;, x: T) -&gt; void</code> | `std/collections/dynarray.mc:80` |
-| <code>pub fn vec_get(comptime T: type, v: *Vec&lt;T&gt;, i: usize) -&gt; T</code> | `std/collections/dynarray.mc:90` |
-| <code>pub fn vec_set(comptime T: type, v: *mut Vec&lt;T&gt;, i: usize, x: T) -&gt; void</code> | `std/collections/dynarray.mc:103` |
-| <code>pub fn vec_pop(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; T</code> | `std/collections/dynarray.mc:114` |
-| <code>pub fn vec_clear(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; void</code> | `std/collections/dynarray.mc:128` |
-| <code>pub fn vec_free(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; void</code> | `std/collections/dynarray.mc:134` |
+| <code>pub fn vec_new(comptime T: type, a: *mut dyn Allocator) -&gt; Vec&lt;T&gt;</code> | `std/collections/dynarray.mc:40` |
+| <code>pub fn vec_len(comptime T: type, v: *Vec&lt;T&gt;) -&gt; usize</code> | `std/collections/dynarray.mc:45` |
+| <code>pub fn vec_push(comptime T: type, v: *mut Vec&lt;T&gt;, x: T) -&gt; void</code> | `std/collections/dynarray.mc:79` |
+| <code>pub fn vec_get(comptime T: type, v: *Vec&lt;T&gt;, i: usize) -&gt; T</code> | `std/collections/dynarray.mc:89` |
+| <code>pub fn vec_set(comptime T: type, v: *mut Vec&lt;T&gt;, i: usize, x: T) -&gt; void</code> | `std/collections/dynarray.mc:102` |
+| <code>pub fn vec_pop(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; T</code> | `std/collections/dynarray.mc:113` |
+| <code>pub fn vec_clear(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; void</code> | `std/collections/dynarray.mc:127` |
+| <code>pub fn vec_free(comptime T: type, v: *mut Vec&lt;T&gt;) -&gt; void</code> | `std/collections/dynarray.mc:133` |
 
 ## `std/collections/hashmap`
 
@@ -472,21 +472,21 @@ Source: `std/grant.mc`
 
 | Signature | Source |
 |---|---|
-| <code>pub struct Grant</code> | `std/grant.mc:15` |
-| <code>pub struct GrantRef</code> | `std/grant.mc:25` |
-| <code>pub enum GrantError</code> | `std/grant.mc:31` |
+| <code>pub struct Grant</code> | `std/grant.mc:16` |
+| <code>pub struct GrantRef</code> | `std/grant.mc:26` |
+| <code>pub enum GrantError</code> | `std/grant.mc:32` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>pub fn grant_make(base: PAddr, len: usize) -&gt; Grant</code> | `std/grant.mc:50` |
-| <code>pub fn grant_make_gen(base: PAddr, len: usize, gen: u32) -&gt; Grant</code> | `std/grant.mc:58` |
-| <code>pub fn grant_ref(g: *Grant) -&gt; GrantRef</code> | `std/grant.mc:63` |
-| <code>pub fn grant_revoke(g: *mut Grant) -&gt; void</code> | `std/grant.mc:70` |
-| <code>pub fn grant_open(g: *Grant, r: GrantRef) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:75` |
-| <code>pub fn grant_copy_out(g: *Grant, r: GrantRef, off: usize, dst: PAddr, n: usize) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:83` |
-| <code>pub fn grant_copy_in(g: *Grant, r: GrantRef, off: usize, src: PAddr, n: usize) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:100` |
+| <code>pub fn grant_make(base: PAddr, len: usize) -&gt; Grant</code> | `std/grant.mc:51` |
+| <code>pub fn grant_make_gen(base: PAddr, len: usize, gen: u32) -&gt; Grant</code> | `std/grant.mc:59` |
+| <code>pub fn grant_ref(g: *Grant) -&gt; GrantRef</code> | `std/grant.mc:64` |
+| <code>pub fn grant_revoke(g: *mut Grant) -&gt; void</code> | `std/grant.mc:71` |
+| <code>pub fn grant_open(g: *Grant, r: GrantRef) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:76` |
+| <code>pub fn grant_copy_out(g: *Grant, r: GrantRef, off: usize, dst: PAddr, n: usize) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:84` |
+| <code>pub fn grant_copy_in(g: *Grant, r: GrantRef, off: usize, src: PAddr, n: usize) -&gt; Result&lt;bool, GrantError&gt;</code> | `std/grant.mc:101` |
 
 ## `std/hosted_args`
 
@@ -496,11 +496,11 @@ Source: `std/hosted_args.mc`
 
 | Signature | Source |
 |---|---|
-| <code>pub fn args_count() -&gt; i32</code> | `std/hosted_args.mc:42` |
-| <code>pub fn arg_len(i: i32) -&gt; usize</code> | `std/hosted_args.mc:48` |
-| <code>pub fn arg(i: i32) -&gt; ByteReader</code> | `std/hosted_args.mc:56` |
-| <code>pub fn arg_byte(i: i32, j: usize) -&gt; u8</code> | `std/hosted_args.mc:63` |
-| <code>pub fn arg_eq(i: i32, expected: *const u8) -&gt; bool</code> | `std/hosted_args.mc:70` |
+| <code>pub fn args_count() -&gt; i32</code> | `std/hosted_args.mc:41` |
+| <code>pub fn arg_len(i: i32) -&gt; usize</code> | `std/hosted_args.mc:47` |
+| <code>pub fn arg(i: i32) -&gt; ByteReader</code> | `std/hosted_args.mc:55` |
+| <code>pub fn arg_byte(i: i32, j: usize) -&gt; u8</code> | `std/hosted_args.mc:62` |
+| <code>pub fn arg_eq(i: i32, expected: *const u8) -&gt; bool</code> | `std/hosted_args.mc:69` |
 
 ## `std/hosted_io`
 
@@ -861,24 +861,24 @@ Source: `std/task.mc`
 
 | Signature | Source |
 |---|---|
-| <code>trait Future</code> | `std/task.mc:27` |
-| <code>struct SlotFuture</code> | `std/task.mc:44` |
-| <code>struct Join2</code> | `std/task.mc:84` |
-| <code>struct Race2</code> | `std/task.mc:120` |
-| <code>struct Timeout</code> | `std/task.mc:161` |
+| <code>trait Future</code> | `std/task.mc:24` |
+| <code>struct SlotFuture</code> | `std/task.mc:39` |
+| <code>struct Join2</code> | `std/task.mc:79` |
+| <code>struct Race2</code> | `std/task.mc:114` |
+| <code>struct Timeout</code> | `std/task.mc:155` |
 
 ### Public functions
 
 | Signature | Source |
 |---|---|
-| <code>export fn slot_future_init(s: *mut SlotFuture, id: u64, done: fn(u64) -&gt; bool, cancel: fn(u64) -&gt; void) -&gt; void</code> | `std/task.mc:52` |
-| <code>export fn slot_future_cancel(s: *mut SlotFuture) -&gt; void</code> | `std/task.mc:76` |
-| <code>export fn join2_init(j: *mut Join2, a: *mut dyn Future, b: *mut dyn Future) -&gt; void</code> | `std/task.mc:92` |
-| <code>export fn race2_init(r: *mut Race2, a: *mut dyn Future, b: *mut dyn Future) -&gt; void</code> | `std/task.mc:127` |
-| <code>export fn race2_winner(r: *Race2) -&gt; i32</code> | `std/task.mc:133` |
-| <code>export fn timeout_init(t: *mut Timeout, inner: *mut dyn Future, budget_ticks: u64) -&gt; void</code> | `std/task.mc:169` |
-| <code>export fn timeout_timed_out(t: *Timeout) -&gt; bool</code> | `std/task.mc:176` |
-| <code>export fn run_to_completion(f: *mut dyn Future, idle: fn() -&gt; void) -&gt; u64</code> | `std/task.mc:212` |
+| <code>export fn slot_future_init(s: *mut SlotFuture, id: u64, done: fn(u64) -&gt; bool, cancel: fn(u64) -&gt; void) -&gt; void</code> | `std/task.mc:47` |
+| <code>export fn slot_future_cancel(s: *mut SlotFuture) -&gt; void</code> | `std/task.mc:71` |
+| <code>export fn join2_init(j: *mut Join2, a: *mut dyn Future, b: *mut dyn Future) -&gt; void</code> | `std/task.mc:87` |
+| <code>export fn race2_init(r: *mut Race2, a: *mut dyn Future, b: *mut dyn Future) -&gt; void</code> | `std/task.mc:121` |
+| <code>export fn race2_winner(r: *Race2) -&gt; i32</code> | `std/task.mc:127` |
+| <code>export fn timeout_init(t: *mut Timeout, inner: *mut dyn Future, budget_ticks: u64) -&gt; void</code> | `std/task.mc:163` |
+| <code>export fn timeout_timed_out(t: *Timeout) -&gt; bool</code> | `std/task.mc:170` |
+| <code>export fn run_to_completion(f: *mut dyn Future, idle: fn() -&gt; void) -&gt; u64</code> | `std/task.mc:206` |
 
 ## `std/time`
 
@@ -934,11 +934,11 @@ Source: `std/virtqueue.mc`
 | <code>pub struct UsedElem</code> | `std/virtqueue.mc:26` |
 | <code>pub struct VringUsed</code> | `std/virtqueue.mc:27` |
 | <code>pub struct Virtq</code> | `std/virtqueue.mc:33` |
-| <code>pub enum VqError</code> | `std/virtqueue.mc:143` |
-| <code>pub enum VqSubmitError</code> | `std/virtqueue.mc:148` |
-| <code>pub enum VqCompleteError</code> | `std/virtqueue.mc:331` |
-| <code>pub move struct CompletedChain3</code> | `std/virtqueue.mc:344` |
-| <code>pub move struct CompletedBuffer</code> | `std/virtqueue.mc:470` |
+| <code>pub enum VqError</code> | `std/virtqueue.mc:142` |
+| <code>pub enum VqSubmitError</code> | `std/virtqueue.mc:147` |
+| <code>pub enum VqCompleteError</code> | `std/virtqueue.mc:330` |
+| <code>pub move struct CompletedChain3</code> | `std/virtqueue.mc:343` |
+| <code>pub move struct CompletedBuffer</code> | `std/virtqueue.mc:469` |
 
 ### Public functions
 
@@ -946,16 +946,16 @@ Source: `std/virtqueue.mc`
 |---|---|
 | <code>pub fn bus_addr(comptime T: type, p: *mut T) -&gt; u64</code> | `std/virtqueue.mc:51` |
 | <code>pub fn vq_free_count(vq: *mut Virtq) -&gt; u16</code> | `std/virtqueue.mc:72` |
-| <code>pub fn vq_free_desc(vq: *mut Virtq, id: u16) -&gt; void</code> | `std/virtqueue.mc:94` |
-| <code>pub fn vq_free_chain3(vq: *mut Virtq, head: u16) -&gt; void</code> | `std/virtqueue.mc:113` |
-| <code>pub fn vq_setup(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32, vq: *mut Virtq) -&gt; Result&lt;bool, VqError&gt;</code> | `std/virtqueue.mc:158` |
-| <code>pub fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:238` |
-| <code>pub fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:242` |
-| <code>pub fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:256` |
-| <code>pub fn vq_complete_chain(vq: *mut Virtq) -&gt; Result&lt;CompletedChain3, VqCompleteError&gt;</code> | `std/virtqueue.mc:357` |
-| <code>pub fn vq_kick(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32) -&gt; void</code> | `std/virtqueue.mc:428` |
-| <code>pub fn vq_has_used(vq: *mut Virtq) -&gt; bool</code> | `std/virtqueue.mc:434` |
-| <code>pub fn vq_wait_used(vq: *mut Virtq, timeout: u64) -&gt; bool</code> | `std/virtqueue.mc:444` |
-| <code>pub fn vq_used_len(vq: *mut Virtq) -&gt; u32</code> | `std/virtqueue.mc:456` |
-| <code>pub fn vq_complete(vq: *mut Virtq) -&gt; Result&lt;CompletedBuffer, VqCompleteError&gt;</code> | `std/virtqueue.mc:485` |
-| <code>pub fn vq_reset_reclaim(vq: *mut Virtq) -&gt; usize</code> | `std/virtqueue.mc:518` |
+| <code>pub fn vq_free_desc(vq: *mut Virtq, id: u16) -&gt; void</code> | `std/virtqueue.mc:93` |
+| <code>pub fn vq_free_chain3(vq: *mut Virtq, head: u16) -&gt; void</code> | `std/virtqueue.mc:112` |
+| <code>pub fn vq_setup(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32, vq: *mut Virtq) -&gt; Result&lt;bool, VqError&gt;</code> | `std/virtqueue.mc:157` |
+| <code>pub fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:237` |
+| <code>pub fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:241` |
+| <code>pub fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:255` |
+| <code>pub fn vq_complete_chain(vq: *mut Virtq) -&gt; Result&lt;CompletedChain3, VqCompleteError&gt;</code> | `std/virtqueue.mc:356` |
+| <code>pub fn vq_kick(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32) -&gt; void</code> | `std/virtqueue.mc:427` |
+| <code>pub fn vq_has_used(vq: *mut Virtq) -&gt; bool</code> | `std/virtqueue.mc:433` |
+| <code>pub fn vq_wait_used(vq: *mut Virtq, timeout: u64) -&gt; bool</code> | `std/virtqueue.mc:443` |
+| <code>pub fn vq_used_len(vq: *mut Virtq) -&gt; u32</code> | `std/virtqueue.mc:455` |
+| <code>pub fn vq_complete(vq: *mut Virtq) -&gt; Result&lt;CompletedBuffer, VqCompleteError&gt;</code> | `std/virtqueue.mc:484` |
+| <code>pub fn vq_reset_reclaim(vq: *mut Virtq) -&gt; usize</code> | `std/virtqueue.mc:517` |

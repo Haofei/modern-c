@@ -112,8 +112,8 @@ pub fn cpu_len(b: *CpuBuffer) -> usize {
 // The CPU may read/write a buffer only while it owns it: these take a
 // `*CpuBuffer` (not a DeviceBuffer), so touching device-owned memory is a type
 // error. The raw memory access is concentrated here behind a typed, bounds-
-// checked API — drivers never open-code `raw.store`/`raw.load`. Out-of-bounds
-// offsets trap. Multi-byte accessors are big-endian (network order); little-
+// checked API — callers never open-code `raw.store`/`raw.load`. Out-of-bounds
+// offsets trap. Multi-byte accessors are big-endian; little-
 // endian variants follow the same shape.
 
 // Bounds-check a `[offset, offset+n)` access against the buffer, overflow-safe. Multi-byte

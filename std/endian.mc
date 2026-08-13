@@ -1,5 +1,5 @@
 // MC standard library — `endian`: byte-order conversion (section 28.3). Device
-// registers and on-wire packet headers have a fixed endianness; the host may
+// registers and byte-serialized records have a fixed endianness; the host may
 // differ. These are pure `const fn`s (comptime-foldable, linkable) — explicit
 // conversions, never an implicit reinterpret.
 
@@ -26,7 +26,7 @@ export const fn swap_u64(x: u64) -> u64 {
 }
 
 // Host ↔ explicit-endian conversions. v0 assumes a little-endian host (x86,
-// riscv64, aarch64 LE — the usual MC targets): big-endian (network order) is a
+// riscv64, aarch64 LE — the usual MC targets): big-endian is a
 // swap, little-endian is identity. (A `__BYTE_ORDER__`-aware variant is a
 // follow-on for big-endian hosts.)
 

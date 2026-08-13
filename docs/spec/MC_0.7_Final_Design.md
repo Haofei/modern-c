@@ -87,16 +87,16 @@ Language primitives:
         atomics, interrupt context, the trap ABI, narrow compile-time
         reflection, the inline-asm boundary, and the C ABI.
 
-Device libraries:
-    Concrete protocols and devices, written on top of the primitives and
-    outside the language:
-        PCIe, USB, NVMe, UART, SPI/I2C, Ethernet, SoC HALs, board support.
+Validation libraries:
+    Small fixtures written on top of the primitives and outside the language.
+    They exist to exercise compiler-visible contracts, not to define device
+    stacks.
 ```
 
-The point of standardizing the generic primitives is that a driver author does
+The point of standardizing the generic primitives is that low-level code does
 not re-derive C's implicit rules—`volatile`, aliasing, overflow, barriers,
-optimizer assumptions—for every device. A device library expresses a datasheet
-and a driver state machine in terms of these primitives; the language stays
+optimizer assumptions—for every hardware boundary. Validation fixtures use
+these primitives to keep the language contract executable; the language stays
 device-agnostic. (See annex section A.1.)
 
 MC is not a memory-safe language. It is a language that makes the machine contract explicit.
@@ -3002,8 +3002,7 @@ It makes the contract explicit enough that a kernel author can reason about wher
 
 The driver validation profile exercises the language primitives that matter for
 freestanding driver code: MMIO, DMA ownership, linear guards, atomics, IRQ
-effects, endian conversion, and optimizer boundaries. It is not a device-stack
-or driver-framework roadmap. Each retained library surface is a thin, typed layer
+effects, endian conversion, and optimizer boundaries. Each retained library surface is a thin, typed layer
 over a core primitive (sections 16–19) plus Scoped Affine Ownership
 (section 18.1); none introduces new language semantics.
 
@@ -3042,18 +3041,16 @@ reader/writer lock: many concurrent readers or one exclusive writer) and
 an overlapping write). Both are built on the fair ticket `Spinlock` + an atomic
 counter, so they need no compare-exchange primitive; their state-machine transitions
 are covered by `synclock-test` (C and LLVM host-suite). A **sleeping `Mutex`**
-(`kernel/lib/mutex`) completes the set: unlike the busy-waiting SpinLock, a contended
-mutex enqueues the caller as a FIFO waiter (`mutex_lock` returns `Blocked`, the
-scheduler then parks it) and on `mutex_unlock` hands the lock *directly* to the
-next waiter — fair, no thundering herd, no starvation; the park/wake are the kernel's
-scheduler hooks. Its lock/owner/waiter state machine is covered by `mutex-test`. A NIC
-driver holds a `SpinLock` (via `lock_irqsave`) around TX/RX ring updates shared between
-the transmit path and the completion ISR.
+(`kernel/lib/mutex`) validates the blocking-contract variant: unlike the
+busy-waiting SpinLock, a contended mutex records a waiter (`mutex_lock` returns
+`Blocked`) and `mutex_unlock` hands ownership to the next waiter through the
+embedding scheduler hook. Its lock/owner/waiter state machine is covered by
+`mutex-test`.
 
 ## 28.2 `std/ring` — Generic Descriptor Ring
 
-A NIC's TX and RX paths are bounded single-producer/single-consumer rings of
-descriptors. `Ring<T, N>` is a generic (section 22) fixed-capacity ring:
+`Ring<T, N>` is a generic (section 22) fixed-capacity ring used by validation
+fixtures for bounded producer/consumer state:
 
 ```mc
 struct Ring<T, N> { slots: [N]T, head: usize, tail: usize, count: usize }
@@ -3079,20 +3076,19 @@ array field of a `move` type (`slots: [N]T` with linear `T`) is rejected at the
 struct definition (`E_MOVE_ARRAY_UNSUPPORTED`), so `Ring<MoveT, N>` does not
 type-check and `ring_front` can never copy a linear value. A ring of linear
 resources holds them behind a copyable handle (a pointer, an index, a `DmaAddr`),
-not by value; a by-value `move` ring would need a borrowing `front` and a
-move-out `pop`, which is a possible future extension, not the current API.
+not by value; a by-value `move` ring is outside the current API.
 
 ## 28.3 `std/endian` — Byte Order
 
-Device registers and on-wire packet headers have a fixed endianness; the host may
-differ. Pure `const fn`s (comptime-foldable) convert explicitly — never an
+Device registers and byte-serialized records have a fixed endianness; the host
+may differ. Pure `const fn`s (comptime-foldable) convert explicitly — never an
 implicit reinterpret:
 
 ```mc
 export const fn swap_u16(x: u16) -> u16;
 export const fn swap_u32(x: u32) -> u32;
 export const fn swap_u64(x: u64) -> u64;
-export const fn to_be32(x: u32) -> u32;     // host → big-endian (network order)
+export const fn to_be32(x: u32) -> u32;     // host → big-endian
 export const fn from_be32(x: u32) -> u32;
 export const fn to_le32(x: u32) -> u32;     // host → little-endian (most devices)
 export const fn from_le32(x: u32) -> u32;
@@ -3105,9 +3101,9 @@ but it does not by itself make a *missing* conversion a type error — `to_be32`
 a raw `u32` are interchangeable to the type checker. Enforcing "host-endian value
 written to a big-endian field is a compile error" (section 28.6) requires distinct
 representation types — `be32` / `le32` newtypes, or typed register fields that
-carry endianness — so that the unconverted store fails to type-check. That typed
-endian-field layer is a planned extension; until it lands, the guarantee is
-"explicit conversion, reviewable at the call site," not a type-enforced one.
+carry endianness — so that the unconverted store fails to type-check. Until such
+a type exists, the guarantee is "explicit conversion, reviewable at the call
+site," not a type-enforced one.
 
 ## 28.4 `std/time` — Delays and Monotonic Ticks
 
@@ -3206,7 +3202,7 @@ fn submit(dev: *Device, frame: CpuBuffer) -> void {
 }
 ```
 
-The point is not to specify a device stack. The example keeps the compiler-facing
+The point is to keep the compiler-facing
 contracts visible: a buffer read after handoff is a **compile error** (the `move`
 handle is consumed, section 18.2), a lock left held is a **compile error** (the
 guard is linear, section 28.1), and a descriptor write reordered past the device
@@ -3801,9 +3797,8 @@ Language primitives:
     interrupt context, trap ABI, compile-time reflection, inline-asm boundary,
     C ABI.
 
-Device libraries:
-    Built on the primitives, outside this spec. Conformance does NOT define them.
-    PCIe, USB, NVMe, UART, SPI/I2C, Ethernet, SoC HAL, board support.
+Validation libraries:
+    Built on the primitives and outside this spec.
 ```
 
 A guarantee the compiler enforces (a primitive) and an invariant a library asserts (a device convention) are different trust levels:

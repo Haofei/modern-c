@@ -1,4 +1,4 @@
-// kernel/lib/mutex — a sleeping (blocking) mutex (spec §28 planned extension).
+// kernel/lib/mutex — a sleeping (blocking) mutex validation fixture.
 //
 // Unlike `std/sync`'s SpinLock (which busy-waits), a contended sleeping mutex enqueues the
 // caller as a waiter and yields to the scheduler instead of spinning, so a long critical section

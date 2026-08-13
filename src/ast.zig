@@ -189,7 +189,7 @@ pub const FnDecl = struct {
     is_variadic: bool = false,
     // `where T: Trait, ...` bounds on the function's comptime type parameters.
     bounds: []TraitBound = &.{},
-    // `async fn …` — a stackless async function (async/await roadmap Phase D). A pre-sema
+    // `async fn …` — a stackless async function. A pre-sema
     // transform (src/async_lower.zig) rewrites every `is_async` fn into a Future state machine
     // (a struct + `impl Future` poll + `_take_result` + constructor), so no `is_async` fn nor
     // `await_expr` survives to sema/backends. v0: straight-line awaits only.
@@ -603,7 +603,7 @@ pub const Expr = struct {
             operand: *Expr,
             mapped: ?*Expr = null,
         },
-        // `await EXPR` — a suspend point inside an `async fn` (async/await roadmap Phase D).
+        // `await EXPR` — a suspend point inside an `async fn`.
         // The pre-sema async transform (src/async_lower.zig) eliminates every `await_expr`;
         // it must never reach sema or a backend. Post-transform switches treat it as an error.
         await_expr: *Expr,

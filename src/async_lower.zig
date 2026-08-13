@@ -1,5 +1,4 @@
-// src/async_lower.zig — the `async fn` / `await` stackless state-machine transform
-// (async/await roadmap Phase D, build-order step 3: straight-line awaits).
+// src/async_lower.zig — the `async fn` / `await` stackless state-machine transform.
 //
 // Runs POST-parse, PRE-monomorphize/sema, on the whole `ast.Module`. For every `is_async`
 // fn it GENERATES ordinary MC AST matching the hand-lowered acceptance target in

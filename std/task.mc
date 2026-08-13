@@ -1,4 +1,4 @@
-// std/task.mc — pure async TASK VOCABULARY (async/await roadmap, Phase A).
+// std/task.mc — pure async task vocabulary used by compiler validation.
 //
 // This module is PURE: it knows nothing about ProcTable, IRQs, wait queues, runtime slots,
 // or syscalls — only how to *poll* and *compose* futures. `async`/`await` syntax is a stackless state-machine transform. Everything here is FIXED-SIZE with no hidden heap.

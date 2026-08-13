@@ -1,4 +1,4 @@
-// std/rwlock — a reader/writer lock (spec §28 planned extension), built on the fair ticket
+// std/rwlock — a reader/writer lock built on the fair ticket
 // `Spinlock` (std/spinlock) plus an atomic reader count, so it needs no compare-exchange.
 //
 // Many readers may hold the lock at once; a writer is exclusive against both other writers and
