@@ -15,7 +15,7 @@
 #   tools/run-kernel.sh [demo.mc] [c|llvm]
 # Examples:
 #   tools/run-kernel.sh                                   # default: basic arch demo, C backend
-#   tools/run-kernel.sh tests/qemu/proc/agent_preempt_demo.mc c
+#   tools/run-kernel.sh tests/qemu/proc/preempt_demo.mc c
 #   MC_DISK=disk.img tools/run-kernel.sh tests/qemu/arch/blk_persist_demo.mc   # attach a virtio-blk disk
 #
 # Env knobs:

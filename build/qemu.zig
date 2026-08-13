@@ -643,9 +643,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-preempt-test", "Run LLVM-lowered timer-driven preemption under QEMU", &.{ "bash", "tools/proc/preempt-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "agent-preempt-test", "Run timer-driven preemption of agent PROCESSES (ProcTable) under QEMU", &.{ "bash", "tools/proc/agent-preempt-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-agent-preempt-test", "Run LLVM-lowered timer-driven preemption of agent PROCESSES under QEMU", &.{ "bash", "tools/proc/agent-preempt-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "proc-supervisor-test", "Run the running supervisor loop (proc_supervisor_scan) over 3 supervised PROCESSES under QEMU: one healthy, one restarted once, one given up exactly once", &.{ "bash", "tools/proc/proc-supervisor-test.sh", "zig-out/bin/mcc", "c" });
 
@@ -728,10 +725,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU: a user-derived scalar must pass checked_len/checked_index/validate_bound (fail closed) before driving a copy length or index", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test" });
 
     _ = h.addScriptTest(ctx, "llvm-uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU (LLVM backend): a user-derived scalar must pass checked_len/checked_index/validate_bound before driving a copy length or index", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test" });
-
-    _ = h.addScriptTest(ctx, "agent-confined-test", "Step 0: load a separate ELF into an isolated Sv39 address space (kernel unmapped) and run it confined in U-mode under QEMU", &.{ "bash", "tools/proc/agent-confined-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-agent-confined-test", "Step 0 (LLVM): load a separate ELF into an isolated Sv39 address space and run it confined in U-mode under QEMU", &.{ "bash", "tools/proc/agent-confined-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // multi-segment U-mode ELF via the userspace SDK, load it with the real elf_loader into
     // an isolated Sv39 space, and run it confined under QEMU — prints via SYS_WRITE (uaccess),

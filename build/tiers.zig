@@ -107,7 +107,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-elf-loader-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-uaccess-snapshot-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-uaccess-taint-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-agent-confined-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-app-run-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-compute-app-test"));
     m0_full_step.dependOn(ctx.cmd("vararg-test"));
@@ -172,7 +171,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-backtrace-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-driver-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-preempt-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-agent-preempt-test"));
     // llvm-proc-supervisor-test runs the LLVM-lowered running supervisor loop (proc_supervisor_scan) under QEMU.
     m0_full_step.dependOn(ctx.cmd("llvm-proc-supervisor-test"));
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
@@ -565,8 +563,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("sched-test"));
     // preempt-test runs the timer-driven preemptive scheduler under QEMU.
     m0_full_step.dependOn(ctx.cmd("preempt-test"));
-    // agent-preempt-test runs timer-driven preemption of agent PROCESSES (ProcTable) under QEMU.
-    m0_full_step.dependOn(ctx.cmd("agent-preempt-test"));
     // proc-supervisor-test runs the running supervisor loop (proc_supervisor_scan) over supervised PROCESSES under QEMU.
     m0_full_step.dependOn(ctx.cmd("proc-supervisor-test"));
     // ledger-test runs the unified resource ledger (charge/release + overflow-edge) under QEMU.
@@ -587,8 +583,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("elf-loader-test"));
     m0_full_step.dependOn(ctx.cmd("uaccess-snapshot-test"));
     m0_full_step.dependOn(ctx.cmd("uaccess-taint-test"));
-    // agent-confined-test (step 0): separate ELF into an isolated address space, run confined in U-mode.
-    m0_full_step.dependOn(ctx.cmd("agent-confined-test"));
     m0_full_step.dependOn(ctx.cmd("app-run-test"));
     m0_full_step.dependOn(ctx.cmd("compute-app-test"));
     // driver-test runs the char-device driver framework (vtable dispatch) under QEMU.

@@ -13,7 +13,7 @@
 // validate a user pointer before the kernel ever touches it, returning -EFAULT for
 // an unmapped/non-user/straddling pointer without dereferencing it.
 //
-// This is the S-mode analogue of agent_confined_demo.mc (which relies on M-mode
+// This is the S-mode analogue of the M-mode user-space confinement fixture (which relies on M-mode
 // ignoring satp). The boot/trap/U-mode-drop bring-up — once smode_user_runtime.c —
 // is now folded in below (pure MC, no C).
 
@@ -48,7 +48,7 @@ global g_pt: PageTable;
 global g_stack_len: usize;
 
 // ELF load (parse + copy the PT_LOAD segment to a physical landing frame). Same shape
-// as agent_confined_demo.mc — the bring-up calls this before smode_space_build.
+// as the M-mode user-space fixture — the bring-up calls this before smode_space_build.
 export fn elf_load_run(elf_base: usize, elf_len: usize, dst: usize) -> u64 {
     var r: ByteReader = byte_reader(pa(elf_base), elf_len);
     switch elf_parse_header(&r) {

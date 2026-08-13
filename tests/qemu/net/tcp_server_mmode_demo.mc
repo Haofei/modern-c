@@ -8,7 +8,7 @@
 // Console/halt use local names (uputc/uputs/halt) so they do NOT collide with the
 // putc_/puts_/mc_halt that context_runtime.c still exports for its own use. The heap is
 // over-allocated and the base rounded up to a page (MC has no compile-time global-align
-// attribute; same idiom as agent_confined_runtime.mc).
+// attribute; same idiom as the M-mode user-runtime fixtures).
 
 import "tests/qemu/lib/test_report.mc";
 import "tests/qemu/net/tcp_server_demo.mc"; // tcp_server_run
