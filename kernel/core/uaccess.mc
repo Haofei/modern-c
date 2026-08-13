@@ -88,8 +88,7 @@ export fn copy_to_user(us: *UserSpace, dst: UserPtr<u8>, src: PAddr, len: usize)
 // The double-fetch (TOCTOU) bug class: the kernel copies a datum in from a
 // `UserPtr`, validates it, then copies the SAME user pointer in a SECOND time to
 // use it — and a concurrent thread (or a racing mapping) changed the bytes between
-// the two reads, so the value validated is not the value used (the classic
-// "validate, then it changes under you" CVE family, e.g. CVE-2016-6516).
+// the two reads, so the value validated is not the value used.
 //
 // The structural fix is to copy a user datum in EXACTLY ONCE into a kernel-owned
 // snapshot, then read only the snapshot. `UserSnapshot<T>` is that handle: it owns
@@ -155,8 +154,8 @@ pub fn fetch_user_pt(uas: *UserAddrSpace, src: UserPtr<u8>) -> Result<UserSnapsh
 // A value that ORIGINATES from user space is untrusted ("tainted"): the kernel must
 // not use it as a length, index, copy-size, or loop bound until it has passed an
 // explicit bounds check against a kernel-chosen limit. Skipping that check is the
-// heartbleed shape: trust an attacker-supplied length and over-read past the buffer
-// (CVE-2014-0160) — or under-index/overflow with an attacker-supplied index.
+// over-read shape: trust an attacker-supplied length and read past the buffer, or
+// under-index/overflow with an attacker-supplied index.
 //
 // `Tainted<T>` is the carrier. It wraps a scalar that came in from user space (via a
 // `UserSnapshot` — see `taint`) and, crucially, exposes NO way to read the raw value:

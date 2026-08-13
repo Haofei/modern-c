@@ -348,13 +348,9 @@ RULES: tuple[Rule, ...] = (
         "SAFE/RELEASE parity harness changes need the safe release parity gate",
     ),
     Rule(
-        (
-            "SECURITY.md",
-            "STABILITY.md",
-            "CHANGELOG.md",
-        ),
+        ("CHANGELOG.md",),
         (),
-        "security/stability prose changes do not affect compiler-core gates",
+        "changelog prose changes do not affect compiler-core gates",
         ("git diff --check",),
     ),
     Rule(
@@ -741,7 +737,7 @@ def main() -> int:
 
         print("\nTruth gate:")
         print("  zig build m0                   # core compiler qualification")
-        print("  zig build m0-full              # required before release/production claims")
+        print("  zig build m0-full              # broad local qualification sweep")
     else:
         print("\nConfidence gates:")
         print("  none for checks-only changes")

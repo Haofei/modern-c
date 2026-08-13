@@ -198,7 +198,7 @@ Split the patch if it:
 - adds a new abstraction while leaving the old authority path untracked;
 - updates status prose without changing the owning manifest, inventory, code, or
   tests;
-- expands an experimental profile into a production claim.
+- expands an experimental validation workload into a product surface.
 
 ## Verification ladder
 

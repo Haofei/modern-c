@@ -123,9 +123,9 @@ sits inside an `unsafe`/`unsafe_contract` region (re-run the lint for the live c
 | `unchecked.{add,…}` | 0 | `#[unsafe_contract(no_overflow)]` | — none currently in kernel/std. |
 | `assume_noalias_unchecked` | 0 | `#[unsafe_contract(noalias)]` | — none currently in kernel/std. |
 | `bitcast<T>` | 8 | tracked | `std/vec.mc` (typed-slot reinterpret). Alias-safe (memcpy). |
-| `uninit` | 37 | tracked | Buffers written before read across std/kernel/tests. Unspecified-not-UB. |
-| **TOTAL (constructs)** | **275** | | |
-| `extern` declarations (FFI) | 97 | trust boundary | The non-MC call surface (runtime, libc shims, platform hooks). Callee correctness is not MC-checked. |
+| `uninit` | 32 | tracked | Buffers written before read across std/kernel/tests. Unspecified-not-UB. |
+| **TOTAL (constructs)** | **204** | | |
+| `extern` declarations (FFI) | 59 | trust boundary | The non-MC call surface (runtime, libc shims, platform hooks). Callee correctness is not MC-checked. |
 
 ### Reading the inventory
 

@@ -325,7 +325,8 @@ Other deliberate or current limitations include:
 - value-level comptime rather than unrestricted type computation;
 - no separate-compilation or mature incremental module graph;
 - a token-preserving reindenter rather than a full pretty printer;
-- incomplete hardware qualification and production kernel hardening;
+- kernel code is a compiler-validation workload, not a board-certification
+  target;
 - no stable public release yet.
 
 The repository-wide backlog is [`docs/todo.md`](docs/todo.md).
@@ -345,13 +346,8 @@ The repository-wide backlog is [`docs/todo.md`](docs/todo.md).
 | `docs/` | Specifications, reference material, qualification, and plans |
 
 Start with [`docs/README.md`](docs/README.md) to see which documents are current
-sources of truth and which are historical records.
-
-## Security
-
-Report security issues through the private process in
-[`SECURITY.md`](SECURITY.md). Compatibility expectations are documented in
-[`STABILITY.md`](STABILITY.md).
+sources of truth and which are historical records. This repository is a research
+compiler workspace and does not define shipped-version guarantees.
 
 ## License
 

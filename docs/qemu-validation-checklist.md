@@ -24,5 +24,4 @@ Use this for the retained RISC-V OpenSBI/QEMU language-validation surrogate.
   changes.
 
 QEMU evidence is a surrogate. It keeps selected OpenSBI, FDT, interrupt, MMIO,
-and backend paths honest, but it is not hardware qualification or a
-long-duration soak result.
+and backend paths honest, but it is not a device or long-duration soak test.

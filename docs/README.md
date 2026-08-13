@@ -7,8 +7,7 @@ historical plans, but the active source of truth should be small:
   and QEMU coverage.
 - [`todo.md`](todo.md) — current consolidated roadmap and known open work.
 - [`component-manifest.json`](component-manifest.json) — machine-readable component
-  manifest tying profile component IDs to owners, provenance, advisory status,
-  and vendored dependency metadata.
+  manifest tying profile component IDs to owners and dependency metadata.
 - [`gate-manifest.json`](gate-manifest.json) — machine-readable gate manifest
   for compiler-core/governance ownership, tiers, profiles, and skip policy.
 - [`refactoring-plan.md`](refactoring-plan.md) — ordered refactoring phases that
@@ -26,8 +25,8 @@ These are still useful as day-to-day references or rationale companions:
 |---|---|---|
 | Language interop | [`c-abi-interop.md`](c-abi-interop.md) | C ABI, symbols, strings, trap ABI, boundary diagnostics. |
 | Backend seam | [`backend-abstraction.md`](backend-abstraction.md) | Where C/LLVM backends plug into `mcc`. |
-| Refactoring | [`refactoring-plan.md`](refactoring-plan.md) | Ordered code-facing refactoring phases derived from the risk register. |
-| Security/stability | [`../SECURITY.md`](../SECURITY.md), [`../STABILITY.md`](../STABILITY.md), [`../CHANGELOG.md`](../CHANGELOG.md) | Security reporting, compatibility expectations, and development-line changes. |
+| Refactoring | [`refactoring-plan.md`](refactoring-plan.md) | Ordered code-facing refactoring phases for the compiler core. |
+| Change log | [`../CHANGELOG.md`](../CHANGELOG.md) | Development-line changes. |
 | Gate/component inventory | [`component-manifest.json`](component-manifest.json), [`gate-manifest.json`](gate-manifest.json) | Machine-readable component and gate ownership for compiler-core validation. |
 | Testing | [`test-architecture.md`](test-architecture.md), [`qemu-validation-checklist.md`](qemu-validation-checklist.md) | Fixture contracts, gate layers, manifest discipline, and the local/CI QEMU surrogate checklist. |
 | Unsafe/UB audit | [`unsafe-boundary.md`](unsafe-boundary.md), [`c-ub-matrix.md`](c-ub-matrix.md), [`lowering-coverage.md`](lowering-coverage.md) | Unsafe syntax, C-UB handling, and lowering coverage reports. |
