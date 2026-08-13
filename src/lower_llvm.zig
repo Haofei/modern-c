@@ -278,7 +278,7 @@ fn backendLower(
     request: backend_mod.LowerRequest,
 ) backend_mod.LowerError!void {
     _ = ctx;
-    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, request.declaration_artifacts, request.program.typed_mir, request.program.source_spelling, request.out, request.opts.source_path orelse "input.mc", request.opts.checks, request.opts.stub_asm, request.opts.target_arch, request.opts.linux_kernel, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
+    return appendLlvmCheckedMirProfileWithVerifiedProgram(allocator, request.declaration_artifacts, request.program, request.out, request.opts.source_path orelse "input.mc", request.opts.checks, request.opts.stub_asm, request.opts.target_arch, request.opts.linux_kernel, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 pub fn appendLlvmCheckedMirArtifacts(
@@ -293,14 +293,20 @@ pub fn appendLlvmCheckedMirArtifacts(
     linux_kernel: bool,
     reporter: ?*diagnostics.Reporter,
 ) !void {
-    return appendLlvmCheckedMirProfileWithSourceSpelling(allocator, artifacts, module_mir, .{ .symbols = module_mir.symbol_identities }, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
+    var local_reporter = diagnostics.Reporter.init(allocator, source_path, "");
+    defer local_reporter.deinit();
+    const active_reporter = reporter orelse &local_reporter;
+    const program = backend_mod.VerifiedProgram.init(module_mir, active_reporter) catch |err| switch (err) {
+        error.StaleMirTargetTypeFacts => return error.UnsupportedLlvmEmission,
+        else => return err,
+    };
+    return appendLlvmCheckedMirProfileWithVerifiedProgram(allocator, artifacts, program, out, source_path, checks, stub_asm, target_arch, linux_kernel, reporter);
 }
 
-fn appendLlvmCheckedMirProfileWithSourceSpelling(
+fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     allocator: std.mem.Allocator,
     early_metadata: declaration_artifacts.EarlyDeclarationArtifacts,
-    module_mir: *const mir.Module,
-    source_spelling: backend_mod.SourceSpellingView,
+    program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     source_path: []const u8,
     checks: backend_mod.Checks,
@@ -309,11 +315,6 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
     linux_kernel: bool,
     reporter: ?*diagnostics.Reporter,
 ) !void {
-    mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err) {
-        error.StaleMirTargetTypeFacts => return error.UnsupportedLlvmEmission,
-        else => return err,
-    };
-    if (!source_spelling.validateAgainstMir(module_mir.*)) return error.UnsupportedLlvmEmission;
     const comptime_declarations = eval.ComptimeDeclarations.fromDeclarationArtifacts(early_metadata);
     const ksan = checks.ksan;
     const msan = checks.msan;
@@ -327,14 +328,14 @@ fn appendLlvmCheckedMirProfileWithSourceSpelling(
     try out.appendSlice(allocator, "; semantic checks: sema + MIR policy/CFG verification\n\n");
     try emitTargetTypeDecls(allocator, out, target_arch);
     if (linux_kernel)
-        try emitExternalRuntimeDecls(allocator, out, source_spelling, module_mir.*)
+        try emitExternalRuntimeDecls(allocator, out, program.source_spelling, program.typed_mir.*)
     else
-        try emitTrapDecl(allocator, out, source_spelling, module_mir.*);
+        try emitTrapDecl(allocator, out, program.source_spelling, program.typed_mir.*);
 
     var ctx = LlvmEmitter{
         .allocator = allocator,
         .out = out,
-        .mir_module = module_mir.*,
+        .mir_module = program.typed_mir.*,
         .scratch = std.heap.ArenaAllocator.init(allocator),
         .need_uadd = std.StringHashMap(void).init(allocator),
         .need_usub = std.StringHashMap(void).init(allocator),

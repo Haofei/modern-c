@@ -41,7 +41,7 @@ fn backendLower(
     request: backend_mod.LowerRequest,
 ) backend_mod.LowerError!void {
     _ = ctx;
-    return appendCProfileWithMirSourceSpelling(allocator, request.declaration_artifacts, request.program.typed_mir, request.program.source_spelling, request.out, request.opts.profile, request.opts.source_path, request.opts.checks, request.opts.stub_asm, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
+    return appendCProfileWithVerifiedProgram(allocator, request.declaration_artifacts, request.program, request.out, request.opts.profile, request.opts.source_path, request.opts.checks, request.opts.stub_asm, request.opts.reporter) catch |err| backend_mod.lowerErrorFromAny(err);
 }
 
 fn backendEmitMap(
@@ -93,14 +93,20 @@ pub fn appendCProfileWithMirArtifacts(
     stub_asm: bool,
     reporter: ?*diagnostics.Reporter,
 ) anyerror!void {
-    return appendCProfileWithMirSourceSpelling(allocator, artifacts, typed_mir, .{ .symbols = typed_mir.symbol_identities }, out, profile, source_path, checks, stub_asm, reporter);
+    var local_reporter = diagnostics.Reporter.init(allocator, source_path orelse "input.mc", "");
+    defer local_reporter.deinit();
+    const active_reporter = reporter orelse &local_reporter;
+    const program = backend_mod.VerifiedProgram.init(typed_mir, active_reporter) catch |err| switch (err) {
+        error.StaleMirTargetTypeFacts => return error.UnsupportedCEmission,
+        else => return err,
+    };
+    return appendCProfileWithVerifiedProgram(allocator, artifacts, program, out, profile, source_path, checks, stub_asm, reporter);
 }
 
-fn appendCProfileWithMirSourceSpelling(
+fn appendCProfileWithVerifiedProgram(
     allocator: std.mem.Allocator,
     early_metadata: declaration_artifacts.EarlyDeclarationArtifacts,
-    typed_mir: *const mir.Module,
-    source_spelling: backend_mod.SourceSpellingView,
+    program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     profile: Profile,
     source_path: ?[]const u8,
@@ -108,23 +114,18 @@ fn appendCProfileWithMirSourceSpelling(
     stub_asm: bool,
     reporter: ?*diagnostics.Reporter,
 ) anyerror!void {
-    mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err) {
-        error.StaleMirTargetTypeFacts => return error.UnsupportedCEmission,
-        else => return err,
-    };
-    if (!source_spelling.validateAgainstMir(typed_mir.*)) return error.UnsupportedCEmission;
     const profile_marker = switch (profile) {
         .kernel => "/* mc-profile: kernel (freestanding) */\n",
         .hosted => "/* mc-profile: hosted (links libc + -lm) */\n",
     };
-    try lower_c_runtime.appendHeaderAndSanitizerHooks(allocator, source_spelling, typed_mir.*, out, profile_marker);
+    try lower_c_runtime.appendHeaderAndSanitizerHooks(allocator, program.source_spelling, program.typed_mir.*, out, profile_marker);
     try lower_c_runtime.appendCheckedArithmeticHelpers(allocator, out);
     try lower_c_runtime.appendMemoryAccessHelpers(allocator, out, checks.ksan, checks.msan, checks.csan);
 
     try lower_c_emitter.appendModuleMir(
         allocator,
         early_metadata,
-        typed_mir,
+        program.typed_mir,
         out,
         source_path,
         checks.ksan,

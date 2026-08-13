@@ -183,7 +183,8 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
     "llvm-representation-fact-consumption": {
         "docs/typed-semantic-facts.md": ["| `llvm-representation-fact-consumption` |"],
         "src/mir.zig": ["pub fn validateRepresentationFactsForLowering"],
-        "src/lower_llvm.zig": ["mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)"],
+        "src/verified_program.zig": ["try mir.validateLoweringAdmission(typed_mir.*)"],
+        "src/lower_llvm.zig": ["VerifiedProgram.init(module_mir"],
     },
     "mir-pointer-provenance-production": {
         "docs/typed-semantic-facts.md": ["| `mir-pointer-provenance-production` |"],
@@ -634,10 +635,13 @@ INTEGER_DEFAULT_FACT_FAMILY_AUDIT: dict[str, list[str]] = {
         "MIR target-type admission rejects target fact identity table drift",
     ],
     "src/lower_c.zig": [
-        "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)",
+        "VerifiedProgram.init(typed_mir",
+    ],
+    "src/verified_program.zig": [
+        "try mir.validateLoweringAdmission(typed_mir.*)",
     ],
     "src/lower_llvm.zig": [
-        "mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)",
+        "VerifiedProgram.init(module_mir",
     ],
     "src/lower_c_tests.zig": [
         "lower-c rejects prebuilt MIR with missing integer facts",
@@ -667,10 +671,13 @@ REPRESENTATION_FACT_HARDENING_AUDIT: dict[str, list[str]] = {
         "fn representationFactKind",
     ],
     "src/lower_c.zig": [
-        "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)",
+        "VerifiedProgram.init(typed_mir",
+    ],
+    "src/verified_program.zig": [
+        "try mir.validateLoweringAdmission(typed_mir.*)",
     ],
     "src/lower_llvm.zig": [
-        "mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)",
+        "VerifiedProgram.init(module_mir",
     ],
     "src/lower_c_tests.zig": [
         "lower-c rejects prebuilt MIR with missing representation facts",
@@ -872,7 +879,7 @@ ANCHORS: dict[str, list[str]] = {
         "if (self.mirCheckElided(slice_span))",
     ],
     "src/lower_c.zig": [
-        "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)",
+        "VerifiedProgram.init(typed_mir",
     ],
     "src/lower_c_global.zig": [
         "pub fn appendGlobalLoadExpr",
@@ -891,7 +898,7 @@ ANCHORS: dict[str, list[str]] = {
         '"lower contract_scope',
     ],
     "src/lower_llvm.zig": [
-        "mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)",
+        "VerifiedProgram.init(module_mir",
         "pointer_local_provenance: std.StringHashMap(mir.PointerProvenance)",
         "local_aggregate_pointer_aliases: std.StringHashMap([]const u8)",
         "local_array_global_pointer_elements: std.StringHashMap(mir.PointerProvenance)",
@@ -1362,7 +1369,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "pub fn replacementSourceMatchesSpan(": 1,
     },
     "src/lower_c.zig": {
-        "mir.validateLoweringAdmission(typed_mir.*) catch |err| switch (err)": 1,
+        "VerifiedProgram.init(typed_mir": 1,
         "program.syntax_module": 0,
         "program.syntaxForLegacyDeclarationMetadata()": 0,
         "program.declarationMetadata().syntaxForLegacyLowering()": 0,
@@ -1394,9 +1401,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "program.source_spelling": 1,
         "VerifiedProgram.init(module": 0,
         "VerifiedProgram.initFromDecls(module.decls": 0,
-        "source_spelling: backend_mod.SourceSpellingView": 1,
-        "source_spelling.validateAgainstMir(typed_mir.*)": 1,
-        "try lower_c_runtime.appendHeaderAndSanitizerHooks(allocator, source_spelling": 1,
+        "fn appendCProfileWithVerifiedProgram(": 1,
+        "try lower_c_runtime.appendHeaderAndSanitizerHooks(allocator, program.source_spelling": 1,
     },
     "src/lower_c_map.zig": {
         "try mapper.emitModule(module);": 0,
@@ -2668,9 +2674,8 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "early_metadata.declsForEarlyDeclarationScan()": 0,
         "early_metadata.declsForLegacyArtifactEnumeration()": 0,
         "declarations.declsForEarlyDeclarationScan()": 0,
-        "program.source_spelling": 1,
-        "source_spelling: backend_mod.SourceSpellingView": 1,
-        "source_spelling.validateAgainstMir(module_mir.*)": 1,
+        "program.source_spelling": 2,
+        "fn appendLlvmCheckedMirProfileWithVerifiedProgram(": 1,
         "auto_drop_fns_by_type": 0,
         "collectDropGlueFactsFromMir": 0,
         ".ownership_events": 0,
@@ -2909,7 +2914,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "for (artifacts.const_fns) |fn_decl|": 0,
         "for (artifacts.decl_artifacts) |artifact| switch (artifact)": 1,
         'ast_query.isIdentNamed(call.callee.*, "trap")': 0,
-        "mir.validateLoweringAdmission(module_mir.*) catch |err| switch (err)": 1,
+        "VerifiedProgram.init(module_mir": 1,
         "fn mirTargetTypeFactAt(": 1,
         "fn mirTargetTypeFactAtOwned(": 1,
         "fn mirCallTargetSourceMatches(span: ast.Span, source: mir.SourcePoint) bool": 0,

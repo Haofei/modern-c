@@ -61,9 +61,9 @@ pub const VerifiedProgram = struct {
         typed_mir: *const mir.Module,
         reporter: *diagnostics.Reporter,
     ) !VerifiedProgram {
+        try mir.validateLoweringAdmission(typed_mir.*);
         try mir.verifyBuiltMir(typed_mir.*, reporter);
         if (reporter.has_errors) return error.InvalidMir;
-        try mir.validateLoweringAdmission(typed_mir.*);
         const source_spelling = SourceSpellingView{ .symbols = typed_mir.symbol_identities };
         if (!source_spelling.validateAgainstMir(typed_mir.*)) return error.InvalidMir;
         return .{
