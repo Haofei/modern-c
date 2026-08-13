@@ -5582,9 +5582,7 @@ llvm-mmap-test`, `zig build llvm-contain-test`, `zig build llvm-cow-test`, and
 `zig build llvm-isolation-test`, `zig build
 llvm-driver-test`, and `zig build
 llvm-preempt-test`, `zig build llvm-smp-test`, `zig build
-llvm-smp-lock-test`, `zig build llvm-ipi-test`, `zig build llvm-virtio-test`, and `zig build
-llvm-blk-test`, `zig build llvm-net-test`,
-`zig build llvm-nic-test`,
+llvm-smp-lock-test`, `zig build llvm-ipi-test`, `zig build llvm-net-test`,
 `zig build llvm-sbi-boot-test`
 gates boot LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer
 traps, cooperative context switching, round-robin scheduling, syscall dispatch,

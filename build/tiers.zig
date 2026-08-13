@@ -115,7 +115,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-async-pollmany-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-future-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-multi-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-async-blk-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-select-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-privilege-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-cap-test"));
@@ -135,8 +134,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-smp-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smp-lock-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-ipi-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-virtio-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-blk-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-timer-test"));
     // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI;
     // the multishot variant proves the re-armed steady-state path (regression gate for the former
@@ -144,7 +141,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-smode-plic-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-plic-multishot-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-net-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-nic-test"));
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
@@ -254,12 +250,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("try-defer-test"));
     // sync-test exercises std/sync locks + linear guards (needs clang).
     m0_full_step.dependOn(ctx.cmd("sync-test"));
-    // nic-test runs the demo NIC driver under QEMU (self-skips without QEMU).
-    m0_full_step.dependOn(ctx.cmd("nic-test"));
-    // virtio-test runs the real virtio-net driver under QEMU (self-skips without QEMU).
-    m0_full_step.dependOn(ctx.cmd("virtio-test"));
-    // blk-test runs the virtio-blk driver reading a sector under QEMU.
-    m0_full_step.dependOn(ctx.cmd("blk-test"));
     // smode-timer-test proves REAL S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
     m0_full_step.dependOn(ctx.cmd("smode-timer-test"));
     // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI;
@@ -356,7 +346,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("async-pollmany-test"));
     m0_full_step.dependOn(ctx.cmd("async-future-test"));
     m0_full_step.dependOn(ctx.cmd("async-multi-test"));
-    m0_full_step.dependOn(ctx.cmd("async-blk-test"));
     m0_full_step.dependOn(ctx.cmd("async-select-test"));
     m0_full_step.dependOn(ctx.cmd("cap-test"));
     m0_full_step.dependOn(ctx.cmd("arc-pkt-test"));

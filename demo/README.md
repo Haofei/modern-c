@@ -14,15 +14,8 @@ guards against by convention become **compile errors**.
 | `spi/` | bus transaction | a linear `SpiTransaction` holds chip-select; forgetting to end it leaks, using it after end is a move error. | compile-gated contract |
 | `framebuffer/` | device-visible memory | a linear `Framebuffer` mapping; pixels carry their typed format (`Rgb888`, not a bare `u32`); a flush names the dirty rectangle; unmap exactly once. | compile-gated contract |
 | `virtio-blk/` | DMA queue, request/response | block buffers cross the queue as linear DMA handles with device directions; the CPU can't read the result until it is reclaimed. | **typed request sketch** — the chained submit is a primitive; see note |
-| `virtio-net/` | DMA queue, streaming packet | the virtio 1.x transport, handshake, and a typed DMA TX path on a real device. | **TX smoke path under QEMU** — not a full RX/TX driver yet; see note |
-
-Honest scope: `virtio-net` is a **single-buffer TX smoke path** that completes the
-virtio handshake and round-trips one frame through the DMA ownership cycle against
-a real `virtio-net-device` under QEMU — there is no RX queue, no multi-descriptor
-/ multi-in-flight management, and `std/virtqueue` currently uses descriptor slot 0
-only. A full RX/TX driver needs the **descriptor free-list / in-flight tracking**
-(the next milestone). `virtio-blk` is a typed request *sketch* whose chained
-submit is a platform primitive. The register/capability/typestate demos
+Honest scope: `virtio-blk` is a typed request *sketch* whose chained submit is a
+platform primitive. The register/capability/typestate demos
 (`uart`…`framebuffer`) are compile-gated: their value is the static contract.
 
 ## Running
@@ -30,7 +23,6 @@ submit is a platform primitive. The register/capability/typestate demos
 ```sh
 zig build demo-test     # lower every demo to C, compile-check it, and verify the
                         # demo/bad/ misuses are rejected (both in `zig build m0`)
-zig build virtio-test   # run the virtio-net TX smoke path against virtio-net-device under QEMU
 ```
 
 ## Compile-fail demos (`demo/bad/`)

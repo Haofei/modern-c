@@ -2,8 +2,7 @@
 # Demo-suite gate: lower every demo driver in demo/ to C and compile-check it.
 # The demos showcase typed-hardware patterns (typed MMIO + access permissions,
 # pin/IRQ capabilities, device state machines, bus-transaction and DMA ownership,
-# descriptor lifecycle, device-visible memory). virtio-net additionally runs on
-# real emulated hardware via `zig build virtio-test`.
+# descriptor lifecycle, device-visible memory).
 set -euo pipefail
 
 MCC="${1:-${MCC_UNDER_TEST:-zig-out/bin/mcc}}"
@@ -28,10 +27,10 @@ command -v "$CLANG" >/dev/null 2>&1 || unavailable "clang not found"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# The demos are freestanding RISC-V kernel drivers (virtio-net boots under QEMU-riscv
-# via virtio-test) and one carries RISC-V inline asm (_start's `la sp,_stack_top`), so
-# they must be compile-checked for riscv64 — NOT the host default, which cannot assemble
-# that asm. Portable demos compile for riscv64 just as well.
+# The demos are freestanding RISC-V kernel drivers; one carries RISC-V inline asm
+# (_start's `la sp,_stack_top`), so they must be compile-checked for riscv64 —
+# NOT the host default, which cannot assemble that asm. Portable demos compile
+# for riscv64 just as well.
 CFLAGS="--target=riscv64-unknown-elf -march=rv64imac -mabi=lp64 -std=c11 -nostdlib -ffreestanding -fno-pic -mcmodel=medany -Wall -Wextra -Wno-unused-parameter -Wno-unused-function"
 
 # 1. Positive demos must lower to compilable C.

@@ -534,8 +534,9 @@ Gates: device-level virtio-net validation remains; protocol product fixtures are
 | `irq/plic` | RISC-V PLIC | **GATED** — typestate `IrqLine<State>`, `#[irq_context]`-checked. |
 | `timer/clint` | RISC-V CLINT | **GATED** — `mtime`/`mtimecmp`. |
 
-DMA buffers use `move` semantics so CPU↔device ownership transitions are compile-checked;
-VirtIO I/O carries real-time deadlines that fail closed. Gates: `nic-test`, `blk-test`,
+DMA buffers use `move` semantics so CPU↔device ownership transitions are compile-checked.
+Standalone virtio net/block device data-path gates were removed from the core
+workload; retained driver validation is language/backend scoped. Gate:
 `driver-test`.
 
 ---

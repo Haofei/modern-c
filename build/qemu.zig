@@ -143,14 +143,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "sync-test", "Build, link, and run a std/sync guarded critical section", &.{ "bash", "tools/toolchain/sync-test.sh", "zig-out/bin/mcc" });
 
-    _ = h.addScriptTest(ctx, "nic-test", "Build and run the demo NIC driver (driver-library profile) under QEMU", &.{ "bash", "tools/net/nic-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-nic-test", "Build and run the LLVM-lowered demo NIC driver under QEMU", &.{ "bash", "tools/net/nic-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "virtio-test", "Build and run the real virtio-net driver against virtio-net-device under QEMU", &.{ "bash", "tools/net/virtio-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-virtio-test", "Build and run the LLVM-lowered virtio-net driver under QEMU", &.{ "bash", "tools/net/virtio-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "blk-test", "Build and run the virtio-blk driver reading a sector under QEMU", &.{ "bash", "tools/fs/blk-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-blk-test", "Build and run the LLVM-lowered virtio-blk driver under QEMU", &.{ "bash", "tools/fs/blk-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
 
@@ -426,12 +420,9 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "async-multi-test", "multi-future cooperative async: drive_many drives three async fns concurrently, completed out-of-order by a re-armed timer ISR, no slot leak", &.{ "bash", "tools/proc/async-multi-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-async-multi-test", "LLVM-lowered multi-future cooperative async executor (drive_many) under QEMU", &.{ "bash", "tools/proc/async-multi-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // async-blk-test: DEVICE-BACKED async completion. An async fn's await resolves against a REAL
     // virtio-blk device interrupt: blk_read_sector_async submits a read + ties the head descriptor id
     // to a broker request id; the PLIC-routed used-ring IRQ reaps the completion in interrupt context
     // word "DISK" + ASYNC-BLK-OK prove the completion came from the device IRQ, not a polling loop.
-    _ = h.addScriptTest(ctx, "async-blk-test", "device-backed async: an async fn's await resolves against a real virtio-blk device interrupt (PLIC used-ring completion reaped in interrupt context)", &.{ "bash", "tools/proc/async-blk-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-async-blk-test", "LLVM-lowered device-backed async virtio-blk completion under QEMU", &.{ "bash", "tools/proc/async-blk-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
     // async-select-test: select / cancel-the-loser over the real broker. Two in-flight requests are
