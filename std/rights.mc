@@ -1,5 +1,5 @@
 // std/rights — an UNFORGEABLE, MONOTONIC (narrow-only) rights set: the type-level
-// capability-attenuation law (hardening item K1).
+// capability-attenuation law.
 //
 // A `Rights` value names a set of permission bits (right id = bit index, 0..31). Unlike a
 // plain `Mask32`, it cannot be:

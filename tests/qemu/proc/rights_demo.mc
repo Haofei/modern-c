@@ -1,11 +1,11 @@
-// K1 runtime demo: the unforgeable + monotonic (narrow-only) `Rights` discipline and the
+// Runtime demo: the unforgeable + monotonic (narrow-only) `Rights` discipline and the
 // rights-bearing capability `RCap`. This exercises the RUNTIME behaviour of the type-law
 // machinery; the static forge/widen rejection is pinned by tests/spec/rights_monotonic.mc
 // (an opaque-struct field-privacy fixture). Together: forging/widening is a compile error,
 // and the operations that ARE allowed (attenuation) only ever narrow authority.
 
 import "std/rights.mc";
-import "kernel/core/capability.mc";
+import "tests/support/capability.mc";
 
 export fn rights_run() -> u32 {
     var pass: u32 = 1;

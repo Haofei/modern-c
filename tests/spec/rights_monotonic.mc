@@ -4,7 +4,7 @@
 // SPEC: expect=pass,compile_error
 // SPEC: check=E_PRIVATE_FIELD
 
-// K1 — unforgeable + monotonic (narrow-only) capability rights as a TYPE LAW.
+// Unforgeable + monotonic (narrow-only) capability rights as a TYPE LAW.
 //
 // This mirrors std/rights' `opaque struct Rights` inline (spec fixtures are parsed
 // standalone, without imports). The point: an `opaque struct`'s bit set is private to its

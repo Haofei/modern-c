@@ -3,7 +3,7 @@
 #
 # One parameterized lint for retained source-level security checks:
 #   --mode unsafe        (S0.2) enforce + inventory the MC `unsafe` boundary
-#   --mode capability-mint (K1) flag direct capability/right mint or root authority
+#   --mode capability-mint flag direct capability/right mint or root authority
 #        creation outside the approved authority roots
 #
 # These modes share the same awk machinery (comment/string `strip()`, brace-depth /
@@ -29,7 +29,7 @@
 #
 # Usage:
 #   mc-audit.sh --mode unsafe        [DIR ...]   (default dirs: kernel std)
-#   mc-audit.sh --mode capability-mint [DIR ...] (default dirs: kernel std)
+#   mc-audit.sh --mode capability-mint [DIR ...] (default dirs: kernel std tests/support)
 #   mc-audit.sh --mode MODE --self-test          (run the built-in negative fixture)
 
 set -uo pipefail
@@ -57,6 +57,7 @@ esac
 # Default scan roots per mode.
 if [ ${#DIRS[@]} -eq 0 ]; then
   DIRS=(kernel std)
+  [ "$MODE" = capability-mint ] && DIRS=(kernel std tests/support)
 fi
 
 SELF_TMP=""
@@ -81,7 +82,8 @@ export fn bad_unsafe_outside(p: PAddr) -> u8 {
 MC
       ;;
     capability-mint)
-      cat > "$SELF_TMP/kernel/core/capability.mc" <<'MC'
+      mkdir -p "$SELF_TMP/tests/support"
+      cat > "$SELF_TMP/tests/support/capability.mc" <<'MC'
 pub linear opaque struct BootAuthority { marker: u32 }
 pub fn boot_authority_unchecked() -> BootAuthority { return .{ .marker = 1 }; }
 pub fn cap_mint(comptime R: type, auth: *BootAuthority, resource: R) -> R { return resource; }
@@ -96,7 +98,7 @@ pub fn rights_single(auth: *RightsAuthority, bit: u32) -> u32 { return bit; }
 MC
       mkdir -p "$SELF_TMP/kernel/driver"
       cat > "$SELF_TMP/kernel/driver/bad_mint.mc" <<'MC'
-import "kernel/core/capability.mc";
+import "tests/support/capability.mc";
 import "std/rights.mc";
 
 // NEGATIVE TEST (must be flagged): ordinary kernel code must not directly call the
@@ -113,7 +115,7 @@ MC
   esac
   DIRS=("$SELF_TMP/kernel")
   [ "$MODE" = unsafe ] && DIRS=("$SELF_TMP/kernel" "$SELF_TMP/std")
-  [ "$MODE" = capability-mint ] && DIRS=("$SELF_TMP/kernel" "$SELF_TMP/std")
+  [ "$MODE" = capability-mint ] && DIRS=("$SELF_TMP/kernel" "$SELF_TMP/std" "$SELF_TMP/tests/support")
 fi
 
 FILES=$(find "${DIRS[@]}" -name '*.mc' 2>/dev/null | sort)
@@ -335,10 +337,10 @@ function end_unsafe(   tot) {
   print "__COUNT__=" violations > "/dev/stderr"
 }
 
-# ===================== MODE: capability-mint (K1) =====================
+# ===================== MODE: capability-mint =====================
 
 function approved_capability_mint_file(file) {
-  return (file ~ /(^|\/)kernel\/core\/capability\.mc$/ || file ~ /(^|\/)std\/rights\.mc$/)
+  return (file ~ /(^|\/)tests\/support\/capability\.mc$/ || file ~ /(^|\/)std\/rights\.mc$/)
 }
 
 function do_capability_mint(l, startfnr,   cur, call) {
@@ -358,7 +360,7 @@ function do_capability_mint(l, startfnr,   cur, call) {
 }
 
 function end_capability_mint() {
-  print  "============== MC capability mint audit (K1) ===================="
+  print  "============== MC capability mint audit ===================="
   printf("scanned %d .mc file(s)\n\n", nfiles)
   printf("Unapproved direct mint call sites:\n")
   printf("  cap_mint                  %5d\n", ncapmint)

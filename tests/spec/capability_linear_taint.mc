@@ -6,7 +6,7 @@
 
 // Capability LINEARITY + opaque-carrier OPACITY as type laws.
 //
-// This mirrors kernel/core/capability's `Cap`/`RCap` plus a representative
+// This mirrors tests/support/capability's `Cap`/`RCap` plus a representative
 // opaque scalar carrier inline (spec fixtures are parsed standalone, without
 // imports), using concrete `usize`/`u8` instantiations so no generic `extern fn`
 // is needed. Two guarantees that were previously NOT enforced by the type

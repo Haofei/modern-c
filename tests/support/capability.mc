@@ -1,5 +1,5 @@
-// kernel/core/capability — capability-style least privilege made explicit with
-// MC's linear types. A `Cap<R>` is an *unforgeable, linear* grant of
+// tests/support/capability — capability-style least privilege fixture made
+// explicit with MC's linear types. A `Cap<R>` is an *unforgeable, linear* grant of
 // access to a resource R (e.g. a device's MMIO base, an IRQ line, a memory region):
 //
 //   - unforgeable: `Cap` is a `linear opaque struct` (section 31), so its `resource` field is
@@ -14,7 +14,7 @@
 //
 // `RCap<R>` (below) extends a cap with an UNFORGEABLE, MONOTONIC rights set (std/rights):
 // the same resource handle, plus an attenuable `Rights`. Sub-grants can only NARROW the
-// rights (never widen) — the attenuated-subgrant property as a type law (hardening K1).
+// rights (never widen) — the attenuated-subgrant property as a type law.
 
 import "std/rights.mc";
 
@@ -61,7 +61,7 @@ impl Cap {
     }
 }
 
-// Grant a capability over `resource` (the kernel setup-time primitive). The explicit
+// Grant a capability over `resource` (the privileged setup-time primitive). The explicit
 // authority parameter prevents ordinary imports of this module from being ambient mint roots.
 pub fn cap_mint(comptime R: type, auth: *BootAuthority, resource: R) -> Cap<R> {
     BootAuthority.require(auth);
@@ -114,7 +114,7 @@ impl RCap {
     }
 }
 
-// Mint a rights-bearing capability (kernel setup-time primitive).
+// Mint a rights-bearing capability (privileged setup-time primitive).
 pub fn rcap_mint(comptime R: type, auth: *BootAuthority, resource: R, rights: Rights) -> RCap<R> {
     BootAuthority.require(auth);
     return RCap.mint(R, resource, rights);

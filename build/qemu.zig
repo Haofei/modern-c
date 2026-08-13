@@ -184,7 +184,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "byteview-test", "ByteBuf<N> inline buffer view", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "byteview-test" });
     _ = h.addScriptTest(ctx, "scan-test", "find_index/any closure scan", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "scan-test" });
 
-    _ = h.addScriptTest(ctx, "rights-test", "K1 unforgeable+monotonic Rights/RCap (narrow-only attenuation, parent⊇child law)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "rights-test" });
+    _ = h.addScriptTest(ctx, "rights-test", "Unforgeable+monotonic Rights/RCap fixture (narrow-only attenuation, parent⊇child law)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "rights-test" });
 
     _ = h.addScriptTest(ctx, "mmio-test", "std/mmio register-field helpers + ordered IO-memory copy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mmio-test" });
 
