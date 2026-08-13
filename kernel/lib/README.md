@@ -8,6 +8,6 @@ typed ownership across kernel-flavored APIs.
 It is not a reusable OS framework layer. Code belongs here only when it needs a
 kernel-shaped validation context and would make `std/` less generic.
 
-Generic freestanding primitives should stay in `std/`. Kernel/product features,
+Generic freestanding primitives should stay in `std/`. Kernel deliverable features,
 subsystems, and driver stacks should not be added here unless they are required
 to validate a specific language, MIR, ABI, ownership, or unsafe-boundary rule.

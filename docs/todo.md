@@ -11,7 +11,7 @@ history; this file should describe only current compiler-core direction.
   fixtures.
 - Kernel code is a validation workload for language, MIR, ownership, ABI,
   unsafe-boundary, freestanding, and backend-lowering behavior. It is not a
-  product track.
+  deliverable track.
 
 ## Active priorities
 
@@ -27,9 +27,9 @@ history; this file should describe only current compiler-core direction.
 
 ## Non-goals in the core backlog
 
-- Kernel product features.
+- Kernel deliverable features.
 - Filesystems, networking stacks, storage stacks, package ecosystems, service
-  supervisors, and update/recovery products.
-- Board certification, fleet operations, shipped-image policy, or product
-  support process.
+  supervisors, and update/recovery systems.
+- Board certification, fleet operations, shipped-image policy, or support
+  process.
 - New language surface before the current semantic authority boundary is stable.

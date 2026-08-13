@@ -10,8 +10,8 @@
 // Freestanding: no libc, no globals beyond the linker-defined stack symbol.
 //
 // SYS_EXIT = 3 (see user/abi.mc; matches the shared M-mode trap handler). Hardcoded in the naked
-// _start template below — keep it in sync with abi.mc (this file is MC, like the x86/aarch64 user
-// user runtimes, so it is excluded from the C-side abi-consistency grep).
+// _start template below — keep it in sync with abi.mc. This file is MC, so it is excluded from the
+// C-side abi-consistency grep.
 
 // One syscall: a7=number, a0..a2=args, `ecall`, result in a0.
 export fn mc_ecall(number: u64, a0: u64, a1: u64, a2: u64) -> u64 {

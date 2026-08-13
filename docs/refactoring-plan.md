@@ -30,8 +30,8 @@ CLI composition root.
 
 - new language surface area;
 - new backends;
-- editor product or persistent service work;
-- deployable kernel, Agent product, runtime, package, or hardware claims;
+- editor integration or persistent service work;
+- deployable kernel, Agent, runtime, package, or hardware claims;
 - validation workloads defining compiler semantics.
 
 ## Active phases
@@ -63,7 +63,7 @@ Each patch should change one invariant family and include one focused proof:
 - inventory test for authority-boundary changes;
 - direct backend/MIR regression for semantic changes;
 - CLI/tool test for surface removals;
-- no unrelated kernel/product edits.
+- no unrelated kernel or validation-workload edits.
 
 Focused compiler-authority checks:
 
