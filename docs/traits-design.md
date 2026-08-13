@@ -443,9 +443,9 @@ two are only implementation cost rather than design risk:
   through the checked coercion. This is real machinery, not a coercion rule.
 - **Orphan / coherence rules across modules.** §7 guarantees one `impl Trait for
   Type` per pair, which is trivial within a kernel monolith but underspecified once
-  code spans modules/packages. A Rust-style orphan rule (the `impl` must live in the
-  trait's or the type's module) is the likely answer; deferred until MC has a
-  multi-package story (which it does not yet — there is no package manager).
+  code spans multiple modules. A Rust-style orphan rule (the `impl` must live in the
+  trait's or the type's module) is the likely answer, but it is deferred until MC has
+  a real module identity model.
 - **Monomorphization code size.** Tier 1's zero dispatch cost is paid in binary
   size / icache (one code copy per instantiation). This is inherent to MC's
   existing generics, not new — but it is the systems-level reason `dyn` (Tier 2)

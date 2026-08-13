@@ -24,7 +24,7 @@ These are still useful as day-to-day references or rationale companions:
 | Gate inventory | [`gate-manifest.json`](gate-manifest.json) | Test selection input; not a product-readiness source of truth. |
 | Testing | [`test-architecture.md`](test-architecture.md), [`qemu-validation-checklist.md`](qemu-validation-checklist.md), [`spec/MC_Kernel_Design.md`](spec/MC_Kernel_Design.md) | Fixture contracts, gate layers, manifest discipline, the local/CI QEMU surrogate checklist, and the narrow kernel validation scope. |
 | Unsafe/UB audit | [`unsafe-boundary.md`](unsafe-boundary.md), [`c-ub-matrix.md`](c-ub-matrix.md), [`lowering-coverage.md`](lowering-coverage.md) | Unsafe syntax, C-UB handling, and lowering coverage reports. |
-| Traits/async rationale | [`traits-design.md`](traits-design.md), [`async-plan.md`](async-plan.md) | Design reasoning behind implemented or mostly implemented features. |
+| Traits rationale | [`traits-design.md`](traits-design.md) | Design reasoning behind implemented trait and dynamic-dispatch behavior. |
 
 ## Historical records
 

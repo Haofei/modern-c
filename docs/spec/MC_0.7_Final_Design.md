@@ -39,7 +39,7 @@
   - [25. Minimal Syntax Principles](#25-minimal-syntax-principles)
   - [26. Rationale Appendix](#26-rationale-appendix)
   - [27. Final Semantic Contract](#27-final-semantic-contract)
-  - [28. Driver Library Profile (Network-Card Target)](#28-driver-library-profile-network-card-target)
+  - [28. Driver Validation Profile](#28-driver-validation-profile)
   - [29. Tuples](#29-tuples)
   - [30. Modules and Associated Functions](#30-modules-and-associated-functions)
   - [31. Opaque Structs](#31-opaque-structs)
@@ -2998,40 +2998,22 @@ It makes the contract explicit enough that a kernel author can reason about wher
 
 ---
 
-# 28. Driver Library Profile (Network-Card Target)
+# 28. Driver Validation Profile
 
-The first conformance target for MC's library layer is a **DMA-capable network
-card driver**. A NIC exercises every kernel primitive at once: BAR-mapped MMIO
-registers, DMA descriptor rings plus packet buffers, completion interrupts,
-locking against concurrent producers, memory ordering between descriptor writes
-and the doorbell register, and network byte-order conversion. This section
-specifies the library modules a NIC driver composes. Each is a thin, typed layer
+The driver validation profile exercises the language primitives that matter for
+freestanding driver code: MMIO, DMA ownership, linear guards, atomics, IRQ
+effects, endian conversion, and optimizer boundaries. It is not a device-stack
+or driver-framework roadmap. Each retained library surface is a thin, typed layer
 over a core primitive (sections 16–19) plus Scoped Affine Ownership
 (section 18.1); none introduces new language semantics.
 
 ```txt
-NIC driver  ──uses──▶  std/sync     locking + linear guards          (on §19 atomics + §18.1 move)
-            ──uses──▶  std/ring     TX/RX descriptor rings           (on §22 generics)
-            ──uses──▶  std/dma      packet buffers, ownership         (§18.2)
-            ──uses──▶  std/endian   network/device byte order         (pure const fn)
-            ──uses──▶  std/time     reset/link-up waits, timeouts      (on counter/serial domains)
-            ──uses──▶  std/barrier  descriptor-vs-doorbell ordering    (on §17/§19 ordering)
-            ──uses──▶  std/mmio     register-field helpers + ordered IO-memory copy  (on §17 MMIO)
-            ──uses──▶  (core)       typed MMIO §17, IrqOff §19.1, irq_context
-```
-
-For a concrete device class, a second tier of libraries owns the **bus/device
-protocol** so the device-specific driver stays tiny. Earlier QEMU virtio-net
-product fixtures have been removed from the core workload; the remaining driver
-profile text is a library design sketch over:
-
-```txt
-virtio-*    ──uses──▶  std/virtio     virtio-mmio transport: the @offset register
-                                       map, the init status handshake, feature
-                                       negotiation (generic across net/block/…)
-            ──uses──▶  std/virtqueue   the split virtqueue: vring layout, queue
-                                       setup, add_buf/kick/wait_used — the raw
-                                       shared-ring access concentrated here
+driver fixture ──uses──▶  std/sync     locking + linear guards
+               ──uses──▶  std/dma      buffer ownership transitions
+               ──uses──▶  std/endian   device byte order
+               ──uses──▶  std/barrier  descriptor-vs-doorbell ordering
+               ──uses──▶  std/mmio     ordered IO-memory access
+               ──uses──▶  (core)       typed MMIO, IrqOff, irq_context
 ```
 
 ## 28.1 `std/sync` — Locks with Linear Guards
@@ -3773,7 +3755,7 @@ hand-lowered acceptance targets (`fuzz-async-lowering`, `-branch-lowering`, `-lo
 `fuzz-async-return-inregion`, `fuzz-async-loop-breakcont`, `fuzz-async-nested-await`,
 `fuzz-async-multi-construct`, `fuzz-async-nested-locals`, `fuzz-async-switch-pattern-sema`, and
 `fuzz-async-safe-borrow` gates verify the transform's output against it — all in the
-diff-backend corpus (annex). Runtime/product broker validation is intentionally outside the compiler-core gate.
+diff-backend corpus (annex). Runtime broker validation is outside the language definition.
 
 ---
 
@@ -5341,7 +5323,6 @@ linear move checking for resource handles
 field_type reflection in type-argument position
 contract-scoped noalias assumptions
 hosted profile for explicit fallible host I/O and libm float intrinsics
-package manifests with recursive dependency/version checks
 ```
 
 ---
@@ -5573,9 +5554,8 @@ gates boot LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer
 traps, cooperative context switching, round-robin scheduling, syscall dispatch,
 U-mode entry, process lifecycle, ELF load/run, Sv39 activation, user-copy
 boundaries, timer preemption, OpenSBI/FDT boot discovery, and selected U-mode
-exit traps. Product OS surfaces such as demand paging, mmap/COW, block devices,
-networking, service registries, SMP product demos, and driver-framework demos are
-outside the compiler-core gate.
+exit traps. These remain validation fixtures for language and backend behavior,
+not operating-system product scope.
 The `zig build llvm-page-test`, `zig build llvm-heap-test`, and `zig build
 llvm-paging-test` gates link and run LLVM-lowered host checks for the frame
 allocator, kernel heap allocator, and Sv39 page-table map/translate helpers.
