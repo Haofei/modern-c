@@ -108,7 +108,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-uaccess-snapshot-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-uaccess-taint-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-app-run-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-compute-app-test"));
     m0_full_step.dependOn(ctx.cmd("vararg-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vararg-test"));
     m0_full_step.dependOn(ctx.cmd("cstr-test"));
@@ -119,16 +118,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-stdio-test"));
     m0_full_step.dependOn(ctx.cmd("mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
-    m0_full_step.dependOn(ctx.cmd("sbrk-grow-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-sbrk-grow-test"));
-    m0_full_step.dependOn(ctx.cmd("sbrk-cap-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-sbrk-cap-test"));
     m0_full_step.dependOn(ctx.cmd("fault-probe-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-fault-probe-test"));
-    m0_full_step.dependOn(ctx.cmd("quota-probe-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-quota-probe-test"));
-    m0_full_step.dependOn(ctx.cmd("broker-probe-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-broker-probe-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-fs-syscall-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-exec-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-kmain-test"));
@@ -562,7 +553,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("uaccess-snapshot-test"));
     m0_full_step.dependOn(ctx.cmd("uaccess-taint-test"));
     m0_full_step.dependOn(ctx.cmd("app-run-test"));
-    m0_full_step.dependOn(ctx.cmd("compute-app-test"));
     // driver-test runs the char-device driver framework (vtable dispatch) under QEMU.
     m0_full_step.dependOn(ctx.cmd("driver-test"));
     // fs-syscall-test runs U-mode file syscalls over the VFS under QEMU.

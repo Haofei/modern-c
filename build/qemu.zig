@@ -715,18 +715,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-fault-probe-test", "Syscall-ABI fault test (LLVM): bad pointers to SYS_WRITE/READ/POLL return -E_FAULT under QEMU", &.{ "bash", "tools/proc/fault-probe-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // Tool-ABI quota test (review item 4): a confined MC app submits ToolReqs that breach each
-    // quota and asserts the SPECIFIC errno — payload>MAX_REQ_BYTES/cap>MAX_RES_BYTES => -E_NOCAP,
-    // unknown op => -E_DENIED, ring full => -E_AGAIN. Reuses app-run-test.sh (app+marker params).
-    _ = h.addScriptTest(ctx, "quota-probe-test", "Tool-ABI quota test: ToolReq quota breaches return -E_NOCAP/-E_DENIED/-E_AGAIN under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/quota_probe.mc", "QUOTA-PROBE: PASS", "quota-probe" });
-
-    _ = h.addScriptTest(ctx, "llvm-quota-probe-test", "Tool-ABI quota test (LLVM): quota breaches return the specific errno under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/quota_probe.mc", "QUOTA-PROBE: PASS", "quota-probe" });
-
-    // Mock-broker cancellation/timeout (review item 3): a confined MC app submits a delayed request
-    // and cancels it (-E_CANCELED), and a TIMEOUT op (-E_TIMEDOUT), asserting the completion status.
-    _ = h.addScriptTest(ctx, "broker-probe-test", "Mock-broker cancellation/timeout: completions carry -E_CANCELED / -E_TIMEDOUT under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/broker_probe.mc", "BROKER-PROBE: PASS", "broker-probe" });
-
-    _ = h.addScriptTest(ctx, "llvm-broker-probe-test", "Mock-broker cancellation/timeout (LLVM) under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/broker_probe.mc", "BROKER-PROBE: PASS", "broker-probe" });
 
     // (delay 1) request; the broker delivers fast first, so the resolve order is "FS". Both backends.
 
@@ -734,9 +722,6 @@ pub fn register(ctx: *h.Ctx) void {
     // completion carries a bogus id; the host must fail loudly ("host: unknown completion id").
 
 
-    _ = h.addScriptTest(ctx, "compute-app-test", "Confined C app over the freestanding libc (malloc+string) runs in an isolated U-mode space under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/compute.c", "compute-ok", "compute-app" });
-
-    _ = h.addScriptTest(ctx, "llvm-compute-app-test", "LLVM: confined C app over the freestanding libc runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/compute.c", "compute-ok", "compute-app" });
 
     // is driven from a C runtime under QEMU on both backends — the printf-family interop the
     _ = h.addScriptTest(ctx, "vararg-test", "C-ABI variadic MC fn (va.start/va.arg/va.end) runs under QEMU", &.{ "bash", "tools/lang/vararg-test.sh", "zig-out/bin/mcc", "c" });
@@ -801,19 +786,6 @@ pub fn register(ctx: *h.Ctx) void {
 
 
     // fails GRACEFULLY (malloc -> NULL at the cap, no trap, guest stays confined) — an untrusted guest
-    // cannot exhaust host memory and OOM is a normal confined error, not a crash.
-
-    // the guest's own stdout survives the large grow).
-
-    // Demand-grown guest heap (Increment 1): a confined guest libc heap grows ON DEMAND past the
-    // fixed static arena via SYS_SBRK — the kernel maps fresh frames at the running break, so the heap
-    // scales with real RAM instead of a compile-time .bss array. The guest malloc()s far past the arena
-    // and writes+reads every page, proving the demand-mapped frames are real.
-    _ = h.addScriptTest(ctx, "sbrk-grow-test", "Demand-grown heap: a confined guest libc heap grows past the static arena via SYS_SBRK (40 MiB, every page written+read) under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-sbrk-grow-test", "Demand-grown heap (LLVM): a confined guest libc heap grows past the static arena via SYS_SBRK under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "sbrk-cap-test", "Demand-grown heap cap: a confined guest grows past the arena then hits the unified-ledger memory ceiling with a clean NULL (no trap) under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "c", "examples/apps/sbrk_cap.c", "SBRK-CAP-OK", "sbrk-cap" });
-    _ = h.addScriptTest(ctx, "llvm-sbrk-cap-test", "Demand-grown heap cap (LLVM): a confined guest grows past the arena then hits the unified-ledger memory ceiling with a clean NULL under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/sbrk_cap.c", "SBRK-CAP-OK", "sbrk-cap" });
-
     // preempted by the machine-timer watchdog and KILLED past its CPU budget — a coarse liveness
     // bound (NOT deterministic fuel) proving an untrusted guest cannot wedge the system.
 

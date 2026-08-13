@@ -125,7 +125,7 @@ export fn mc_lm_fault(stval: u64) -> u64 {
 // Opt-in cycle timing of the sys_sbrk map loop. The kernel boots -bios none (M-mode), so we read the
 // machine cycle CSR `mcycle` (0xb00) directly. When SBRK_BENCH is true each grow prints
 // "SBRK-CYCLES <cycles> PAGES <pages>", making the per-page-vs-batched TLB-flush delta reproducible
-// via sbrk-grow-test (which grows 40 MiB). It is confinement-neutral kernel-side reporting.
+// when a local demand-growth probe is run. It is confinement-neutral kernel-side reporting.
 const SBRK_BENCH: bool = true;
 
 fn sbrk_read_cycle() -> u64 {
