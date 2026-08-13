@@ -619,11 +619,9 @@ export fn proc_wait(t: *mut ProcTable, parent_pid: u32) -> Result<ReapInfo, Reap
     return ok(result);
 }
 
-// Give process `idx` its own address space. A context switch into this process loads it
-// (see the vmspace demo); 0 keeps the kernel map. The stored handle is the opaque
-// AddressSpace, but the accessor keeps a raw `u64` because C runtimes (vmspace/vmctx) call
-// it: the raw satp word is wrapped on the way in and unwrapped on the way out, so the
-// arch-encoded value crosses the FFI unchanged while core stores it opaquely.
+// Give process `idx` its own address space. 0 keeps the kernel map. The stored handle is
+// the opaque AddressSpace, while the accessor accepts the raw arch root word at the FFI
+// boundary and wraps it immediately.
 export fn proc_set_satp(t: *mut ProcTable, idx: usize, satp: u64) -> void {
     t.procs[idx].aspace = AddressSpace.from_root(satp);
 }

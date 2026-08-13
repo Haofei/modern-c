@@ -146,7 +146,7 @@ pub enum MapError {
 // Walk PML4->PDPT->PD, allocating interior tables as needed, and install a 4 KiB leaf at
 // the PT level mapping `virt` -> `phys` with `flags | PTE_P`. Interior entries are linked
 // PTE_P|PTE_W|PTE_US (see interior-US policy at the top). Returns a typed error instead of
-// trapping — the validated form callers use on dynamic paths (mmap, fault handlers).
+// trapping — the validated form callers use on dynamic mapping paths.
 #[mc_abi]
 export fn page_table_try_map(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_target: PAddr, flags: u64) -> Result<bool, MapError> {
     if (va_value(virt) % PAGE_SIZE) != 0 {

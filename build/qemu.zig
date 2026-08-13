@@ -14,7 +14,7 @@ pub fn register(ctx: *h.Ctx) void {
     // Arch-selection seam (R0b): emit-c the portable core modules under every --arch. Pure host
     // (no ld.lld/QEMU), so it catches active-import regressions the x86/ARM QEMU gates would miss
     // when their cross toolchain is absent. Depends on the installed mcc.
-    _ = h.addScriptTest(ctx, "arch-emit-test", "emit-c the portable core modules (elf_loader/uaccess_pt/uaccess/mmap) under --arch=riscv64|x86_64|aarch64", &.{ "bash", "tools/check/arch-emit-test.sh" });
+    _ = h.addScriptTest(ctx, "arch-emit-test", "emit-c the portable core modules (elf_loader/uaccess_pt/uaccess) under --arch=riscv64|x86_64|aarch64", &.{ "bash", "tools/check/arch-emit-test.sh" });
 
     _ = h.addScriptTest(ctx, "qemu-test", "Run the typed-MMIO program on emulated hardware under QEMU", &.{ "bash", "tools/arch/qemu-mmio-test.sh", "zig-out/bin/mcc", "c" });
 

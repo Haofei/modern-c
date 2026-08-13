@@ -535,7 +535,6 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | x86_64 / aarch64 full kernel | **PARTIAL / DEMO-SCOPE** |
 | Page allocator, heap (+ coalescing, redzone/KASAN) | **GATED** |
 | Address classes (PAddr/VAddr/UserPtr) + uaccess defenses | **GATED (compile-time)** |
-| mmap / demand paging / COW | mmap **GATED**; demand paging & COW **DEMO-SCOPE** (single-region / one-page) |
 | Process lifecycle, attenuation, endpoints | **GATED** · demo-scale (`MAX_PROCS=8`) |
 | Scheduler (RR/priority/fair-share, preemption) | **GATED**; SMP product fixtures removed |
 | User isolation + runtime ABI | **DEMO-SCOPE**. Remaining fixtures exercise syscall/runtime mechanics only. |

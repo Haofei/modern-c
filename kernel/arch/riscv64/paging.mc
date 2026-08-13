@@ -124,7 +124,7 @@ export fn page_table_try_new(h: *mut Heap) -> Result<PageTable, HeapError> {
 
 // Encode this page table's root as a portable `AddressSpace` handle. This is the one place
 // the riscv64 satp bit layout lives: the satp word is MODE | PPN(root>>12), MODE=8 (Sv39) in
-// bits 63:60. Portable core (cow/demand) calls this instead of open-coding the layout, so the
+// bits 63:60. Portable core code calls this instead of open-coding the layout, so the
 // satp encoding never leaks into architecture-independent code. The MODE constant is a local
 // `let` (not a module-level const) so this arch file adds no `SATP_SV39` symbol that would
 // collide with the demo runtimes that still define their own while paging.mc is included.
@@ -143,8 +143,8 @@ pub enum MapError {
 
 // Map `virt` (page-aligned) to `phys` with permission `flags` (R/W/X/U; V is added),
 // returning a typed error instead of trapping. Interior tables are allocated from `h`
-// as needed. This is the validated form callers use on dynamic paths (mmap, fault
-// handlers) where a conflict or misalignment is a runtime condition to handle.
+// as needed. This is the validated form callers use on dynamic mapping paths where a
+// conflict or misalignment is a runtime condition to handle.
 #[mc_abi]
 export fn page_table_try_map(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_target: PAddr, flags: u64) -> Result<bool, MapError> {
     if (va_value(virt) % PAGE_SIZE) != 0 {
@@ -264,7 +264,7 @@ export fn page_table_unmap(pt: *mut PageTable, virt: VAddr) -> void {
 // (no translations use it yet). But on RISC-V a store to a page table that is *currently in
 // use* is not ordered with subsequent implicit translation-table reads — stale TLB entries can
 // persist — so any edit to the active address space must be followed by `sfence.vma` for the
-// affected page. The fault handlers (demand paging, COW) use the `_active` wrappers below.
+// affected page. Dynamic active-space edits use the `_active` wrappers below.
 
 // Synchronize a page-table edit for `virt` with address translation (flush its TLB entry for
 // all ASIDs). A full implementation would also shoot down other harts that share this address

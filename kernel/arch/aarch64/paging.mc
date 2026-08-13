@@ -195,7 +195,7 @@ pub enum MapError {
 // Walk L0->L1->L2, allocating interior tables as needed (linked as table descriptors), and
 // install a 4 KiB page leaf at L3 mapping `virt` -> `phys` with `flags`. AF + inner-shareable
 // + page type bits are added here. Returns a typed error instead of trapping — the validated
-// form callers use on dynamic paths (mmap, fault handlers).
+// form callers use on dynamic mapping paths.
 #[mc_abi]
 export fn page_table_try_map(pt: *mut PageTable, h: *mut Heap, virt: VAddr, phys_target: PAddr, flags: u64) -> Result<bool, MapError> {
     if (va_value(virt) % PAGE_SIZE) != 0 {
