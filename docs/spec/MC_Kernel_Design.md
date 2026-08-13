@@ -40,7 +40,7 @@ agree (§8.3 distinguishes this from CPU-architecture support).
 |------|-----------|
 | Core (process, ipc, sched, capability, memory) | `kernel/core/` |
 | Arch HAL (riscv64 primary, x86_64/aarch64 partial) | `kernel/arch/<arch>/` |
-| Library types (resacct, mailbox, fdspace) | `kernel/lib/` |
+| Library types (resacct, mailbox) | `kernel/lib/` |
 | Filesystems & storage | removed from current core scope |
 | Network stack | removed from current core scope |
 | Drivers | `kernel/drivers/` |
@@ -305,7 +305,6 @@ struct Process {
     allow_mask: Mask32,                    // bit p = may IPC-send to pid p
     kcall_mask: Mask32,                    // bit op = may invoke kernel call op
     priority, quantum, ticks,
-    fds: FdSpace,                          // inherited on spawn, preserved on exec
     macct: ResourceAccount,
 }
 ```
@@ -319,7 +318,7 @@ Runnability is **derived** (`Ready|Running` ∧ `block_reasons == 0`), never set
 |----------|--------|
 | `proc_spawn(t, stack_top, entry) -> pid` | Create `Ready`; **empty masks** (least privilege); inherit fd copies; reuse free slot with `gen++`. |
 | `proc_spawn_attenuated(…, allow_subset, kcall_subset)` | `child.mask = parent.mask ∩ subset`. Monotone — child ≤ parent. |
-| `proc_exec(t, slot, stack_top, entry)` | Reset context to new entry; preserve identity + fds; reset accounting. |
+| `proc_exec(t, slot, stack_top, entry)` | Reset context to new entry; preserve identity; reset accounting. |
 | `proc_exit(code)` | Mark `Zombie`, run `proc_death_cleanup`, wake waiting parent, switch away. |
 | `proc_wait` / `proc_reap` | Blocking / non-blocking reap → `Result<ReapInfo, ReapError>`. |
 

@@ -12,7 +12,6 @@ import "kernel/core/ipc.mc";
 import "std/math.mc";
 import "std/mask.mc";
 import "kernel/lib/mailbox.mc";
-import "kernel/lib/fdspace.mc";
 import "kernel/lib/resacct.mc";
 // Re-export the concerns split out of this file. MC imports are textual inclusion deduped
 // by path, so every existing `import "kernel/core/process.mc"` consumer transitively gets
@@ -93,7 +92,6 @@ struct Process {
     quantum: u32,                // remaining scheduling quantum in ticks (0 = expired)
     ticks: u64,                  // saturating long-running accounting; never traps on uptime
     throttle: u32,               // fair-share throttle penalty (added to effective ticks; see proc_throttle)
-    fds: FdSpace,                // open file descriptors; copied to a child on spawn (fork), kept across exec
     macct: ResourceAccount,      // per-process memory account; reset on spawn (fresh, from zero) and on exit
 }
 
@@ -221,7 +219,6 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
         t.procs[i].quantum = QUANTUM_DEFAULT;
         t.procs[i].ticks = 0;
         t.procs[i].throttle = 0;
-        fd_init(&t.procs[i].fds);
         resacct_init(&t.procs[i].macct, MEM_QUOTA_DEFAULT);
         i = i + 1;
     }
@@ -303,14 +300,6 @@ export fn proc_spawn(t: *mut ProcTable, stack_top: usize, entry: fn() -> void) -
     t.procs[slot].quantum = QUANTUM_DEFAULT;
     t.procs[slot].ticks = 0;
         t.procs[slot].throttle = 0;       // a reused slot must not inherit the old process's scheduler state
-    // fork fd semantics: the child inherits a COPY of the spawner's open descriptors at the
-    // same fd numbers, sharing the underlying resources. Clear any stale fds from a reaped
-    // slot first. (Empty child + equal capacity ⇒ inherit can never overflow.)
-    fd_init(&t.procs[slot].fds);
-    switch fd_inherit(&t.procs[t.current].fds, &t.procs[slot].fds) {
-        ok(n) => {}
-        err(e) => {}
-    }
     // A fresh process starts at zero memory usage — it does NOT inherit the parent's usage.
     // Re-init in case this slot was reaped from an earlier (possibly heavily-charged) process.
     resacct_init(&t.procs[slot].macct, MEM_QUOTA_DEFAULT);
@@ -347,12 +336,6 @@ fn proc_kcall_mask(t: *mut ProcTable, slot: usize) -> Mask32 {
     return t.procs[slot].kcall_mask;
 }
 
-// A mutable handle to a process's open-file-descriptor space — for the syscall surface and
-// fork/exec wiring to populate, inherit, and inspect a process's fds.
-export fn proc_fds(t: *mut ProcTable, slot: usize) -> *mut FdSpace {
-    return &t.procs[slot].fds;
-}
-
 // A mutable handle to a process's memory ResourceAccount — for the allocator to charge/uncharge
 // against, and for policy/introspection to read. Released (reset to zero) when the process exits.
 export fn proc_macct(t: *mut ProcTable, slot: usize) -> *mut ResourceAccount {
@@ -377,11 +360,10 @@ export fn proc_uncharge_mem(t: *mut ProcTable, slot: usize, n: usize) -> void {
     resacct_uncharge(proc_macct(t, slot), n);
 }
 
-// Replace a process's executable image in place — exec() semantics. The saved context is reset
-// to start `entry` on a fresh stack, but the process KEEPS its identity (same pid and
-// generation, so existing endpoints stay valid) and, crucially, its open file descriptors:
-// fork COPIES a process's fds to the child (proc_spawn), exec PRESERVES them across the image
-// swap. Run accounting is reset for the new image; privileges and scheduling policy are kept.
+// Replace a process's executable image in place. The saved context is reset to start `entry`
+// on a fresh stack, but the process keeps its identity (same pid and generation, so existing
+// endpoints stay valid). Run accounting is reset for the new image; privileges and scheduling
+// policy are kept.
 // The slot must hold a live (non-Unused) process. In the integrated boot path `entry` is the
 // ELF entry point from elf_parse_header (kernel/core/elf) once its LOAD segments are mapped.
 #[mc_abi]
@@ -390,7 +372,6 @@ export fn proc_exec(t: *mut ProcTable, slot: usize, stack_top: usize, entry: fn(
     t.procs[slot].exit_code = 0;
     t.procs[slot].ticks = 0;
     t.procs[slot].quantum = QUANTUM_DEFAULT;
-    // fds are deliberately untouched — preserved across exec (the fork/exec distinction).
 }
 
 // The pid of the currently-running process.
@@ -484,11 +465,9 @@ fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     // whatever the subsystem owner registered (a no-op if none).
     let death_hook: fn(u32, u32) -> void = t.death_hook;
     death_hook(dead_pid, dead_gen);
-    // Drop the dead process's own pending IPC + wait state, and close its open file
-    // descriptors — a zombie holds only its exit status, never live resources, so a later
-    // spawn that reuses this slot can never inherit a ghost descriptor.
+    // Drop the dead process's own pending IPC + wait state. A zombie holds only its exit
+    // status, so a later spawn that reuses this slot starts with clean validation state.
     mailbox_init(Message, IPC_SLOTS, &t.procs[dead].inbox);
-    fd_init(&t.procs[dead].fds);
     resacct_reset(&t.procs[dead].macct); // a zombie holds no charged memory — release the account
     t.procs[dead].wait_slot = MAX_PROCS;
     // Wake anyone blocked receiving-from this exact incarnation. We do NOT post a DEAD message
