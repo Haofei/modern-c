@@ -261,7 +261,6 @@ pub const CEmitter = struct {
     structs: std.StringHashMap(ast_bridge.StructDecl),
     aggregate_decl_artifacts: std.ArrayList(AggregateDeclArtifact) = .empty,
     mmio_structs: std.StringHashMap(MmioStruct),
-    mmio_struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
     packed_bits: std.StringHashMap(PackedBitsInfo),
     overlay_unions: std.StringHashMap(OverlayUnionInfo),
     tagged_unions: std.StringHashMap(ast_bridge.UnionDecl),
@@ -411,7 +410,6 @@ pub const CEmitter = struct {
         var mmio_structs = self.mmio_structs.valueIterator();
         while (mmio_structs.next()) |mmio_struct| mmio_struct.fields.deinit();
         self.mmio_structs.deinit();
-        self.mmio_struct_decl_artifacts.deinit(self.allocator);
         self.aggregate_decl_artifacts.deinit(self.allocator);
         self.structs.deinit();
         self.type_aliases.deinit();
@@ -513,7 +511,6 @@ pub const CEmitter = struct {
 
     fn collectStructDeclArtifact(self: *CEmitter, struct_decl: ast_bridge.StructDecl) !void {
         if (isMmioStructAbi(struct_decl)) {
-            try self.mmio_struct_decl_artifacts.append(self.allocator, struct_decl);
             try self.collectMmioStruct(struct_decl);
             return;
         }
@@ -594,11 +591,17 @@ pub const CEmitter = struct {
     }
 
     fn emitMmioStructTypes(self: *CEmitter) !void {
-        for (self.mmio_struct_decl_artifacts.items) |struct_decl| {
-            if (self.mmio_structs.contains(struct_decl.name.text)) {
-                try lower_c_mmio.emitStruct(self.mmioStructEmitContext(), struct_decl);
-            }
-        }
+        for (self.decl_artifacts) |artifact| switch (artifact) {
+            .type_decl => |type_decl| switch (type_decl) {
+                .struct_decl => |struct_decl| {
+                    if (self.mmio_structs.contains(struct_decl.name.text)) {
+                        try lower_c_mmio.emitStruct(self.mmioStructEmitContext(), struct_decl);
+                    }
+                },
+                else => {},
+            },
+            else => {},
+        };
     }
 
     pub fn emitFunctionDeclarations(self: *CEmitter) anyerror!void {
