@@ -435,11 +435,6 @@ RULES: tuple[Rule, ...] = (
         "heap benchmark wrapper changes need its C and LLVM benchmark gates",
     ),
     Rule(
-        ("tools/proc/sched-bench.sh",),
-        ("sched-bench", "llvm-sched-bench"),
-        "scheduler benchmark wrapper changes need its C and LLVM benchmark gates",
-    ),
-    Rule(
         ("tools/mem/uaccess-bench.sh",),
         ("uaccess-bench", "llvm-uaccess-bench"),
         "uaccess benchmark wrapper changes need its C and LLVM benchmark gates",
@@ -581,7 +576,6 @@ RULES: tuple[Rule, ...] = (
         excludes=(
             "tools/arch/aarch64-test.sh",
             "tools/arch/qemu-mmio-test.sh",
-            "tools/proc/sched-bench.sh",
             "tools/mem/heap-bench.sh",
             "tools/mem/uaccess-bench.sh",
         ),

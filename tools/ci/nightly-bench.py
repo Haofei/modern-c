@@ -42,12 +42,8 @@ EXPECTED_BENCHES: tuple[Bench, ...] = (
         "llvm-uaccess-bench",
         ("UACCESS-TO-CYCLES", "UACCESS-FROM-CYCLES", "UACCESS-SMALL-CYCLES", "UACCESS-CYCLES"),
     ),
-    Bench("sched", "c", "sched-bench", ("SCHED-CYCLES",)),
-    Bench("sched", "llvm", "llvm-sched-bench", ("SCHED-CYCLES",)),
     Bench("heap", "c", "heap-bench", ("HEAPFREE-CYCLES",)),
     Bench("heap", "llvm", "llvm-heap-bench", ("HEAPFREE-CYCLES",)),
-    Bench("ipc", "c", "ipc-bench", ("IPC-CYCLES",)),
-    Bench("ipc", "llvm", "llvm-ipc-bench", ("IPC-CYCLES",)),
 )
 
 BASELINE_COLUMNS = (

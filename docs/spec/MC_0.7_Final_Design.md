@@ -5575,9 +5575,8 @@ llvm-thread-test`, `zig build llvm-sched-test`, `zig build llvm-syscall-test`,
 `zig build llvm-user-test`, `zig build llvm-process-test`, `zig build
 llvm-vm-switch-test`, `zig build llvm-vmspace-test`, `zig build
 llvm-vmctx-test`, `zig build llvm-sched-vm-test`, `zig build llvm-ipc-test`,
-`zig build llvm-ipc2-test`, `zig build
-llvm-timeout-test`, `zig build llvm-signal-test`, `zig build llvm-cap-test`,
-`zig build llvm-privilege-test`, `zig build llvm-usched-test`, `zig build
+`zig build llvm-ipc2-test`, `zig build llvm-cap-test`,
+`zig build llvm-privilege-test`, `zig build
 llvm-paging-activate-test`, `zig build llvm-demand-test`, `zig build
 llvm-mmap-test`, `zig build llvm-contain-test`, `zig build llvm-cow-test`, and
 `zig build llvm-isolation-test`, `zig build

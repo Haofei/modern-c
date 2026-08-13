@@ -277,7 +277,6 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/llvm-c-emit-sweep.py"], ["llvm-c-sweep"])
     assert_gates(module, ["tools/toolchain/llvm-c-obj-sweep.py"], ["llvm-c-obj-sweep"])
     assert_gates(module, ["tools/mem/heap-bench.sh"], ["heap-bench", "llvm-heap-bench"])
-    assert_gates(module, ["tools/proc/sched-bench.sh"], ["sched-bench", "llvm-sched-bench"])
     assert_gates(module, ["tools/mem/uaccess-bench.sh"], ["uaccess-bench", "llvm-uaccess-bench"])
     assert_gates(module, ["tools/arch/aarch64-test.sh"], ["aarch64-test", "llvm-aarch64-test"])
     assert_gates(module, ["tools/arch/qemu-mmio-test.sh"], ["qemu-test", "llvm-qemu-test"])

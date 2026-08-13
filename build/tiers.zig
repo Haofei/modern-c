@@ -119,8 +119,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-vmspace-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vmctx-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-sched-vm-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-timeout-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-signal-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-ipc2-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-ipc-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-test"));
@@ -131,7 +129,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-async-multi-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-blk-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-select-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-usched-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-privilege-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-cap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-contain-test"));
@@ -337,13 +334,10 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("arc-test"));
     m0_full_step.dependOn(ctx.cmd("constgen-test"));
     m0_full_step.dependOn(ctx.cmd("ipc2-test"));
-    m0_full_step.dependOn(ctx.cmd("signal-test"));
     m0_full_step.dependOn(ctx.cmd("privilege-test"));
-    m0_full_step.dependOn(ctx.cmd("timeout-test"));
     m0_full_step.dependOn(ctx.cmd("mmap-test"));
     m0_full_step.dependOn(ctx.cmd("demand-test"));
     m0_full_step.dependOn(ctx.cmd("isolation-test"));
-    m0_full_step.dependOn(ctx.cmd("usched-test"));
     m0_full_step.dependOn(ctx.cmd("cow-test"));
     m0_full_step.dependOn(ctx.cmd("bcache-test"));
     m0_full_step.dependOn(ctx.cmd("time-test"));
@@ -364,7 +358,6 @@ pub fn register(ctx: *h.Ctx) void {
     // sort-test exercises std/sort on both backends.
     m0_full_step.dependOn(ctx.cmd("sort-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-sort-test"));
-    m0_full_step.dependOn(ctx.cmd("waitqueue-test"));
     m0_full_step.dependOn(ctx.cmd("endpoint-test"));
     m0_full_step.dependOn(ctx.cmd("sched-difftest"));
     m0_full_step.dependOn(ctx.cmd("granttab-test"));

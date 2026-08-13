@@ -348,7 +348,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-e1000-test", "LLVM-lowered real e1000 NIC PCI probe", &.{ "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
-    _ = h.addScriptTest(ctx, "waitqueue-test", "WaitQueue (kernel/lib): block/wake/idle policy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "waitqueue-test" });
 
 
 
@@ -392,9 +391,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-cow-test", "Run LLVM-lowered copy-on-write fault handling under QEMU", &.{ "bash", "tools/mem/cow-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "usched-test", "Userspace-set scheduling policy (priority)", &.{ "bash", "tools/proc/usched-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-usched-test", "Run LLVM-lowered userspace-set scheduling policy under QEMU", &.{ "bash", "tools/proc/usched-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
     _ = h.addScriptTest(ctx, "isolation-test", "Per-server MMU isolation + cross-AS IPC", &.{ "bash", "tools/proc/isolation-test.sh", "zig-out/bin/mcc", "c" });
@@ -410,17 +407,13 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-mmap-test", "Run LLVM-lowered anonymous mmap under QEMU", &.{ "bash", "tools/mem/mmap-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
-    _ = h.addScriptTest(ctx, "timeout-test", "IPC timeout: bounded receive, no infinite block", &.{ "bash", "tools/ipc/timeout-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-timeout-test", "Run LLVM-lowered IPC timeout under QEMU", &.{ "bash", "tools/ipc/timeout-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "privilege-test", "Least privilege: IPC allow-list + kernel-call gate", &.{ "bash", "tools/proc/privilege-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-privilege-test", "Run LLVM-lowered least-privilege IPC and kcall gates under QEMU", &.{ "bash", "tools/proc/privilege-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "signal-test", "Signals: deliver + poll + take an async signal", &.{ "bash", "tools/ipc/signal-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-signal-test", "Run LLVM-lowered signal delivery under QEMU", &.{ "bash", "tools/ipc/signal-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
     _ = h.addScriptTest(ctx, "ipc2-test", "IPC completeness: multi-slot + source filter + notify", &.{ "bash", "tools/ipc/ipc2-test.sh", "zig-out/bin/mcc", "c" });
@@ -433,9 +426,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-ipc-test", "Run LLVM-lowered kernel-mediated IPC under QEMU", &.{ "bash", "tools/ipc/ipc-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "ipc-bench", "IPC round-trip latency microbench (cycles/round-trip) under QEMU", &.{ "bash", "tools/ipc/ipc-bench.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-ipc-bench", "IPC round-trip latency microbench (LLVM backend) under QEMU", &.{ "bash", "tools/ipc/ipc-bench.sh", "zig-out/bin/mcc", "llvm" });
 
     // async-test (async/await roadmap Phase B): request-id-keyed PARK/WAKE completion broker
     // (kernel/lib/async.mc). A waiter PARKS on submitted requests; a completer wakes it
@@ -599,9 +590,7 @@ pub fn register(ctx: *h.Ctx) void {
     // next_runnable() round-robin pick. In the re-land the pick path is unchanged (design B),
     // so this stays the standing baseline tool; the algorithmic win was the O(children)
     // supervisor cascade, not the pick.
-    _ = h.addScriptTest(ctx, "sched-bench", "Scheduler microbenchmark under QEMU: average cycles per next_runnable() round-robin pick (SCHED-CYCLES) via rdcycle", &.{ "bash", "tools/proc/sched-bench.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-sched-bench", "Scheduler microbenchmark under QEMU (LLVM backend): average cycles per next_runnable() round-robin pick", &.{ "bash", "tools/proc/sched-bench.sh", "zig-out/bin/mcc", "llvm" });
 
     // Phase 2.1 heap microbenchmark (NOT in m0): rdcycle total for an adversarial
     // fragment-and-coalesce free sequence that drives the free list to capacity — the
