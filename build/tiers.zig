@@ -157,8 +157,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-async-blk-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-net-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-select-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-async-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-agent-async-api-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-usched-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-heartbeat-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-privilege-test"));
@@ -514,8 +512,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("async-blk-test"));
     m0_full_step.dependOn(ctx.cmd("async-net-test"));
     m0_full_step.dependOn(ctx.cmd("async-select-test"));
-    m0_full_step.dependOn(ctx.cmd("async-agent-test"));
-    m0_full_step.dependOn(ctx.cmd("agent-async-api-test"));
     m0_full_step.dependOn(ctx.cmd("block-server-test"));
     m0_full_step.dependOn(ctx.cmd("fs-server-test"));
     m0_full_step.dependOn(ctx.cmd("net-server-test"));

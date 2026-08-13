@@ -33,8 +33,7 @@ import "kernel/core/process.mc";
 // (e.g. kernel/drivers/virtio/virtio_blk_async.mc's BLK_ASYNC_MAX = VRING_QSIZE/3 = 2 reads,
 // descriptor-bound); a request then needs BOTH a free global broker slot AND a free per-backend
 // slot, so the effective concurrency for that kind is min(MAX_INFLIGHT, that backend's cap). The
-// agent-side pump (user/agent_async.mc PUMP_STASH/PUMP_BATCH) is sized == MAX_INFLIGHT so it can
-// always stash every completion the broker may deliver. Keep these in sync if MAX_INFLIGHT changes.
+// vectored drain can deliver at most MAX_INFLIGHT completions at once.
 const MAX_INFLIGHT: usize = 8;
 
 // Returned by async_submit when the MAX_INFLIGHT quota is exhausted.

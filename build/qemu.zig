@@ -565,22 +565,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "async-select-test", "broker-backed select: race two requests, cancel the loser, active slots return to 0", &.{ "bash", "tools/proc/async-select-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-async-select-test", "LLVM-lowered broker-backed select / cancel-the-loser under QEMU", &.{ "bash", "tools/proc/async-select-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // agent-async-api-test: the AGENT-FACING async API end-to-end. An `async fn` agent does
-    // `let a = await read_async(...); let b = await tool_call_async(...)` plus sleep_async (timeout)
-    // and a timeout-then-CANCEL, driven by pump_run_to_completion over the ToolFut/ToolPump leaves
-    // (user/agent_async.mc) against an in-kernel broker shim with app_run_demo's sys_submit/sys_poll
-    // semantics. ARW + AGENT-ASYNC-API-OK (result 42) proves the awaits resolved over the API and
-    // the cancel reclaimed the broker slot. Both backends.
-    _ = h.addScriptTest(ctx, "agent-async-api-test", "agent-facing async API: an async fn agent awaits read_async/tool_call_async + sleep_async + timeout-then-cancel over the ToolFut/ToolPump leaves under QEMU", &.{ "bash", "tools/proc/agent-async-api-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-agent-async-api-test", "LLVM-lowered agent-facing async API (ToolFut/ToolPump wrappers) end-to-end under QEMU", &.{ "bash", "tools/proc/agent-async-api-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // async-agent-test: the capstone — async/await over the app-run tool pump fixture.
-    // async-fn-awaiting-async-fn (agent -> tool_fetch/tool_read -> ReqFut) resolves two sequential
-    // tool calls (page+cfg==42), then TIMES OUT a slow tool call by racing it against a deadline
-    // (slow tool cancelled, inflight count back to 0). FRT + ASYNC-AGENT-OK.
-    _ = h.addScriptTest(ctx, "async-agent-test", "capstone: async/await resolves tool calls over the app-run pump + times out a slow call", &.{ "bash", "tools/proc/async-agent-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-async-agent-test", "LLVM-lowered async/await over the app-run tool pump under QEMU", &.{ "bash", "tools/proc/async-agent-test.sh", "zig-out/bin/mcc", "llvm" });
-
     _ = h.addScriptTest(ctx, "cap-test", "capability least-privilege: driver-as-server holds the console cap", &.{ "bash", "tools/proc/cap-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-cap-test", "Run LLVM-lowered capability least-privilege server under QEMU", &.{ "bash", "tools/proc/cap-test.sh", "zig-out/bin/mcc", "llvm" });

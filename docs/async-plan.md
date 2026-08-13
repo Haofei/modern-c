@@ -196,7 +196,7 @@ loser (`*mut dyn Future`) is cancelled through the vtable. The generic `std/task
 upgraded: `Race2::poll` cancels the loser when a winner is decided, `Timeout::poll` cancels `inner`
 on the timed-out edge, `Join2`/`Race2`/`Timeout` each gained a `cancel` that drops their children
 (idempotent). Every `impl Future` now provides `cancel`: the hand-written leaves (`SlotFuture`,
-`ReqFut`, `ToolFut`) and combinators, AND every TRANSFORM-GENERATED future — `src/async_lower.zig`
+`ReqFut`) and combinators, AND every TRANSFORM-GENERATED future — `src/async_lower.zig`
 now routes the generated `f__Fut_cancel` free fn into the `impl Future` record's `cancel` vtable slot
 (`cancelConfMethod`), mirroring how `poll` is wired, so generated futures satisfy the enlarged trait
 on both backends. The trait-ABI/vtable-layout change was verified sound on C and LLVM
@@ -440,8 +440,7 @@ Follow-ups beyond the 7 build-order steps, all **DONE**: kernel vectored drain `
 (`f__Fut.poll(&x)` → `f__Fut__poll`); interior-borrow-across-await soundness
 (`E_ASYNC_BORROW_ACROSS_AWAIT`); the backend-parity fix below; **broker integration** (`ReqFut`
 leaf + `drive_irq` executor + `async-future-test`); **select/cancel-the-loser** (`ReqRace2` +
-`async-select-test`, `MAX_INFLIGHT → 0`); the **capstone agent demo** (`async-agent-test`: an agent
-in real async/await resolving tool calls over the broker + timing one out); and **try-await**
+`async-select-test`, `MAX_INFLIGHT → 0`); and **try-await**
 (`let x = (await e)?;` Result-propagation, `fuzz-async-try-test`). Spec: §33 of
 `docs/spec/MC_0.7_Final_Design.md`.
 

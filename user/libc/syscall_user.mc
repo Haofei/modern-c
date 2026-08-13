@@ -8,8 +8,6 @@
 // (the ELF entry runtime).
 
 import "user/abi.mc";
-import "user/agent_async.mc"; // ToolPump (the agent-facing async API), bound to the real syscalls
-
 extern fn mc_ecall(number: u64, a0: u64, a1: u64, a2: u64) -> u64;
 
 // Async tool I/O (Phase 7+): submit a non-blocking op described by a ToolReq at `req_ptr` (returns
@@ -23,14 +21,6 @@ export fn sys_submit(req_ptr: usize) -> i64 {
 
 export fn sys_poll(events_ptr: usize, max: usize, timeout: usize) -> i64 {
     return bitcast<i64>(mc_ecall(SYS_POLL, events_ptr as u64, max as u64, timeout as u64));
-}
-
-fn sys_submit_pump(req_ptr: usize) -> i64 {
-    return sys_submit(req_ptr);
-}
-
-fn sys_poll_pump(events_ptr: usize, max: usize, timeout: usize) -> i64 {
-    return sys_poll(events_ptr, max, timeout);
 }
 
 // write(2): the C-ABI used by confined C apps. fd in a0, buffer address in a1, length in a2.
@@ -56,11 +46,4 @@ export fn sys_read(buf: usize, max: usize) -> i64 {
 // fixed arena. `delta == 0` queries the current break.
 export fn __sbrk(delta: usize) -> usize {
     return mc_ecall(SYS_SBRK, delta as u64, 0, 0) as usize;
-}
-
-// Bind the agent-facing async pump (user/agent_async.mc) to the REAL syscall Tool ABI: its drain
-// goes through sys_submit / sys_poll. A confined agent calls this once, then uses tool_call_async /
-// read_async / write_async / sleep_async / net_fetch_async + pump_run_to_completion over `p`.
-export fn tool_pump_init_syscall(p: *mut ToolPump) -> void {
-    tool_pump_init(p, sys_submit_pump, sys_poll_pump);
 }
