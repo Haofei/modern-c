@@ -8,91 +8,117 @@
       "category": "toolchain",
       "owner": "compiler",
       "summary": "Zig compiler used to build and test the stage0 implementation.",
-      "profiles": ["compiler-subset"]
+      "profiles": [
+        "compiler-subset"
+      ]
     },
     {
       "id": "clang-for-c-artifact-checks",
       "category": "toolchain",
       "owner": "compiler",
       "summary": "Clang used to compile generated C artifacts in compiler-subset gates.",
-      "profiles": ["compiler-subset"]
+      "profiles": [
+        "compiler-subset"
+      ]
     },
     {
       "id": "llvm-for-differential-checks",
       "category": "toolchain",
       "owner": "compiler",
       "summary": "LLVM tools used by C/LLVM differential checks for the admitted compiler subset.",
-      "profiles": ["compiler-subset"]
+      "profiles": [
+        "compiler-subset"
+      ]
     },
     {
       "id": "llvm-as",
       "category": "toolchain",
       "owner": "backend",
       "summary": "LLVM assembler used by the experimental LLVM backend profile.",
-      "profiles": ["llvm-experimental"]
+      "profiles": [
+        "llvm-experimental"
+      ]
     },
     {
       "id": "llc",
       "category": "toolchain",
       "owner": "backend",
       "summary": "LLVM static compiler used by LLVM object and optimizer gates.",
-      "profiles": ["llvm-experimental"]
+      "profiles": [
+        "llvm-experimental"
+      ]
     },
     {
       "id": "clang",
       "category": "toolchain",
       "owner": "backend",
       "summary": "Clang used by LLVM profile host and object checks.",
-      "profiles": ["llvm-experimental"]
+      "profiles": [
+        "llvm-experimental"
+      ]
     },
     {
       "id": "stage0-mcc",
       "category": "internal",
       "owner": "selfhost",
       "summary": "Stage0 modern-c compiler used to build the selfhost experiment.",
-      "profiles": ["selfhost-experimental"]
+      "profiles": [
+        "selfhost-experimental"
+      ]
     },
     {
       "id": "selfhost-c-emitter",
       "category": "internal",
       "owner": "selfhost",
       "summary": "Experimental selfhost C emitter; not a production semantic authority.",
-      "profiles": ["selfhost-experimental"]
+      "profiles": [
+        "selfhost-experimental"
+      ]
     },
     {
       "id": "clang-for-stage-link",
       "category": "toolchain",
       "owner": "selfhost",
       "summary": "Clang used to link selfhost stage artifacts.",
-      "profiles": ["selfhost-experimental"]
+      "profiles": [
+        "selfhost-experimental"
+      ]
     },
     {
       "id": "python3",
       "category": "toolchain",
       "owner": "developer-tools",
       "summary": "Python runtime used by LSP, CI scripts, and local verification helpers.",
-      "profiles": ["developer-tools"]
+      "profiles": [
+        "developer-tools"
+      ]
     },
     {
       "id": "workspace-local-mcc",
       "category": "internal",
       "owner": "developer-tools",
       "summary": "Workspace-built mcc binary invoked by LSP and editor tooling.",
-      "profiles": ["developer-tools"]
+      "profiles": [
+        "developer-tools"
+      ]
     },
     {
       "id": "vscode-extension-runtime",
       "category": "toolchain",
       "owner": "developer-tools",
       "summary": "VS Code extension host runtime for the editor adapter.",
-      "profiles": ["developer-tools"]
+      "profiles": [
+        "developer-tools"
+      ]
     },
     {
       "id": "qemu",
       "category": "emulator",
       "owner": "kernel",
       "summary": "QEMU surrogate execution environment for kernel and Agent gates.",
-      "profiles": ["kernel-qemu"]
+      "profiles": [
+        "kernel-qemu"
+      ]
     },
     {
       "id": "opensbi",
@@ -102,7 +128,9 @@
       "upstream": "https://github.com/riscv-software-src/opensbi",
       "revision": "environment-provided",
       "license": "BSD-2-Clause",
-      "profiles": ["kernel-qemu"]
+      "profiles": [
+        "kernel-qemu"
+      ]
     },
     {
       "id": "quickjs",
@@ -116,37 +144,30 @@
       "license": "MIT",
       "license_file": "third_party/quickjs/LICENSE",
       "provenance_file": "third_party/quickjs/README.vendored.md",
-      "local_modifications": ["third_party/quickjs/quickjs.h"],
-      "profiles": ["kernel-qemu"]
-    },
-    {
-      "id": "wamr",
-      "category": "vendored",
-      "owner": "agent-runtime",
-      "summary": "WebAssembly Micro Runtime interpreter for confined WASM Agents.",
-      "upstream": "https://github.com/bytecodealliance/wasm-micro-runtime",
-      "revision": "0e65961d8e560b3d8a125045a29336ce6a0b16ad",
-      "version": "2.4.3",
-      "archive_sha256": "dc27b60a1aff64b89d2ca51f036e0f1baee000e156ed7e9283e4f97b660e6e65",
-      "license": "Apache-2.0 WITH LLVM-exception",
-      "license_file": "third_party/wamr/LICENSE",
-      "provenance_file": "third_party/wamr/README.vendored.md",
-      "local_modifications": ["third_party/wamr/core/shared/platform/mc"],
-      "profiles": ["kernel-qemu"]
+      "local_modifications": [
+        "third_party/quickjs/quickjs.h"
+      ],
+      "profiles": [
+        "kernel-qemu"
+      ]
     },
     {
       "id": "openlibm",
       "category": "vendored",
       "owner": "agent-runtime",
-      "summary": "Freestanding libm subset used by confined C apps, QuickJS, and WAMR hosts.",
+      "summary": "Freestanding libm subset used by confined C apps and QuickJS hosts.",
       "upstream": "https://github.com/JuliaMath/openlibm",
       "revision": "b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8",
       "archive_sha256": "b387919068d5ec49929cc012119375b889724175918e851851d3eacab92a665a",
       "license": "mixed permissive",
       "license_file": "third_party/openlibm/LICENSE.md",
       "provenance_file": "third_party/openlibm/README.vendored.md",
-      "local_modifications": ["tools/user/build-openlibm.sh integration only"],
-      "profiles": ["kernel-qemu"]
+      "local_modifications": [
+        "tools/user/build-openlibm.sh integration only"
+      ],
+      "profiles": [
+        "kernel-qemu"
+      ]
     }
   ]
 }

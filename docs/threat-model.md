@@ -28,13 +28,12 @@ failure modes we accept. It is the frame for the security-hardening work in §4.
   is also an attacker-reachable service surface (§5).
 - The microkernel: loader, page-table/uaccess paths, syscall dispatch, the brokers
   (FS/net), the scheduler, the capability registries.
-- The vendored engines linked into the validation workload where used: WAMR (agent
-  wasm), QuickJS, and openlibm. A bug in these can invalidate validation evidence;
+- The vendored engines linked into the validation workload where used: QuickJS and openlibm. A bug in these can invalidate validation evidence;
   release and vendoring controls reduce exposure (§6).
 - The boot firmware (OpenSBI on RISC-V) and the platform (QEMU virt / a real board).
 
 **Untrusted, attacker-controlled:**
-- The agent payload itself: arbitrary wasm (WAMR) or JS (QuickJS-on-wasm), and the
+- The agent payload itself: JavaScript payloads exercised by QuickJS validation hosts, and the
   arguments/pointers/lengths it passes across the syscall ABI.
 - All network input (DNS/TCP records, raw frames) — fully hostile.
 - Agent-supplied filesystem contents within its sandbox.
@@ -55,8 +54,6 @@ failure modes we accept. It is the frame for the security-hardening work in §4.
 - **User-pointer validation.** Every pointer/length an agent hands the kernel is
   copied through page-table-aware `copy_to/from_user` (`kernel/core/uaccess.mc`); a
   bad address returns `-EFAULT` via a software page-table walk, never a kernel fault.
-- **wasm sandbox-in-sandbox.** WAMR runs the agent's wasm with bounds-checked linear
-  memory and **deterministic instruction-count fuel** (the runaway bound wasm3 lacked).
 - **No ambient authority in fixtures.** Confined payloads have no direct kernel memory access; FS/tool
   effects go through explicit test fixtures. Product FS/net brokers are out of scope.
 
@@ -68,7 +65,7 @@ failure modes we accept. It is the frame for the security-hardening work in §4.
 | Agent forges a syscall arg (ptr/len overflow) | checked arithmetic + `fits_within`/bounds checks; EFAULT/EINVAL not trap (recent hardening) | audit syscall-facing index routes (plan §4.7) |
 | Hostile network frame corrupts socket state | bounds-checked frame parser + IPv4/TCP checksum validation (`tcp_tx.mc`) | larger hostile-packet corpus |
 | Agent exfiltrates via network | Product egress-policy broker removed from scope; remaining net paths are deterministic or driver fixtures | product policy is out of current scope |
-| Runaway CPU (DoS) | WAMR instruction fuel; timer watchdog kill; timer-driven process preemption (`proc_preempt_*`, gated by `agent-preempt-test`) | uniform per-agent CPU-budget policy and accounting |
+| Runaway CPU (DoS) | timer watchdog kill; timer-driven process preemption (`proc_preempt_*`, gated by `agent-preempt-test`) | uniform per-agent CPU-budget policy and accounting |
 | Memory exhaustion (DoS) | confined arena + fixed pools with overflow-safe fit checks | typed `NoMem` on broker/device paths (§3.1 #5); per-agent memory budget enforcement everywhere |
 | Agent crash takes down kernel | fault-confinement: agent faults are contained to its AS | per-agent crash cleanup/reap (§3.1 #4) |
 | Agent forges/suppresses audit | audit written kernel-side (`ipc_trace`/`cap_audit`), agent cannot reach it | persist-across-reboot (§4.3) |
@@ -95,7 +92,7 @@ output, leak source during diagnostics, or corrupt artifacts.
 
 Supply-chain compromise of vendored engines, the compiler toolchain, CI actions,
 or release artifacts is in scope for toolchain hygiene. The kernel validation
-workloads treat WAMR, QuickJS, openlibm, Zig, LLVM, QEMU, and pinned CI actions as
+workloads treat QuickJS, openlibm, Zig, LLVM, QEMU, and pinned CI actions as
 trusted inputs at runtime/build time; a malicious or broken component can
 invalidate validation evidence. The control is therefore provenance, pinning,
 and update discipline, not a kernel product claim.
@@ -118,8 +115,7 @@ and update discipline, not a kernel product claim.
 - **G3 Fail-closed:** on hostile or malformed input the kernel returns a typed error
   (EFAULT/EINVAL/BadSegment/TooLarge) rather than trapping or corrupting state. (Largely
   enforced; the remaining `unreachable`-on-exhaustion paths are tracked.)
-- **G4 Deterministic bound on agent CPU:** an agent cannot run unbounded (fuel,
-  watchdog, and timer-driven process preemption are gated); uniform per-agent
+- **G4 Deterministic bound on agent CPU:** an agent cannot run unbounded (watchdog and timer-driven process preemption are gated); uniform per-agent
   budget policy and accounting remain incomplete.
 - **G5 Audit truth:** allow/deny + effects are recorded kernel-side beyond agent reach.
 
@@ -129,7 +125,7 @@ and update discipline, not a kernel product claim.
   uniform per-agent memory/CPU budgets land. Timer-driven process preemption has landed,
   but a misbehaving agent may
   currently degrade throughput (it cannot escape isolation or forge authority).
-- **A validation-dependency bug (WAMR/QuickJS/openlibm/compiler/toolchain) can break any guarantee** —
+- **A validation-dependency bug (QuickJS/openlibm/compiler/toolchain) can break any guarantee** —
   these are trusted inputs. Defense is vendoring/update discipline, pinned tools/actions,
   release checksums/SBOM/attestations, SECURITY.md intake, and compiler/codegen gates,
   not runtime containment.

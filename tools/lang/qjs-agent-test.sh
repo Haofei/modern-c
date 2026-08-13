@@ -109,7 +109,7 @@ OUT="$(timeout 120 "$QEMU" -machine virt -bios none -nographic -m 256 \
         -kernel "$WORK/kernel.elf" 2>/dev/null || true)"
 _bt1=$(date +%s%N 2>/dev/null || echo 0)
 # Phase-7 benchmark hooks (only when BENCH is set; otherwise no output change): the QEMU wall time
-# of the agent run + the confined U-mode image size, consumed by tools/lang/wasm-js-bench-test.sh.
+# of the agent run + the confined U-mode image size, kept for optional local timing comparisons.
 if [ -n "${BENCH:-}" ]; then
     echo "BENCH-QEMU-MS: $(( (_bt1 - _bt0) / 1000000 ))"
     [ -f "$WORK/agent.elf" ] && echo "BENCH-AGENT-ELF-BYTES: $(wc -c < "$WORK/agent.elf" | tr -d ' ')"

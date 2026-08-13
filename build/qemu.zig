@@ -428,10 +428,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-arm-qjs-test", "M9 (LLVM): run a PURE-JS agent confined in an aarch64 EL0 space under QEMU, with async host I/O", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "arm-qjs-async-test", "M9: a pure-JS agent proves overlap + back-pressure/denial over async host I/O in aarch64 EL0", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "arm-qjs-async" });
 
-    // WASM-agent Phase 6 cross-arch (aarch64): a stock wasm32-wasi guest on WAMR runs confined in
-    // EL0 with async host I/O over svc #0. The WASM peer of arm-qjs-async-test.
-    _ = h.addScriptTest(ctx, "arm-wasm-async-test", "WASM-agent Phase 6: a confined WASM guest proves overlap + back-pressure over async host I/O in aarch64 EL0 under QEMU", &.{ "bash", "tools/arch/arm-wasm-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-arm-wasm-async-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest proves async host I/O in aarch64 EL0 under QEMU", &.{ "bash", "tools/arch/arm-wasm-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "llvm-arm-qjs-async-test", "M9 (LLVM): a pure-JS agent proves overlap + back-pressure/denial over async host I/O in aarch64 EL0", &.{ "bash", "tools/arch/arm-qjs-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "arm-qjs-async" });
 
     _ = h.addScriptTest(ctx, "snapshot-test", "proc_snapshot (kernel/lib): stable process enumeration", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "snapshot-test" });
@@ -490,10 +486,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "x86-qjs-async-test", "M7: a pure-JS agent proves overlap + back-pressure/denial over async host I/O in x86-64 ring 3", &.{ "bash", "tools/arch/x86-qjs-test.sh", "zig-out/bin/mcc", "c", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "x86-qjs-async" });
 
-    // WASM-agent Phase 6 cross-arch (x86_64): a stock wasm32-wasi guest on WAMR runs confined in
-    // ring 3 with async host I/O over int 0x80. The WASM peer of x86-qjs-async-test.
-    _ = h.addScriptTest(ctx, "x86-wasm-async-test", "WASM-agent Phase 6: a confined WASM guest proves overlap + back-pressure over async host I/O in x86-64 ring 3 under QEMU", &.{ "bash", "tools/arch/x86-wasm-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-x86-wasm-async-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest proves async host I/O in x86-64 ring 3 under QEMU", &.{ "bash", "tools/arch/x86-wasm-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "llvm-x86-qjs-async-test", "M7 (LLVM): a pure-JS agent proves overlap + back-pressure/denial over async host I/O in x86-64 ring 3", &.{ "bash", "tools/arch/x86-qjs-test.sh", "zig-out/bin/mcc", "llvm", "examples/agents/agent_async.js", "async-agent: backpressure ok=8 rejected=4", "x86-qjs-async" });
 
     _ = h.addScriptTest(ctx, "cow-test", "Copy-on-write: shared RO page diverges on write", &.{ "bash", "tools/mem/cow-test.sh", "zig-out/bin/mcc", "c" });
@@ -912,177 +904,70 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-qjs-run-test", "QuickJS-agent Phase 4 (LLVM): build QuickJS freestanding and evaluate JS under QEMU", &.{ "bash", "tools/lang/qjs-run-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // WASM-agent Phase 0 (docs/wasm-migration-plan.md §5): the spike that proves a general WASM
     // engine confines, links, and reaches the kernel — the mirror of qjs-run-test. RETIRED with
-    // wasm3: superseded by wamr-run-test below (the WAMR engine spike, which also adds the
-    // deterministic instruction-metering fuel wasm3 lacked).
 
-    // WASM engine swap (tools/wamr/README.md): the WAMR interpreter (vendored third_party/wamr, built
-    // freestanding via the `mc` platform port) runs a real wasm32 module CONFINED — the WAMR analogue
-    // of wasm-run-test (wasm3). WAMR adds deterministic instruction-metering fuel that wasm3 lacks.
-    _ = h.addScriptTest(ctx, "wamr-run-test", "WASM engine swap: build WAMR freestanding against the all-MC libc and run a real wasm32 module CONFINED under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-wamr-run-test", "WASM engine swap (LLVM): build WAMR freestanding and run a real wasm32 module CONFINED under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // WASM engine swap — the payoff: DETERMINISTIC per-instruction fuel (wasm_runtime_set_instruction
     // _count_limit). The same burn() guest is terminated mid-loop under a low limit and completes
-    // under a high one — a precise instruction budget wasm3 cannot provide (cf. the coarse watchdog).
-    _ = h.addScriptTest(ctx, "wamr-fuel-test", "WASM engine swap: WAMR deterministic instruction-fuel — a confined guest is terminated at a low instruction limit and completes at a high one, under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wamr/burn.c", "examples/apps/wamr_fuel_host.c", "WAMR-FUEL: ok", "wamr-fuel", "burn" });
-    _ = h.addScriptTest(ctx, "llvm-wamr-fuel-test", "WASM engine swap (LLVM): WAMR deterministic instruction-fuel under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wamr/burn.c", "examples/apps/wamr_fuel_host.c", "WAMR-FUEL: ok", "wamr-fuel", "burn" });
 
-    // WASM engine swap: WAMR drives the kernel broker (SYS_SUBMIT/SYS_POLL) from a confined agent —
-    // an async SUM tool op resolves by id (result=7) over the mc tool ABI. Proves WAMR runs real
-    // broker AGENTS (not just compute), the core agent-runtime capability for replacing wasm3.
-    _ = h.addScriptTest(ctx, "wamr-agent-test", "WASM engine swap: a confined WAMR agent drives the broker (async SUM over SYS_SUBMIT/SYS_POLL) under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wamr/agent.c", "examples/apps/wamr_agent_host.c", "agent: ok", "wamr-agent", "agent_main" });
-    _ = h.addScriptTest(ctx, "llvm-wamr-agent-test", "WASM engine swap (LLVM): a confined WAMR agent drives the broker over SYS_SUBMIT/SYS_POLL under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wamr/agent.c", "examples/apps/wamr_agent_host.c", "agent: ok", "wamr-agent", "agent_main" });
 
-    // WASM engine swap: WAMR runs a STOCK wasm32-wasi guest (wasi-libc printf via the WASI P1 shim ->
-    // SYS_WRITE) CONFINED — the WAMR analogue of wasm-wasi-hello-test. WAMR is built with
     // CALL_INDIRECT_OVERLONG support, so stock wasi-libc output loads without feature-pinning.
-    _ = h.addScriptTest(ctx, "wamr-wasi-hello-test", "WASM engine swap: WAMR runs a stock wasm32-wasi guest CONFINED via the WASI P1 shim under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_hello.c", "examples/apps/wamr_wasi_host.c", "WASI-HELLO=ok", "wamr-wasi-hello", "", "wasi" });
-    _ = h.addScriptTest(ctx, "llvm-wamr-wasi-hello-test", "WASM engine swap (LLVM): WAMR runs a stock wasm32-wasi guest CONFINED under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_hello.c", "examples/apps/wamr_wasi_host.c", "WASI-HELLO=ok", "wamr-wasi-hello", "", "wasi" });
 
-    // WASM engine swap: WAMR runs the REAL broker agents (stock wasm32-wasi: wasi-libc printf + the mc
     // tool ABI) confined via the comprehensive host (WASI P1 + mc net_fetch/tool_submit/tool_poll).
-    _ = h.addScriptTest(ctx, "wamr-async-test", "WASM engine swap: WAMR runs the async broker agent (overlap + back-pressure) confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_async.c", "examples/apps/wamr_full_host.c", "async: ok", "wamr-async", "", "wasi" });
-    _ = h.addScriptTest(ctx, "llvm-wamr-async-test", "WASM engine swap (LLVM): WAMR runs the async broker agent confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_async.c", "examples/apps/wamr_full_host.c", "async: ok", "wamr-async", "", "wasi" });
 
-    _ = h.addScriptTest(ctx, "wamr-net-test", "WASM engine swap: WAMR runs the brokered net-fetch agent (allow/deny/budget) confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_net.c", "examples/apps/wamr_full_host.c", "net: ok", "wamr-net", "", "wasi" });
-    _ = h.addScriptTest(ctx, "llvm-wamr-net-test", "WASM engine swap (LLVM): WAMR runs the brokered net-fetch agent confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_net.c", "examples/apps/wamr_full_host.c", "net: ok", "wamr-net", "", "wasi" });
 
-    // WASM engine swap: WAMR drives the real capability-checked WASI FS tool path (path_open/fd_read/
-    // fd_write whole-file + mkdir-deny + outside-preopen-deny) confined — the WAMR analogue of
-    // wasm-realtool-test, via the full host's brokered /ws preopen (TOOL_OP_FS_* over SYS_SUBMIT).
-    _ = h.addScriptTest(ctx, "wamr-fs-test", "WASM engine swap: WAMR drives the capability-checked WASI FS path (allow + deny audit) confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_fs.c", "examples/apps/wamr_full_host.c", "fs: ok", "wamr-fs", "", "wasi" });
-    _ = h.addScriptTest(ctx, "llvm-wamr-fs-test", "WASM engine swap (LLVM): WAMR drives the capability-checked WASI FS path confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_fs.c", "examples/apps/wamr_full_host.c", "fs: ok", "wamr-fs", "", "wasi" });
 
-    // WASM engine swap — THE KEYSTONE: JavaScript (QuickJS compiled to wasm32-wasi: guest + 4 TUs)
-    // runs on WAMR confined -> "js: ok". WAMR now covers the full retired wasm3 agent family. The
     // full host's 1 MB operand stack carries QuickJS's eval recursion.
-    _ = h.addScriptTest(ctx, "wamr-js-test", "WASM engine swap keystone: JavaScript (QuickJS-on-wasm) runs on WAMR confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_js.c", "examples/apps/wamr_full_host.c", "js: ok", "wamr-js", "", "qjs" });
-    _ = h.addScriptTest(ctx, "llvm-wamr-js-test", "WASM engine swap keystone (LLVM): JavaScript (QuickJS-on-wasm) runs on WAMR confined under QEMU", &.{ "bash", "tools/lang/wamr-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_js.c", "examples/apps/wamr_full_host.c", "js: ok", "wamr-js", "", "qjs" });
 
-    // WASM-agent Phase 1 (docs/wasm-migration-plan.md §5): run a STOCK wasm32-wasi guest CONFINED.
-    // Build WAMR + the comprehensive wamr_full_host (WASI P1 + the brokered FS + the mc tool ABI) +
     // the all-MC libc into a U-mode ELF, load it with the real elf_loader into an isolated Sv39
-    // space (kernel UNMAPPED), and run an embedded `zig cc -target wasm32-wasi` printf hello —
     // reaching the kernel only through SYS_WRITE/SYS_EXIT. The mirror of qjs-confined-test. Both
     // backends.
-    _ = h.addScriptTest(ctx, "wasm-wasi-hello-test", "WASM-agent Phase 1: run a stock wasm32-wasi guest confined in an isolated U-mode Sv39 space via the WASI P1 shim under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-wasm-wasi-hello-test", "WASM-agent Phase 1 (LLVM): run a stock wasm32-wasi guest confined via the WASI P1 shim under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // WASM-agent Phase 2 (docs/wasm-migration-plan.md §5): WASI filesystem via the simple app-run FS path.
-    // A stock wasm32-wasi guest does POSIX file I/O (open/write/read/close + mkdir) which wasi-libc
     // lowers to path_open/fd_read/fd_write/path_create_directory against the "/ws" preopen; the shim
     // routes these to TOOL_OP_FS_*. Write/read round-trip is ALLOWED; mkdir is DENIED and the guest
-    // observes EACCES — the WASM mirror of qjs-realtool-test. Both backends.
-    _ = h.addScriptTest(ctx, "wasm-realtool-test", "WASM-agent Phase 2: a stock wasm32-wasi guest drives the simple FS tool path confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_fs.c", "fs: ok", "wasm-realtool" });
 
-    _ = h.addScriptTest(ctx, "llvm-wasm-realtool-test", "WASM-agent Phase 2 (LLVM): a stock wasm32-wasi guest drives the simple FS tool path confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_fs.c", "fs: ok", "wasm-realtool" });
 
-    // WASM-agent Phase 3 (docs/wasm-migration-plan.md §5): brokered FETCH-ONLY network egress via
-    // NetCap. A WASM guest calls the MC host tool net_fetch(endpoint, token) (module "mc", not
     // general WASI sockets), which the shim maps to TOOL_OP_NET_FETCH through the net broker
     // (egress allowlist -> budget -> endpoint). Endpoint 1 allowed (107/108), endpoint 9 DENIED
-    // (EDENIED), budget exhaustion (EAGAIN) — the WASM mirror of qjs-nettool-test. Both backends.
-    _ = h.addScriptTest(ctx, "wasm-nettool-test", "WASM-agent Phase 3: a WASM guest drives the brokered fetch-only network egress tool (allow/deny/budget) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_net.c", "net: ok", "wasm-nettool" });
 
-    _ = h.addScriptTest(ctx, "llvm-wasm-nettool-test", "WASM-agent Phase 3 (LLVM): a WASM guest drives the brokered fetch-only network egress tool (allow/deny/budget) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_net.c", "net: ok", "wasm-nettool" });
 
-    // WASM-agent Phase 4 KEYSTONE (docs/wasm-migration-plan.md §5): JavaScript on the WASM path.
-    // The repo's vendored QuickJS compiled to wasm32-wasi (the Javy approach — Javy IS QuickJS-ng
-    // on wasm32-wasi — built with zig cc + wasi-libc since the Javy binary is unavailable here) runs
-    // a representative JS program (recursion + objects + JSON + closures) on the WAMR host + WASI
     // shim, confined. Proves JS agents survive the migration ("keep JS, retire the hack"). Both
-    // backends. (The 6th arg selects the QuickJS-on-wasm guest build.)
-    _ = h.addScriptTest(ctx, "wasm-js-agent-test", "WASM-agent Phase 4 keystone: JavaScript (QuickJS compiled to wasm32-wasi) runs on WAMR confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_js.c", "js: ok", "wasm-js-agent", "qjs" });
 
-    _ = h.addScriptTest(ctx, "llvm-wasm-js-agent-test", "WASM-agent Phase 4 keystone (LLVM): JavaScript (QuickJS compiled to wasm32-wasi) runs on WAMR confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_js.c", "js: ok", "wasm-js-agent", "qjs" });
 
-    // WASM-agent Phase 4b (docs/wasm-migration-plan.md §5): a JS AGENT drives the kernel broker on
-    // the WASM path. QuickJS-on-wasm registers net_fetch() as a JS global backed by the mc.net_fetch
     // import, which the shim routes to TOOL_OP_NET_FETCH; the JS observes the broker's allow (107/108)
-    // / deny (EDENIED) / budget (EAGAIN) decisions — the WASM mirror of qjs-nettool-test, but driven
     // from JS. Full JS-agent broker parity, completing the keystone. Both backends.
-    _ = h.addScriptTest(ctx, "wasm-js-nettool-test", "WASM-agent Phase 4b: a JS agent (QuickJS-on-wasm) drives the brokered network tool (allow/deny/budget) from JavaScript, confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_js_net.c", "js-net: ok", "wasm-js-nettool", "qjs" });
 
-    _ = h.addScriptTest(ctx, "llvm-wasm-js-nettool-test", "WASM-agent Phase 4b (LLVM): a JS agent (QuickJS-on-wasm) drives the brokered network tool (allow/deny/budget) from JavaScript, confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_js_net.c", "js-net: ok", "wasm-js-nettool", "qjs" });
 
-    // WASM-agent Phase 5 (docs/wasm-migration-plan.md §5): native async over the tool ABI. A WASM
     // guest uses the mc.tool_submit / mc.tool_poll surface to keep multiple ops in flight and drain
     // completions by id — mirrors the QuickJS async agents.
     //   async  : 12 overlapping SUM ops; 8 accepted + complete, 4 denied -E_AGAIN (ok=8 rejected=4).
     //   cancel : a slow op cancelled (TOOL_OP_CANCEL) completes -E_CANCELED while a fast one resolves.
     //   quota  : the 9th submit on a full 8-deep queue returns exactly -E_AGAIN.
     //   spurious: the spurious op's completion carries a bogus id the guest must detect.
-    _ = h.addScriptTest(ctx, "wasm-async-agent-test", "WASM-agent Phase 5: overlapping async tool ops + back-pressure (ok=8 rejected=4) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_async.c", "async: ok", "wasm-async-agent" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-async-agent-test", "WASM-agent Phase 5 (LLVM): overlapping async tool ops + back-pressure confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_async.c", "async: ok", "wasm-async-agent" });
 
-    _ = h.addScriptTest(ctx, "wasm-cancel-test", "WASM-agent Phase 5: cancel an in-flight async tool op (structured -E_CANCELED) confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_cancel.c", "cancel: ok", "wasm-cancel" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-cancel-test", "WASM-agent Phase 5 (LLVM): cancel an in-flight async tool op confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_cancel.c", "cancel: ok", "wasm-cancel" });
 
-    _ = h.addScriptTest(ctx, "wasm-quota-agent-test", "WASM-agent Phase 5: tool-ABI back-pressure surfaces as -E_AGAIN confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_quota.c", "quota: ok", "wasm-quota-agent" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-quota-agent-test", "WASM-agent Phase 5 (LLVM): tool-ABI back-pressure surfaces as -E_AGAIN confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_quota.c", "quota: ok", "wasm-quota-agent" });
 
-    _ = h.addScriptTest(ctx, "wasm-spurious-agent-test", "WASM-agent Phase 5: a spurious completion's unknown id is detected confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_spurious.c", "spurious: ok", "wasm-spurious-agent" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-spurious-agent-test", "WASM-agent Phase 5 (LLVM): a spurious completion's unknown id is detected confined under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_spurious.c", "spurious: ok", "wasm-spurious-agent" });
 
-    // WASM-agent Phase 6 (docs/wasm-migration-plan.md §5): substrate peers of the qjs agent gates,
-    // proving the WASM path reaches the SAME confined-agent surface. agent-smoke walks the whole
     // happy path in one run (async SUM resolve + capability-checked FS round-trip + timeout cancel);
     // cancel-edges asserts the broker rejects ill-formed cancels (post-completion + never-submitted
-    // -> -E_DENIED). Both are stock wasm32-wasi guests, both backends.
-    _ = h.addScriptTest(ctx, "wasm-agent-smoke-test", "WASM-agent Phase 6: a confined WASM guest walks the async happy path (SUM resolve + FS round-trip + timeout cancel) under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_smoke.c", "smoke: ok", "wasm-agent-smoke" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-agent-smoke-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest walks the async happy path (SUM + FS + timeout cancel) under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_smoke.c", "smoke: ok", "wasm-agent-smoke" });
 
-    _ = h.addScriptTest(ctx, "wasm-cancel-edges-test", "WASM-agent Phase 6: the broker rejects ill-formed cancels (post-completion + never-submitted -> -E_DENIED) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_cancel_edges.c", "cancel-edges: ok", "wasm-cancel-edges" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-cancel-edges-test", "WASM-agent Phase 6 (LLVM): the broker rejects ill-formed cancels (post-completion + never-submitted -> -E_DENIED) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_cancel_edges.c", "cancel-edges: ok", "wasm-cancel-edges" });
 
-    _ = h.addScriptTest(ctx, "wasm-broker-agent-test", "WASM-agent Phase 6: out-of-order broker completion (slow-then-fast submit -> fast resolves first, order=FS) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_broker.c", "broker-agent: order=FS", "wasm-broker-agent" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-broker-agent-test", "WASM-agent Phase 6 (LLVM): out-of-order broker completion (slow-then-fast submit -> fast resolves first, order=FS) from a confined WASM guest under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_broker.c", "broker-agent: order=FS", "wasm-broker-agent" });
 
-    // WASM-agent Phase 6 basic syscall-driven agent (mirrors qjs-agent-test): submit a brokered tool
     // op and demultiplex its completion by id over SYS_SUBMIT/SYS_POLL, confined.
-    _ = h.addScriptTest(ctx, "wasm-agent-test", "WASM-agent Phase 6: a confined WASM agent submits a brokered tool op and resolves it by id over SYS_SUBMIT/SYS_POLL under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_agent.c", "agent: ok", "wasm-agent" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-agent-test", "WASM-agent Phase 6 (LLVM): a confined WASM agent resolves a brokered tool op by id over SYS_SUBMIT/SYS_POLL under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_agent.c", "agent: ok", "wasm-agent" });
 
-    // WASM-agent Phase 6 S-mode peers (docs/wasm-migration-plan.md §5): the same confined WASM agent
     // ELF, but the kernel runs in S-mode under REAL OpenSBI (kernel mapped supervisor-only). Mirrors
     // the qjs-smode-* gates; one parameterized script covers confined / agent / async-agent by guest.
-    _ = h.addScriptTest(ctx, "wasm-smode-confined-test", "WASM-agent Phase 6: a WASM guest runs CONFINED under REAL OpenSBI (S-mode), kernel supervisor-only, under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-smode-confined-test", "WASM-agent Phase 6 (LLVM): a WASM guest runs CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "wasm-smode-agent-test", "WASM-agent Phase 6: a WASM agent walks the async happy path (SUM + FS + timeout cancel) CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_smoke.c", "smoke: ok", "wasm-smode-agent" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-smode-agent-test", "WASM-agent Phase 6 (LLVM): a WASM agent walks the async happy path CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_smoke.c", "smoke: ok", "wasm-smode-agent" });
 
-    _ = h.addScriptTest(ctx, "wasm-smode-async-agent-test", "WASM-agent Phase 6: overlapping async tool ops + back-pressure (ok=8 rejected=4) CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_async.c", "async: ok", "wasm-smode-async-agent" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-smode-async-agent-test", "WASM-agent Phase 6 (LLVM): overlapping async tool ops + back-pressure CONFINED under REAL OpenSBI (S-mode) under QEMU", &.{ "bash", "tools/arch/wasm-smode-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_async.c", "async: ok", "wasm-smode-async-agent" });
 
-    // WASM-agent Phase 6 S-mode device-IRQ peers: a confined WASM guest's brokered tool completes
     // through a REAL S-mode virtio PLIC interrupt + the gated SYS_POLL fixture. Mirror qjs-smode-{net,blk}-irq.
-    _ = h.addScriptTest(ctx, "wasm-smode-net-irq-tool-test", "WASM-agent Phase 6: a confined WASM guest's net_fetch completes via a real S-mode virtio-net PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-smode-net-irq-tool-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest's net_fetch completes via a real S-mode virtio-net PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-net-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "wasm-smode-blk-irq-tool-test", "WASM-agent Phase 6: a confined WASM guest's fs_read completes via a real S-mode virtio-blk PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-smode-blk-irq-tool-test", "WASM-agent Phase 6 (LLVM): a confined WASM guest's fs_read completes via a real S-mode virtio-blk PLIC interrupt under QEMU", &.{ "bash", "tools/arch/wasm-smode-blk-irq-tool-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // WASM-agent Phase 7 (docs/wasm-migration-plan.md §5): JS perf benchmark — native QuickJS vs
-    // QuickJS-on-WASM on the SAME workload. Gate is functional-parity (same numeric result) + report
-    // emission (zig-out/wasm-js-bench-*.json); QEMU timings are indicative (recorded, not gated on).
-    _ = h.addScriptTest(ctx, "wasm-js-bench-test", "WASM-agent Phase 7: native QuickJS vs QuickJS-on-WASM evaluate the same JS workload to the same result; emit the comparison report under QEMU", &.{ "bash", "tools/lang/wasm-js-bench-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-js-bench-test", "WASM-agent Phase 7 (LLVM): native QuickJS vs QuickJS-on-WASM JS benchmark + comparison report under QEMU", &.{ "bash", "tools/lang/wasm-js-bench-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // WASM-agent Phase 5 linear-memory cap: a confined guest's heap is BOUNDED and hitting the bound
     // fails GRACEFULLY (malloc -> NULL at the cap, no trap, agent stays confined) — an untrusted agent
     // cannot exhaust host memory and OOM is a normal confined error, not a crash.
-    _ = h.addScriptTest(ctx, "wasm-memcap-test", "WASM-agent Phase 5: a confined WASM guest's linear memory is bounded; OOM is graceful (malloc->NULL, no trap) under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_memcap.c", "memcap: ok", "wasm-memcap" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-memcap-test", "WASM-agent Phase 5 (LLVM): a confined WASM guest's linear memory is bounded; OOM is graceful under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_memcap.c", "memcap: ok", "wasm-memcap" });
 
-    // Phase 4.1: a confined WASM guest grows its linear memory FAR past the old ~14 MiB arena ceiling
-    // (18 MiB) with the data intact — proving demand-paged growth (no O(n^2) realloc-copy, no trap, and
     // the guest's own stdout survives the large grow).
-    _ = h.addScriptTest(ctx, "wasm-biggrow-test", "WASM-agent Phase 4.1: a confined WASM guest grows its linear memory to 18 MiB (>14 MiB arena) with correct data via demand paging under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "c", "examples/apps/wasm/wasi_biggrow.c", "biggrow: ok", "wasm-biggrow" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-biggrow-test", "WASM-agent Phase 4.1 (LLVM): a confined WASM guest grows its linear memory to 18 MiB with correct data via demand paging under QEMU", &.{ "bash", "tools/lang/wasm-confined-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/wasm/wasi_biggrow.c", "biggrow: ok", "wasm-biggrow" });
 
     // Demand-grown guest heap (Increment 1): a confined agent's libc heap grows ON DEMAND past the
     // fixed static arena via SYS_SBRK — the kernel maps fresh frames at the running break, so the heap
@@ -1093,11 +978,8 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "sbrk-cap-test", "Demand-grown heap cap: a confined agent grows past the arena then hits the unified-ledger memory ceiling with a clean NULL (no trap) under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "c", "examples/apps/sbrk_cap.c", "SBRK-CAP-OK", "sbrk-cap" });
     _ = h.addScriptTest(ctx, "llvm-sbrk-cap-test", "Demand-grown heap cap (LLVM): a confined agent grows past the arena then hits the unified-ledger memory ceiling with a clean NULL under QEMU", &.{ "bash", "tools/lang/sbrk-grow-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/sbrk_cap.c", "SBRK-CAP-OK", "sbrk-cap" });
 
-    // WASM-agent Phase 5 CPU-runaway watchdog: a runaway agent (infinite loop, no syscalls) is
     // preempted by the machine-timer watchdog and KILLED past its CPU budget — a coarse liveness
     // bound (NOT deterministic fuel) proving an untrusted agent cannot wedge the system.
-    _ = h.addScriptTest(ctx, "wasm-watchdog-test", "WASM-agent Phase 5: a confined runaway WASM agent is preempted + killed by the machine-timer CPU watchdog under QEMU", &.{ "bash", "tools/lang/wasm-watchdog-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-wasm-watchdog-test", "WASM-agent Phase 5 (LLVM): a confined runaway WASM agent is preempted + killed by the machine-timer CPU watchdog under QEMU", &.{ "bash", "tools/lang/wasm-watchdog-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // QuickJS-agent Phase 6: run QuickJS CONFINED — build the engine + all-MC libc into a U-mode
     // ELF, load it with the real elf_loader into an isolated Sv39 space (kernel UNMAPPED), and

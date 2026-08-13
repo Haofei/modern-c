@@ -37,29 +37,6 @@ DEPENDENCIES = {
             "next QuickJS re-vendor",
         ],
     },
-    "wamr": {
-        "license": "LICENSE",
-        "needles": [
-            "Upstream",
-            "Recorded version",
-            "Recorded commit",
-            "0e65961d8e560b3d8a125045a29336ce6a0b16ad",
-            "Archive SHA-256",
-            "dc27b60a1aff64b89d2ca51f036e0f1baee000e156ed7e9283e4f97b660e6e65",
-            "License",
-            "What is kept",
-            "dropped",
-            "Local modifications",
-            "core/shared/platform/mc",
-            "How it is built and used",
-        ],
-        "forbidden": [
-            "Recorded commit:** unknown",
-            "exact upstream commit is unknown",
-            "exact recorded commit is currently unknown",
-            "next WAMR re-vendor",
-        ],
-    },
     "openlibm": {
         "license": "LICENSE.md",
         "needles": [
@@ -89,7 +66,6 @@ DEPENDENCIES = {
 
 DOC_NEEDLES = [
     "quickjs",
-    "wamr",
     "openlibm",
     "README.vendored.md",
     "THIRD-PARTY-LICENSES.md",
@@ -183,19 +159,6 @@ def check_manifest_links() -> list[str]:
     return errors
 
 
-def check_wamr_loader_guard() -> list[str]:
-    path = ROOT / "third_party" / "wamr" / "core" / "iwasm" / "interpreter" / "wasm_loader.c"
-    if not path.is_file():
-        return [f"missing {path.relative_to(ROOT)}"]
-    text = path.read_text(encoding="utf-8")
-    guarded_read = "CHECK_BUF(buf, buf_end, 1);\n            uint8 data = *buf++;"
-    if guarded_read not in text:
-        return [
-            f"{path.relative_to(ROOT)} must bounds-check branch-hint payload bytes before reading them"
-        ]
-    return []
-
-
 def main() -> int:
     errors: list[str] = []
     for name, cfg in DEPENDENCIES.items():
@@ -203,7 +166,6 @@ def main() -> int:
     errors.extend(check_no_extra_license_deps())
     errors.extend(check_doc())
     errors.extend(check_manifest_links())
-    errors.extend(check_wamr_loader_guard())
 
     if errors:
         for error in errors:

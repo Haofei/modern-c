@@ -19,28 +19,6 @@ remain in each `README.vendored.md`.
   notice, and warranty disclaimer in source or binary redistributions that
   include this dependency or substantial portions of it.
 
-## WAMR
-
-- Component: WAMR, the WebAssembly Micro Runtime.
-- Upstream and provenance:
-  <https://github.com/bytecodealliance/wasm-micro-runtime>, recorded version
-  `2.4.3`, untagged upstream `main` snapshot commit
-  `0e65961d8e560b3d8a125045a29336ce6a0b16ad`, source archive SHA-256
-  `dc27b60a1aff64b89d2ca51f036e0f1baee000e156ed7e9283e4f97b660e6e65`; see
-  `third_party/wamr/README.vendored.md`.
-- License summary: Apache-2.0 WITH LLVM-exception.
-- Local license file: `third_party/wamr/LICENSE`.
-- Redistribution note: provide a copy of the Apache License, Version 2.0; keep
-  required copyright, patent, trademark, and attribution notices; mark modified
-  files when distributing modified source; and preserve any upstream NOTICE text
-  file if one is present.
-- WAMR notice text: this vendored subset currently has no separate NOTICE file.
-  If a future re-vendor imports one, preserve its attribution text in the
-  redistributed source, documentation, NOTICE file, or generated third-party
-  notices wherever such notices normally appear. The LLVM exception permits
-  redistributing embedded object-form portions without Apache-2.0 Sections
-  4(a), 4(b), and 4(d) for that embedded object form.
-
 ## openlibm
 
 - Component: openlibm.

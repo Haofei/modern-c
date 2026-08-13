@@ -4,9 +4,7 @@ This repository vendors a small number of third-party components under
 `third_party/`:
 
 - `quickjs` for confined JavaScript agents.
-- `wamr` for confined WebAssembly agents.
-- `openlibm` for freestanding libm support used by C apps, QuickJS, and WAMR
-  hosts.
+- `openlibm` for freestanding libm support used by C apps and QuickJS hosts.
 
 ## Required metadata
 
@@ -47,11 +45,11 @@ zig build vendoring-test
    Do not import upstream tests, examples, docs, generated build trees, or unused
    engines unless the local build needs them.
 5. Diff the old and new vendor trees. Separate upstream changes from local
-   modifications such as WAMR's `mc` platform port. Reapply local changes
-   deliberately and update the local-modifications section.
+   modifications. Reapply local changes deliberately and update the
+   local-modifications section.
 6. Re-run the component gates:
-   `tools/user/build-qjs.sh` consumers for QuickJS, WAMR confined-agent gates
-   for WAMR, and `tools/user/build-openlibm.sh` consumers for openlibm.
+   `tools/user/build-qjs.sh` consumers for QuickJS and
+   `tools/user/build-openlibm.sh` consumers for openlibm.
 7. Run the static gates:
    `python3 tools/toolchain/vendoring-test.py`, `zig build vendoring-test`,
    `zig build fast` when practical, and the relevant QEMU gates for the changed

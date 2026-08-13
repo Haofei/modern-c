@@ -21,7 +21,7 @@
           "selfhost/",
           "kernel product claims",
           "advanced incremental LSP",
-          "QuickJS/WAMR runtime profiles"
+          "QuickJS runtime profiles"
         ]
       },
       "blocking_risks": [
@@ -199,7 +199,6 @@
         "qemu",
         "opensbi",
         "quickjs",
-        "wamr",
         "openlibm"
       ]
     }
