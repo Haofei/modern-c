@@ -17,9 +17,9 @@ pub fn register(ctx: *h.Ctx) void {
     // Positive CI anti-vacuity assertions for m0 are declared in
     // docs/gate-manifest.json. tools/ci/pass-gates.py verifies every manifest
     // assertion is still an m0 dependency, and CI uses that manifest-backed list
-    // when grepping the m0 log and re-running the async QEMU gates in Docker.
+    // when grepping the m0 log and re-running selected QEMU validation gates in Docker.
 
-    const riscv_qemu_validation_step = b.step("riscv-qemu-validation", "Run the RISC-V QEMU/OpenSBI validation surrogate for the selected real-board path");
+    const riscv_qemu_validation_step = b.step("riscv-qemu-validation", "Run the retained RISC-V QEMU/OpenSBI validation surrogate");
     for (riscv_qemu_validation) |name| {
         riscv_qemu_validation_step.dependOn(ctx.cmd(name));
     }
@@ -108,7 +108,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-heap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-paging-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-timer-test"));
-    // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI;
+    // smode-plic-test validates S-mode external-interrupt delivery through the PLIC under OpenSBI;
     // the multishot variant proves the re-armed steady-state path (regression gate for the former
     // C-backend async-IRQ reset, fixed by #[align(4)] on naked trap vectors).
     m0_full_step.dependOn(ctx.cmd("llvm-smode-plic-test"));
@@ -218,9 +218,9 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("try-defer-test"));
     // sync-test exercises std/sync locks + linear guards (needs clang).
     m0_full_step.dependOn(ctx.cmd("sync-test"));
-    // smode-timer-test proves REAL S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
+    // smode-timer-test validates S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
     m0_full_step.dependOn(ctx.cmd("smode-timer-test"));
-    // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI;
+    // smode-plic-test validates S-mode external-interrupt delivery through the PLIC under OpenSBI;
     // the multishot variant proves the re-armed steady-state path on the C backend (regression
     // gate for the former async-IRQ reset).
     m0_full_step.dependOn(ctx.cmd("smode-plic-test"));

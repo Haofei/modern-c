@@ -130,21 +130,19 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "sync-test", "Build, link, and run a std/sync guarded critical section", &.{ "bash", "tools/toolchain/sync-test.sh", "zig-out/bin/mcc" });
 
 
-    // Item (4): REAL S-mode timer-interrupt delivery under OpenSBI — a flat
-    // S-mode kernel arms the SBI TIME extension, enables S-mode timer
-    // interrupts, and counts ticks in its trap handler (re-arming each tick,
-    // wfi-parked). The RISC-V analogue of the x86 X4 LAPIC-timer proof.
-    _ = h.addScriptTest(ctx, "smode-timer-test", "Build and run the flat S-mode kernel taking REAL S-mode timer interrupts under REAL OpenSBI", &.{ "bash", "tools/arch/smode-timer-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-smode-timer-test", "Build and run the LLVM-lowered flat S-mode timer-interrupt kernel under REAL OpenSBI", &.{ "bash", "tools/arch/smode-timer-test.sh", "zig-out/bin/mcc", "llvm" });
+    // S-mode timer-interrupt validation under OpenSBI. The fixture arms the
+    // SBI TIME extension, enables timer interrupts, and counts re-armed ticks.
+    _ = h.addScriptTest(ctx, "smode-timer-test", "Build and run the S-mode timer-interrupt validation fixture under OpenSBI", &.{ "bash", "tools/arch/smode-timer-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-smode-timer-test", "Build and run the LLVM-lowered S-mode timer-interrupt validation fixture under OpenSBI", &.{ "bash", "tools/arch/smode-timer-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "smode-plic-test", "Build and run the flat S-mode kernel taking REAL S-mode EXTERNAL interrupts through the PLIC under REAL OpenSBI", &.{ "bash", "tools/arch/smode-plic-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-smode-plic-test", "Build and run the LLVM-lowered flat S-mode external-interrupt (PLIC) kernel under REAL OpenSBI", &.{ "bash", "tools/arch/smode-plic-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "smode-plic-test", "Build and run the S-mode external-interrupt validation fixture through the PLIC under OpenSBI", &.{ "bash", "tools/arch/smode-plic-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-smode-plic-test", "Build and run the LLVM-lowered S-mode external-interrupt validation fixture through the PLIC under OpenSBI", &.{ "bash", "tools/arch/smode-plic-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // Steady-state (re-armed) variant: 3 discrete external interrupts. The regression gate for
     // the former C-backend S-mode async-IRQ reset (root cause: a 2-byte-aligned naked trap
     // vector → reserved stvec MODE; fixed by #[align(4)] / naked-defaults-to-4).
-    _ = h.addScriptTest(ctx, "smode-plic-multishot-test", "Build and run the flat S-mode kernel taking 3 RE-ARMED REAL S-mode EXTERNAL interrupts via the PLIC under REAL OpenSBI", &.{ "bash", "tools/arch/smode-plic-multishot-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-smode-plic-multishot-test", "Build and run the LLVM-lowered re-armed S-mode external-interrupt (PLIC) kernel under REAL OpenSBI", &.{ "bash", "tools/arch/smode-plic-multishot-test.sh", "zig-out/bin/mcc", "llvm" });
+    _ = h.addScriptTest(ctx, "smode-plic-multishot-test", "Build and run the re-armed S-mode external-interrupt validation fixture through the PLIC under OpenSBI", &.{ "bash", "tools/arch/smode-plic-multishot-test.sh", "zig-out/bin/mcc", "c" });
+    _ = h.addScriptTest(ctx, "llvm-smode-plic-multishot-test", "Build and run the LLVM-lowered re-armed S-mode external-interrupt validation fixture through the PLIC under OpenSBI", &.{ "bash", "tools/arch/smode-plic-multishot-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
     _ = h.addScriptTest(ctx, "demo-test", "Lower every demo/ driver to C and compile-check it", &.{ "bash", "tools/toolchain/demo-test.sh", "zig-out/bin/mcc" });
@@ -261,10 +259,6 @@ pub fn register(ctx: *h.Ctx) void {
     // Reproduces the stale-cache regression that reverted the first O(1)/O(children) attempt.
     _ = h.addScriptTest(ctx, "sched-difftest", "differential scheduler gate: next_runnable pick == independent authoritative scan across randomized transitions (stale-cache regression guard)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "sched-difftest" });
 
-
-    // X4: x86-64 Local-APIC timer — REAL, non-polled interrupt delivery. PICs masked, LAPIC timer
-    // periodic at IDT vec 0x20, sti + hlt-spin until ticks fire.
-
     _ = h.addScriptTest(ctx, "grant-test", "Memory grant: bounded delegation + revocation", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "grant-test" });
 
 
@@ -330,20 +324,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-mem-test", "Word-aligned mem ops under QEMU (LLVM backend): mem_copy/mem_set/memmove byte-exact across lengths+alignments, memmove overlap both directions", &.{ "bash", "tools/mem/mem-test.sh", "zig-out/bin/mcc", "llvm" });
 
-
-    // through the page-table-aware copy_to_user_pt / copy_from_user_pt (single-pass walk).
-
-
-    // next_runnable() round-robin pick. In the re-land the pick path is unchanged (design B),
-    // so this stays the standing baseline tool; the algorithmic win was the O(children)
-    // process-death cleanup path, not the pick.
-
-
-    // fragment-and-coalesce free sequence that drives the free list to capacity — the
-    // before/after number for killing the O(n^2) coalesce in kernel/core/heap.mc.
-
-
-    // plan / review F3) — maps every PT_LOAD at its vaddr with per-segment perms, zeroes bss.
     _ = h.addScriptTest(ctx, "elf-loader-test", "Multi-segment ELF64 loader under QEMU: maps every PT_LOAD at its vaddr with per-segment R/W/X perms, copies file bytes, zeroes bss; synthetic 2-segment image, asserts mappings/content/bss/perms", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test" });
 
     _ = h.addScriptTest(ctx, "llvm-elf-loader-test", "Multi-segment ELF64 loader under QEMU (LLVM backend): per-segment perms, file copy, bss zero", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test" });
@@ -353,21 +333,10 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU (LLVM backend): a user-derived scalar must pass checked_len/checked_index/validate_bound before driving a copy length or index", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test" });
 
-    // (delay 1) request; retained only as a historical async ordering note.
-
-
-    // completion carries a bogus id; the host must fail loudly ("host: unknown completion id").
-
-
-    // is driven from a C runtime under QEMU on both backends — the printf-family interop the
     _ = h.addScriptTest(ctx, "vararg-test", "C-ABI variadic MC fn (va.start/va.arg/va.end) runs under QEMU", &.{ "bash", "tools/lang/vararg-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-vararg-test", "LLVM: C-ABI variadic MC fn runs under QEMU", &.{ "bash", "tools/lang/vararg-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // kernel/core/heap.mc's free-list. Driven via malloc/free/calloc/realloc from a C runtime
-
-
-    // memmove/memcmp/strlen/strcmp/strncmp/strchr/memchr, driven from a C runtime under QEMU on
     _ = h.addScriptTest(ctx, "cstr-test", "All-MC mem/string core runs under QEMU", &.{ "bash", "tools/lang/cstr-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-cstr-test", "LLVM: all-MC mem/string core runs under QEMU", &.{ "bash", "tools/lang/cstr-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -378,34 +347,12 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-cnum-test", "LLVM: all-MC ctype + integer parsing runs under QEMU", &.{ "bash", "tools/lang/cnum-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // varargs intrinsics), compiled as part of the AGGREGATED libc (user/libc/libc.mc — the
-    // a C runtime under QEMU on both backends.
     _ = h.addScriptTest(ctx, "stdio-test", "All-MC printf family (aggregated libc) runs under QEMU", &.{ "bash", "tools/lang/stdio-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-stdio-test", "LLVM: all-MC printf family runs under QEMU", &.{ "bash", "tools/lang/stdio-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // (1 + 2*3 == 7). Both backends.
-
-
-    // _count_limit). The same burn() guest is terminated mid-loop under a low limit and completes
-
-
-    // CALL_INDIRECT_OVERLONG support, so stock wasi-libc output loads without feature-pinning.
-
-
-    // async happy path in a single run — retained host async validation note.
-
-
-    // post-completion cancel is denied, a failed-submit cancel hits nothing, a late completion after
-    // cancel produces NO fatal unknown-id, and an FS read resolves non-empty — each with a distinct
-    // marker; the host drains to inflight=0.
-
-
-    // evaluating 6*7=42 confined. Proves the host need not be C either. Both backends.
-
-
-    // Preflight: explicit toolchain check for the QEMU milestone gates (clang/ld.lld/llc/qemu +
-    // riscv64 target). `zig build preflight`. Milestone gates with MC_REQUIRE_TOOLS=1/CI=1 fail
+    // Preflight: explicit toolchain check for QEMU validation gates (clang/ld.lld/llc/qemu +
+    // riscv64 target). `zig build preflight`. Validation gates with MC_REQUIRE_TOOLS=1/CI=1 fail
     // rather than skip when a tool is missing (tools/qemu/kernel-boot-lib.sh).
-    _ = h.addScriptTestOpts(ctx, "preflight", "Check the toolchain (clang/ld.lld/llc/qemu + riscv64 target) the QEMU milestone gates need", &.{ "bash", "tools/preflight.sh" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "preflight", "Check the toolchain (clang/ld.lld/llc/qemu + riscv64 target) needed by QEMU validation gates", &.{ "bash", "tools/preflight.sh" }, .{ .install = false });
 }
