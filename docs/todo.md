@@ -8,9 +8,10 @@ Current baseline:
 
 - `zig build m0` is the core compiler qualification gate for normal local/CI
   feedback; `zig build m0-full` is the full milestone gate for the implemented
-  language, backend, hardening, fuzz, runtime, and QEMU validation surface.
+  language, backend, hardening, fuzz, runtime, and retained QEMU validation
+  surface.
 - `zig build riscv-qemu-validation` is the focused QEMU/OpenSBI validation gate
-  for the retained RISC-V board-metadata fixture.
+  for the retained RISC-V language/backend surrogate.
 - The C and LLVM backends both cover the current implemented spec surface.
 - RISC-V S-mode under OpenSBI, confined app loading, interrupt-driven driver
   paths, resource governance, and selected cross-architecture kernel gates are
@@ -22,7 +23,7 @@ Current baseline:
 
 | Priority | Area | Current state | Next work |
 |---|---|---|---|
-| P0 | Kernel validation workload | StarFive VisionFive 2 metadata remains as a board-resource fixture (`kernel/platform/starfive_visionfive2/profile.mc`): OpenSBI S-mode plus FDT-described UART/interrupt/storage/network expectations. `visionfive2-resource-test` / `llvm-visionfive2-resource-test` validate the profile's FDT-resource fixture against QEMU, but this is language/backend evidence, not hardware release evidence. | Keep the QEMU surrogate green. Use real hardware only when it exposes language, ABI, driver, async, MMIO, syscall, or backend-lowering gaps. |
+| P0 | Kernel validation workload | Board-specific VisionFive 2 metadata, QMP hotplug, and soak-style qualification fixtures have been removed from the current language-oriented scope. The retained RISC-V QEMU/OpenSBI gates are language/backend evidence, not hardware release evidence. | Keep the QEMU surrogate green only where it validates language, ABI, driver, async, MMIO, syscall, or backend-lowering behavior. |
 | P0 | Interrupt-driven I/O | S-mode timer, single-shot PLIC delivery, re-armed PLIC multishot, context-aware PLIC helper reuse, reusable S-mode PLIC dispatch, and retained device IRQ completion gates pass on both backends. | Keep the promoted IRQ gates green as language/backend evidence. Add hardware runs only when they expose language, ABI, driver, async, MMIO, syscall, or backend-lowering gaps. |
 | P1 | Confined app ABI fixtures | Confined app broker fixtures and the versioned `SYS_SUBMIT` / `SYS_POLL` user ABI have been removed from the current language-oriented scope. | Keep async validation inside `kernel/lib/async.mc` and device IRQ fixtures. |
 | P1 | Cross-architecture backend gaps | C-backed x86/aarch64 paths are substantially gated. LLVM has target-aware `va_list`/`va_arg` lowering and emits target triples/data layouts for retained user-libc objects. | Keep promoted gates green; add cross-architecture depth only when it validates compiler, ABI, runtime, or backend behavior. |

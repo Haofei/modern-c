@@ -1,6 +1,6 @@
 # QEMU Validation Checklist
 
-Use this when VisionFive 2 hardware is unavailable.
+Use this for the retained RISC-V OpenSBI/QEMU language-validation surrogate.
 
 ## Local
 
@@ -8,8 +8,6 @@ Use this when VisionFive 2 hardware is unavailable.
 - Run `zig build riscv-qemu-validation` for the focused RISC-V OpenSBI/QEMU
   surrogate. On macOS, set `LLD` when Homebrew installs it outside `PATH`, for
   example `LLD=/opt/homebrew/opt/lld/bin/ld.lld zig build riscv-qemu-validation`.
-- Run `tools/qemu/riscv-qemu-soak-smoke.sh` before making a durability claim from
-  QEMU-only evidence. Set `MC_SOAK_ITERS=N` to raise the repeat count.
 - Run `zig build m0-full` before broad milestone or release claims.
 
 ## Required Tools
@@ -22,9 +20,9 @@ Use this when VisionFive 2 hardware is unavailable.
 
 - The command exits 0.
 - CI/local logs do not contain `SKIP:` for the QEMU surrogate.
-- `visionfive2-resource-test` and `llvm-visionfive2-resource-test` pass when
-  board-profile or FDT/BootInfo code changes.
+- Retained RISC-V OpenSBI/QEMU gates pass when FDT, BootInfo, interrupt, MMIO,
+  or backend-lowering code changes.
 
-QEMU evidence is a surrogate. It keeps the OpenSBI, FDT, interrupt, storage,
-network, and agent paths honest, but it is not a VisionFive 2 hardware boot or
-real long-duration soak result.
+QEMU evidence is a surrogate. It keeps selected OpenSBI, FDT, interrupt, MMIO,
+and backend paths honest, but it is not hardware qualification or a
+long-duration soak result.

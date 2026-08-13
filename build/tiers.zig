@@ -22,8 +22,6 @@ pub fn register(ctx: *h.Ctx) void {
         "llvm-net-smode-irq-test",
         "net-smode-rx-irq-test",
         "llvm-net-smode-rx-irq-test",
-        "visionfive2-resource-test",
-        "llvm-visionfive2-resource-test",
     };
 
     // Positive CI anti-vacuity assertions for m0 are declared in
@@ -206,7 +204,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("kernel-contract-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("kernel-scope-inventory-test"));
-    m0_full_step.dependOn(ctx.cmd("qmp-ordering-test"));
     m0_full_step.dependOn(ctx.cmd("numeric-comptime-matrix-test"));
     m0_full_step.dependOn(ctx.cmd("parallel-runner-test"));
     m0_full_step.dependOn(ctx.cmd("m0-timing-report-test"));
@@ -538,7 +535,6 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
     fast_step.dependOn(ctx.cmd("kernel-contract-inventory-test"));
     fast_step.dependOn(ctx.cmd("kernel-scope-inventory-test"));
-    fast_step.dependOn(ctx.cmd("qmp-ordering-test"));
     fast_step.dependOn(ctx.cmd("numeric-comptime-matrix-test"));
     fast_step.dependOn(ctx.cmd("parallel-runner-test"));
     fast_step.dependOn(ctx.cmd("std-api-docs-test"));
@@ -584,7 +580,6 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test")); // advanced ownership forms stay outside the stable v0 surface
     c0_step.dependOn(ctx.cmd("kernel-contract-inventory-test")); // bounded region/effect/FFI profile stays explicit
     c0_step.dependOn(ctx.cmd("kernel-scope-inventory-test")); // kernel remains a language-validation workload, not a product roadmap
-    c0_step.dependOn(ctx.cmd("qmp-ordering-test")); // lifecycle qualification transport preserves asynchronous events
     c0_step.dependOn(ctx.cmd("numeric-comptime-matrix-test")); // every fixed-width arithmetic domain keeps its comptime semantics
     c0_step.dependOn(ctx.cmd("parallel-runner-test")); // full-tier acceleration retains the exact gate inventory and CPU budget
     c0_step.dependOn(ctx.cmd("std-api-docs-test")); // generated stdlib API index stays current
