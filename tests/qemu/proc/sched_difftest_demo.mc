@@ -11,8 +11,8 @@
 // was runnable but the authoritative state said was not. This gate reproduces exactly that class:
 // it FAILS against the stale-cache version and PASSES against the authoritative scan.
 //
-// No context switch is exercised (proc_exit/proc_yield are avoided): every op mutates only the
-// runnability state (block reasons / process state), and the pick is compared, never taken.
+// Context switching is only exercised through proc_exit for the cleanup path; every other op
+// mutates runnability state directly and compares the pick without taking it.
 
 import "kernel/core/process.mc";
 import "kernel/core/proc_sched.mc";
@@ -157,15 +157,18 @@ export fn sched_difftest_run() -> u32 {
                 err(e) => {}
             }
         } else if op == 5 {
-            // fault-kill a live slot: death cleanup + Zombie (an instrumented transition).
+            // Exit a live slot: death cleanup + Zombie through the ordinary process lifecycle.
             let slot: usize = pick_live(&g_t, r);
             if slot < MAX_PROCS {
-                proc_fault_kill(&g_t, slot);
+                let saved_current: usize = g_t.current;
+                g_t.current = slot;
+                proc_exit(&g_t, 0x55);
+                g_t.current = saved_current;
             }
         } else if op == 6 {
             // death-cleanup-with-blocked-waiter: waiter A blocks receiving-from victim B, then B is
-            // fault-killed; death cleanup must wake A (clearing its BLOCK_RECV) so the pick sees A
-            // runnable again. The exact endpoint-test failure shape.
+            // exited; death cleanup must wake A (clearing its BLOCK_RECV) so the pick sees A
+            // runnable again.
             let a: usize = pick_live(&g_t, r);
             let b: usize = pick_live(&g_t, lcg(r));
             if a < MAX_PROCS {
@@ -177,7 +180,10 @@ export fn sched_difftest_run() -> u32 {
                         if !check_all(&g_t) {
                             return 0;
                         }
-                        proc_fault_kill(&g_t, b);
+                        let saved_current: usize = g_t.current;
+                        g_t.current = b;
+                        proc_exit(&g_t, 0x56);
+                        g_t.current = saved_current;
                     }
                 }
             }

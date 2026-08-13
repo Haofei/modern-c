@@ -38,9 +38,9 @@ agree (§8.3 distinguishes this from CPU-architecture support).
 
 | Area | Directory |
 |------|-----------|
-| Core (process, ipc, sched, capability, memory, resource governance) | `kernel/core/` |
+| Core (process, ipc, sched, capability, memory) | `kernel/core/` |
 | Arch HAL (riscv64 primary, x86_64/aarch64 partial) | `kernel/arch/<arch>/` |
-| Library types (resacct, granttab, supervisor, mailbox, fdspace, registry) | `kernel/lib/` |
+| Library types (resacct, mailbox, fdspace) | `kernel/lib/` |
 | Filesystems & storage | removed from current core scope |
 | Network stack | removed from current core scope |
 | Drivers | `kernel/drivers/` |
@@ -134,9 +134,9 @@ This trust base is small relative to a monolithic kernel, which is the point
    dispatched tool call) flows through a typed mediation point that can observe and gate it.
    This is *not* a claim that every byte an agent touches is mediated — in-process MOCK tool
    handlers (§10.3) are explicitly **not** a trust boundary.
-5. **Mechanism, not policy.** The kernel provides sensors (provenance) and actuators
-   (revoke / throttle / pause / OOM-kill / checkpoint). *Deciding* when to pull a lever
-   lives above the kernel.
+5. **Mechanism, not policy.** The validation kernel keeps only small mechanisms that expose
+   language/compiler behavior. Product scheduling, reclaim, checkpoint, and governance policy
+   are outside this scope.
 6. **Bounded by construction.** Tables are fixed-capacity (no hidden allocation on hot
    paths); failures are typed `Result` values, not sentinels or silent drops.
 7. **Dual-backend parity.** `emit-c` and `emit-llvm` must produce equivalent behavior;
@@ -156,9 +156,8 @@ This trust base is small relative to a monolithic kernel, which is the point
             │            migration target: userspace processes)        │
             │            VFS · net server · tool server                │
    kernel   ├─────────────────────────────────────────────────────────┤
-            │  CORE: process · scheduler · IPC · capability · grants   │
-            │        memory (page/heap/paging) · governance · agent    │
-            │        supervisor · provenance/audit                     │
+            │  CORE: process · scheduler · IPC · capability           │
+            │        memory (page/heap/paging)                         │
             ├─────────────────────────────────────────────────────────┤
             │  Arch HAL: boot · trap/syscall · context switch · paging │
             │            timer (CLINT) · IRQ (PLIC)                     │
@@ -281,15 +280,12 @@ fault-isolation QEMU demos were removed from the compiler-core workload. The ret
 surface validates typed paging primitives and user-access boundaries; it does not define an OS
 virtual-memory product layer.
 
-### 9.6 Resource accounting — GATED
+### 9.6 Resource accounting — library-scope
 
-`kernel/lib/resacct.mc`. `ResourceAccount { used, limit }`. `resacct_charge(n)` is
-**all-or-nothing**: on overflow or over-limit it returns `err(MemError.OverQuota)` with
-`used` unchanged. Each `Process` owns a `macct` with `MEM_QUOTA_DEFAULT = 0x100000` (1 MiB),
-reset on spawn and on death. See §14 for the live-reclaim keystone. **Scope caveat:** the
-gate proves the mechanism under **explicit charge sites**; the allocator→charge call-site
-wiring inside `heap.mc` (so that *every* allocation path charges automatically) is
-follow-up work.
+`kernel/lib/resacct.mc` keeps the small explicit accounting primitive used by process lifecycle
+validation: `resacct_charge(n)` is all-or-nothing and leaves `used` unchanged on overflow or
+over-quota. The broader unified-ledger and OOM/fault-containment product fixtures were removed
+from the compiler-core workload.
 
 ### 9.7 TLB — validation boundary
 
@@ -430,34 +426,11 @@ vision § fast transport). Gates: `ipc-result-test`, `endpoint-test`.
 
 ---
 
-## 14. Resource Governance — GATED
+## 14. Resource Accounting Scope
 
-The kernel validation workload keeps a small resource-governance path: **a runaway task should
-not OOM/starve the host in the explicit accounting fixture.**
-
-- **Accounting & quota** (§9.6): `resacct_charge` fails closed (`OverQuota`) with no partial
-  reservation.
-- **Reclaim-on-death:** `proc_death_cleanup` (shared by exit/OOM/fault) runs the death hook,
-  clears IPC + signals + wait state, closes fds, and **resets the memory account to zero**,
-  then wakes anyone blocked receiving from the dead incarnation.
-- **Live OOM-kill** (reclaim from a *live* agent): `proc_oom_victim` (highest-usage live,
-  non-bootstrap offender), `proc_oom_kill` (force a non-current victim through the death
-  path; `OOM_KILLED_CODE = 0xDEAD_00F0`), `proc_oom_reclaim` (select + kill; the allocator's
-  pressure entry point).
-- **Fault containment (F1):** a `g_fault_domain` marker records "this agent owns the CPU." On
-  a synchronous trap, `proc_fault_contain` classifies: attributable to an agent →
-  `proc_fault_kill` (`FAULT_KILLED_CODE = 0xDEAD_00F1`) kills + reclaims it and the kernel
-  survives; kernel's own fault (`NoVictim`) → stays fatal.
-
-> **Calibrated claim:** resource-accounting primitives, victim selection, OOM-kill,
-> fault containment, and reclaim-on-death are **implemented and parity-gated**. The current
-> gates prove the governance **mechanism under explicit charge sites** — they do **not** yet
-> prove comprehensive live memory enforcement across all allocation paths, because the
-> allocator→charge wiring inside `heap.mc` is follow-up work (§9.6).
-
-The standalone OOM policy fixture was removed from the core workload. The retained gates focus
-on fault containment and explicit reclaim paths needed by the language/runtime validation
-surface. **Deferred (ABSENT):** comprehensive live accounting across all allocation paths.
+The validation kernel keeps only local accounting helpers needed by allocator/process cleanup
+tests. Product-level reclaim, throttling, and cross-subsystem governance are outside the current
+compiler-core workload.
 
 ---
 
@@ -574,11 +547,10 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | Address classes (PAddr/VAddr/UserPtr) + uaccess defenses | **GATED (compile-time)** |
 | mmap / demand paging / COW | mmap **GATED**; demand paging & COW **DEMO-SCOPE** (single-region / one-page) |
 | Process lifecycle, attenuation, endpoints | **GATED** · demo-scale (`MAX_PROCS=8`) |
-| Scheduler (RR/priority/fair-share, preemption) | **GATED**; SMP **DEMO-SCOPE** (`NCORES=2`) |
+| Scheduler (RR/priority/fair-share, preemption) | **GATED**; SMP product fixtures removed |
 | User isolation + runtime ABI | **DEMO-SCOPE**. Remaining request ops exercise syscall/async/runtime mechanics, not part of a product broker. |
-| Capabilities, grants + delegation/cascade | **GATED** |
+| Capabilities and std grants | **library/spec scoped** |
 | IPC (sync rendezvous + notify, endpoint-safe) | **GATED** (copying, not zero-copy) |
-| Resource governance: quota + OOM-kill + fault containment | **GATED** (mechanism under explicit charge sites; full allocator wiring follow-up) |
 | Provenance + cap audit | **GATED** (kcall audits allowed+denied; tool calls audit dispatched only) |
 | Syscall table mechanism | **GATED**; production syscall surface absent |
 | Filesystems / storage | **GATED**; low-level block/cache/blob validation only |
@@ -604,7 +576,7 @@ scope. Gate names are verified against `build.zig`.
 
 ## 27. Roadmap
 
-The safety keystone (governance) has landed. The open frontier, per the vision doc:
+Kernel product roadmap items are out of the current language-oriented scope. Historical frontier items:
 
 - **Hierarchical VFS** — *partially delivered*: `treefs.mc` provides real paths (nested
   mkdir/create, `.`/`..`, `getdents`); the remaining work is mounting it as the primary VFS
@@ -612,9 +584,6 @@ The safety keystone (governance) has landed. The open frontier, per the vision d
 - **Native tool catalog** — out of current language-kernel scope. The kernel tree now keeps only
   demo-scope tool ops needed to exercise the userspace ABI and async runtime.
 - **Confined app execution** — retained only as validation workload: userspace ELF loading, syscall confinement, and C/LLVM backend parity are exercised by narrow app fixtures. Product runtimes and extra language engines are out of current scope.
-- **Allocator→charge wiring** — close the §9.6/§14 gap so governance enforces on every
-  allocation path, not only explicit charge sites.
 - **IPC fast path** — co-designed with sampling provenance.
-- **Accelerator/CPU/IPC accounting** — extend governance beyond memory for on-host inference.
 
 Current roadmap: [`../todo.md`](../todo.md).

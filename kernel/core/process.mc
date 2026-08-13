@@ -14,7 +14,6 @@ import "std/mask.mc";
 import "kernel/lib/mailbox.mc";
 import "kernel/lib/fdspace.mc";
 import "kernel/lib/resacct.mc";
-import "kernel/core/ledger.mc";  // unified per-dimension resource ledger (charged from hot paths)
 // Re-export the concerns split out of this file. MC imports are textual inclusion deduped
 // by path, so every existing `import "kernel/core/process.mc"` consumer transitively gets
 // the full process API (scheduling, signals, IPC) without changing any consumer import site.
@@ -120,11 +119,6 @@ struct ProcTable {
     // Monotonic source of correlation ids for synchronous calls (ipc_call / ipc_call_ep), so
     // each outstanding call is distinguishable and its reply can be matched. Never reused.
     next_call_id: u64,
-    // The UNIFIED resource ledger for this table (kernel/core/ledger.mc). Representative hot paths
-    // charge/release against it (IPC messages on send/receive, block I/O per op, DMA at the alloc
-    // seam); a dimension with limit 0 is unlimited, so an un-configured ledger never gates work.
-    // An over-limit charge fails the operation cleanly (its existing error/drop path), never traps.
-    ledger: Ledger,
 }
 
 // The no-op default idle action.
@@ -242,13 +236,6 @@ export fn proc_table_init(t: *mut ProcTable) -> void {
     t.next_call_id = 1; // 0 means "not a call"; real call ids start at 1
     t.idle_hook = idle_noop; // platform overrides with wfi via proc_set_idle
     t.death_hook = death_noop; // subsystems override via proc_set_death_hook
-    ledger_init(&t.ledger);   // every dimension starts unlimited (limit 0); callers opt in per dimension
-}
-
-// The table's unified resource ledger — for the hot paths that charge/release against it and for
-// policy/introspection to set limits (ledger_set_limit) and read usage (ledger_used).
-export fn proc_ledger(t: *mut ProcTable) -> *mut Ledger {
-    return &t.ledger;
 }
 
 // Set the platform's CPU-idle action (e.g. a `wfi` wrapper). Called when the scheduler has
@@ -393,201 +380,6 @@ export fn proc_uncharge_mem(t: *mut ProcTable, slot: usize, n: usize) -> void {
     resacct_uncharge(proc_macct(t, slot), n);
 }
 
-// ----- P0.5: LIVE reclaim — OOM-kill a runaway that won't exit (the safety keystone) -----
-//
-// A cooperative process exits via proc_exit and releases its resources. A *runaway* process never
-// does: it allocates without bound and stays LIVE, so its memory account and fds are never
-// released. Without an external reclaim mechanism such a process can OOM the host — defeating the
-// resource-isolation validation path. These three functions are that mechanism: select the worst
-// live offender, forcibly terminate it (reusing the exact death-cleanup path proc_exit runs), and
-// reclaim its resources, while every other agent survives untouched. The heap/allocator calls
-// proc_oom_reclaim when it hits exhaustion (wiring that single call site into heap.mc is a
-// follow-up); the selection + kill + reclaim mechanism is delivered and tested here.
-
-enum OomError {
-    NoVictim, // no live, non-bootstrap process exists to reclaim — nothing to kill
-}
-
-// A sentinel exit code marking a process that was OOM-killed (vs. a clean self-exit). A parent
-// reaping the zombie sees this code and can distinguish a forced reclaim from a normal exit.
-const OOM_KILLED_CODE: u32 = 0xDEAD_00F0;
-
-// Select the OOM-kill victim: the live (proc_is_live), non-bootstrap (slot 0 is the kernel
-// bootstrap and is never a victim) process with the HIGHEST current memory usage — the worst
-// offender, the most likely runaway. Returns its slot, or err(.NoVictim) if no eligible process
-// exists. Pure selection: makes no state changes.
-#[mc_abi]
-export fn proc_oom_victim(t: *mut ProcTable) -> Result<usize, OomError> {
-    var best: usize = MAX_PROCS; // sentinel: no victim found yet
-    var best_used: usize = 0;
-    var found: bool = false;
-    var i: usize = 1; // skip slot 0 (bootstrap)
-    while i < t.count {
-        if proc_is_live(t, i) {
-            let used: usize = resacct_used(proc_macct(t, i));
-            if !found {
-                best = i;
-                best_used = used;
-                found = true;
-            } else {
-                if used > best_used {
-                    best = i;
-                    best_used = used;
-                }
-            }
-        }
-        i = i + 1;
-    }
-    if !found {
-        return err(.NoVictim);
-    }
-    return ok(best);
-}
-
-// Forcibly terminate a LIVE process (the runaway) that is NOT the current process — the victim
-// is not running, so we never context-switch. Runs the same proc_death_cleanup that proc_exit
-// runs (releasing fds, resetting the memory account, clearing IPC, waking blocked waiters), then
-// marks the slot a Zombie with the OOM sentinel exit code and wakes its parent (mirroring
-// proc_exit's parent-wake) so the death can be reaped like any other. Idempotent guard: a no-op
-// if the slot isn't a live, non-current victim, so a double-kill or a bad slot can't corrupt
-// state. After this the killed agent's memory and fds are reclaimed; the slot is later reaped
-// like any zombie.
-export fn proc_oom_kill(t: *mut ProcTable, slot: usize) -> void {
-    if slot == t.current {
-        return; // never kill the running process via this path (it isn't the runaway)
-    }
-    if !proc_is_live(t, slot) {
-        return; // already dead/zombie/free — nothing to reclaim
-    }
-    t.procs[slot].exit_code = OOM_KILLED_CODE; // recognizable: OOM-killed, not a clean exit
-    proc_death_cleanup(t, slot); // SAME path as proc_exit: fds + macct + IPC + waiters released
-    t.procs[slot].state = .Zombie; // a parent can still reap its death
-    // Wake the parent if it is blocked in proc_wait — this forced exit is the event it awaits.
-    let parent_slot: usize = t.procs[slot].parent_slot;
-    if parent_slot < t.count {
-        if t.procs[parent_slot].gen == t.procs[slot].parent_gen {
-            proc_unblock(t, parent_slot, BLOCK_WAIT);
-        }
-    }
-    // Deliberately NO context switch: the victim is not the running process.
-}
-
-// The memory-pressure entry point: pick the worst live offender (proc_oom_victim) and OOM-kill
-// it (proc_oom_kill), returning the reclaimed slot. err(.NoVictim) if there is nothing to kill.
-// The heap/allocator calls this on allocation exhaustion to reclaim memory from a runaway agent.
-#[mc_abi]
-export fn proc_oom_reclaim(t: *mut ProcTable) -> Result<usize, OomError> {
-    switch proc_oom_victim(t) {
-        ok(slot) => {
-            proc_oom_kill(t, slot);
-            return ok(slot);
-        }
-        err(e) => {
-            return err(e);
-        }
-    }
-}
-
-// ----- F1: fault isolation — contain a recoverable agent fault (kill+reclaim, kernel survives) --
-//
-// The OOM keystone above kills a NON-current runaway (it never context-switches). A FAULT is the
-// dual case: the faulting agent IS the one executing when the trap fires, so the kill path must be
-// allowed to terminate `t.current` and the trap handler resumes the KERNEL afterwards (the dead
-// agent never runs again). To classify a trap, the kernel marks which agent owns the CPU before
-// handing it control (its "fault domain"); the trap handler reads that marker to decide whether a
-// synchronous fault is recoverable-in-agent (an agent was running -> contain) or fatal-kernel
-// (no agent was running, i.e. the fault is the kernel's own -> panic + halt).
-
-// Sentinel exit code for an agent terminated by a contained fault (vs OOM_KILLED_CODE / a clean
-// exit). A parent reaping the zombie can tell a fault-kill apart from an OOM-kill or normal exit.
-const FAULT_KILLED_CODE: u32 = 0xDEAD_00F1;
-
-// No agent currently owns the CPU (the kernel itself is running): a synchronous fault here is the
-// kernel's own and must stay fatal. MAX_PROCS is never a valid slot, so it is the "no domain" mark.
-global g_fault_domain: usize = MAX_PROCS;
-
-// Enter an agent's fault domain: record that `slot` owns the CPU, so a trap that fires now is
-// attributable to that agent. Call immediately before transferring control into agent code.
-// Mirrors setting `t.current`, but is the authority the *trap handler* consults (it runs in an
-// arbitrary context and must not guess). A bad/non-live slot leaves the domain cleared (fail-safe:
-// an unattributable fault then classifies as fatal-kernel rather than killing an innocent agent).
-export fn proc_enter_agent(t: *mut ProcTable, slot: usize) -> void {
-    if proc_is_live(t, slot) {
-        t.current = slot;
-        g_fault_domain = slot;
-    } else {
-        g_fault_domain = MAX_PROCS;
-    }
-}
-
-// Leave the current fault domain (the agent returned cleanly): subsequent faults are the kernel's
-// until the next proc_enter_agent. Idempotent.
-export fn proc_leave_agent(t: *mut ProcTable) -> void {
-    let _t: *mut ProcTable = t;
-    g_fault_domain = MAX_PROCS;
-}
-
-// The slot of the agent that currently owns the CPU, or err(.NoVictim) if the kernel itself is
-// running (no fault domain marked). This is the trap handler's classifier: ok => a fault is a
-// recoverable agent fault; err => a fault is fatal-kernel.
-#[mc_abi]
-export fn proc_fault_domain(t: *mut ProcTable) -> Result<usize, OomError> {
-    if g_fault_domain == MAX_PROCS {
-        return err(.NoVictim);
-    }
-    if !proc_is_live(t, g_fault_domain) {
-        return err(.NoVictim); // domain marks a non-live slot — treat as unattributable
-    }
-    return ok(g_fault_domain);
-}
-
-// Contain a recoverable agent fault: forcibly terminate the FAULTING agent `slot` (which is the
-// one that owned the CPU, == g_fault_domain) and reclaim its resources through the SAME death path
-// the OOM-kill and proc_exit use (fds + memory account + IPC + waiters released), mark it a Zombie
-// with the fault sentinel, and wake its parent so the death reaps like any other. Unlike
-// proc_oom_kill this is ALLOWED to kill the current slot (the fault victim is, by definition, the
-// running agent); it then clears the fault domain so the kernel — which the trap handler resumes
-// next — runs outside any agent. Idempotent guard: a no-op on a non-live or out-of-range slot.
-// Deliberately performs NO context switch: the trap handler advances past the faulting instruction
-// and `mret`s back into the kernel; the dead agent's saved context is simply never scheduled again.
-export fn proc_fault_kill(t: *mut ProcTable, slot: usize) -> void {
-    if slot >= t.count {
-        return;
-    }
-    if !proc_is_live(t, slot) {
-        return; // already dead/zombie/free — nothing to reclaim
-    }
-    t.procs[slot].exit_code = FAULT_KILLED_CODE; // recognizable: contained-fault kill
-    proc_death_cleanup(t, slot); // SAME path as proc_exit/proc_oom_kill: fds + macct + IPC + waiters
-    t.procs[slot].state = .Zombie; // a parent can still reap its death
-    let parent_slot: usize = t.procs[slot].parent_slot;
-    if parent_slot < t.count {
-        if t.procs[parent_slot].gen == t.procs[slot].parent_gen {
-            proc_unblock(t, parent_slot, BLOCK_WAIT);
-        }
-    }
-    if g_fault_domain == slot {
-        g_fault_domain = MAX_PROCS; // the faulting agent is gone; the kernel runs next
-    }
-}
-
-// The fault-path entry point the trap handler calls: classify (is a fault attributable to a live
-// agent?) and, if so, contain it (kill+reclaim the faulting agent) — returning ok(slot) of the
-// reclaimed agent. err(.NoVictim) means the fault is NOT attributable to any agent (the kernel's
-// own fault), so the handler must keep it fatal (panic + halt) instead of recovering.
-#[mc_abi]
-export fn proc_fault_contain(t: *mut ProcTable) -> Result<usize, OomError> {
-    switch proc_fault_domain(t) {
-        ok(slot) => {
-            proc_fault_kill(t, slot);
-            return ok(slot);
-        }
-        err(e) => {
-            return err(e);
-        }
-    }
-}
-
 // Replace a process's executable image in place — exec() semantics. The saved context is reset
 // to start `entry` on a fresh stack, but the process KEEPS its identity (same pid and
 // generation, so existing endpoints stay valid) and, crucially, its open file descriptors:
@@ -690,7 +482,7 @@ fn endpoint_live(t: *mut ProcTable, ep: Endpoint) -> bool {
 fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     let dead_gen: u32 = t.procs[dead].gen;
     let dead_pid: u32 = t.procs[dead].pid;
-    // Revoke global resources the dead process owned (grants, registered services, …)
+    // Revoke resources the dead process owned through the installed hook.
     // through the installed hook, before the slot is reused. Decoupled: the hook is
     // whatever the subsystem owner registered (a no-op if none).
     let death_hook: fn(u32, u32) -> void = t.death_hook;
@@ -698,19 +490,6 @@ fn proc_death_cleanup(t: *mut ProcTable, dead: usize) -> void {
     // Drop the dead process's own pending IPC + wait state, and close its open file
     // descriptors — a zombie holds only its exit status, never live resources, so a later
     // spawn that reuses this slot can never inherit a ghost descriptor.
-    // Refund the unified ledger for every charged in-flight IPC message still queued in the dead
-    // process's inbox. Each was charged at post; only a receive releases, and a zombie never receives,
-    // so without this refund a process killed with mail pending would permanently leak IpcMessages
-    // budget. Must run BEFORE mailbox_init drops the messages.
-    let queued_ipc: usize = mailbox_count(Message, IPC_SLOTS, &t.procs[dead].inbox);
-    var qr: usize = 0;
-    while qr < queued_ipc {
-        switch ledger_release(&t.ledger, .IpcMessages, 1) {
-            ok(v) => {}
-            err(e) => {}
-        }
-        qr = qr + 1;
-    }
     mailbox_init(Message, IPC_SLOTS, &t.procs[dead].inbox);
     fd_init(&t.procs[dead].fds);
     resacct_reset(&t.procs[dead].macct); // a zombie holds no charged memory — release the account

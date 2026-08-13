@@ -104,8 +104,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-preempt-test"));
-    // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
-    m0_full_step.dependOn(ctx.cmd("llvm-ledger-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-page-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-heap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-paging-test"));
@@ -315,8 +313,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("sched-test"));
     // preempt-test runs the timer-driven preemptive scheduler under QEMU.
     m0_full_step.dependOn(ctx.cmd("preempt-test"));
-    // ledger-test runs the unified resource ledger (charge/release + overflow-edge) under QEMU.
-    m0_full_step.dependOn(ctx.cmd("ledger-test"));
     // syscall-test runs the ecall syscall dispatch skeleton under QEMU.
     m0_full_step.dependOn(ctx.cmd("syscall-test"));
     // user-test runs the M->U privilege drop + user-mode syscalls under QEMU.
