@@ -527,7 +527,6 @@ def main() -> None:
 
     zon_paths = zon[zon.find(".paths"):]
     for path in (
-        '"selfhost"',
         '"third_party"',
         '"editors"',
         '".github"',

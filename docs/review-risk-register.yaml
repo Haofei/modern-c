@@ -14,7 +14,7 @@ risks:
     blocks:
       - unrestricted-production-compiler
       - stable-release
-    summary: Product surface spans compiler, dual backends, selfhost, kernel/QEMU workloads, kernel validation demos, LSP, release provenance, and multiple runtime profiles before the core semantic boundary is stable; deployable kernel claims have been retired.
+    summary: Product surface spans compiler, dual backends, kernel/QEMU workloads, kernel validation demos, LSP, release provenance, and multiple runtime profiles before the core semantic boundary is stable; deployable kernel claims have been retired.
 
   - id: ARCH-COMPILATION-SESSION
     severity: high
@@ -69,15 +69,6 @@ risks:
     blocks:
       - release-debug-provenance-claim
     summary: C/source-map-bearing artifacts now bind generated artifact, source-map generated artifact, source-map payload, MIR facts, source digest, lowering options, and toolchain identity where applicable; full LLVM debug/source-map release provenance remains open.
-
-  - id: SELFHOST-PROFILE
-    severity: medium
-    scope: selfhost
-    status: open
-    admitted_subset_status: experimental-bootstrap-subset
-    blocks:
-      - selfhost-production-compiler-claim
-    summary: Selfhost is a bootstrap experiment and should not become a second semantic authority while the main compiler IR/fact boundary is still moving.
 
   - id: GATE-MANIFEST
     severity: medium

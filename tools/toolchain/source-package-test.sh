@@ -21,7 +21,7 @@ archive="$CACHE/p/$hash.tar.gz"
 mkdir -p "$OUT"
 tar -xzf "$archive" -C "$OUT" --strip-components=1
 
-for path in build.zig build.zig.zon src tests selfhost third_party editors .github/workflows/ci.yml \
+for path in build.zig build.zig.zon src tests third_party editors .github/workflows/ci.yml \
     Dockerfile docker-compose.yml SECURITY.md STABILITY.md CHANGELOG.md THIRD-PARTY-LICENSES.md; do
     [ -e "$OUT/$path" ] || { echo "FAIL: source-package-test - package omitted $path"; exit 1; }
 done

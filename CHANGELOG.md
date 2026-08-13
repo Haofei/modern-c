@@ -8,7 +8,7 @@ This project has not shipped a tagged release yet. Changes below describe the cu
 - Added top-level `mcc --help`, `mcc help`, and `mcc --version` behavior with a
   transcript gate.
 - Added generated diagnostic-code reference coverage for compiler `E_*` messages.
-- Hardened early production-readiness blockers: parser nesting limits,
+- Hardened early core reliability blockers: parser nesting limits,
   monomorphization limits, 128-bit arithmetic guards, oversized integer literal
   diagnostics, fail-closed diagnostic allocation, closure typing, while-condition
   move checking, extern aggregate ABI rejection, and LLVM check-elision parity.

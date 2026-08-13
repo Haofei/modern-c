@@ -58,33 +58,6 @@
       ]
     },
     {
-      "id": "stage0-mcc",
-      "category": "internal",
-      "owner": "selfhost",
-      "summary": "Stage0 modern-c compiler used to build the selfhost experiment.",
-      "profiles": [
-        "selfhost-experimental"
-      ]
-    },
-    {
-      "id": "selfhost-c-emitter",
-      "category": "internal",
-      "owner": "selfhost",
-      "summary": "Experimental selfhost C emitter; not a production semantic authority.",
-      "profiles": [
-        "selfhost-experimental"
-      ]
-    },
-    {
-      "id": "clang-for-stage-link",
-      "category": "toolchain",
-      "owner": "selfhost",
-      "summary": "Clang used to link selfhost stage artifacts.",
-      "profiles": [
-        "selfhost-experimental"
-      ]
-    },
-    {
       "id": "python3",
       "category": "toolchain",
       "owner": "developer-tools",

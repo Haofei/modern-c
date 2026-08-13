@@ -72,7 +72,7 @@ fn applyCompilerSelector(b: *std.Build, argv: []const []const u8) []const []cons
     const selected = b.graph.environ_map.get("MCC_UNDER_TEST") orelse return argv;
     if (selected.len == 0) return argv;
 
-    // Full-selfhost P0: build-registered gates pass "zig-out/bin/mcc" as an
+    // Build-registered gates pass "zig-out/bin/mcc" as an
     // explicit script argument. Rewrite that exact compiler slot so
     // `MCC_UNDER_TEST=... zig build <gate>` actually exercises the selected
     // compiler without changing each gate registration.

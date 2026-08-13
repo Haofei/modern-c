@@ -20,8 +20,7 @@ guarantees until a tagged release declares its supported surfaces.
   APIs.
 - The package/registry scripts are local exact-version tooling, not a public package
   ecosystem.
-- Async, traits, kernel libraries, editor integration, and self-hosted compiler
-  slices remain subject to incompatible changes.
+- Async, traits, kernel libraries, and editor integration remain subject to incompatible changes.
 
 ## Tagged Release Compatibility
 

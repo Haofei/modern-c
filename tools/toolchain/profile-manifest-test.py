@@ -19,7 +19,6 @@ BUILD_DIR = ROOT / "build"
 REQUIRED_PROFILES = {
     "compiler-subset",
     "llvm-experimental",
-    "selfhost-experimental",
     "developer-tools",
     "kernel-qemu",
 }
@@ -176,14 +175,12 @@ def main() -> None:
     profile_by_id = {profile["id"]: profile for profile in profiles}
     if profile_by_id["compiler-subset"]["production_claim"]:
         fail("compiler-subset must not claim unrestricted production support")
-    for experimental_id in ("llvm-experimental", "selfhost-experimental", "developer-tools", "kernel-qemu"):
+    for experimental_id in ("llvm-experimental", "developer-tools", "kernel-qemu"):
         if profile_by_id[experimental_id]["production_claim"]:
             fail(f"{experimental_id} must not claim production support")
 
     if "BACKEND-LLVM-PROFILE" not in profile_by_id["llvm-experimental"]["blocking_risks"]:
         fail("llvm-experimental must reference BACKEND-LLVM-PROFILE")
-    if "SELFHOST-PROFILE" not in profile_by_id["selfhost-experimental"]["blocking_risks"]:
-        fail("selfhost-experimental must reference SELFHOST-PROFILE")
 
     print(
         "PASS: profile-manifest-test - "

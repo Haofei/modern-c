@@ -331,60 +331,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("argv-test"));
     // memstr-test exercises the allocation-free std/mem byte-slice string ops (needs clang).
     m0_full_step.dependOn(ctx.cmd("memstr-test"));
-    // selfhost-lex-test exercises the Phase-1 self-hosted lexer's token stream (needs clang).
-    m0_full_step.dependOn(ctx.cmd("selfhost-lex-test"));
-    // selfhost-parse-test exercises the Phase-2 self-hosted parser + flat AST (needs clang).
-    m0_full_step.dependOn(ctx.cmd("selfhost-parse-test"));
-    // selfhost-sema-test exercises the Phase-3 self-hosted semantic analyzer (needs clang).
-    m0_full_step.dependOn(ctx.cmd("selfhost-sema-test"));
-    // selfhost-emit-test exercises the Phase-4 self-hosted C emitter (lex->parse->emit->clang->run).
-    m0_full_step.dependOn(ctx.cmd("selfhost-emit-test"));
-    // mcc2-cli-test builds the standalone mcc2 CLI (selfhost/main.mc) and measures it at scale.
-    m0_full_step.dependOn(ctx.cmd("mcc2-cli-test"));
-    // selfhost-struct-test exercises P5.1 STRUCT support end to end (parser+sema+emit_c -> clang).
-    m0_full_step.dependOn(ctx.cmd("selfhost-struct-test"));
-    // selfhost-enum-test exercises P5.2 ENUM support end to end (parser+sema+emit_c -> clang).
-    m0_full_step.dependOn(ctx.cmd("selfhost-enum-test"));
-    // selfhost-switch-test exercises P5.3 SWITCH support + exhaustiveness (parser+sema+emit_c -> clang).
-    m0_full_step.dependOn(ctx.cmd("selfhost-switch-test"));
-    // selfhost-import-test exercises P5.4 multi-module IMPORT resolution (loader flatten + dedup -> clang).
-    m0_full_step.dependOn(ctx.cmd("selfhost-import-test"));
-    // selfhost-generic-test exercises P5.5 GENERICS (monomorphization: parser+sema+emit_c -> clang).
-    m0_full_step.dependOn(ctx.cmd("selfhost-generic-test"));
-    // selfhost-array-test exercises P5.6 fixed [N]T ARRAYS (parser+sema+emit_c, incl. array-in-generic -> clang).
-    m0_full_step.dependOn(ctx.cmd("selfhost-array-test"));
-    // selfhost-slice-test exercises P5.7 PROPER SLICES (fat pointers: .len, index, sub-slice, by-value, as_bytes).
-    m0_full_step.dependOn(ctx.cmd("selfhost-slice-test"));
-    // selfhost-lowlevel-test exercises P5.8 the LOW-LEVEL LAYER (unsafe blocks, raw.ptr/load/store, extern "C" fn, p.* deref).
-    m0_full_step.dependOn(ctx.cmd("selfhost-lowlevel-test"));
-    // selfhost-cast-test exercises P5.9 `as` CASTS + sizeof/alignof (incl. sizeof of a generic type param -> substitution).
-    m0_full_step.dependOn(ctx.cmd("selfhost-cast-test"));
-    // selfhost-trait-test exercises P5.10 TRAITS + `*mut dyn` dynamic dispatch (vtable + thunk + fat-pointer coercion + dispatch).
-    m0_full_step.dependOn(ctx.cmd("selfhost-trait-test"));
-    // selfhost-match-test exercises P5.11 MATCH support (desugars to switch; no payload in the subset) + exhaustiveness.
-    m0_full_step.dependOn(ctx.cmd("selfhost-match-test"));
-    // selfhost-opaque-test exercises `opaque struct` support end to end via the mcc2 CLI (compiled as a regular struct; the subset does not enforce opacity).
-    m0_full_step.dependOn(ctx.cmd("selfhost-opaque-test"));
-    // selfhost-bitwise-test exercises infix bitwise (& | ^) + shift (<< >>) with C precedence, prefix vs infix `&`, and the `unreachable;` terminator end to end via the mcc2 CLI.
-    m0_full_step.dependOn(ctx.cmd("selfhost-bitwise-test"));
-    // selfhost-addr-test (CAPSTONE): mcc2 compiles the real std module std/addr.mc to clang-clean C, plus a behavioral round-trip of bool literals + the address-class model (PAddr/VAddr/phys/as-mint) via the mcc2 CLI.
-    m0_full_step.dependOn(ctx.cmd("selfhost-addr-test"));
-    // selfhost-mem-test (VALUE-OPTIONAL milestone): mcc2 compiles a second real std module std/mem.mc (which returns `?usize`) to clang-clean C after adding `?T` value optionals to the subset (G11), plus a behavioral round-trip of `?usize` via if let / == null / != null.
-    m0_full_step.dependOn(ctx.cmd("selfhost-mem-test"));
-    // selfhost-result-test (RESULT milestone): mcc2 gains `Result<T,E>` + `ok/err` construction + Result `switch`/`if let` pattern-matching + the `?` propagation operator (lowered to the real backend's tagged `mc_result_<T>_<E>`), asserted behaviorally, plus a real-module check emitting std/hosted_io.mc's Result machinery to C.
-    m0_full_step.dependOn(ctx.cmd("selfhost-result-test"));
-    // selfhost-lexself-test (SELF-COMPILE LANDMARK): after adding CHARACTER LITERALS and MODULE-LEVEL `const` to the subset (plus the std-dep-driven `const fn`/`move struct`/bool `switch`/`uninit`/string-literal/transitive-monomorphization fixes), mcc2 compiles its OWN lexer selfhost/lexer.mc to clang-clean C, plus a char-literal + module-const behavioral round-trip -> clang -Werror -> run.
-    m0_full_step.dependOn(ctx.cmd("selfhost-lexself-test"));
-    // selfhost-parseself-test (SELF-COMPILE LANDMARK): after adding STRUCT-type-argument monomorphization (a generic container/function instantiated at a NAMED struct type — `Vec<Node>`/`vec_push(Node, ..)` — not just scalars) plus dependency-ordered struct emission (`Parser` embedding `TokenList`/`Vec<Node>` by value emitted after them), mcc2 compiles its OWN parser selfhost/parser.mc to clang-clean C, plus a Vec<Pt> (generic container over a STRUCT element) behavioral round-trip -> clang -Werror -> run.
-    m0_full_step.dependOn(ctx.cmd("selfhost-parseself-test"));
-    // selfhost-semaself-test (SELF-COMPILE LANDMARK, 3rd module): after adding comma-less `}`-block switch arms, a `>>`-splitting generic close (nested `raw.ptr<Entry<V>>`), a visited-set in the transitive generic-instance collector (lexeme-only type-param match otherwise blows up on hashmap's `V`-named generics + call cycle), `Entry<struct>` typedef induction, `mem.bytes_equal` builtin lowering, module-qualified `mod.fn` calls, and `_` digit-separator stripping, mcc2 compiles its OWN sema selfhost/sema.mc (instantiating `Vec`/`StrHashMap` over its own structs) to clang-clean C, plus a comma-less block switch + `StrHashMap<Rec>` (hash map over a STRUCT value) behavioral round-trip -> clang -Werror -> run.
-    m0_full_step.dependOn(ctx.cmd("selfhost-semaself-test"));
-    // selfhost-emitself-test (SELF-COMPILE LANDMARK, 4th module): after adding PREFIX pointer deref `*p` (incl. the `&*p` re-borrow — `e_arg_present(p, &*out, ..)`), string-literal-to-`*const u8`-parameter coercion (string literals coerce to BOTH `[]const u8` and `*const u8` (G12): sema accepts leniently, the emitter lowers to a bare C string not a fat-pointer slice), and renaming `ok`/`err`-shaped locals, mcc2 compiles its OWN emitter selfhost/emit_c.mc (its LARGEST module: the monomorphizer + StrBuf C emitter) to clang-clean C, plus a prefix-deref + string-literal-to-`*const u8` behavioral round-trip -> clang -Werror -> run.
-    m0_full_step.dependOn(ctx.cmd("selfhost-emitself-test"));
-    // selfhost-mainself-test (SELF-COMPILE LANDMARK, 5th and FINAL core module): after adding module-level `global NAME: T [= init];` — a MUTABLE file-scope variable (parser `global_decl`; sema registers it as a mutable global so uses resolve + whole-variable/`[i]`/`.f` writes + address-of `(&g) as usize` are allowed; emitter lowers `static T NAME [= init];`) — plus an emitter fix so a chained sub-slice/index of a `mem.as_bytes(&g)` slice VALUE reads its `.ptr` field instead of mis-lowering as an array decay, mcc2 compiles its OWN CLI driver selfhost/main.mc (the standalone `mcc2` command: lexer->parser->sema->emit_c + a textual-concatenation import loader + a hosted-I/O file reader) to clang-clean C — every one of the five mcc2 modules now self-compiles — plus a module-level `global` (scalar-with-init, array, whole-variable + `[i]` writes + address-of) behavioral round-trip -> clang -Werror -> run.
-    m0_full_step.dependOn(ctx.cmd("selfhost-mainself-test"));
-    // selfhost-bootstrap-test (SUBSET BOOTSTRAP CAPSTONE): the closed subset loop — the Zig `mcc` builds first-gen mcc2, mcc2 compiles its OWN full source (main + emit_c + sema + parser + lexer + all std deps, concat-loaded into one C TU) diagnostic-clean, that C links into second-gen mcc2', mcc2 and mcc2' emit BYTE-IDENTICAL C (the fixpoint), and mcc2''s output compiles+runs (add(2,3)==5). This proves the mcc2 subset bootstrap, not full replacement of the Zig compiler.
-    m0_full_step.dependOn(ctx.cmd("selfhost-bootstrap-test"));
     // move-test exercises linear `move` handle erasure (needs clang).
     m0_full_step.dependOn(ctx.cmd("move-test"));
     // try-defer-test checks `defer` runs on the `?` error branch in both backends (needs clang).

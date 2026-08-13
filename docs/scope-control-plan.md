@@ -10,9 +10,7 @@ claims, not to remove safety checks.
 
 ## Current imbalance
 
-The repository now contains a language/compiler, C and LLVM backends, selfhost
-experiments, kernel validation workloads, LSP/editor tooling, QEMU suites, release
-provenance, and vendored dependency metadata.
+The repository now contains a language/compiler, C and LLVM backends, kernel validation workloads, LSP/editor tooling, QEMU suites, release provenance, and vendored dependency metadata.
 
 Those pieces are useful, but they should not all be treated as one production
 profile while the following core items remain open:
@@ -34,9 +32,8 @@ summary.
 
 | Profile | Blocking scope | Non-blocking / experimental scope |
 |---|---|---|
-| `compiler-subset` | Parser/sema/MIR verifier, C backend reference path, diagnostics, source loading, C/LLVM differential for covered fixtures | Selfhost, deployable-kernel claims, advanced LSP, runtime product profiles |
+| `compiler-subset` | Parser/sema/MIR verifier, C backend reference path, diagnostics, source loading, C/LLVM differential for covered fixtures | Deployable-kernel claims, advanced LSP, runtime product profiles |
 | `llvm-experimental` | LLVM verifier/object/differential smoke for supported fixtures | Full language-surface parity until typed MIR/fact boundaries are complete |
-| `selfhost-experimental` | Explicit bootstrap subset tests and fixpoint evidence | Any claim that selfhost is the production compiler or language authority |
 | `kernel-qemu` | QEMU boot/runtime workloads, kernel API model tests | Real hardware production support, power-loss/durable security claims |
 | `developer-tools` | Basic diagnostics, formatting, navigation smoke, LSP resource limits | Low-latency incremental service claims until a query DB / persistent compiler service exists |
 
@@ -47,11 +44,9 @@ summary.
 2. Treat C backend as the reference release path until typed MIR/facts remove
    backend-local semantic inference.
 3. Treat LLVM backend as differential/experimental where coverage is incomplete.
-4. Treat selfhost as an experiment until the main compiler semantic boundary is
-   stable.
-5. Do not duplicate validation state across markdown files; summarize
+4. Do not duplicate validation state across markdown files; summarize
    `docs/review-risk-register.yaml`.
-6. Keep safety-critical mechanisms such as atomic output, OOM visibility,
+5. Keep safety-critical mechanisms such as atomic output, OOM visibility,
    hostile-input budgets, capability roots, and exact-byte verification. These
    are not over-engineering.
 

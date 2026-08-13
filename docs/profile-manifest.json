@@ -18,7 +18,6 @@
           "tools/toolchain/"
         ],
         "experimental_or_excluded": [
-          "selfhost/",
           "kernel product claims",
           "advanced incremental LSP"
         ]
@@ -89,42 +88,6 @@
         "llvm-as",
         "llc",
         "clang"
-      ]
-    },
-    {
-      "id": "selfhost-experimental",
-      "status": "experimental",
-      "production_claim": false,
-      "summary": "Selfhost is a bootstrap experiment and must not become a second semantic authority while the main compiler IR/fact boundary is still moving.",
-      "scope": {
-        "blocking": [
-          "selfhost/",
-          "tests/selfhost/",
-          "tools/toolchain/full-selfhost-manifest.tsv"
-        ],
-        "experimental_or_excluded": [
-          "production compiler replacement",
-          "language specification authority",
-          "release-blocking compiler-subset claim"
-        ]
-      },
-      "blocking_risks": [
-        "SELFHOST-PROFILE",
-        "ARCH-TYPED-MIR",
-        "ARCH-BACKEND-FACTS"
-      ],
-      "blocking_gates": [
-        "selfhost-lex-test",
-        "selfhost-parse-test",
-        "selfhost-sema-test",
-        "selfhost-emit-test",
-        "full-selfhost-diff",
-        "full-selfhost-stage"
-      ],
-      "components": [
-        "stage0-mcc",
-        "selfhost-c-emitter",
-        "clang-for-stage-link"
       ]
     },
     {

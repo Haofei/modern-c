@@ -354,7 +354,6 @@ The repository-wide backlog is [`docs/todo.md`](docs/todo.md).
 | `tests/c_emit/`, `tests/llvm/` | Backend fixtures |
 | `tests/qemu/` | Programs used by QEMU and host-driver gates |
 | `kernel/`, `user/` | Kernel runtime, MC modules, and user-mode components |
-| `selfhost/` | Self-hosting experiments |
 | `tools/` | Drivers, fuzzers, package tools, LSP, and test harnesses |
 | `demo/`, `examples/` | Hosted and hardware-oriented examples |
 | `docs/` | Specifications, reference material, qualification, and plans |

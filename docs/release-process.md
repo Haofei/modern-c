@@ -120,9 +120,7 @@ review.
 
 ## Complete Source Package
 
-`build.zig.zon` includes the compiler, tests, self-host sources, vendored source
-and licenses, editor integration, workflows, and release metadata needed by the
-qualification surface. `zig build source-package-test` invokes `zig fetch` to
+`build.zig.zon` includes the compiler, tests, vendored source and licenses, editor integration, workflows, and release metadata needed by the qualification surface. `zig build source-package-test` invokes `zig fetch` to
 materialize that exact `.paths` selection into a fresh directory without `.git`,
 then runs `zig build test` and `zig build release-metadata-test` there. This keeps
 the Zig source package and the repository checkout from becoming two different

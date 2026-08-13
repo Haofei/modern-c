@@ -1,7 +1,6 @@
 const std = @import("std");
 const compiler = @import("build/compiler.zig");
 const sweep = @import("build/sweep.zig");
-const selfhost = @import("build/selfhost.zig");
 const fuzz = @import("build/fuzz.zig");
 const hardening = @import("build/hardening.zig");
 const qemu = @import("build/qemu.zig");
@@ -19,7 +18,6 @@ const tiers = @import("build/tiers.zig");
 pub fn build(b: *std.Build) void {
     var ctx = compiler.build(b);
     sweep.register(&ctx);
-    selfhost.register(&ctx);
     fuzz.register(&ctx);
     hardening.register(&ctx);
     qemu.register(&ctx);
