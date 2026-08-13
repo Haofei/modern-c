@@ -9,9 +9,7 @@ byteview-test	current host/corpus C build gap; additional skipped fixtures remai
 elf-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 arc-pkt-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 arc-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-log-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 scan-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-symbols-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 smprq-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 time-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 vqfault-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions

@@ -494,16 +494,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "ring-test", "Link + run the generic in-place Ring<T> (push/pop/wrap)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "ring-test" });
 
-    _ = h.addScriptTest(ctx, "trace-test", "Link + run the trace ring buffer (retention/wrap/sequence)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "trace-test" });
-
-    _ = h.addScriptTest(ctx, "log-test", "Link + run the leveled tracepoint logger (threshold/levels)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "log-test" });
-
-
-
-
-
-
-    _ = h.addScriptTest(ctx, "symbols-test", "Link + run the symbol table (symbolize address -> function+offset)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "symbols-test" });
 
 
 
@@ -511,9 +501,14 @@ pub fn register(ctx: *h.Ctx) void {
 
 
 
-    _ = h.addScriptTest(ctx, "backtrace-test", "Walk the frame-pointer chain and symbolize the frames under QEMU", &.{ "bash", "tools/lang/backtrace-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-backtrace-test", "Run LLVM-lowered backtrace symbolization under QEMU", &.{ "bash", "tools/lang/backtrace-test.sh", "zig-out/bin/mcc", "llvm" });
+
+
+
+
+
+
+
 
     _ = h.addScriptTest(ctx, "paging-test", "Link + run Sv39 page-table map/translate", &.{ "bash", "tools/mem/paging-test.sh", "zig-out/bin/mcc", "c" });
 

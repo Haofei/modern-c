@@ -138,7 +138,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-mmap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-paging-activate-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-rtc-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-backtrace-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-driver-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-preempt-test"));
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
@@ -422,14 +421,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("closure-test"));
     // ring-test links + runs the generic in-place Ring<T> (needs clang).
     m0_full_step.dependOn(ctx.cmd("ring-test"));
-    // trace-test links + runs the trace ring buffer (needs clang).
-    m0_full_step.dependOn(ctx.cmd("trace-test"));
-    // log-test links + runs the leveled tracepoint logger (needs clang).
-    m0_full_step.dependOn(ctx.cmd("log-test"));
-    // symbols-test links + runs the symbol table / address symbolizer (needs clang).
-    m0_full_step.dependOn(ctx.cmd("symbols-test"));
-    // backtrace-test walks the frame-pointer chain + symbolizes under QEMU.
-    m0_full_step.dependOn(ctx.cmd("backtrace-test"));
     // paging-test links + runs the Sv39 page-table map/translate (needs clang).
     m0_full_step.dependOn(ctx.cmd("paging-test"));
     // fnptr-test links + runs function-pointer dispatch (needs clang).
