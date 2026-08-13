@@ -448,15 +448,8 @@ is **ABSENT**; the user-boundary safety machinery (§9.3) is GATED.
 
 ## 17. Filesystem & Storage
 
-`kernel/fs/` is retained only for the minimal `BlockDevice` trait used by low-level driver
-validation. The product-style VFS, mount table, in-memory hierarchy, disk filesystem,
-block-backed file store, write-back cache, blob store, and persistence demos were removed
-from the core workload.
-
-| File | Role | Capacity |
-|------|------|----------|
-| `blockdev.mc` | `trait BlockDevice` (512 B) via `*dyn` dispatch. | — |
-
+`kernel/fs/` has been removed from the current core workload. Storage products,
+write-back cache, blob-store, and persistence demos are outside the language-validation kernel.
 
 ---
 
@@ -474,7 +467,6 @@ product work belongs to a separate validation/product profile if it is revived.
 
 | Driver | Hardware | Status |
 |--------|----------|--------|
-| `virtio/virtio_blk` | VirtIO block | **GATED** — 3-descriptor chains, 5 s deadline. |
 | `pci` | ECAM config | **IMPLEMENTED** — bus scan, BAR0. |
 | `irq/plic` | RISC-V PLIC | **GATED** — typestate `IrqLine<State>`, `#[irq_context]`-checked. |
 | `timer/clint` | RISC-V CLINT | **GATED** — `mtime`/`mtimecmp`. |
@@ -542,9 +534,8 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | IPC (sync rendezvous + notify, endpoint-safe) | **GATED** (copying, not zero-copy) |
 | Provenance + cap audit | **GATED** (kcall audits allowed+denied; tool calls audit dispatched only) |
 | Syscall table mechanism | **GATED**; production syscall surface absent |
-| Filesystems / storage | **GATED**; low-level block/cache/blob validation only |
 | Network validation | **GATED**; link/IP/driver validation only |
-| Drivers: virtio net/blk, plic, clint | **GATED**; pci **IMPLEMENTED** |
+| Drivers: plic, clint, rng | **GATED/validation scoped** |
 | ELF parse/load | **GATED**; dynamic linking absent |
 
 ---

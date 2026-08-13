@@ -50,7 +50,7 @@ fn rng_regs(dev: *RngDevice) -> MmioPtr<VirtioMmio> {
 
 // Find the entropy device and bring it up: scan for device-id 4, run the virtio 1.x
 // handshake (virtio-rng requires no feature bits), set up the request queue, go live.
-// `vq` is caller-owned storage for the one queue (as with blk/net).
+// `vq` is caller-owned storage for the one queue.
 #[mc_abi]
 export fn rng_open(vq: *mut Virtq) -> Result<RngDevice, RngError> {
     // Scan the mmio window for the entropy device (device-id 4). The MC twin of the

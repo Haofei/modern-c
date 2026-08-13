@@ -16,15 +16,13 @@
 # Examples:
 #   tools/run-kernel.sh                                   # default: basic arch demo, C backend
 #   tools/run-kernel.sh tests/qemu/proc/preempt_demo.mc c
-#   MC_DISK=disk.img tools/run-kernel.sh tests/qemu/arch/blk_persist_demo.mc   # attach a virtio-blk disk
-#
+# #
 # Env knobs:
 #   MCC, CLANG, LLD, LLC, QEMU   override tool paths (LLD defaults to `brew --prefix lld`/bin if present)
 #   MC_PLATFORM=<file.mc>        extra platform object to link (e.g. kernel/arch/riscv64/mmode_dma_time.mc
 #                                for demos that use std/dma + std/time, like the blk_* demos)
 #   MC_RUNTIME=<file.mc>         extra runtime object (demos whose entry lives in a *_runtime.mc)
-#   MC_DISK=<path>               attach as a raw virtio-blk disk (created 16 MiB if it doesn't exist)
-#   MC_CHECKS=elide-proven       build the release (fact-gated) profile instead of the safe default
+# #   MC_CHECKS=elide-proven       build the release (fact-gated) profile instead of the safe default
 #   OUT=<dir>                    output dir for the built image (default: out/vm)
 set -euo pipefail
 
@@ -87,10 +85,6 @@ echo ">> linking $OUT/kernel.elf"
 "$LLD" -T "$LDSCRIPT" "${OBJS[@]}" $SUPPORT_OBJ -o "$OUT/kernel.elf"
 
 QARGS=(-machine virt -bios none -nographic -kernel "$OUT/kernel.elf")
-if [ -n "${MC_DISK:-}" ]; then
-    [ -f "$MC_DISK" ] || { echo ">> creating 16 MiB disk $MC_DISK"; qemu-img create -f raw "$MC_DISK" 16M >/dev/null 2>&1 || dd if=/dev/zero of="$MC_DISK" bs=1m count=16 >/dev/null 2>&1; }
-    QARGS+=(-drive file="$MC_DISK",format=raw,if=none,id=d0 -device virtio-blk-device,drive=d0)
-fi
 
 echo ">> booting: $QEMU ${QARGS[*]}"
 echo ">> (serial console below; exit QEMU with Ctrl-A then X)"
