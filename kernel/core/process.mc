@@ -424,7 +424,7 @@ export fn proc_uncharge_mem(t: *mut ProcTable, slot: usize, n: usize) -> void {
 // A cooperative process exits via proc_exit and releases its resources. A *runaway* agent never
 // does: it allocates without bound and stays LIVE, so its memory account and fds are never
 // released. Without an external reclaim mechanism such a process can OOM the host — defeating the
-// whole agent-OS isolation thesis. These three functions are that mechanism: select the worst
+// resource-isolation validation path. These three functions are that mechanism: select the worst
 // live offender, forcibly terminate it (reusing the exact death-cleanup path proc_exit runs), and
 // reclaim its resources, while every other agent survives untouched. The heap/allocator calls
 // proc_oom_reclaim when it hits exhaustion (wiring that single call site into heap.mc is a

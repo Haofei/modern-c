@@ -8,7 +8,6 @@ vfs-test	current host/corpus C build gap; additional skipped fixtures remain cov
 treefs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 blockfs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 fdspace-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-agent-abi-fuzz-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 grant-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 forkfd-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 granttab-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions

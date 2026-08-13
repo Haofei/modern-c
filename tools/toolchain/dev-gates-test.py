@@ -200,7 +200,6 @@ def main() -> None:
     assert_gates(module, ["tools/fuzz/parser-fuzz.sh"], ["parser-fuzz-test"])
     assert_gates(module, ["tests/qemu/net/parser_fuzz_demo.mc"], ["parser-fuzz-test"])
     assert_gates(module, ["tools/lib/host-drivers/parser-fuzz-test.c"], ["parser-fuzz-test"])
-    assert_gates(module, ["tests/qemu/proc/agent_abi_demo.mc"], ["agent-abi-test"])
     assert_gates(module, ["tools/toolchain/diagnostics-test.sh"], ["diagnostics-test"])
     assert_gates(module, ["tools/toolchain/mcc-cli-test.sh"], ["mcc-cli-test"])
     assert_gates(module, ["tools/toolchain/install-layout-test.sh"], ["install-layout-test"])

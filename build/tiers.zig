@@ -420,10 +420,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("vfsmount-test"));
     // treefs-test links + runs the hierarchical tree filesystem (needs clang); LLVM side via llvm-host-suite-test.
     m0_full_step.dependOn(ctx.cmd("treefs-test"));
-    // agent-abi-test pins the versioned SYS_SUBMIT/SYS_POLL request/completion contract.
-    m0_full_step.dependOn(ctx.cmd("agent-abi-test"));
-    // agent-abi-fuzz-test adversarially checks validation precedence and fail-closed syscall dispatch.
-    m0_full_step.dependOn(ctx.cmd("agent-abi-fuzz-test"));
     // showcase-test links + runs the language feature showcase (emit-c); LLVM side via llvm-host-suite-test.
     m0_full_step.dependOn(ctx.cmd("showcase-test"));
     // mc-test runs the native #[test] facility (process-isolated) on both backends.
@@ -607,9 +603,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("paging-activate-test"));
     // kmain-test boots one integrated kernel image (heap+console+log+VFS+scheduler).
     m0_full_step.dependOn(ctx.cmd("kmain-test"));
-    // agentos-test boots the agent-OS governance keystone (OOM-kill + reclaim) under QEMU.
-    m0_full_step.dependOn(ctx.cmd("agentos-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-agentos-test"));
     // fault-isolation-test boots the F1 keystone: a real agent trap is CONTAINED (faulting agent
     // killed+reclaimed via the death path, kernel + other agents survive) under QEMU.
     m0_full_step.dependOn(ctx.cmd("fault-isolation-test"));

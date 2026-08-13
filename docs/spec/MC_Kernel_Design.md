@@ -449,9 +449,10 @@ vision § fast transport). Gates: `ipc-test`, `ipc-result-test`, `endpoint-test`
 
 ---
 
-## 14. Resource Governance — GATED (the safety keystone)
+## 14. Resource Governance — GATED
 
-The agent-OS P0 keystone: **a runaway or hijacked agent must not OOM/starve the host.**
+The kernel validation workload keeps a small resource-governance path: **a runaway task should
+not OOM/starve the host in the explicit accounting fixture.**
 
 - **Accounting & quota** (§9.6): `resacct_charge` fails closed (`OverQuota`) with no partial
   reservation.
@@ -473,12 +474,12 @@ The agent-OS P0 keystone: **a runaway or hijacked agent must not OOM/starve the 
 > prove comprehensive live memory enforcement across all allocation paths, because the
 > allocator→charge wiring inside `heap.mc` is follow-up work (§9.6).
 
-**What `agentos-test` proves under QEMU:** spawn three never-exiting agents A/B/C; charge
-memory (C the runaway); an over-quota charge on C fails closed; `proc_oom_victim` selects C;
+**What `oom-test` proves:** spawn three never-exiting tasks A/B/C; charge memory (C the
+runaway); an over-quota charge on C fails closed; `proc_oom_victim` selects C;
 `proc_oom_reclaim` kills C (now a `Zombie`, `used == 0`, fds released) **while A and B stay
-live with accounts intact**; C reaps cleanly. Output: `1ABC2 → AGENTOS-OK`. Gates:
-`agentos-test`, `contain-test`, `fault-isolation-test`. **Deferred (ABSENT):** CPU / IPC /
-accelerator accounting (vision P0.6 — remote-inference lane first).
+live with accounts intact**; C reaps cleanly. Gates: `oom-test`, `contain-test`,
+`fault-isolation-test`. **Deferred (ABSENT):** comprehensive live accounting across all
+allocation paths.
 
 ---
 
@@ -674,7 +675,7 @@ scope. Gate names are verified against `build.zig`.
 | Claim | Source | Gate(s) | Scope |
 |-------|--------|---------|-------|
 | Endpoint generation prevents stale-slot IPC misdelivery | `process.mc`, `proc_ipc.mc` | `endpoint-test`, `llvm-endpoint-test` | riscv64 QEMU |
-| OOM victim selection kills highest-usage live agent; others survive | `process.mc:404-472` | `agentos-test`, `llvm-agentos-test` | explicit-charge fixture |
+| OOM victim selection kills highest-usage live task; others survive | `process.mc:404-472` | `oom-test` | explicit-charge fixture |
 | A faulting agent is killed + reclaimed; kernel survives | `process.mc:474-553` | `contain-test`, `fault-isolation-test` | riscv64 QEMU |
 | Rights/capabilities attenuate only (child = parent ∩ keep) | `capability.mc`, `std/rights.mc` | `cap-test`, `llvm-cap-test` | compile-time + QEMU |
 | Grant revoke invalidates outstanding refs; cascade revokes subtree | `kernel/lib/granttab.mc` | `grant-test`, `granttab-test` | riscv64 QEMU |

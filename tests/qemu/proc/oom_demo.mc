@@ -1,4 +1,4 @@
-// LIVE reclaim / OOM-kill (kernel/core/process) — the agent-OS safety keystone. A runaway agent
+// LIVE reclaim / OOM-kill (kernel/core/process). A runaway task
 // is the LIVE process that never calls proc_exit: it keeps charging memory and would OOM the host
 // if nothing could reclaim it from the outside. This test drives that reclaim path on the host
 // (the arch context primitives are stubbed by the C driver):

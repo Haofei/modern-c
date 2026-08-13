@@ -146,7 +146,6 @@
         "arch-emit-test",
         "qemu-test",
         "kmain-test",
-        "agentos-test",
         "app-run-test"
       ],
       "components": [

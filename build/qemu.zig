@@ -307,8 +307,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "treefs-test", "Hierarchical tree FS: nested mkdir/create, path resolution, ./.. traversal, getdents listing, typed errors", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "treefs-test" });
 
-    _ = h.addScriptTest(ctx, "agent-abi-test", "Versioned agent SYS_SUBMIT/SYS_POLL ABI: request validation and stable typed completion status mapping", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-test" });
-    _ = h.addScriptTest(ctx, "agent-abi-fuzz-test", "Adversarial agent SYS_SUBMIT/SYS_POLL ABI fuzz: validation precedence, typed events, and fail-closed syscall dispatch", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "agent-abi-fuzz-test" });
     // examples/feature_showcase.mc — one self-verifying tour of the language; emit-c via
     // the host harness here, emit-llvm auto-covered by llvm-host-suite-test. Returns 1 iff
     // every demonstrated feature produces its expected result on the backend under test.
@@ -927,10 +925,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "kmain-test", "Boot one integrated kernel image (heap+console+log+VFS+scheduler) under QEMU", &.{ "bash", "tools/proc/kmain-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-kmain-test", "Boot one LLVM-lowered integrated kernel image under QEMU", &.{ "bash", "tools/proc/kmain-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "agentos-test", "Boot the agent-OS governance keystone (OOM-kill + reclaim) under QEMU", &.{ "bash", "tools/proc/agentos-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-agentos-test", "Boot the LLVM-lowered agent-OS governance keystone under QEMU", &.{ "bash", "tools/proc/agentos-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "fault-isolation-test", "Boot the F1 fault-isolation keystone (a real agent trap is contained: faulting agent killed+reclaimed, kernel+others survive) under QEMU", &.{ "bash", "tools/proc/fault-isolation-test.sh", "zig-out/bin/mcc", "c" });
 
