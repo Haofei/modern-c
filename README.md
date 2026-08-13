@@ -109,7 +109,7 @@ but not bit-for-bit identical across rebuild dates.
 
 | Environment | Qualified LLVM | Support status |
 | --- | --- | --- |
-| Linux CI/dev container | Ubuntu 24.04 packages for LLVM 18 (`clang-18`, `lld-18`, `llvm-18`) | Release qualification path; `zig build preflight` must pass with `MC_LLVM_MAJOR=18`. |
+| Linux CI/dev container | Ubuntu 24.04 packages for LLVM 18 (`clang-18`, `lld-18`, `llvm-18`) | Primary CI/dev path; `zig build preflight` must pass with `MC_LLVM_MAJOR=18`. |
 | macOS host gate | Homebrew `llvm@18` on `macos-15` | Host/fast qualification path; the workflow places `llvm@18` first on `PATH`. |
 | Native local | LLVM 18 tools selected on `PATH` | Supported when `MC_LLVM_MAJOR=18 zig build preflight` passes. |
 | Other LLVM majors | Any non-18 LLVM toolchain | Unqualified until the major is added to CI, Docker, preflight, and this matrix. |
@@ -194,9 +194,9 @@ MC_REQUIRE_TOOLS=1 MC_LLVM_MAJOR=18 zig build m0-full
 `m0` covers the deterministic compiler-core qualification path used for normal
 local and CI feedback. It intentionally omits the full `c-test` fixture compile
 sweep; use `fast`, `c0`, or `m0-full` when a change needs that C-backend
-coverage. `m0-full` preserves the exhaustive matrix: unit and spec tests, C and
-LLVM fixture sweeps, IR assembly and object generation, optimizer compatibility,
-differential execution, fuzz oracles, package and release tooling, host-driver
+coverage. `m0-full` preserves the exhaustive compiler-validation matrix: unit
+and spec tests, C and LLVM fixture sweeps, IR assembly and object generation,
+optimizer compatibility, differential execution, fuzz oracles, host-driver
 tests, runtime experiments, and the QEMU kernel matrix.
 
 The canonical Zig aggregate executes side-effecting `Run` gates serially. For
@@ -311,9 +311,9 @@ normalization, but code/comment internal spacing on that line is intentionally c
 
 ## Current Boundaries
 
-MC is not generally production-ready. Three compiler architecture workstreams
-are closed only for the currently admitted supported subset and reopen when a
-new semantic/projection/pointer-flow family is admitted:
+Three compiler architecture workstreams are closed only for the currently
+admitted supported subset and reopen when a new semantic/projection/pointer-flow
+family is admitted:
 
 1. pointer-provenance handling for race-tolerant lowering;
 2. typed semantic facts and typed MIR as backend semantic authority;

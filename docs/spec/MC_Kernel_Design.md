@@ -19,7 +19,7 @@ contract. Keep kernel work small and tied to compiler evidence.
 - network stacks, filesystems, block storage, PCI, RNG services, and device
   registries;
 - kernel IPC policy, endpoint rendezvous protocols, service supervision, fdspace,
-  process capability masks, and per-process product governance;
+  and process capability masks;
 - async kernel brokers, SMP product fixtures, VM products, isolation products, and
   update/checkpoint/recovery products;
 - product release, shipped-version, or device-certification claims.

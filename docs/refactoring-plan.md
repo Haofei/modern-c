@@ -188,7 +188,7 @@ A patch is complete only if it includes:
 
 - the code change;
 - one focused regression, inventory check, or manifest check;
-- documentation/risk-register changes only when the claim changes;
+- documentation changes only when the claim changes;
 - no unrelated kernel/product edits.
 
 Split the patch if it:
@@ -242,4 +242,4 @@ zig build <focused-qemu-gate-for-touched-subsystem> --summary all
 ```
 
 Use the focused tamper/substitution or capability tests for the touched
-subsystem before changing risk-register status.
+subsystem before changing scope or support-status prose.
