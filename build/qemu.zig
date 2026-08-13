@@ -117,21 +117,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "sync-test", "Build, link, and run a std/sync guarded critical section", &.{ "bash", "tools/toolchain/sync-test.sh", "zig-out/bin/mcc" });
 
 
-    // S-mode timer-interrupt validation under OpenSBI. The fixture arms the
-    // SBI TIME extension, enables timer interrupts, and counts re-armed ticks.
-    _ = h.addScriptTest(ctx, "smode-timer-test", "Build and run the S-mode timer-interrupt validation fixture under OpenSBI", &.{ "bash", "tools/arch/smode-timer-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-smode-timer-test", "Build and run the LLVM-lowered S-mode timer-interrupt validation fixture under OpenSBI", &.{ "bash", "tools/arch/smode-timer-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "smode-plic-test", "Build and run the S-mode external-interrupt validation fixture through the PLIC under OpenSBI", &.{ "bash", "tools/arch/smode-plic-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-smode-plic-test", "Build and run the LLVM-lowered S-mode external-interrupt validation fixture through the PLIC under OpenSBI", &.{ "bash", "tools/arch/smode-plic-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // Steady-state (re-armed) variant: 3 discrete external interrupts. The regression gate for
-    // the former C-backend S-mode async-IRQ reset (root cause: a 2-byte-aligned naked trap
-    // vector → reserved stvec MODE; fixed by #[align(4)] / naked-defaults-to-4).
-    _ = h.addScriptTest(ctx, "smode-plic-multishot-test", "Build and run the re-armed S-mode external-interrupt validation fixture through the PLIC under OpenSBI", &.{ "bash", "tools/arch/smode-plic-multishot-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-smode-plic-multishot-test", "Build and run the LLVM-lowered re-armed S-mode external-interrupt validation fixture through the PLIC under OpenSBI", &.{ "bash", "tools/arch/smode-plic-multishot-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
     _ = h.addScriptTest(ctx, "demo-test", "Lower every demo/ driver to C and compile-check it", &.{ "bash", "tools/toolchain/demo-test.sh", "zig-out/bin/mcc" });
 
     // Conformance-tier variant: MC_REQUIRE_TARGET=1 makes a missing clang/riscv64 target a

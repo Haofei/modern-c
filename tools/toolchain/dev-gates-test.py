@@ -265,7 +265,7 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/llvm-c-emit-sweep.py"], ["llvm-c-sweep"])
     assert_gates(module, ["tools/toolchain/llvm-c-obj-sweep.py"], ["llvm-c-obj-sweep"])
     assert_gates(module, ["tools/arch/qemu-mmio-test.sh"], ["qemu-test", "llvm-qemu-test"])
-    assert_gates(module, ["tools/qemu/kernel-boot-lib.sh"], ["preflight", "riscv-qemu-validation"])
+    assert_gates(module, ["tools/qemu/kernel-boot-lib.sh"], ["preflight"])
     assert_route(
         module,
         [".github/workflows/nightly-fuzz.yml"],

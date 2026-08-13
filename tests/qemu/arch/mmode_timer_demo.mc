@@ -1,5 +1,4 @@
-// Bare-metal riscv64 M-mode timer kernel — in PURE MC (no C). The M-mode analogue
-// of the OpenSBI S-mode proof (tests/qemu/arch/smode_timer_demo.mc): there is NO
+// Bare-metal riscv64 M-mode timer kernel — in PURE MC (no C). There is NO
 // firmware here (QEMU `-bios none` jumps straight to 0x80000000 in M-mode), so the
 // kernel owns the machine CSRs (mtvec/mie/mstatus/mepc/mcause/mtval, `mret`), talks
 // to the CLINT directly for the timer (mtime/mtimecmp MMIO — reachable in M-mode,

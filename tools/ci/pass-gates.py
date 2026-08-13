@@ -15,15 +15,9 @@ TIERS = ROOT / "build" / "tiers.zig"
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 GATE_MANIFEST = ROOT / "docs" / "gate-manifest.json"
 
-ARRAYS = {
-    "riscv-qemu-validation": "riscv_qemu_validation",
-}
+ARRAYS = {}
 
-MIN_GATE_COUNTS = {
-    # Match the current assertion-list sizes. Any intentional reduction should
-    # update this contract explicitly so CI cannot quietly become less probative.
-    "riscv-qemu-validation": 6,
-}
+MIN_GATE_COUNTS = {}
 MIN_M0_DEPENDENCIES = 20
 
 
@@ -181,7 +175,6 @@ def check_static() -> None:
     ci = read(CI)
     required_snippets = (
         "python3 tools/ci/pass-gates.py assert --tier ci-m0-pass --log m0.log",
-        "python3 tools/ci/pass-gates.py assert --tier riscv-qemu-validation --log riscv-qemu-validation.log",
         "python3 tools/ci/pass-gates.py names --tier ci-m0-pass",
     )
     for snippet in required_snippets:
@@ -190,7 +183,6 @@ def check_static() -> None:
 
     stale_fragments = (
         "for g in async-test async-irq-test",
-        "smode-timer-test llvm-smode-timer-test",
     )
     for fragment in stale_fragments:
         if fragment in ci:

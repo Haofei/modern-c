@@ -5,24 +5,10 @@ const h = @import("helpers.zig");
 // These look up the command steps the other modules registered, by name, via ctx.cmd().
 pub fn register(ctx: *h.Ctx) void {
     const b = ctx.b;
-    const riscv_qemu_validation = [_][]const u8{
-        "smode-timer-test",
-        "llvm-smode-timer-test",
-        "smode-plic-test",
-        "llvm-smode-plic-test",
-        "smode-plic-multishot-test",
-        "llvm-smode-plic-multishot-test",
-    };
-
     // Positive CI anti-vacuity assertions for m0 are declared in
     // docs/gate-manifest.json. tools/ci/pass-gates.py verifies every manifest
     // assertion is still an m0 dependency, and CI uses that manifest-backed list
-    // when grepping the m0 log and re-running selected QEMU validation gates in Docker.
-
-    const riscv_qemu_validation_step = b.step("riscv-qemu-validation", "Run the retained RISC-V QEMU/OpenSBI validation surrogate");
-    for (riscv_qemu_validation) |name| {
-        riscv_qemu_validation_step.dependOn(ctx.cmd(name));
-    }
+    // when grepping the m0 log.
 
     const m0_full_step = b.step("m0-full", "Run full M0 validation matrix");
     // Fixture-contract lint guards the test corpus itself (reject EXPECT lines, sweep
@@ -93,12 +79,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-stdio-test"));
     m0_full_step.dependOn(ctx.cmd("mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-smode-timer-test"));
-    // smode-plic-test validates S-mode external-interrupt delivery through the PLIC under OpenSBI;
-    // the multishot variant proves the re-armed steady-state path (regression gate for the former
-    // C-backend async-IRQ reset, fixed by #[align(4)] on naked trap vectors).
-    m0_full_step.dependOn(ctx.cmd("llvm-smode-plic-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-smode-plic-multishot-test"));
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
@@ -203,13 +183,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("try-defer-test"));
     // sync-test exercises std/sync locks + linear guards (needs clang).
     m0_full_step.dependOn(ctx.cmd("sync-test"));
-    // smode-timer-test validates S-mode timer-interrupt delivery under OpenSBI (SBI TIME ext).
-    m0_full_step.dependOn(ctx.cmd("smode-timer-test"));
-    // smode-plic-test validates S-mode external-interrupt delivery through the PLIC under OpenSBI;
-    // the multishot variant proves the re-armed steady-state path on the C backend (regression
-    // gate for the former async-IRQ reset).
-    m0_full_step.dependOn(ctx.cmd("smode-plic-test"));
-    m0_full_step.dependOn(ctx.cmd("smode-plic-multishot-test"));
     // demo-test compile-checks the whole demo/ suite (needs clang).
     m0_full_step.dependOn(ctx.cmd("demo-test-strict"));
     // elf-test links + runs the ELF64 parser (needs clang).

@@ -33,7 +33,7 @@ route it to the matching expectation.
 | Emit + compile-check | emitted C/IR is well-formed for a target | `c-test`, `sweep`, `llvm-sweep`, `llvm-spec-obj-sweep`, `demo-test` | fast (clang/llc, no QEMU) |
 | Differential / fuzz | C and LLVM backends agree; no soundness holes | `diff-backend`, `mcfuzz/*`, `move-fuzz` | fast, no QEMU |
 | Host-driver execution | runtime behavior on the host | `tools/lib/host-tests.tsv` via `host-harness.sh` | medium |
-| QEMU execution | real boot / low-level behavior | the retained per-feature QEMU gates (`qemu-test`, S-mode timer/PLIC, …) | slow |
+| QEMU execution | real boot / low-level behavior | retained per-feature QEMU gates such as typed MMIO/trap/thread boot checks | slow |
 
 Aggregate lanes compose these: **`fast`** = spec + emit-C + differential (no fuzz/QEMU);
 **`c0`** (spec §L.1) = unit + `c-test` + `sweep` + `demo-test`; **`c1`** (spec §L.2) =

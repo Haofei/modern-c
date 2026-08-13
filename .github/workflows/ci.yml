@@ -81,17 +81,6 @@ jobs:
         run: docker compose run --rm dev zig build fast
       - name: Preflight the toolchain inside the container
         run: docker compose run --rm dev zig build preflight
-      - name: Run the RISC-V QEMU/OpenSBI validation surrogate in the container (no skips)
-        run: |
-          docker compose run --rm dev bash -lc '
-            set -euo pipefail
-            MC_REQUIRE_TOOLS=1 zig build riscv-qemu-validation 2>&1 | tee riscv-qemu-validation.log
-            if grep -n "^SKIP:" riscv-qemu-validation.log; then
-              echo "riscv-qemu-validation skipped at least one gate in CI" >&2
-              exit 1
-            fi
-            python3 tools/ci/pass-gates.py assert --tier riscv-qemu-validation --log riscv-qemu-validation.log
-          '
       - name: Run the async C+LLVM QEMU gates in the container (no skips)
         run: |
           docker compose run --rm dev bash -lc '

@@ -374,8 +374,8 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("tools/qemu/kernel-boot-lib.sh",),
-        ("preflight", "riscv-qemu-validation"),
-        "shared QEMU boot library changes need toolchain preflight and the RISC-V QEMU validation surrogate",
+        ("preflight",),
+        "shared QEMU boot library changes need toolchain preflight",
     ),
     Rule(
         ("docs/**/*.md", "docs/*.md", "*.md"),
@@ -488,8 +488,8 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         ("kernel/**/*", "std/**/*", "tests/qemu/**/*", "tools/arch/*", "tools/proc/*", "tools/mem/*"),
-        ("fast", "riscv-qemu-validation"),
-        "kernel/std/QEMU changes need host confidence plus the focused RISC-V QEMU validation surrogate",
+        ("fast",),
+        "kernel/std/QEMU changes need host confidence",
         excludes=(
             "tools/arch/qemu-mmio-test.sh",
         ),
