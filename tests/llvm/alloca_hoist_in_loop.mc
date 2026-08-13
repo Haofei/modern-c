@@ -4,7 +4,7 @@
 // entry block, NOT a fresh alloca per iteration. An alloca emitted in a (non-entry) loop block
 // is a dynamic stack allocation that grows the stack every iteration and is never reclaimed
 // until the function returns — so a long-running loop silently exhausts the stack and corrupts
-// adjacent memory. (Found via a 4096-byte ELF-loader copy loop corrupting the kernel heap under
+// adjacent memory. (Found via a 4096-byte copy loop corrupting a fixture heap under
 // QEMU; the C backend was always correct because it emits a normal reused C local.)
 //
 // This fixture makes the bug observable on a HOST (where the stack is large): the in-loop local

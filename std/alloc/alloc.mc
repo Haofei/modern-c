@@ -1,12 +1,12 @@
 // std/alloc — a type-erased allocator interface (the Zig pattern, realized with an MC
-// `trait`; docs/spec/MC_0.7_Final_Design.md §32). The concrete allocator (a kernel Heap,
+// `trait`; docs/spec/MC_0.7_Final_Design.md §32). The concrete allocator (for example,
 // page allocator, slab, …) is the trait object's `data`, so generic code — containers,
 // owning handles, drivers — allocates against a `*mut dyn Allocator` without naming the
 // backend, and without an implicit global heap: you pass the allocator in. A
 // `*mut dyn Allocator` is one {data,vtable} fat pointer over a shared rodata vtable —
 // where the old closure-pair handle carried two per-instance {code,env} closures. Each
 // backend supplies an `impl Allocator for <Backend>` and an adapter that coerces it to
-// `*mut dyn Allocator`, living with that backend (e.g. `heap_allocator` in kernel/core/heap).
+// `*mut dyn Allocator`, living with that backend (e.g. the fixture heap in tests/support).
 
 import "std/addr.mc";
 

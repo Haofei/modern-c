@@ -2,7 +2,7 @@
 import "std/collections/arc.mc";
 import "std/alloc/alloc.mc";
 import "std/addr.mc";
-import "kernel/core/heap.mc";
+import "tests/support/heap.mc";
 struct Payload { value: u32 }
 global g_pool: [4096]u8;
 fn bad() -> void {

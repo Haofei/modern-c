@@ -1,7 +1,7 @@
 // EXPECT: E_RESOURCE_LEAK — an Owned<T> from create() is never freed.
 import "std/alloc/alloc.mc";
 import "std/addr.mc";
-import "kernel/core/heap.mc";
+import "tests/support/heap.mc";
 global g_pool: [4096]u8;
 struct Cell { v: u32 }
 fn bad() -> void {

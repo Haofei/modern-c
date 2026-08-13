@@ -8,7 +8,6 @@ arc-test	current host/corpus C build gap; additional skipped fixtures remain cov
 scan-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 time-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 synclock-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-heapfree-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 showcase-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 fuzz-atomics-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fuzz-task-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions

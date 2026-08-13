@@ -1,8 +1,8 @@
-// kernel/core/heap — a reclaiming byte allocator over a physical memory region.
+// tests/support/heap — a reclaiming byte allocator used by allocator/resource
+// fixtures.
 //
 // Sub-allocates aligned byte ranges from a `PhysRange` the platform reserved for
-// the kernel (distinct from the frame allocator, which hands out reclaimable page
-// frames). All address math is typed/checked via std/addr — no raw `usize`, no
+// tests. All address math is typed/checked via std/addr — no raw `usize`, no
 // hand-rolled alignment or overflow.
 //
 // Reclamation: a first-fit free list reuses freed blocks; what is never reused is
@@ -16,13 +16,13 @@
 // keeps the live count low in practice; if a free would exceed capacity *and* could
 // not coalesce, the block is dropped (leaked back to nothing) rather than corrupting
 // state — fail-safe, never fail-unsafe. First-fit is O(n) in the number of free
-// blocks, which is fine for the small block counts a kernel heap sees.
+// blocks, which is fine for the small block counts these fixtures exercise.
 
 import "std/addr.mc";
 import "std/alloc/alloc.mc";
 
-// Max distinct (non-coalesced) free blocks tracked at once. A kernel heap fragments
-// little; coalescing collapses adjacent frees, so this rarely fills.
+// Max distinct (non-coalesced) free blocks tracked at once. The fixture allocator
+// keeps this deliberately small; coalescing collapses adjacent frees, so this rarely fills.
 const HEAP_FREE_SLOTS: usize = 64;
 const HEAP_LIVE_SLOTS: usize = 256;
 
@@ -633,7 +633,7 @@ pub fn heap_live_allocations(h: *mut Heap) -> usize {
 }
 
 // The heap conforms to the Allocator trait (std/alloc §32), so callers allocate against
-// a `*mut dyn Allocator` without knowing it's a kernel heap. `heap_alloc`/`heap_free` are
+// a `*mut dyn Allocator` without knowing the concrete test backend. `heap_alloc`/`heap_free` are
 // already (self, …) -> …, so the methods delegate directly.
 impl Allocator for Heap {
     fn alloc(self: *mut Heap, size: usize, align: usize) -> PAddr {

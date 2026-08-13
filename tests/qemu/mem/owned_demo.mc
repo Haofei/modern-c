@@ -3,7 +3,7 @@
 
 import "std/alloc/alloc.mc";
 import "std/addr.mc";
-import "kernel/core/heap.mc";
+import "tests/support/heap.mc";
 
 global g_pool: [8192]u8;
 struct Cell { v: u32 }

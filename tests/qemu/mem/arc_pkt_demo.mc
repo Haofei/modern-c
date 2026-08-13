@@ -6,7 +6,7 @@
 import "std/collections/arc.mc";
 import "std/alloc/alloc.mc";
 import "std/addr.mc";
-import "kernel/core/heap.mc";
+import "tests/support/heap.mc";
 
 struct Packet { len: u32, data: [64]u8 }
 global g_pool: [8192]u8;

@@ -4,7 +4,7 @@
 // double free of the same allocation.
 import "std/alloc/alloc.mc";
 import "std/addr.mc";
-import "kernel/core/heap.mc";
+import "tests/support/heap.mc";
 global g_pool: [4096]u8;
 struct Cell { v: u32 }
 fn bad() -> void {
