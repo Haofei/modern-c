@@ -106,7 +106,7 @@ It is a *lint*, not the compiler: it parses with `awk` and is deliberately conse
 authoritative gate is `sema`; this gives the greppable, human-auditable view and a clean
 inventory.
 
-## Audited inventory — `kernel/` + `std/` (102 `.mc` files)
+## Audited inventory — `kernel/` + `std/` (101 `.mc` files)
 
 Snapshot from `tools/toolchain/mc-audit.sh --mode unsafe` at S0.2. **Result: clean** — every gated unsafe op
 sits inside an `unsafe`/`unsafe_contract` region (re-run the lint for the live count).
@@ -119,7 +119,7 @@ sits inside an `unsafe`/`unsafe_contract` region (re-run the lint for the live c
 | raw-many `.offset()` | 0 | unsafe block | — none currently. |
 | `forget_unchecked` | 28 | unsafe block | Driver completion/lock release paths such as `kernel/drivers/irq/plic.mc` — transferring a linear value's ownership out of the checker. |
 | `arc_get_mut` | 1 | unsafe block | `std/arc.mc` (definition); call sites require `unsafe`. |
-| inline `asm` | 17 | unsafe block | Architecture context/CSR/paging paths. The precise forms carry `#[unsafe_contract(precise_asm)]`. |
+| inline `asm` | 15 | unsafe block | Architecture context/CSR/paging paths. The precise forms carry `#[unsafe_contract(precise_asm)]`. |
 | `unchecked.{add,…}` | 0 | `#[unsafe_contract(no_overflow)]` | — none currently in kernel/std. |
 | `assume_noalias_unchecked` | 0 | `#[unsafe_contract(noalias)]` | — none currently in kernel/std. |
 | `bitcast<T>` | 8 | tracked | `std/vec.mc` (typed-slot reinterpret). Alias-safe (memcpy). |
