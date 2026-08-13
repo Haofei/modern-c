@@ -13,10 +13,9 @@ guards against by convention become **compile errors**.
 | `irq/` | interrupt lifecycle | `Masked → Enabled → Pending → Enabled`; `ack` needs an `IrqPending`; shared updates need an `IrqOff` witness. | compile-gated contract |
 | `spi/` | bus transaction | a linear `SpiTransaction` holds chip-select; forgetting to end it leaks, using it after end is a move error. | compile-gated contract |
 | `framebuffer/` | device-visible memory | a linear `Framebuffer` mapping; pixels carry their typed format (`Rgb888`, not a bare `u32`); a flush names the dirty rectangle; unmap exactly once. | compile-gated contract |
-| `virtio-blk/` | DMA queue, request/response | block buffers cross the queue as linear DMA handles with device directions; the CPU can't read the result until it is reclaimed. | **typed request sketch** — the chained submit is a primitive; see note |
-Honest scope: `virtio-blk` is a typed request *sketch* whose chained submit is a
-platform primitive. The register/capability/typestate demos
-(`uart`…`framebuffer`) are compile-gated: their value is the static contract.
+
+The register/capability/typestate demos (`uart`…`framebuffer`) are
+compile-gated: their value is the static contract.
 
 ## Running
 
@@ -33,9 +32,9 @@ that must not compile, checked by `demo-test`:
 | misuse | rejected with |
 |--------|---------------|
 | read a write-only UART register | `E_MMIO_ACCESS_FORBIDDEN` |
-| drive a pin configured as input | `E_NO_IMPLICIT_POINTER_CONVERSION` |
-| read `elapsed` from a stopped timer | `E_NO_IMPLICIT_POINTER_CONVERSION` |
+| drive a pin configured as input | `E_NO_IMPLICIT_CONVERSION` |
+| read `elapsed` from a stopped timer | `E_NO_IMPLICIT_CONVERSION` |
 | `ack` an interrupt that has not fired | `E_NO_IMPLICIT_CONVERSION` |
 | transfer after the SPI transaction ended | `E_USE_AFTER_MOVE` |
 | draw after the framebuffer was unmapped | `E_USE_AFTER_MOVE` |
-| get a CPU address of a device-owned DMA buffer | `E_NO_IMPLICIT_POINTER_CONVERSION` |
+| get a CPU address of a device-owned DMA buffer | `E_NO_IMPLICIT_CONVERSION` |

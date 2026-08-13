@@ -24,11 +24,11 @@ extern fn touch_shared(w: *IrqOff, value: u32) -> void;
 // Service one interrupt, each transition in the only legal state.
 export fn serve(line: u32) -> void {
     let masked: IrqMasked = mc_irq_register(line);
-    let enabled: IrqEnabled = mc_irq_unmask(masked);
-    let pending: IrqPending = mc_irq_wait(enabled);
-    let live: IrqEnabled = mc_irq_ack(pending);
-    let off: IrqMasked = mc_irq_mask(live);
-    mc_irq_release(off);
+    let enabled: IrqEnabled = mc_irq_unmask(move masked);
+    let pending: IrqPending = mc_irq_wait(move enabled);
+    let live: IrqEnabled = mc_irq_ack(move pending);
+    let off: IrqMasked = mc_irq_mask(move live);
+    mc_irq_release(move off);
 }
 
 // A critical section: the shared update is only reachable with the witness, which
@@ -36,7 +36,7 @@ export fn serve(line: u32) -> void {
 export fn critical_update(value: u32) -> void {
     let w: IrqOff = irq_save();
     touch_shared(&w, value);
-    irq_restore(w);
+    irq_restore(move w);
 }
 
 // what the types forbid:

@@ -13,38 +13,40 @@ move struct TimerRunning { id: u32 }
 extern fn mc_timer_open(id: u32) -> TimerStopped;
 extern fn mc_timer_configure(t: TimerStopped, reload: u32) -> TimerStopped;
 extern fn mc_timer_start(t: TimerStopped) -> TimerRunning;
-extern fn mc_timer_elapsed(t: *TimerRunning) -> u32;
+extern fn mc_timer_elapsed(id: u32) -> u32;
 extern fn mc_timer_stop(t: TimerRunning) -> TimerStopped;
 extern fn mc_timer_close(t: TimerStopped) -> void;
 
 #[mc_abi]
 export fn configure(t: TimerStopped, reload: u32) -> TimerStopped {
-    return mc_timer_configure(t, reload);
+    return mc_timer_configure(move t, reload);
 }
 #[mc_abi]
 export fn start(t: TimerStopped) -> TimerRunning {
-    return mc_timer_start(t);
+    return mc_timer_start(move t);
 }
-export fn elapsed(t: *TimerRunning) -> u32 {
-    return mc_timer_elapsed(t);
+fn elapsed(t: TimerRunning) -> TimerRunning {
+    let _ticks: u32 = mc_timer_elapsed(t.id);
+    return move t;
 }
 #[mc_abi]
 export fn stop(t: TimerRunning) -> TimerStopped {
-    return mc_timer_stop(t);
+    return mc_timer_stop(move t);
 }
 
 // One full lifecycle, each transition in the only state where it is legal.
 export fn measure(id: u32, reload: u32) -> u32 {
     let stopped: TimerStopped = mc_timer_open(id);
-    let armed: TimerStopped = configure(stopped, reload);
-    let running: TimerRunning = start(armed);
-    let ticks: u32 = elapsed(&running);
-    let done: TimerStopped = stop(running);
-    mc_timer_close(done);
+    let armed: TimerStopped = configure(move stopped, reload);
+    let running: TimerRunning = start(move armed);
+    let ticks: u32 = mc_timer_elapsed(running.id);
+    let still_running: TimerRunning = move running;
+    let done: TimerStopped = stop(move still_running);
+    mc_timer_close(move done);
     return ticks;
 }
 
 // what the types forbid:
-//   start(start(armed))     // E_NO_IMPLICIT_CONVERSION: start() wants Stopped, got Running
-//   elapsed(&armed)         // E_NO_IMPLICIT_CONVERSION: elapsed() wants *Running
+//   start(start(move armed))     // E_NO_IMPLICIT_CONVERSION: start() wants Stopped, got Running
+//   elapsed(move armed)     // E_NO_IMPLICIT_CONVERSION: elapsed() wants Running
 //   (omitting mc_timer_close) // E_RESOURCE_LEAK: the handle is never closed
