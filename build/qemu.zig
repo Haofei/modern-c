@@ -772,18 +772,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-compute-app-test", "LLVM: confined C app over the freestanding libc runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/compute.c", "compute-ok", "compute-app" });
 
-    // the exact half: classification/rounding/fmod + hardware sqrt) on real doubles. Proves
-    // hardware FP is enabled for the app (kernel sets mstatus.FS before enter_user) — the
-    _ = h.addScriptTest(ctx, "math-app-test", "Confined C app over the freestanding libm (exact functions + hardware sqrt, FP enabled) runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/mathtest.c", "math-ok", "math-app" });
-
-    _ = h.addScriptTest(ctx, "llvm-math-app-test", "LLVM: confined C app over the freestanding libm runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/mathtest.c", "math-ok", "math-app" });
-
-    // transcendentals (pow/exp/log/sin/cos/tan/atan2/cbrt/hypot) — the full double libm JS
-    // Math needs, built freestanding into a cached archive and linked confined under FP.
-    _ = h.addScriptTest(ctx, "trig-app-test", "Confined C app over vendored openlibm transcendentals runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c", "examples/apps/transcendental.c", "trig-ok", "trig-app" });
-
-    _ = h.addScriptTest(ctx, "llvm-trig-app-test", "LLVM: confined C app over vendored openlibm transcendentals runs under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm", "examples/apps/transcendental.c", "trig-ok", "trig-app" });
-
     // is driven from a C runtime under QEMU on both backends — the printf-family interop the
     _ = h.addScriptTest(ctx, "vararg-test", "C-ABI variadic MC fn (va.start/va.arg/va.end) runs under QEMU", &.{ "bash", "tools/lang/vararg-test.sh", "zig-out/bin/mcc", "c" });
 

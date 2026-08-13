@@ -253,18 +253,6 @@ def main() -> None:
     assert_route(module, ["docs/std-api.md"], ["std-api-docs-test"], ["git diff --check"])
     assert_route(module, ["docs/vendoring.md"], ["vendoring-test"], ["git diff --check"])
     assert_route(module, ["THIRD-PARTY-LICENSES.md"], ["third-party-licenses-test"], ["git diff --check"])
-    assert_route(
-        module,
-        ["third_party/openlibm/README.vendored.md"],
-        ["vendoring-test", "third-party-licenses-test"],
-        ["git diff --check"],
-    )
-    assert_route(
-        module,
-        ["third_party/openlibm/LICENSE.md"],
-        ["vendoring-test", "third-party-licenses-test"],
-        ["git diff --check"],
-    )
     assert_gates(module, ["tools/toolchain/abi-test.sh"], ["abi-test"])
     assert_gates(module, ["tests/toolchain/abi_layout.mc"], ["abi-test"])
     assert_gates(module, ["tools/toolchain/asm-targets-test.sh"], ["asm-targets-test"])

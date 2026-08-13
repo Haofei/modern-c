@@ -17,7 +17,6 @@
         "user",
         "examples",
         "docs",
-        "third_party",
         ".github",
         "README.md",
         "LICENSE",

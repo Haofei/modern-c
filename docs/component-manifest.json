@@ -95,24 +95,6 @@
       "profiles": [
         "kernel-qemu"
       ]
-    },
-    {
-      "id": "openlibm",
-      "category": "vendored",
-      "owner": "agent-runtime",
-      "summary": "Freestanding libm subset used by confined C app validation.",
-      "upstream": "https://github.com/JuliaMath/openlibm",
-      "revision": "b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8",
-      "archive_sha256": "b387919068d5ec49929cc012119375b889724175918e851851d3eacab92a665a",
-      "license": "mixed permissive",
-      "license_file": "third_party/openlibm/LICENSE.md",
-      "provenance_file": "third_party/openlibm/README.vendored.md",
-      "local_modifications": [
-        "tools/user/build-openlibm.sh integration only"
-      ],
-      "profiles": [
-        "kernel-qemu"
-      ]
     }
   ]
 }

@@ -272,7 +272,8 @@ export fn atoi(nptr: *const u8) -> i32 {
 
 // ---- string -> double ----
 
-// 10^n via openlibm (linked alongside the libc in the app). Reasonable accuracy for parsing.
+// 10^n via the app-provided math runtime. Runtime harnesses that need `strtod` link a tiny
+// deterministic pow shim instead of vendoring a full libm into the language repository.
 extern fn pow(base: f64, exp: f64) -> f64;
 
 export fn strtod(nptr: *const u8, endptr: *mut u8) -> f64 {

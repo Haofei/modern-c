@@ -9,36 +9,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-DEPENDENCIES = {
-    "openlibm": {
-        "license": "LICENSE.md",
-        "needles": [
-            "Upstream",
-            "Recorded version",
-            "Retained-subset comparison commit",
-            "b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8",
-            "Archive SHA-256",
-            "b387919068d5ec49929cc012119375b889724175918e851851d3eacab92a665a",
-            "Source evidence",
-            "Provenance limit",
-            "not uniquely provable",
-            "License",
-            "What is kept",
-            "dropped",
-            "Local modifications",
-            "tools/user/build-openlibm.sh",
-            "How it is built and used",
-            "re-vendor",
-        ],
-        "forbidden": [
-            "exact recorded version and commit currently unknown",
-            "No upstream version macro, commit, tag file, or archive checksum is present",
-        ],
-    },
-}
+DEPENDENCIES: dict[str, dict[str, object]] = {}
+
 
 DOC_NEEDLES = [
-    "openlibm",
+    "No third-party source dependency is currently vendored",
     "README.vendored.md",
     "THIRD-PARTY-LICENSES.md",
     "archive checksum",
@@ -91,6 +66,8 @@ def check_dependency(name: str, cfg: dict[str, object]) -> list[str]:
 def check_no_extra_license_deps() -> list[str]:
     errors: list[str] = []
     third_party = ROOT / "third_party"
+    if not third_party.is_dir():
+        return errors
     for child in sorted(p for p in third_party.iterdir() if p.is_dir()):
         has_license = any(
             (child / name).is_file()

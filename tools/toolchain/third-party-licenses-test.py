@@ -12,30 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "THIRD-PARTY-LICENSES.md"
 LICENSE_FILENAMES = ("LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING")
 
-DEPENDENCIES = {
-    "openlibm": {
-        "heading": "openlibm",
-        "license": "third_party/openlibm/LICENSE.md",
-        "readme": "third_party/openlibm/README.vendored.md",
-        "needles": (
-            "Component: openlibm",
-            "https://github.com/JuliaMath/openlibm",
-            "b8b7bec46076bbe5fee43ffe8f9b2a4c8352a9c8",
-            "b387919068d5ec49929cc012119375b889724175918e851851d3eacab92a665a",
-            "original import commit is not uniquely provable",
-            "mixed permissive",
-            "MIT",
-            "ISC",
-            "FreeBSD/2-clause BSD",
-            "FDLIBM",
-            "Redistribution note:",
-            "LICENSE.md",
-        ),
-        "forbidden": (
-            "exact recorded version and commit currently unknown",
-        ),
-    },
-}
+DEPENDENCIES: dict[str, dict[str, object]] = {}
+
 
 
 def fail(message: str) -> None:

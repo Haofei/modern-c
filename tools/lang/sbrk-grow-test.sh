@@ -50,11 +50,25 @@ CFLAGS=("${APP_CFLAGS[@]}")
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$HERE/user/libc/libc.mc" "$WORK/libc.o" "$WORK"
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$HERE/user/libc/syscall_user.mc" "$WORK/sys.o" "$WORK"
 APP_SUPPORT="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/app-support.o")"
-bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
+cat > "$WORK/pow_shim.c" <<'C'
+double pow(double base, double exp) {
+    int n = (int)exp;
+    double result = 1.0;
+    int neg = n < 0;
+    if (neg) n = -n;
+    while (n > 0) {
+        if (n & 1) result *= base;
+        base *= base;
+        n >>= 1;
+    }
+    return neg ? 1.0 / result : result;
+}
+C
+"$CLANG" "${APP_CFLAGS[@]}" -c "$WORK/pow_shim.c" -o "$WORK/pow_shim.o"
 
 "$LLD" -T "$HERE/user/runtime/user.ld" \
     "$WORK/crt0.o" "$WORK/agent.o" \
-    "$WORK/libc.o" "$WORK/sys.o" "$WORK/traps.o" $APP_SUPPORT "$WORK/libm.a" \
+    "$WORK/libc.o" "$WORK/sys.o" "$WORK/traps.o" "$WORK/pow_shim.o" $APP_SUPPORT \
     -o "$WORK/agent.elf"
 
 # ---- 2. Embed the agent ELF for the kernel to load ----

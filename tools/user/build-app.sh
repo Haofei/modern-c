@@ -21,8 +21,8 @@ HERE="$(kernel_boot_repo_root)"
 MCC="${MCC_UNDER_TEST:-${MCC:-$HERE/zig-out/bin/mcc}}"
 
 # RISC-V freestanding target for the APP — the boot-lib compile helpers consume this `CFLAGS`.
-# Apps are built with the F/D float extension (rv64imafdc, lp64d ABI) because JS numbers (and
-# libm) are doubles; the kernel enables mstatus.FS before entering the app (enter_user in
+# Apps are built with the F/D float extension (rv64imafdc, lp64d ABI) for confined app ABI
+# coverage; the kernel enables mstatus.FS before entering the app (enter_user in
 # usermode_runtime.c).
 # The app is a SEPARATE ELF from the (integer-only) kernel, so the ABIs don't link together;
 # the syscall boundary (mc_ecall) passes only integers, unaffected by lp64d.
@@ -49,12 +49,6 @@ case "$APP" in
         "$MCC" emit-c "$HERE/user/libc/libc_core.mc" > "$WORK/libc_mc.c"
         "$CLANG" "${CFLAGS[@]}" -I"$HERE" -c "$WORK/libc_mc.c" -o "$WORK/libc.o"
         APP_OBJS+=("$WORK/libc.o")
-        # Full libm: build/reuse the vendored-openlibm archive and link it LAST (so the linker
-        # pulls only the math members the app references). Cached under zig-out (gitignored).
-        LIBM="$HERE/zig-out/lib/libopenlibm.a"
-        mkdir -p "$(dirname "$LIBM")"
-        CLANG="$CLANG" bash "$HERE/tools/user/build-openlibm.sh" "$LIBM"
-        APP_OBJS+=("$LIBM")
         ;;
     *)
         # Apps build with hardware FP (CFLAGS use lp64d), so the MC object must too — otherwise

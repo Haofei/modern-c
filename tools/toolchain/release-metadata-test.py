@@ -525,7 +525,6 @@ def main() -> None:
 
     zon_paths = zon[zon.find(".paths"):]
     for path in (
-        '"third_party"',
         '".github"',
         '"SECURITY.md"',
         '"STABILITY.md"',

@@ -38,8 +38,22 @@ CFLAGS=(--target=riscv64-unknown-elf -march=rv64imafdc -mabi=lp64d
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$SRC" "$WORK/cnum.o" "$WORK"
 MC_FP=1 kernel_boot_compile_mc_object "$BACKEND" "$RUNTIME" "$WORK/runtime.o" "$WORK"
 SUPPORT_OBJ="$(kernel_boot_compile_llvm_support "$BACKEND" "$WORK/llvm-support.o")"
-bash "$HERE/tools/user/build-openlibm.sh" "$WORK/libm.a" >/dev/null
+cat > "$WORK/pow_shim.c" <<'C'
+double pow(double base, double exp) {
+    int n = (int)exp;
+    double result = 1.0;
+    int neg = n < 0;
+    if (neg) n = -n;
+    while (n > 0) {
+        if (n & 1) result *= base;
+        base *= base;
+        n >>= 1;
+    }
+    return neg ? 1.0 / result : result;
+}
+C
+"$CLANG" "${CFLAGS[@]}" -c "$WORK/pow_shim.c" -o "$WORK/pow_shim.o"
 # NOTE: no freestanding.o — cnum.mc IS the mem/str libc here.
 kernel_boot_link_run "$TEST_NAME" "$EXPECT" \
     "$BACKEND backend ran the all-MC ctype + integer parsing correctly under QEMU" \
-    "$WORK/runtime.o" "$WORK/cnum.o" $SUPPORT_OBJ "$WORK/libm.a"
+    "$WORK/runtime.o" "$WORK/cnum.o" "$WORK/pow_shim.o" $SUPPORT_OBJ

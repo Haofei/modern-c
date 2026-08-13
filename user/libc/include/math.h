@@ -1,8 +1,7 @@
 #ifndef _MATH_H
 #define _MATH_H
-/* Freestanding <math.h>: declarations backed by the
- * vendored openlibm (linked as libopenlibm.a). Classification is via compiler
- * builtins so no symbol is needed for isnan/isinf/etc. */
+/* Freestanding <math.h>: declarations for consumers that provide their own math runtime.
+ * Classification is via compiler builtins so no symbol is needed for isnan/isinf/etc. */
 
 #define HUGE_VAL  __builtin_huge_val()
 #define HUGE_VALF __builtin_huge_valf()

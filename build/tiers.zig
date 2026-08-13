@@ -110,10 +110,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-agent-confined-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-app-run-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-compute-app-test"));
-    m0_full_step.dependOn(ctx.cmd("math-app-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-math-app-test"));
-    m0_full_step.dependOn(ctx.cmd("trig-app-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-trig-app-test"));
     m0_full_step.dependOn(ctx.cmd("vararg-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vararg-test"));
     m0_full_step.dependOn(ctx.cmd("cstr-test"));

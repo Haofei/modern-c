@@ -1,13 +1,11 @@
 # Vendoring provenance
 
-This repository vendors a small number of third-party components under
-`third_party/`:
-
-- `openlibm` for freestanding libm support used by confined C app validation.
+No third-party source dependency is currently vendored under `third_party/`.
+The directory may be absent.
 
 ## Required metadata
 
-Every vendored dependency must have `third_party/<name>/README.vendored.md`
+Every future vendored dependency must have `third_party/<name>/README.vendored.md`
 with:
 
 - Upstream URL.
@@ -45,11 +43,10 @@ zig build vendoring-test
 5. Diff the old and new vendor trees. Separate upstream changes from local
    modifications. Reapply local changes deliberately and update the
    local-modifications section.
-6. Re-run the component gates:
-   `tools/user/build-openlibm.sh` consumers for openlibm.
+6. Re-run the component gates for the affected consumer.
 7. Run the static gates:
    `python3 tools/toolchain/vendoring-test.py`, `zig build vendoring-test`,
-   `zig build fast` when practical, and the relevant QEMU gates for the changed
+   `zig build fast` when practical, and the relevant validation gates for the changed
    dependency.
 8. Document the update in the dependency README with the new version/commit,
    source checksum, local diffs kept, and tests run.

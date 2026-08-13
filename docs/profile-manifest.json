@@ -151,8 +151,7 @@
       ],
       "components": [
         "qemu",
-        "opensbi",
-        "openlibm"
+        "opensbi"
       ]
     }
   ]
