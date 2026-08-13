@@ -292,11 +292,12 @@ gate proves the mechanism under **explicit charge sites**; the allocator→charg
 wiring inside `heap.mc` (so that *every* allocation path charges automatically) is
 follow-up work.
 
-### 9.7 TLB — IMPLEMENTED (bookkeeping)
+### 9.7 TLB — validation boundary
 
-`kernel/core/tlb_shootdown.mc`. Arch-neutral `Shootdown { va, len, targets, acked }`
-(`Mask32`, up to `TLB_MAX_CORES = 32`) tracks which cores must flush and which acked.
-Single-hart `sfence.vma` lives in `paging.mc`; per-arch IPI dispatch is separate.
+Multi-core TLB shootdown bookkeeping has been removed from the core validation
+workload. Retained paging tests focus on language, address-space, and backend
+lowering behavior; production multi-core shootdown policy belongs to a separate
+kernel product profile.
 
 ---
 
@@ -348,10 +349,11 @@ native OS surface.
 
 Gates: `cap-test`, `uaccess-pt-test`.
 
-## 11. Scheduler — GATED · SMP scaffold-scale
+## 11. Scheduler — validation-scale
 
-`kernel/core/proc_sched.mc` (policy + mechanism), `sched.mc` (legacy RR), `smprq.mc` (SMP).
-The kernel owns *mechanism*; policy can be set externally (`proc_schedctl`).
+`kernel/core/proc_sched.mc` and `sched.mc` remain as validation-scale scheduler
+mechanisms. The former SMP run-queue/work-stealing fixture was removed from the
+current core workload.
 
 - **Selection:** round-robin, priority (ties → lower pid), and **fair-share**
   (`proc_pick_fair`: least effective ticks, cost = `(ticks + throttle_penalty) /
@@ -360,8 +362,6 @@ The kernel owns *mechanism*; policy can be set externally (`proc_schedctl`).
   `TICK_INTERVAL`); `proc_tick_notify` sends `TAG_QUANTUM` to the scheduler endpoint.
 - **Blocking:** `proc_block`/`proc_unblock`; `proc_yield_or_idle` sleeps (`wfi`) rather than
   spins; `proc_yield_vm` switches address space.
-- **SMP:** `smprq.mc` per-core FIFO `RunQueues` (`NCORES=2`, `RQ_CAP=8`) with work stealing.
-  **DEMO-SCOPE** — scaffold-scale, not production multi-core hardening.
 - **Throttle / pause:** `proc_throttle` (deprioritize), `proc_pause`/`proc_resume`
   (`BLOCK_PAUSED`).
 
@@ -513,8 +513,9 @@ the core workload.
 > address classes, checksummed packet construction, MMIO/DMA virtio-net bring-up, and QEMU
 > backend parity.
 
-- **Link/IP:** `ethernet`, `arp` + `arp_cache` (8-entry), `ipv4` (RFC 1071 checksum),
-  `icmp`, `inet_checksum`, `packet` (typed `Ipv4Addr` + bounds cursor).
+- **Link/IP:** `ethernet`, `arp`, `ipv4` (RFC 1071 checksum), `icmp`,
+  `inet_checksum`, `packet` (typed `Ipv4Addr` + bounds cursor). The former ARP
+  cache fixture was removed with the OS product-surface cleanup.
 
 Gates: device-level virtio-net validation remains; protocol product fixtures are absent.
 

@@ -304,13 +304,10 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "ipc-result-test", "ipc_send_result: typed bounded send (Denied/DeadTarget/Timeout)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "ipc-result-test" });
 
-    _ = h.addScriptTest(ctx, "arp-cache-test", "ARP IP->MAC cache: insert/lookup/refresh/invalidate/eviction", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arp-cache-test" });
 
-    _ = h.addScriptTest(ctx, "tlb-shootdown-test", "TLB shootdown bookkeeping: target/ack core masks + completion", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tlb-shootdown-test" });
 
     _ = h.addScriptTest(ctx, "mutex-test", "sleeping Mutex: try_lock, blocking enqueue, FIFO hand-off on unlock", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mutex-test" });
 
-    _ = h.addScriptTest(ctx, "smprq-test", "SMP per-core run queues + work stealing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "smprq-test" });
     _ = h.addScriptTest(ctx, "rtc-test", "Wall-clock via goldfish-RTC: read the 64-bit epoch and assert a plausible live 'now'", &.{ "bash", "tools/arch/rtc-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-rtc-test", "Run LLVM-lowered goldfish-RTC MMIO under QEMU", &.{ "bash", "tools/arch/rtc-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "contain-test", "MMU crash containment", &.{ "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "c" });

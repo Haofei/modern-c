@@ -368,14 +368,11 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("mmio-test"));
     m0_full_step.dependOn(ctx.cmd("synclock-test"));
     m0_full_step.dependOn(ctx.cmd("ipc-result-test"));
-    m0_full_step.dependOn(ctx.cmd("arp-cache-test"));
-    m0_full_step.dependOn(ctx.cmd("tlb-shootdown-test"));
     m0_full_step.dependOn(ctx.cmd("mutex-test"));
     m0_full_step.dependOn(ctx.cmd("mailbox-test"));
     m0_full_step.dependOn(ctx.cmd("tryelse-test"));
     m0_full_step.dependOn(ctx.cmd("byteview-test"));
     m0_full_step.dependOn(ctx.cmd("scan-test"));
-    m0_full_step.dependOn(ctx.cmd("smprq-test"));
     m0_full_step.dependOn(ctx.cmd("rtc-test"));
     m0_full_step.dependOn(ctx.cmd("contain-test"));
     m0_full_step.dependOn(ctx.cmd("fdt-test"));
