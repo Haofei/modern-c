@@ -24,7 +24,7 @@ pub fn register(ctx: *h.Ctx) void {
         riscv_qemu_validation_step.dependOn(ctx.cmd(name));
     }
 
-    const m0_full_step = b.step("m0-full", "Run full M0 qualification matrix");
+    const m0_full_step = b.step("m0-full", "Run full M0 validation matrix");
     // Fixture-contract lint guards the test corpus itself (reject EXPECT lines, sweep
     // OUT_OF_SCOPE soundness, host-tests.tsv well-formedness). It belongs in every
     // conformance tier, not only `fast`, so a contract regression can't slip into m0/c0/c1.
@@ -41,7 +41,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("c-test"));
     m0_full_step.dependOn(ctx.cmd("sweep"));
     m0_full_step.dependOn(ctx.cmd("sanitize"));
-    // Coverage ratchets are part of the main qualification tier.
+    // Coverage ratchets are part of the main validation tier.
     m0_full_step.dependOn(ctx.cmd("lowering-coverage"));
     m0_full_step.dependOn(ctx.cmd("compiler-coverage"));
     m0_full_step.dependOn(ctx.cmd("diff-backend"));
@@ -346,9 +346,9 @@ pub fn register(ctx: *h.Ctx) void {
     ownership_backend_dev_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
     ownership_backend_dev_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
 
-    const m0_step = b.step("m0", "Run core M0 compiler qualification gates");
+    const m0_step = b.step("m0", "Run core M0 compiler validation gates");
     // Keep the default M0 tier focused on deterministic compiler-core confidence.
-    // The former exhaustive matrix remains available as `m0-full` for broad local/nightly qualification.
+    // The former exhaustive matrix remains available as `m0-full` for broad local/nightly validation.
     m0_step.dependOn(ctx.cmd("test-lint"));
     m0_step.dependOn(ctx.cmd("bad-diagnostics-test"));
     m0_step.dependOn(ctx.cmd("diagnostics-reference-test"));

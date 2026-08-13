@@ -37,7 +37,7 @@ const MoveCfgJoinPolicy = union(enum) {
     },
 };
 
-// The first production consumer of the move CFG.  Unlike the small model-level
+// The first compiler consumer of the move CFG.  Unlike the small model-level
 // worklist tests, this carries the real ownership state used by the checker.
 // Transfer functions still retain a block-local MoveSlot map for bindings and
 // compatibility metadata. Ownership subplaces are matched by MovePlace at joins,
@@ -930,7 +930,7 @@ fn moveLoopCfg(self: *Checker, loop: ast.Loop, state: *MoveState, aliases: *cons
 
 // Route `if let` through explicit entry/then/else/join CFG blocks.  The scrutinee
 // transfer runs in entry, arm-local bindings live only in then, and only
-// non-diverging arms reach the join.  This is deliberately the first production
+// non-diverging arms reach the join.  This is deliberately the first compiler
 // CFG slice; switch and loop still use their existing specialized transfer rules.
 fn moveIfLetCfg(self: *Checker, node: ast.IfLet, state: *MoveState, aliases: *const std.StringHashMap(ast.TypeExpr)) bool {
     var branch = multiArmMoveCfg(self, 2) orelse return false;

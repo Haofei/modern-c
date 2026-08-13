@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Recommend focused development gates from the files changed in git.
 
-This is an inner-loop helper, not a broad qualification oracle. It chooses a
+This is an inner-loop helper, not a broad validation oracle. It chooses a
 conservative small set of `zig build` steps for the current edit shape, then
 prints the broader confidence/truth gates that still matter before a large merge
 or broad validation.
@@ -701,8 +701,8 @@ def main() -> int:
         print("  tools/m0-parallel.sh <jobs>    # broad local milestone check when the slice is large")
 
         print("\nTruth gate:")
-        print("  zig build m0                   # core compiler qualification")
-        print("  zig build m0-full              # broad local qualification sweep")
+        print("  zig build m0                   # core compiler validation")
+        print("  zig build m0-full              # broad local validation sweep")
     else:
         print("\nConfidence gates:")
         print("  none for checks-only changes")

@@ -2,7 +2,7 @@
 //!
 //! This module emits report artifacts for tests and diagnostics. Backends must
 //! not consume or reparse this text; MIR and verified semantic facts remain the
-//! production authority.
+//! semantic authority.
 
 const std = @import("std");
 

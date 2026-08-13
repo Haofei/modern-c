@@ -279,7 +279,7 @@ T3_DISPOSITION_AUDIT: dict[str, list[str]] = {
     ],
 }
 
-# T4 file-surface audit. This is intentionally an exact inventory of production
+# T4 file-surface audit. This is intentionally an exact inventory of non-test
 # backend modules (tests are excluded). Adding a backend module must classify it
 # in the same patch; overlapping semantic decisions within a registered module
 # remain governed by the seven-family budget and the detailed anchors above.

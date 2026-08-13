@@ -36,7 +36,7 @@ route it to the matching expectation.
 
 Aggregate lanes compose these: **`fast`** = spec + emit-C + differential (no fuzz/QEMU);
 **`c0`** (spec §L.1) = unit + `c-test` + `sweep` + `demo-test`; **`c1`** (spec §L.2) =
-`c0` + `kernel-test`; **`m0`** = the deterministic compiler-core qualification set;
+`c0` + `kernel-test`; **`m0`** = the deterministic compiler-core validation set;
 it keeps C-backend smoke coverage but leaves the full `c-test` fixture sweep to
 `fast`/`c0`/`m0-full`; **`m0-full`** = the full conformance set including fuzz,
 runtime experiments, and QEMU.

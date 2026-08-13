@@ -6,7 +6,7 @@ machine behavior can be made explicit and checkable without hiding allocation,
 control flow, hardware access, or optimizer assumptions?
 
 MC is a research prototype, not a production C replacement. The compiler has
-two differentially qualified backend paths for the documented, implemented subset:
+two differentially validated backend paths for the documented, implemented subset:
 
 - checked C emission;
 - textual LLVM IR emission and object generation.
@@ -79,7 +79,7 @@ Required for compiler and host development:
 - LLVM 18 tools: `llvm-as`, `llc`, `opt`, `llvm-dwarfdump`;
 - Python 3.10 or newer.
 
-The QEMU qualification gates additionally use `qemu-system-riscv64`,
+The QEMU validation gates additionally use `qemu-system-riscv64`,
 `qemu-system-aarch64`, `qemu-system-x86_64`, `ld.lld`, and `llvm-objcopy`.
 
 Use the native toolchain directly, or run the same build steps in the development
@@ -107,15 +107,15 @@ but not bit-for-bit identical across rebuild dates.
 
 ### LLVM Support Matrix
 
-| Environment | Qualified LLVM | Support status |
+| Environment | Validated LLVM | Support status |
 | --- | --- | --- |
 | Linux CI/dev container | Ubuntu 24.04 packages for LLVM 18 (`clang-18`, `lld-18`, `llvm-18`) | Primary CI/dev path; `zig build preflight` must pass with `MC_LLVM_MAJOR=18`. |
-| macOS host gate | Homebrew `llvm@18` on `macos-15` | Host/fast qualification path; the workflow places `llvm@18` first on `PATH`. |
+| macOS host gate | Homebrew `llvm@18` on `macos-15` | Host/fast validation path; the workflow places `llvm@18` first on `PATH`. |
 | Native local | LLVM 18 tools selected on `PATH` | Supported when `MC_LLVM_MAJOR=18 zig build preflight` passes. |
 | Other LLVM majors | Any non-18 LLVM toolchain | Unqualified until the major is added to CI, Docker, preflight, and this matrix. |
 
 LLVM backend wrappers intentionally resolve `clang`, `ld.lld`, `llvm-as`, `llc`,
-and `opt` from `PATH`. A qualified run must resolve those names to the qualified LLVM 18 toolchain.
+and `opt` from `PATH`. A validated run must resolve those names to the LLVM 18 toolchain used by the validation gates.
 
 ## Compiler Workflow
 
@@ -128,7 +128,7 @@ semantic representation -> optional HIR inspection / HIR verification
 ```
 
 Inspection projections are debug/report surfaces only; MIR verification is the
-backend production boundary.
+backend semantic boundary.
 
 `extern "C" fn` and unmarked `export fn` use a strict, target-classified C ABI
 surface. `#[mc_abi] export fn` is available for same-backend object boundaries and
@@ -136,7 +136,7 @@ is not C ABI stable. See [C ABI and interop](docs/c-abi-interop.md) for the curr
 type allowlist and aggregate restrictions.
 
 HIR and the compact IR report are inspection projections; they are not the
-production input to MIR or either backend. Inspect the available stages from the
+pipeline input to MIR or either backend. Inspect the available stages from the
 command line:
 
 ```sh
@@ -170,7 +170,7 @@ Run `zig-out/bin/mcc --help` for profile, check-mode, import-path, remapping, an
 stdin options. `emit-c` defaults to the kernel/freestanding profile; hosted C is
 explicitly selected with `--profile=hosted`.
 
-## Qualification
+## Validation Gates
 
 Use the smallest gate that matches the work, then finish substantial compiler or
 kernel changes with the milestone gate.
@@ -180,18 +180,18 @@ zig build test       # compiler unit tests and spec conformance
 zig build c-test     # checked C backend
 zig build llvm-test  # LLVM backend
 zig build fast       # broad host-only development gate, no fuzz or QEMU
-zig build m0         # core compiler qualification gate
+zig build m0         # core compiler validation gate
 zig build m0-full    # complete compiler, backend, fuzz, runtime, and QEMU matrix
 ```
 
 Normal local gates may report a skip when an external tool is unavailable. A
-qualification run must fail instead of skipping:
+validation run must fail instead of skipping:
 
 ```sh
 MC_REQUIRE_TOOLS=1 MC_LLVM_MAJOR=18 zig build m0-full
 ```
 
-`m0` covers the deterministic compiler-core qualification path used for normal
+`m0` covers the deterministic compiler-core validation path used for normal
 local and CI feedback. It intentionally omits the full `c-test` fixture compile
 sweep; use `fast`, `c0`, or `m0-full` when a change needs that C-backend
 coverage. `m0-full` preserves the exhaustive compiler-validation matrix: unit
@@ -343,7 +343,7 @@ The repository-wide backlog is [`docs/todo.md`](docs/todo.md).
 | `kernel/`, `user/` | Kernel runtime, MC modules, and user-mode components |
 | `tools/` | Drivers, fuzzers, and test harnesses |
 | `demo/`, `examples/` | Hosted and hardware-oriented examples |
-| `docs/` | Specifications, reference material, qualification, and plans |
+| `docs/` | Specifications, reference material, validation, and plans |
 
 Start with [`docs/README.md`](docs/README.md) to see which documents are current
 sources of truth and which are historical records. This repository is a research

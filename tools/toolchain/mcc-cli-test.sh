@@ -130,7 +130,7 @@ assert_stdout_contains "mcc emit-c-struct <file.mc> --structs=A,B,C" "--help emi
 assert_stdout_contains "mcc fmt <file.mc> [--check]" "--help fmt command"
 assert_stdout_contains "mcc symbols <file.mc>" "--help symbols command"
 assert_stdout_contains "mcc build <file.mc> -o <exe>" "--help build command"
-assert_stdout_contains "Inspection commands are not backend pipeline inputs; MIR verification remains the backend production boundary." "--help inspection-only contract"
+assert_stdout_contains "Inspection commands are not backend pipeline inputs; MIR verification remains the backend semantic boundary." "--help inspection-only contract"
 assert_stdout_contains "--remap-prefix=FROM=TO" "--help remap-prefix option"
 assert_stdout_contains "<output>.mcmeta sidecar" "--help artifact metadata sidecar"
 assert_stdout_contains "--std-dir=<dir>" "--help installed std-dir option"

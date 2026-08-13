@@ -54,7 +54,7 @@ const usage =
     \\  mcc symbols <file.mc>
     \\  mcc list-tests <file.mc>
     \\
-    \\Inspection commands are not backend pipeline inputs; MIR verification remains the backend production boundary.
+    \\Inspection commands are not backend pipeline inputs; MIR verification remains the backend semantic boundary.
     \\
     \\input:
     \\  Use <file.mc> for normal file input, or - to read MC source from stdin.

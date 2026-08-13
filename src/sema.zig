@@ -9956,7 +9956,7 @@ pub fn exprIsNeverCall(expr: ast.Expr, ctx: Context) bool {
     };
 }
 
-// The type name of a type-parameter argument after production monomorphization.
+// The type name of a type-parameter argument after monomorphization.
 fn typeArgName(arg: ast.Expr, ctx: Context) ?[]const u8 {
     return switch (arg.kind) {
         .ident => |id| id.text,

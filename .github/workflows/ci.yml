@@ -103,7 +103,7 @@ jobs:
 
   macos:
     # Native macOS coverage for the host/compiler surface README claims works outside Docker.
-    # macos-15 currently carries Homebrew llvm@18, matching the Linux LLVM qualification major
+    # macos-15 currently carries Homebrew llvm@18, matching the Linux LLVM validation major
     # while avoiding the deprecated macos-14 image and the moving latest-label alias.
     runs-on: macos-15
     timeout-minutes: 60

@@ -1,7 +1,7 @@
 //! HIR inspection projection.
 //!
-//! This module is a diagnostics/debug surface, not a production compiler
-//! pipeline stage and not a backend input. MIR remains the semantic lowering
+//! This module is a diagnostics/debug surface, not a compiler pipeline
+//! stage and not a backend input. MIR remains the semantic lowering
 //! and verification authority.
 
 const std = @import("std");
@@ -24,7 +24,7 @@ const isWrapPreservingBinary = ast_query.isWrapPreservingBinary;
 const isWrapType = ast_query.isWrapType;
 const patternText = mir_syntax.patternText;
 
-pub const inspection_only_header = "hir mode=inspection-only production_boundary=false\n";
+pub const inspection_only_header = "hir mode=inspection-only pipeline_boundary=false\n";
 
 pub const Instruction = struct {
     kind: []const u8,

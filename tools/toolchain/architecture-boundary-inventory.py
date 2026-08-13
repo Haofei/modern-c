@@ -508,7 +508,7 @@ REQUIRED_ANCHORS = {
         "independent from expanded byte offsets",
     ),
     "src/hir_inspection.zig": (
-        'pub const inspection_only_header = "hir mode=inspection-only production_boundary=false\\n";',
+        'pub const inspection_only_header = "hir mode=inspection-only pipeline_boundary=false\\n";',
     ),
     "src/mir_facts_view.zig": (
         "MIR owns construction and verification.",
