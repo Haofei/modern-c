@@ -3,27 +3,20 @@
 # A listed fixture may still compare successfully on a host/toolchain that supports it.
 bcache-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 blockfs-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-fdspace-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 grant-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-forkfd-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 granttab-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 grantcascade-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 endpoint-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 byteview-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-plugin-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-pipe-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 elf-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 arc-pkt-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 arc-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-registry2-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 log-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 scan-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 symbols-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 smprq-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 time-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 vqfault-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-snapshot-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-death-hook-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 synclock-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 waitqueue-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 mutex-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
@@ -38,7 +31,6 @@ pause-test	current LLVM backend unsupported fixture; additional skipped fixtures
 ipcsample-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 capaudit-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 fairsched-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-oom-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 ipcfast-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 heapfree-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 showcase-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions

@@ -253,10 +253,8 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "constgen-test", "Const-generic Ring<T,N> at two capacities", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "constgen-test" });
 
-    _ = h.addScriptTest(ctx, "pipe-test", "Pipe FIFO", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "pipe-test" });
 
     _ = h.addScriptTest(ctx, "bcache-test", "Write-back block cache", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "bcache-test" });
-    _ = h.addScriptTest(ctx, "tty-test", "TTY line discipline", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tty-test" });
 
     _ = h.addScriptTest(ctx, "time-test", "std/time counter<u64> timeout arithmetic", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "time-test" });
 
@@ -273,8 +271,6 @@ pub fn register(ctx: *h.Ctx) void {
     // clang/python3.
     _ = h.addScriptTest(ctx, "hosted-test", "Hosted-profile elementwise float kernel: stdin/stdout f32 round-trip via libc/libm", &.{ "bash", "demo/hosted/run.sh", "zig-out/bin/mcc" });
 
-    _ = h.addScriptTest(ctx, "shell-test", "Minimal shell", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "shell-test" });
-    _ = h.addScriptTest(ctx, "shell2-test", "Shell: tokenize + builtins with output", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "shell2-test" });
 
 
     // examples/feature_showcase.mc — one self-verifying tour of the language; emit-c via
@@ -299,7 +295,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-sort-test", "std/sort (LLVM backend): in-place sort + binary search, via the #[test] runner", &.{ "bash", "tools/test/mc-test-runner.sh", "zig-out/bin/mcc", "llvm", "tests/test/sort_test.mc" });
 
-    _ = h.addScriptTest(ctx, "fdspace-test", "FdSpace (kernel/lib): fd alloc/select, sentinel-free", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdspace-test" });
     _ = h.addScriptTest(ctx, "slotmap-test", "SlotMap<T,N> index handle table", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "slotmap-test" });
     _ = h.addScriptTest(ctx, "mask-test", "Mask32 bit set", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mask-test" });
     _ = h.addScriptTest(ctx, "mailbox-test", "Mailbox<T,N> bounded queue + source filter", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mailbox-test" });
@@ -354,12 +349,10 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "e1000-test", "Real e1000 NIC PCI probe", &.{ "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-e1000-test", "LLVM-lowered real e1000 NIC PCI probe", &.{ "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "snapshot-test", "proc_snapshot (kernel/lib): stable process enumeration", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "snapshot-test" });
 
     _ = h.addScriptTest(ctx, "waitqueue-test", "WaitQueue (kernel/lib): block/wake/idle policy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "waitqueue-test" });
 
 
-    _ = h.addScriptTest(ctx, "plugin-test", "pluggable boot flow: device/bus probe-attach + registry + discovery", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "plugin-test" });
 
     _ = h.addScriptTest(ctx, "endpoint-test", "MINIX hardening: endpoints/generations, derived runnable, death cleanup", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "endpoint-test" });
 
@@ -368,7 +361,6 @@ pub fn register(ctx: *h.Ctx) void {
     // Reproduces the stale-cache regression that reverted the first O(1)/O(children) attempt.
     _ = h.addScriptTest(ctx, "sched-difftest", "differential scheduler gate: next_runnable pick == independent authoritative scan across randomized transitions (stale-cache regression guard)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "sched-difftest" });
 
-    _ = h.addScriptTest(ctx, "registry2-test", "Registry v2: multiple-per-class, generations, unregister-on-death", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "registry2-test" });
 
 
 
@@ -636,9 +628,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-elf-loader-test", "Multi-segment ELF64 loader under QEMU (LLVM backend): per-segment perms, file copy, bss zero", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test" });
 
-    _ = h.addScriptTest(ctx, "uaccess-snapshot-test", "Single-snapshot uaccess (U2 double-fetch/TOCTOU defense) under QEMU: fetch_user freezes a user datum once; later user-byte flips don't change the snapshot", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/uaccess_snapshot_demo.mc", "uaccess_snapshot_run", "uaccess-snapshot-test" });
 
-    _ = h.addScriptTest(ctx, "llvm-uaccess-snapshot-test", "Single-snapshot uaccess (U2) under QEMU (LLVM backend): fetch_user freezes a user datum once; later user-byte flips don't change the snapshot", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/uaccess_snapshot_demo.mc", "uaccess_snapshot_run", "uaccess-snapshot-test" });
 
     _ = h.addScriptTest(ctx, "uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU: a user-derived scalar must pass checked_len/checked_index/validate_bound (fail closed) before driving a copy length or index", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test" });
 

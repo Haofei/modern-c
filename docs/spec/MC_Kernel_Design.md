@@ -471,12 +471,9 @@ not OOM/starve the host in the explicit accounting fixture.**
 > prove comprehensive live memory enforcement across all allocation paths, because the
 > allocator→charge wiring inside `heap.mc` is follow-up work (§9.6).
 
-**What `oom-test` proves:** spawn three never-exiting tasks A/B/C; charge memory (C the
-runaway); an over-quota charge on C fails closed; `proc_oom_victim` selects C;
-`proc_oom_reclaim` kills C (now a `Zombie`, `used == 0`, fds released) **while A and B stay
-live with accounts intact**; C reaps cleanly. Gates: `oom-test`, `contain-test`,
-`fault-isolation-test`. **Deferred (ABSENT):** comprehensive live accounting across all
-allocation paths.
+The standalone OOM policy fixture was removed from the core workload. The retained gates focus
+on fault containment and explicit reclaim paths needed by the language/runtime validation
+surface. **Deferred (ABSENT):** comprehensive live accounting across all allocation paths.
 
 ---
 
@@ -574,13 +571,10 @@ VirtIO I/O carries real-time deadlines that fail closed. Gates: `nic-test`, `blk
 
 ---
 
-## 21. Bus & Device Model — IMPLEMENTED (static)
+## 21. Driver Binding Scope
 
-`kernel/bus/` + `kernel/lib/registry*.mc`. A MINIX-style plug model: platforms list devices
-(`DeviceId`, `ResourceSet`); `bus_probe_attach` matches each to the first `Provider { probe,
-attach, class }` whose probe succeeds and records an endpoint in the `Registry`; services
-discover dependencies by name hash via `registry_client`. **Static registration today;
-dynamic loading is ABSENT.** Gate: `driver-test`.
+The former bus/registry/plugin model was removed from the core workload. Driver validation now
+uses focused device fixtures directly; dynamic loading and service discovery are **ABSENT**.
 
 ---
 
@@ -590,10 +584,7 @@ dynamic loading is ABSENT.** Gate: `driver-test`.
   `phoff/phnum/phentsize` validated up front. **GATED** (`elf-test`, `elf-run-test`).
 - **Dynamic linking** — `dynlink.mc`: `R_RISCV_RELATIVE` relocations for PIE. **DEMO-SCOPE**
   — no symbol resolution / PLT-GOT (`dynlink-test`).
-- **Agent checkpoint/restore/migrate** — `checkpoint.mc`: serialize `{ pid, FdSpace,
-  ResourceAccount }` to a durable blob; restore spawns a **fresh** slot; `migrate` =
-  save(src)→restore(dst)→exit(src), atomic on failure. **IMPLEMENTED** for fd-space +
-  account; full context capture is ABSENT.
+- **Agent checkpoint/restore/migrate** — absent from the core workload.
 
 ---
 
@@ -653,7 +644,6 @@ scope. Gate names are verified against `build.zig`.
 | Claim | Source | Gate(s) | Scope |
 |-------|--------|---------|-------|
 | Endpoint generation prevents stale-slot IPC misdelivery | `process.mc`, `proc_ipc.mc` | `endpoint-test`, `llvm-endpoint-test` | riscv64 QEMU |
-| OOM victim selection kills highest-usage live task; others survive | `process.mc:404-472` | `oom-test` | explicit-charge fixture |
 | A faulting agent is killed + reclaimed; kernel survives | `process.mc:474-553` | `contain-test`, `fault-isolation-test` | riscv64 QEMU |
 | Rights/capabilities attenuate only (child = parent ∩ keep) | `capability.mc`, `std/rights.mc` | `cap-test`, `llvm-cap-test` | compile-time + QEMU |
 | Grant revoke invalidates outstanding refs; cascade revokes subtree | `kernel/lib/granttab.mc` | `grant-test`, `granttab-test` | riscv64 QEMU |

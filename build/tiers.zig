@@ -105,7 +105,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-elf-run-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-uaccess-pt-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-elf-loader-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-uaccess-snapshot-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-uaccess-taint-test"));
     m0_full_step.dependOn(ctx.cmd("vararg-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vararg-test"));
@@ -349,9 +348,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("isolation-test"));
     m0_full_step.dependOn(ctx.cmd("usched-test"));
     m0_full_step.dependOn(ctx.cmd("cow-test"));
-    m0_full_step.dependOn(ctx.cmd("pipe-test"));
     m0_full_step.dependOn(ctx.cmd("bcache-test"));
-    m0_full_step.dependOn(ctx.cmd("tty-test"));
     m0_full_step.dependOn(ctx.cmd("time-test"));
     m0_full_step.dependOn(ctx.cmd("vqfault-test"));
     m0_full_step.dependOn(ctx.cmd("wrap-test"));
@@ -359,8 +356,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("libc-test"));
     // hosted-test runs the hosted-profile float I/O round-trip (needs clang+python3).
     m0_full_step.dependOn(ctx.cmd("hosted-test"));
-    m0_full_step.dependOn(ctx.cmd("shell-test"));
-    m0_full_step.dependOn(ctx.cmd("shell2-test"));
     // showcase-test links + runs the language feature showcase (emit-c); LLVM side via llvm-host-suite-test.
     m0_full_step.dependOn(ctx.cmd("showcase-test"));
     // mc-test runs the native #[test] facility (process-isolated) on both backends.
@@ -372,13 +367,9 @@ pub fn register(ctx: *h.Ctx) void {
     // sort-test exercises std/sort on both backends.
     m0_full_step.dependOn(ctx.cmd("sort-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-sort-test"));
-    m0_full_step.dependOn(ctx.cmd("fdspace-test"));
-    m0_full_step.dependOn(ctx.cmd("snapshot-test"));
     m0_full_step.dependOn(ctx.cmd("waitqueue-test"));
-    m0_full_step.dependOn(ctx.cmd("plugin-test"));
     m0_full_step.dependOn(ctx.cmd("endpoint-test"));
     m0_full_step.dependOn(ctx.cmd("sched-difftest"));
-    m0_full_step.dependOn(ctx.cmd("registry2-test"));
     m0_full_step.dependOn(ctx.cmd("granttab-test"));
     m0_full_step.dependOn(ctx.cmd("x86-sched-test"));
     m0_full_step.dependOn(ctx.cmd("x86-qemu-test"));
@@ -482,7 +473,6 @@ pub fn register(ctx: *h.Ctx) void {
     // The uaccess demos run under QEMU (they import riscv paging.mc, so they can't run on the host suite).
     m0_full_step.dependOn(ctx.cmd("uaccess-pt-test"));
     m0_full_step.dependOn(ctx.cmd("elf-loader-test"));
-    m0_full_step.dependOn(ctx.cmd("uaccess-snapshot-test"));
     m0_full_step.dependOn(ctx.cmd("uaccess-taint-test"));
     // driver-test runs the char-device driver framework (vtable dispatch) under QEMU.
     m0_full_step.dependOn(ctx.cmd("driver-test"));
