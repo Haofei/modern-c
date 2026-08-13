@@ -111,9 +111,8 @@ pub fn page_table_new(h: *mut Heap) -> PageTable {
     return .{ .root = alloc_table(h) };
 }
 
-// Non-trapping form: allocate the root frame fallibly, so a caller on a hostile-input path
-// (e.g. the ELF loader's app_build) can turn even root-table exhaustion into a typed error
-// rather than a kernel trap.
+// Non-trapping form: allocate the root frame fallibly, so a validation path can
+// turn root-table exhaustion into a typed error rather than a kernel trap.
 #[mc_abi]
 export fn page_table_try_new(h: *mut Heap) -> Result<PageTable, HeapError> {
     switch try_alloc_table(h) {
@@ -353,18 +352,6 @@ export fn mapping_is_user(m: *LeafMapping) -> bool { return (m.flags & PTE_U) !=
 export fn mapping_is_readable(m: *LeafMapping) -> bool { return (m.flags & PTE_R) != 0; }
 export fn mapping_is_writable(m: *LeafMapping) -> bool { return (m.flags & PTE_W) != 0; }
 export fn mapping_is_executable(m: *LeafMapping) -> bool { return (m.flags & PTE_X) != 0; }
-
-// Arch hook for the generic ELF loader (kernel/core/elf_loader.mc): translate a user
-// segment's R/W/X intent into leaf-PTE permission bits. A loaded image is user code, so
-// PTE_U is always set; R/W/X follow the segment. (PTE_V is added by page_table_map.) On
-// RISC-V every permission is an explicit bit, so all three are honored.
-export fn pte_flags_for_user(r: bool, w: bool, x: bool) -> u64 {
-    var flags: u64 = PTE_U;
-    if r { flags = flags | PTE_R; }
-    if w { flags = flags | PTE_W; }
-    if x { flags = flags | PTE_X; }
-    return flags;
-}
 
 // Translate `virt` to its mapped physical address (including the page offset).
 // Traps if the address is not mapped — callers verify a mapping exists first.

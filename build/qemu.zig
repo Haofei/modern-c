@@ -256,29 +256,12 @@ pub fn register(ctx: *h.Ctx) void {
 
 
 
-    // The uaccess demos exercise kernel/core/uaccess.mc, which imports riscv paging.mc
-    // (sfence.vma) — not host-assemblable — so they run under QEMU on the real target,
-    // not on the host driver suite. One generic runtime+harness, parameterized by the
-    // fixture and its entry symbol.
-    _ = h.addScriptTest(ctx, "uaccess-pt-test", "Page-table-aware user copies under QEMU: Sv39 walk + per-page PTE_U/R/W checks; kernel-only page, unmapped hole, off-page straddle all rejected (imports riscv paging.mc, so QEMU-only)", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/uaccess_pt_demo.mc", "uaccess_pt_run", "uaccess-pt-test" });
-
-    _ = h.addScriptTest(ctx, "llvm-uaccess-pt-test", "Page-table-aware user copies under QEMU (LLVM backend): Sv39 walk + per-page PTE_U/R/W checks; kernel-only page, unmapped hole, off-page straddle all rejected", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/uaccess_pt_demo.mc", "uaccess_pt_run", "uaccess-pt-test" });
-
     // Word-aligned mem ops (perf refactor Phase 1.1): mem_copy/mem_set/memmove copy 8-byte
     // words for the aligned bulk. Correctness gate boots a self-contained runtime that asserts
     // byte-exact results across boundary lengths + alignments + memmove overlap both directions.
     _ = h.addScriptTest(ctx, "mem-test", "Word-aligned mem ops under QEMU: mem_copy/mem_set/memmove byte-exact across lengths 0..4096, misaligned src/dst, memmove overlap both directions", &.{ "bash", "tools/mem/mem-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-mem-test", "Word-aligned mem ops under QEMU (LLVM backend): mem_copy/mem_set/memmove byte-exact across lengths+alignments, memmove overlap both directions", &.{ "bash", "tools/mem/mem-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "elf-loader-test", "Multi-segment ELF64 loader under QEMU: maps every PT_LOAD at its vaddr with per-segment R/W/X perms, copies file bytes, zeroes bss; synthetic 2-segment image, asserts mappings/content/bss/perms", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test" });
-
-    _ = h.addScriptTest(ctx, "llvm-elf-loader-test", "Multi-segment ELF64 loader under QEMU (LLVM backend): per-segment perms, file copy, bss zero", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/elf_loader_demo.mc", "elf_loader_run", "elf-loader-test" });
-
-
-    _ = h.addScriptTest(ctx, "uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU: a user-derived scalar must pass checked_len/checked_index/validate_bound (fail closed) before driving a copy length or index", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "c", "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test" });
-
-    _ = h.addScriptTest(ctx, "llvm-uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU (LLVM backend): a user-derived scalar must pass checked_len/checked_index/validate_bound before driving a copy length or index", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test" });
 
     _ = h.addScriptTest(ctx, "vararg-test", "C-ABI variadic MC fn (va.start/va.arg/va.end) runs under QEMU", &.{ "bash", "tools/lang/vararg-test.sh", "zig-out/bin/mcc", "c" });
 

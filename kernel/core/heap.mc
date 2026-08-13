@@ -486,8 +486,7 @@ pub enum HeapError {
 
 // Non-trapping core aligned allocator: returns Exhausted instead of
 // trapping when the heap is full. This is the body shared by the infallible
-// `heap_alloc_raw` (which traps) and the fallible `heap_try_alloc` (which callers on
-// hostile-input paths — e.g. the ELF loader — use to turn OOM into a typed LoadError).
+// `heap_alloc_raw` (which traps) and the fallible `heap_try_alloc`.
 fn heap_try_alloc_raw(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, HeapError> {
     // First-fit over the free list: pick the first block whose aligned start still
     // leaves `size` bytes inside the block.
@@ -546,9 +545,8 @@ fn heap_alloc_raw(h: *mut Heap, size: usize, align: usize) -> PAddr {
     }
 }
 
-// Public non-trapping frame allocator. Used by the ELF loader (and any other
-// hostile-input path) so a malformed image that exhausts the loader heap surfaces as
-// a typed error rather than a kernel trap.
+// Public non-trapping frame allocator. Used by validation paths that need heap
+// exhaustion to surface as a typed error rather than a kernel trap.
 #[may_sleep]
 pub fn heap_try_alloc(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, HeapError> {
     if h.track_live != 0 && size != 0 && h.live_count >= HEAP_LIVE_SLOTS {

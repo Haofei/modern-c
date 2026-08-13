@@ -197,7 +197,7 @@ pub fn br_validate_len(r: *ByteReader, off: usize, claimed: usize) -> Result<usi
 
 // Copy `n` bytes from the reader (starting at `off`) into the physical region `dst`.
 // Reads are bounds-checked against the reader; the raw store is the single unsafe
-// edge — so callers (the ELF loader, …) don't hand-roll a `while { raw.store }` loop.
+// edge, so callers don't hand-roll a `while { raw.store }` loop.
 pub fn br_copy_to(r: *ByteReader, off: usize, dst: PAddr, n: usize) -> void {
     var i: usize = 0;
     while i < n {

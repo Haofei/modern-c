@@ -5535,8 +5535,8 @@ target for the main kernel modules and an x86-64 target for x86 arch modules.
 The `zig build llvm-qemu-test`, `zig build llvm-trap-test`,
 `zig build llvm-thread-test`, and `zig build llvm-sbi-boot-test` gates boot
 LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer traps,
-cooperative context switching, ELF load/run, Sv39 activation, user-copy
-boundaries, OpenSBI/FDT boot discovery, and selected exit traps. These remain
+cooperative context switching, Sv39 activation, OpenSBI/FDT boot discovery, and
+selected exit traps. These remain
 validation fixtures for language and backend behavior, not operating-system
 product scope.
 The `zig build llvm-hosted-demo-test` gate links and runs the hosted

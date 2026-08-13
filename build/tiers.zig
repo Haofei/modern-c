@@ -83,9 +83,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-qemu-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-trap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-thread-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-uaccess-pt-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-elf-loader-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-uaccess-taint-test"));
     m0_full_step.dependOn(ctx.cmd("vararg-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vararg-test"));
     m0_full_step.dependOn(ctx.cmd("cstr-test"));
@@ -266,10 +263,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("trap-test"));
     // thread-test runs cooperative context switching under QEMU.
     m0_full_step.dependOn(ctx.cmd("thread-test"));
-    // The uaccess demos run under QEMU (they import riscv paging.mc, so they can't run on the host suite).
-    m0_full_step.dependOn(ctx.cmd("uaccess-pt-test"));
-    m0_full_step.dependOn(ctx.cmd("elf-loader-test"));
-    m0_full_step.dependOn(ctx.cmd("uaccess-taint-test"));
 
     // fast: the inner-loop gate for deterministic host-only confidence. It
     // covers the spec/unit harness, emit-C sweep, C-vs-LLVM differential, and

@@ -123,9 +123,9 @@ const ResolvedImport = struct {
 // peer `impl` accessor, so a cross-file `impl` can no longer forge access to private fields.
 // The virtual arch directory: an `import "kernel/arch/active/<x>"` is rewritten to
 // `import "kernel/arch/<arch>/<x>"` where <arch> is the `--arch` selection (default
-// "riscv64"). This is the arch-selection seam (plan R0b): ONE generic core module (e.g.
-// kernel/core/uaccess.mc, elf_loader.mc) imports `active`, and the per-arch kernel binary
-// is produced by picking the arch at compile time — no duplicated per-arch source copies.
+// "riscv64"). This is the arch-selection seam (plan R0b): generic freestanding
+// validation modules can import `active`, and the selected arch is picked at compile
+// time — no duplicated per-arch source copies.
 pub const arch_active_prefix = "kernel/arch/active/";
 pub const default_arch = "riscv64";
 
