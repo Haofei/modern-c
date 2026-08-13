@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Compiler front-end/semantics function-coverage report.
 #
-# Measures function-entry coverage for the production parser/sema/monomorphize/
+# Measures function-entry coverage for the parser/sema/monomorphize/
 # async front-end semantics slice. This is deliberately the same fidelity as the
 # lowering coverage gate: function-level source instrumentation plus a deterministic
 # compiler corpus, not full line/branch coverage.

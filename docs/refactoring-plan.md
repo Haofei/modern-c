@@ -42,7 +42,7 @@ These areas stay profile-scoped or experimental until the compiler authority
 boundary is stable:
 
 - new language surface area;
-- LLVM as an equal production backend where facts are still incomplete;
+- LLVM as an equal deployment backend where facts are still incomplete;
 - editor-product and incremental-service work that requires a persistent query service;
 - deployable kernel, Agent product, or real hardware claims;
 - new vendored runtimes in the default compiler profile.
@@ -53,12 +53,11 @@ boundary is stable:
 |---:|---|---|---|
 | 0 | Stop authority growth | `ARCH-BACKEND-FACTS`, `BACKEND-LLVM-PROFILE` | semantic-facts inventory does not grow, or each remaining exception is exact-count-gated. |
 | 1 | Typed MIR identity | `ARCH-TYPED-MIR` | backend-critical types, symbols, values, ABI/layout, representation, and control facts are typed or verifier-owned. |
-| 2 | `VerifiedProgram` narrowing | `ARCH-TYPED-MIR`, `ARCH-BACKEND-FACTS` | production backend entrypoints no longer expose AST as semantic input. |
+| 2 | `VerifiedProgram` narrowing | `ARCH-TYPED-MIR`, `ARCH-BACKEND-FACTS` | backend entrypoints no longer expose AST as semantic input. |
 | 3 | Artifact provenance | `ARCH-SOURCE-MAP-DIGEST` | emitted bytes, source maps, lowering options, source/MIR digests, and tool identity are bound together. |
 | 4 | Manifest-backed gates | `GATE-MANIFEST` | build/CI/docs read compiler-core gate status from one manifest instead of Markdown counters. |
-| 5 | Profile-scoped kernel hardening | `KERNEL-CAPABILITY-MINT`, `HARDWARE-PRODUCTION-QUALIFICATION` | production capability/hardware claims are type-gated and evidence-backed. |
 
-Phases 0–2 are the default work. Phases 3–5 should not displace compiler P0
+Phases 0–2 are the default work. Phases 3–4 should not displace compiler P0
 unless the patch is small, isolated, and directly closes a listed risk.
 
 ## Phase 0 — stop backend authority growth
@@ -98,7 +97,7 @@ Preferred order:
 
 Done when:
 
-- production lowering positions do not accept `.unknown` except through an
+- backend lowering positions do not accept `.unknown` except through an
   explicit diagnostic/debug allowlist;
 - migrated type/value/symbol/span identities use typed IDs or verifier-owned
   tables;
@@ -115,12 +114,12 @@ Work items:
 1. Introduce typed views for symbol spelling, source spans, layout, ABI,
    representation, and target configuration.
 2. Replace one backend AST ingress at a time with those views.
-3. Remove direct production backend entrypoints that bypass `VerifiedProgram`.
+3. Remove direct backend entrypoints that bypass `VerifiedProgram`.
 4. Keep any remaining syntax access mechanics-only and exact-count-gated.
 
 Done when:
 
-- production C/LLVM entrypoints require `VerifiedProgram`;
+- C/LLVM entrypoints require `VerifiedProgram`;
 - `VerifiedProgram` does not expose `ast.Module` as a general backend semantic
   input;
 - adding a backend does not require reimplementing semantic analysis.
@@ -174,7 +173,7 @@ Do these in order unless a failing test forces a narrower slice:
 | 1 | Delete remaining historical compatibility surfaces that are not part of the current CLI, gate, or compiler API. | The surface is removed, all references move to the current entrypoint, and focused CLI/tool tests pass. |
 | 2 | Remove or quarantine the next backend-local semantic helper. | `semantic-facts-inventory-test` passes and the touched backend test proves missing facts fail closed. |
 | 3 | Convert the next backend-critical fact family toward typed IDs or verifier-owned facts. | MIR admission rejects stale/forged identity before C or LLVM emission. |
-| 4 | Narrow the next `VerifiedProgram` or codegen request syntax ingress. | Production C/LLVM entrypoints keep syntax mechanics explicit and exact-count-gated. |
+| 4 | Narrow the next `VerifiedProgram` or codegen request syntax ingress. | C/LLVM entrypoints keep syntax mechanics explicit and exact-count-gated. |
 | 5 | Keep active gate status in manifests and short plans, not completed-patch ledgers. | Completed work is represented by Git history and ratchet tests; this document only carries the next execution order. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower
@@ -226,14 +225,14 @@ Do not delete semantic parity tests just to speed up the inner loop. Move them
 to the broad level unless the touched slice changes cross-backend semantics,
 MIR fact shape, ABI/layout, or the parity harness itself.
 
-Governance-only slices:
+Manifest-only slices:
 
 ```text
 git diff --check
 zig build gate-manifest-test --summary all
 ```
 
-Kernel trust-boundary slices:
+Kernel validation slices:
 
 ```text
 git diff --check

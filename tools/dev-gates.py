@@ -34,7 +34,7 @@ RULES: tuple[Rule, ...] = (
     Rule(
         ("src/*.zig",),
         ("test", "diagnostics-reference-test", "diagnostic-code-inventory-test"),
-        "production source changes need unit/spec coverage plus generated diagnostic reference and code ownership checks",
+        "compiler implementation changes need unit/spec coverage plus generated diagnostic reference and code ownership checks",
         excludes=("src/*_tests.zig", "src/diagnostic_explain.zig"),
     ),
     Rule(

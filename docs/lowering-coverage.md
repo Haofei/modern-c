@@ -27,7 +27,7 @@ Instead this is **function-level coverage by source instrumentation**:
 
 1. `tools/toolchain/lowering-cov-instrument.py` injects a
    `lower_cov.hit("<file>:<fn>:<line>")` probe as the first statement of every
-   function in every production backend file (currently 40 C backend files and
+   function in every backend implementation file (currently 40 C backend files and
    12 LLVM backend files).
 2. `lowering-coverage.sh` copies the checkout to a temporary work directory,
    instruments that copy, and builds the instrumented `mcc` there. The main

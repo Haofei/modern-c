@@ -12,7 +12,7 @@
 # own output, so true llvm-cov line/branch coverage of the `mcc` binary is unavailable.
 # Instead this script does FUNCTION-LEVEL coverage by source instrumentation:
 #   1. inject a `lower_cov.hit("<file>:<fn>:<line>")` probe at the top of every function
-#      in each production backend module (tools/toolchain/lowering-cov-instrument.py),
+#      in each backend implementation module (tools/toolchain/lowering-cov-instrument.py),
 #   2. build that instrumented `mcc`,
 #   3. run it (emit-c AND emit-llvm) over (a) every diff-backend host fixture and
 #      (b) a batch of mcfuzz-generated programs, each writing its fired-function set to a

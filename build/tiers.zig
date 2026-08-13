@@ -363,7 +363,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("test-spec"));
     // The 166-fixture C backend compile sweep is the largest default-m0 cost.
     // Keep it in fast/c0/m0-full; m0 keeps narrower C smoke coverage through
-    // mcc-build, mcmap, package, CLI, and generated-reference gates.
+    // mcc-build, mcmap, CLI, and generated-reference gates.
     m0_step.dependOn(ctx.cmd("mcc-cli-test"));
     m0_step.dependOn(ctx.cmd("mcc-build-test"));
     m0_step.dependOn(ctx.cmd("path-remap-test"));
@@ -423,7 +423,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("bad-diagnostics-test")); // golden wording for reject diagnostics
     c0_step.dependOn(ctx.cmd("diagnostics-reference-test")); // generated diagnostic-code reference stays current
     c0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test")); // emitted diagnostics stay fixture-owned or documented
-    c0_step.dependOn(ctx.cmd("lowering-coverage-inventory-test")); // split backend coverage ratchet stays pointed at production files
+    c0_step.dependOn(ctx.cmd("lowering-coverage-inventory-test")); // split backend coverage ratchet stays pointed at implementation files
     c0_step.dependOn(ctx.cmd("semantic-facts-inventory-test")); // backend semantic authority stays registered and anchored
     c0_step.dependOn(ctx.cmd("architecture-boundary-inventory-test")); // backend syntax escapes and deleted cleanup state stay ratcheted
     c0_step.dependOn(ctx.cmd("compilation-session-inventory-test")); // request-scoped compiler context stays anchored

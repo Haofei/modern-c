@@ -1,48 +1,35 @@
 # Current roadmap
 
-This is the consolidated follow-up list for MC. Older planning notes remain in
-this directory as rationale and execution logs, but this file is the short,
-current backlog to check first.
+This is the short active backlog for MC. Historical campaigns live in git
+history; this file should describe only current compiler-core direction.
 
-Current baseline:
+## Baseline
 
-- `zig build m0` is the core compiler qualification gate for normal local/CI
-  feedback; `zig build m0-full` is the full milestone gate for the implemented
-  language, backend, hardening, fuzz, runtime, and retained QEMU validation
-  surface.
-- `zig build riscv-qemu-validation` is the focused QEMU/OpenSBI validation gate
-  for the retained RISC-V language/backend surrogate.
-- The C and LLVM backends both cover the current implemented spec surface.
-- RISC-V S-mode under OpenSBI, narrow user/syscall paths, interrupt primitives, and selected
-  backend/ABI kernel gates are retained as validation evidence.
-- The project is still a prototype. Kernel work is kept as language/compiler
-  validation evidence, not as a product track.
+- `zig build m0` is the normal local/CI compiler-core gate.
+- `zig build m0-full` is the broader validation matrix for the implemented
+  language, backends, fuzz oracles, runtime experiments, and retained QEMU
+  fixtures.
+- Kernel code is a validation workload for language, MIR, ownership, ABI,
+  unsafe-boundary, freestanding, and backend-lowering behavior. It is not a
+  product track.
 
 ## Active priorities
 
-| Priority | Area | Current state | Next work |
-|---|---|---|---|
-| P0 | Kernel validation workload | Board-specific VisionFive 2 metadata, QMP hotplug, and soak-style qualification fixtures have been removed from the current language-oriented scope. The retained RISC-V QEMU/OpenSBI gates are language/backend evidence, not hardware release evidence. | Keep the QEMU surrogate green only where it validates language, ABI, driver, MMIO, syscall, or backend-lowering behavior. |
-| P0 | Interrupt validation | S-mode timer and focused PLIC interrupt gates remain as backend/ABI evidence. Device IRQ product fixtures have been removed. | Keep IRQ gates only where they expose language, ABI, MMIO, syscall, or backend-lowering gaps. |
-| P1 | Confined app ABI fixtures | Confined app broker fixtures, the kernel async broker, and the versioned `SYS_SUBMIT` / `SYS_POLL` user ABI have been removed from the current language-oriented scope. | Keep async validation in compiler/host fixtures unless a separate runtime validation profile is created. |
-| P1 | Cross-architecture backend gaps | Deep x86/AArch64 QEMU boot/user/VM execution fixtures have been removed from the current language-oriented scope. Compiler-side target coverage remains in host-only arch emission and precise-asm tests. | Keep arch coverage focused on compiler target selection, ABI/data-layout facts, and backend emission; reintroduce platform execution only for a concrete language/backend gap. |
-| P1 | Updates and recovery | Kernel update/live-update fixtures were removed from the current language-oriented scope. | Keep update/recovery out of the kernel validation workload unless a separate product profile is created. |
-| P1 | Persistence and recovery | Filesystem, storage, and checkpoint-like product fixtures have been removed or demoted from the current language-oriented scope. | Keep only small library fixtures that directly validate language or backend behavior. |
-| P1 | Kernel product surface | POSIX/VFS/TCP/DNS/socket/shell/userland/exec product fixtures have been removed from the current language-oriented scope. | Keep kernel validation focused on language, ABI, MMIO, ownership, and backend-lowering evidence. |
-| P1 | Multi-architecture platform | RISC-V remains the reference QEMU/OpenSBI validation path. x86_64 and AArch64 are retained as compiler target/emit coverage, not as kernel product platforms. | Keep the RISC-V QEMU/OpenSBI path as the reference validation path. Defer additional platform execution unless it directly validates compiler, ABI, runtime, or backend behavior. |
-| P2 | Fuzzing and independent oracles | The mcfuzz oracle family, including `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `fuzz-reference`, and `fuzz-corpus`, is registered in `build/fuzz.zig` and wired into `m0-full`; `.github/workflows/nightly-fuzz.yml` also exists for the longer fuzz cadence. | Keep the promoted fuzz gates green in the full/nightly profiles; continue expanding generator surface and independent oracle coverage where backend/runtime support exists. |
-| P2 | Remaining mcfuzz generator surface | Most scalar/control-flow coverage has landed. Tagged unions, slices, multi-module programs, external-link programs, and coverage-guided throughput remain open or blocked. | Keep expanding `tools/fuzz/mcfuzz.py` where backend/runtime support exists; do not generate features that cannot yet lower into runnable programs. |
-| P2 | Tooling polish | `mcc fmt` and symbol indexing are implemented and gated. | Improve formatter pretty-printing and developer diagnostics as needed by active language work. |
+| Priority | Area | Next work |
+|---|---|---|
+| P0 | Backend semantic authority | Remove backend-local semantic inference and keep C/LLVM lowering driven by typed MIR, verified facts, layout/ABI tables, and `VerifiedProgram`. |
+| P0 | `VerifiedProgram` narrowing | Remove AST-shaped semantic ingress from backend entrypoints; keep source spelling and spans mechanics-only. |
+| P0 | Test speed and sharding | Keep the cheap `m0`/`fast` loop focused; leave broad sweeps in `m0-full` and parallel runners. |
+| P1 | Module identity | Move away from text-inclusion identity toward per-file source, module, definition, type, and body IDs. |
+| P1 | QEMU validation boundary | Keep RISC-V/QEMU fixtures only where they validate language, ABI, MMIO, syscall, ownership, or backend-lowering behavior. |
+| P2 | Fuzzing and independent oracles | Expand fuzz generators only where generated programs can lower into runnable C/LLVM comparisons. |
+| P2 | Tooling polish | Improve formatter, diagnostics, and symbol output as needed by active language work. |
 
-## Historical work folded into this roadmap
+## Non-goals in the core backlog
 
-Completed campaign notes and experiment drafts live in git history, not as live
-documentation. Their current takeaways are folded into this roadmap.
-
-## Kernel validation boundary
-
-There is no kernel product checklist in the current repository scope. Kernel
-work remains useful when it validates language, MIR, ownership, backend, ABI,
-unsafe-boundary, freestanding, or driver behavior. Product operations, release
-images, hardware soak, fleet observability, update policy, and broad hardware
-qualification belong to a separate product profile if one is ever created.
+- Kernel product features.
+- Filesystems, networking stacks, storage stacks, package ecosystems, service
+  supervisors, and update/recovery products.
+- Board certification, fleet operations, shipped-image policy, or product
+  support process.
+- New language surface before the current semantic authority boundary is stable.
