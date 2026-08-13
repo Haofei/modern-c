@@ -192,8 +192,6 @@ pub fn register(ctx: *h.Ctx) void {
     // Expose as a public step too, so the parallel runner (tools/m0-parallel.sh) can invoke it alone.
     ctx.b.step("demo-test-strict", "Strict demo-test (riscv64 required; m0/c0 variant)").dependOn(&demo_test_strict_cmd.step);
 
-    _ = h.addScriptTest(ctx, "net-test", "Run the kernel virtio-net RX/TX ARP exchange under QEMU", &.{ "bash", "tools/net/net-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-net-test", "Run the LLVM-lowered kernel virtio-net RX/TX ARP exchange under QEMU", &.{ "bash", "tools/net/net-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "kernel-test", "Compile-check kernel/ for riscv64 and verify typestate rejects", &.{ "bash", "tools/toolchain/kernel-test.sh", "zig-out/bin/mcc" });
 

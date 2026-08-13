@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Kernel-suite gate: lower every kernel/ module to C, compile-check it for the
 # riscv64 freestanding target, and verify the kernel/bad/ typestate misuses are
-# rejected. (The runnable net path is gated separately by `net-test`.)
+# rejected.
 #
 # Each module is an independent compile-check, so both phases fan out across the
 # available cores (override with JOBS=N). Parallelism only changes output

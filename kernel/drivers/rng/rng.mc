@@ -1,8 +1,8 @@
 // kernel/drivers/rng — the system entropy driver. A single virtio-rng (virtio
 // device-id 4) driver plus a clean `rng_fill(buf, len)` API, built on the shared
 // transport (std/virtio: scan / handshake), the split virtqueue (std/virtqueue:
-// submit / kick / wait / complete) and DMA ownership (std/dma) — the same layering
-// virtio_net / virtio_blk use. This is where in-kernel callers (tokens /
+// submit / kick / wait / complete) and DMA ownership (std/dma). This is where
+// in-kernel callers (tokens /
 // nonces later) get real device entropy, instead of every caller re-walking the mmio
 // window and hand-rolling the queue cycle.
 //

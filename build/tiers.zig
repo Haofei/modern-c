@@ -140,7 +140,6 @@ pub fn register(ctx: *h.Ctx) void {
     // C-backend async-IRQ reset, fixed by #[align(4)] on naked trap vectors).
     m0_full_step.dependOn(ctx.cmd("llvm-smode-plic-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-plic-multishot-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-net-test"));
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
@@ -265,8 +264,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("ipi-test"));
     // demo-test compile-checks the whole demo/ suite (needs clang).
     m0_full_step.dependOn(ctx.cmd("demo-test-strict"));
-    // net-test runs the kernel virtio-net RX/TX ARP exchange under QEMU.
-    m0_full_step.dependOn(ctx.cmd("net-test"));
     // kernel-test compile-checks kernel/ for riscv64 + typestate rejects.
     m0_full_step.dependOn(ctx.cmd("kernel-test-strict"));
     // page-test links + runs the physical frame allocator (needs clang).

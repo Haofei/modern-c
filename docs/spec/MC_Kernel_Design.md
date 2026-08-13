@@ -41,8 +41,8 @@ agree (§8.3 distinguishes this from CPU-architecture support).
 | Core (process, ipc, sched, capability, memory, resource governance) | `kernel/core/` |
 | Arch HAL (riscv64 primary, x86_64/aarch64 partial) | `kernel/arch/<arch>/` |
 | Library types (resacct, granttab, supervisor, mailbox, fdspace, registry) | `kernel/lib/` |
-| Filesystems & storage | `kernel/fs/` |
-| Network stack | `kernel/net/` |
+| Filesystems & storage | removed from current core scope |
+| Network stack | removed from current core scope |
 | Drivers | `kernel/drivers/` |
 | Bus / device model | `kernel/bus/` |
 | Address classes, libc subset, mem, rights | `std/` |
@@ -504,21 +504,11 @@ from the core workload.
 
 ---
 
-## 19. Network Validation — GATED
+## 19. Network Validation — removed from core scope
 
-`kernel/net/` is retained only for link/IP packet helpers and virtio-net driver validation.
-The former UDP socket, DNS, TCP, RX demux, and parser-fuzz product stack was removed from
-the core workload.
-
-> **Scope honesty:** this is not a network stack claim. The retained code exists to exercise
-> address classes, checksummed packet construction, MMIO/DMA virtio-net bring-up, and QEMU
-> backend parity.
-
-- **Link/IP:** `ethernet`, `arp`, `ipv4` (RFC 1071 checksum), `icmp`,
-  `inet_checksum`, `packet` (typed `Ipv4Addr` + bounds cursor). The former ARP
-  cache fixture was removed with the OS product-surface cleanup.
-
-Gates: device-level virtio-net validation remains; protocol product fixtures are absent.
+The former `kernel/net/` link/IP helpers and virtio-net ARP/ICMP QEMU validation
+were removed with the OS product-surface cleanup. Network protocol and NIC
+product work belongs to a separate validation/product profile if it is revived.
 
 ---
 
@@ -528,7 +518,6 @@ Gates: device-level virtio-net validation remains; protocol product fixtures are
 
 | Driver | Hardware | Status |
 |--------|----------|--------|
-| `virtio/virtio_net` | VirtIO 1.0 NIC | **GATED** — handshake, split virtqueues, `move`-checked DMA ownership, TX/RX, 1 s deadline. |
 | `virtio/virtio_blk` | VirtIO block | **GATED** — 3-descriptor chains, 5 s deadline. |
 | `pci` | ECAM config | **IMPLEMENTED** — bus scan, BAR0. |
 | `irq/plic` | RISC-V PLIC | **GATED** — typestate `IrqLine<State>`, `#[irq_context]`-checked. |
@@ -618,7 +607,6 @@ scope. Gate names are verified against `build.zig`.
 | Rights/capabilities attenuate only (child = parent ∩ keep) | `capability.mc`, `std/rights.mc` | `cap-test`, `llvm-cap-test` | compile-time + QEMU |
 | Grant revoke invalidates outstanding refs; cascade revokes subtree | `kernel/lib/granttab.mc` | `grant-test`, `granttab-test` | riscv64 QEMU |
 | `UserPtr<T>` cannot be dereferenced in the kernel | `uaccess.mc` + compiler diagnostic `E_USER_PTR_DEREF` | compile-time spec fixtures | compile-time |
-| Virtio-net ARP/ICMP validation | `kernel/net/*`, `kernel/drivers/virtio/*` | `net-test`, `llvm-net-test` | QEMU |
 | `page_free` is real O(1) reclaim (not a no-op) | `page_alloc.mc` | `page-test`, `llvm-page-test` | riscv64 QEMU |
 
 ---

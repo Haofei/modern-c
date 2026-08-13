@@ -3021,11 +3021,12 @@ NIC driver  ──uses──▶  std/sync     locking + linear guards          (
 ```
 
 For a concrete device class, a second tier of libraries owns the **bus/device
-protocol** so the device-specific driver stays tiny. The implemented virtio-net
-driver, for example, is ~12 lines of net-specific logic over:
+protocol** so the device-specific driver stays tiny. Earlier QEMU virtio-net
+product fixtures have been removed from the core workload; the remaining driver
+profile text is a library design sketch over:
 
 ```txt
-virtio-net  ──uses──▶  std/virtio     virtio-mmio transport: the @offset register
+virtio-*    ──uses──▶  std/virtio     virtio-mmio transport: the @offset register
                                        map, the init status handshake, feature
                                        negotiation (generic across net/block/…)
             ──uses──▶  std/virtqueue   the split virtqueue: vring layout, queue
@@ -5582,7 +5583,7 @@ llvm-mmap-test`, `zig build llvm-contain-test`, `zig build llvm-cow-test`, and
 `zig build llvm-isolation-test`, `zig build
 llvm-driver-test`, and `zig build
 llvm-preempt-test`, `zig build llvm-smp-test`, `zig build
-llvm-smp-lock-test`, `zig build llvm-ipi-test`, `zig build llvm-net-test`,
+llvm-smp-lock-test`, `zig build llvm-ipi-test`,
 `zig build llvm-sbi-boot-test`
 gates boot LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer
 traps, cooperative context switching, round-robin scheduling, syscall dispatch,
@@ -5596,8 +5597,7 @@ demand paging, anonymous mmap, crash containment, copy-on-write, per-server MMU
 isolation, user-mode block-device validation, RTC MMIO, user-mode
 server syscalls, backtrace symbolization, char-device driver dispatch, timer
 preemption, SMP boot/sync, SMP ticket-lock mutual exclusion, inter-processor
-interrupts, virtio-net device bring-up, virtio-blk sector reads, ARP/ICMP
-gateway round trips over virtio-net, driver-library synthetic NIC transmit,
+interrupts, char-device driver dispatch,
 OpenSBI firmware boot, plus selected U-mode exit traps.
 The `zig build llvm-page-test`, `zig build llvm-heap-test`, and `zig build
 llvm-paging-test` gates link and run LLVM-lowered host checks for the frame
