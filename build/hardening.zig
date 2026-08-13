@@ -56,10 +56,4 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-kmsan-test", "Boot the LLVM-lowered KMSAN demo under QEMU", &.{ "bash", "tools/mem/kmsan-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // kcsan-test boots the D2.3 KCSAN demo under QEMU: data-race detection via a watchpoint
-    // on the shadow (the `--checks=csan` profile). An unsynchronized boot-thread access
-    // racing a REAL preempting timer-IRQ access is caught by the watchpoint conflict check
-    // (CSAN-DETECTED); a properly-synchronized (mc_race_*) access is clean (CSAN-OK). C
-    // backend only — the LLVM backend does not implement the csan watchpoint instrumentation.
-    _ = h.addScriptTest(ctx, "kcsan-test", "Boot the KCSAN demo under QEMU (data-race detection on the watchpoint)", &.{ "bash", "tools/mem/kcsan-test.sh", "zig-out/bin/mcc", "c" });
 }

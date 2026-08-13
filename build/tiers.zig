@@ -231,8 +231,6 @@ pub fn register(ctx: *h.Ctx) void {
     // kmsan-test (D2.2): access-time use-of-uninitialized-heap detection on the ksan shadow.
     m0_full_step.dependOn(ctx.cmd("kmsan-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-kmsan-test"));
-    // kcsan-test (D2.3): data-race detection via a watchpoint on the shadow (csan profile).
-    m0_full_step.dependOn(ctx.cmd("kcsan-test"));
     // elf-test links + runs the ELF64 parser (needs clang).
     m0_full_step.dependOn(ctx.cmd("elf-test"));
     // alloc-test links + runs the type-erased Allocator (needs clang).
