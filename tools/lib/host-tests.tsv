@@ -1,6 +1,5 @@
 # name	fixture	mode	spec	mcc_flags	description
 numeric-literal-boundaries-test	tests/exec/numeric_literal_boundaries_run.mc	entry	numeric_literal_boundaries_run		full-range u64/u128 constants, separated floats, folded inf/nan, and signed zero execute identically on C and LLVM
-fb-test	tests/qemu/arch/fb_demo.mc	entry	fb_run	-Wno-switch-bool	linear framebuffer device: set/get independent 32-bit pixels by coordinate
 fdt-test	tests/qemu/arch/fdt_demo.mc	entry	fdt_run	-Wno-switch-bool	device-tree (FDT) header parsing: magic validation + totalsize/version
 endpoint-test	tests/qemu/ipc/endpoint_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	MINIX hardening: generation-checked endpoints (stale fails closed), derived runnable state (block reasons), death cleanup (waiter released with DEAD)
 grant-test	tests/qemu/ipc/grant_demo.mc	entry	grant_demo_run		memory grant: bounded delegation (OOB rejected) + revocation (stale ref caught)

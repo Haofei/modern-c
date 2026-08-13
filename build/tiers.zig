@@ -161,7 +161,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-net-smode-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-net-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-nic-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-e1000-test"));
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
@@ -376,7 +375,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("rtc-test"));
     m0_full_step.dependOn(ctx.cmd("contain-test"));
     m0_full_step.dependOn(ctx.cmd("fdt-test"));
-    m0_full_step.dependOn(ctx.cmd("fb-test"));
     m0_full_step.dependOn(ctx.cmd("aarch64-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-aarch64-test"));
     m0_full_step.dependOn(ctx.cmd("arm-vm-test"));
@@ -391,7 +389,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-bootinfo-test"));
     m0_full_step.dependOn(ctx.cmd("uart-driver-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-uart-driver-test"));
-    m0_full_step.dependOn(ctx.cmd("e1000-test"));
     m0_full_step.dependOn(ctx.cmd("grant-test"));
     m0_full_step.dependOn(ctx.cmd("ipc-test"));
     m0_full_step.dependOn(ctx.cmd("async-test"));

@@ -5564,7 +5564,7 @@ with `check` plus LLVM object lowering.
 The `zig build llvm-std-test` gate additionally links LLVM-built
 `std/{core,bits,math,ascii,fmt,addr}` objects into one host executable and runs
 exported function checks.
-The `zig build llvm-demo-test` gate compiles the framebuffer/gpio/irq/spi/timer/uart
+The `zig build llvm-demo-test` gate compiles the gpio/irq/spi/timer/uart
 hardware demo drivers and the hosted elementwise demo through LLVM to non-empty
 object files under the same hidden-assumption token check.
 The `zig build llvm-kernel-test` gate compiles every non-bad `kernel/` module
@@ -5585,7 +5585,7 @@ llvm-driver-test`, and `zig build
 llvm-preempt-test`, `zig build llvm-smp-test`, `zig build
 llvm-smp-lock-test`, `zig build llvm-ipi-test`, `zig build llvm-virtio-test`, and `zig build
 llvm-blk-test`, `zig build llvm-net-test`,
-`zig build llvm-nic-test`, `zig build llvm-e1000-test`,
+`zig build llvm-nic-test`,
 `zig build llvm-sbi-boot-test`,
 `zig build llvm-aarch64-test`, `zig build llvm-x86-sched-test`,
 `zig build llvm-x86-qemu-test`
@@ -5603,7 +5603,6 @@ server syscalls, backtrace symbolization, char-device driver dispatch, timer
 preemption, SMP boot/sync, SMP ticket-lock mutual exclusion, inter-processor
 interrupts, virtio-net device bring-up, virtio-blk sector reads, ARP/ICMP
 gateway round trips over virtio-net, driver-library synthetic NIC transmit,
-e1000 PCI probing,
 OpenSBI firmware boot, aarch64 QEMU boot, and x86-64 native/QEMU scheduler
 boot, plus selected U-mode exit traps.
 The `zig build llvm-page-test`, `zig build llvm-heap-test`, and `zig build

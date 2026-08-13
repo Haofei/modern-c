@@ -530,14 +530,12 @@ Gates: device-level virtio-net validation remains; protocol product fixtures are
 | `virtio/virtio_net` | VirtIO 1.0 NIC | **GATED** — handshake, split virtqueues, `move`-checked DMA ownership, TX/RX, 1 s deadline. |
 | `virtio/virtio_blk` | VirtIO block | **GATED** — 3-descriptor chains, 5 s deadline. |
 | `pci` | ECAM config | **IMPLEMENTED** — bus scan, BAR0. |
-| `e1000` | Intel 82540EM | **MOCK / probe-only** — no rings. |
-| `fb` | linear framebuffer | DEMO-SCOPE (16×16). |
 | `irq/plic` | RISC-V PLIC | **GATED** — typestate `IrqLine<State>`, `#[irq_context]`-checked. |
 | `timer/clint` | RISC-V CLINT | **GATED** — `mtime`/`mtimecmp`. |
 
 DMA buffers use `move` semantics so CPU↔device ownership transitions are compile-checked;
 VirtIO I/O carries real-time deadlines that fail closed. Gates: `nic-test`, `blk-test`,
-`driver-test`, `e1000-test` (probe).
+`driver-test`.
 
 ---
 
@@ -601,7 +599,7 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | Syscall table mechanism | **GATED**; production syscall surface absent |
 | Filesystems / storage | **GATED**; low-level block/cache/blob validation only |
 | Network validation | **GATED**; link/IP/driver validation only |
-| Drivers: virtio net/blk, plic, clint | **GATED**; pci **IMPLEMENTED**; e1000 **MOCK** |
+| Drivers: virtio net/blk, plic, clint | **GATED**; pci **IMPLEMENTED** |
 | ELF parse/load | **GATED**; dynamic linking absent |
 
 ---

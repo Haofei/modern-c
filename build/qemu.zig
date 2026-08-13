@@ -314,7 +314,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-contain-test", "Run LLVM-lowered MMU crash containment under QEMU", &.{ "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "fdt-test", "Device-tree (FDT) header parsing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test" });
 
-    _ = h.addScriptTest(ctx, "fb-test", "Linear framebuffer device", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fb-test" });
     _ = h.addScriptTest(ctx, "aarch64-test", "Second architecture (aarch64) bring-up", &.{ "bash", "tools/arch/aarch64-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-aarch64-test", "LLVM-lowered second architecture (aarch64) bring-up", &.{ "bash", "tools/arch/aarch64-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "arm-vm-test", "AArch64 stage-1 page-table VM + MMU enable (real VA->PA translation)", &.{ "bash", "tools/arch/arm-vm-test.sh", "zig-out/bin/mcc", "c" });
@@ -333,8 +332,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-uart-driver-test", "LLVM-lowered boot under OpenSBI + FDT-discovered first-class NS16550 driver", &.{ "bash", "tools/arch/uart-driver-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "smode-user-test", "S-mode U-mode hello under OpenSBI (SYS_WRITE + bad-ptr -EFAULT)", &.{ "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-smode-user-test", "LLVM-lowered S-mode U-mode hello under OpenSBI", &.{ "bash", "tools/arch/smode-user-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "e1000-test", "Real e1000 NIC PCI probe", &.{ "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-e1000-test", "LLVM-lowered real e1000 NIC PCI probe", &.{ "bash", "tools/net/e1000-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
 
