@@ -88,8 +88,7 @@ fn vq_alloc_desc(vq: *mut Virtq) -> u16 {
 }
 
 // Return a descriptor to the free list. Pure vq-field manipulation (no alloc/free, no blocking,
-// no MMIO), so it is safe to call from an interrupt handler — an IRQ-driven driver (e.g.
-// kernel/drivers/virtio/virtio_blk_async.mc) reaps the used ring and returns its descriptors here.
+// no MMIO), so it is safe to call from an interrupt handler that reaps a used ring.
 #[irq_context]
 pub fn vq_free_desc(vq: *mut Virtq, id: u16) -> void {
     vq.inflight_addr[id as usize] = 0;

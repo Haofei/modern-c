@@ -51,7 +51,7 @@ export fn wq_wait(q: *mut WaitQueue, t: *mut ProcTable) -> void {
 
 // Wake the oldest *live* waiter (FIFO), skipping any whose endpoint is now stale (the waiter
 // exited and its slot may have been reused). Returns false if no live waiter remained. Called
-// from an ISR via async_complete, so it stays non-blocking (ring + generation-check +
+// from an ISR-style wake path, so it stays non-blocking (ring + generation-check +
 // proc_unblock) and is `#[irq_context]`-verified: its callees (ring_is_empty/ring_pop,
 // endpoint_slot, proc_unblock) are all irq-safe (endpoint_slot's `Result` is fine — Result
 // construction is not a call, which is all the irq-context verifier flags).

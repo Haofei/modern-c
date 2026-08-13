@@ -1,10 +1,7 @@
 // std/task.mc — pure async TASK VOCABULARY (async/await roadmap, Phase A).
 //
-// This module is PURE: it knows nothing about ProcTable, IRQs, wait queues, broker slots,
-// or syscalls — only how to *poll* and *compose* futures. The scheduler / broker / park-wake
-// integration lives in the kernel (kernel/lib/async.mc, Phase B); the IRQ-backed completion
-// path is Phase C; `async`/`await` syntax (a stackless state-machine transform) is the
-// optional Phase D. Everything here is FIXED-SIZE with no hidden heap.
+// This module is PURE: it knows nothing about ProcTable, IRQs, wait queues, runtime slots,
+// or syscalls — only how to *poll* and *compose* futures. Kernel park/wake broker integration was removed from the core workload; `async`/`await` syntax is a stackless state-machine transform. Everything here is FIXED-SIZE with no hidden heap.
 //
 // Model. A `Future` is anything that can be polled to advance; `poll` returns `true` once the
 // future is COMPLETE and must keep returning `true` afterward (idempotent). `poll` MUST NOT
@@ -20,7 +17,7 @@
 // this vocabulary is for task/agent context, never an ISR.
 
 // The core abstraction. `poll` advances the future and returns true once complete; `cancel`
-// drops a still-pending future, releasing any in-flight resource it holds (a broker slot, a child
+// drops a still-pending future, releasing any in-flight resource it holds (a runtime slot, a child
 // future). `cancel` MUST be idempotent and a no-op once the future is complete — after a winner is
 // decided a combinator cancels the type-erased LOSER through this vtable slot (E1). `*dyn` dispatch
 // is excluded from `#[irq_context]`/`#[bounded]`, so this vocabulary is task/agent context only.
@@ -33,13 +30,11 @@ trait Future {
 //
 // `SlotFuture` is the shape "a submitted request id maps to a pending future". It stays pure
 // by INJECTING the completion source as `done(id) -> bool`: std never learns what the source
-// is (the kernel supplies a `done` backed by the vectored SYS_POLL / inflight table in Phase
-// B). Fixed-size — one per in-flight request — so callers keep the live count <= MAX_INFLIGHT.
+// is (a runtime can supply `done` from any bounded completion table). Fixed-size — one per in-flight request — so callers keep the live count <= MAX_INFLIGHT.
 //
-// Cancellation is ALSO injected, as `cancel(id) -> void` (the kernel supplies one backed by
-// `async_cancel`, which frees the inflight slot). `slot_future_cancel` is what a generated
+// Cancellation is ALSO injected, as `cancel(id) -> void` (a runtime supplies one that frees the injected resource). `slot_future_cancel` is what a generated
 // `async fn`'s `cancel` walks down to when this is the leaf still in flight: dropping a pending
-// future must release its broker slot, or it leaks (see kernel/lib/async.mc `async_cancel`).
+// future must release its runtime slot, or it leaks (see the injected cancel callback).
 // `cancel` is only meaningful while pending — once `ready`, the slot is already consumed.
 struct SlotFuture {
     id: u64,
@@ -218,8 +213,6 @@ export fn run_to_completion(f: *mut dyn Future, idle: fn() -> void) -> u64 {
     return ticks;
 }
 
-// NOTE: the vectored drain (advance many in-flight futures per scheduler wakeup, mirroring
-// the broker's `SYS_POLL(events, max)`) is intentionally NOT here. In pure std it would mean
-// pointer arithmetic over an array of `*mut dyn` fat pointers; in practice the drain iterates
-// the kernel's fixed inflight-slot TABLE, which knows the slot type and bound (MAX_INFLIGHT).
-// So `poll_many` lives in kernel/lib/async.mc (Phase B), over the inflight table, not here.
+// NOTE: a vectored drain over many `*mut dyn Future` values is intentionally NOT here.
+// In pure std it would mean pointer arithmetic over an array of fat pointers; an embedding
+// runtime can provide a typed, bounded table if it needs batched completion.

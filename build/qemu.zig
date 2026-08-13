@@ -296,59 +296,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-ipc-test", "Run LLVM-lowered kernel-mediated IPC under QEMU", &.{ "bash", "tools/ipc/ipc-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
-    // async-test (async/await roadmap Phase B): request-id-keyed PARK/WAKE completion broker
-    // (kernel/lib/async.mc). A waiter PARKS on submitted requests; a completer wakes it
-    // (out-of-order completions) under the real cooperative scheduler. WCR + ASYNC-OK.
-    _ = h.addScriptTest(ctx, "async-test", "async Phase B: request-id park/wake completion broker (submit/await/complete) under the scheduler", &.{ "bash", "tools/proc/async-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-async-test", "LLVM-lowered async park/wake completion broker under QEMU", &.{ "bash", "tools/proc/async-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // async-irq-test (async/await Phase C): a real M-mode TIMER interrupt completes an in-flight
-    // request and wakes a task parked in async_await_irq (irq-off wait-prepare closes the
-    // lost-wake window). The validation shape: a task sleeps in wfi until an interrupt resumes it.
-    _ = h.addScriptTest(ctx, "async-irq-test", "async Phase C: a real timer interrupt completes an async request and wakes the parked task (IRQ-backed completion)", &.{ "bash", "tools/proc/async-irq-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-async-irq-test", "LLVM-lowered IRQ-backed async completion under QEMU", &.{ "bash", "tools/proc/async-irq-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // async-cancel-test (async/await Phase D step 6, runtime half): the broker CANCELLATION
-    // primitive kernel/lib/async.mc `async_cancel`. Fill the inflight quota, cancel one request,
-    // prove its slot is RECLAIMED (a fresh submit reuses it), a late completion is a no-op, and a
-    // double-cancel is idempotent — so a dropped pending future does not leak its slot. FXR + OK.
-    _ = h.addScriptTest(ctx, "async-cancel-test", "async Phase D: async_cancel reclaims a dropped request's inflight slot (no leak on drop)", &.{ "bash", "tools/proc/async-cancel-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-async-cancel-test", "LLVM-lowered async_cancel slot reclamation under QEMU", &.{ "bash", "tools/proc/async-cancel-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // async-pollmany-test: the VECTORED DRAIN kernel/lib/async.mc `async_poll_many` — harvest many
-    // completed in-flight requests per wakeup over the inflight table. Capped + re-enterable drain;
-    // pending requests never harvested. SD + OK.
-    _ = h.addScriptTest(ctx, "async-pollmany-test", "async vectored drain: async_poll_many harvests many completions per wakeup over the inflight table", &.{ "bash", "tools/proc/async-pollmany-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-async-pollmany-test", "LLVM-lowered async_poll_many vectored drain under QEMU", &.{ "bash", "tools/proc/async-pollmany-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // async-future-test: the compiler's `async fn`/`await` lowering wired to the REAL kernel broker.
-    // An async fn's two awaits resolve through ReqFut leaves (async_submit/async_slot_ready/
-    // async_take/async_cancel_slot) driven to completion by drive_irq while sleeping in wfi; a
-    // re-armed timer ISR delivers one real async_complete per request. WR + ASYNC-FUTURE-OK (42).
-    _ = h.addScriptTest(ctx, "async-future-test", "broker-backed async: an async fn's awaits resolve against real broker completions driven by drive_irq (ReqFut leaves)", &.{ "bash", "tools/proc/async-future-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-async-future-test", "LLVM-lowered broker-backed async fn under QEMU", &.{ "bash", "tools/proc/async-future-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // async-multi-test (async/await E6): the MULTI-FUTURE cooperative executor `drive_many`. THREE
-    // independent async fns are driven CONCURRENTLY by ONE drive_many call, sleeping in wfi between
-    // ISR completions; a re-armed timer completes the in-flight requests OUT OF ORDER, so they
-    // resolve interleaved. Generalizes drive_irq (one future) to N with the same lost-wakeup-free
-    // IRQ-off idle discipline; adversarial to a leaked slot (active count -> 0) and a lost wakeup
-    // (a stranded future would exhaust the idle budget and be cancelled, dropping drive_many < 3).
-    // WR + ASYNC-MULTI-OK (drive_many=3, each result, 3 completions, 0 active).
-    _ = h.addScriptTest(ctx, "async-multi-test", "multi-future cooperative async: drive_many drives three async fns concurrently, completed out-of-order by a re-armed timer ISR, no slot leak", &.{ "bash", "tools/proc/async-multi-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-async-multi-test", "LLVM-lowered multi-future cooperative async executor (drive_many) under QEMU", &.{ "bash", "tools/proc/async-multi-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // virtio-blk device interrupt: blk_read_sector_async submits a read + ties the head descriptor id
-    // to a broker request id; the PLIC-routed used-ring IRQ reaps the completion in interrupt context
-    // word "DISK" + ASYNC-BLK-OK prove the completion came from the device IRQ, not a polling loop.
-
-
-    // async-select-test: select / cancel-the-loser over the real broker. Two in-flight requests are
-    // raced (ReqRace2); a timer ISR completes the winner; the race cancels the loser and the active
-    // slot count returns to 0 — the MAX_INFLIGHT-returns-to-zero acceptance. WR + ASYNC-SELECT-OK.
-    _ = h.addScriptTest(ctx, "async-select-test", "broker-backed select: race two requests, cancel the loser, active slots return to 0", &.{ "bash", "tools/proc/async-select-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-async-select-test", "LLVM-lowered broker-backed select / cancel-the-loser under QEMU", &.{ "bash", "tools/proc/async-select-test.sh", "zig-out/bin/mcc", "llvm" });
-
     _ = h.addScriptTest(ctx, "cap-test", "capability least-privilege: driver-as-server holds the console cap", &.{ "bash", "tools/proc/cap-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-cap-test", "Run LLVM-lowered capability least-privilege server under QEMU", &.{ "bash", "tools/proc/cap-test.sh", "zig-out/bin/mcc", "llvm" });

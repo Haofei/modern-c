@@ -5,8 +5,8 @@
 //       future for state N is built at the TRANSITION into state N (when `t` exists), not all
 //       up front in the constructor; and
 //   (b) CANCELLATION / drop — a generated `cancel` that walks the currently-active child future
-//       down to the in-flight leaf and RELEASES its broker slot, so dropping a still-pending
-//       future does not LEAK the slot (kernel/lib/async.mc `async_cancel`).
+//       down to the in-flight leaf and RELEASES its runtime slot, so dropping a still-pending
+//       future does not LEAK the slot.
 //
 // Hand-written as the acceptance target (ordinary MC; no parser sugar). Driving it through the
 // Phase-A executor and diffing C vs LLVM proves the lazy + cancel ABI lowers identically on both
@@ -21,11 +21,11 @@ import "std/task.mc";
 global g_clock: u64 = 0;
 fn tick_idle() -> void { g_clock = g_clock + 1; }
 
-// ---- a cancellable mock leaf modeling "a request that holds one inflight broker slot". The real
-// leaf is std/task.mc's SlotFuture over kernel async_submit / async_cancel; here a global counts
-// live slots so a LEAK (cancel not walked to the leaf) or a DOUBLE-free is observable on BOTH
+// ---- a cancellable mock leaf modeling "a request that holds one inflight runtime slot". The real
+// leaf is std/task.mc's SlotFuture with injected completion/cancel callbacks; here a global
+// counts live slots so a LEAK (cancel not walked to the leaf) or a DOUBLE-free is observable on BOTH
 // backends. `held` makes release idempotent: a slot is freed exactly once, by completion OR drop. ----
-global g_inflight: i32 = 0;       // live broker slots; must return to 0
+global g_inflight: i32 = 0;       // live runtime slots; must return to 0
 fn slot_acquire() -> void { g_inflight = g_inflight + 1; }
 fn slot_release() -> void { g_inflight = g_inflight - 1; }
 

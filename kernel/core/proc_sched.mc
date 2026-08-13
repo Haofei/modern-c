@@ -267,7 +267,7 @@ export fn proc_block(t: *mut ProcTable, slot: usize, reason: u32) -> void {
 
 // Clear a block reason; the process is runnable again once no reasons remain.
 // `#[irq_context]`: a single bounded bit-clear (mask32_clear), no blocking/indirect calls — it is
-// the wake primitive an ISR completion path reaches (wq_wake_one <- async_complete).
+// the wake primitive an ISR-style completion path reaches.
 #[irq_context]
 export fn proc_unblock(t: *mut ProcTable, slot: usize, reason: u32) -> void {
     if slot < t.count {

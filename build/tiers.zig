@@ -105,13 +105,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-ipc2-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-ipc-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-async-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-async-irq-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-async-cancel-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-async-pollmany-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-async-future-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-async-multi-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-async-select-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-privilege-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-cap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-preempt-test"));
@@ -308,13 +301,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-smode-user-test"));
     m0_full_step.dependOn(ctx.cmd("grant-test"));
     m0_full_step.dependOn(ctx.cmd("ipc-test"));
-    m0_full_step.dependOn(ctx.cmd("async-test"));
-    m0_full_step.dependOn(ctx.cmd("async-irq-test"));
-    m0_full_step.dependOn(ctx.cmd("async-cancel-test"));
-    m0_full_step.dependOn(ctx.cmd("async-pollmany-test"));
-    m0_full_step.dependOn(ctx.cmd("async-future-test"));
-    m0_full_step.dependOn(ctx.cmd("async-multi-test"));
-    m0_full_step.dependOn(ctx.cmd("async-select-test"));
     m0_full_step.dependOn(ctx.cmd("cap-test"));
     m0_full_step.dependOn(ctx.cmd("arc-pkt-test"));
     m0_full_step.dependOn(ctx.cmd("arena-test"));

@@ -3673,7 +3673,7 @@ pending **up the poll chain**; once `e` completes, `await e` takes its value (vi
 **Stackless invariant (normative).** A generated `poll` only polls child futures and returns
 pending — it **never** calls a blocking primitive. `await` is therefore a *suspend*, never a park.
 Blocking lives in exactly one place: the *driver* of the top-level future — the cooperative
-executor `run_to_completion`, or the kernel park/wake driver `async_await_irq`. `await` outside an
+executor `run_to_completion`, or the top-level runtime driver. `await` outside an
 `async fn` is `E_AWAIT_OUTSIDE_ASYNC`.
 
 **Try-await.** When the awaited value is a `Result<U, E>`, `let x = (await e)?;` applies the
@@ -3732,12 +3732,11 @@ or any other expression whose future type is not syntactically known is reserved
 
 ## 33.5 Cancellation and Drop
 
-A started future may own a bounded resource (e.g. an in-flight broker slot) until it completes;
-dropping a still-pending future must release it. The generated `f__Fut_cancel` walks the
-currently-active child future and cancels it — recursively, down to a leaf's `_cancel` — then marks
-the future complete (idempotent: a later `poll`/`cancel` is a no-op, with no double-free). The
-kernel primitive behind a leaf cancel is `async_cancel(id)`, which frees the slot and releases any
-parked waiter. `race`/`select` and timeout cleanup build on cancellation and are **reserved** in v0.
+A started future may own a bounded runtime resource until it completes; dropping a still-pending
+future must release it. The generated `f__Fut_cancel` walks the currently-active child future and
+cancels it — recursively, down to a leaf's `_cancel` — then marks the future complete (idempotent:
+a later `poll`/`cancel` is a no-op, with no double-free). `race`/`select` and timeout cleanup build
+on cancellation and are **reserved** in v0.
 
 ## 33.6 Ownership and Borrowing Across `await`
 
@@ -3754,9 +3753,7 @@ lifetime stays within one state — e.g. used only after the final `await` — i
 
 An `async fn` suspends and is driven through `*dyn` dispatch, both forbidden in an `#[irq_context]`
 / `#[atomic_context]` or `#[bounded]` context (sections 19.1, 32.4). Declaring an `async fn` with
-any of these attributes is `E_ASYNC_FORBIDDEN_CONTEXT`. The *completion* side — waking a parked task
-from an interrupt handler — is ordinary non-async kernel code and **is** `#[irq_context]` (the wake
-path forms no `Result`, takes no indirect call, and runs in bounded loops; section 19.1).
+any of these attributes is `E_ASYNC_FORBIDDEN_CONTEXT`. The completion side belongs to the embedding runtime and is outside the core language definition.
 
 ## 33.8 Diagnostics
 
@@ -3776,10 +3773,7 @@ hand-lowered acceptance targets (`fuzz-async-lowering`, `-branch-lowering`, `-lo
 `fuzz-async-return-inregion`, `fuzz-async-loop-breakcont`, `fuzz-async-nested-await`,
 `fuzz-async-multi-construct`, `fuzz-async-nested-locals`, `fuzz-async-switch-pattern-sema`, and
 `fuzz-async-safe-borrow` gates verify the transform's output against it — all in the
-diff-backend corpus (annex). The runtime is exercised under QEMU by `async-test` (park/wake),
-`async-irq-test` (IRQ-backed completion), `async-cancel-test` (slot reclamation on drop), and
-`async-pollmany-test` (vectored drain). The roadmap for the reserved features (`race`/`select`,
-pinning) is `docs/async-plan.md`.
+diff-backend corpus (annex). Runtime/product broker validation is intentionally outside the compiler-core gate.
 
 ---
 

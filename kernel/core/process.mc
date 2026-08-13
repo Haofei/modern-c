@@ -649,7 +649,7 @@ fn endpoint_slot(t: *mut ProcTable, ep: Endpoint) -> Result<usize, EpError> {
 // returns the slot index on success or `sentinel` on a stale/dead endpoint — NO `Result`. The
 // `Result`-constructing `endpoint_slot` cannot be `#[irq_context]` (each `ok(..)`/`err(..)` lowers
 // to a call-like instruction the MIR irq-context verifier rejects); this sentinel form is what the
-// ISR wake path (`wq_wake_one` <- `async_complete`) calls. Pass `t.count` as the sentinel (no live
+// ISR-style wake path (`wq_wake_one`) calls. Pass `t.count` as the sentinel (no live
 // slot equals it) and check `< t.count`.
 #[irq_context]
 fn endpoint_slot_or(t: *mut ProcTable, ep: Endpoint, sentinel: usize) -> usize {
