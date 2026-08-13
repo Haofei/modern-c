@@ -269,9 +269,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "sched-difftest", "differential scheduler gate: next_runnable pick == independent authoritative scan across randomized transitions (stale-cache regression guard)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "sched-difftest" });
 
 
-    _ = h.addScriptTest(ctx, "granttab-test", "owner-tracked grants: bounded IPC sharing + revoke-on-death", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "granttab-test" });
-
-
     // X4: x86-64 Local-APIC timer — REAL, non-polled interrupt delivery. PICs masked, LAPIC timer
     // periodic at IDT vec 0x20, sti + hlt-spin until ticks fire.
 
@@ -280,25 +277,8 @@ pub fn register(ctx: *h.Ctx) void {
     // (vendor 0x1AF4), reports its identity over COM1 (the analogue of RISC-V FDT/ECAM discovery).
 
 
-    _ = h.addScriptTest(ctx, "privilege-test", "Least privilege: IPC allow-list + kernel-call gate", &.{ "bash", "tools/proc/privilege-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-privilege-test", "Run LLVM-lowered least-privilege IPC and kcall gates under QEMU", &.{ "bash", "tools/proc/privilege-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
-    _ = h.addScriptTest(ctx, "ipc2-test", "IPC completeness: multi-slot + source filter + notify", &.{ "bash", "tools/ipc/ipc2-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-ipc2-test", "Run LLVM-lowered IPC multi-slot/source-filter/notify under QEMU", &.{ "bash", "tools/ipc/ipc2-test.sh", "zig-out/bin/mcc", "llvm" });
-
     _ = h.addScriptTest(ctx, "grant-test", "Memory grant: bounded delegation + revocation", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "grant-test" });
 
-    _ = h.addScriptTest(ctx, "ipc-test", "kernel-mediated IPC: client/server message round-trip", &.{ "bash", "tools/ipc/ipc-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-ipc-test", "Run LLVM-lowered kernel-mediated IPC under QEMU", &.{ "bash", "tools/ipc/ipc-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
-    _ = h.addScriptTest(ctx, "cap-test", "capability least-privilege: driver-as-server holds the console cap", &.{ "bash", "tools/proc/cap-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-cap-test", "Run LLVM-lowered capability least-privilege server under QEMU", &.{ "bash", "tools/proc/cap-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "arc-test", "Arc<T> shared ownership: clone/last-drop-frees, handles leak-checked", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arc-test" });
 

@@ -103,10 +103,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-stdio-test"));
     m0_full_step.dependOn(ctx.cmd("mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-ipc2-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-ipc-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-privilege-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-cap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-preempt-test"));
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
     m0_full_step.dependOn(ctx.cmd("llvm-ledger-test"));
@@ -260,8 +256,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("alloc-test"));
     m0_full_step.dependOn(ctx.cmd("arc-test"));
     m0_full_step.dependOn(ctx.cmd("constgen-test"));
-    m0_full_step.dependOn(ctx.cmd("ipc2-test"));
-    m0_full_step.dependOn(ctx.cmd("privilege-test"));
     m0_full_step.dependOn(ctx.cmd("time-test"));
     m0_full_step.dependOn(ctx.cmd("vqfault-test"));
     m0_full_step.dependOn(ctx.cmd("wrap-test"));
@@ -282,7 +276,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-sort-test"));
     m0_full_step.dependOn(ctx.cmd("endpoint-test"));
     m0_full_step.dependOn(ctx.cmd("sched-difftest"));
-    m0_full_step.dependOn(ctx.cmd("granttab-test"));
     m0_full_step.dependOn(ctx.cmd("slotmap-test"));
     m0_full_step.dependOn(ctx.cmd("mask-test"));
     m0_full_step.dependOn(ctx.cmd("rights-test"));
@@ -300,8 +293,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("smode-user-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-user-test"));
     m0_full_step.dependOn(ctx.cmd("grant-test"));
-    m0_full_step.dependOn(ctx.cmd("ipc-test"));
-    m0_full_step.dependOn(ctx.cmd("cap-test"));
     m0_full_step.dependOn(ctx.cmd("arc-pkt-test"));
     m0_full_step.dependOn(ctx.cmd("arena-test"));
     m0_full_step.dependOn(ctx.cmd("genref-test"));

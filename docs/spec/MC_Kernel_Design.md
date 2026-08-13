@@ -341,12 +341,11 @@ reused; `endpoint_slot` fails `DeadEndpoint` on generation mismatch. Gate: `endp
 
 ### 10.3 Runtime ABI fixtures — GATED, not a kernel product layer
 
-The dedicated kernel policy runtime and network broker fixtures have been removed. Kernel tests
-now use smaller runtime ABI fixtures to exercise userspace calls, async polling, isolation, and
-C/LLVM lowering. These fixtures are not a production capability broker and do not define a
-native OS surface.
+The dedicated kernel policy runtime, broker, and driver-as-server fixtures have been removed.
+Kernel tests now use smaller runtime ABI fixtures to exercise userspace calls and C/LLVM lowering.
+These fixtures are not a production capability broker and do not define a native OS surface.
 
-Gates: `cap-test`, `uaccess-pt-test`.
+Gates: `uaccess-pt-test`.
 
 ## 11. Scheduler — validation-scale
 
@@ -390,15 +389,11 @@ or `rights_single(auth, ...)`); every other combinator is **narrow-only**
 checks `child ⊆ parent`. Opacity makes "restore a dropped right" unrepresentable
 outside the module.
 
-### 12.3 Memory grants — GATED
+### 12.3 Memory grants — library-scope
 
-`std/grant.mc`, `kernel/lib/granttab.mc`. A `Grant { base, len, gen }` is a bounded,
-revocable region; a `GrantRef` is a copyable-but-untrusted handle whose authority comes from
-the live `Grant`. `gen` bumps on revoke → stale refs fail (use-after-revoke caught). The
-kernel `GrantTable` (`GRANTTAB_MAX = 8`) keys grants by **(owner_slot, owner_gen)** and
-supports make/ref/open/copy_out (bounds-checked), `grant_table_delegate` (child region `⊆`
-parent's), `grant_table_revoke_owner` (on death), and `grant_table_revoke_cascade` (revoke a
-grant **and its entire delegation subtree**). Gates: `grant-test`, `granttab-test`.
+`std/grant.mc` keeps the small bounded/revocable grant primitive: `Grant { base, len, gen }`,
+`GrantRef`, bounds-checked open/copy, and generation-based revoke. The owner-tracked kernel
+`GrantTable` product fixture was removed from the compiler-core workload. Gate: `grant-test`.
 
 ### 12.4 Per-process authority masks — GATED
 
@@ -431,7 +426,7 @@ with filtered receive.
 Reserved tags: `TAG_DEAD = 0xDEAD` (synthesized when an awaited endpoint dies, so a receiver
 never blocks forever) and `TAG_QUANTUM = 0xDEAD+1`. IPC is **synchronous rendezvous with
 async notify**; messages are **copied, not zero-copy** (an optimized fast path is roadmap —
-vision § fast transport). Gates: `ipc-test`, `ipc-result-test`, `endpoint-test`.
+vision § fast transport). Gates: `ipc-result-test`, `endpoint-test`.
 
 ---
 
@@ -601,8 +596,7 @@ scope. Gate names are verified against `build.zig`.
 | Claim | Source | Gate(s) | Scope |
 |-------|--------|---------|-------|
 | Endpoint generation prevents stale-slot IPC misdelivery | `process.mc`, `proc_ipc.mc` | `endpoint-test`, `llvm-endpoint-test` | riscv64 QEMU |
-| Rights/capabilities attenuate only (child = parent ∩ keep) | `capability.mc`, `std/rights.mc` | `cap-test`, `llvm-cap-test` | compile-time + QEMU |
-| Grant revoke invalidates outstanding refs; cascade revokes subtree | `kernel/lib/granttab.mc` | `grant-test`, `granttab-test` | riscv64 QEMU |
+| Rights/capabilities attenuate only (child = parent ∩ keep) | `capability.mc`, `std/rights.mc` | spec fixtures and host checks | compile-time |
 | `UserPtr<T>` cannot be dereferenced in the kernel | `uaccess.mc` + compiler diagnostic `E_USER_PTR_DEREF` | compile-time spec fixtures | compile-time |
 | `page_free` is real O(1) reclaim (not a no-op) | `page_alloc.mc` | `page-test`, `llvm-page-test` | riscv64 QEMU |
 

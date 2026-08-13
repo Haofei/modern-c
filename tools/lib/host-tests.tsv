@@ -3,8 +3,6 @@ numeric-literal-boundaries-test	tests/exec/numeric_literal_boundaries_run.mc	ent
 fdt-test	tests/qemu/arch/fdt_demo.mc	entry	fdt_run	-Wno-switch-bool	device-tree (FDT) header parsing: magic validation + totalsize/version
 endpoint-test	tests/qemu/ipc/endpoint_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	MINIX hardening: generation-checked endpoints (stale fails closed), derived runnable state (block reasons), death cleanup (waiter released with DEAD)
 grant-test	tests/qemu/ipc/grant_demo.mc	entry	grant_demo_run		memory grant: bounded delegation (OOB rejected) + revocation (stale ref caught)
-granttab-test	tests/qemu/ipc/granttab_demo.mc	entry	granttab_run	-Wno-switch-bool	granttab (kernel/lib): owner-tracked grants, bounded IPC sharing, revoke-on-death
-grantcascade-test	tests/qemu/ipc/grantcascade_demo.mc	entry	grantcascade_run	-Wno-switch-bool	grant revoke cascade (kernel/lib): delegated grant chains (bounds attenuated ⊆ parent), revoking the root invalidates the whole chain
 mailbox-test	tests/qemu/ipc/mailbox_demo.mc	entry	mailbox_run	-Wno-switch-bool	Mailbox<T,N>: post/take, source-filtered take_from, drop-when-full
 args-test	tests/qemu/lang/args_demo.mc	entry	args_run	-Wno-switch-bool	argv/envp: packed NUL-terminated argument vector with per-arg offsets
 byteview-test	tests/qemu/lang/byteview_demo.mc	entry	byteview_run	-Wno-switch-bool	ByteBuf<N>: bounds-checked get + set/copy_from/copy_to return typed OutOfBounds (no silent clamp) on a PAddr

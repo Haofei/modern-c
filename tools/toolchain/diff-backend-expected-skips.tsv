@@ -2,8 +2,6 @@
 # Format: fixture<TAB>reason
 # A listed fixture may still compare successfully on a host/toolchain that supports it.
 grant-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-granttab-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
-grantcascade-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 endpoint-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 byteview-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 elf-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions

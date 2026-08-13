@@ -5567,10 +5567,8 @@ through LLVM to assemblable IR and non-empty target objects, using a RISC-V
 target for the main kernel modules and an x86-64 target for x86 arch modules.
 The `zig build llvm-qemu-test`, `zig build llvm-trap-test`, `zig build
 llvm-thread-test`, `zig build llvm-sched-test`, `zig build llvm-syscall-test`,
-`zig build llvm-user-test`, `zig build llvm-process-test`, `zig build
-llvm-ipc-test`, `zig build llvm-ipc2-test`, `zig build llvm-cap-test`,
-`zig build llvm-privilege-test`, `zig build llvm-preempt-test`, and `zig build
-llvm-sbi-boot-test`
+`zig build llvm-user-test`, `zig build llvm-process-test`, `zig build llvm-preempt-test`, and
+`zig build llvm-sbi-boot-test`
 gates boot LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer
 traps, cooperative context switching, round-robin scheduling, syscall dispatch,
 U-mode entry, process lifecycle, ELF load/run,
