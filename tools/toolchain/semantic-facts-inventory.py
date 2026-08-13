@@ -153,9 +153,10 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
             "pub fn isPhysCall(",
             "pub fn isBindCallNode(",
             "pub fn isBindCallExpr(",
-            "pub fn reduceCallKind(",
-            "pub fn reduceCallOpName(",
             "pub fn constGetCallTarget(",
+        ],
+        "src/expr_syntax.zig": [
+            "pub fn reduceCallKind(",
         ],
         "src/lower_llvm.zig": [
             "fn exprType(",

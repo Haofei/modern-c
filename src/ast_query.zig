@@ -864,32 +864,6 @@ pub fn mmioRegisterAccessFromModeType(ty: ast.TypeExpr) ?MmioRegisterAccess {
     return null;
 }
 
-/// The `reduce.*` sum intrinsics.
-pub const ReduceCallKind = enum { sum_checked, sum_left, sum_fast };
-
-pub fn reduceCallOpName(kind: ReduceCallKind) []const u8 {
-    return switch (kind) {
-        .sum_checked => "sum_checked",
-        .sum_left => "sum_left",
-        .sum_fast => "sum_fast",
-    };
-}
-
-/// Classify a `reduce.sum_checked` / `reduce.sum_left` / `reduce.sum_fast` call (through
-/// grouping), or null.
-pub fn reduceCallKind(callee: ast.Expr) ?ReduceCallKind {
-    const member = switch (callee.kind) {
-        .member => |node| node,
-        .grouped, .move_expr => |inner| return reduceCallKind(inner.*),
-        else => return null,
-    };
-    if (!isIdentNamed(member.base.*, "reduce")) return null;
-    if (std.mem.eql(u8, member.name.text, "sum_checked")) return .sum_checked;
-    if (std.mem.eql(u8, member.name.text, "sum_left")) return .sum_left;
-    if (std.mem.eql(u8, member.name.text, "sum_fast")) return .sum_fast;
-    return null;
-}
-
 pub const ConstGetCallTarget = struct {
     base: *ast.Expr,
     index: usize,

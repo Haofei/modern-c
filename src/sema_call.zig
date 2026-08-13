@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
+const expr_syntax = @import("expr_syntax.zig");
 const sema_model = @import("sema_model.zig");
 const sema_type = @import("sema_type.zig");
 
@@ -9,7 +10,7 @@ const Context = sema_model.Context;
 const TypeClass = sema_model.TypeClass;
 
 const byteViewCallKind = ast_query.byteViewCallKind;
-const reduceCallKind = ast_query.reduceCallKind;
+const reduceCallKind = expr_syntax.reduceCallKind;
 const simpleNameType = ast_query.simpleNameType;
 
 const classifyType = sema_type.classifyType;
