@@ -37,14 +37,14 @@ fn accept_numeric_widen(x: u32) -> u64 {
 }
 
 fn accept_userptr_to_usize(p: UserPtr<u32>) -> usize {
-    // uaccess.mc relies on this exact direction; it can never be dereferenced.
+    // UserPtr can be erased to an integer token; it can never be dereferenced.
     return p as usize;
 }
 
 fn reject_usize_to_userptr(a: usize) -> UserPtr<u32> {
     // Minting a UserPtr (an address class) from a raw integer forges an unvalidated
-    // user address: gated by the address-class laundering rule. The audited uaccess
-    // boundary does this re-tag inside `unsafe`.
+    // user address: gated by the address-class laundering rule. Any embedding
+    // runtime that re-tags user addresses must do it inside `unsafe`.
     // EXPECT_ERROR: E_ADDRESS_CLASS_CAST
     return a as UserPtr<u32>;
 }

@@ -11,8 +11,8 @@
 // pierced that privacy — `b as <inner>` extracted the hidden `.raw`/`.bits`/etc. with no
 // `E_PRIVATE_FIELD`, no accessor, and no `unsafe`. The earlier cast-strip gate keyed on
 // the ENUMERATED built-in classes (Secret/UserPtr) and the bitcast pointee, so it missed
-// value-`as` on a general opaque struct — including the real `kernel/core/uaccess`
-// `Tainted<T>`, where `t as u8` yields the unchecked raw length and defeats U3.
+// value-`as` on a general opaque struct — including opaque scalar carriers where
+// `t as u8` would yield hidden raw state outside the approved accessor.
 //
 // This fixture generalizes the gate to the `opaque` PROPERTY itself: a value-`as` whose
 // source is any opaque struct is a gated declassification (E_OPAQUE_DECLASSIFY), uniformly
@@ -28,8 +28,8 @@ opaque struct Box {
     raw: u8,
 }
 
-// A generic opaque struct mirroring uaccess `Tainted<T>` — the carrier whose raw scalar
-// must only be read through a checked accessor.
+// A generic opaque struct modeling a carrier whose raw scalar must only be read
+// through an approved accessor.
 opaque struct Tainted<T> {
     raw: T,
 }
@@ -46,8 +46,8 @@ fn reject_box_strip(b: Box) -> u8 {
 }
 
 fn reject_generic_opaque_strip(t: Tainted<u32>) -> u32 {
-    // The exact uaccess shape: `t as <inner>` would yield the unchecked raw value,
-    // bypassing checked_len / checked_index (U3).
+    // `t as <inner>` would yield hidden raw state, bypassing the carrier's
+    // approved accessor.
     return t as u32; // EXPECT_ERROR: E_OPAQUE_DECLASSIFY
 }
 

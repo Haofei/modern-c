@@ -70,7 +70,7 @@ fn addr_offset_mod8(base: usize, off: usize) -> usize {
 // dst after src — like C memcpy.)
 //
 // Bulk copy runs 8 bytes (one u64 word) at a time — ~6-8x faster than the old
-// byte-at-a-time loop on large copies (ELF load, DMA, CoW, uaccess, and every
+// byte-at-a-time loop on large copies (DMA, generated aggregate copies, and every
 // generated aggregate copy funnel through here). A byte HEAD aligns `dst` to 8, a
 // word BODY copies the aligned middle, and a byte TAIL finishes the <8 remainder.
 // SAFETY: the word path is only taken when src and dst share the same alignment

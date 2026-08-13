@@ -4,12 +4,13 @@
 // SPEC: expect=pass,compile_error
 // SPEC: check=E_PRIVATE_FIELD,E_USE_AFTER_MOVE,E_RESOURCE_LEAK
 
-// Capability LINEARITY + Tainted OPACITY as type laws (hardening K1 / U3).
+// Capability LINEARITY + opaque-carrier OPACITY as type laws.
 //
-// This mirrors kernel/core/capability's `Cap`/`RCap` and kernel/core/uaccess's `Tainted`
-// inline (spec fixtures are parsed standalone, without imports), using concrete `usize`/`u8`
-// instantiations so no generic `extern fn` is needed. Two guarantees that were previously NOT
-// enforced by the type system are proven structural here:
+// This mirrors kernel/core/capability's `Cap`/`RCap` plus a representative
+// opaque scalar carrier inline (spec fixtures are parsed standalone, without
+// imports), using concrete `usize`/`u8` instantiations so no generic `extern fn`
+// is needed. Two guarantees that were previously NOT enforced by the type
+// system are proven structural here:
 //
 //   1. A capability is `linear opaque struct`: opaque alone is field-privacy only, orthogonal
 //      to `linear`, so without `linear` a `Cap` is freely COPYABLE — `cap_revoke` could "consume"
@@ -143,8 +144,8 @@ fn reject_rcap_use_after_revoke() -> void {
     rcap_revoke(RCap.mint(0, r));
 }
 
-// READING Tainted.raw outside impl Tainted bypasses the validators (the U3 hole that was
-// convention-only before opacity).
+// READING Tainted.raw outside impl Tainted bypasses the carrier's accessor
+// discipline; opacity makes that structural instead of convention-only.
 fn reject_read_tainted_raw(t: Tainted) -> u8 {
     // EXPECT_ERROR: E_PRIVATE_FIELD
     return t.raw;

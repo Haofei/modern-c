@@ -231,7 +231,7 @@ def main() -> None:
     assert_route(
         module,
         ["tools/toolchain/mc-audit.sh"],
-        ["unsafe-audit", "double-fetch-audit", "taint-audit", "capability-mint-audit"],
+        ["unsafe-audit", "capability-mint-audit"],
         ["bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '"],
     )
     assert_route(module, ["docs/unsafe-boundary.md"], ["unsafe-audit"], ["git diff --check"])

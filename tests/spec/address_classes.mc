@@ -126,6 +126,7 @@ fn reject_user_ptr_field(hdr: UserPtr<UserHeader>) -> u8 {
 
 fn reject_user_ptr_index(buf: UserPtr<u8>) -> u8 {
     // EXPECT_ERROR: E_INDEX_BASE_NOT_ARRAY_OR_SLICE
-    // Indexing a UserPtr would reach through it: only copy_from_user may read it.
+    // Indexing a UserPtr would reach through it: only an explicit checked
+    // user-memory boundary may read it.
     return buf[0];
 }

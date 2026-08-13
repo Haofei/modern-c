@@ -79,7 +79,7 @@ slices, `null`, or integers to `cstr` are rejected.
 classes — they do not implicitly convert to or from raw integers or each other. Forging
 one from an integer is `E_ADDRESS_CLASS_CAST`; construct through the typed constructor
 (`pa`/`va`/`dma`/`mmio.map`) or, at a deliberate boundary, in an `unsafe` block (e.g.
-`unsafe { p = a as UserPtr<u8>; }`, the kernel/core/uaccess.mc idiom). They lower to a
+`unsafe { p = a as UserPtr<u8>; }`, an embedding-runtime boundary). They lower to a
 pointer-width integer in the ABI.
 
 ## Stable object symbols (§28.1)

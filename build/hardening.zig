@@ -1,7 +1,7 @@
 const std = @import("std");
 const h = @import("helpers.zig");
 
-// Opt-in static audits (unsafe boundary / double-fetch / taint / capability mint / coverage),
+// Opt-in static audits (unsafe boundary / capability mint / coverage),
 // the ASan/UBSan sanitize pass, and the checks=all/checks=elide-proven parity gate.
 pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "sanitize", "Run the host-driver corpus under ASan + UBSan over the emitted C", &.{ "bash", "tools/toolchain/sanitize-test.sh", "zig-out/bin/mcc" });
@@ -16,18 +16,12 @@ pub fn register(ctx: *h.Ctx) void {
     // uncovered function count against a checked-in ratchet.
     _ = h.addScriptTestOpts(ctx, "compiler-coverage", "Report and ratchet parser/sema/monomorphize/async compiler frontend function coverage", &.{ "bash", "tools/toolchain/compiler-coverage.sh", "--check" }, .{ .install = false });
 
-    // The source-level security audits (unsafe boundary / double-fetch / taint / capability mint) are
+    // The source-level security audits (unsafe boundary / capability mint) are
     // now one parameterized tool, tools/toolchain/mc-audit.sh, invoked with `--mode`. Pure
     // source scans (no mcc dependency), so they do not depend on the install step.
 
     // S0.2: source-level audit of the unsafe boundary.
     _ = h.addScriptTestOpts(ctx, "unsafe-audit", "Audit the MC unsafe boundary: flag gated unsafe ops outside an unsafe/unsafe_contract region and inventory the audited sites in kernel/ + std/ (S0.2)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "unsafe" }, .{ .install = false });
-
-    // U2: source-level audit of double-fetch / TOCTOU on user memory.
-    _ = h.addScriptTestOpts(ctx, "double-fetch-audit", "Audit user-memory double-fetch / TOCTOU: flag a function that copies the same UserPtr in more than once (U2)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "double-fetch" }, .{ .install = false });
-
-    // U3: source-level audit of untrusted (user-derived) lengths/indices.
-    _ = h.addScriptTestOpts(ctx, "taint-audit", "Audit user-derived (tainted) values: flag a value from copy_from_user/fetch_user used as a length/index/loop-bound without passing checked_len/checked_index/validate_bound (U3)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "taint" }, .{ .install = false });
 
     // K1: source-level audit of capability mint authority.
     _ = h.addScriptTestOpts(ctx, "capability-mint-audit", "Audit capability authority roots: flag direct cap_mint/rcap_mint calls outside kernel/core/capability.mc (K1)", &.{ "bash", "tools/toolchain/mc-audit.sh", "--mode", "capability-mint" }, .{ .install = false });

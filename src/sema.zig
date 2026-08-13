@@ -4359,11 +4359,11 @@ pub const Checker = struct {
                 if (ctx.safe_module and !ctx.in_unsafe and base_class == .pointer and !exprIsExplicitBorrowPointer(node.base.*, ctx)) {
                     self.errorCode(expr.span, "E_SAFE_MODULE_POINTER_DEREF", "`#[safe_module]` requires ordinary pointer field access to be inside an `unsafe` block unless the pointer is derived from an explicit scoped `borrow`");
                 }
-                // A direct `.field` on a UserPtr<T> is a kernel dereference of user memory:
-                // reading T's field reaches through the user pointer. Forbid it exactly like
-                // `p.*` — the only path to a user value is a checked copy_from_user/copy_to_user.
+                // A direct `.field` on a UserPtr<T> reaches through the user pointer.
+                // Forbid it exactly like `p.*`; any user-memory load must go through
+                // an explicit checked boundary supplied by the embedding runtime.
                 if (base_class == .user_ptr) {
-                    self.errorCode(expr.span, "E_USER_PTR_DEREF", "cannot directly access a field through UserPtr; copy it in with copy_from_user first");
+                    self.errorCode(expr.span, "E_USER_PTR_DEREF", "cannot directly access a field through UserPtr; use an explicit checked user-memory boundary first");
                 }
                 if (base_class != .c_void_pointer and
                     base_class != .user_ptr and
@@ -5233,7 +5233,7 @@ pub const Checker = struct {
         // Pointer-reinterpret may not cross INTO or OUT OF an opaque/secret/userptr
         // pointee. A value `bitcast` already rejects cross-class scalars with
         // E_BITCAST_TYPE; the pointer case is the same hole one indirection deeper —
-        // `bitcast<*Shadow>(pt)` where `pt: *Tainted` would read the opaque struct's
+        // `bitcast<*Shadow>(pt)` where `pt: *OpaqueCarrier` would read the opaque struct's
         // private scalar (or the lock-protected Guarded data) through a same-shape
         // plain mirror, with no validator/guard and no `unsafe`. The guard is the
         // POINTEE's privacy class crossing, so ordinary `*A -> *B` kernel-pointer
@@ -7079,7 +7079,7 @@ pub const Checker = struct {
     // would launder a Secret/UserPtr value out of its discipline with no `unsafe`
     // gate, the same hole `reveal`/`declassify` plug for secrets. We gate only the
     // class-stripping direction; numeric/enum/pointer-to-pointer casts and the
-    // legitimate `UserPtr <-> usize` round-trip (uaccess.mc) stay accepted.
+    // legitimate `UserPtr <-> usize` round-trip stays accepted.
     fn checkCastSafetyStrip(self: *Checker, span: diagnostics.Span, value: ast.Expr, source: TypeClass, target_ty: ast.TypeExpr, target: TypeClass, ctx: Context) void {
         // `Secret<T> as <non-secret>` declassifies a constant-time value; it is the
         // `reveal` operation in cast clothing and is forbidden outside `unsafe`.
@@ -7088,8 +7088,8 @@ pub const Checker = struct {
         }
         // `UserPtr<T> as <derefable pointer>` turns an unvalidated user-controlled
         // address into a kernel pointer the deref operator will trust. Only the
-        // `UserPtr <-> usize` round-trip (which uaccess.mc relies on, and which can
-        // never be dereferenced as-is) is allowed.
+        // `UserPtr <-> usize` round-trip (which can never be dereferenced as-is)
+        // is allowed.
         if (source == .user_ptr and isDerefablePointerClass(target)) {
             self.errorCode(span, "E_USERPTR_CAST_DEREF", "casting a UserPtr<T> to a derefable kernel pointer bypasses uaccess validation; only UserPtr<->usize is permitted");
         }
@@ -7105,8 +7105,7 @@ pub const Checker = struct {
         // accessor — `b as <inner>` extracts the hidden `.raw`/`.bits`/etc. directly.
         // This generalizes the Secret/UserPtr-specific gates above to the `opaque`
         // property itself, so it uniformly covers `Tainted`, `Cap`, `Rights`,
-        // `Guarded`, and any user-defined opaque struct (e.g. closing the `Tainted`
-        // checked-length bypass behind U3). Allowed escapes: an `unsafe` block (the
+        // `Guarded`, and any user-defined opaque struct. Allowed escapes: an `unsafe` block (the
         // controlled declassification) and an identity cast to the SAME opaque type
         // (a no-op). Pointer-class sources are left to the bitcast pointee gate.
         self.checkOpaqueCastDeclassify(span, value, target_ty, ctx);
@@ -7122,7 +7121,7 @@ pub const Checker = struct {
         //  - crossing between two DIFFERENT address classes, or
         //  - MINTING an address class from a non-address source (integer/plain ptr).
         // The audited boundary (the typed constructors/extractors in std/addr.mc,
-        // std/dma.mc, std/virtqueue.mc, uaccess.mc, and the `unsafe` MMIO path)
+        // std/dma.mc, std/virtqueue.mc, and the `unsafe` MMIO path)
         // wraps these in `unsafe`, the controlled escape. The EXTRACT direction
         // (address class `as usize`) is NOT gated here: it cannot deref or forge and
         // is the `pa_value`/`va_value` raw-access edge.
@@ -9474,7 +9473,7 @@ fn addressDerefMessage(kind: TypeClass) []const u8 {
         .paddr => "cannot dereference PAddr; map it into the current virtual address space first",
         .vaddr => "cannot dereference VAddr; convert it to a typed virtual pointer first",
         .dma_addr => "cannot dereference DmaAddr; convert through the appropriate DMA mapping API first",
-        .user_ptr => "cannot directly dereference UserPtr; use user.load or user.copy_from",
+        .user_ptr => "cannot directly dereference UserPtr; use an explicit checked user-memory boundary",
         .mmio_ptr => "cannot directly dereference MmioPtr; use typed MMIO register accessors",
         .phys_ptr => "cannot directly dereference PhysPtr; map it into the current virtual address space first",
         else => "cannot directly dereference opaque address class",

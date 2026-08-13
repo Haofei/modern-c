@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # tools/toolchain/mc-audit.sh — unified MC source-level security auditor.
 #
-# One parameterized lint that replaces three ~90%-identical awk scripts:
+# One parameterized lint for retained source-level security checks:
 #   --mode unsafe        (S0.2) enforce + inventory the MC `unsafe` boundary
-#   --mode double-fetch  (U2)   flag double-fetch / TOCTOU on user memory
-#   --mode taint         (U3)   flag user-derived lengths/indices used without a bound check
 #   --mode capability-mint (K1) flag direct capability/right mint or root authority
 #        creation outside the approved authority roots
 #
@@ -13,27 +11,24 @@
 # `__COUNT__=N`->stderr plumbing). Consolidating them means a single fix — e.g. the
 # cross-line logical-line joining below — applies to all three at once.
 #
-# These are *lints*, not the compiler. The authoritative gates are sema (E_UNSAFE_REQUIRED,
-# the `UserSnapshot`/`Tainted<T>` types in kernel/core/uaccess.mc); this is the greppable,
-# human-auditable backstop. See docs/unsafe-boundary.md, docs/uaccess.md.
+# These are *lints*, not the compiler. The authoritative gates are sema
+# (E_UNSAFE_REQUIRED) and capability/rights type boundaries; this is the
+# greppable, human-auditable backstop. See docs/unsafe-boundary.md.
 #
 # Shared correctness properties (the bugs this consolidation fixed):
 #   * CROSS-LINE OPS: physical lines are first joined into LOGICAL lines (continuing while
 #     round/square brackets are unbalanced, or when the next line is a `.method` chain), so a
-#     `raw\n  .load<u8>(p)` or a multi-line `copy_from_user(us,\n  dst, src, n)` call is matched,
+#     `raw\n  .load<u8>(p)` is matched,
 #     not silently skipped (a false negative in the violation check AND the inventory).
 #   * `<>` DEPTH: the argument splitter counts `<`/`>` for generic depth but ignores the
 #     digraphs `->`, `=>`, `<=`, `>=`, `<<`, `>>` (which are not bracket nesting), so top-level
 #     comma splitting is not corrupted by an arrow/shift/compare.
 #
-# Exit non-zero only on a real finding (a gated unsafe op outside a region / a likely
-# double-fetch / an unvalidated tainted use / an unapproved capability mint). A clean run prints
-# the inventory and exits 0.
+# Exit non-zero only on a real finding (a gated unsafe op outside a region or an
+# unapproved capability mint). A clean run prints the inventory and exits 0.
 #
 # Usage:
 #   mc-audit.sh --mode unsafe        [DIR ...]   (default dirs: kernel std)
-#   mc-audit.sh --mode double-fetch  [DIR ...]   (default dir:  kernel)
-#   mc-audit.sh --mode taint         [DIR ...]   (default dir:  kernel)
 #   mc-audit.sh --mode capability-mint [DIR ...] (default dirs: kernel std)
 #   mc-audit.sh --mode MODE --self-test          (run the built-in negative fixture)
 
@@ -55,13 +50,13 @@ while [ $# -gt 0 ]; do
 done
 
 case "$MODE" in
-  unsafe|double-fetch|taint|capability-mint) : ;;
-  *) echo "mc-audit: --mode must be one of: unsafe | double-fetch | taint | capability-mint" >&2; exit 2 ;;
+  unsafe|capability-mint) : ;;
+  *) echo "mc-audit: --mode must be one of: unsafe | capability-mint" >&2; exit 2 ;;
 esac
 
 # Default scan roots per mode.
 if [ ${#DIRS[@]} -eq 0 ]; then
-  if [ "$MODE" = unsafe ] || [ "$MODE" = capability-mint ]; then DIRS=(kernel std); else DIRS=(kernel); fi
+  DIRS=(kernel std)
 fi
 
 SELF_TMP=""
@@ -82,86 +77,6 @@ import "std/addr.mc";
 export fn bad_unsafe_outside(p: PAddr) -> u8 {
     return raw
         .load<u8>(p);
-}
-MC
-      ;;
-    double-fetch)
-      # NEGATIVE TEST (must be flagged): a textbook double-fetch. `lenp` is copied in once to
-      # validate, then copied in AGAIN to use — TOCTOU. The SECOND call is spelled across
-      # multiple lines to prove the cross-line join surfaces it (the old per-line matcher bailed).
-      cat > "$SELF_TMP/kernel/core/double_fetch_bad.mc" <<'MC'
-import "kernel/core/uaccess.mc";
-import "std/addr.mc";
-
-// NEGATIVE TEST (must be flagged): a textbook double-fetch. `lenp` is copied in once to validate,
-// then copied in AGAIN to actually use it — the second read can observe attacker-mutated bytes
-// the first read validated.
-export fn bad_double_fetch(us: *UserSpace, lenp: UserPtr<u8>, kbuf: PAddr) -> bool {
-    var n1: PAddr = kbuf;
-    switch copy_from_user(us, n1, lenp, 4) {   // FETCH #1: validate
-        ok(v) => {}
-        err(e) => { return false; }
-    }
-    var n2: PAddr = kbuf;
-    switch copy_from_user(
-        us,
-        n2,
-        lenp,
-        4
-    ) {                                         // FETCH #2 of the SAME lenp (multi-line): TOCTOU
-        ok(v) => {}
-        err(e) => { return false; }
-    }
-    return true;
-}
-MC
-      ;;
-    taint)
-      # NEGATIVE TEST (must be flagged): TWO unvalidated tainted-length uses.
-      #  (1) raw `.value` fed straight to a copy length.
-      #  (2) a value PASSED to `checked_len` but then the ORIGINAL raw name is used as the length
-      #      — the validator returns a NEW value via `ok(v)`; the input stays attacker-controlled.
-      #      The old lint cleansed the input name and reported this clean (a false negative).
-      cat > "$SELF_TMP/kernel/core/taint_bad.mc" <<'MC'
-import "kernel/core/uaccess.mc";
-import "std/addr.mc";
-
-// NEGATIVE TEST (must be flagged): a textbook unvalidated tainted length. `n` is the raw
-// user-supplied length read out of a snapshot; it is fed directly to a copy as the length WITHOUT
-// passing checked_len/validate_bound — the heartbleed over-read.
-export fn bad_unvalidated_len(us: *UserSpace, lenp: UserPtr<u8>, dst: PAddr, src: UserPtr<u8>) -> bool {
-    var n: u8 = 0;
-    switch fetch_user(us, lenp) {
-        ok(snap) => { n = snap.value; }   // tainted: raw user length
-        err(e) => { return false; }
-    }
-    switch copy_from_user(us, dst, src, n) {   // BUG: `n` drives the copy length, no bound check
-        ok(v) => {}
-        err(e) => { return false; }
-    }
-    return true;
-}
-
-// NEGATIVE TEST (must be flagged): the validate-then-use-the-WRONG-value bug. `m` IS passed to
-// checked_len, but the validated value comes back as `cv` via `ok(cv)`; the code then uses the
-// raw `m` (still attacker-controlled) as the copy length. Cleansing the input name `m` would be
-// the false negative this lint fix closes.
-export fn bad_validate_wrong_value(us: *UserSpace, lenp: UserPtr<u8>, dst: PAddr, src: UserPtr<u8>, lim: u8) -> bool {
-    var m: u8 = 0;
-    switch fetch_user(us, lenp) {
-        ok(snap) => { m = snap.value; }
-        err(e) => { return false; }
-    }
-    var cv: u8 = 0;
-    switch checked_len(u8, tainted(m), lim) {
-        ok(v) => { cv = v; }              // `cv` is the trusted value
-        err(e) => { return false; }
-    }
-    switch copy_from_user(us, dst, src, m) {   // BUG: uses raw `m`, NOT the validated `cv`
-        ok(v) => {}
-        err(e) => { return false; }
-    }
-    return true;
 }
 MC
       ;;
@@ -293,8 +208,8 @@ function mentions(l, name,   re) {
 
 # ===================== logical-line buffering (cross-line fix) =====================
 # Physical lines are joined into LOGICAL lines before any matching, so a construct split across
-# lines (a `raw\n .load<u8>(p)` method chain, or a multi-line `copy_from_user(us,\n dst, src, n)`
-# arg list) is matched, not silently skipped — the false negative the per-physical-line lints had.
+# lines (a `raw\n .load<u8>(p)` method chain) is matched, not silently
+# skipped — the false negative the per-physical-line lints had.
 #
 # A physical line CONTINUES the current logical line when ANY of:
 #   * round/square brackets are still open in the buffer  (`bufdepth > 0`), or
@@ -308,8 +223,6 @@ function mentions(l, name,   re) {
 
 function process(logical, startfnr) {
   if (MODE=="unsafe")            do_unsafe(logical, startfnr)
-  else if (MODE=="double-fetch") do_doublefetch(logical, startfnr)
-  else if (MODE=="taint")        do_taint(logical, startfnr)
   else if (MODE=="capability-mint") do_capability_mint(logical, startfnr)
 }
 
@@ -331,7 +244,6 @@ FNR==1 {
   depth=0; unsafe_open=0; unsafe_min=0
   infn=0; fnname=""; fnopen=0
   delete seen; delete seenline
-  delete tainted; delete tline; snapvar=""; sawfetch=0; sawvalidator=0
 }
 
 {
@@ -347,8 +259,6 @@ FNR==1 {
 END {
   if (buf != "") { process(buf, bufstart); buf="" }
   if (MODE=="unsafe")            end_unsafe()
-  else if (MODE=="double-fetch") end_doublefetch()
-  else if (MODE=="taint")        end_taint()
   else if (MODE=="capability-mint") end_capability_mint()
 }
 
@@ -425,166 +335,6 @@ function end_unsafe(   tot) {
   print "__COUNT__=" violations > "/dev/stderr"
 }
 
-# ===================== MODE: double-fetch (U2) =====================
-
-# The user pointer is the 3rd arg of copy_from_user{,_pt}, and the 2nd
-# arg of the representation-safe byte-only fetch_user{,_pt}.
-function user_src(l,   a) {
-  a = call_args(l, "(fetch_user_pt|fetch_user)[ \t]*\\(")
-  if (a != "<<NONE>>") return nth_arg(a, 2)
-  a = call_args(l, "(copy_from_user_pt|copy_from_user)[ \t]*\\(")
-  if (a == "<<NONE>>") return ""
-  return nth_arg(a, 3)
-}
-
-function do_doublefetch(l, startfnr,   src) {
-  if (!infn && depth==0 && match(l, /(^|[^_[:alnum:]])fn[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
-    nm = substr(l, RSTART, RLENGTH); sub(/^.*fn[ \t]+/, "", nm)
-    fnname = nm; infn=1; fnopen=depth
-    delete seen; delete seenline
-  }
-
-  src = user_src(l)
-  if (src != "" && infn) {
-    ncalls++
-    if (src in seen) {
-      findings++
-      printf("DOUBLE-FETCH  %s:%d  fn `%s` re-reads the same UserPtr `%s` (first at line %d) — copy it in once via fetch_user/UserSnapshot\n",
-             FILENAME, startfnr, fnname, src, seenline[src]) > "/dev/stderr"
-    } else { seen[src]=1; seenline[src]=startfnr }
-  } else if (src != "") {
-    ncalls++
-  }
-
-  brace_update(l)
-  if (infn && depth <= fnopen) { infn=0; fnname=""; delete seen; delete seenline }
-}
-
-function end_doublefetch() {
-  print  "============== MC double-fetch / TOCTOU audit (U2) =============="
-  printf("scanned %d .mc file(s); %d user-read call site(s) (copy_from_user{,_pt} / fetch_user{,_pt})\n\n", nfiles, ncalls)
-  if (findings==0)
-    print "RESULT: clean — no function copies the same UserPtr in more than once."
-  else
-    printf("RESULT: %d likely double-fetch(es) found (see DOUBLE-FETCH lines on stderr).\n", findings)
-  print  "================================================================"
-  print "__COUNT__=" findings > "/dev/stderr"
-}
-
-# ===================== MODE: taint (U3) =====================
-
-function do_taint(l, startfnr,   a, s, lhs, seg, base, ch, rhs, nmx, ca, lenarg, sub_re_idx, cmp_l, cmp_r) {
-  if (!infn && depth==0 && match(l, /(^|[^_[:alnum:]])fn[ \t]+[A-Za-z_][A-Za-z0-9_]*/)) {
-    nm = substr(l, RSTART, RLENGTH); sub(/^.*fn[ \t]+/, "", nm)
-    fnname = nm; infn=1; fnopen=depth
-    delete tainted; delete tline; snapvar=""; sawfetch=0; sawvalidator=0
-  }
-
-  if (infn) {
-    # ---- VALIDATOR: a tainted name passed to checked_len/checked_index/validate_bound does NOT
-    #      cleanse the INPUT name — the validator returns a NEW trusted value via its `ok(v)` arm.
-    #      We record that a validator was seen on this line; the NEXT `ok(NAME) =>` arm names the
-    #      trusted binding, which is simply never tainted (so nothing to do). The original tainted
-    #      input STAYS tainted — using it raw afterward is still a finding. (This is the FN fix:
-    #      the old lint deleted the input name`s taint here.)
-    a = call_args(l, "(checked_len|checked_index|validate_bound)[ \t]*\\(")
-    if (a != "<<NONE>>") sawvalidator=1
-
-    # ---- snapshot binding name from an `ok(SNAP)` arm. After a fetch it names the snapshot var;
-    #      after a validator it names the TRUSTED (untainted) value — ensure it is not tainted.
-    if (match(l, /ok[ \t]*\([ \t]*[A-Za-z_][A-Za-z0-9_]*[ \t]*\)[ \t]*=>/)) {
-      s = l; sub(/^.*ok[ \t]*\([ \t]*/, "", s); sub(/[ \t]*\).*$/, "", s)
-      if (sawfetch) { snapvar = s; sawfetch = 0 }
-      else if (sawvalidator) { delete tainted[s]; delete tline[s]; sawvalidator=0 }
-    }
-
-    # ---- TAINT SOURCES ----
-    if (match(l, /(^|[ \t])(var|let)[ \t]+[A-Za-z_][A-Za-z0-9_]*/) && \
-        l ~ /(copy_from_user|copy_from_user_pt|fetch_user|fetch_user_pt)[ \t]*\(/ && l ~ /=/) {
-      lhs = l; sub(/^.*(var|let)[ \t]+/, "", lhs); sub(/[ \t:=].*$/, "", lhs)
-      if (lhs != "") { tainted[lhs]=1; tline[lhs]=startfnr }
-    }
-
-    # `X = <SNAP>.value` taints X.
-    if (match(l, /[A-Za-z_][A-Za-z0-9_]*[ \t]*=[ \t]*[A-Za-z_][A-Za-z0-9_]*\.value([^A-Za-z0-9_]|$)/)) {
-      seg = substr(l, RSTART, RLENGTH)
-      lhs = seg; sub(/[ \t]*=.*$/, "", lhs); gsub(/[ \t]/, "", lhs)
-      base = seg; sub(/^.*=[ \t]*/, "", base); sub(/\.value.*$/, "", base); gsub(/[ \t]/, "", base)
-      ch = substr(l, RSTART-1, 1)
-      if (base != "" && (base == snapvar || base ~ /snap/) && ch !~ /[<>=!]/) {
-        if (lhs ~ /^[A-Za-z_][A-Za-z0-9_]*$/) { tainted[lhs]=1; tline[lhs]=startfnr }
-      }
-    }
-
-    # taint PROPAGATION: `let/var X = <expr mentioning a tainted name>` taints X.
-    if (l ~ /(^|[ \t])(var|let)[ \t]+[A-Za-z_][A-Za-z0-9_]*/ && l ~ /=/) {
-      rhs = l; sub(/^.*=[ \t]*/, "", rhs)
-      lhs = l; sub(/=.*$/, "", lhs); sub(/^.*(var|let)[ \t]+/, "", lhs)
-      gsub(/[ \t]/, "", lhs); sub(/:.*$/, "", lhs)
-      for (nmx in tainted) {
-        if (nmx != lhs && mentions(rhs, nmx)) { tainted[lhs]=1; tline[lhs]=startfnr }
-      }
-    }
-
-    # ---- SINKS ----
-    # (1) length arg (4th) of a copy_*_user call
-    ca = call_args(l, "(copy_from_user_pt|copy_from_user|copy_to_user_pt|copy_to_user)[ \t]*\\(")
-    if (ca != "<<NONE>>") {
-      lenarg = nth_arg(ca, 4)
-      for (nmx in tainted) {
-        if (mentions(lenarg, nmx)) {
-          findings++
-          printf("TAINT  %s:%d  fn `%s` uses user-derived `%s` (tainted at line %d) as a copy LENGTH without checked_len/validate_bound\n",
-                 FILENAME, startfnr, fnname, nmx, tline[nmx]) > "/dev/stderr"
-          delete tainted[nmx]; delete tline[nmx]
-        }
-      }
-    }
-
-    # (2) subscript: ...[ NAME ]
-    for (nmx in tainted) {
-      sub_re_idx = "\\[[ \t]*" nmx "([ \t]*\\]|[^A-Za-z0-9_])"
-      if (l ~ sub_re_idx) {
-        findings++
-        printf("TAINT  %s:%d  fn `%s` uses user-derived `%s` (tainted at line %d) as an array INDEX without checked_index/validate_bound\n",
-               FILENAME, startfnr, fnname, nmx, tline[nmx]) > "/dev/stderr"
-        delete tainted[nmx]; delete tline[nmx]
-      }
-    }
-
-    # (3) loop bound: `while ... NAME (< <= > >=) ...`
-    if (l ~ /(^|[^A-Za-z0-9_])while([^A-Za-z0-9_]|$)/) {
-      for (nmx in tainted) {
-        cmp_l = "(^|[^A-Za-z0-9_])" nmx "[ \t]*(<|<=|>|>=)"
-        cmp_r = "(<|<=|>|>=)[ \t]*" nmx "([^A-Za-z0-9_]|$)"
-        if (l ~ cmp_l || l ~ cmp_r) {
-          findings++
-          printf("TAINT  %s:%d  fn `%s` uses user-derived `%s` (tainted at line %d) as a LOOP BOUND without checked_len/validate_bound\n",
-                 FILENAME, startfnr, fnname, nmx, tline[nmx]) > "/dev/stderr"
-          delete tainted[nmx]; delete tline[nmx]
-        }
-      }
-    }
-
-    if (l ~ /(fetch_user|fetch_user_pt)[ \t]*\(/) { sawfetch=1; nfetch++ }
-    else if (l ~ /(copy_from_user|copy_from_user_pt)[ \t]*\(/) { nfetch++ }
-  }
-
-  brace_update(l)
-  if (infn && depth <= fnopen) { infn=0; fnname=""; delete tainted; delete tline; snapvar=""; sawfetch=0; sawvalidator=0 }
-}
-
-function end_taint() {
-  print  "============== MC tainted length/index audit (U3) =============="
-  printf("scanned %d .mc file(s); %d user-read site(s) (copy_from_user{,_pt} / fetch_user{,_pt})\n\n", nfiles, nfetch)
-  if (findings==0)
-    print "RESULT: clean — no user-derived value reaches a length/index/loop-bound without a validator."
-  else
-    printf("RESULT: %d unvalidated tainted use(s) found (see TAINT lines on stderr).\n", findings)
-  print  "================================================================"
-  print "__COUNT__=" findings > "/dev/stderr"
-}
-
 # ===================== MODE: capability-mint (K1) =====================
 
 function approved_capability_mint_file(file) {
@@ -625,7 +375,7 @@ function end_capability_mint() {
 ' $FILES 2> "$TMP"
 
 # Surface the per-mode finding lines (awk wrote them to stderr/$TMP).
-grep -E '^(VIOLATION|DOUBLE-FETCH|TAINT|CAP-MINT)' "$TMP" >&2 || true
+grep -E '^(VIOLATION|CAP-MINT)' "$TMP" >&2 || true
 count=$(grep -o '__COUNT__=[0-9]*' "$TMP" | head -1 | cut -d= -f2)
 count=${count:-0}
 
