@@ -3188,35 +3188,29 @@ type-generic register), these helpers operate on the register *value* and on raw
 `PAddr` windows rather than being generic over an arbitrary device struct. Covered
 by `mmio-test` (C and LLVM host-suite).
 
-## 28.7 Composition — the NIC Driver Shape
+## 28.7 Composition — a Validation Driver Shape
 
-The transmit path composes the modules: take the lock, push a DMA-backed
-descriptor onto the TX ring, order the writes, ring the doorbell.
+The validation shape composes the modules: take the lock, record a DMA-backed
+descriptor in bounded state, order the writes, and notify a device register.
 
 ```mc
-fn transmit(dev: *Nic, frame: CpuBuffer) -> void {
+fn submit(dev: *Device, frame: CpuBuffer) -> void {
     let owned = dma.clean_for_device(frame);        // §18.2: frame consumed, owned is DeviceBuffer
     let g = sync.lock_irqsave(&dev.lock);           // §28.1: linear IrqGuard
-    let pushed = ring_push(Desc, TX_CAP, &dev.tx, make_desc(dma.device_addr(&owned))); // §28.2 + §18
+    let pushed = ring_push(Desc, CAP, &dev.pending, make_desc(dma.device_addr(&owned))); // §28.2 + §18
     if !pushed { unreachable; }
-    barrier.wmb();                                  // §28.5: descriptor before doorbell
-    dev.doorbell.write(TX_KICK, .release);          // §17 typed MMIO
-    enqueue_owned(dev, owned);                       // owned moved into the ring's pending list
+    barrier.wmb();                                  // §28.5: descriptor before notification
+    dev.notify.write(1, .release);                  // §17 typed MMIO
+    remember_owned(dev, owned);                     // owned moved into retained state
     sync.unlock_irqrestore(g);                      // §28.1: consumes the guard
 }
 ```
 
-Every hazard a C NIC driver hits by convention is here a typed contract: a buffer
-read after handoff is a **compile error** (the `move` handle is consumed, section
-18.2), a lock left held is a **compile error** (the guard is linear, section 28.1),
-and a descriptor write reordered past the doorbell is prevented by an explicit
-barrier (section 28.5) — none becomes a silent runtime corruption. Byte order is
-made **explicit at every call site** by the `std/endian` conversions (section
-28.3): there is no implicit host↔wire reinterpret, so an unconverted write is
-visible in the source rather than hidden. (Today `std/endian` operates on plain
-integers, so a *missing* conversion is not itself a type error; a typed
-endian-field representation that makes the mismatch a compile error is a planned
-extension — see section 28.3.)
+The point is not to specify a device stack. The example keeps the compiler-facing
+contracts visible: a buffer read after handoff is a **compile error** (the `move`
+handle is consumed, section 18.2), a lock left held is a **compile error** (the
+guard is linear, section 28.1), and a descriptor write reordered past the device
+notification is prevented by an explicit barrier (section 28.5).
 
 ---
 

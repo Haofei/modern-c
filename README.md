@@ -273,9 +273,8 @@ interrupts, and backend lowering. They are not an OS product roadmap.
 
 Use `zig build riscv-qemu-validation` only when a change needs the retained
 RISC-V OpenSBI/QEMU surrogate. See
-[`docs/qemu-validation-checklist.md`](docs/qemu-validation-checklist.md) and
-[`docs/spec/MC_Kernel_Design.md`](docs/spec/MC_Kernel_Design.md) for the narrow
-validation boundary.
+[`docs/qemu-validation-checklist.md`](docs/qemu-validation-checklist.md) for the
+local gate checklist.
 
 ## Developer Tooling
 

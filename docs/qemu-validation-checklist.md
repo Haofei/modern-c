@@ -8,7 +8,7 @@ Use this for the retained RISC-V OpenSBI/QEMU language-validation surrogate.
 - Run `zig build riscv-qemu-validation` for the focused RISC-V OpenSBI/QEMU
   surrogate. On macOS, set `LLD` when Homebrew installs it outside `PATH`, for
   example `LLD=/opt/homebrew/opt/lld/bin/ld.lld zig build riscv-qemu-validation`.
-- Run `zig build m0-full` before broad milestone or release claims.
+- Run `zig build m0-full` before broad validation claims.
 
 ## Required Tools
 
