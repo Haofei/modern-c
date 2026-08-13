@@ -1,9 +1,9 @@
 # kernel/bus — device model + driver binding
 
-The pluggable structure is **service and driver registration over stable interfaces**, with
-static (fixed-capacity) registration now and dynamic loading later. The contract:
+The pluggable structure is **driver registration over stable interfaces**, with
+static (fixed-capacity) registration for validation fixtures. The contract:
 
-> drivers plug into buses · services plug into device classes · apps plug into services
+> drivers plug into buses · tests discover device-class endpoints
 
 ## The interfaces (`device.mc`)
 
@@ -21,10 +21,10 @@ static (fixed-capacity) registration now and dynamic loading later. The contract
 
 ## The registry (`kernel/lib/registry.mc` + `registry_client.mc`)
 
-Static-registration backbone: a `Registry` maps a numeric key (a device-class code or a
-service-name hash) to an endpoint handle. `registry.mc` is the **write** side (drivers and
-services register, detach removes); `registry_client.mc` is the **read** side (`lookup`,
-`available`) so clients discover dependencies without touching registry internals.
+Static-registration backbone: a `Registry` maps a numeric device-class key to an endpoint
+handle. `registry.mc` is the **write** side (drivers register, detach removes);
+`registry_client.mc` is the **read** side (`lookup`, `available`) so validation code
+discovers dependencies without touching registry internals.
 
 ## Boot flow (see `tests/qemu/plugin_demo.mc`)
 
@@ -33,9 +33,7 @@ services register, detach removes); `registry_client.mc` is the **read** side (`
 2. **Bus enumerates** the devices.
 3. **Drivers attach** — the first matching `Provider.attach` binds each device.
 4. **Drivers register** their device-class endpoint in the registry.
-5. **Services bind** — a service (`kernel/lib/service.mc` loop) resolves its device class via
-   `registry_client.lookup` (VFS → Block, net server → Net, TTY → Console).
-6. **Userland discovers** services through the registry by name.
+5. **Validation code discovers** the registered device endpoint via `registry_client.lookup`.
 
 ## Adding a real driver
 
@@ -49,11 +47,4 @@ bus_register_provider(&bus,
     .Net);
 ```
 
-No change to the bus, registry, or services — that is the point of the stable interface.
-
-## MINIX-style split (direction, not yet fully realized)
-
-Keep the core small: trap, scheduler, IPC, address spaces, grants, IRQ routing in-kernel;
-bus manager, drivers, VFS, net, TTY, process manager as user-mode services where possible.
-The kernel only grants resources and routes messages/interrupts. The registry + service loop
-+ probe/attach table are the substrate for moving drivers/services out of the core over time.
+No change to the bus or registry is needed for the validation fixture.

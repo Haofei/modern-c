@@ -373,7 +373,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "waitqueue-test", "WaitQueue (kernel/lib): block/wake/idle policy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "waitqueue-test" });
 
-    _ = h.addScriptTest(ctx, "service-test", "service (kernel/lib): request/reply server loop", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "service-test" });
 
     _ = h.addScriptTest(ctx, "plugin-test", "pluggable boot flow: device/bus probe-attach + registry + discovery", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "plugin-test" });
 
@@ -387,7 +386,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "registry2-test", "Registry v2: multiple-per-class, generations, unregister-on-death", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "registry2-test" });
 
 
-    _ = h.addScriptTest(ctx, "info-test", "info/snapshot service: top queries over IPC", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "info-test" });
 
     _ = h.addScriptTest(ctx, "granttab-test", "owner-tracked grants: bounded IPC sharing + revoke-on-death", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "granttab-test" });
 
