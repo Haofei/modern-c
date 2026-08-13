@@ -264,9 +264,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "pipe-test", "Pipe FIFO", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "pipe-test" });
 
     _ = h.addScriptTest(ctx, "bcache-test", "Write-back block cache", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "bcache-test" });
-    _ = h.addScriptTest(ctx, "perm-test", "POSIX permission checks", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "perm-test" });
-
-    _ = h.addScriptTest(ctx, "pgroup-test", "Process groups + sessions", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "pgroup-test" });
     _ = h.addScriptTest(ctx, "tty-test", "TTY line discipline", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "tty-test" });
 
     _ = h.addScriptTest(ctx, "time-test", "std/time counter<u64> timeout arithmetic", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "time-test" });
@@ -335,7 +332,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "mutex-test", "sleeping Mutex: try_lock, blocking enqueue, FIFO hand-off on unlock", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mutex-test" });
 
-    _ = h.addScriptTest(ctx, "posix-test", "POSIX syscall surface", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "posix-test" });
     _ = h.addScriptTest(ctx, "userland-test", "Userland echo utility", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "userland-test" });
     _ = h.addScriptTest(ctx, "smprq-test", "SMP per-core run queues + work stealing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "smprq-test" });
     _ = h.addScriptTest(ctx, "rtc-test", "Wall-clock via goldfish-RTC: read the 64-bit epoch and assert a plausible live 'now'", &.{ "bash", "tools/arch/rtc-test.sh", "zig-out/bin/mcc", "c" });

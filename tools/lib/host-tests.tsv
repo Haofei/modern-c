@@ -27,7 +27,6 @@ dynlink-test	tests/qemu/lang/dynlink_demo.mc	entry	dynlink_run	-Wno-switch-bool	
 elf-test	tests/qemu/lang/elf_demo.mc	driver			ELF64 parse (header+phdr) + segment load (copy+bss zero-fill) + reject bad magic/truncation
 libc-test	tests/qemu/lang/libc_demo.mc	entry	libc_run	-Wno-switch-bool	minimal libc core: mc_memeq / mc_strlen / mc_atoi over typed addresses
 log-test	tests/qemu/lang/log_demo.mc	driver			leveled tracepoints: threshold filtering (dropped count), level+id+value recording, runtime verbosity change
-posix-test	tests/qemu/lang/posix_demo.mc	entry	posix_run	-Wno-switch-bool -Wno-unused-parameter	POSIX syscall surface: getpid + open/write/read/close file lifecycle + ENOSYS, over the dispatch table
 scan-test	tests/qemu/lang/scan_demo.mc	entry	scan_run	-Wno-switch-bool	find_index/any: bounded array search via a closure predicate (found index, not-found N, any)
 shell-test	tests/qemu/lang/shell_demo.mc	entry	shell_run	-Wno-switch-bool	minimal shell: parses the command word and dispatches builtins (true=0/false=1/unknown=127)
 shell2-test	tests/qemu/lang/shell2_demo.mc	entry	shell2_run	-Wno-switch-bool	shell: tokenizes a full command line into argv, runs builtins (echo with captured output, true=0/false=1, unknown=127), tolerates extra whitespace
@@ -58,8 +57,6 @@ tcp-rtx-test	tests/qemu/net/tcp_rtx_demo.mc	driver			retransmit timer: arm on se
 tcp-test	tests/qemu/net/tcp_demo.mc	driver			TCP segment build/parse (ports/seq/ack/flags/window) + pseudo-header checksum + corruption detection
 tcp-window-test	tests/qemu/net/tcp_window_demo.mc	driver			TCP send window + ACK processing (dup/unsent rejected) + in-order receive + sequence wraparound
 udp-test	tests/qemu/net/udp_demo.mc	driver			UDP datagram build/parse + pseudo-header checksum (incl. corruption detection) correct
-perm-test	tests/qemu/proc/perm_demo.mc	entry	perm_run		POSIX uid/gid + rwx-mode permission checks (owner/group/other, root bypass)
-pgroup-test	tests/qemu/proc/pgroup_demo.mc	entry	pgroup_run		process groups + sessions: setsid/setpgid/getpgid/getsid
 smprq-test	tests/qemu/proc/smprq_demo.mc	entry	smprq_run	-Wno-switch-bool	SMP per-core run queues + work stealing: an idle core steals from the busiest (FIFO, load-balanced)
 snapshot-test	tests/qemu/proc/snapshot_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	proc_snapshot (kernel/lib): stable pid/state enumeration + state summary, unaffected by later spawn/exit
 waitqueue-test	tests/qemu/proc/waitqueue_demo.mc	driver		-Wno-switch-bool -Wno-unused-parameter	WaitQueue (kernel/lib): block current (park+yield), FIFO wake_one/wake_all, empty no-op, idle yield

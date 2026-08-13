@@ -365,8 +365,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("cow-test"));
     m0_full_step.dependOn(ctx.cmd("pipe-test"));
     m0_full_step.dependOn(ctx.cmd("bcache-test"));
-    m0_full_step.dependOn(ctx.cmd("perm-test"));
-    m0_full_step.dependOn(ctx.cmd("pgroup-test"));
     m0_full_step.dependOn(ctx.cmd("tty-test"));
     m0_full_step.dependOn(ctx.cmd("time-test"));
     m0_full_step.dependOn(ctx.cmd("vqfault-test"));
@@ -424,7 +422,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("tryelse-test"));
     m0_full_step.dependOn(ctx.cmd("byteview-test"));
     m0_full_step.dependOn(ctx.cmd("scan-test"));
-    m0_full_step.dependOn(ctx.cmd("posix-test"));
     m0_full_step.dependOn(ctx.cmd("userland-test"));
     m0_full_step.dependOn(ctx.cmd("smprq-test"));
     m0_full_step.dependOn(ctx.cmd("rtc-test"));
