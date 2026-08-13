@@ -4,7 +4,7 @@
 // Reuses std/mem (mem_copy/mem_set) for the bulk routines. Like the allocator, all work is done
 // on `usize` ADDRESSES — pointer params are consumed to an address immediately and result
 // pointers are minted only at the return — so nothing fights MC's pointer-representation rules.
-// Exports return `*mut u8` (== C void*/char* in ABI; separate TU, so no <string.h> conflict).
+// Exports return `*mut u8` (== C void*/char* in ABI; separate TU, so no C prototype conflict).
 
 import "std/addr.mc";
 import "std/mem.mc";

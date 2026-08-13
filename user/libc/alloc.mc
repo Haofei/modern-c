@@ -14,8 +14,8 @@
 // `usize` addresses — `*mut u8` pointers (which a failed malloc makes null, an invalid `*mut`
 // representation) are only MINTED at the export return and CONSUMED from the incoming param, at
 // the C-ABI boundary. The exported functions return `*mut u8` (C `uint8_t*`), which is
-// ABI-identical to `void*`: alloc.mc and the engine are separate translation units, so the
-// `void*` prototype in <stdlib.h> and this `uint8_t*` definition never meet to conflict.
+// ABI-identical to `void*`: alloc.mc and any C-ABI driver are separate translation units, so
+// a C `void*` prototype and this `uint8_t*` definition never meet to conflict.
 
 import "kernel/core/heap.mc";
 import "std/addr.mc";
