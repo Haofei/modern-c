@@ -5539,8 +5539,6 @@ cooperative context switching, ELF load/run, Sv39 activation, user-copy
 boundaries, OpenSBI/FDT boot discovery, and selected exit traps. These remain
 validation fixtures for language and backend behavior, not operating-system
 product scope.
-The `zig build llvm-paging-test` gate links and runs LLVM-lowered checks for
-Sv39 page-table map/translate helpers.
 The `zig build llvm-hosted-demo-test` gate links and runs the hosted
 elementwise demo through LLVM, libc, and libm, then verifies its binary
 stdin/stdout `f32` round trip.

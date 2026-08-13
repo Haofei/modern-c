@@ -47,67 +47,6 @@ const HEAP_LIVE_SLOTS: usize = 256;
 // legacy path ignores it.
 const HEAP_COMPACT_FREELIST: bool = true;
 
-// ----- KASAN shadow hooks (D2.1) -----
-//
-// A KASAN-profile heap (built with `heap_new_ksan`) drives a shadow map: it POISONS a
-// block's bytes on `heap_free` and UNPOISONS the user bytes on `heap_alloc`. The shadow
-// is consulted by the compiler-instrumented memory accesses (raw.load/raw.store under
-// `--checks=ksan`) via `mc_ksan_check`, so a use-after-free or out-of-bounds ACCESS
-// traps the moment it touches a poisoned byte — before the freed block is reused. These
-// hooks are no-ops in a default heap (`ksan == 0`), so non-KASAN builds are unchanged.
-//
-// The shadow runtime (poison/unpoison/check) is provided externally and must itself be
-// UNinstrumented (it manipulates the shadow with raw accesses); it lives in C in the
-// boot runtime so the ksan profile never recurses through its own shadow writes.
-extern fn mc_ksan_poison(addr: usize, size: usize) -> void;
-extern fn mc_ksan_unpoison(addr: usize, size: usize) -> void;
-
-// ----- redzone hardening (D2.4) -----
-//
-// A redzone-profile heap (built with `heap_new_redzoned`) reserves guard bytes
-// immediately *before* and *after* every user allocation and fills them with a known
-// poison pattern. A buffer overflow that writes past the user region lands in the
-// trailing redzone; an underflow lands in the leading one. On `heap_free` (and via
-// the explicit `heap_check_block`) the allocator re-reads both redzones, and if any
-// poison byte has been clobbered it TRAPS (`unreachable`) instead of returning the
-// corrupted block to the free list, where it would silently propagate.
-//
-// The default `heap_new` leaves `redzone == 0`, so a non-redzone build keeps the
-// exact byte layout and free-list behaviour it had before — the guard work and the
-// poison writes are entirely skipped (the profile is selected at heap construction).
-//
-// REDZONE_BYTES is the guard width on each side. POISON is the fill byte; it is
-// deliberately not 0x00 so that an overflow which only zeroes memory is still caught.
-const REDZONE_BYTES: usize = 16;
-const REDZONE_POISON: u8 = 0xCD;
-
-// Write the poison pattern across `[start, start+len)`.
-fn redzone_fill(start: PAddr, len: usize) -> void {
-    var i: usize = 0;
-    while i < len {
-        unsafe {
-            raw.store<u8>(pa_offset(start, i), REDZONE_POISON);
-        }
-        i = i + 1;
-    }
-}
-
-// Return true iff every byte of `[start, start+len)` still holds the poison pattern.
-fn redzone_intact(start: PAddr, len: usize) -> bool {
-    var i: usize = 0;
-    while i < len {
-        var b: u8 = 0;
-        unsafe {
-            b = raw.load<u8>(pa_offset(start, i));
-        }
-        if b != REDZONE_POISON {
-            return false;
-        }
-        i = i + 1;
-    }
-    return true;
-}
-
 // One free region [start, start+len). `len == 0` marks an empty slot.
 pub struct FreeBlock {
     start: PAddr,
@@ -128,14 +67,6 @@ pub struct Heap {
     // COMPACTED representation is active (`HEAP_COMPACT_FREELIST`). Slots at and above
     // `free_count` are empty. The legacy unsorted path does not maintain this.
     free_count: usize,
-    // Guard width (bytes) reserved on each side of every user allocation. 0 disables
-    // the redzone profile entirely (default `heap_new`), so non-redzone builds keep
-    // their original layout and incur no poison work.
-    redzone: usize,
-    // KASAN shadow profile (D2.1): 1 enables shadow poison/unpoison on free/alloc, 0
-    // (default) disables it. Independent of `redzone`, though `heap_new_ksan` enables
-    // both so freed blocks AND redzones are poisoned in the shadow.
-    ksan: usize,
     // Exact live-allocation ownership tracking. Normal heaps keep this enabled so
     // double-free, partial-free, and overlap-free fail closed. Bump/frame pools that
     // allocate many fixed pages and never free them can explicitly disable this with
@@ -216,8 +147,6 @@ pub fn heap_init(h: *mut Heap, range: PhysRange) -> void {
     h.next = pr_start(&range);
     h.free = heap_empty_free_list();
     h.free_count = 0;
-    h.redzone = 0;
-    h.ksan = 0;
     h.track_live = 1;
     h.live_count = 0;
     h.dropped_free_bytes = 0;
@@ -235,49 +164,6 @@ pub fn heap_new(range: PhysRange) -> Heap {
         .free = heap_empty_free_list(),
         .live = heap_empty_live_list(),
         .free_count = 0,
-        .redzone = 0,
-        .ksan = 0,
-        .track_live = 1,
-        .live_count = 0,
-        .dropped_free_bytes = 0,
-    };
-}
-
-// Build a heap with the redzone hardening profile enabled (D2.4). Every allocation
-// is fenced by `REDZONE_BYTES` poison bytes on each side; overflow into a redzone is
-// detected and trapped on free / `heap_check_block`. Same backing store, same API —
-// the only difference is the guard bytes and the corruption check.
-pub fn heap_new_redzoned(range: PhysRange) -> Heap {
-    return .{
-        .range = range,
-        .next = pr_start(&range),
-        .free = heap_empty_free_list(),
-        .live = heap_empty_live_list(),
-        .free_count = 0,
-        .redzone = REDZONE_BYTES,
-        .ksan = 0,
-        .track_live = 1,
-        .live_count = 0,
-        .dropped_free_bytes = 0,
-    };
-}
-
-// Build a heap with the KASAN shadow hardening profile (D2.1). On top of the redzone
-// profile (so guard bands are poisoned in the shadow too), every `heap_alloc` UNPOISONS
-// the user region in the shadow and every `heap_free` POISONS the whole fenced block.
-// Combined with compiler-instrumented accesses (`--checks=ksan`), a read or write of a
-// freed (or out-of-bounds) byte traps at ACCESS time via `mc_ksan_check` — strictly
-// finer than D2.4, which only catches a redzone clobber on FREE. The caller must arm the
-// shadow region for this heap's backing store (`mc_ksan_arm`, runtime-side) first.
-pub fn heap_new_ksan(range: PhysRange) -> Heap {
-    return .{
-        .range = range,
-        .next = pr_start(&range),
-        .free = heap_empty_free_list(),
-        .live = heap_empty_live_list(),
-        .free_count = 0,
-        .redzone = REDZONE_BYTES,
-        .ksan = 1,
         .track_live = 1,
         .live_count = 0,
         .dropped_free_bytes = 0,
@@ -580,55 +466,17 @@ fn heap_resize_live(h: *mut Heap, start: PAddr, old_len: usize, new_len: usize) 
 // heap is exhausted (callers gate on `heap_available`). Returns the allocation's
 // physical address.
 //
-// With the redzone profile (`h.redzone != 0`) the request is widened to fence the
-// user region with guard bytes: a leading band rounded up to `align` (so the user
-// pointer stays aligned) and a trailing band of `redzone` bytes, both filled with
-// the poison pattern. The user pointer (raw_start + lead) is returned; `heap_free`
-// reconstructs the bands from `redzone`/`align` and verifies the poison is intact.
 // C2: heap allocation is a sleepable op (it may walk/coalesce the free list and,
 // in a fuller kernel, block on memory pressure) — allocating from an
 // `#[irq_context]` function is forbidden ("sleeping in interrupt").
 #[may_sleep]
 pub fn heap_alloc(h: *mut Heap, size: usize, align: usize) -> PAddr {
-    let rz: usize = h.redzone;
     if h.track_live != 0 && size != 0 && h.live_count >= HEAP_LIVE_SLOTS {
         unreachable; // no unowned allocation may escape
     }
-    if rz == 0 {
-        let p: PAddr = heap_alloc_raw(h, size, align);
-        heap_record_live(h, p, size);
-        return p;
-    }
-    // The leading guard is exactly `rz` bytes; for the user pointer to stay aligned
-    // we therefore require `align <= rz` (rz is a power-of-two-friendly 16). Kernel
-    // heap allocations are 16-aligned or finer, so this always holds; a larger align
-    // is a misuse and fails closed.
-    if align > rz {
-        unreachable; // redzone profile supports align <= REDZONE_BYTES
-    }
-    // Request the fenced block [raw .. raw+rz+size+rz). `heap_alloc_raw` aligns `raw`
-    // to `align`; since `rz` is a multiple of `align`, `raw+rz` (the user pointer) is
-    // aligned too. Poison both guard bands, then hand back the user pointer.
-    let inner: usize = rz + size + rz; // checked arithmetic via overflow traps
-    let raw_start: PAddr = heap_alloc_raw(h, inner, align);
-    let user: PAddr = pa_offset(raw_start, rz);
-    // KASAN: unpoison the entire fenced block BEFORE filling the guards, so the heap's
-    // own redzone writes never land on poisoned shadow (the block may be a reused, and
-    // thus poisoned, freed block). The bands are re-poisoned in the shadow just below.
-    if h.ksan != 0 {
-        mc_ksan_unpoison(pa_value(raw_start), inner);
-    }
-    redzone_fill(raw_start, rz);                 // leading guard [raw_start, user)
-    redzone_fill(pa_offset(user, size), rz);     // trailing guard [user+size, +rz)
-    // KASAN: poison the two guard bands in the shadow (an OOB access into them traps at
-    // access time, the access-time analogue of the free-time redzone check) and leave
-    // the user region `[user, user+size)` valid/addressable.
-    if h.ksan != 0 {
-        mc_ksan_poison(pa_value(raw_start), rz);             // leading guard
-        mc_ksan_poison(pa_value(pa_offset(user, size)), rz); // trailing guard
-    }
-    heap_record_live(h, user, size);
-    return user;
+    let p: PAddr = heap_alloc_raw(h, size, align);
+    heap_record_live(h, p, size);
+    return p;
 }
 
 // Why a non-trapping allocation could not be satisfied.
@@ -636,7 +484,7 @@ pub enum HeapError {
     Exhausted, // no free block fit and the bump frontier is out of space
 }
 
-// Non-trapping core aligned allocator (no redzone): returns Exhausted instead of
+// Non-trapping core aligned allocator: returns Exhausted instead of
 // trapping when the heap is full. This is the body shared by the infallible
 // `heap_alloc_raw` (which traps) and the fallible `heap_try_alloc` (which callers on
 // hostile-input paths — e.g. the ELF loader — use to turn OOM into a typed LoadError).
@@ -689,7 +537,7 @@ fn heap_try_alloc_raw(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, 
     return ok(start);
 }
 
-// Core aligned allocator (no redzone). The original `heap_alloc` body: traps on
+// Core aligned allocator: traps on
 // exhaustion, for the infallible callers that treat OOM as a kernel bug.
 fn heap_alloc_raw(h: *mut Heap, size: usize, align: usize) -> PAddr {
     switch heap_try_alloc_raw(h, size, align) {
@@ -700,13 +548,9 @@ fn heap_alloc_raw(h: *mut Heap, size: usize, align: usize) -> PAddr {
 
 // Public non-trapping frame allocator. Used by the ELF loader (and any other
 // hostile-input path) so a malformed image that exhausts the loader heap surfaces as
-// a typed error rather than a kernel trap. The loader heap is non-redzoned, so this is
-// the raw allocator directly; redzoned heaps must use the infallible `heap_alloc`.
+// a typed error rather than a kernel trap.
 #[may_sleep]
 pub fn heap_try_alloc(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, HeapError> {
-    if h.redzone != 0 {
-        unreachable; // fallible allocation is only wired for non-redzoned heaps
-    }
     if h.track_live != 0 && size != 0 && h.live_count >= HEAP_LIVE_SLOTS {
         return err(.Exhausted);
     }
@@ -719,59 +563,22 @@ pub fn heap_try_alloc(h: *mut Heap, size: usize, align: usize) -> Result<PAddr, 
     }
 }
 
-// Verify the redzones fencing the user allocation `[addr, addr+size)` are intact.
-// Traps (`unreachable`) the moment a guard byte has been overwritten — i.e. on the
-// first detected heap buffer overflow/underflow. No-op for a non-redzone heap. Can
-// be called at any point to check a live allocation, not only on free.
-pub fn heap_check_block(h: *mut Heap, addr: PAddr, size: usize) -> void {
-    let rz: usize = h.redzone;
-    if rz == 0 {
-        return;
-    }
-    let lead: PAddr = pa(pa_value(addr) - rz); // [addr-rz, addr), checked subtraction
-    if !redzone_intact(lead, rz) {
-        unreachable; // underflow: leading redzone clobbered
-    }
-    if !redzone_intact(pa_offset(addr, size), rz) {
-        unreachable; // overflow: trailing redzone clobbered
-    }
-}
-
 // Return a block to the heap so a later `alloc` can reuse it. Validates the request
 // (fail closed on a bogus free), then releases [addr, addr+size) to the free list,
 // coalescing with adjacent free space. The signature matches the Allocator's free
 // closure once `h` is captured.
-//
-// On a redzone heap, the user passes the same `(addr, size)` it received; this routine
-// first verifies both guard bands (trapping on a detected overflow before the block
-// re-enters the free list) and then releases the *fenced* block [addr-rz, addr+size+rz).
 pub fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
     if size == 0 {
         return;
     }
     heap_take_live(h, addr, size);
-    var faddr: PAddr = addr;
-    var fsize: usize = size;
-    let rz: usize = h.redzone;
-    if rz != 0 {
-        faddr = pa(pa_value(addr) - rz); // raw fenced start, checked subtraction
-        fsize = rz + size + rz;          // full fenced length
-        // KASAN: the redzone bands are POISONED in the shadow (so a user OOB access traps);
-        // but `heap_check_block` below legitimately READS them, which would itself trap
-        // under instrumentation. Unpoison the whole fenced block first so the heap's own
-        // guard read is valid, then the block is re-poisoned wholesale just below.
-        if h.ksan != 0 {
-            mc_ksan_unpoison(pa_value(faddr), fsize);
-        }
-        heap_check_block(h, addr, size); // traps on corruption
-    }
-    if !pr_contains(&h.range, faddr) {
+    if !pr_contains(&h.range, addr) {
         unreachable; // freeing an address this heap never owned
     }
-    if fsize > pr_len(&h.range) {
+    if size > pr_len(&h.range) {
         unreachable; // nonsensical size
     }
-    let end: PAddr = pa_offset(faddr, fsize); // checked
+    let end: PAddr = pa_offset(addr, size); // checked
     if pa_lt(pr_end(&h.range), end) {
         unreachable; // block runs past the end of the region
     }
@@ -779,16 +586,7 @@ pub fn heap_free(h: *mut Heap, addr: PAddr, size: usize) -> void {
     if pa_lt(h.next, end) {
         unreachable;
     }
-    // KASAN: poison the whole fenced block in the shadow. From here on, any ACCESS to
-    // these bytes (a use-after-free read or write) consults the shadow via mc_ksan_check
-    // and traps — the access-time detection that is strictly finer than the free-time
-    // redzone check. Poison AFTER the redzone read above (which needs valid shadow) and
-    // before release; the free-list metadata `heap_release` touches lives in the Heap
-    // struct, not in these freed bytes, so it is never instrumented against this poison.
-    if h.ksan != 0 {
-        mc_ksan_poison(pa_value(faddr), fsize);
-    }
-    heap_release(h, faddr, fsize);
+    heap_release(h, addr, size);
 }
 
 // Grow the block [addr, addr+old_len) to new_len IN PLACE — no copy — but ONLY when it is the topmost

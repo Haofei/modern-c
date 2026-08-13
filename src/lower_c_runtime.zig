@@ -77,9 +77,7 @@ pub fn appendHeaderAndSanitizerHooks(
         \\/* KASAN shadow hooks (D2.1). Weak no-op defaults so EVERY build links and behaves
         \\   identically when no KASAN runtime is present (the hooks do nothing). A linked
         \\   KASAN shadow runtime (the ksan profile) provides STRONG definitions that
-        \\   override these, poisoning/unpoisoning the shadow on heap free/alloc and trapping
-        \\   on a poisoned access. The heap calls poison/unpoison only on a `heap_new_ksan`
-        \\   heap (guarded `if h.ksan != 0`), so default heaps never reach even these stubs. */
+        \\   override these and trap on poisoned instrumented accesses. */
         \\#if defined(__GNUC__) || defined(__clang__)
         \\#define MC_WEAK __attribute__((weak))
         \\#else

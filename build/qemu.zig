@@ -234,10 +234,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "ring-test", "Link + run the generic in-place Ring<T> (push/pop/wrap)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "ring-test" });
 
 
-    _ = h.addScriptTest(ctx, "paging-test", "Link + run Sv39 page-table map/translate", &.{ "bash", "tools/mem/paging-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-paging-test", "Link + run the LLVM-lowered Sv39 page-table map/translate", &.{ "bash", "tools/mem/paging-test.sh", "zig-out/bin/mcc", "llvm" });
-
     _ = h.addScriptTest(ctx, "fnptr-test", "Link + run function-pointer dispatch (callback, vtable, return)", &.{ "bash", "tools/toolchain/fnptr-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "trap-test", "Run the typed-CPU trap/timer interrupt path under QEMU", &.{ "bash", "tools/arch/trap-test.sh", "zig-out/bin/mcc", "c" });

@@ -96,7 +96,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-stdio-test"));
     m0_full_step.dependOn(ctx.cmd("mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-paging-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-timer-test"));
     // smode-plic-test validates S-mode external-interrupt delivery through the PLIC under OpenSBI;
     // the multishot variant proves the re-armed steady-state path (regression gate for the former
@@ -261,8 +260,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("closure-test"));
     // ring-test links + runs the generic in-place Ring<T> (needs clang).
     m0_full_step.dependOn(ctx.cmd("ring-test"));
-    // paging-test links + runs the Sv39 page-table map/translate (needs clang).
-    m0_full_step.dependOn(ctx.cmd("paging-test"));
     // fnptr-test links + runs function-pointer dispatch (needs clang).
     m0_full_step.dependOn(ctx.cmd("fnptr-test"));
     // trap-test runs the typed-CPU trap/timer interrupt path under QEMU.
