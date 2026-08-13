@@ -136,7 +136,7 @@ is a *status* oracle. ⇒ The highest-leverage additions are **independent** che
 | E1 | **Reference interpreter** (eval generated subset, assert digest) | Done / expanding | `fuzz-reference`, gated by `m0-full`/nightly; highest leverage for bugs both backends share. Keep extending the interpreted subset as generator surface grows. |
 | E2 | **Metamorphic/algebraic** (semantics-preserving transform → same digest) | Done / expanding | `fuzz-metamorphic`, gated by `m0-full`/nightly; keep adding transforms for new constructs. |
 | E3 | Optimization-level differential | Done / expanding | `fuzz-optlevel`, gated by `m0-full`/nightly; keep widening the generated surface. |
-| E4 | Artifact consistency oracle over `facts`/`emit-map`/`lower-mir`/`lower-ir` | Done / expanding | `fuzz-artifacts`, gated by `m0-full`/nightly; checks stage status, MIR/IR trap-edge counters, checked-trap facts reaching IR, and core mcmap source/function/MIR-reference invariants. |
+| E4 | Artifact consistency oracle over `facts`/`emit-map`/`lower-mir`/`inspect-ir` | Done / expanding | `fuzz-artifacts`, gated by `m0-full`/nightly; checks stage status, MIR/IR trap-edge counters, checked-trap facts reaching IR, and core mcmap source/function/MIR-reference invariants. |
 | E5 | Memory-safety oracle (ASan over pointer/slice programs) | Done / expanding | `fuzz-asan`, gated by `m0-full` and nightly but omitted from `fast` with the other env-fragile sanitizer gates; covers C-emitted memory safety over the current nullable/non-null pointer, byte-view slice, and `[]mut T` slice generator surface. |
 | E6 | Round-trip / idempotence (re-parse, re-lower → stable) | Done / expanding | `fuzz-roundtrip`, gated by `m0-full`/nightly; generated and formatted source both check, `fmt(fmt(src)) == fmt(src)`, stripped token streams match, and emitted C matches after source-location normalization. |
 | E7 | Crash-bucketing & auto-minimization of findings | Done / expanding | `mcfuzz.py run` prints root-cause bucket summaries on failure, can write `--triage-dir` JSONL findings, and `--shrink-failures` opt-in minimizes the first finding per signature. |
@@ -214,7 +214,7 @@ core oracle family plus `fuzz-metamorphic`, `fuzz-optlevel`, `fuzz-floatbits`, `
 ### Done 2026-07-04 (E4 artifact consistency)
 
 - **E4** artifact consistency oracle (`fuzz-artifacts`): for every generated program accepted by
-  `mcc check`, run `facts`, `lower-mir`, `lower-ir`, and `emit-map`; report stage hang/crash/reject
+  `mcc check`, run `facts`, `lower-mir`, `inspect-ir`, and `emit-map`; report stage hang/crash/reject
   as findings; verify `mir`/`ir` function `trap_edges=N` counters match their concrete trap-edge
   rows; require checked arithmetic/shift facts to have a same-function/kind/source-position IR
   trap edge; and validate core `.mcmap` structure, positive source spans, source-origin paths,

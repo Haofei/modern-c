@@ -1814,7 +1814,7 @@ def oracle_pipeline(env, seed, src_path, work):
     """Internal consistency: every lowering/verification stage must succeed on a program `mcc
     check` accepted. A stage that errors (or crashes) on accepted source is an internal
     inconsistency — the exact class where the checker accepts a program a backend can't lower."""
-    for stage in ("lower-hir", "verify-hir", "lower-mir", "verify", "lower-ir",
+    for stage in ("inspect-hir", "verify-inspect-hir", "lower-mir", "verify", "inspect-ir",
                   "facts", "emit-c", "emit-map", "emit-llvm"):
         try:
             r = subprocess.run([env["mcc"], stage, src_path], capture_output=True, timeout=20)
@@ -2017,18 +2017,18 @@ def oracle_artifacts(env, seed, src_path, work):
     """Artifact consistency oracle (E4): parse the real line-oriented compiler artifacts and
     enforce conservative cross-artifact invariants that go beyond status-only pipeline success."""
     outputs = {}
-    for stage in ("facts", "lower-mir", "lower-ir", "emit-map"):
+    for stage in ("facts", "lower-mir", "inspect-ir", "emit-map"):
         text, err = _run_required_stage(env, stage, src_path)
         if err is not None:
             return err
         outputs[stage] = text
 
-    for prefix, stage in (("mir", "lower-mir"), ("ir", "lower-ir")):
+    for prefix, stage in (("mir", "lower-mir"), ("ir", "inspect-ir")):
         err = _check_trap_edge_counts(outputs[stage], prefix)
         if err is not None:
             return err
 
-    err = _check_checked_facts_reach_ir(outputs["facts"], outputs["lower-ir"])
+    err = _check_checked_facts_reach_ir(outputs["facts"], outputs["inspect-ir"])
     if err is not None:
         return err
 
@@ -2381,7 +2381,7 @@ def finding_signature(finding, oracle_name=None):
         if body.startswith("mir "):
             return "artifacts:lower-mir"
         if body.startswith("ir "):
-            return "artifacts:lower-ir"
+            return "artifacts:inspect-ir"
         if body.startswith("fact ") or body.startswith("checked "):
             return "artifacts:facts"
 
@@ -2731,7 +2731,7 @@ def main():
         "failclosed": "mcc check rejected every ill-typed program (no soundness hole)",
         "determinism": "emit-c/emit-llvm are byte-deterministic",
         "pipeline": "every lowering/verify stage succeeds on check-accepted programs",
-        "artifacts": "facts/lower-mir/lower-ir/emit-map cross-artifact invariants hold",
+        "artifacts": "facts/lower-mir/inspect-ir/emit-map cross-artifact invariants hold",
         "roundtrip": "fmt output checks, is idempotent, preserves tokens, and lowers identically",
         "reference": "compiled output matches the independent Python interpreter",
         "trapsite": "C and LLVM agree on trap kind or normal output",

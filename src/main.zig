@@ -55,10 +55,6 @@ const usage =
     \\  mcc list-tests <file.mc>
     \\
     \\Inspection commands are not backend pipeline inputs; MIR verification remains the backend production boundary.
-    \\Legacy aliases remain accepted:
-    \\  mcc lower-hir <file.mc>
-    \\  mcc verify-hir <file.mc>
-    \\  mcc lower-ir <file.mc>
     \\
     \\input:
     \\  Use <file.mc> for normal file input, or - to read MC source from stdin.
@@ -306,15 +302,15 @@ fn runMain(init: std.process.Init) !void {
         try runTrap(&session, path, source);
     } else if (std.mem.eql(u8, command, "facts")) {
         try runFacts(&session, path, source);
-    } else if (std.mem.eql(u8, command, "inspect-hir") or std.mem.eql(u8, command, "lower-hir")) {
+    } else if (std.mem.eql(u8, command, "inspect-hir")) {
         try runLowerHir(&session, path, source);
-    } else if (std.mem.eql(u8, command, "verify-inspect-hir") or std.mem.eql(u8, command, "verify-hir")) {
+    } else if (std.mem.eql(u8, command, "verify-inspect-hir")) {
         try runVerifyHir(&session, path, source);
     } else if (std.mem.eql(u8, command, "lower-mir")) {
         try runLowerMir(&session, path, source, options.checks.optimize);
     } else if (std.mem.eql(u8, command, "verify")) {
         try runVerify(&session, path, source, options.checks.optimize);
-    } else if (std.mem.eql(u8, command, "inspect-ir") or std.mem.eql(u8, command, "lower-ir")) {
+    } else if (std.mem.eql(u8, command, "inspect-ir")) {
         try runLowerIr(&session, path, source);
     } else if (std.mem.eql(u8, command, "lower-c")) {
         try runLowerC(&session, path, source);
