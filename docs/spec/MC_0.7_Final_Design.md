@@ -5577,15 +5577,14 @@ llvm-elf-run-test`, `zig build llvm-fs-syscall-test`, `zig build
 llvm-exec-test`, `zig build
 llvm-vm-switch-test`, `zig build llvm-vmspace-test`, `zig build
 llvm-vmctx-test`, `zig build llvm-sched-vm-test`, `zig build llvm-ipc-test`,
-`zig build llvm-ipc2-test`, `zig build llvm-registry-test`, `zig build
+`zig build llvm-ipc2-test`, `zig build
 llvm-timeout-test`, `zig build llvm-signal-test`, `zig build llvm-cap-test`,
 `zig build llvm-restart-test`, `zig build llvm-heartbeat-test`, `zig build
 llvm-privilege-test`, `zig build llvm-usched-test`, `zig build
 llvm-paging-activate-test`, `zig build llvm-demand-test`, `zig build
 llvm-mmap-test`, `zig build llvm-contain-test`, `zig build llvm-cow-test`, and
-`zig build llvm-isolation-test`, `zig build llvm-block-server-test`, `zig build
-llvm-fs-server-test`, `zig build
-llvm-rtc-test`, `zig build llvm-userserver-test`, `zig build
+`zig build llvm-isolation-test`, `zig build
+llvm-rtc-test`, `zig build
 llvm-backtrace-test`, `zig build llvm-driver-test`, and `zig build
 llvm-preempt-test`, `zig build llvm-smp-test`, `zig build
 llvm-smp-lock-test`, `zig build llvm-ipi-test`, `zig build llvm-virtio-test`, and `zig build
@@ -5593,7 +5592,7 @@ llvm-udp-net-test`, `zig build llvm-blk-test`, `zig build llvm-net-test`,
 `zig build llvm-nic-test`, `zig build llvm-e1000-test`,
 `zig build llvm-net-rx-live-test`, `zig build llvm-sbi-boot-test`,
 `zig build llvm-aarch64-test`, `zig build llvm-x86-sched-test`,
-`zig build llvm-x86-qemu-test`, and `zig build llvm-ushell-test`
+`zig build llvm-x86-qemu-test`
 gates boot LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer
 traps, cooperative context switching, round-robin scheduling, syscall dispatch,
 U-mode entry, process lifecycle, ELF load/run, VFS syscalls,

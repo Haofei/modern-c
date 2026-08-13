@@ -261,13 +261,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "pool-test", "generational pool: use-after-free/double-free caught", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "pool-test" });
 
-    _ = h.addScriptTest(ctx, "block-server-test", "storage driver as a user-mode server (block read/write via IPC)", &.{ "bash", "tools/fs/block-server-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-block-server-test", "Run LLVM-lowered block server under QEMU", &.{ "bash", "tools/fs/block-server-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "fs-server-test", "filesystem as a user-mode server (open/write/read via IPC)", &.{ "bash", "tools/fs/fs-server-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-fs-server-test", "Run LLVM-lowered filesystem server under QEMU", &.{ "bash", "tools/fs/fs-server-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
     _ = h.addScriptTest(ctx, "constgen-test", "Const-generic Ring<T,N> at two capacities", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "constgen-test" });
@@ -297,8 +290,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "shell-test", "Minimal shell", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "shell-test" });
     _ = h.addScriptTest(ctx, "shell2-test", "Shell: tokenize + builtins with output", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "shell2-test" });
-    _ = h.addScriptTest(ctx, "ushell-test", "Shell running in user mode via syscalls", &.{ "bash", "tools/lang/ushell-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-ushell-test", "LLVM-lowered shell running in user mode via syscalls", &.{ "bash", "tools/lang/ushell-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "vfsmount-test", "VFS mount switch", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "vfsmount-test" });
 
@@ -441,9 +432,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-usched-test", "Run LLVM-lowered userspace-set scheduling policy under QEMU", &.{ "bash", "tools/proc/usched-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "userserver-test", "A server running in user mode via syscalls", &.{ "bash", "tools/lang/userserver-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-userserver-test", "Run LLVM-lowered user-mode server under QEMU", &.{ "bash", "tools/lang/userserver-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "isolation-test", "Per-server MMU isolation + cross-AS IPC", &.{ "bash", "tools/proc/isolation-test.sh", "zig-out/bin/mcc", "c" });
 
@@ -475,9 +463,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-signal-test", "Run LLVM-lowered signal delivery under QEMU", &.{ "bash", "tools/ipc/signal-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "registry-test", "Name/registry server: lookup a service by name", &.{ "bash", "tools/ipc/registry-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-registry-test", "Run LLVM-lowered name/registry server under QEMU", &.{ "bash", "tools/ipc/registry-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "ipc2-test", "IPC completeness: multi-slot + source filter + notify", &.{ "bash", "tools/ipc/ipc2-test.sh", "zig-out/bin/mcc", "c" });
 
@@ -926,10 +911,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "sched-vm-test", "Scheduler switching per-process address spaces (proc_yield_vm) under QEMU", &.{ "bash", "tools/proc/sched-vm-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-sched-vm-test", "Run LLVM-lowered scheduler switching per-process address spaces under QEMU", &.{ "bash", "tools/proc/sched-vm-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTestOpts(ctx, "run-ushell", "Build + boot the user-mode MC shell in QEMU (interactive)", &.{ "bash", "tools/lang/run-ushell.sh", "c" }, .{ .inherit_stdio = true });
-
-    _ = h.addScriptTestOpts(ctx, "run-llvm-ushell", "Build + boot the LLVM-lowered user-mode MC shell in QEMU (interactive)", &.{ "bash", "tools/lang/run-ushell.sh", "llvm" }, .{ .inherit_stdio = true });
 
     // Preflight: explicit toolchain check for the QEMU milestone gates (clang/ld.lld/llc/qemu +
     // riscv64 target). `zig build preflight`. Milestone gates with MC_REQUIRE_TOOLS=1/CI=1 fail

@@ -543,7 +543,7 @@ listing, typed errors).
 | `bcache.mc` | 4-slot write-back block cache + hit/miss counters. | `NSLOTS=4` |
 | `blobstore.mc` | durable `u32 → bytes` blob sink; `blob_reopen`. | `MAX_BLOBS=8`, 4 KiB |
 
-Storage gates: `diskfs-test`, `bcache-test`, `blockfs-test`, `fs-server-test`.
+Storage gates: `diskfs-test`, `bcache-test`, `blockfs-test`.
 
 ---
 

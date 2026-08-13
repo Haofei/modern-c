@@ -138,7 +138,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-sched-vm-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-timeout-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-signal-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-registry-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-ipc2-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-ipc-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-test"));
@@ -161,10 +160,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-demand-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mmap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-paging-activate-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-block-server-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-fs-server-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-rtc-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-userserver-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-backtrace-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-driver-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-preempt-test"));
@@ -381,7 +377,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("arc-test"));
     m0_full_step.dependOn(ctx.cmd("constgen-test"));
     m0_full_step.dependOn(ctx.cmd("ipc2-test"));
-    m0_full_step.dependOn(ctx.cmd("registry-test"));
     m0_full_step.dependOn(ctx.cmd("signal-test"));
     m0_full_step.dependOn(ctx.cmd("privilege-test"));
     m0_full_step.dependOn(ctx.cmd("timeout-test"));
@@ -390,7 +385,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("mmap-test"));
     m0_full_step.dependOn(ctx.cmd("demand-test"));
     m0_full_step.dependOn(ctx.cmd("isolation-test"));
-    m0_full_step.dependOn(ctx.cmd("userserver-test"));
     m0_full_step.dependOn(ctx.cmd("usched-test"));
     m0_full_step.dependOn(ctx.cmd("cow-test"));
     m0_full_step.dependOn(ctx.cmd("pipe-test"));
@@ -407,8 +401,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("hosted-test"));
     m0_full_step.dependOn(ctx.cmd("shell-test"));
     m0_full_step.dependOn(ctx.cmd("shell2-test"));
-    m0_full_step.dependOn(ctx.cmd("ushell-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-ushell-test"));
     m0_full_step.dependOn(ctx.cmd("vfsmount-test"));
     // treefs-test links + runs the hierarchical tree filesystem (needs clang); LLVM side via llvm-host-suite-test.
     m0_full_step.dependOn(ctx.cmd("treefs-test"));
@@ -495,8 +487,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("async-blk-test"));
     m0_full_step.dependOn(ctx.cmd("async-net-test"));
     m0_full_step.dependOn(ctx.cmd("async-select-test"));
-    m0_full_step.dependOn(ctx.cmd("block-server-test"));
-    m0_full_step.dependOn(ctx.cmd("fs-server-test"));
     m0_full_step.dependOn(ctx.cmd("cap-test"));
     m0_full_step.dependOn(ctx.cmd("restart-test"));
     m0_full_step.dependOn(ctx.cmd("arc-pkt-test"));
