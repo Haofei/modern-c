@@ -417,12 +417,6 @@ pub fn reflectionValueCallKind(callee: ast.Expr) ?ReflectionValueCallKind {
     return null;
 }
 
-/// The result type of value-producing reflection intrinsics, or null when not recognized.
-pub fn reflectionValueCallReturnType(call: anytype) ?ast.TypeExpr {
-    _ = reflectionValueCallKind(call.callee.*) orelse return null;
-    return simpleNameType("usize", call.callee.*.span);
-}
-
 /// For `atomic<T>` members, return the supported operation spelling.
 pub fn atomicMemberOpName(name: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, name, "load") or
@@ -814,15 +808,6 @@ pub fn taggedUnionCase(union_decl: ast.UnionDecl, name: []const u8) ?ast.UnionCa
         if (std.mem.eql(u8, case.name.text, name)) return case;
     }
     return null;
-}
-
-/// The result type of a qualified tagged-union constructor `Union.variant(...)`,
-/// or null when the callee is not a known tagged-union case.
-pub fn qualifiedTaggedUnionConstructorType(tagged_unions: *const std.StringHashMap(ast.UnionDecl), call: anytype) ?ast.TypeExpr {
-    const q = qualifiedMemberCallee(call.callee.*) orelse return null;
-    const union_decl = tagged_unions.get(q.owner) orelse return null;
-    if (taggedUnionCase(union_decl, q.member.text) == null) return null;
-    return simpleNameType(q.owner, call.callee.*.span);
 }
 
 /// The result type of a value-position enum variant path `Enum.variant`, or null
