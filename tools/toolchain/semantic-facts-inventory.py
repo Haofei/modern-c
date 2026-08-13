@@ -1346,7 +1346,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/mir_source_bridge.zig": {
         "Transitional AST-span to MIR-source-point bridge.": 1,
-        "pub fn sourcePointMatchesSpan(": 1,
+        "pub fn sourcePointMatchesSpan(": 0,
         "pub fn sourcePointFromOptionalSpan(": 1,
         "pub fn isSourceSpan(": 1,
         "pub fn firstCallTargetKindAt(": 1,

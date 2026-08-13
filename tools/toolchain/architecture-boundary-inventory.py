@@ -433,7 +433,7 @@ EXACT_FILE_COUNTS = {
     ("src/lower_llvm.zig", "fn sourcePointMatchesSpan("): 0,
     ("src/lower_llvm.zig", "fn sourcePointFromOptionalSpan("): 0,
     ("src/lower_llvm.zig", "fn isSourceSpan("): 0,
-    ("src/mir_source_bridge.zig", "pub fn sourcePointMatchesSpan("): 1,
+    ("src/mir_source_bridge.zig", "pub fn sourcePointMatchesSpan("): 0,
     ("src/mir_source_bridge.zig", "pub fn sourcePointFromOptionalSpan("): 1,
     ("src/mir_source_bridge.zig", "pub fn isSourceSpan("): 1,
     ("src/mir_source_bridge.zig", "pub fn firstCallTargetKindAt("): 1,

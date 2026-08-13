@@ -15,10 +15,6 @@ const type_bridge = @import("type_bridge.zig");
 const MirFactsView = mir_facts_view.MirFactsView;
 pub const TargetTypeLookupKey = mir_facts_view.TargetTypeLookupKey;
 
-pub fn sourcePointMatchesSpan(source: mir.SourcePoint, span: ast_bridge.Span) bool {
-    return mir_facts_view.sourcePointExactMatches(source, mir.sourcePointFromSpan(span));
-}
-
 pub fn sourcePointFromOptionalSpan(span: ?ast_bridge.Span) ?mir.SourcePoint {
     return if (span) |value| mir.sourcePointFromSpan(value) else null;
 }
