@@ -457,7 +457,6 @@ const LlvmEmitter = struct {
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
     decl_artifacts: []const declaration_artifacts.DeclArtifact = &.{},
-    struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
     global_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
     global_initializers: std.StringHashMap(ast_bridge.Expr) = undefined,
@@ -549,7 +548,6 @@ const LlvmEmitter = struct {
         self.impl_methods.deinit();
         self.bind_thunks.deinit();
         self.backend_names.deinit();
-        self.struct_decl_artifacts.deinit(self.allocator);
         self.global_types.deinit();
         self.global_is_const.deinit();
         self.global_initializers.deinit();
@@ -591,7 +589,6 @@ const LlvmEmitter = struct {
                     if (struct_decl.abi) |abi| {
                         if (!std.mem.eql(u8, abi, "mmio")) return error.UnsupportedLlvmEmission;
                     }
-                    try self.struct_decl_artifacts.append(self.allocator, struct_decl);
                     try self.struct_types.put(struct_decl.name.text, struct_decl);
                 },
                 .overlay_union_decl => {},
@@ -601,7 +598,13 @@ const LlvmEmitter = struct {
     }
 
     fn collectStructArtifacts(self: *LlvmEmitter) !void {
-        for (self.struct_decl_artifacts.items) |struct_decl| try self.collectStruct(struct_decl);
+        for (self.decl_artifacts) |artifact| switch (artifact) {
+            .type_decl => |type_decl| switch (type_decl) {
+                .struct_decl => |struct_decl| try self.collectStruct(struct_decl),
+                else => {},
+            },
+            else => {},
+        };
     }
 
     fn collectStruct(self: *LlvmEmitter, struct_decl: ast_bridge.StructDecl) !void {
