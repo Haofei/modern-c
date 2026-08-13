@@ -459,7 +459,6 @@ const LlvmEmitter = struct {
     decl_artifacts: []const declaration_artifacts.DeclArtifact = &.{},
     struct_decl_artifacts: std.ArrayList(ast_bridge.StructDecl) = .empty,
     function_decl_artifacts: std.ArrayList(declaration_artifacts.FunctionArtifact) = .empty,
-    global_decl_artifacts: std.ArrayList(declaration_artifacts.GlobalArtifact) = .empty,
     global_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
     global_initializers: std.StringHashMap(ast_bridge.Expr) = undefined,
@@ -553,7 +552,6 @@ const LlvmEmitter = struct {
         self.backend_names.deinit();
         self.struct_decl_artifacts.deinit(self.allocator);
         self.function_decl_artifacts.deinit(self.allocator);
-        self.global_decl_artifacts.deinit(self.allocator);
         self.global_types.deinit();
         self.global_is_const.deinit();
         self.global_initializers.deinit();
@@ -730,7 +728,6 @@ const LlvmEmitter = struct {
     fn collectGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {
         const ty = global.ty orelse return error.UnsupportedLlvmEmission;
         _ = try self.llvmType(ty);
-        try self.global_decl_artifacts.append(self.allocator, global);
         try self.global_types.put(global.name.text, ty);
         try self.global_is_const.put(global.name.text, global.is_const);
         if (global.is_const) {
@@ -812,7 +809,10 @@ const LlvmEmitter = struct {
     }
 
     fn emitCollectedGlobals(self: *LlvmEmitter) !void {
-        for (self.global_decl_artifacts.items) |global| try self.emitGlobal(global);
+        for (self.decl_artifacts) |artifact| switch (artifact) {
+            .global => |global| try self.emitGlobal(global),
+            else => {},
+        };
     }
 
     fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {

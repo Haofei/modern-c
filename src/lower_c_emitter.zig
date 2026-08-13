@@ -242,7 +242,7 @@ pub const CEmitter = struct {
     out: *std.ArrayList(u8),
     scratch: std.heap.ArenaAllocator,
     globals: std.StringHashMap(GlobalInfo),
-    global_decl_artifacts: std.ArrayList(declaration_artifacts.GlobalArtifact) = .empty,
+    decl_artifacts: []const declaration_artifacts.DeclArtifact = &.{},
     static_initializers: std.StringHashMap(ast_bridge.Expr),
     type_aliases: std.StringHashMap(ast_bridge.TypeExpr),
     functions: std.StringHashMap(FnInfo),
@@ -425,7 +425,6 @@ pub const CEmitter = struct {
         self.const_fns.deinit();
         eval.deinitConstGlobals(self.allocator, &self.const_globals);
         self.static_initializers.deinit();
-        self.global_decl_artifacts.deinit(self.allocator);
         self.globals.deinit();
     }
 
@@ -435,6 +434,7 @@ pub const CEmitter = struct {
     }
 
     fn collectModule(self: *CEmitter, early_metadata: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
+        self.decl_artifacts = early_metadata.decl_artifacts;
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectConstGlobals();
@@ -505,7 +505,6 @@ pub const CEmitter = struct {
     }
 
     fn collectGlobalDeclArtifact(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
-        try self.global_decl_artifacts.append(self.allocator, global);
         if (global.ty) |ty| {
             var info = try self.globalInfoFromType(ty);
             info.is_const = global.is_const;
@@ -635,7 +634,10 @@ pub const CEmitter = struct {
         // in an imported module). Globals are simple `static` definitions, so
         // emitting them first satisfies C's declare-before-use without needing
         // forward declarations.
-        for (self.global_decl_artifacts.items) |global| try self.emitGlobal(global);
+        for (self.decl_artifacts) |artifact| switch (artifact) {
+            .global => |global| try self.emitGlobal(global),
+            else => {},
+        };
     }
 
     pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
