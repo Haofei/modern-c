@@ -5580,7 +5580,6 @@ llvm-vmctx-test`, `zig build llvm-sched-vm-test`, `zig build llvm-ipc-test`,
 llvm-paging-activate-test`, `zig build llvm-demand-test`, `zig build
 llvm-mmap-test`, `zig build llvm-contain-test`, `zig build llvm-cow-test`, and
 `zig build llvm-isolation-test`, `zig build
-llvm-rtc-test`, `zig build
 llvm-driver-test`, and `zig build
 llvm-preempt-test`, `zig build llvm-smp-test`, `zig build
 llvm-smp-lock-test`, `zig build llvm-ipi-test`, `zig build llvm-virtio-test`, and `zig build

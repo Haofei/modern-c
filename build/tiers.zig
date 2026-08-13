@@ -125,7 +125,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-demand-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mmap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-paging-activate-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-rtc-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-driver-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-preempt-test"));
     // llvm-ledger-test runs the LLVM-lowered unified resource ledger under QEMU.
@@ -339,7 +338,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("tryelse-test"));
     m0_full_step.dependOn(ctx.cmd("byteview-test"));
     m0_full_step.dependOn(ctx.cmd("scan-test"));
-    m0_full_step.dependOn(ctx.cmd("rtc-test"));
     m0_full_step.dependOn(ctx.cmd("contain-test"));
     m0_full_step.dependOn(ctx.cmd("fdt-test"));
     m0_full_step.dependOn(ctx.cmd("sbi-boot-test"));

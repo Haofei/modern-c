@@ -113,7 +113,7 @@ sits inside an `unsafe`/`unsafe_contract` region (re-run the lint for the live c
 
 | Category | Count | Gate | Where the load-bearing ones live |
 |---|---:|---|---|
-| `raw.load` / `raw.store` | 142 | unsafe block | The raw-register/MMIO path. Concentrated in the driver/MMIO/runtime layers: `kernel/drivers/irq/plic.mc`, `std/mmio.mc`, `std/bytes.mc`, `std/mem.mc`, `std/libc.mc`, `kernel/core/time.mc`, `kernel/drivers/timer/clint.mc`, `std/dma.mc`, `std/vec.mc`. This is the **S0.3 strict-aliasing** surface. |
+| `raw.load` / `raw.store` | 142 | unsafe block | The raw-register/MMIO path. Concentrated in the driver/MMIO/runtime layers: `kernel/drivers/irq/plic.mc`, `std/mmio.mc`, `std/bytes.mc`, `std/mem.mc`, `std/libc.mc`, `kernel/drivers/timer/clint.mc`, `std/dma.mc`, `std/vec.mc`. This is the **S0.3 strict-aliasing** surface. |
 | `mmio.map<T>` | 1 | unsafe block | `kernel/drivers/rng/rng.mc:63` (`mmio.map<VirtioMmio>(phys(addr))`) — the typed-MMIO-view mint. |
 | `raw.ptr<T>` | 20 | tracked | Mostly typed address wrappers and hosted/runtime plumbing. Minting only; derefs are checked. |
 | raw-many `.offset()` | 0 | unsafe block | — none currently. |

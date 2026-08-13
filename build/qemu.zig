@@ -298,8 +298,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "mutex-test", "sleeping Mutex: try_lock, blocking enqueue, FIFO hand-off on unlock", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mutex-test" });
 
-    _ = h.addScriptTest(ctx, "rtc-test", "Wall-clock via goldfish-RTC: read the 64-bit epoch and assert a plausible live 'now'", &.{ "bash", "tools/arch/rtc-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-rtc-test", "Run LLVM-lowered goldfish-RTC MMIO under QEMU", &.{ "bash", "tools/arch/rtc-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "contain-test", "MMU crash containment", &.{ "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-contain-test", "Run LLVM-lowered MMU crash containment under QEMU", &.{ "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "fdt-test", "Device-tree (FDT) header parsing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test" });
