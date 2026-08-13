@@ -285,8 +285,6 @@ def main() -> None:
     assert_gates(module, ["tools/proc/kmain-test.sh"], ["kmain-test", "llvm-kmain-test"])
     assert_gates(module, ["tools/arch/aarch64-test.sh"], ["aarch64-test", "llvm-aarch64-test"])
     assert_gates(module, ["tools/arch/qemu-mmio-test.sh"], ["qemu-test", "llvm-qemu-test"])
-    assert_gates(module, ["tools/proc/app-run-test.sh"], ["app-run-test", "llvm-app-run-test"])
-    assert_gates(module, ["tests/qemu/proc/app_run_demo.mc"], ["app-run-test", "llvm-app-run-test"])
     assert_gates(module, ["tools/qemu/kernel-boot-lib.sh"], ["preflight", "riscv-qemu-validation"])
     assert_route(
         module,

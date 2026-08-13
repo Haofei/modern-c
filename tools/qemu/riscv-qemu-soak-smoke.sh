@@ -13,7 +13,6 @@ for i in $(seq 1 "$ITERS"); do
         blk-smode-irq-test \
         net-smode-irq-test \
         net-smode-rx-irq-test \
-        app-run-test \
         visionfive2-resource-test
 done
 

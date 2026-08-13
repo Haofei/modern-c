@@ -347,7 +347,7 @@ now use smaller runtime ABI fixtures to exercise userspace calls, async polling,
 C/LLVM lowering. These fixtures are not a production capability broker and do not define a
 native OS surface.
 
-Gates: `cap-test`, `app-run-test`.
+Gates: `cap-test`, `elf-run-test`, `uaccess-pt-test`.
 
 ### 10.4 Signals — IMPLEMENTED (kernel primitive only)
 

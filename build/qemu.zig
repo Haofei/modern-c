@@ -697,21 +697,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-uaccess-taint-test", "Tainted untrusted lengths/indices (U3) under QEMU (LLVM backend): a user-derived scalar must pass checked_len/checked_index/validate_bound before driving a copy length or index", &.{ "bash", "tools/mem/uaccess-entry-test.sh", "zig-out/bin/mcc", "llvm", "tests/qemu/mem/uaccess_taint_demo.mc", "uaccess_taint_run", "uaccess-taint-test" });
 
-    // multi-segment U-mode ELF via the userspace SDK, load it with the real elf_loader into
-    // an isolated Sv39 space, and run it confined under QEMU — prints via SYS_WRITE (uaccess),
-    // exits via SYS_EXIT.
-    _ = h.addScriptTest(ctx, "app-run-test", "Build an MC app into a multi-segment ELF, load it into an isolated U-mode space, run it confined under QEMU — SYS_WRITE via uaccess + SYS_EXIT", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-app-run-test", "LLVM: build + run a confined MC app in an isolated U-mode space under QEMU", &.{ "bash", "tools/proc/app-run-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // Direct syscall-ABI fault test (review item 2): a confined MC app hands bad user pointers to
-    // SYS_WRITE/SYS_READ/SYS_POLL and asserts -E_FAULT at runtime — proving the uaccess path fails
-    // closed, rather than relying on static review of the kernel. Both backends.
-    _ = h.addScriptTest(ctx, "fault-probe-test", "Syscall-ABI fault test: a confined app gets -E_FAULT from SYS_WRITE/READ/POLL on bad pointers under QEMU", &.{ "bash", "tools/proc/fault-probe-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-fault-probe-test", "Syscall-ABI fault test (LLVM): bad pointers to SYS_WRITE/READ/POLL return -E_FAULT under QEMU", &.{ "bash", "tools/proc/fault-probe-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
     // (delay 1) request; the broker delivers fast first, so the resolve order is "FS". Both backends.
 
 

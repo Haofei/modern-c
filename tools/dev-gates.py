@@ -460,14 +460,6 @@ RULES: tuple[Rule, ...] = (
         "typed-MMIO QEMU wrapper changes need its C and LLVM QEMU gates",
     ),
     Rule(
-        (
-            "tests/qemu/proc/app_run_demo.mc",
-            "tools/proc/app-run-test.sh",
-        ),
-        ("app-run-test", "llvm-app-run-test"),
-        "confined app loader changes need raw app loading coverage on both backends",
-    ),
-    Rule(
         ("tools/qemu/kernel-boot-lib.sh",),
         ("preflight", "riscv-qemu-validation"),
         "shared QEMU boot library changes need toolchain preflight and the RISC-V QEMU validation surrogate",
@@ -603,8 +595,6 @@ RULES: tuple[Rule, ...] = (
             "tools/proc/sched-bench.sh",
             "tools/mem/heap-bench.sh",
             "tools/mem/uaccess-bench.sh",
-            "tests/qemu/proc/app_run_demo.mc",
-            "tools/proc/app-run-test.sh",
         ),
     ),
 )

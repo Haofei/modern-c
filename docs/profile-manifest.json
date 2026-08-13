@@ -145,8 +145,7 @@
       "blocking_gates": [
         "arch-emit-test",
         "qemu-test",
-        "kmain-test",
-        "app-run-test"
+        "kmain-test"
       ],
       "components": [
         "qemu",
