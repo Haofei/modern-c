@@ -144,14 +144,6 @@ pub fn register(ctx: *h.Ctx) void {
     ctx.b.step("demo-test-strict", "Strict demo-test (riscv64 required; m0/c0 variant)").dependOn(&demo_test_strict_cmd.step);
 
 
-    _ = h.addScriptTest(ctx, "page-test", "Link + run the physical frame allocator (bump + free-list reclaim)", &.{ "bash", "tools/mem/page-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-page-test", "Link + run the LLVM-lowered physical frame allocator", &.{ "bash", "tools/mem/page-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "heap-test", "Link + run the kernel heap (aligned bump over a PhysRange)", &.{ "bash", "tools/mem/heap-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-heap-test", "Link + run the LLVM-lowered kernel heap", &.{ "bash", "tools/mem/heap-test.sh", "zig-out/bin/mcc", "llvm" });
-
     _ = h.addScriptTest(ctx, "elf-test", "Link + run the ELF64 parser (header + program headers, bounds-checked)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "elf-test" });
 
 

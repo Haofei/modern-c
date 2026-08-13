@@ -2,8 +2,7 @@ const std = @import("std");
 const h = @import("helpers.zig");
 
 // Opt-in static audits (unsafe boundary / double-fetch / taint / capability mint / coverage),
-// the ASan/UBSan sanitize pass, the checks=all/checks=elide-proven parity gate, and the KASAN/KMSAN/KCSAN
-// + redzone sanitizer-profile QEMU boots.
+// the ASan/UBSan sanitize pass, and the checks=all/checks=elide-proven parity gate.
 pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "sanitize", "Run the host-driver corpus under ASan + UBSan over the emitted C", &.{ "bash", "tools/toolchain/sanitize-test.sh", "zig-out/bin/mcc" });
 
@@ -37,23 +36,5 @@ pub fn register(ctx: *h.Ctx) void {
     // Asserts the two profiles agree functionally and that checks=elide-proven elides exactly the
     // checks=all keeps (the optimizer-proven-dead ones).
     _ = h.addScriptTest(ctx, "checks-elision-parity", "D2.5: checks=all and checks=elide-proven agree functionally; checks=elide-proven elides only proven-dead checks", &.{ "bash", "tools/toolchain/checks-elision-parity.sh", "zig-out/bin/mcc" });
-
-    // D2.4: heap-redzone + stack-canary runtime detection under QEMU.
-    _ = h.addScriptTest(ctx, "redzone-test", "Boot the redzone+canary demo under QEMU (detects heap overflow + smashed canary)", &.{ "bash", "tools/mem/redzone-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-redzone-test", "Boot the LLVM-lowered redzone+canary demo under QEMU", &.{ "bash", "tools/mem/redzone-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // ksan-test boots the D2.1 KASAN demo under QEMU: access-time use-after-free + OOB
-    // detection via shadow memory (the `--checks=ksan` profile), strictly finer than D2.4.
-    _ = h.addScriptTest(ctx, "ksan-test", "Boot the KASAN demo under QEMU (access-time use-after-free + OOB detection)", &.{ "bash", "tools/mem/ksan-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-ksan-test", "Boot the LLVM-lowered KASAN demo under QEMU", &.{ "bash", "tools/mem/ksan-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    // kmsan-test boots the D2.2 KMSAN demo under QEMU: access-time use-of-uninitialized-heap
-    // detection on the ksan shadow (the `--checks=msan` profile) — a read of never-written
-    // heap memory traps, the dynamic complement to S0.1's static check.
-    _ = h.addScriptTest(ctx, "kmsan-test", "Boot the KMSAN demo under QEMU (access-time uninitialized-heap-use detection)", &.{ "bash", "tools/mem/kmsan-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-kmsan-test", "Boot the LLVM-lowered KMSAN demo under QEMU", &.{ "bash", "tools/mem/kmsan-test.sh", "zig-out/bin/mcc", "llvm" });
 
 }

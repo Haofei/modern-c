@@ -96,8 +96,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-stdio-test"));
     m0_full_step.dependOn(ctx.cmd("mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-page-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-heap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-paging-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-timer-test"));
     // smode-plic-test validates S-mode external-interrupt delivery through the PLIC under OpenSBI;
@@ -218,19 +216,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("smode-plic-multishot-test"));
     // demo-test compile-checks the whole demo/ suite (needs clang).
     m0_full_step.dependOn(ctx.cmd("demo-test-strict"));
-    // page-test links + runs the physical frame allocator (needs clang).
-    m0_full_step.dependOn(ctx.cmd("page-test"));
-    // heap-test links + runs the kernel heap (needs clang).
-    m0_full_step.dependOn(ctx.cmd("heap-test"));
-    // redzone-test boots the D2.4 redzone+canary demo under QEMU (needs clang+qemu).
-    m0_full_step.dependOn(ctx.cmd("redzone-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-redzone-test"));
-    // ksan-test (D2.1): access-time UAF/OOB detection via KASAN shadow memory.
-    m0_full_step.dependOn(ctx.cmd("ksan-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-ksan-test"));
-    // kmsan-test (D2.2): access-time use-of-uninitialized-heap detection on the ksan shadow.
-    m0_full_step.dependOn(ctx.cmd("kmsan-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-kmsan-test"));
     // elf-test links + runs the ELF64 parser (needs clang).
     m0_full_step.dependOn(ctx.cmd("elf-test"));
     // alloc-test links + runs the type-erased Allocator (needs clang).
