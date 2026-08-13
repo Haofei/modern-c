@@ -21,7 +21,7 @@ history; this file should describe only current compiler-core direction.
 | P0 | `VerifiedProgram` narrowing | Remove AST-shaped semantic ingress from backend entrypoints; keep source spelling and spans mechanics-only. |
 | P0 | Test speed and sharding | Keep the cheap `m0`/`fast` loop focused; leave broad sweeps in `m0-full` and parallel runners. |
 | P1 | Module identity | Move away from text-inclusion identity toward per-file source, module, definition, type, and body IDs. |
-| P1 | QEMU validation boundary | Keep RISC-V/QEMU fixtures only where they validate language, ABI, MMIO, syscall, ownership, or backend-lowering behavior. |
+| P1 | QEMU validation boundary | Keep RISC-V/QEMU fixtures only where they validate language, ABI, MMIO, ownership, trap/interrupt behavior, or backend lowering. |
 | P2 | Fuzzing and independent oracles | Expand fuzz generators only where generated programs can lower into runnable C/LLVM comparisons. |
 | P2 | Tooling polish | Improve formatter, diagnostics, and symbol output as needed by active language work. |
 
