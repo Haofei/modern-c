@@ -1,8 +1,7 @@
 // kernel/core/mmio_console — tiny number/string formatting over the bare 16550
-// UART sink (`console_putc`), in PURE MC. The M-mode analogue of
-// kernel/arch/riscv64/sbi_console: an M-mode kernel booted with `-bios none` has
-// NO firmware, so there is no SBI console ecall — it writes bytes straight to the
-// 16550 transmit register (kernel/core/console).
+// UART sink (`console_putc`), in PURE MC. An M-mode kernel booted with
+// `-bios none` has NO firmware, so MMIO UART remains the minimal console path:
+// it writes bytes straight to the 16550 transmit register (kernel/core/console).
 //
 // The digit/nibble arithmetic lives once in `std/fmt_sink` (`fmt_put_*`); this module
 // is the thin binding of those renderers to the bare-UART `console_putc` sink, so

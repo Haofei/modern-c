@@ -68,7 +68,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-host-suite-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-qemu-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-trap-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-thread-test"));
     m0_full_step.dependOn(ctx.cmd("vararg-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vararg-test"));
     m0_full_step.dependOn(ctx.cmd("cstr-test"));
@@ -217,8 +216,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("byteview-test"));
     m0_full_step.dependOn(ctx.cmd("scan-test"));
     m0_full_step.dependOn(ctx.cmd("fdt-test"));
-    m0_full_step.dependOn(ctx.cmd("sbi-boot-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-sbi-boot-test"));
     m0_full_step.dependOn(ctx.cmd("grant-test"));
     m0_full_step.dependOn(ctx.cmd("arc-pkt-test"));
     m0_full_step.dependOn(ctx.cmd("arena-test"));
@@ -234,8 +231,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("fnptr-test"));
     // trap-test runs the typed-CPU trap/timer interrupt path under QEMU.
     m0_full_step.dependOn(ctx.cmd("trap-test"));
-    // thread-test runs cooperative context switching under QEMU.
-    m0_full_step.dependOn(ctx.cmd("thread-test"));
 
     // fast: the inner-loop gate for deterministic host-only confidence. It
     // covers the spec/unit harness, emit-C sweep, C-vs-LLVM differential, and

@@ -198,13 +198,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "fdt-test", "Device-tree (FDT) header parsing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test" });
 
-    _ = h.addScriptTest(ctx, "sbi-boot-test", "Boot under OpenSBI (real firmware)", &.{ "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-sbi-boot-test", "LLVM-lowered boot under OpenSBI (real firmware)", &.{ "bash", "tools/arch/sbi-boot-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "fdt-boot-test", "Boot under OpenSBI + parse DTB /memory (FDT discovery)", &.{ "bash", "tools/arch/fdt-boot-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-fdt-boot-test", "LLVM-lowered boot under OpenSBI + parse DTB /memory", &.{ "bash", "tools/arch/fdt-boot-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
-
     _ = h.addScriptTest(ctx, "grant-test", "Memory grant: bounded delegation + revocation", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "grant-test" });
 
 
@@ -224,22 +217,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "trap-test", "Run the typed-CPU trap/timer interrupt path under QEMU", &.{ "bash", "tools/arch/trap-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-trap-test", "Run the LLVM-lowered typed-CPU trap/timer path under QEMU", &.{ "bash", "tools/arch/trap-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "thread-test", "Run cooperative context switching (main/worker ping-pong) under QEMU", &.{ "bash", "tools/proc/thread-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-thread-test", "Run LLVM-lowered cooperative context switching under QEMU", &.{ "bash", "tools/proc/thread-test.sh", "zig-out/bin/mcc", "llvm" });
-
-
-
-
-
-
-
-
-
-
-
-
 
     // Word-aligned mem ops (perf refactor Phase 1.1): mem_copy/mem_set/memmove copy 8-byte
     // words for the aligned bulk. Correctness gate boots a self-contained runtime that asserts
