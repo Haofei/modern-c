@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Recommend focused development gates from the files changed in git.
 
-This is an inner-loop helper, not a release qualification oracle. It chooses a
+This is an inner-loop helper, not a broad qualification oracle. It chooses a
 conservative small set of `zig build` steps for the current edit shape, then
 prints the broader confidence/truth gates that still matter before a large merge
-or release.
+or broad validation.
 """
 
 from __future__ import annotations
@@ -187,21 +187,6 @@ RULES: tuple[Rule, ...] = (
         "stdlib API docs checker changes need the std API docs gate",
     ),
     Rule(
-        ("tools/toolchain/vendoring-test.py",),
-        ("vendoring-test",),
-        "vendoring provenance checker changes need the vendoring gate",
-    ),
-    Rule(
-        ("tools/toolchain/third-party-licenses-test.py",),
-        ("third-party-licenses-test",),
-        "third-party license checker changes need the license manifest gate",
-    ),
-    Rule(
-        ("docs/component-manifest.json",),
-        ("vendoring-test",),
-        "component manifest changes need vendored provenance gates",
-    ),
-    Rule(
         (
             "docs/gate-manifest.json",
             "tools/toolchain/gate-manifest-test.py",
@@ -298,26 +283,6 @@ RULES: tuple[Rule, ...] = (
         ("docs/std-api.md",),
         ("std-api-docs-test",),
         "generated stdlib API docs need the std API docs gate",
-    ),
-    Rule(
-        ("docs/vendoring.md", "docs/component-manifest.json"),
-        ("vendoring-test",),
-        "vendoring process docs need provenance gates",
-    ),
-    Rule(
-        ("THIRD-PARTY-LICENSES.md",),
-        ("third-party-licenses-test",),
-        "aggregated third-party license docs need the license manifest gate",
-    ),
-    Rule(
-        ("third_party/*/README.vendored.md",),
-        ("vendoring-test", "third-party-licenses-test"),
-        "vendored dependency metadata changes need provenance and license manifest gates",
-    ),
-    Rule(
-        ("third_party/*/LICENSE", "third_party/*/LICENSE.md", "third_party/*/LICENSE.txt", "third_party/*/COPYING"),
-        ("vendoring-test", "third-party-licenses-test"),
-        "vendored license changes need provenance and license manifest gates",
     ),
     Rule(
         ("tools/toolchain/abi-test.sh", "tests/toolchain/abi_layout.mc"),

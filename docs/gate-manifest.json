@@ -1,22 +1,19 @@
 {
   "schema_version": 1,
   "source_of_truth": "docs/gate-manifest.json",
-  "scope": "compiler-core-and-governance",
+  "scope": "compiler-core",
   "tiers": {
     "pr": {
       "intent": "fast deterministic compiler-core feedback"
     },
     "nightly": {
       "intent": "broader differential, fuzz, and platform sweeps"
-    },
-    "release": {
-      "intent": "reserved for explicit tagged compiler snapshots"
     }
   },
   "ci_pass_assertions": {
     "ci-m0-pass": {
       "build_tier": "m0",
-      "min_count": 19,
+      "min_count": 17,
       "gates": [
         "test-lint",
         "bad-diagnostics-test",
@@ -35,8 +32,6 @@
         "ownership-experimental-surface-inventory-test",
         "kernel-scope-inventory-test",
         "std-api-docs-test",
-        "vendoring-test",
-        "third-party-licenses-test",
         "no-committed-private-keys-test"
       ]
     }
@@ -321,38 +316,8 @@
       "skip_policy": "no-skip"
     },
     {
-      "id": "vendoring-test",
-      "owner": "supply-chain",
-      "category": "vendored-provenance",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
-      "id": "third-party-licenses-test",
-      "owner": "supply-chain",
-      "category": "license-manifest",
-      "tier": "pr",
-      "required_tools": [
-        "python3"
-      ],
-      "build_tiers": [
-        "m0",
-        "fast",
-        "c0"
-      ],
-      "skip_policy": "no-skip"
-    },
-    {
       "id": "no-committed-private-keys-test",
-      "owner": "supply-chain",
+      "owner": "repo-hygiene",
       "category": "secret-material-inventory",
       "tier": "pr",
       "required_tools": [

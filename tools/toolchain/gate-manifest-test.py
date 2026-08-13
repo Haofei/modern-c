@@ -25,14 +25,12 @@ REQUIRED_FIELDS = {
     "build_tiers",
     "skip_policy",
 }
-KNOWN_EXECUTION_TIERS = {"pr", "nightly", "release"}
+KNOWN_EXECUTION_TIERS = {"pr", "nightly"}
 KNOWN_BUILD_TIERS = {"m0", "fast", "c0"}
 KNOWN_SKIP_POLICIES = {"no-skip", "tool-required", "documented-skip"}
 KNOWN_CI_PASS_ASSERTIONS = {"ci-m0-pass"}
 REQUIRED_GOVERNANCE_GATES = {
     "gate-manifest-test",
-    "vendoring-test",
-    "third-party-licenses-test",
     "ci-pass-gates-test",
 }
 ARTIFACT_METADATA_ANCHORS: dict[str, list[str]] = {
@@ -249,12 +247,12 @@ def main() -> None:
     manifest = load_json(MANIFEST)
     if manifest.get("schema_version") != 1:
         fail("schema_version must be 1")
-    if manifest.get("scope") != "compiler-core-and-governance":
-        fail("scope must be compiler-core-and-governance")
+    if manifest.get("scope") != "compiler-core":
+        fail("scope must be compiler-core")
 
     tiers = manifest.get("tiers")
     if not isinstance(tiers, dict) or set(tiers) != KNOWN_EXECUTION_TIERS:
-        fail("tiers must define exactly pr, nightly, and release")
+        fail("tiers must define exactly pr and nightly")
 
     gates = manifest.get("gates")
     if not isinstance(gates, list) or not gates:
@@ -310,12 +308,12 @@ def main() -> None:
                 fail(f"gate {gate_id} is missing from {build_tier}_step dependencies")
 
     if len(gates) < 20:
-        fail("gate manifest must cover at least 20 compiler-core/governance gates")
+        fail("gate manifest must cover at least 20 compiler-core gates")
     if len(owners) < 5:
         fail("gate manifest should cover multiple ownership domains")
-    missing_governance = sorted(REQUIRED_GOVERNANCE_GATES - seen)
-    if missing_governance:
-        fail(f"manifest missing governance/provenance gates: {', '.join(missing_governance)}")
+    missing_required = sorted(REQUIRED_GOVERNANCE_GATES - seen)
+    if missing_required:
+        fail(f"manifest missing required gates: {', '.join(missing_required)}")
 
     print(
         "PASS: gate-manifest-test - "

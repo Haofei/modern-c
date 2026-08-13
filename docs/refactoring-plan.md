@@ -55,7 +55,7 @@ boundary is stable:
 | 1 | Typed MIR identity | `ARCH-TYPED-MIR` | backend-critical types, symbols, values, ABI/layout, representation, and control facts are typed or verifier-owned. |
 | 2 | `VerifiedProgram` narrowing | `ARCH-TYPED-MIR`, `ARCH-BACKEND-FACTS` | production backend entrypoints no longer expose AST as semantic input. |
 | 3 | Artifact provenance | `ARCH-SOURCE-MAP-DIGEST` | emitted bytes, source maps, lowering options, source/MIR digests, and tool identity are bound together. |
-| 4 | Manifest-backed governance | `GATE-MANIFEST`, `COMPONENT-PROFILE-MINIMIZATION` | build/CI/release/docs read status from manifests instead of Markdown counters. |
+| 4 | Manifest-backed gates | `GATE-MANIFEST` | build/CI/docs read compiler-core gate status from one manifest instead of Markdown counters. |
 | 5 | Profile-scoped kernel hardening | `KERNEL-CAPABILITY-MINT`, `HARDWARE-PRODUCTION-QUALIFICATION` | production capability/hardware claims are type-gated and evidence-backed. |
 
 Phases 0–2 are the default work. Phases 3–5 should not displace compiler P0
@@ -141,16 +141,15 @@ Done when:
 
 - wrong artifact/map pairings are rejected;
 - failed or interrupted `build` does not corrupt an existing output;
-- release evidence names the same artifact digest produced locally.
+- local artifact metadata names the same artifact digest produced locally.
 
 ## Phase 4 — make manifests authoritative
 
-Purpose: stop Markdown, CI, release, and build files from carrying competing
-status truth.
+Purpose: stop Markdown, CI, and build files from carrying competing compiler-core
+gate status truth.
 
 Authoritative inputs:
 
-- `docs/component-manifest.json`;
 - `docs/gate-manifest.json`.
 
 Work items:
@@ -176,7 +175,7 @@ Do these in order unless a failing test forces a narrower slice:
 | 2 | Remove or quarantine the next backend-local semantic helper. | `semantic-facts-inventory-test` passes and the touched backend test proves missing facts fail closed. |
 | 3 | Convert the next backend-critical fact family toward typed IDs or verifier-owned facts. | MIR admission rejects stale/forged identity before C or LLVM emission. |
 | 4 | Narrow the next `VerifiedProgram` or codegen request syntax ingress. | Production C/LLVM entrypoints keep syntax mechanics explicit and exact-count-gated. |
-| 5 | Keep active governance in manifests and short plans, not completed-patch ledgers. | Completed work is represented by Git history and ratchet tests; this document only carries the next execution order. |
+| 5 | Keep active gate status in manifests and short plans, not completed-patch ledgers. | Completed work is represented by Git history and ratchet tests; this document only carries the next execution order. |
 
 Default next patch: continue Phase 0/1 compiler authority work unless a narrower
 compatibility-surface deletion is available and independently verifiable.
@@ -190,7 +189,7 @@ A patch is complete only if it includes:
 - the code change;
 - one focused regression, inventory check, or manifest check;
 - documentation/risk-register changes only when the claim changes;
-- no unrelated kernel/product/release edits.
+- no unrelated kernel/product edits.
 
 Split the patch if it:
 

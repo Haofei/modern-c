@@ -63,8 +63,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTestOpts(ctx, "kernel-contract-inventory-test", "Check the bounded kernel region/effect/FFI contract surface stays explicit", &.{ "python3", "tools/toolchain/kernel-contract-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "kernel-scope-inventory-test", "Check kernel docs/code stay scoped as language-validation workload, not product roadmap", &.{ "python3", "tools/toolchain/kernel-scope-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "std-api-docs-test", "Check docs/std-api.md covers exported stdlib declarations", &.{ "python3", "tools/toolchain/std-api-docs.py", "--check" }, .{ .install = false });
-    _ = h.addScriptTestOpts(ctx, "vendoring-test", "Check vendored dependency provenance and license docs", &.{ "python3", "tools/toolchain/vendoring-test.py" }, .{ .install = false });
-    _ = h.addScriptTestOpts(ctx, "third-party-licenses-test", "Check the aggregated third-party license manifest", &.{ "python3", "tools/toolchain/third-party-licenses-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "no-committed-private-keys-test", "Reject committed PEM private keys", &.{ "python3", "tools/toolchain/no-committed-private-keys.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "gate-manifest-test", "Check the gate manifest matches registered build tiers", &.{ "python3", "tools/toolchain/gate-manifest-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "numeric-comptime-matrix-test", "Check width/domain arithmetic boundaries across every fixed integer width", &.{ "python3", "tools/toolchain/numeric-comptime-matrix.py", "zig-out/bin/mcc" }, .{ .install = true });

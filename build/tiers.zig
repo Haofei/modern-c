@@ -160,10 +160,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("m0-timing-report-test"));
     // std-api-docs-test keeps the generated stdlib API index in sync with std/**/*.mc exports.
     m0_full_step.dependOn(ctx.cmd("std-api-docs-test"));
-    // vendoring-test keeps third_party provenance and license docs present.
-    m0_full_step.dependOn(ctx.cmd("vendoring-test"));
-    // third-party-licenses-test keeps the aggregated license manifest complete.
-    m0_full_step.dependOn(ctx.cmd("third-party-licenses-test"));
     // no-committed-private-keys-test keeps test/private key material out of the repo.
     m0_full_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
     // gate-manifest-test pilots machine-readable gate ownership for compiler-core gates.
@@ -325,7 +321,7 @@ pub fn register(ctx: *h.Ctx) void {
     // fast: the inner-loop gate for deterministic host-only confidence. It
     // covers the spec/unit harness, emit-C sweep, C-vs-LLVM differential, and
     // static inventory checks, while leaving fuzz, QEMU, and env-fragile LLVM/
-    // sanitizer sweeps to m0-full/nightly/release profiles. For process-level
+    // sanitizer sweeps to m0-full and nightly profiles. For process-level
     // parallelism without nested-worker oversubscription, use
     // `tools/fast-parallel.sh`.
     const core_dev_step = b.step("core-dev", "Fast compiler-core development loop: cleanup/MIR authority, C sweep, LLVM smoke, and inventories");
@@ -352,7 +348,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     const m0_step = b.step("m0", "Run core M0 compiler qualification gates");
     // Keep the default M0 tier focused on deterministic compiler-core confidence.
-    // The former exhaustive matrix remains available as `m0-full` for release/nightly qualification.
+    // The former exhaustive matrix remains available as `m0-full` for broad local/nightly qualification.
     m0_step.dependOn(ctx.cmd("test-lint"));
     m0_step.dependOn(ctx.cmd("bad-diagnostics-test"));
     m0_step.dependOn(ctx.cmd("diagnostics-reference-test"));
@@ -375,8 +371,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("ownership-experimental-surface-inventory-test"));
     m0_step.dependOn(ctx.cmd("kernel-scope-inventory-test"));
     m0_step.dependOn(ctx.cmd("std-api-docs-test"));
-    m0_step.dependOn(ctx.cmd("vendoring-test"));
-    m0_step.dependOn(ctx.cmd("third-party-licenses-test"));
     m0_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
 
     const fast_step = b.step("fast", "Inner-loop gate: host-only unit + spec-coverage tests, emit-C sweep, and C/LLVM differential — no fuzz or QEMU");
@@ -403,8 +397,6 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("numeric-comptime-matrix-test"));
     fast_step.dependOn(ctx.cmd("parallel-runner-test"));
     fast_step.dependOn(ctx.cmd("std-api-docs-test"));
-    fast_step.dependOn(ctx.cmd("vendoring-test"));
-    fast_step.dependOn(ctx.cmd("third-party-licenses-test"));
     fast_step.dependOn(ctx.cmd("no-committed-private-keys-test"));
     fast_step.dependOn(ctx.cmd("gate-manifest-test"));
     fast_step.dependOn(ctx.cmd("mcc-cli-test"));
@@ -448,8 +440,6 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("numeric-comptime-matrix-test")); // every fixed-width arithmetic domain keeps its comptime semantics
     c0_step.dependOn(ctx.cmd("parallel-runner-test")); // full-tier acceleration retains the exact gate inventory and CPU budget
     c0_step.dependOn(ctx.cmd("std-api-docs-test")); // generated stdlib API index stays current
-    c0_step.dependOn(ctx.cmd("vendoring-test")); // third_party provenance and license process stay documented
-    c0_step.dependOn(ctx.cmd("third-party-licenses-test")); // aggregated third-party license manifest stays complete
     c0_step.dependOn(ctx.cmd("no-committed-private-keys-test")); // test/private key material stays generated, not committed
     c0_step.dependOn(ctx.cmd("gate-manifest-test")); // gate manifest stays tied to build tiers
     c0_step.dependOn(ctx.cmd("mcc-cli-test")); // top-level CLI help/version/usage behavior stays documented

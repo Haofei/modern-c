@@ -6,7 +6,7 @@
 # many-core box. This runner executes the SAME gate set as concurrent `zig build <gate>` PROCESSES —
 # process-level parallelism, which the OS does spread across all cores (verified) — for the same
 # pass/fail at a fraction of the wall time. Use it for fast local full-matrix runs; `zig build m0-full`
-# remains the canonical (deterministic, serial) release gate.
+# remains the canonical deterministic serial gate.
 #
 # Usage: tools/m0-parallel.sh [jobs]      (jobs default: host CPU count)
 #
