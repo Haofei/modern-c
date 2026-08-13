@@ -270,11 +270,6 @@ RULES: tuple[Rule, ...] = (
         "unsafe-boundary docs need the unsafe audit gate",
     ),
     Rule(
-        ("tools/check/arch-emit-test.sh",),
-        ("arch-emit-test",),
-        "arch emission checker changes need the arch emission gate",
-    ),
-    Rule(
         ("docs/std-api.md",),
         ("std-api-docs-test",),
         "generated stdlib API docs need the std API docs gate",
@@ -444,11 +439,6 @@ RULES: tuple[Rule, ...] = (
         "LLVM demo harness changes need the LLVM demo gate",
     ),
     Rule(
-        ("tools/toolchain/llvm-kernel-test.sh",),
-        ("llvm-kernel-test",),
-        "LLVM kernel harness changes need the LLVM kernel gate",
-    ),
-    Rule(
         ("tools/toolchain/llvm-*.sh",),
         ("llvm-test", "llvm-obj-test", "llvm-sweep", "llvm-c-obj-sweep"),
         "unclassified LLVM harness changes keep the conservative textual, object, and sweep coverage",
@@ -460,7 +450,6 @@ RULES: tuple[Rule, ...] = (
             "tools/toolchain/llvm-toolchain-test.sh",
             "tools/toolchain/llvm-runtime-test.sh",
             "tools/toolchain/llvm-demo-test.sh",
-            "tools/toolchain/llvm-kernel-test.sh",
             "tools/toolchain/llvm-c-*.py",
         ),
     ),

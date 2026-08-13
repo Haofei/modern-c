@@ -5532,7 +5532,7 @@ exported function checks.
 The `zig build llvm-demo-test` gate compiles the gpio/irq/spi/timer/uart
 hardware demo drivers and the hosted elementwise demo through LLVM to non-empty
 object files under the same hidden-assumption token check.
-The `zig build llvm-kernel-test` gate compiles every non-bad `kernel/` module
+Focused QEMU and host-driver gates compile retained freestanding validation modules
 through LLVM to assemblable IR and non-empty target objects, using a RISC-V
 target for the main kernel modules and an x86-64 target for x86 arch modules.
 The `zig build llvm-qemu-test`, `zig build llvm-trap-test`, `zig build

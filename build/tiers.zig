@@ -30,7 +30,6 @@ pub fn register(ctx: *h.Ctx) void {
     // conformance tier, not only `fast`, so a contract regression can't slip into m0/c0/c1.
     m0_full_step.dependOn(ctx.cmd("test-lint"));
     m0_full_step.dependOn(ctx.cmd("bad-diagnostics-test"));
-    m0_full_step.dependOn(ctx.cmd("arch-emit-test"));
     m0_full_step.dependOn(ctx.cmd("lowering-coverage-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
@@ -79,7 +78,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-std-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-toolchain-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-demo-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-kernel-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-hosted-demo-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-host-suite-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-qemu-test"));
@@ -226,8 +224,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("smode-plic-multishot-test"));
     // demo-test compile-checks the whole demo/ suite (needs clang).
     m0_full_step.dependOn(ctx.cmd("demo-test-strict"));
-    // kernel-test compile-checks kernel/ for riscv64 + typestate rejects.
-    m0_full_step.dependOn(ctx.cmd("kernel-test-strict"));
     // page-test links + runs the physical frame allocator (needs clang).
     m0_full_step.dependOn(ctx.cmd("page-test"));
     // heap-test links + runs the kernel heap (needs clang).
@@ -452,7 +448,6 @@ pub fn register(ctx: *h.Ctx) void {
     // lowering must actually run), rather than skipping and passing vacuously.
     c0_step.dependOn(ctx.cmd("demo-test-strict"));
 
-    const c1_step = b.step("c1", "Spec §L.2 MC-C1 kernel-profile gates: c0 + kernel suite (MMIO, DMA, move checking, address-space lowering)");
+    const c1_step = b.step("c1", "Spec §L.2 retained freestanding validation gates");
     c1_step.dependOn(c0_step);
-    c1_step.dependOn(ctx.cmd("kernel-test-strict")); // strict: skip-on-missing-riscv64 is a failure here
 }

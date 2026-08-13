@@ -15,7 +15,8 @@ from it.
 Every fixture-semantics bug this suite has had was a violation of this invariant: a gate
 globbed a directory and compiled *everything* one way. Concretely:
 
-- `kernel/arch/x86_64/*.mc` carry x86 inline asm but were compiled for riscv64.
+- Kernel validation is RISC-V/QEMU-focused; language-level target coverage lives in the
+  standalone target/asm gates, not in extra kernel ports.
 - RISC-V demo runtimes carry inline asm but were compiled for the host.
 - the precise-asm spec fixtures were assembled against the host default triple.
 - `tests/c_emit/initialization.mc` held a *must-reject* function inside a *must-compile* glob.
@@ -29,14 +30,14 @@ route it to the matching expectation.
 | Layer | What it proves | Where | Speed |
 |---|---|---|---|
 | In-process unit tests | front-end/MIR/lowering logic | `zig build test` (`src/**` `test {}` blocks, incl. `src/spec_tests.zig`) | fast, no external tools |
-| Emit + compile-check | emitted C/IR is well-formed for a target | `c-test`, `sweep`, `llvm-sweep`, `llvm-spec-obj-sweep`, `kernel-test`, `demo-test` | fast (clang/llc, no QEMU) |
+| Emit + compile-check | emitted C/IR is well-formed for a target | `c-test`, `sweep`, `llvm-sweep`, `llvm-spec-obj-sweep`, `demo-test` | fast (clang/llc, no QEMU) |
 | Differential / fuzz | C and LLVM backends agree; no soundness holes | `diff-backend`, `mcfuzz/*`, `move-fuzz` | fast, no QEMU |
 | Host-driver execution | runtime behavior on the host | `tools/lib/host-tests.tsv` via `host-harness.sh` | medium |
 | QEMU execution | real boot / low-level behavior | the retained per-feature QEMU gates (`qemu-test`, S-mode timer/PLIC, …) | slow |
 
 Aggregate lanes compose these: **`fast`** = spec + emit-C + differential (no fuzz/QEMU);
 **`c0`** (spec §L.1) = unit + `c-test` + `sweep` + `demo-test`; **`c1`** (spec §L.2) =
-`c0` + `kernel-test`; **`m0`** = the deterministic compiler-core validation set;
+`c0` + retained freestanding fixtures; **`m0`** = the deterministic compiler-core validation set;
 it keeps C-backend smoke coverage but leaves the full `c-test` fixture sweep to
 `fast`/`c0`/`m0-full`; **`m0-full`** = the full conformance set including fuzz,
 host-driver fixtures, and QEMU.
@@ -48,8 +49,8 @@ corpora:
 
 | Outcome | How it is declared | Gate that owns it | Asserted by |
 |---|---|---|---|
-| **Compiles** | default (a file in the must-compile glob) | `c-test`, `kernel-test`, `demo-test`, the spec sweeps | emit-c/llvm + clang/llc succeed |
-| **Rejected with a named diagnostic** | a `// EXPECT: E_CODE` line, in a `bad/` sibling dir | `c-test` (`tests/c_emit/bad/`), `kernel-test` (`kernel/bad/`), `demo-test` (`demo/bad/`) | `mcc check`/`emit-c` fails *and* stderr contains `E_CODE` |
+| **Compiles** | default (a file in the must-compile glob) | `c-test`, `demo-test`, the spec sweeps | emit-c/llvm + clang/llc succeed |
+| **Rejected with a named diagnostic** | a `// EXPECT: E_CODE` line, in a `bad/` sibling dir | `c-test` (`tests/c_emit/bad/`), `demo-test` (`demo/bad/`), diagnostic inventory (`kernel/bad/`) | `mcc check`/`emit-c` fails *and* stderr contains `E_CODE` |
 | **Rejected (spec, per-declaration)** | a `// SPEC: ... EXPECT_ERROR` comment on the negative declaration | the spec sweeps strip it; `src/spec_tests.zig` validates the rejection | declaration removed before emit; reject checked in `spec_tests.zig` |
 | **Not lowerable (checker-only)** | a `phase=sema` fixture whose `check=` is all `E_*` diagnostics | `src/spec_tests.zig` (not the emit sweeps) | listed in the sweep's `OUT_OF_SCOPE` with a documented reason |
 | **Runtime output** | `tools/lib/host-tests.tsv` row, or a QEMU gate's expected serial/pcap | the host-harness / per-gate QEMU script | captured output matches |
@@ -68,7 +69,7 @@ Beyond the outcome, a fixture (or its manifest row) carries the axes a gate must
 
 - **arch** — the target ISA. For kernel modules it is the `kernel/arch/<arch>/` path; for
   inline-asm fixtures it is the ISA the asm is written in. Gates compile per-arch
-  (`kernel-test`, `llvm-kernel-test`) or pin a deterministic triple (`llvm-spec-obj-sweep`,
+  or pin a deterministic triple (`llvm-spec-obj-sweep`,
   `demo-test`) — never the host default.
 - **profile** — kernel vs hosted (the C0/C1 split); selects CFLAGS (`-ffreestanding`,
   `-mcmodel`, …).
@@ -96,8 +97,9 @@ Beyond the outcome, a fixture (or its manifest row) carries the axes a gate must
 1. **A language accept/reject case** → a spec fixture under `tests/spec/` with a `// SPEC:`
    header (positive) or an `EXPECT_ERROR` declaration (negative); or, for backend-emit cases,
    a `tests/c_emit/*.mc` fixture (must-compile) or `tests/c_emit/bad/*.mc` (`// EXPECT: E_CODE`).
-2. **A kernel module / typestate misuse** → it is picked up by `kernel-test`'s glob; a misuse
-   goes in `kernel/bad/` with an `EXPECT:` line.
+2. **A freestanding/kernel validation case** → put runnable behavior in a focused `tests/qemu/`
+   fixture or a host harness; typestate misuses can still live in `kernel/bad/` with an `EXPECT:`
+   line for diagnostic inventory coverage.
 3. **A runtime/driver behavior** → a row in `tools/lib/host-tests.tsv` (host) and/or a QEMU gate.
 4. **A regression found by fuzzing** → distill it to a minimal fixture in the matching corpus,
    so it is locked in deterministically.

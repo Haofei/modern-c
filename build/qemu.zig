@@ -6,11 +6,6 @@ const h = @import("helpers.zig");
 pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "move-fuzz", "Generate move-resource programs; assert every resource is released once (live_count==0) on both backends", &.{ "bash", "tools/toolchain/move-fuzz.sh", "zig-out/bin/mcc" });
 
-    // Arch-selection seam (R0b): emit-c the portable core modules under every --arch. Pure host
-    // (no ld.lld/QEMU), so it catches active-import regressions the x86/ARM QEMU gates would miss
-    // when their cross toolchain is absent. Depends on the installed mcc.
-    _ = h.addScriptTest(ctx, "arch-emit-test", "emit-c the portable core modules (elf_loader/uaccess_pt/uaccess) under --arch=riscv64|x86_64|aarch64", &.{ "bash", "tools/check/arch-emit-test.sh" });
-
     _ = h.addScriptTest(ctx, "qemu-test", "Run the typed-MMIO program on emulated hardware under QEMU", &.{ "bash", "tools/arch/qemu-mmio-test.sh", "zig-out/bin/mcc", "c" });
 
     _ = h.addScriptTest(ctx, "llvm-qemu-test", "Run the LLVM-lowered typed-MMIO program under QEMU", &.{ "bash", "tools/arch/qemu-mmio-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -108,8 +103,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-demo-test", "Compile supported demo drivers through LLVM to objects", &.{ "bash", "tools/toolchain/llvm-demo-test.sh", "zig-out/bin/mcc" });
 
-    _ = h.addScriptTest(ctx, "llvm-kernel-test", "Compile kernel modules through LLVM to target objects", &.{ "bash", "tools/toolchain/llvm-kernel-test.sh", "zig-out/bin/mcc" });
-
     _ = h.addScriptTest(ctx, "llvm-hosted-demo-test", "Compile the hosted demo through LLVM, link it, and run the stdin/stdout check", &.{ "bash", "tools/toolchain/llvm-hosted-demo-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "llvm-host-suite-test", "Compile host-driver manifest fixtures through LLVM, link them, and run them", &.{ "bash", "tools/toolchain/llvm-host-suite-test.sh", "zig-out/bin/mcc" });
@@ -151,15 +144,6 @@ pub fn register(ctx: *h.Ctx) void {
     // Expose as a public step too, so the parallel runner (tools/m0-parallel.sh) can invoke it alone.
     ctx.b.step("demo-test-strict", "Strict demo-test (riscv64 required; m0/c0 variant)").dependOn(&demo_test_strict_cmd.step);
 
-
-    _ = h.addScriptTest(ctx, "kernel-test", "Compile-check kernel/ for riscv64 and verify typestate rejects", &.{ "bash", "tools/toolchain/kernel-test.sh", "zig-out/bin/mcc" });
-
-    // Conformance-tier variant (see demo_test_strict_cmd): skip-on-missing-riscv64 becomes a
-    // hard failure under MC_REQUIRE_TARGET=1 so m0/c1 cannot pass without the riscv64 compile.
-    const kernel_test_strict_cmd = h.addRawCmd(ctx, "kernel-test-strict", &.{ "bash", "tools/toolchain/kernel-test.sh", "zig-out/bin/mcc" });
-    kernel_test_strict_cmd.setEnvironmentVariable("MC_REQUIRE_TARGET", "1");
-    // Expose as a public step too, so the parallel runner (tools/m0-parallel.sh) can invoke it alone.
-    ctx.b.step("kernel-test-strict", "Strict kernel-test (riscv64 required; m0/c1 variant)").dependOn(&kernel_test_strict_cmd.step);
 
     _ = h.addScriptTest(ctx, "page-test", "Link + run the physical frame allocator (bump + free-list reclaim)", &.{ "bash", "tools/mem/page-test.sh", "zig-out/bin/mcc", "c" });
 

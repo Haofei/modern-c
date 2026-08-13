@@ -4,8 +4,7 @@
 #   1. PASS corpus  (tests/c_emit/*.mc) — every fixture must lower to C that clang accepts
 #      under -std=c11 -Wall -Wextra -Werror.
 #   2. REJECT corpus (tests/c_emit/bad/*.mc) — every fixture must be REJECTED by emit-c with
-#      the diagnostic its `EXPECT: E_CODE` line names. This mirrors the kernel/bad/ convention
-#      that kernel-test.sh already uses, so the two suites share one reject contract.
+#      the diagnostic its `EXPECT: E_CODE` line names.
 #
 # The non-recursive `tests/c_emit/*.mc` glob naturally excludes bad/, so a reject fixture is
 # never fed to the must-compile phase.

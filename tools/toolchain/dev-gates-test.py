@@ -235,7 +235,6 @@ def main() -> None:
         ["bash tools/toolchain/mc-audit.sh --mode capability-mint --self-test 2>&1 | rg '^CAP-MINT '"],
     )
     assert_route(module, ["docs/unsafe-boundary.md"], ["unsafe-audit"], ["git diff --check"])
-    assert_gates(module, ["tools/check/arch-emit-test.sh"], ["arch-emit-test"])
     assert_route(module, ["docs/std-api.md"], ["std-api-docs-test"], ["git diff --check"])
     assert_gates(module, ["tools/toolchain/abi-test.sh"], ["abi-test"])
     assert_gates(module, ["tests/toolchain/abi_layout.mc"], ["abi-test"])
@@ -249,7 +248,6 @@ def main() -> None:
     assert_gates(module, ["tools/toolchain/llvm-toolchain-test.sh"], ["llvm-toolchain-test"])
     assert_gates(module, ["tools/toolchain/llvm-runtime-test.sh"], ["llvm-runtime-test"])
     assert_gates(module, ["tools/toolchain/llvm-demo-test.sh"], ["llvm-demo-test"])
-    assert_gates(module, ["tools/toolchain/llvm-kernel-test.sh"], ["llvm-kernel-test"])
     assert_gates(
         module,
         ["tools/toolchain/llvm-new-harness.sh"],

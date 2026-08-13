@@ -104,8 +104,8 @@ pub fn addScriptTestOpts(ctx: *Ctx, name: []const u8, desc: []const u8, argv: []
 }
 
 /// A command that is registered (so tiers can depend on it) but has NO named
-/// public step of its own — e.g. the strict `demo-test`/`kernel-test` variants
-/// that only exist as tier dependencies. `key` is the lookup name used by tiers.
+/// public step of its own — e.g. strict variants that only exist as tier dependencies.
+/// `key` is the lookup name used by tiers.
 pub fn addRawCmd(ctx: *Ctx, key: []const u8, argv: []const []const u8) *Run {
     const selected_argv = applyCompilerSelector(ctx.b, argv);
     const cmd = ctx.b.addSystemCommand(timed(ctx.b, key, selected_argv));
