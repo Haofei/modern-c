@@ -400,7 +400,6 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     try ctx.collectNonStructTypeArtifacts();
     try ctx.collectStructArtifacts();
     try ctx.collectFunctionGlobalAndTraitArtifacts();
-    try ctx.validateDropGlueFactsAgainstDecls();
     try ctx.collectMirAggregateReturnPointerFieldFacts();
     // Tier 2: one rodata vtable global per `impl Trait for Type` of an object-safe
     // trait. Function pointers may be forward-referenced in LLVM IR, so this can run
@@ -696,11 +695,6 @@ const LlvmEmitter = struct {
         } else null;
         const c_abi = function.is_variadic or function.abi != null or (function.exported and !hasNamedAttr(function.attrs, "mc_abi"));
         try self.fn_sigs.put(function.name.text, .{ .ret = ret_ty, .params = function.params, .c_abi = c_abi, .is_variadic = function.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(function.attrs) });
-        if (hasNamedAttr(function.attrs, "drop")) {
-            if (mir_ownership_authority.dropPointerReleaseParamTypeNameFromParams(function.params)) |type_name| {
-                if (!mir_ownership_authority.dropGlueDeclMatches(&self.mir_module, type_name, function.name.text)) return error.UnsupportedLlvmEmission;
-            }
-        }
         for (function.attrs) |attr| switch (attr.kind) {
             .backend_name => |name| try self.backend_names.put(function.name.text, name),
             else => {},
@@ -718,10 +712,6 @@ const LlvmEmitter = struct {
             },
             .type_decl => {},
         };
-    }
-
-    fn validateDropGlueFactsAgainstDecls(self: *LlvmEmitter) !void {
-        if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(&self.mir_module, self.decl_artifacts)) return error.UnsupportedLlvmEmission;
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {

@@ -428,7 +428,6 @@ pub const CEmitter = struct {
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectConstGlobals();
         try self.collectDeclArtifacts(early_metadata);
-        try self.validateDropGlueFactsAgainstDecls();
         try self.collectBindThunks();
     }
 
@@ -513,17 +512,8 @@ pub const CEmitter = struct {
 
     fn collectFunctionArtifact(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
         try self.functions.put(function.name.text, .{ .params = function.params, .return_type = function.return_type, .is_extern = function.is_extern, .is_variadic = function.is_variadic, .error_from = error_from.hasAttr(function.attrs) });
-        if (!function.is_extern and hasNamedAttr(function.attrs, "drop")) {
-            if (mir_ownership_authority.dropPointerReleaseParamTypeNameFromParams(function.params)) |type_name| {
-                if (!mir_ownership_authority.dropGlueDeclMatches(self.mir_module, type_name, function.name.text)) return error.UnsupportedCEmission;
-            }
-        }
         if (!function.is_extern) if (backendNameOverride(function.attrs)) |name| try self.backend_names.put(function.name.text, name);
         try self.collectFunctionArtifactSliceTypes(function);
-    }
-
-    pub fn validateDropGlueFactsAgainstDecls(self: *CEmitter) !void {
-        if (!mir_ownership_authority.dropGlueFactsMatchDeclArtifacts(self.mir_module, self.decl_artifacts)) return error.UnsupportedCEmission;
     }
 
     fn collectImplTraitArtifact(self: *CEmitter, impl_trait: declaration_artifacts.ImplTraitArtifact) !void {

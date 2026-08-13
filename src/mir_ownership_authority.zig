@@ -2,7 +2,6 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const ast_query = @import("ast_query.zig");
-const declaration_artifacts = @import("declaration_artifacts.zig");
 const mir = @import("mir.zig");
 
 pub const AutoDropLocalCleanup = struct {
@@ -60,55 +59,6 @@ pub fn autoDropEligibleTypeNameForDropGlue(module: *const mir.Module, type_name:
         return fact.kind == .affine and fact.drop_glue_symbol_id.isValid() and fact.drop_glue_symbol_id.eql(release_symbol_id);
     }
     return false;
-}
-
-pub fn dropGlueDeclMatches(module: *const mir.Module, type_name: []const u8, release_fn: []const u8) bool {
-    const drop_glue = dropGlueFactForReleaseFunction(module, release_fn) orelse return false;
-    if (!std.mem.eql(u8, drop_glue.resource_type, type_name)) return false;
-    return autoDropEligibleTypeNameForDropGlue(module, type_name, drop_glue.typed_release_symbol_id);
-}
-
-pub fn dropGlueFactsMatchDeclArtifacts(
-    module: *const mir.Module,
-    artifacts: []const declaration_artifacts.DeclArtifact,
-) bool {
-    for (module.drop_glue_facts) |fact| {
-        var matched = false;
-        for (artifacts) |artifact| {
-            if (artifact != .function) continue;
-            if (!dropGlueDeclArtifactMatches(module, fact, artifact.function)) continue;
-            matched = true;
-            break;
-        }
-        if (!matched) return false;
-    }
-    return true;
-}
-
-fn dropGlueDeclArtifactMatches(
-    module: *const mir.Module,
-    fact: mir.DropGlueFact,
-    artifact: anytype,
-) bool {
-    if (artifact.is_extern) return false;
-    if (!std.mem.eql(u8, artifact.name.text, fact.release_fn)) return false;
-    if (!hasNamedAttr(artifact.attrs, "drop")) return false;
-    const declared_resource = dropPointerReleaseParamTypeNameFromParams(artifact.params) orelse return false;
-    if (!std.mem.eql(u8, declared_resource, fact.resource_type)) return false;
-    return dropGlueDeclMatches(module, declared_resource, fact.release_fn);
-}
-
-pub fn dropPointerReleaseParamTypeNameFromParams(params: []const ast.Param) ?[]const u8 {
-    if (params.len == 0) return null;
-    const first = params[0].ty;
-    const child = switch (first.kind) {
-        .pointer => |pointer| blk: {
-            if (pointer.mutability != .mut) return null;
-            break :blk pointer.child.*;
-        },
-        else => return null,
-    };
-    return ast_query.leadingTypeName(child);
 }
 
 pub fn autoDropCleanupEmissionAllowed(
