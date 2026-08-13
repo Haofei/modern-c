@@ -272,9 +272,7 @@ freestanding ABI boundaries, address classes, ownership, unsafe operations, MMIO
 interrupts, and backend lowering. They are not an OS deliverable track.
 
 Use `zig build riscv-qemu-validation` only when a change needs the retained
-RISC-V OpenSBI/QEMU surrogate. See
-[`docs/qemu-validation-checklist.md`](docs/qemu-validation-checklist.md) for the
-local gate checklist.
+RISC-V OpenSBI/QEMU surrogate.
 
 ## Developer Tooling
 
