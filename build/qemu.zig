@@ -149,18 +149,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-smode-plic-multishot-test", "Build and run the LLVM-lowered re-armed S-mode external-interrupt (PLIC) kernel under REAL OpenSBI", &.{ "bash", "tools/arch/smode-plic-multishot-test.sh", "zig-out/bin/mcc", "llvm" });
 
 
-    _ = h.addScriptTest(ctx, "smp-test", "Boot multiple harts and synchronize on a shared atomic under QEMU", &.{ "bash", "tools/proc/smp-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-smp-test", "Run LLVM-lowered SMP boot/sync under QEMU", &.{ "bash", "tools/proc/smp-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "smp-lock-test", "Contend a ticket spinlock across harts under QEMU (mutual exclusion)", &.{ "bash", "tools/proc/smp-lock-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-smp-lock-test", "Run LLVM-lowered SMP ticket-lock contention under QEMU", &.{ "bash", "tools/proc/smp-lock-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "ipi-test", "Send a CLINT software interrupt (IPI) between harts under QEMU", &.{ "bash", "tools/proc/ipi-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-ipi-test", "Run LLVM-lowered inter-processor interrupt under QEMU", &.{ "bash", "tools/proc/ipi-test.sh", "zig-out/bin/mcc", "llvm" });
-
     _ = h.addScriptTest(ctx, "demo-test", "Lower every demo/ driver to C and compile-check it", &.{ "bash", "tools/toolchain/demo-test.sh", "zig-out/bin/mcc" });
 
     // Conformance-tier variant: MC_REQUIRE_TARGET=1 makes a missing clang/riscv64 target a

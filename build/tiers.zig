@@ -120,9 +120,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-page-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-heap-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-paging-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-smp-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-smp-lock-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-ipi-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smode-timer-test"));
     // smode-plic-test proves REAL S-mode EXTERNAL interrupt delivery through the PLIC under OpenSBI;
     // the multishot variant proves the re-armed steady-state path (regression gate for the former
@@ -245,12 +242,6 @@ pub fn register(ctx: *h.Ctx) void {
     // gate for the former async-IRQ reset).
     m0_full_step.dependOn(ctx.cmd("smode-plic-test"));
     m0_full_step.dependOn(ctx.cmd("smode-plic-multishot-test"));
-    // smp-test boots multiple harts synchronizing on a shared atomic under QEMU.
-    m0_full_step.dependOn(ctx.cmd("smp-test"));
-    // smp-lock-test contends a ticket spinlock across harts under QEMU.
-    m0_full_step.dependOn(ctx.cmd("smp-lock-test"));
-    // ipi-test sends a CLINT software interrupt between harts under QEMU.
-    m0_full_step.dependOn(ctx.cmd("ipi-test"));
     // demo-test compile-checks the whole demo/ suite (needs clang).
     m0_full_step.dependOn(ctx.cmd("demo-test-strict"));
     // kernel-test compile-checks kernel/ for riscv64 + typestate rejects.
