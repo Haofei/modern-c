@@ -337,8 +337,7 @@ Runnability is **derived** (`Ready|Running` ∧ `block_reasons == 0`), never set
 | `proc_wait` / `proc_reap` | Blocking / non-blocking reap → `Result<ReapInfo, ReapError>`. |
 
 `Endpoint { slot, gen }` is the safe reference: a bare pid is insufficient because slots are
-reused; `endpoint_slot` fails `DeadEndpoint` on generation mismatch. Gates: `exec-test`,
-`endpoint-test`.
+reused; `endpoint_slot` fails `DeadEndpoint` on generation mismatch. Gate: `endpoint-test`.
 
 ### 10.3 Runtime ABI fixtures — GATED, not a kernel product layer
 
@@ -347,7 +346,7 @@ now use smaller runtime ABI fixtures to exercise userspace calls, async polling,
 C/LLVM lowering. These fixtures are not a production capability broker and do not define a
 native OS surface.
 
-Gates: `cap-test`, `elf-run-test`, `uaccess-pt-test`.
+Gates: `cap-test`, `uaccess-pt-test`.
 
 ### 10.4 Signals — IMPLEMENTED (kernel primitive only)
 
@@ -581,9 +580,9 @@ uses focused device fixtures directly; dynamic loading and service discovery are
 ## 22. Code Loading, Live Update & Checkpoint
 
 - **ELF** — `kernel/core/elf.mc`: bounds-checked ELF64 parser; untrusted
-  `phoff/phnum/phentsize` validated up front. **GATED** (`elf-test`, `elf-run-test`).
-- **Dynamic linking** — `dynlink.mc`: `R_RISCV_RELATIVE` relocations for PIE. **DEMO-SCOPE**
-  — no symbol resolution / PLT-GOT (`dynlink-test`).
+  `phoff/phnum/phentsize` validated up front. **GATED** (`elf-test` plus retained loader
+  validation).
+- **Dynamic linking** — removed from the core workload.
 - **Agent checkpoint/restore/migrate** — absent from the core workload.
 
 ---
@@ -628,11 +627,11 @@ backends" is the two lowerings, on the riscv64 gate — not multi-architecture p
 | IPC (sync rendezvous + notify, endpoint-safe) | **GATED** (copying, not zero-copy) |
 | Resource governance: quota + OOM-kill + fault containment | **GATED** (mechanism under explicit charge sites; full allocator wiring follow-up) |
 | Provenance + cap audit | **GATED** (kcall audits allowed+denied; tool calls audit dispatched only) |
-| Syscall table mechanism | **GATED**; registered surface **DEMO-SCOPE** (5 POSIX calls) |
-| Filesystems / storage | **GATED**; flat stores + **hierarchical `treefs`** (mkdir/`..`/getdents) |
-| Network stack (real DNS/TCP/HTTP demos) | **GATED** (demo-exercised, not RFC-complete) |
+| Syscall table mechanism | **GATED**; production syscall surface absent |
+| Filesystems / storage | **GATED**; low-level block/cache/blob validation only |
+| Network validation | **GATED**; link/IP/driver validation only |
 | Drivers: virtio net/blk, plic, clint | **GATED**; pci **IMPLEMENTED**; e1000 **MOCK** |
-| ELF load | **GATED**; dynlink **DEMO-SCOPE** |
+| ELF parse/load | **GATED**; dynamic linking absent |
 
 ---
 

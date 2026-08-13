@@ -13,7 +13,6 @@ args-test	tests/qemu/lang/args_demo.mc	entry	args_run	-Wno-switch-bool	argv/envp
 byteview-test	tests/qemu/lang/byteview_demo.mc	entry	byteview_run	-Wno-switch-bool	ByteBuf<N>: bounds-checked get + set/copy_from/copy_to return typed OutOfBounds (no silent clamp) on a PAddr
 closure-test	tests/qemu/lang/closure_demo.mc	driver			bind() closure captures a pointer + fn, callable with no ctx word/casts; capture mutated across calls
 constgen-test	tests/qemu/lang/constgen_demo.mc	entry	constgen_run		const-generic Ring<T,N> at two capacities (2 and 8): [N]T + % N specialize per instance
-dynlink-test	tests/qemu/lang/dynlink_demo.mc	entry	dynlink_run	-Wno-switch-bool	dynamic-linking core: R_RISCV_RELATIVE relocations patch a PIE image to its load base
 elf-test	tests/qemu/lang/elf_demo.mc	driver			ELF64 parse (header+phdr) + segment load (copy+bss zero-fill) + reject bad magic/truncation
 libc-test	tests/qemu/lang/libc_demo.mc	entry	libc_run	-Wno-switch-bool	minimal libc core: mc_memeq / mc_strlen / mc_atoi over typed addresses
 log-test	tests/qemu/lang/log_demo.mc	driver			leveled tracepoints: threshold filtering (dropped count), level+id+value recording, runtime verbosity change
@@ -21,7 +20,6 @@ scan-test	tests/qemu/lang/scan_demo.mc	entry	scan_run	-Wno-switch-bool	find_inde
 symbols-test	tests/qemu/lang/symbols_demo.mc	driver			symbol table symbolizes addresses to function+offset (binary search), rejects unsorted/below-first
 trace-test	tests/qemu/lang/trace_demo.mc	driver			trace ring buffer: ordered retention, wrap-around (oldest dropped), sequence numbering
 tryelse-test	tests/qemu/lang/tryelse_demo.mc	entry	tryelse_run		postfix-? with else remaps a subsystem error into the layer error type (ok + mapped-err paths)
-userland-test	tests/qemu/lang/userland_demo.mc	entry	userland_run	-Wno-switch-bool	userland echo utility: joins argv with spaces over the args vector + raw stores
 alloc-test	tests/qemu/mem/alloc_demo.mc	entry	alloc_demo_run		generic Allocator (std/alloc) over a captured bump heap: aligned, advancing allocation
 arc-pkt-test	tests/qemu/mem/arc_pkt_demo.mc	entry	arc_pkt_run		packet Arc-shared between two consumers, freed when the last owner drops (skb/mbuf pattern)
 arc-test	tests/qemu/mem/arc_demo.mc	entry	arc_demo_run		Arc<T> shared ownership: clone adds an owner, last drop frees (handles leak-checked at compile time)

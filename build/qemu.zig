@@ -316,7 +316,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "mutex-test", "sleeping Mutex: try_lock, blocking enqueue, FIFO hand-off on unlock", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "mutex-test" });
 
-    _ = h.addScriptTest(ctx, "userland-test", "Userland echo utility", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "userland-test" });
     _ = h.addScriptTest(ctx, "smprq-test", "SMP per-core run queues + work stealing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "smprq-test" });
     _ = h.addScriptTest(ctx, "rtc-test", "Wall-clock via goldfish-RTC: read the 64-bit epoch and assert a plausible live 'now'", &.{ "bash", "tools/arch/rtc-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-rtc-test", "Run LLVM-lowered goldfish-RTC MMIO under QEMU", &.{ "bash", "tools/arch/rtc-test.sh", "zig-out/bin/mcc", "llvm" });
@@ -325,7 +324,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "fdt-test", "Device-tree (FDT) header parsing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test" });
 
     _ = h.addScriptTest(ctx, "fb-test", "Linear framebuffer device", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fb-test" });
-    _ = h.addScriptTest(ctx, "dynlink-test", "Dynamic-linking relocation core", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "dynlink-test" });
     _ = h.addScriptTest(ctx, "aarch64-test", "Second architecture (aarch64) bring-up", &.{ "bash", "tools/arch/aarch64-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-aarch64-test", "LLVM-lowered second architecture (aarch64) bring-up", &.{ "bash", "tools/arch/aarch64-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "arm-vm-test", "AArch64 stage-1 page-table VM + MMU enable (real VA->PA translation)", &.{ "bash", "tools/arch/arm-vm-test.sh", "zig-out/bin/mcc", "c" });
@@ -484,19 +482,10 @@ pub fn register(ctx: *h.Ctx) void {
     // async-blk-test: DEVICE-BACKED async completion. An async fn's await resolves against a REAL
     // virtio-blk device interrupt: blk_read_sector_async submits a read + ties the head descriptor id
     // to a broker request id; the PLIC-routed used-ring IRQ reaps the completion in interrupt context
-    // (blk_irq_reap -> async_complete) and wakes the task parked in drive_irq. Trace W i R + the sector
     // word "DISK" + ASYNC-BLK-OK prove the completion came from the device IRQ, not a polling loop.
     _ = h.addScriptTest(ctx, "async-blk-test", "device-backed async: an async fn's await resolves against a real virtio-blk device interrupt (PLIC used-ring completion reaped in interrupt context)", &.{ "bash", "tools/proc/async-blk-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-async-blk-test", "LLVM-lowered device-backed async virtio-blk completion under QEMU", &.{ "bash", "tools/proc/async-blk-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    // async-net-test: DEVICE-BACKED async completion over the NIC. An async fn's await resolves
-    // against a REAL virtio-net TX device interrupt: net_send_frame_async submits a frame + ties the
-    // TX head descriptor id to a broker request id; the PLIC-routed TX used-ring IRQ reaps the
-    // completion in interrupt context (net_irq_reap -> async_complete) and wakes the task parked in
-    // drive_irq. Trace W i R + ASYNC-NET-OK + free=8/NET-NOLEAK-OK prove the completion came from the
-    // device IRQ (not a poll loop) and no descriptor/DMA leaks across repeated sends.
-    _ = h.addScriptTest(ctx, "async-net-test", "device-backed async: an async fn's await resolves against a real virtio-net TX device interrupt (PLIC used-ring completion reaped in interrupt context)", &.{ "bash", "tools/proc/async-net-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-async-net-test", "LLVM-lowered device-backed async virtio-net TX completion under QEMU", &.{ "bash", "tools/proc/async-net-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // async-select-test: select / cancel-the-loser over the real broker. Two in-flight requests are
     // raced (ReqRace2); a timer ISR completes the winner; the race cancels the loser and the active
@@ -578,9 +567,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-process-test", "Run the LLVM-lowered process lifecycle under QEMU", &.{ "bash", "tools/proc/process-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "elf-run-test", "Load an ELF64 and run it in U-mode under QEMU", &.{ "bash", "tools/lang/elf-run-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-elf-run-test", "Load an ELF64 from an LLVM-lowered kernel image and run it in U-mode under QEMU", &.{ "bash", "tools/lang/elf-run-test.sh", "zig-out/bin/mcc", "llvm" });
 
     // The uaccess demos exercise kernel/core/uaccess.mc, which imports riscv paging.mc
     // (sfence.vma) — not host-assemblable — so they run under QEMU on the real target,
@@ -695,9 +682,7 @@ pub fn register(ctx: *h.Ctx) void {
 
 
 
-    _ = h.addScriptTest(ctx, "exec-test", "Run sys_exec: a U-mode program loads + runs another ELF under QEMU", &.{ "bash", "tools/lang/exec-test.sh", "zig-out/bin/mcc", "c" });
 
-    _ = h.addScriptTest(ctx, "llvm-exec-test", "Run LLVM-lowered sys_exec under QEMU", &.{ "bash", "tools/lang/exec-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "paging-activate-test", "Activate Sv39 satp in S-mode and read a translation-only VA under QEMU", &.{ "bash", "tools/mem/paging-activate-test.sh", "zig-out/bin/mcc", "c" });
 

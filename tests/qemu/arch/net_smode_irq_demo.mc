@@ -1,7 +1,6 @@
 // S-mode/OpenSBI interrupt-backed virtio-net async TX completion.
 //
-// This is the S-mode counterpart to tests/qemu/proc/async_net_demo.mc. It
-// submits an async virtio-net TX frame, parks in wfi, takes the device's S-mode
+// This submits an async virtio-net TX frame, parks in wfi, takes the device's S-mode
 // PLIC interrupt, reaps the TX used ring with net_irq_reap, and drains the ready
 // broker id through async_poll_many.
 

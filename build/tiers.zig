@@ -102,7 +102,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-syscall-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-user-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-process-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-elf-run-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-uaccess-pt-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-elf-loader-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-uaccess-taint-test"));
@@ -116,7 +115,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-stdio-test"));
     m0_full_step.dependOn(ctx.cmd("mem-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-mem-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-exec-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vm-switch-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vmspace-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vmctx-test"));
@@ -132,7 +130,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-async-future-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-multi-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-blk-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-async-net-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-async-select-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-usched-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-privilege-test"));
@@ -396,13 +393,11 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("tryelse-test"));
     m0_full_step.dependOn(ctx.cmd("byteview-test"));
     m0_full_step.dependOn(ctx.cmd("scan-test"));
-    m0_full_step.dependOn(ctx.cmd("userland-test"));
     m0_full_step.dependOn(ctx.cmd("smprq-test"));
     m0_full_step.dependOn(ctx.cmd("rtc-test"));
     m0_full_step.dependOn(ctx.cmd("contain-test"));
     m0_full_step.dependOn(ctx.cmd("fdt-test"));
     m0_full_step.dependOn(ctx.cmd("fb-test"));
-    m0_full_step.dependOn(ctx.cmd("dynlink-test"));
     m0_full_step.dependOn(ctx.cmd("aarch64-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-aarch64-test"));
     m0_full_step.dependOn(ctx.cmd("arm-vm-test"));
@@ -427,7 +422,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("async-future-test"));
     m0_full_step.dependOn(ctx.cmd("async-multi-test"));
     m0_full_step.dependOn(ctx.cmd("async-blk-test"));
-    m0_full_step.dependOn(ctx.cmd("async-net-test"));
     m0_full_step.dependOn(ctx.cmd("async-select-test"));
     m0_full_step.dependOn(ctx.cmd("cap-test"));
     m0_full_step.dependOn(ctx.cmd("arc-pkt-test"));
@@ -468,16 +462,12 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("user-test"));
     // process-test runs process lifecycle (spawn/run/exit) under QEMU.
     m0_full_step.dependOn(ctx.cmd("process-test"));
-    // elf-run-test loads an ELF64 and runs it in U-mode under QEMU.
-    m0_full_step.dependOn(ctx.cmd("elf-run-test"));
     // The uaccess demos run under QEMU (they import riscv paging.mc, so they can't run on the host suite).
     m0_full_step.dependOn(ctx.cmd("uaccess-pt-test"));
     m0_full_step.dependOn(ctx.cmd("elf-loader-test"));
     m0_full_step.dependOn(ctx.cmd("uaccess-taint-test"));
     // driver-test runs the char-device driver framework (vtable dispatch) under QEMU.
     m0_full_step.dependOn(ctx.cmd("driver-test"));
-    // exec-test runs sys_exec: a U-mode program loads + runs another ELF under QEMU.
-    m0_full_step.dependOn(ctx.cmd("exec-test"));
     // paging-activate-test activates Sv39 satp in S-mode + reads a translated VA.
     m0_full_step.dependOn(ctx.cmd("paging-activate-test"));
     // fault-isolation-test boots the F1 keystone: a real agent trap is CONTAINED (faulting agent
