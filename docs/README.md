@@ -12,8 +12,6 @@ historical plans, but the active source of truth should be small:
   turn the open risks into code-facing work with closure criteria.
 - [`spec/MC_0.7_Final_Design.md`](spec/MC_0.7_Final_Design.md) — normative language
   and backend contract.
-- [`spec/MC_Kernel_Design.md`](spec/MC_Kernel_Design.md) — source-faithful kernel
-  architecture and status.
 
 ## Current reference docs
 
@@ -26,7 +24,7 @@ These are still useful as day-to-day references or rationale companions:
 | Refactoring | [`refactoring-plan.md`](refactoring-plan.md) | Ordered code-facing refactoring phases for the compiler core. |
 | Change log | [`../CHANGELOG.md`](../CHANGELOG.md) | Development-line changes. |
 | Gate inventory | [`gate-manifest.json`](gate-manifest.json) | Machine-readable gate ownership for compiler-core validation. |
-| Testing | [`test-architecture.md`](test-architecture.md), [`qemu-validation-checklist.md`](qemu-validation-checklist.md) | Fixture contracts, gate layers, manifest discipline, and the local/CI QEMU surrogate checklist. |
+| Testing | [`test-architecture.md`](test-architecture.md), [`qemu-validation-checklist.md`](qemu-validation-checklist.md), [`spec/MC_Kernel_Design.md`](spec/MC_Kernel_Design.md) | Fixture contracts, gate layers, manifest discipline, the local/CI QEMU surrogate checklist, and the narrow kernel validation scope. |
 | Unsafe/UB audit | [`unsafe-boundary.md`](unsafe-boundary.md), [`c-ub-matrix.md`](c-ub-matrix.md), [`lowering-coverage.md`](lowering-coverage.md) | Unsafe syntax, C-UB handling, and lowering coverage reports. |
 | Traits/async rationale | [`traits-design.md`](traits-design.md), [`async-plan.md`](async-plan.md) | Design reasoning behind implemented or mostly implemented features. |
 | Fuzzing backlog | [`mcfuzz-coverage-todo.md`](mcfuzz-coverage-todo.md) | Generator/oracle expansion notes. Some gating statements are historical; see `todo.md` for current gate status. |

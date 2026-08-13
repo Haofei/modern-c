@@ -112,7 +112,7 @@ but not bit-for-bit identical across rebuild dates.
 | Linux CI/dev container | Ubuntu 24.04 packages for LLVM 18 (`clang-18`, `lld-18`, `llvm-18`) | Primary CI/dev path; `zig build preflight` must pass with `MC_LLVM_MAJOR=18`. |
 | macOS host gate | Homebrew `llvm@18` on `macos-15` | Host/fast validation path; the workflow places `llvm@18` first on `PATH`. |
 | Native local | LLVM 18 tools selected on `PATH` | Supported when `MC_LLVM_MAJOR=18 zig build preflight` passes. |
-| Other LLVM majors | Any non-18 LLVM toolchain | Unqualified until the major is added to CI, Docker, preflight, and this matrix. |
+| Other LLVM majors | Any non-18 LLVM toolchain | Unsupported by current validation gates until the major is added to CI, Docker, preflight, and this matrix. |
 
 LLVM backend wrappers intentionally resolve `clang`, `ld.lld`, `llvm-as`, `llc`,
 and `opt` from `PATH`. A validated run must resolve those names to the LLVM 18 toolchain used by the validation gates.
@@ -172,8 +172,9 @@ explicitly selected with `--profile=hosted`.
 
 ## Validation Gates
 
-Use the smallest gate that matches the work, then finish substantial compiler or
-kernel changes with the milestone gate.
+Use the smallest gate that matches the work, then finish substantial compiler
+changes with the milestone gate. Run retained kernel/QEMU gates only when the
+change touches freestanding, ABI, MMIO, interrupt, or backend-lowering behavior.
 
 ```sh
 zig build test       # compiler unit tests and spec conformance
@@ -181,7 +182,7 @@ zig build c-test     # checked C backend
 zig build llvm-test  # LLVM backend
 zig build fast       # broad host-only development gate, no fuzz or QEMU
 zig build m0         # core compiler validation gate
-zig build m0-full    # complete compiler, backend, fuzz, runtime, and QEMU matrix
+zig build m0-full    # broad compiler/backend/fuzz validation matrix
 ```
 
 Normal local gates may report a skip when an external tool is unavailable. A
@@ -194,19 +195,19 @@ MC_REQUIRE_TOOLS=1 MC_LLVM_MAJOR=18 zig build m0-full
 `m0` covers the deterministic compiler-core validation path used for normal
 local and CI feedback. It intentionally omits the full `c-test` fixture compile
 sweep; use `fast`, `c0`, or `m0-full` when a change needs that C-backend
-coverage. `m0-full` preserves the exhaustive compiler-validation matrix: unit
-and spec tests, C and LLVM fixture sweeps, IR assembly and object generation,
-optimizer compatibility, differential execution, fuzz oracles, host-driver
-tests, runtime experiments, and the QEMU kernel matrix.
+coverage. `m0-full` preserves the broad validation matrix: unit and spec tests, C and
+LLVM fixture sweeps, IR assembly and object generation, optimizer compatibility,
+differential execution, fuzz oracles, selected host-driver tests, runtime
+experiments, and retained QEMU validation fixtures.
 
 The canonical Zig aggregate executes side-effecting `Run` gates serially. For
-the same complete gate inventory with process-level parallelism, bounded nested
+the same broad gate inventory with process-level parallelism, bounded nested
 worker pools, longest-first scheduling, and serial rechecks of contention
 failures, use:
 
 ```sh
 tools/fast-parallel.sh              # fast inventory with process-level parallelism
-MC_REQUIRE_TOOLS=1 tools/m0-parallel.sh  # complete full inventory; skips are failures
+MC_REQUIRE_TOOLS=1 tools/m0-parallel.sh  # broad inventory; skips are failures
 ```
 
 Both runners derive their gate lists directly from `build/tiers.zig`; they do
@@ -227,11 +228,11 @@ The complete test architecture and gate ownership model are documented in
 
 ### C
 
-The C backend emits freestanding C for the qualified Clang 18 toolchain and uses
+The C backend emits freestanding C for the validated Clang 18 toolchain and uses
 Clang builtins for traps, checked arithmetic, atomics, wide intermediate
 arithmetic, and exact-bit floating constants. Generated C is an implementation
 artifact and differential oracle, not portable ISO C11; GCC C is not currently
-a qualified consumer because it does not provide Clang's C-mode
+a validated consumer because it does not provide Clang's C-mode
 `__builtin_bit_cast`.
 
 ```sh
@@ -243,9 +244,9 @@ zig build cc-test
 ### LLVM
 
 The LLVM backend consumes the same semantic and MIR verification pipeline, emits
-textual IR, and uses `llc` for object generation. Its qualified surface is
-established by IR assembly, object, optimizer, differential, runtime, and QEMU
-gates rather than by a claim that every language form is supported.
+textual IR, and uses `llc` for object generation. Its validated surface is
+established by IR assembly, object, optimizer, differential, runtime, and
+selected QEMU gates rather than by a claim that every language form is supported.
 Expected differential exclusions are explicit in the checked
 [`diff-backend-expected-skips.tsv`](tools/toolchain/diff-backend-expected-skips.tsv)
 manifest; an unlisted skip fails the gate.
@@ -264,38 +265,17 @@ Object generation is available through:
 tools/toolchain/mcc-llvm-cc.sh path/to/file.mc -o file.o
 ```
 
-## Kernel Validation
+## Kernel Validation Workload
 
-The repository contains MC kernel modules, C runtime support, drivers, user-mode
-components, and host models used to exercise the language against realistic
-freestanding workloads. Coverage includes MMIO, timers and traps, schedulers,
-syscalls, processes, IPC, virtual memory, filesystems, networking, SMP, virtio,
-and multiple target architectures.
+The `kernel/` and QEMU fixtures are compiler-validation workloads. They exercise
+freestanding ABI boundaries, address classes, ownership, unsafe operations, MMIO,
+interrupts, and backend lowering. They are not an OS product roadmap.
 
-The focused RISC-V board-surrogate gate is:
-
-```sh
-zig build riscv-qemu-validation
-```
-
-It runs the RISC-V QEMU `virt` and OpenSBI path across both compiler backends,
-including IRQ, storage, networking, and confined runtime integration. This is a
-repeatable surrogate when VisionFive 2 hardware is unavailable; it is not final
-real-board boot or soak evidence.
-
-Useful narrower gates include:
-
-```sh
-zig build qemu-test
-zig build llvm-qemu-test
-zig build kmain-test
-zig build llvm-kmain-test
-zig build aarch64-test
-zig build x86-qemu-test
-```
-
-See [`docs/qemu-validation-checklist.md`](docs/qemu-validation-checklist.md) for
-the complete validation boundary.
+Use `zig build riscv-qemu-validation` only when a change needs the retained
+RISC-V OpenSBI/QEMU surrogate. See
+[`docs/qemu-validation-checklist.md`](docs/qemu-validation-checklist.md) and
+[`docs/spec/MC_Kernel_Design.md`](docs/spec/MC_Kernel_Design.md) for the narrow
+validation boundary.
 
 ## Developer Tooling
 
@@ -340,7 +320,7 @@ The repository-wide backlog is [`docs/todo.md`](docs/todo.md).
 | `tests/spec/` | Normative language and diagnostic fixtures |
 | `tests/c_emit/`, `tests/llvm/` | Backend fixtures |
 | `tests/qemu/` | Programs used by QEMU and host-driver gates |
-| `kernel/`, `user/` | Kernel runtime, MC modules, and user-mode components |
+| `kernel/`, `user/` | Freestanding validation modules and user-mode fixtures |
 | `tools/` | Drivers, fuzzers, and test harnesses |
 | `demo/`, `examples/` | Hosted and hardware-oriented examples |
 | `docs/` | Specifications, reference material, validation, and plans |
