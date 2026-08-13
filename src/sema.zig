@@ -7121,7 +7121,7 @@ pub const Checker = struct {
         //  - crossing between two DIFFERENT address classes, or
         //  - MINTING an address class from a non-address source (integer/plain ptr).
         // The audited boundary (the typed constructors/extractors in std/addr.mc,
-        // std/dma.mc, std/virtqueue.mc, and the `unsafe` MMIO path)
+        // std/dma.mc, and the `unsafe` MMIO path)
         // wraps these in `unsafe`, the controlled escape. The EXTRACT direction
         // (address class `as usize`) is NOT gated here: it cannot deref or forge and
         // is the `pa_value`/`va_value` raw-access edge.

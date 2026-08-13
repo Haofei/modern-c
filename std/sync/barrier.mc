@@ -3,8 +3,8 @@
 // after the interrupt. These lower to target-aware CPU fences via the `fence.*`
 // builtins (`__atomic_thread_fence` → riscv `fence`, x86 `mfence`, arm `dmb`), so
 // they order accesses on real hardware, not just against the compiler. Combined
-// with `volatile` typed MMIO ordering (section 17), they make the virtqueue and
-// device handshakes correct beyond QEMU's sequentially-consistent model.
+// with `volatile` typed MMIO ordering (section 17), they make device handshakes
+// correct beyond QEMU's sequentially-consistent model.
 
 export fn mb() -> void {
     fence.full();

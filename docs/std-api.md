@@ -10,11 +10,11 @@ python3 tools/toolchain/std-api-docs.py --write
 The extractor is static: it records `pub`/`export` function signatures, public constants,
 public type declarations, and local types named by public declarations.
 
-Total modules: **41**.
-Total public functions: **356**.
+Total modules: **39**.
+Total public functions: **338**.
 Total public constants: **6**.
-Total public type declarations: **46**.
-Total referenced local types: **15**.
+Total public type declarations: **35**.
+Total referenced local types: **13**.
 
 ## Modules
 
@@ -591,8 +591,8 @@ Source: `std/math.mc`
 | <code>export const fn wrapping_sub_u64(a: u64, b: u64) -&gt; u64</code> | `std/math.mc:65` |
 | <code>export const fn wrapping_sub_u32(a: u32, b: u32) -&gt; u32</code> | `std/math.mc:72` |
 | <code>export const fn wrapping_mul_u32(a: u32, b: u32) -&gt; u32</code> | `std/math.mc:80` |
-| <code>export const fn wrapping_add_u16(a: u16, b: u16) -&gt; u16</code> | `std/math.mc:87` |
-| <code>export const fn wrapping_shl_u32(x: u32, n: u32) -&gt; u32</code> | `std/math.mc:95` |
+| <code>export const fn wrapping_add_u16(a: u16, b: u16) -&gt; u16</code> | `std/math.mc:86` |
+| <code>export const fn wrapping_shl_u32(x: u32, n: u32) -&gt; u32</code> | `std/math.mc:94` |
 
 ## `std/mathf`
 
@@ -897,65 +897,6 @@ Source: `std/time.mc`
 | <code>export fn read_ticks() -&gt; Ticks</code> | `std/time.mc:21` |
 | <code>export fn delta_mod(start: Ticks, now: Ticks) -&gt; u64</code> | `std/time.mc:32` |
 | <code>export fn timed_out(start: Ticks, now: Ticks, limit: u64) -&gt; bool</code> | `std/time.mc:41` |
-| <code>export fn poll_until(probe: fn() -&gt; bool, timeout: u64) -&gt; bool</code> | `std/time.mc:52` |
-| <code>export fn udelay(us: u32) -&gt; void</code> | `std/time.mc:63` |
-| <code>export fn mdelay(ms: u32) -&gt; void</code> | `std/time.mc:67` |
-
-## `std/virtio`
-
-Source: `std/virtio.mc`
-
-### Referenced local types
-
-| Signature | Source |
-|---|---|
-| <code>extern mmio struct VirtioMmio</code> | `std/virtio.mc:8` |
-| <code>enum VirtioError</code> | `std/virtio.mc:47` |
-
-### Public functions
-
-| Signature | Source |
-|---|---|
-| <code>export fn virtio_reset(regs: MmioPtr&lt;VirtioMmio&gt;) -&gt; bool</code> | `std/virtio.mc:65` |
-| <code>export fn virtio_init(regs: MmioPtr&lt;VirtioMmio&gt;, device_id: u32, want_lo: u32, want_hi: u32) -&gt; Result&lt;bool, VirtioError&gt;</code> | `std/virtio.mc:85` |
-| <code>export fn virtio_driver_ok(regs: MmioPtr&lt;VirtioMmio&gt;) -&gt; void</code> | `std/virtio.mc:136` |
-
-## `std/virtqueue`
-
-Source: `std/virtqueue.mc`
-
-### Public types
-
-| Signature | Source |
-|---|---|
-| <code>pub struct VringDesc</code> | `std/virtqueue.mc:23` |
-| <code>pub struct DescTable</code> | `std/virtqueue.mc:24` |
-| <code>pub struct VringAvail</code> | `std/virtqueue.mc:25` |
-| <code>pub struct UsedElem</code> | `std/virtqueue.mc:26` |
-| <code>pub struct VringUsed</code> | `std/virtqueue.mc:27` |
-| <code>pub struct Virtq</code> | `std/virtqueue.mc:33` |
-| <code>pub enum VqError</code> | `std/virtqueue.mc:142` |
-| <code>pub enum VqSubmitError</code> | `std/virtqueue.mc:147` |
-| <code>pub enum VqCompleteError</code> | `std/virtqueue.mc:330` |
-| <code>pub move struct CompletedChain3</code> | `std/virtqueue.mc:343` |
-| <code>pub move struct CompletedBuffer</code> | `std/virtqueue.mc:469` |
-
-### Public functions
-
-| Signature | Source |
-|---|---|
-| <code>pub fn bus_addr(comptime T: type, p: *mut T) -&gt; u64</code> | `std/virtqueue.mc:51` |
-| <code>pub fn vq_free_count(vq: *mut Virtq) -&gt; u16</code> | `std/virtqueue.mc:72` |
-| <code>pub fn vq_free_desc(vq: *mut Virtq, id: u16) -&gt; void</code> | `std/virtqueue.mc:93` |
-| <code>pub fn vq_free_chain3(vq: *mut Virtq, head: u16) -&gt; void</code> | `std/virtqueue.mc:112` |
-| <code>pub fn vq_setup(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32, vq: *mut Virtq) -&gt; Result&lt;bool, VqError&gt;</code> | `std/virtqueue.mc:157` |
-| <code>pub fn vq_submit_tx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:237` |
-| <code>pub fn vq_submit_rx(vq: *mut Virtq, buf: DeviceBuffer) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:241` |
-| <code>pub fn vq_submit_chain3(vq: *mut Virtq, header: DeviceBuffer, data: DeviceBuffer, status: DeviceBuffer, data_writable: bool) -&gt; Result&lt;u16, VqSubmitError&gt;</code> | `std/virtqueue.mc:255` |
-| <code>pub fn vq_complete_chain(vq: *mut Virtq) -&gt; Result&lt;CompletedChain3, VqCompleteError&gt;</code> | `std/virtqueue.mc:356` |
-| <code>pub fn vq_kick(regs: MmioPtr&lt;VirtioMmio&gt;, q: u32) -&gt; void</code> | `std/virtqueue.mc:427` |
-| <code>pub fn vq_has_used(vq: *mut Virtq) -&gt; bool</code> | `std/virtqueue.mc:433` |
-| <code>pub fn vq_wait_used(vq: *mut Virtq, timeout: u64) -&gt; bool</code> | `std/virtqueue.mc:443` |
-| <code>pub fn vq_used_len(vq: *mut Virtq) -&gt; u32</code> | `std/virtqueue.mc:455` |
-| <code>pub fn vq_complete(vq: *mut Virtq) -&gt; Result&lt;CompletedBuffer, VqCompleteError&gt;</code> | `std/virtqueue.mc:484` |
-| <code>pub fn vq_reset_reclaim(vq: *mut Virtq) -&gt; usize</code> | `std/virtqueue.mc:517` |
+| <code>export fn poll_until(probe: fn() -&gt; bool, timeout: u64) -&gt; bool</code> | `std/time.mc:51` |
+| <code>export fn udelay(us: u32) -&gt; void</code> | `std/time.mc:62` |
+| <code>export fn mdelay(ms: u32) -&gt; void</code> | `std/time.mc:66` |

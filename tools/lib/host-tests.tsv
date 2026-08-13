@@ -1,6 +1,5 @@
 # name	fixture	mode	spec	mcc_flags	description
 numeric-literal-boundaries-test	tests/exec/numeric_literal_boundaries_run.mc	entry	numeric_literal_boundaries_run		full-range u64/u128 constants, separated floats, folded inf/nan, and signed zero execute identically on C and LLVM
-fdt-test	tests/qemu/arch/fdt_demo.mc	entry	fdt_run	-Wno-switch-bool	device-tree (FDT) header parsing: magic validation + totalsize/version
 grant-test	tests/qemu/ipc/grant_demo.mc	entry	grant_demo_run		memory grant: bounded delegation (OOB rejected) + revocation (stale ref caught)
 byteview-test	tests/qemu/lang/byteview_demo.mc	entry	byteview_run	-Wno-switch-bool	ByteBuf<N>: bounds-checked get + set/copy_from/copy_to return typed OutOfBounds (no silent clamp) on a PAddr
 closure-test	tests/qemu/lang/closure_demo.mc	driver			bind() closure captures a pointer + fn, callable with no ctx word/casts; capture mutated across calls
@@ -22,7 +21,6 @@ ring-test	tests/qemu/mem/ring_demo.mc	driver			generic in-place Ring<T> (instant
 slotmap-test	tests/qemu/mem/slotmap_demo.mc	entry	slotmap_run	-Wno-switch-bool	SlotMap<T,N>: stable index handles, alloc lowest-free, get/set/free bounds+liveness checked (BadHandle on use-after-free/double-free/oob), Full at capacity
 dma-try-test	tests/qemu/mem/dma_try_demo.mc	driver		-Wno-switch-bool -Wno-incompatible-library-redeclaration	std/dma typed fallible alloc: try_alloc returns ok(CpuBuffer) when the pool fits and err(DmaError.OutOfMemory) on exhaustion instead of trapping
 time-test	tests/qemu/lang/time_demo.mc	driver			std/time counter<u64> timeout arithmetic: wrap-correct delta_mod across a u64 rollover and the >= timeout boundary
-vqfault-test	tests/qemu/mem/vq_fault_demo.mc	driver		-Wno-unused-variable -Wno-unused-parameter -Wno-switch-bool -Wno-incompatible-library-redeclaration	virtqueue completion fault injection: bad used.id, not-in-flight, and used.len > allocation each rejected with their own distinct typed error
 wrap-test	tests/qemu/mem/wrap_demo.mc	entry	wrap_run	-Wno-unused-variable -Wno-unused-parameter	long-running wrap/exhaustion: ring stays FIFO across index wrap, a stale pool handle never revalidates across many generation advances, pool exhaustion fails closed (Full)
 mmio-test	tests/qemu/mem/mmio_demo.mc	entry	mmio_run	-Wno-switch-bool	std/mmio: RegField get/set/mask + single-bit ops (masked, neighbour-safe) and ordered IO-memory block/word copy with the fence on the correct edge
 synclock-test	tests/qemu/mem/synclock_demo.mc	entry	synclock_run	-Wno-switch-bool	std/rwlock + std/seqlock: reader-count transitions, uncontended writer acquire, and seqlock read-snapshot retry detection

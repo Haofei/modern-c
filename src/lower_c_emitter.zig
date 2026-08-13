@@ -924,7 +924,7 @@ pub const CEmitter = struct {
     /// is emitted regardless by `emitNamedStructDecls`; skipping only the belt-and-
     /// suspenders `_Static_assert` keeps the header compiling rather than emitting no
     /// header at all. The authoritative A1 `emit-layout` path keeps `fatal = true`, so
-    /// genuine drift on resolvable (e.g. virtqueue) structs is still a hard error.
+    /// genuine drift on resolvable structs is still a hard error.
     fn appendLayoutAssertsForImpl(self: *CEmitter, struct_names: []const []const u8, fatal: bool) !void {
         try lower_c_layout.appendLayoutAsserts(self.layoutAssertContext(), struct_names, fatal);
     }

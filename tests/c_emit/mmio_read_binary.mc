@@ -15,7 +15,7 @@
 // — they render inline (an `.acquire` read becomes a statement-expression carrying its fence)
 // at their syntactic position, so C's `&&`/`||` guarantees the right read happens only when
 // the left did not already decide the result. For NON-logical binaries (both operands always
-// evaluate) the reads are still hoisted to sequenced temps. This is exactly a virtio device
+// evaluate) the reads are still hoisted to sequenced temps. This is exactly a device
 // probe scan: `slot.magic.read(.acquire) == MAGIC && slot.device_id.read(.acquire) == ID`.
 //
 // LIMIT: inline rendering is only sequencing-safe with a SINGLE read per logical operand.

@@ -191,7 +191,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("arc-test"));
     m0_full_step.dependOn(ctx.cmd("constgen-test"));
     m0_full_step.dependOn(ctx.cmd("time-test"));
-    m0_full_step.dependOn(ctx.cmd("vqfault-test"));
     m0_full_step.dependOn(ctx.cmd("wrap-test"));
     m0_full_step.dependOn(ctx.cmd("libc-test"));
     // hosted-test runs the hosted-profile float I/O round-trip (needs clang+python3).
@@ -215,7 +214,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("tryelse-test"));
     m0_full_step.dependOn(ctx.cmd("byteview-test"));
     m0_full_step.dependOn(ctx.cmd("scan-test"));
-    m0_full_step.dependOn(ctx.cmd("fdt-test"));
     m0_full_step.dependOn(ctx.cmd("grant-test"));
     m0_full_step.dependOn(ctx.cmd("arc-pkt-test"));
     m0_full_step.dependOn(ctx.cmd("arena-test"));

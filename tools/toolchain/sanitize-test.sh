@@ -45,11 +45,7 @@ export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
 # adds ASan + UBSan; a sanitizer report makes the app exit non-zero, surfaced as a FAIL.
 san_one() {
     local name="$1"
-    # Fixtures that hand-build device-state globals (a fault-injection mock corrupts the
-    # device-owned vring rings directly). ASan's global redzone instrumentation mis-handles
-    # those raw aliased structs and faults with no report, while the fixture is clean under
-    # UBSan and the plain + differential runs — so only ASan's checks are skipped for them.
-    local sanitize_skip=" vqfault-test "
+    local sanitize_skip=" "
     case "$sanitize_skip" in
         *" $name "*) echo "NOTE: sanitize $name (hand-built device-state globals confuse ASan; covered by UBSan + diff-backend)"; return 0 ;;
     esac

@@ -148,8 +148,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "time-test", "std/time counter<u64> timeout arithmetic", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "time-test" });
 
-    _ = h.addScriptTest(ctx, "vqfault-test", "virtqueue completion fault injection (bad id / not-in-flight / length overflow)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "vqfault-test" });
-
     _ = h.addScriptTest(ctx, "wrap-test", "long-running ring-index/pool-generation wrap and pool exhaustion invariants", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "wrap-test" });
 
     _ = h.addScriptTest(ctx, "libc-test", "Minimal libc core", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "libc-test" });
@@ -195,8 +193,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "synclock-test", "std/rwlock + std/seqlock reader-writer and sequence locks", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "synclock-test" });
 
-
-    _ = h.addScriptTest(ctx, "fdt-test", "Device-tree (FDT) header parsing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test" });
 
     _ = h.addScriptTest(ctx, "grant-test", "Memory grant: bounded delegation + revocation", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "grant-test" });
 

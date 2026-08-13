@@ -81,9 +81,8 @@ export const fn wrapping_mul_u32(a: u32, b: u32) -> u32 {
     return (((a as u64) * (b as u64)) & 0x0000_0000_FFFF_FFFF) as u32;
 }
 
-// Wrapping (modulo-2^16) 16-bit add. For 16-bit counters that wrap by protocol — e.g.
-// virtio split-ring `avail.idx` / `used.idx` cursors — where `+ 1` past 65535 must wrap to
-// 0, not trip the checked-overflow trap.
+// Wrapping (modulo-2^16) 16-bit add. For 16-bit counters that wrap by protocol
+// where `+ 1` past 65535 must wrap to 0, not trip the checked-overflow trap.
 export const fn wrapping_add_u16(a: u16, b: u16) -> u16 {
     return (((a as u32) + (b as u32)) & 0x0000_FFFF) as u16;
 }

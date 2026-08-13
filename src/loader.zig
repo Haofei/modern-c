@@ -133,7 +133,7 @@ pub const default_arch = "riscv64";
 // `import "kernel/platform/<platform>/<x>"` where <platform> is the `--platform` selection
 // (default "qemu_virt"). This is the platform-selection seam (kernel-layering plan, Wave 0):
 // a generic core module keeps its stable import path and pulls its board/device backend
-// (the fixed MMIO addresses for the UART console, the RTC, the virtio-rng window) from
+// (fixed MMIO addresses for board devices such as the UART console and RTC) from
 // `active`, so swapping boards is a compile-time selection — not a source edit of the 45
 // modules that import the console interface.
 pub const platform_active_prefix = "kernel/platform/active/";

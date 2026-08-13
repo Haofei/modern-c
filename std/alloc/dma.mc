@@ -174,7 +174,7 @@ pub fn read_be32(b: *CpuBuffer, offset: usize) -> u32 {
     return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
 }
 
-// Little-endian accessors (virtio structures are little-endian).
+// Little-endian accessors for device-visible buffers.
 
 pub fn write_le16(b: *CpuBuffer, offset: usize, value: u16) -> void {
     cpu_check(b, offset, 2); // full-width check up front: no partial store before a trap
