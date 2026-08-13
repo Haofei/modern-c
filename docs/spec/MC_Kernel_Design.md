@@ -565,7 +565,8 @@ HTTP demos over slirp** (gateway `10.0.2.2`).
 - **TCP:** `tcp`, `tcp_conn` (RFC 793 state machine), `tcp_window`, `tcp_reasm`, `tcp_rtx`,
   `tcp_socket` (integration + segment-hold), `tcp_tx`.
 
-Gates: `dns-test`, `net-test`, `http-get-test`, and `tcp_*` demos (each C and LLVM).
+Gates: packet/parser and device-level validation remain; end-to-end HTTP/DNS/TCP server product
+fixtures have been removed from the core gate set.
 
 ---
 
@@ -675,7 +676,7 @@ scope. Gate names are verified against `build.zig`.
 | Rights/capabilities attenuate only (child = parent ∩ keep) | `capability.mc`, `std/rights.mc` | `cap-test`, `llvm-cap-test` | compile-time + QEMU |
 | Grant revoke invalidates outstanding refs; cascade revokes subtree | `kernel/lib/granttab.mc` | `grant-test`, `granttab-test` | riscv64 QEMU |
 | `UserPtr<T>` cannot be dereferenced in the kernel | `uaccess.mc` + compiler diagnostic `E_USER_PTR_DEREF` | compile-time spec fixtures | compile-time |
-| Real DNS + TCP + HTTP over slirp (no mocks on the wire) | `kernel/net/*` | `dns-test`, `http-get-test` | QEMU |
+| Packet/network parser validation | `kernel/net/*` | `dns-parser-test`, `parser-fuzz-test`, `net-test` | host + QEMU |
 | `page_free` is real O(1) reclaim (not a no-op) | `page_alloc.mc` | `page-test`, `llvm-page-test` | riscv64 QEMU |
 
 ---

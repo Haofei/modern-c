@@ -459,11 +459,6 @@ RULES: tuple[Rule, ...] = (
         "integrated kernel wrapper changes need its C and LLVM boot gates",
     ),
     Rule(
-        ("tools/net/kmain-net-test.sh",),
-        ("kmain-net-test", "llvm-kmain-net-test"),
-        "integrated network kernel wrapper changes need its C and LLVM boot gates",
-    ),
-    Rule(
         ("tools/arch/aarch64-test.sh",),
         ("aarch64-test", "llvm-aarch64-test"),
         "aarch64 wrapper changes need its C and LLVM architecture gates",
@@ -617,7 +612,6 @@ RULES: tuple[Rule, ...] = (
             "tools/proc/sched-bench.sh",
             "tools/mem/heap-bench.sh",
             "tools/mem/uaccess-bench.sh",
-            "tools/net/kmain-net-test.sh",
             "tests/qemu/proc/app_run_demo.mc",
             "tools/proc/app-run-test.sh",
         ),

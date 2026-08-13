@@ -5574,7 +5574,7 @@ The `zig build llvm-qemu-test`, `zig build llvm-trap-test`, `zig build
 llvm-thread-test`, `zig build llvm-sched-test`, `zig build llvm-syscall-test`,
 `zig build llvm-user-test`, `zig build llvm-process-test`, `zig build
 llvm-elf-run-test`, `zig build llvm-fs-syscall-test`, `zig build
-llvm-socket-syscall-test`, `zig build llvm-exec-test`, `zig build
+llvm-exec-test`, `zig build
 llvm-vm-switch-test`, `zig build llvm-vmspace-test`, `zig build
 llvm-vmctx-test`, `zig build llvm-sched-vm-test`, `zig build llvm-ipc-test`,
 `zig build llvm-ipc2-test`, `zig build llvm-registry-test`, `zig build
@@ -5584,12 +5584,11 @@ llvm-privilege-test`, `zig build llvm-usched-test`, `zig build
 llvm-paging-activate-test`, `zig build llvm-demand-test`, `zig build
 llvm-mmap-test`, `zig build llvm-contain-test`, `zig build llvm-cow-test`, and
 `zig build llvm-isolation-test`, `zig build llvm-block-server-test`, `zig build
-llvm-fs-server-test`, `zig build llvm-net-server-test`, `zig build
+llvm-fs-server-test`, `zig build
 llvm-rtc-test`, `zig build llvm-userserver-test`, `zig build
 llvm-backtrace-test`, `zig build llvm-driver-test`, and `zig build
 llvm-preempt-test`, `zig build llvm-smp-test`, `zig build
-llvm-smp-lock-test`, `zig build llvm-ipi-test`, and `zig build
-llvm-tcp-server-test`, `zig build llvm-virtio-test`, and `zig build
+llvm-smp-lock-test`, `zig build llvm-ipi-test`, `zig build llvm-virtio-test`, and `zig build
 llvm-udp-net-test`, `zig build llvm-blk-test`, `zig build llvm-net-test`,
 `zig build llvm-nic-test`, `zig build llvm-e1000-test`,
 `zig build llvm-net-rx-live-test`, `zig build llvm-sbi-boot-test`,
@@ -5597,26 +5596,24 @@ llvm-udp-net-test`, `zig build llvm-blk-test`, `zig build llvm-net-test`,
 `zig build llvm-x86-qemu-test`, and `zig build llvm-ushell-test`
 gates boot LLVM-lowered bare-metal RISC-V QEMU images for typed MMIO, timer
 traps, cooperative context switching, round-robin scheduling, syscall dispatch,
-U-mode entry, process lifecycle, ELF load/run, VFS syscalls, socket syscalls,
+U-mode entry, process lifecycle, ELF load/run, VFS syscalls,
 exec, `satp` address-space switching, per-process page tables, context switches
 that swap address spaces, scheduler VM switching, IPC request/reply,
 multi-slot IPC, registry lookup, IPC timeout, signal delivery,
 capability-scoped server access, restart supervision, heartbeat liveness,
 least-privilege gates, userspace-set scheduling policy, Sv39 activation,
 demand paging, anonymous mmap, crash containment, copy-on-write, per-server MMU
-isolation, user-mode block/filesystem/network servers, RTC MMIO, user-mode
+isolation, user-mode block/filesystem servers, RTC MMIO, user-mode
 server syscalls, backtrace symbolization, char-device driver dispatch, timer
 preemption, SMP boot/sync, SMP ticket-lock mutual exclusion, inter-processor
-interrupts, a user-mode TCP passive-open server handshake, virtio-net device
-bring-up, pcap-verified UDP transmit, virtio-blk sector reads, ARP/ICMP
+interrupts, virtio-net device bring-up, pcap-verified UDP transmit, virtio-blk sector reads, ARP/ICMP
 gateway round trips over virtio-net, driver-library synthetic NIC transmit,
 e1000 PCI probing, live virtio-net RX routing through the gated receive demux,
 OpenSBI firmware boot, aarch64 QEMU boot, and x86-64 native/QEMU scheduler
 boot, plus a syscall-driven user-mode shell session covering command input,
 process-table `top`, and U-mode exit traps.
-The `zig build llvm-kmain-test` and `zig build llvm-kmain-net-test` gates boot
-LLVM-lowered integrated RISC-V kernel images under QEMU; the network variant also
-checks that QEMU captures the expected transmitted UDP payload.
+The `zig build llvm-kmain-test` gate boots an LLVM-lowered integrated RISC-V kernel image
+under QEMU.
 The `zig build llvm-page-test`, `zig build llvm-heap-test`, and `zig build
 llvm-paging-test` gates link and run LLVM-lowered host checks for the frame
 allocator, kernel heap allocator, and Sv39 page-table map/translate helpers.

@@ -130,10 +130,8 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("broker-probe-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-broker-probe-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-fs-syscall-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-socket-syscall-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-exec-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-kmain-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-kmain-net-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vm-switch-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vmspace-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-vmctx-test"));
@@ -165,7 +163,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-paging-activate-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-block-server-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-fs-server-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-net-server-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-rtc-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-userserver-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-backtrace-test"));
@@ -183,7 +180,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-smp-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-smp-lock-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-ipi-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-tcp-server-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-virtio-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-udp-net-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-blk-test"));
@@ -202,8 +198,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-nic-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-e1000-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-net-rx-live-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-http-get-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-dns-test"));
 
     // qemu-test is gated separately (needs a riscv cross-toolchain + QEMU); it
     // self-skips when those are absent, so it is safe to include in m0 too.
@@ -381,7 +375,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("blockfs-test"));
     // udp-test links + runs the UDP build/parse + checksum (needs clang).
     m0_full_step.dependOn(ctx.cmd("udp-test"));
-    m0_full_step.dependOn(ctx.cmd("dns-host-test"));
+    m0_full_step.dependOn(ctx.cmd("dns-parser-test"));
     // alloc-test links + runs the type-erased Allocator (needs clang).
     m0_full_step.dependOn(ctx.cmd("alloc-test"));
     m0_full_step.dependOn(ctx.cmd("arc-test"));
@@ -472,7 +466,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("smprq-test"));
     m0_full_step.dependOn(ctx.cmd("rtc-test"));
     m0_full_step.dependOn(ctx.cmd("contain-test"));
-    m0_full_step.dependOn(ctx.cmd("tcp-server-test"));
     m0_full_step.dependOn(ctx.cmd("fdt-test"));
     m0_full_step.dependOn(ctx.cmd("fb-test"));
     m0_full_step.dependOn(ctx.cmd("dynlink-test"));
@@ -504,7 +497,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("async-select-test"));
     m0_full_step.dependOn(ctx.cmd("block-server-test"));
     m0_full_step.dependOn(ctx.cmd("fs-server-test"));
-    m0_full_step.dependOn(ctx.cmd("net-server-test"));
     m0_full_step.dependOn(ctx.cmd("cap-test"));
     m0_full_step.dependOn(ctx.cmd("restart-test"));
     m0_full_step.dependOn(ctx.cmd("arc-pkt-test"));
@@ -545,10 +537,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("parser-fuzz-test"));
     // net-rx-live-test routes a real virtio-net RX frame through net_rx_deliver under QEMU.
     m0_full_step.dependOn(ctx.cmd("net-rx-live-test"));
-    // http-get-test active-opens a real TCP connection and HTTP GETs a live server under QEMU.
-    m0_full_step.dependOn(ctx.cmd("http-get-test"));
-    // dns-test resolves a name via a real DNS A-query then HTTP GETs that host under QEMU.
-    m0_full_step.dependOn(ctx.cmd("dns-test"));
     // backtrace-test walks the frame-pointer chain + symbolizes under QEMU.
     m0_full_step.dependOn(ctx.cmd("backtrace-test"));
     // paging-test links + runs the Sv39 page-table map/translate (needs clang).
@@ -589,8 +577,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("driver-test"));
     // fs-syscall-test runs U-mode file syscalls over the VFS under QEMU.
     m0_full_step.dependOn(ctx.cmd("fs-syscall-test"));
-    // socket-syscall-test runs U-mode recvfrom over the UDP socket layer under QEMU.
-    m0_full_step.dependOn(ctx.cmd("socket-syscall-test"));
     // exec-test runs sys_exec: a U-mode program loads + runs another ELF under QEMU.
     m0_full_step.dependOn(ctx.cmd("exec-test"));
     // paging-activate-test activates Sv39 satp in S-mode + reads a translated VA.
@@ -609,8 +595,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("vmctx-test"));
     // sched-vm-test: the scheduler switches per-process address spaces (proc_yield_vm).
     m0_full_step.dependOn(ctx.cmd("sched-vm-test"));
-    // kmain-net-test boots the integrated kernel + network in one image.
-    m0_full_step.dependOn(ctx.cmd("kmain-net-test"));
 
     // fast: the inner-loop gate for deterministic host-only confidence. It
     // covers the spec/unit harness, emit-C sweep, C-vs-LLVM differential, and

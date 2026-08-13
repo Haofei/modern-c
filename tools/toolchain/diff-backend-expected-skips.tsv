@@ -49,7 +49,7 @@ blobstore-test	current host/corpus C build gap; additional skipped fixtures rema
 procmem-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 ipcprov-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 attenuate-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
-dns-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
+dns-parser-test	current host/corpus C build gap; additional skipped fixtures remain coverage regressions
 pause-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 ipcsample-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions
 capaudit-test	current LLVM backend unsupported fixture; additional skipped fixtures remain coverage regressions

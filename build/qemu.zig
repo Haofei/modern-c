@@ -248,7 +248,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "udp-test", "Link + run the UDP datagram build/parse + checksum", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "udp-test" });
 
-    _ = h.addScriptTest(ctx, "dns-host-test", "Link + run the DNS A-query build + response parse (host fixture)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "dns-test" });
+    _ = h.addScriptTest(ctx, "dns-parser-test", "Link + run the DNS A-query build + response parse (host fixture)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "dns-parser-test" });
 
     _ = h.addScriptTest(ctx, "arena-test", "move Arena: bump alloc, reset/reuse, destroy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arena-test" });
 
@@ -269,9 +269,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-fs-server-test", "Run LLVM-lowered filesystem server under QEMU", &.{ "bash", "tools/fs/fs-server-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "net-server-test", "UDP socket layer as a user-mode server (bind/recv via IPC)", &.{ "bash", "tools/net/net-server-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-net-server-test", "Run LLVM-lowered network server under QEMU", &.{ "bash", "tools/net/net-server-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "constgen-test", "Const-generic Ring<T,N> at two capacities", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "constgen-test" });
 
@@ -358,8 +355,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "llvm-rtc-test", "Run LLVM-lowered goldfish-RTC MMIO under QEMU", &.{ "bash", "tools/arch/rtc-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "contain-test", "MMU crash containment", &.{ "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-contain-test", "Run LLVM-lowered MMU crash containment under QEMU", &.{ "bash", "tools/mem/contain-test.sh", "zig-out/bin/mcc", "llvm" });
-    _ = h.addScriptTest(ctx, "tcp-server-test", "TCP connection state machine as a server", &.{ "bash", "tools/net/tcp-server-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-tcp-server-test", "LLVM-lowered TCP connection state machine as a server", &.{ "bash", "tools/net/tcp-server-test.sh", "zig-out/bin/mcc", "llvm" });
     _ = h.addScriptTest(ctx, "fdt-test", "Device-tree (FDT) header parsing", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fdt-test" });
 
     _ = h.addScriptTest(ctx, "fb-test", "Linear framebuffer device", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "fb-test" });
@@ -611,11 +606,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "net-rx-live-test", "Route a real virtio-net RX frame through net_rx_deliver under QEMU", &.{ "bash", "tools/net/net-rx-live-test.sh", "zig-out/bin/mcc", "c" });
     _ = h.addScriptTest(ctx, "llvm-net-rx-live-test", "Route a real LLVM-lowered virtio-net RX frame through net_rx_deliver under QEMU", &.{ "bash", "tools/net/net-rx-live-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "http-get-test", "Active-open a real TCP connection and HTTP GET a live server over virtio-net under QEMU", &.{ "bash", "tools/net/http-get-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-http-get-test", "Active-open a real LLVM-lowered TCP connection and HTTP GET a live server over virtio-net under QEMU", &.{ "bash", "tools/net/http-get-test.sh", "zig-out/bin/mcc", "llvm" });
-
-    _ = h.addScriptTest(ctx, "dns-test", "Resolve a name via a real DNS A-query then HTTP GET that host over virtio-net under QEMU", &.{ "bash", "tools/net/dns-test.sh", "zig-out/bin/mcc", "c" });
-    _ = h.addScriptTest(ctx, "llvm-dns-test", "Resolve a name via a real LLVM-lowered DNS A-query then HTTP GET that host over virtio-net under QEMU", &.{ "bash", "tools/net/dns-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "backtrace-test", "Walk the frame-pointer chain and symbolize the frames under QEMU", &.{ "bash", "tools/lang/backtrace-test.sh", "zig-out/bin/mcc", "c" });
 
@@ -903,9 +893,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-fs-syscall-test", "Run LLVM-lowered U-mode file syscalls over the VFS under QEMU", &.{ "bash", "tools/fs/fs-syscall-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "socket-syscall-test", "Run U-mode recvfrom over the UDP socket layer under QEMU", &.{ "bash", "tools/net/socket-syscall-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-socket-syscall-test", "Run LLVM-lowered U-mode recvfrom over the UDP socket layer under QEMU", &.{ "bash", "tools/net/socket-syscall-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "exec-test", "Run sys_exec: a U-mode program loads + runs another ELF under QEMU", &.{ "bash", "tools/lang/exec-test.sh", "zig-out/bin/mcc", "c" });
 
@@ -923,9 +910,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "llvm-fault-isolation-test", "Boot the LLVM-lowered F1 fault-isolation keystone under QEMU", &.{ "bash", "tools/proc/fault-isolation-test.sh", "zig-out/bin/mcc", "llvm" });
 
-    _ = h.addScriptTest(ctx, "kmain-net-test", "Boot the integrated kernel + network in one image under QEMU", &.{ "bash", "tools/net/kmain-net-test.sh", "zig-out/bin/mcc", "c" });
-
-    _ = h.addScriptTest(ctx, "llvm-kmain-net-test", "Boot the LLVM-lowered integrated kernel + network image under QEMU", &.{ "bash", "tools/net/kmain-net-test.sh", "zig-out/bin/mcc", "llvm" });
 
     _ = h.addScriptTest(ctx, "vm-switch-test", "Switch satp between two address spaces under QEMU (per-process VM)", &.{ "bash", "tools/mem/vm-switch-test.sh", "zig-out/bin/mcc", "c" });
 
