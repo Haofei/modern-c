@@ -5564,8 +5564,6 @@ with `check` plus LLVM object lowering.
 The `zig build llvm-std-test` gate additionally links LLVM-built
 `std/{core,bits,math,ascii,fmt,addr}` objects into one host executable and runs
 exported function checks.
-The `zig build llvm-pkg-test` gate builds the package-manifest demo through
-the LLVM object driver, links the resulting object, and runs it.
 The `zig build llvm-demo-test` gate compiles the framebuffer/gpio/irq/spi/timer/uart
 hardware demo drivers and the hosted elementwise demo through LLVM to non-empty
 object files under the same hidden-assumption token check.

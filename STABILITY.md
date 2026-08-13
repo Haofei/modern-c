@@ -18,8 +18,6 @@ guarantees until a tagged release declares its supported surfaces.
 - The CLI is not a released installation interface yet.
 - `emit-c` and `emit-llvm` output formats are compiler artifacts, not stable public
   APIs.
-- The package/registry scripts are local exact-version tooling, not a public package
-  ecosystem.
 - Async, traits, kernel libraries, and editor integration remain subject to incompatible changes.
 
 ## Tagged Release Compatibility

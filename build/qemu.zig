@@ -132,11 +132,8 @@ pub fn register(ctx: *h.Ctx) void {
 
 
 
-    _ = h.addScriptTest(ctx, "pkg-test", "Build a package from its manifest with mcc-pkg, link, and run it", &.{ "bash", "tools/toolchain/pkg-test.sh", "zig-out/bin/mcc" });
 
-    _ = h.addScriptTest(ctx, "llvm-pkg-test", "Build a package from its manifest through LLVM, link, and run it", &.{ "bash", "tools/toolchain/llvm-pkg-test.sh", "zig-out/bin/mcc" });
 
-    _ = h.addScriptTest(ctx, "pkg-registry-test", "Registry publish/resolve/install + lockfile reproducibility for the package manager", &.{ "bash", "tools/toolchain/pkg-registry-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "llvm-demo-test", "Compile supported demo drivers through LLVM to objects", &.{ "bash", "tools/toolchain/llvm-demo-test.sh", "zig-out/bin/mcc" });
 

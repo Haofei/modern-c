@@ -304,9 +304,6 @@ The repository includes:
 - a token-preserving formatter through `mcc fmt`;
 - structured diagnostics and `mcc explain`;
 - JSON symbol indexing through `mcc symbols`;
-- local package manifests and an offline, filesystem-backed registry with
-  authenticated installed-file inventories, recoverable transaction records,
-  safe package identities, and publish/install commands;
 - a CLI-backed language server in `tools/lsp/mc-lsp.py` and a VS Code client in
   `editors/vscode/`.
 
@@ -337,7 +334,6 @@ Other deliberate or current limitations include:
 - no general lifetime or borrow checker;
 - value-level comptime rather than unrestricted type computation;
 - no separate-compilation or mature incremental module graph;
-- an offline registry rather than a public network package ecosystem;
 - a token-preserving reindenter rather than a full pretty printer;
 - incomplete hardware qualification and production kernel hardening;
 - no stable public release yet.
@@ -354,7 +350,7 @@ The repository-wide backlog is [`docs/todo.md`](docs/todo.md).
 | `tests/c_emit/`, `tests/llvm/` | Backend fixtures |
 | `tests/qemu/` | Programs used by QEMU and host-driver gates |
 | `kernel/`, `user/` | Kernel runtime, MC modules, and user-mode components |
-| `tools/` | Drivers, fuzzers, package tools, LSP, and test harnesses |
+| `tools/` | Drivers, fuzzers, LSP, and test harnesses |
 | `demo/`, `examples/` | Hosted and hardware-oriented examples |
 | `docs/` | Specifications, reference material, qualification, and plans |
 

@@ -901,7 +901,7 @@ def open_workspace_source(root, path):
 
 def workspace_sources(docs, roots, deadline=None):
     sources = dict(docs)
-    skipped = {".git", ".zig-cache", "zig-out", "zig-pkg", "mc_packages"}
+    skipped = {".git", ".zig-cache", "zig-out", "zig-pkg"}
     total_bytes = 0
     if deadline is None:
         deadline = time.monotonic() + MAX_WORKSPACE_SCAN_SECONDS

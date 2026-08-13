@@ -91,7 +91,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("llvm-runtime-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-std-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-toolchain-test"));
-    m0_full_step.dependOn(ctx.cmd("llvm-pkg-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-demo-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-kernel-test"));
     m0_full_step.dependOn(ctx.cmd("llvm-hosted-demo-test"));
@@ -315,10 +314,6 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("mcc-list-tests-modules-test"));
     m0_full_step.dependOn(ctx.cmd("lsp-test"));
     m0_full_step.dependOn(ctx.cmd("editor-client-test"));
-    // pkg-test exercises the mcc-pkg manifest build (needs clang).
-    m0_full_step.dependOn(ctx.cmd("pkg-test"));
-    // pkg-registry-test exercises registry publish/resolve/install + lockfile reproducibility.
-    m0_full_step.dependOn(ctx.cmd("pkg-registry-test"));
     // stack-test exercises the generic std/stack collection (needs clang).
     m0_full_step.dependOn(ctx.cmd("stack-test"));
     // vec-test exercises the generic heap-backed std/collections/dynarray Vec<T> (needs clang).
