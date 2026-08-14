@@ -4,7 +4,6 @@ const ast_bridge = @import("ast_bridge.zig");
 const backend_cleanup = @import("backend_cleanup.zig");
 const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
-const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const syntax_bridge = @import("syntax_bridge.zig");
@@ -92,7 +91,6 @@ const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
 const isSourceSpan = mir_source_bridge.isSourceSpan;
 const sourcePointFromOptionalSpan = mir_source_bridge.sourcePointFromOptionalSpan;
 const hasNakedAttr = attr_syntax.hasNakedAttr;
-const backendNameOverride = attr_syntax.backendNameOverride;
 const exprContainsCall = lower_c_expr.exprContainsCall;
 const resolvedArrayChildType = lower_c_shape.resolvedArrayChildType;
 const overlayFieldLayoutForType = lower_c_shape.overlayFieldLayout;
@@ -133,16 +131,6 @@ const simpleNameType = type_bridge.simpleNameType;
 const contractName = syntax_bridge.contractName;
 const calleeIdentName = syntax_bridge.calleeIdentName;
 const callExpr = syntax_bridge.callExpr;
-
-fn hasNamedAttr(attrs: []const ast_bridge.Attr, name: []const u8) bool {
-    for (attrs) |attr| {
-        switch (attr.kind) {
-            .named => |id| if (std.mem.eql(u8, id.text, name)) return true,
-            else => {},
-        }
-    }
-    return false;
-}
 
 const MirSubjectType = struct {
     target_ty: ast_bridge.TypeExpr,
@@ -510,8 +498,8 @@ pub const CEmitter = struct {
     }
 
     fn collectFunctionArtifact(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
-        try self.functions.put(function.name.text, .{ .params = function.params, .return_type = function.return_type, .is_extern = function.is_extern, .is_variadic = function.is_variadic, .error_from = error_from.hasAttr(function.attrs) });
-        if (!function.is_extern) if (backendNameOverride(function.attrs)) |name| try self.backend_names.put(function.name.text, name);
+        try self.functions.put(function.name.text, .{ .params = function.params, .return_type = function.return_type, .is_extern = function.is_extern, .is_variadic = function.is_variadic, .error_from = function.has_error_from });
+        if (!function.is_extern) if (function.backend_name) |name| try self.backend_names.put(function.name.text, name);
         try self.collectFunctionArtifactSliceTypes(function);
     }
 
@@ -633,7 +621,7 @@ pub const CEmitter = struct {
                     continue;
                 }
                 if (function.body) |body| {
-                    try self.emitFunction(function, body, function.attrs);
+                    try self.emitFunction(function, body, function.backend_attrs);
                 } else {
                     try self.emitFunctionPrototype(function);
                 }

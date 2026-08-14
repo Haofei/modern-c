@@ -131,7 +131,12 @@ pub const FunctionArtifact = struct {
     is_const: bool,
     exported: bool,
     is_variadic: bool,
-    attrs: []const ast.Attr,
+    /// Transitional backend-rendering attributes only. Semantic facts derived
+    /// from attributes must be normalized into the fields below before codegen.
+    backend_attrs: []const ast.Attr,
+    backend_name: ?[]const u8,
+    has_error_from: bool,
+    has_mc_abi: bool,
     is_extern: bool,
 
     pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
@@ -144,7 +149,10 @@ pub const FunctionArtifact = struct {
             .is_const = fn_decl.is_const,
             .exported = fn_decl.exported,
             .is_variadic = fn_decl.is_variadic,
-            .attrs = attrs,
+            .backend_attrs = attrs,
+            .backend_name = backendNameOverride(attrs),
+            .has_error_from = hasNamedAttr(attrs, "error_from"),
+            .has_mc_abi = hasNamedAttr(attrs, "mc_abi"),
             .is_extern = is_extern,
         };
     }
@@ -301,6 +309,14 @@ fn backendNameOverride(attrs: []const ast.Attr) ?[]const u8 {
         else => {},
     };
     return null;
+}
+
+fn hasNamedAttr(attrs: []const ast.Attr, name: []const u8) bool {
+    for (attrs) |attr| switch (attr.kind) {
+        .named => |named| if (std.mem.eql(u8, named.text, name)) return true,
+        else => {},
+    };
+    return false;
 }
 
 test "declaration artifacts collect from resolved declaration stream" {

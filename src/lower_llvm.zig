@@ -101,16 +101,6 @@ const MirSubjectType = struct {
     nullable_representation: ?NullableRepresentation = null,
 };
 
-fn hasNamedAttr(attrs: []const ast_bridge.Attr, name: []const u8) bool {
-    for (attrs) |attr| {
-        switch (attr.kind) {
-            .named => |id| if (std.mem.eql(u8, id.text, name)) return true,
-            else => {},
-        }
-    }
-    return false;
-}
-
 // LLVM backend AST/call-shape queries and small pure lowering helpers.
 const lower_llvm_query = @import("lower_llvm_query.zig");
 const assignmentIdent = lower_llvm_query.assignmentIdent;
@@ -692,12 +682,9 @@ const LlvmEmitter = struct {
             });
             break :blk id;
         } else null;
-        const c_abi = function.is_variadic or function.abi != null or (function.exported and !hasNamedAttr(function.attrs, "mc_abi"));
-        try self.fn_sigs.put(function.name.text, .{ .ret = ret_ty, .params = function.params, .c_abi = c_abi, .is_variadic = function.is_variadic, .debug_id = debug_id, .error_from = error_from.hasAttr(function.attrs) });
-        for (function.attrs) |attr| switch (attr.kind) {
-            .backend_name => |name| try self.backend_names.put(function.name.text, name),
-            else => {},
-        };
+        const c_abi = function.is_variadic or function.abi != null or (function.exported and !function.has_mc_abi);
+        try self.fn_sigs.put(function.name.text, .{ .ret = ret_ty, .params = function.params, .c_abi = c_abi, .is_variadic = function.is_variadic, .debug_id = debug_id, .error_from = function.has_error_from });
+        if (function.backend_name) |name| try self.backend_names.put(function.name.text, name);
     }
 
     fn collectFunctionGlobalAndTraitArtifacts(self: *LlvmEmitter) !void {
@@ -809,7 +796,7 @@ const LlvmEmitter = struct {
                 if (function.is_extern) {
                     try self.emitExternFunction(function);
                 } else if (function.body) |body| {
-                    try self.emitFunction(function, body, function.attrs);
+                    try self.emitFunction(function, body, function.backend_attrs);
                 }
             },
             else => {},
