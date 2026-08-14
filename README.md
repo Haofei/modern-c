@@ -1,9 +1,9 @@
 # MC / modern-c
 
-MC is a spec-first systems language and compiler for kernels, drivers, and
-freestanding software. It explores a specific question: how much low-level
-machine behavior can be made explicit and checkable without hiding allocation,
-control flow, hardware access, or optimizer assumptions?
+MC is a spec-first systems language and compiler for explicit machine contracts
+in freestanding systems code. It explores a specific question: how much
+low-level machine behavior can be made explicit and checkable without hiding
+allocation, control flow, hardware access, or optimizer assumptions?
 
 MC is a research prototype, not a general C replacement. The compiler has
 two differentially validated backend paths for the documented, implemented subset:
@@ -32,11 +32,16 @@ The language currently includes:
 - explicit atomics, fences, IRQ effects, DMA/cache ownership transitions, and
   unsafe boundaries;
 - `move` resources for ownership-sensitive handles;
-- `Result<T, E>`, optional values, tagged unions, traits, closures, generics, and
-  bounded value-level comptime evaluation;
+- `Result<T, E>`, optional values, tagged unions, and bounded value-level
+  comptime evaluation;
 - `#[no_lang_trap]`, `#[bounded]`, `#[irq_context]`, and unsafe contracts;
 - a rule that optimization mode cannot silently change the semantics of an
   already accepted program.
+
+Traits, closures, broad generics, async/await, and advanced ownership forms such
+as `view struct`, `region struct`, `thread_move`, and borrowed-return contracts
+exist as experimental or validation surfaces. They are frozen while compiler
+work focuses on closing the typed MIR / `VerifiedProgram` backend boundary.
 
 MC does not claim general memory safety. Raw pointers remain available, and the
 current compiler does not implement a general borrow checker or lifetime system.

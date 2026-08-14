@@ -9,9 +9,9 @@ history; this file should describe only current compiler-core direction.
 - `zig build m0-full` is the broader validation matrix for the implemented
   language, backends, fuzz oracles, host-driver fixtures, and retained QEMU
   fixtures.
-- Kernel code is a validation workload for language, MIR, ownership, ABI,
-  unsafe-boundary, freestanding, and backend-lowering behavior. It is not a
-  deliverable track.
+- Freestanding/QEMU fixtures are validation workloads for language, MIR,
+  ownership, ABI, unsafe-boundary, and backend-lowering behavior. They are not a
+  kernel or OS deliverable track.
 
 ## Active priorities
 
@@ -19,6 +19,7 @@ history; this file should describe only current compiler-core direction.
 |---|---|---|
 | P0 | Backend semantic authority | Remove backend-local semantic inference and keep C/LLVM lowering driven by typed MIR, verified facts, layout/ABI tables, and `VerifiedProgram`. |
 | P0 | `VerifiedProgram` narrowing | Remove AST-shaped semantic ingress from backend entrypoints; keep source spelling and spans mechanics-only. |
+| P0 | Language surface freeze | Keep async, traits, closures, broad generics, `view struct`, `region struct`, `thread_move`, and borrowed-return contracts experimental until the backend authority boundary is closed. |
 | P0 | Test speed and sharding | Keep the cheap `m0`/`fast` loop focused; leave broad sweeps in `m0-full` and parallel runners. |
 | P1 | Module identity | Move away from text-inclusion identity toward per-file source, module, definition, type, and body IDs. |
 | P1 | QEMU validation boundary | Keep RISC-V/QEMU fixtures only where they validate language, ABI, MMIO, ownership, trap/interrupt behavior, or backend lowering. |

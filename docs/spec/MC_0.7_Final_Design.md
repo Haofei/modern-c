@@ -1,10 +1,15 @@
-# MC 0.7 Final Design
+# MC 0.7 Design Draft
 
-## A kernel-profile, Zig-like Modern C
+## Explicit machine contracts for freestanding systems code
 
 **Status:** implementation-aligned design draft
 **Version:** 0.7  
-**Scope:** kernels, drivers, allocators, runtimes, freestanding systems code, boot code, and low-level libraries. The current implementation target is the verified C backend plus the LLVM backend for the implemented spec surface. C remains the historical conformance baseline; LLVM follows the same semantic and MIR verification contract.
+**Scope:** freestanding systems code, drivers, allocators, runtimes, boot code,
+and low-level libraries. Kernel-like programs are validation workloads for the
+language and compiler, not a product deliverable. The current implementation
+target is the verified C backend plus the LLVM backend for the implemented spec
+surface. C remains the historical conformance baseline; LLVM follows the same
+semantic and MIR verification contract.
 
 ---
 
@@ -70,14 +75,17 @@
 
 # 0. Thesis
 
-**MC is a Zig-like kernel-profile language whose irreducible language-level departures are:**
+**MC is an explicit-machine-contract language whose irreducible language-level departures are:**
 
 1. **Build mode never changes program semantics.**
 2. **Every unchecked optimizer assumption is confined to an explicitly marked `#[unsafe_contract]` region.**
 
-Everything else—arithmetic-policy types, address-space types, typed MMIO, typed DMA, linear `move` resource handles, trap ABI, narrow compile-time reflection—is the standardized **kernel profile** rather than ad hoc library convention.
+Everything else—arithmetic-policy types, address-space types, typed MMIO,
+typed DMA, linear `move` resource handles, trap ABI, narrow compile-time
+reflection—is the standardized **machine-contract core** rather than ad hoc
+library convention.
 
-The kernel profile is organized as two layers:
+The machine-contract core is organized as two layers:
 
 ```txt
 Language primitives:
@@ -100,6 +108,12 @@ these primitives to keep the language contract executable; the language stays
 device-agnostic. (See annex section A.1.)
 
 MC is not a memory-safe language. It is a language that makes the machine contract explicit.
+
+Traits, closures, broad generics, async/await, `view struct`, `region struct`,
+`thread_move`, and borrowed-return contracts are experimental unless a section
+explicitly says otherwise. They are documented here because they exist in the
+research implementation, but they must not expand the stable core while the
+typed MIR / `VerifiedProgram` backend boundary is being closed.
 
 The central promise is:
 
@@ -1525,7 +1539,7 @@ If false, the marked region has region-scoped unspecified behavior.
 
 # 16. Address-Space Types
 
-MC’s kernel profile treats address spaces as core types.
+MC’s machine-contract core treats address spaces as core types.
 
 ```mc
 type VAddr;
@@ -1750,7 +1764,7 @@ device.wait_irq();
 let packet = buf.as_slice();   // may be stale if invalidate was required
 ```
 
-A stricter kernel profile uses ordinary `move` resource typestates around the
+A stricter validation profile uses ordinary `move` resource typestates around the
 core DMA primitive:
 
 ```mc
@@ -2571,7 +2585,7 @@ bit_offset(T, .field)
 repr_of(T)
 ```
 
-Reflection must work over kernel profile types:
+Reflection must work over machine-contract core types:
 
 ```mc
 extern struct
@@ -2959,7 +2973,7 @@ The irreducible differences are:
 2. Unchecked optimizer assumptions are quarantined in #[unsafe_contract].
 ```
 
-The kernel-profile additions—address-space types, typed MMIO, typed DMA, trap ABI, counter/serial arithmetic—could partly be library conventions in a sufficiently powerful systems language.
+The machine-contract additions—address-space types, typed MMIO, typed DMA, trap ABI, counter/serial arithmetic—could partly be library conventions in a sufficiently powerful systems language.
 
 MC standardizes them because kernel code should not reinvent the hardware contract in every project.
 
@@ -3785,7 +3799,7 @@ If a backend-generated artifact behaves differently from the MC core semantics, 
 
 ## A.1 Primitive and Library Layers
 
-Orthogonal to the core/annex split, the kernel profile (section 0) separates two conformance layers:
+Orthogonal to the core/annex split, the machine-contract core (section 0) separates two conformance layers:
 
 ```txt
 Language primitives:

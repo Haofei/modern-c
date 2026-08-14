@@ -27,6 +27,17 @@ BACKEND_EXTRA_FILES = {
 
 EXACT_BACKEND_COUNTS = {
     '@import("ast.zig")': 0,
+    # Transitional syntax/semantic compatibility edges.  These are not
+    # acceptable long-term backend authority; the counts are a ratchet budget
+    # so new codegen syntax/eval/artifact ingress fails immediately.  Update
+    # these only when the count decreases or a deliberate migration patch
+    # moves one of these edges behind verified MIR facts.
+    '@import("ast_bridge.zig")': 41,
+    '@import("declaration_artifacts.zig")': 9,
+    '@import("eval.zig")': 7,
+    "ast_bridge.": 2841,
+    "declaration_artifacts.": 55,
+    "EarlyDeclarationArtifacts": 17,
     '@import("attr_syntax.zig")': 2,
     '@import("ast_query.zig")': 0,
     '@import("expr_syntax.zig")': 0,

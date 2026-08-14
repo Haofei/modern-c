@@ -13,7 +13,7 @@ signature (§7). The deferred frontier (§9 effect-carrying `dyn`, comptime/cons
 trait methods) is the part still ahead.
 
 This describes how MC gains declared, checked trait/interface abstraction
-**without** weakening any existing kernel-profile guarantee (no GC / no hidden
+**without** weakening any existing machine-contract core guarantee (no GC / no hidden
 allocation, move/linear types, IRQ-context discipline, `secret<T>` constant-time,
 opaque-struct opacity, no-UB IR, C+LLVM parity).
 
