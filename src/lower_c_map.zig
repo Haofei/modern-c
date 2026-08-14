@@ -15,7 +15,7 @@ const mir_syntax = @import("mir_syntax.zig");
 
 pub fn appendSourceMap(
     allocator: std.mem.Allocator,
-    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
+    source_map_artifacts: []const declaration_artifacts.SourceMapArtifact,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     mir_module: *const mir.Module,
@@ -39,7 +39,7 @@ pub fn appendSourceMap(
         .module_name = moduleNameFromPath(source_path),
     };
     defer mapper.deinit();
-    try mapper.collectRowArtifacts(artifacts.source_map_artifacts);
+    try mapper.collectRowArtifacts(source_map_artifacts);
     try mapper.emitCollectedRows();
 
     var mir_facts_input: std.ArrayList(u8) = .empty;

@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "source_of_truth": "docs/feature-maturity.json",
+  "statuses": [
+    "core-qualified",
+    "experimental",
+    "validation-only",
+    "reserved-or-unsupported"
+  ],
+  "features": [
+    {
+      "id": "checked-arithmetic",
+      "status": "core-qualified",
+      "area": "machine-contract-core",
+      "spec_anchor": "Arithmetic Domains",
+      "evidence": [
+        "tests/spec/arithmetic_checked.mc",
+        "tools/toolchain/numeric-comptime-matrix.py"
+      ]
+    },
+    {
+      "id": "address-spaces",
+      "status": "core-qualified",
+      "area": "machine-contract-core",
+      "spec_anchor": "Address-Space Types",
+      "evidence": [
+        "docs/spec/MC_0.7_Final_Design.md",
+        "tests/spec"
+      ]
+    },
+    {
+      "id": "mmio-dma-contracts",
+      "status": "core-qualified",
+      "area": "machine-contract-core",
+      "spec_anchor": "MMIO",
+      "evidence": [
+        "tests/qemu",
+        "tools/arch/qemu-mmio-test.sh"
+      ]
+    },
+    {
+      "id": "move-linear-drop-v0",
+      "status": "core-qualified",
+      "area": "ownership-v0",
+      "spec_anchor": "Scoped Affine Ownership",
+      "evidence": [
+        "src/mir_ownership_authority.zig",
+        "src/test_shard_mir_cleanup.zig"
+      ]
+    },
+    {
+      "id": "traits",
+      "status": "experimental",
+      "area": "language-surface",
+      "spec_anchor": "Traits and Interfaces",
+      "evidence": [
+        "docs/traits-design.md",
+        "src/sema.zig"
+      ]
+    },
+    {
+      "id": "closures",
+      "status": "experimental",
+      "area": "language-surface",
+      "spec_anchor": "closure",
+      "evidence": [
+        "src/sema.zig",
+        "tests/spec"
+      ]
+    },
+    {
+      "id": "broad-generics",
+      "status": "experimental",
+      "area": "language-surface",
+      "spec_anchor": "generic",
+      "evidence": [
+        "src/monomorphize.zig",
+        "tests/spec"
+      ]
+    },
+    {
+      "id": "async-await",
+      "status": "experimental",
+      "area": "language-surface",
+      "spec_anchor": "Async and Await",
+      "evidence": [
+        "src/async_lower.zig",
+        "tests/c_emit/fuzz_async_syntax.mc"
+      ]
+    },
+    {
+      "id": "advanced-ownership-views",
+      "status": "experimental",
+      "area": "ownership-experimental",
+      "spec_anchor": "view struct",
+      "evidence": [
+        "tools/toolchain/ownership-experimental-surface-inventory.py",
+        "src/sema_tests.zig"
+      ]
+    },
+    {
+      "id": "freestanding-qemu-fixtures",
+      "status": "validation-only",
+      "area": "validation",
+      "spec_anchor": "Driver Validation Profile",
+      "evidence": [
+        "tests/qemu",
+        "tools/arch"
+      ]
+    }
+  ]
+}

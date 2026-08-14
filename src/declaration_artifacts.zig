@@ -98,6 +98,20 @@ pub const EarlyDeclarationArtifacts = struct {
         .decl_artifacts = &.{},
         .source_map_artifacts = &.{},
     };
+
+    pub fn codegen(self: EarlyDeclarationArtifacts) CodegenDeclarationArtifacts {
+        return .{ .decl_artifacts = self.decl_artifacts };
+    }
+};
+
+/// Transitional ordinary-codegen artifact view.
+///
+/// Source-map row mechanics are deliberately excluded from `LowerRequest`; only
+/// `EmitMapRequest` receives `SourceMapArtifact` rows. This keeps ordinary
+/// C/LLVM lowering from growing accidental source-map syntax ingress while the
+/// remaining declaration-shaped payload is migrated into verified MIR facts.
+pub const CodegenDeclarationArtifacts = struct {
+    decl_artifacts: []const DeclArtifact,
 };
 
 fn declOrigin(decl: ast.Decl) []const u8 {

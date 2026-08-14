@@ -157,7 +157,7 @@ const dynCalleeMethodName = syntax_bridge.dynCalleeMethodName;
 
 pub fn appendLayoutAsserts(
     allocator: std.mem.Allocator,
-    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
+    artifacts: declaration_artifacts.CodegenDeclarationArtifacts,
     typed_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     struct_names: []const []const u8,
@@ -179,7 +179,7 @@ pub fn appendLayoutAsserts(
 
 pub fn appendStructDecls(
     allocator: std.mem.Allocator,
-    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
+    artifacts: declaration_artifacts.CodegenDeclarationArtifacts,
     typed_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     struct_names: []const []const u8,
@@ -213,7 +213,7 @@ pub fn appendStructDecls(
 
 pub fn appendModuleMir(
     allocator: std.mem.Allocator,
-    early_metadata: declaration_artifacts.EarlyDeclarationArtifacts,
+    early_metadata: declaration_artifacts.CodegenDeclarationArtifacts,
     typed_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     source_path: ?[]const u8,
@@ -421,7 +421,7 @@ pub const CEmitter = struct {
         self.loop_labels.deinit(self.allocator);
     }
 
-    fn collectModule(self: *CEmitter, early_metadata: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
+    fn collectModule(self: *CEmitter, early_metadata: declaration_artifacts.CodegenDeclarationArtifacts) anyerror!void {
         self.decl_artifacts = early_metadata.decl_artifacts;
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
@@ -430,11 +430,11 @@ pub const CEmitter = struct {
         try self.collectBindThunks();
     }
 
-    pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) void {
+    pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: declaration_artifacts.CodegenDeclarationArtifacts) void {
         self.comptime_declarations = eval.ComptimeDeclarations.fromDeclarationArtifacts(artifacts);
     }
 
-    pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
+    pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: declaration_artifacts.CodegenDeclarationArtifacts) !void {
         // Pre-pass: collect const/comptime metadata and pre-register nominal type
         // names up front, so fixed-array lengths, reflection queries, and type-name
         // mangling resolve during the artifact-collection pass below. Const global
@@ -474,7 +474,7 @@ pub const CEmitter = struct {
         });
     }
 
-    pub fn collectDeclArtifacts(self: *CEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
+    pub fn collectDeclArtifacts(self: *CEmitter, artifacts: declaration_artifacts.CodegenDeclarationArtifacts) anyerror!void {
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| try self.collectFunctionArtifact(function),
             .global => |global| try self.collectGlobalDeclArtifact(global),
@@ -535,7 +535,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitModule(self: *CEmitter, early_metadata: declaration_artifacts.EarlyDeclarationArtifacts) anyerror!void {
+    fn emitModule(self: *CEmitter, early_metadata: declaration_artifacts.CodegenDeclarationArtifacts) anyerror!void {
         defer self.deinit();
         try self.collectModule(early_metadata);
         try self.emitTypePrelude();

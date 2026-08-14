@@ -629,7 +629,7 @@ pub const ComptimeDeclarations = struct {
         return .{ .legacy_decls = decls };
     }
 
-    pub fn fromDeclarationArtifacts(artifacts: declaration_artifacts.EarlyDeclarationArtifacts) ComptimeDeclarations {
+    pub fn fromDeclarationArtifacts(artifacts: declaration_artifacts.CodegenDeclarationArtifacts) ComptimeDeclarations {
         return .{ .decl_artifacts = artifacts.decl_artifacts };
     }
 };

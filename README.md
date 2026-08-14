@@ -42,6 +42,8 @@ Traits, closures, broad generics, async/await, and advanced ownership forms such
 as `view struct`, `region struct`, `thread_move`, and borrowed-return contracts
 exist as experimental or validation surfaces. They are frozen while compiler
 work focuses on closing the typed MIR / `VerifiedProgram` backend boundary.
+The machine-readable status table is
+[`docs/feature-maturity.json`](docs/feature-maturity.json).
 
 MC does not claim general memory safety. Raw pointers remain available, and the
 current compiler does not implement a general borrow checker or lifetime system.

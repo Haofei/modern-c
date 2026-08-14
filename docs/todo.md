@@ -12,6 +12,9 @@ history; this file should describe only current compiler-core direction.
 - Freestanding/QEMU fixtures are validation workloads for language, MIR,
   ownership, ABI, unsafe-boundary, and backend-lowering behavior. They are not a
   kernel or OS deliverable track.
+- `docs/feature-maturity.json` is the machine-readable feature-status table.
+  Advanced language forms stay experimental there until the backend semantic
+  authority boundary is closed.
 
 ## Active priorities
 

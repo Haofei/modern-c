@@ -52,7 +52,7 @@ fn backendEmitMap(
     _ = ctx;
     return appendCSourceMapFromGenerated(
         allocator,
-        request.declaration_artifacts,
+        request.source_map_artifacts,
         request.out,
         request.generated_artifact,
         request.program.typed_mir,
@@ -64,7 +64,7 @@ fn backendEmitMap(
 
 pub fn appendLayoutAssertsWithMirArtifacts(
     allocator: std.mem.Allocator,
-    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
+    artifacts: declaration_artifacts.CodegenDeclarationArtifacts,
     typed_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     struct_names: []const []const u8,
@@ -74,7 +74,7 @@ pub fn appendLayoutAssertsWithMirArtifacts(
 
 pub fn appendStructDeclsWithMirArtifacts(
     allocator: std.mem.Allocator,
-    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
+    artifacts: declaration_artifacts.CodegenDeclarationArtifacts,
     typed_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     struct_names: []const []const u8,
@@ -84,7 +84,7 @@ pub fn appendStructDeclsWithMirArtifacts(
 
 pub fn appendCProfileWithMirArtifacts(
     allocator: std.mem.Allocator,
-    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
+    artifacts: declaration_artifacts.CodegenDeclarationArtifacts,
     typed_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     profile: Profile,
@@ -105,7 +105,7 @@ pub fn appendCProfileWithMirArtifacts(
 
 fn appendCProfileWithVerifiedProgram(
     allocator: std.mem.Allocator,
-    early_metadata: declaration_artifacts.EarlyDeclarationArtifacts,
+    early_metadata: declaration_artifacts.CodegenDeclarationArtifacts,
     program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     profile: Profile,
@@ -138,7 +138,7 @@ fn appendCProfileWithVerifiedProgram(
 
 pub fn appendCSourceMapFromGenerated(
     allocator: std.mem.Allocator,
-    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
+    source_map_artifacts: []const declaration_artifacts.SourceMapArtifact,
     out: *std.ArrayList(u8),
     generated_c: []const u8,
     typed_mir: *const mir.Module,
@@ -146,5 +146,5 @@ pub fn appendCSourceMapFromGenerated(
     generated_c_path: ?[]const u8,
     opts: backend_mod.LowerOptions,
 ) anyerror!void {
-    try lower_c_map.appendSourceMap(allocator, artifacts, out, generated_c, typed_mir, source_path, generated_c_path, opts);
+    try lower_c_map.appendSourceMap(allocator, source_map_artifacts, out, generated_c, typed_mir, source_path, generated_c_path, opts);
 }

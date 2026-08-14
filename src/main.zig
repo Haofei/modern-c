@@ -750,7 +750,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
     };
     be.lowerRequest(allocator, .{
         .program = program,
-        .declaration_artifacts = early_metadata,
+        .declaration_artifacts = early_metadata.codegen(),
         .out = &output,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -802,7 +802,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     };
     be.lowerRequest(allocator, .{
         .program = program,
-        .declaration_artifacts = early_metadata,
+        .declaration_artifacts = early_metadata.codegen(),
         .out = &raw_c,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -897,7 +897,7 @@ fn attachCSourceMapDigests(
     defer map_bytes.deinit(allocator);
     try be.emitMapRequest(allocator, .{
         .program = program,
-        .declaration_artifacts = declaration_artifacts,
+        .source_map_artifacts = declaration_artifacts.source_map_artifacts,
         .out = &map_bytes,
         .generated_artifact = generated_c,
         .opts = lower_opts,
@@ -1163,7 +1163,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     defer generated_c.deinit(allocator);
     be.lowerRequest(allocator, .{
         .program = program,
-        .declaration_artifacts = early_metadata,
+        .declaration_artifacts = early_metadata.codegen(),
         .out = &generated_c,
         .opts = .{
             .profile = profile,
@@ -1188,7 +1188,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     defer output.deinit(allocator);
     try be.emitMapRequest(allocator, .{
         .program = program,
-        .declaration_artifacts = early_metadata,
+        .source_map_artifacts = early_metadata.source_map_artifacts,
         .out = &output,
         .generated_artifact = generated_c.items,
         .opts = .{
@@ -1241,7 +1241,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
     };
     be.lowerRequest(allocator, .{
         .program = program,
-        .declaration_artifacts = early_metadata,
+        .declaration_artifacts = early_metadata.codegen(),
         .out = &output,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -1295,7 +1295,7 @@ fn runEmitLayout(session: *CompilationSession, path: []const u8, source: []const
     try driver_codegen_inputs.buildCArtifactInputs(session, &typed_mir, &artifacts);
     defer typed_mir.deinit();
     defer artifacts.deinit(allocator);
-    lower_c.appendLayoutAssertsWithMirArtifacts(allocator, artifacts, &typed_mir, &output, names.items) catch |err| switch (err) {
+    lower_c.appendLayoutAssertsWithMirArtifacts(allocator, artifacts.codegen(), &typed_mir, &output, names.items) catch |err| switch (err) {
         error.LayoutStructNotFound => {
             std.debug.print("emit-layout: a struct named in --structs= was not found in {s}\n", .{path});
             return error.EmitLayoutFailed;
@@ -1343,7 +1343,7 @@ fn runEmitCStruct(session: *CompilationSession, path: []const u8, source: []cons
     try driver_codegen_inputs.buildCArtifactInputs(session, &typed_mir, &artifacts);
     defer typed_mir.deinit();
     defer artifacts.deinit(allocator);
-    lower_c.appendStructDeclsWithMirArtifacts(allocator, artifacts, &typed_mir, &output, names.items) catch |err| switch (err) {
+    lower_c.appendStructDeclsWithMirArtifacts(allocator, artifacts.codegen(), &typed_mir, &output, names.items) catch |err| switch (err) {
         error.LayoutStructNotFound => {
             std.debug.print("emit-c-struct: a struct named in --structs= was not found in {s}\n", .{path});
             return error.EmitCStructFailed;

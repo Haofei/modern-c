@@ -282,7 +282,7 @@ fn backendLower(
 
 pub fn appendLlvmCheckedMirArtifacts(
     allocator: std.mem.Allocator,
-    artifacts: declaration_artifacts.EarlyDeclarationArtifacts,
+    artifacts: declaration_artifacts.CodegenDeclarationArtifacts,
     module_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     source_path: []const u8,
@@ -304,7 +304,7 @@ pub fn appendLlvmCheckedMirArtifacts(
 
 fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     allocator: std.mem.Allocator,
-    early_metadata: declaration_artifacts.EarlyDeclarationArtifacts,
+    early_metadata: declaration_artifacts.CodegenDeclarationArtifacts,
     program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     source_path: []const u8,
@@ -570,7 +570,7 @@ const LlvmEmitter = struct {
         self.scratch.deinit();
     }
 
-    fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: declaration_artifacts.EarlyDeclarationArtifacts) !void {
+    fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: declaration_artifacts.CodegenDeclarationArtifacts) !void {
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
                 if (function.is_const and !self.const_fns.contains(function.name.text)) try self.const_fns.put(function.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));

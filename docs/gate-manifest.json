@@ -30,6 +30,7 @@
         "mcc-build-test",
         "mcmap-test",
         "ownership-experimental-surface-inventory-test",
+        "feature-maturity-test",
         "validation-scope-inventory-test",
         "std-api-docs-test",
         "no-committed-private-keys-test"
@@ -304,6 +305,21 @@
       "id": "ownership-experimental-surface-inventory-test",
       "owner": "ownership",
       "category": "experimental-surface-boundary",
+      "tier": "pr",
+      "required_tools": [
+        "python3"
+      ],
+      "build_tiers": [
+        "m0",
+        "fast",
+        "c0"
+      ],
+      "skip_policy": "no-skip"
+    },
+    {
+      "id": "feature-maturity-test",
+      "owner": "compiler-architecture",
+      "category": "feature-maturity-inventory",
       "tier": "pr",
       "required_tools": [
         "python3"
