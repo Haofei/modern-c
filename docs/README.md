@@ -20,6 +20,7 @@ These are still useful as day-to-day references or rationale companions:
 | Language interop | [`c-abi-interop.md`](c-abi-interop.md) | C ABI, symbols, strings, trap ABI, boundary diagnostics. |
 | Backend seam | [`backend-abstraction.md`](backend-abstraction.md) | Where C/LLVM backends plug into `mcc`. |
 | Refactoring | [`refactoring-plan.md`](refactoring-plan.md) | Ordered code-facing refactoring phases for the compiler core. |
+| Codegen ingress migration | [`codegen-ingress-migration.json`](codegen-ingress-migration.json) | Machine-readable budget for AST-shaped declaration payloads still exposed to codegen. |
 | Change log | [`../CHANGELOG.md`](../CHANGELOG.md) | Development-line changes. |
 | Gate inventory | [`gate-manifest.json`](gate-manifest.json) | Test selection input; not a release-claim source of truth. |
 | Testing | [`test-architecture.md`](test-architecture.md) | Fixture contracts, gate layers, and manifest discipline. |

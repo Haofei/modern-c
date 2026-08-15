@@ -19,6 +19,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_full_step.dependOn(ctx.cmd("lowering-coverage-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
+    m0_full_step.dependOn(ctx.cmd("codegen-ingress-migration-test"));
     m0_full_step.dependOn(ctx.cmd("compilation-session-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
     m0_full_step.dependOn(ctx.cmd("test"));
@@ -266,6 +267,7 @@ pub fn register(ctx: *h.Ctx) void {
     m0_step.dependOn(ctx.cmd("diagnostic-code-inventory-test"));
     m0_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
     m0_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
+    m0_step.dependOn(ctx.cmd("codegen-ingress-migration-test"));
     m0_step.dependOn(ctx.cmd("compilation-session-inventory-test"));
     m0_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
     m0_step.dependOn(ctx.cmd("gate-manifest-test"));
@@ -295,6 +297,7 @@ pub fn register(ctx: *h.Ctx) void {
     fast_step.dependOn(ctx.cmd("lowering-coverage-inventory-test"));
     fast_step.dependOn(ctx.cmd("semantic-facts-inventory-test"));
     fast_step.dependOn(ctx.cmd("architecture-boundary-inventory-test"));
+    fast_step.dependOn(ctx.cmd("codegen-ingress-migration-test"));
     fast_step.dependOn(ctx.cmd("compilation-session-inventory-test"));
     fast_step.dependOn(ctx.cmd("mir-identity-inventory-test"));
     fast_step.dependOn(ctx.cmd("move-unsupported-inventory-test"));
@@ -338,6 +341,7 @@ pub fn register(ctx: *h.Ctx) void {
     c0_step.dependOn(ctx.cmd("lowering-coverage-inventory-test")); // split backend coverage ratchet stays pointed at implementation files
     c0_step.dependOn(ctx.cmd("semantic-facts-inventory-test")); // backend semantic authority stays registered and anchored
     c0_step.dependOn(ctx.cmd("architecture-boundary-inventory-test")); // backend syntax escapes and deleted cleanup state stay ratcheted
+    c0_step.dependOn(ctx.cmd("codegen-ingress-migration-test")); // AST-shaped codegen ingress budget stays explicit and decreasing
     c0_step.dependOn(ctx.cmd("compilation-session-inventory-test")); // request-scoped compiler context stays anchored
     c0_step.dependOn(ctx.cmd("mir-identity-inventory-test")); // typed MIR identity migration seed stays anchored
     c0_step.dependOn(ctx.cmd("move-unsupported-inventory-test")); // fail-closed move-array unsupported channels stay named and covered

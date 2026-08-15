@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "source_of_truth": "docs/codegen-ingress-migration.json",
+  "purpose": "Ratcheted migration budget for AST-shaped payloads still carried beside VerifiedProgram into C/LLVM codegen.",
+  "policy": {
+    "direction": "counts may decrease without replacement; increases require a deliberate migration-plan update",
+    "stable_goal": "LowerRequest carries VerifiedProgram plus syntax-free typed tables; backend render-only attributes are removed or isolated behind verified emit plans",
+    "blocked_without_framework": false
+  },
+  "ast_shaped_payload_budget": {
+    "src/declaration_artifacts.zig": {
+      "params: []ast.Param": 1,
+      "return_type: ?ast.TypeExpr": 1,
+      "body: ?ast.Block": 1,
+      "backend_attrs: []const ast.Attr": 1,
+      "ty: ?ast.TypeExpr": 1,
+      "init: ?ast.Expr": 1,
+      "methods: []ast.TraitMethodSig": 1,
+      "methods: []ast.ImplTraitMethod": 1,
+      "pub const TypeDeclArtifact = union(enum)": 1,
+      "type_alias: ast.TypeAlias": 1,
+      "struct_decl: ast.StructDecl": 1,
+      "enum_decl: ast.EnumDecl": 1,
+      "union_decl: ast.UnionDecl": 1,
+      "packed_bits_decl: ast.PackedBitsDecl": 1,
+      "overlay_union_decl: ast.OverlayUnionDecl": 1
+    }
+  },
+  "normalized_fact_anchors": {
+    "src/declaration_artifacts.zig": {
+      "has_explicit_abi: bool": 1,
+      "backend_name: ?[]const u8": 1,
+      "has_error_from: bool": 1,
+      "has_mc_abi: bool": 1
+    },
+    "src/lower_c_emitter.zig": {
+      "function.backend_attrs": 1,
+      "function.has_error_from": 1,
+      "function.backend_name": 1,
+      "function.has_explicit_abi": 0
+    },
+    "src/lower_llvm.zig": {
+      "function.backend_attrs": 1,
+      "function.has_error_from": 1,
+      "function.backend_name": 1,
+      "function.has_explicit_abi": 1,
+      "function.has_mc_abi": 1
+    }
+  },
+  "backend_artifact_consumers": {
+    "src/lower_c_emitter.zig": {
+      "declaration_artifacts.FunctionArtifact": 2,
+      "declaration_artifacts.GlobalArtifact": 2,
+      "declaration_artifacts.TraitDeclArtifact": 2,
+      "declaration_artifacts.TypeDeclArtifact": 0
+    },
+    "src/lower_llvm.zig": {
+      "declaration_artifacts.FunctionArtifact": 1,
+      "declaration_artifacts.GlobalArtifact": 2,
+      "declaration_artifacts.TraitDeclArtifact": 5,
+      "declaration_artifacts.TypeDeclArtifact": 0
+    }
+  },
+  "forbidden_regressions": {
+    "src/declaration_artifacts.zig": {
+      "abi: ?[]const u8": 0,
+      "    attrs: []const ast.Attr,": 0
+    },
+    "src/lower_c_emitter.zig": {
+      "function.attrs": 0,
+      "function.abi": 0,
+      "error_from.hasAttr(function": 0,
+      "backendNameOverride(function": 0
+    },
+    "src/lower_llvm.zig": {
+      "function.attrs": 0,
+      "function.abi": 0,
+      "error_from.hasAttr(function": 0,
+      "hasNamedAttr(function": 0,
+      "backendNameOverride(function": 0
+    }
+  }
+}

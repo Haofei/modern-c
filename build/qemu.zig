@@ -41,6 +41,7 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTestOpts(ctx, "lowering-coverage-inventory-test", "Check lowering-coverage stays pointed at split backend files with a ratcheted baseline", &.{ "python3", "tools/toolchain/lowering-coverage-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "semantic-facts-inventory-test", "Check backend semantic inference families and fact consumers stay inventoried", &.{ "python3", "tools/toolchain/semantic-facts-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "architecture-boundary-inventory-test", "Check backend cleanup state stays deleted and syntax escapes are ratcheted", &.{ "python3", "tools/toolchain/architecture-boundary-inventory.py" }, .{ .install = false });
+    _ = h.addScriptTestOpts(ctx, "codegen-ingress-migration-test", "Check remaining AST-shaped codegen declaration ingress stays explicit and ratcheted", &.{ "python3", "tools/toolchain/codegen-ingress-migration-test.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "compilation-session-inventory-test", "Check compiler request context stays behind CompilationSession", &.{ "python3", "tools/toolchain/compilation-session-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "mir-identity-inventory-test", "Check typed MIR identity migration seed stays anchored", &.{ "python3", "tools/toolchain/mir-identity-inventory.py" }, .{ .install = false });
     _ = h.addScriptTestOpts(ctx, "move-unsupported-inventory-test", "Check fail-closed move-array unsupported channels have fixed emission and fixture coverage", &.{ "python3", "tools/toolchain/move-unsupported-inventory.py" }, .{ .install = false });
@@ -100,7 +101,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "memstr-test", "Build, link, and run the allocation-free std/mem byte-slice string ops", &.{ "bash", "tools/toolchain/memstr-test.sh", "zig-out/bin/mcc" });
 
-
     _ = h.addScriptTest(ctx, "llvm-demo-test", "Compile supported demo drivers through LLVM to objects", &.{ "bash", "tools/toolchain/llvm-demo-test.sh", "zig-out/bin/mcc" });
 
     _ = h.addScriptTest(ctx, "llvm-hosted-demo-test", "Compile the hosted demo through LLVM, link it, and run the stdin/stdout check", &.{ "bash", "tools/toolchain/llvm-hosted-demo-test.sh", "zig-out/bin/mcc" });
@@ -117,7 +117,6 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "sync-test", "Build, link, and run a std/sync guarded critical section", &.{ "bash", "tools/toolchain/sync-test.sh", "zig-out/bin/mcc" });
 
-
     _ = h.addScriptTest(ctx, "demo-test", "Lower every demo/ driver to C and compile-check it", &.{ "bash", "tools/toolchain/demo-test.sh", "zig-out/bin/mcc" });
 
     // Conformance-tier variant: MC_REQUIRE_TARGET=1 makes a missing clang/riscv64 target a
@@ -129,7 +128,6 @@ pub fn register(ctx: *h.Ctx) void {
     // Expose as a public step too, so the parallel runner (tools/m0-parallel.sh) can invoke it alone.
     ctx.b.step("demo-test-strict", "Strict demo-test (riscv64 required; m0/c0 variant)").dependOn(&demo_test_strict_cmd.step);
 
-
     _ = h.addScriptTest(ctx, "arena-test", "move Arena: bump alloc, reset/reuse, destroy", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arena-test" });
 
     _ = h.addScriptTest(ctx, "genref-test", "generational handle: live resolve, stale-after-reset trap", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "genref-test" });
@@ -140,9 +138,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "pool-test", "generational pool: use-after-free/double-free caught", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "pool-test" });
 
-
     _ = h.addScriptTest(ctx, "constgen-test", "Const-generic Ring<T,N> at two capacities", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "constgen-test" });
-
 
     _ = h.addScriptTest(ctx, "time-test", "std/time counter<u64> timeout arithmetic", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "time-test" });
 
@@ -155,7 +151,6 @@ pub fn register(ctx: *h.Ctx) void {
     // on stdin and verifying the f32 results on stdout. Self-skips without
     // clang/python3.
     _ = h.addScriptTest(ctx, "hosted-test", "Hosted-profile elementwise float kernel: stdin/stdout f32 round-trip via libc/libm", &.{ "bash", "demo/hosted/run.sh", "zig-out/bin/mcc" });
-
 
     // examples/feature_showcase.mc — one self-verifying tour of the language; emit-c via
     // the host harness here, emit-llvm auto-covered by llvm-host-suite-test. Returns 1 iff
@@ -191,9 +186,7 @@ pub fn register(ctx: *h.Ctx) void {
 
     _ = h.addScriptTest(ctx, "synclock-test", "std/rwlock + std/seqlock reader-writer and sequence locks", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "synclock-test" });
 
-
     _ = h.addScriptTest(ctx, "grant-test", "Memory grant: bounded delegation + revocation", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "grant-test" });
-
 
     _ = h.addScriptTest(ctx, "arc-test", "Arc<T> shared ownership: clone/last-drop-frees, handles leak-checked", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "arc-test" });
 
@@ -204,7 +197,6 @@ pub fn register(ctx: *h.Ctx) void {
     _ = h.addScriptTest(ctx, "closure-test", "Link + run a bind() closure (capture + call across calls)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "closure-test" });
 
     _ = h.addScriptTest(ctx, "ring-test", "Link + run the generic in-place Ring<T> (push/pop/wrap)", &.{ "bash", "tools/lib/host-harness.sh", "zig-out/bin/mcc", "ring-test" });
-
 
     _ = h.addScriptTest(ctx, "fnptr-test", "Link + run function-pointer dispatch (callback, vtable, return)", &.{ "bash", "tools/toolchain/fnptr-test.sh", "zig-out/bin/mcc" });
 

@@ -46,6 +46,12 @@ Verifier/admission checks reject result/span/owner drift.
 | 1 | Typed MIR identity | backend-critical type, symbol, value, ABI/layout, representation, control, and ownership facts are typed or verifier-owned. |
 | 2 | `VerifiedProgram` narrowing | C/LLVM entrypoints no longer expose AST as semantic input. |
 
+`docs/codegen-ingress-migration.json` is the working migration ledger for Phase
+2. It records the remaining AST-shaped declaration payloads still carried beside
+`VerifiedProgram`, normalized facts already split out, and C/LLVM consumer
+counts. `codegen-ingress-migration-test` must pass in every core tier; migration
+patches should lower those budgets instead of adding new compatibility paths.
+
 Phases 0–2 are the work. Artifact packaging, manifests, LSP, QEMU, and
 tooling polish must not displace these compiler-core phases.
 
@@ -76,6 +82,7 @@ Focused compiler-authority checks:
 git diff --check
 zig build semantic-facts-inventory-test --summary all
 zig build architecture-boundary-inventory-test --summary all
+zig build codegen-ingress-migration-test --summary all
 ```
 
 Use broader C/LLVM, fuzz, or QEMU validation only when the touched slice changes
