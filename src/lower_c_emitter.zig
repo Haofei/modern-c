@@ -35,7 +35,7 @@ const lower_c_atomic = @import("lower_c_atomic.zig");
 
 // C emission model and helper modules used by the emitter implementation.
 const lower_c_model = @import("lower_c_model.zig");
-const attr_syntax = @import("attr_syntax.zig");
+const codegen_attrs = @import("codegen_attrs.zig");
 const lower_c_flow = @import("lower_c_flow.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
@@ -1119,9 +1119,9 @@ pub const CEmitter = struct {
         try self.emitFunctionPrototype(fn_decl);
     }
 
-    fn emitFunction(self: *CEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: attr_syntax.FunctionRenderAttrs) anyerror!void {
+    fn emitFunction(self: *CEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) anyerror!void {
         try self.writeLineDirective(fn_decl.name.span);
-        try attr_syntax.emitCFunctionRenderAttrs(self.allocator, self.out, attrs);
+        try codegen_attrs.emitCFunctionRenderAttrs(self.allocator, self.out, attrs);
         if (attrs.naked) {
             try self.emitNakedFunction(fn_decl, body);
             return;

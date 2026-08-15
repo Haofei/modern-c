@@ -32,8 +32,10 @@
       "backend_name: ?[]const u8": 1,
       "has_error_from: bool": 1,
       "has_mc_abi: bool": 1,
-      "render_attrs: attr_syntax.FunctionRenderAttrs": 1,
-      "const attr_syntax = @import(\"attr_syntax.zig\")": 1
+      "render_attrs: attr_syntax.FunctionRenderAttrs": 0,
+      "const attr_syntax = @import(\"attr_syntax.zig\")": 1,
+      "render_attrs: codegen_attrs.FunctionRenderAttrs": 1,
+      "const codegen_attrs = @import(\"codegen_attrs.zig\")": 1
     },
     "src/lower_c_emitter.zig": {
       "function.backend_attrs": 0,
@@ -41,8 +43,13 @@
       "function.backend_name": 1,
       "function.has_explicit_abi": 0,
       "function.render_attrs": 1,
-      "attr_syntax.emitCFunctionRenderAttrs": 1,
-      "attrs.naked": 1
+      "attr_syntax.emitCFunctionRenderAttrs": 0,
+      "attrs.naked": 1,
+      "@import(\"attr_syntax.zig\")": 0,
+      "@import(\"codegen_attrs.zig\")": 1,
+      "codegen_attrs.emitCFunctionRenderAttrs": 1,
+      "attr_syntax.FunctionRenderAttrs": 0,
+      "codegen_attrs.FunctionRenderAttrs": 1
     },
     "src/lower_llvm.zig": {
       "function.backend_attrs": 0,
@@ -55,13 +62,22 @@
       "attrs.section": 1,
       "attrs.effective_align": 1,
       "attrs.weak": 1,
-      "attrs.noinline_attr": 2
+      "attrs.noinline_attr": 2,
+      "@import(\"attr_syntax.zig\")": 0,
+      "@import(\"codegen_attrs.zig\")": 1,
+      "attr_syntax.FunctionRenderAttrs": 0,
+      "codegen_attrs.FunctionRenderAttrs": 1
     },
     "src/attr_syntax.zig": {
+      "pub const FunctionRenderAttrs = struct": 0,
+      "pub fn functionRenderAttrs(attrs: []const ast.Attr) FunctionRenderAttrs": 0,
+      "pub fn emitCFunctionRenderAttrs": 0,
+      "pub fn emitCFunctionAttrs": 0,
+      "pub fn functionRenderAttrs(attrs: []const ast.Attr) codegen_attrs.FunctionRenderAttrs": 1
+    },
+    "src/codegen_attrs.zig": {
       "pub const FunctionRenderAttrs = struct": 1,
-      "pub fn functionRenderAttrs(attrs: []const ast.Attr) FunctionRenderAttrs": 1,
-      "pub fn emitCFunctionRenderAttrs": 1,
-      "pub fn emitCFunctionAttrs": 0
+      "pub fn emitCFunctionRenderAttrs": 1
     }
   },
   "backend_artifact_consumers": {
@@ -89,7 +105,9 @@
       "function.abi": 0,
       "error_from.hasAttr(function": 0,
       "backendNameOverride(function": 0,
-      "function.backend_attrs": 0
+      "function.backend_attrs": 0,
+      "@import(\"attr_syntax.zig\")": 0,
+      "attr_syntax.": 0
     },
     "src/lower_llvm.zig": {
       "function.attrs": 0,
@@ -97,7 +115,9 @@
       "error_from.hasAttr(function": 0,
       "hasNamedAttr(function": 0,
       "backendNameOverride(function": 0,
-      "function.backend_attrs": 0
+      "function.backend_attrs": 0,
+      "@import(\"attr_syntax.zig\")": 0,
+      "attr_syntax.": 0
     }
   }
 }

@@ -75,7 +75,7 @@ const llvmTargetTriple = lower_llvm_prelude.targetTriple;
 // LLVM textual escaping, inline-asm spelling, debug line normalization, and
 // declaration attribute helpers.
 const lower_llvm_text = @import("lower_llvm_text.zig");
-const attr_syntax = @import("attr_syntax.zig");
+const codegen_attrs = @import("codegen_attrs.zig");
 const debugColumn = lower_llvm_text.debugColumn;
 const debugLine = lower_llvm_text.debugLine;
 const escapedLlvmString = lower_llvm_text.escapedLlvmString;
@@ -1214,7 +1214,7 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitFunction(self: *LlvmEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: attr_syntax.FunctionRenderAttrs) !void {
+    fn emitFunction(self: *LlvmEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) !void {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
         const fn_sig = self.fn_sigs.get(fn_decl.name.text) orelse return error.UnsupportedLlvmEmission;

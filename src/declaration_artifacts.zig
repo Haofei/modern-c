@@ -3,6 +3,7 @@
 
 const ast = @import("ast.zig");
 const attr_syntax = @import("attr_syntax.zig");
+const codegen_attrs = @import("codegen_attrs.zig");
 const module_parser = @import("module_parser.zig");
 const std = @import("std");
 
@@ -132,7 +133,7 @@ pub const FunctionArtifact = struct {
     exported: bool,
     is_variadic: bool,
     has_explicit_abi: bool,
-    render_attrs: attr_syntax.FunctionRenderAttrs,
+    render_attrs: codegen_attrs.FunctionRenderAttrs,
     backend_name: ?[]const u8,
     has_error_from: bool,
     has_mc_abi: bool,
