@@ -682,7 +682,7 @@ const LlvmEmitter = struct {
             });
             break :blk id;
         } else null;
-        const c_abi = function.is_variadic or function.abi != null or (function.exported and !function.has_mc_abi);
+        const c_abi = function.is_variadic or function.has_explicit_abi or (function.exported and !function.has_mc_abi);
         try self.fn_sigs.put(function.name.text, .{ .ret = ret_ty, .params = function.params, .c_abi = c_abi, .is_variadic = function.is_variadic, .debug_id = debug_id, .error_from = function.has_error_from });
         if (function.backend_name) |name| try self.backend_names.put(function.name.text, name);
     }

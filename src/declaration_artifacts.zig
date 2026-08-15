@@ -124,13 +124,13 @@ fn declOrigin(decl: ast.Decl) []const u8 {
 
 pub const FunctionArtifact = struct {
     name: ast.Ident,
-    abi: ?[]const u8,
     params: []ast.Param,
     return_type: ?ast.TypeExpr,
     body: ?ast.Block,
     is_const: bool,
     exported: bool,
     is_variadic: bool,
+    has_explicit_abi: bool,
     /// Transitional backend-rendering attributes only. Semantic facts derived
     /// from attributes must be normalized into the fields below before codegen.
     backend_attrs: []const ast.Attr,
@@ -142,13 +142,13 @@ pub const FunctionArtifact = struct {
     pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
         return .{
             .name = fn_decl.name,
-            .abi = fn_decl.abi,
             .params = fn_decl.params,
             .return_type = fn_decl.return_type,
             .body = fn_decl.body,
             .is_const = fn_decl.is_const,
             .exported = fn_decl.exported,
             .is_variadic = fn_decl.is_variadic,
+            .has_explicit_abi = fn_decl.abi != null,
             .backend_attrs = attrs,
             .backend_name = backendNameOverride(attrs),
             .has_error_from = hasNamedAttr(attrs, "error_from"),
