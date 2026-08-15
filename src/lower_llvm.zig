@@ -663,9 +663,10 @@ const LlvmEmitter = struct {
     }
 
     fn collectFunctionArtifact(self: *LlvmEmitter, function: declaration_artifacts.FunctionArtifact) !void {
-        const ret_ty = function.return_type orelse simpleType(function.name.span, "void");
+        const sig = function.signature;
+        const ret_ty = sig.return_type orelse simpleType(function.name.span, "void");
         _ = try self.llvmType(ret_ty);
-        for (function.params) |param| _ = try self.llvmType(param.ty);
+        for (sig.params) |param| _ = try self.llvmType(param.ty);
         const debug_id: ?usize = if (function.body != null) blk: {
             const id = self.debug_next_id;
             self.debug_next_id += 1;
@@ -677,8 +678,7 @@ const LlvmEmitter = struct {
             });
             break :blk id;
         } else null;
-        const c_abi = function.is_variadic or function.has_explicit_abi or (function.exported and !function.has_mc_abi);
-        try self.fn_sigs.put(function.name.text, .{ .ret = ret_ty, .params = function.params, .c_abi = c_abi, .is_variadic = function.is_variadic, .debug_id = debug_id, .error_from = function.has_error_from });
+        try self.fn_sigs.put(function.name.text, .{ .ret = ret_ty, .params = sig.params, .c_abi = sig.c_abi, .is_variadic = sig.is_variadic, .debug_id = debug_id, .error_from = sig.error_from });
         if (function.backend_name) |name| try self.backend_names.put(function.name.text, name);
     }
 

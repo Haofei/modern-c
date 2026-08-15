@@ -132,11 +132,9 @@ pub const FunctionArtifact = struct {
     is_const: bool,
     exported: bool,
     is_variadic: bool,
-    has_explicit_abi: bool,
+    signature: codegen_attrs.FunctionSignatureFacts,
     render_attrs: codegen_attrs.FunctionRenderAttrs,
     backend_name: ?[]const u8,
-    has_error_from: bool,
-    has_mc_abi: bool,
     is_extern: bool,
 
     pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
@@ -148,11 +146,16 @@ pub const FunctionArtifact = struct {
             .is_const = fn_decl.is_const,
             .exported = fn_decl.exported,
             .is_variadic = fn_decl.is_variadic,
-            .has_explicit_abi = fn_decl.abi != null,
+            .signature = .{
+                .params = fn_decl.params,
+                .return_type = fn_decl.return_type,
+                .is_extern = is_extern,
+                .is_variadic = fn_decl.is_variadic,
+                .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi")),
+                .error_from = hasNamedAttr(attrs, "error_from"),
+            },
             .render_attrs = attr_syntax.functionRenderAttrs(attrs),
             .backend_name = backendNameOverride(attrs),
-            .has_error_from = hasNamedAttr(attrs, "error_from"),
-            .has_mc_abi = hasNamedAttr(attrs, "mc_abi"),
             .is_extern = is_extern,
         };
     }

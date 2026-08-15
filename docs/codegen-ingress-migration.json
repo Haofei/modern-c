@@ -28,18 +28,20 @@
   },
   "normalized_fact_anchors": {
     "src/declaration_artifacts.zig": {
-      "has_explicit_abi: bool": 1,
+      "has_explicit_abi: bool": 0,
       "backend_name: ?[]const u8": 1,
-      "has_error_from: bool": 1,
-      "has_mc_abi: bool": 1,
+      "has_error_from: bool": 0,
+      "has_mc_abi: bool": 0,
       "render_attrs: attr_syntax.FunctionRenderAttrs": 0,
       "const attr_syntax = @import(\"attr_syntax.zig\")": 1,
       "render_attrs: codegen_attrs.FunctionRenderAttrs": 1,
-      "const codegen_attrs = @import(\"codegen_attrs.zig\")": 1
+      "const codegen_attrs = @import(\"codegen_attrs.zig\")": 1,
+      "signature: codegen_attrs.FunctionSignatureFacts": 1,
+      ".signature = .{": 1
     },
     "src/lower_c_emitter.zig": {
       "function.backend_attrs": 0,
-      "function.has_error_from": 1,
+      "function.has_error_from": 0,
       "function.backend_name": 1,
       "function.has_explicit_abi": 0,
       "function.render_attrs": 1,
@@ -49,14 +51,17 @@
       "@import(\"codegen_attrs.zig\")": 1,
       "codegen_attrs.emitCFunctionRenderAttrs": 1,
       "attr_syntax.FunctionRenderAttrs": 0,
-      "codegen_attrs.FunctionRenderAttrs": 1
+      "codegen_attrs.FunctionRenderAttrs": 1,
+      "const sig = function.signature": 1,
+      ".error_from = sig.error_from": 1,
+      ".error_from = function.has_error_from": 0
     },
     "src/lower_llvm.zig": {
       "function.backend_attrs": 0,
-      "function.has_error_from": 1,
+      "function.has_error_from": 0,
       "function.backend_name": 1,
-      "function.has_explicit_abi": 1,
-      "function.has_mc_abi": 1,
+      "function.has_explicit_abi": 0,
+      "function.has_mc_abi": 0,
       "function.render_attrs": 1,
       "attrs.naked": 1,
       "attrs.section": 1,
@@ -66,7 +71,10 @@
       "@import(\"attr_syntax.zig\")": 0,
       "@import(\"codegen_attrs.zig\")": 1,
       "attr_syntax.FunctionRenderAttrs": 0,
-      "codegen_attrs.FunctionRenderAttrs": 1
+      "codegen_attrs.FunctionRenderAttrs": 1,
+      "const sig = function.signature": 1,
+      ".c_abi = sig.c_abi": 1,
+      ".error_from = sig.error_from": 1
     },
     "src/attr_syntax.zig": {
       "pub const FunctionRenderAttrs = struct": 0,
@@ -77,7 +85,12 @@
     },
     "src/codegen_attrs.zig": {
       "pub const FunctionRenderAttrs = struct": 1,
-      "pub fn emitCFunctionRenderAttrs": 1
+      "pub fn emitCFunctionRenderAttrs": 1,
+      "pub const FunctionSignatureFacts = struct": 1,
+      "params: []const ast_bridge.Param": 1,
+      "return_type: ?ast_bridge.TypeExpr": 1,
+      "c_abi: bool": 1,
+      "error_from: bool": 1
     }
   },
   "backend_artifact_consumers": {
@@ -98,7 +111,10 @@
     "src/declaration_artifacts.zig": {
       "abi: ?[]const u8": 0,
       "    attrs: []const ast.Attr,": 0,
-      "backend_attrs: []const ast.Attr": 0
+      "backend_attrs: []const ast.Attr": 0,
+      "has_explicit_abi: bool": 0,
+      "has_error_from: bool": 0,
+      "has_mc_abi: bool": 0
     },
     "src/lower_c_emitter.zig": {
       "function.attrs": 0,

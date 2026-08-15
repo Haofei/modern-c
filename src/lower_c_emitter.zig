@@ -497,7 +497,8 @@ pub const CEmitter = struct {
     }
 
     fn collectFunctionArtifact(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
-        try self.functions.put(function.name.text, .{ .params = function.params, .return_type = function.return_type, .is_extern = function.is_extern, .is_variadic = function.is_variadic, .error_from = function.has_error_from });
+        const sig = function.signature;
+        try self.functions.put(function.name.text, .{ .params = sig.params, .return_type = sig.return_type, .is_extern = sig.is_extern, .is_variadic = sig.is_variadic, .error_from = sig.error_from });
         if (!function.is_extern) if (function.backend_name) |name| try self.backend_names.put(function.name.text, name);
         try self.collectFunctionArtifactSliceTypes(function);
     }

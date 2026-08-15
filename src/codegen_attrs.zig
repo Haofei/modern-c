@@ -5,6 +5,16 @@
 //! syntax attribute helpers.
 
 const std = @import("std");
+const ast_bridge = @import("ast_bridge.zig");
+
+pub const FunctionSignatureFacts = struct {
+    params: []const ast_bridge.Param,
+    return_type: ?ast_bridge.TypeExpr,
+    is_extern: bool,
+    is_variadic: bool,
+    c_abi: bool,
+    error_from: bool,
+};
 
 pub const FunctionRenderAttrs = struct {
     naked: bool = false,
