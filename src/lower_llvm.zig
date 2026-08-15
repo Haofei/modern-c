@@ -78,17 +78,12 @@ const lower_llvm_text = @import("lower_llvm_text.zig");
 const attr_syntax = @import("attr_syntax.zig");
 const debugColumn = lower_llvm_text.debugColumn;
 const debugLine = lower_llvm_text.debugLine;
-const effectiveAlign = attr_syntax.effectiveAlign;
 const escapedLlvmString = lower_llvm_text.escapedLlvmString;
-const hasNakedAttr = attr_syntax.hasNakedAttr;
-const hasNoinlineAttr = attr_syntax.hasNoinlineAttr;
-const hasWeakAttr = attr_syntax.hasWeakAttr;
 const llvmAsmClobbers = lower_llvm_text.llvmAsmClobbers;
 const llvmOpaqueAsmTemplate = lower_llvm_text.llvmOpaqueAsmTemplate;
 const llvmPreciseAsmConstraints = lower_llvm_text.llvmPreciseAsmConstraints;
 const llvmPreciseAsmTemplate = lower_llvm_text.llvmPreciseAsmTemplate;
 const llvmStringLiteralBytes = lower_llvm_text.llvmStringLiteralBytes;
-const sectionAttr = attr_syntax.sectionAttr;
 
 const NullableRepresentation = enum {
     pointer,
@@ -796,7 +791,7 @@ const LlvmEmitter = struct {
                 if (function.is_extern) {
                     try self.emitExternFunction(function);
                 } else if (function.body) |body| {
-                    try self.emitFunction(function, body, function.backend_attrs);
+                    try self.emitFunction(function, body, function.render_attrs);
                 }
             },
             else => {},
@@ -1219,7 +1214,7 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitFunction(self: *LlvmEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: []const ast_bridge.Attr) !void {
+    fn emitFunction(self: *LlvmEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: attr_syntax.FunctionRenderAttrs) !void {
         const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
         const fn_sig = self.fn_sigs.get(fn_decl.name.text) orelse return error.UnsupportedLlvmEmission;
@@ -1250,14 +1245,14 @@ const LlvmEmitter = struct {
         // epilogue. The body is a single inline-asm statement that performs the
         // ABI-correct jump/return itself; we terminate the entry block with
         // `unreachable` because the asm — not a synthesized `ret` — transfers control.
-        const naked = hasNakedAttr(attrs);
+        const naked = attrs.naked;
         // `#[noinline]`: the LLVM `noinline` function attribute keeps a distinct physical call
         // frame (e.g. a frame-pointer backtrace must walk nested frames). Composes with naked.
-        const base_attr_str: []const u8 = if (naked and hasNoinlineAttr(attrs))
+        const base_attr_str: []const u8 = if (naked and attrs.noinline_attr)
             " naked noinline"
         else if (naked)
             " naked"
-        else if (hasNoinlineAttr(attrs))
+        else if (attrs.noinline_attr)
             " noinline"
         else
             "";
@@ -1274,7 +1269,7 @@ const LlvmEmitter = struct {
         // OpenSBI's `_start` at 0x80200000 via `KEEP(*(.text.boot))`).
         var section_buf: std.ArrayList(u8) = .empty;
         defer section_buf.deinit(self.allocator);
-        if (sectionAttr(attrs)) |sec| {
+        if (attrs.section) |sec| {
             try section_buf.print(self.allocator, " section \"{s}\"", .{sec});
         }
         const section_str: []const u8 = section_buf.items;
@@ -1283,7 +1278,7 @@ const LlvmEmitter = struct {
         // alignment-sensitive register (a RISC-V `stvec`/`mtvec` base must be 4-byte aligned;
         // its low two bits are the MODE field, so a 2-byte-aligned vector traps to a bad PC).
         var align_buf: [32]u8 = undefined;
-        const align_str: []const u8 = if (effectiveAlign(attrs)) |al|
+        const align_str: []const u8 = if (attrs.effective_align) |al|
             std.fmt.bufPrint(&align_buf, " align {d}", .{al}) catch unreachable
         else
             "";
@@ -1295,7 +1290,7 @@ const LlvmEmitter = struct {
         //   internal linkage the copies collide at link time (`ld.lld: duplicate symbol`).
         //   Exported functions keep external linkage so the C bring-up glue / cross-object
         //   references resolve.
-        const weak_str: []const u8 = if (hasWeakAttr(attrs))
+        const weak_str: []const u8 = if (attrs.weak)
             "weak "
         else if (!fn_decl.exported)
             "internal "

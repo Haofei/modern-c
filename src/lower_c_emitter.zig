@@ -90,7 +90,6 @@ const GlobalAccess = lower_c_model.GlobalAccess;
 const GlobalArrayElementAccess = lower_c_model.GlobalArrayElementAccess;
 const isSourceSpan = mir_source_bridge.isSourceSpan;
 const sourcePointFromOptionalSpan = mir_source_bridge.sourcePointFromOptionalSpan;
-const hasNakedAttr = attr_syntax.hasNakedAttr;
 const exprContainsCall = lower_c_expr.exprContainsCall;
 const resolvedArrayChildType = lower_c_shape.resolvedArrayChildType;
 const overlayFieldLayoutForType = lower_c_shape.overlayFieldLayout;
@@ -621,7 +620,7 @@ pub const CEmitter = struct {
                     continue;
                 }
                 if (function.body) |body| {
-                    try self.emitFunction(function, body, function.backend_attrs);
+                    try self.emitFunction(function, body, function.render_attrs);
                 } else {
                     try self.emitFunctionPrototype(function);
                 }
@@ -1120,10 +1119,10 @@ pub const CEmitter = struct {
         try self.emitFunctionPrototype(fn_decl);
     }
 
-    fn emitFunction(self: *CEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: []const ast_bridge.Attr) anyerror!void {
+    fn emitFunction(self: *CEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: attr_syntax.FunctionRenderAttrs) anyerror!void {
         try self.writeLineDirective(fn_decl.name.span);
-        try attr_syntax.emitCFunctionAttrs(self.allocator, self.out, attrs);
-        if (hasNakedAttr(attrs)) {
+        try attr_syntax.emitCFunctionRenderAttrs(self.allocator, self.out, attrs);
+        if (attrs.naked) {
             try self.emitNakedFunction(fn_decl, body);
             return;
         }

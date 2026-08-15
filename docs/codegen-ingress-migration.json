@@ -12,7 +12,7 @@
       "params: []ast.Param": 1,
       "return_type: ?ast.TypeExpr": 1,
       "body: ?ast.Block": 1,
-      "backend_attrs: []const ast.Attr": 1,
+      "backend_attrs: []const ast.Attr": 0,
       "ty: ?ast.TypeExpr": 1,
       "init: ?ast.Expr": 1,
       "methods: []ast.TraitMethodSig": 1,
@@ -31,20 +31,37 @@
       "has_explicit_abi: bool": 1,
       "backend_name: ?[]const u8": 1,
       "has_error_from: bool": 1,
-      "has_mc_abi: bool": 1
+      "has_mc_abi: bool": 1,
+      "render_attrs: attr_syntax.FunctionRenderAttrs": 1,
+      "const attr_syntax = @import(\"attr_syntax.zig\")": 1
     },
     "src/lower_c_emitter.zig": {
-      "function.backend_attrs": 1,
+      "function.backend_attrs": 0,
       "function.has_error_from": 1,
       "function.backend_name": 1,
-      "function.has_explicit_abi": 0
+      "function.has_explicit_abi": 0,
+      "function.render_attrs": 1,
+      "attr_syntax.emitCFunctionRenderAttrs": 1,
+      "attrs.naked": 1
     },
     "src/lower_llvm.zig": {
-      "function.backend_attrs": 1,
+      "function.backend_attrs": 0,
       "function.has_error_from": 1,
       "function.backend_name": 1,
       "function.has_explicit_abi": 1,
-      "function.has_mc_abi": 1
+      "function.has_mc_abi": 1,
+      "function.render_attrs": 1,
+      "attrs.naked": 1,
+      "attrs.section": 1,
+      "attrs.effective_align": 1,
+      "attrs.weak": 1,
+      "attrs.noinline_attr": 2
+    },
+    "src/attr_syntax.zig": {
+      "pub const FunctionRenderAttrs = struct": 1,
+      "pub fn functionRenderAttrs(attrs: []const ast.Attr) FunctionRenderAttrs": 1,
+      "pub fn emitCFunctionRenderAttrs": 1,
+      "pub fn emitCFunctionAttrs": 0
     }
   },
   "backend_artifact_consumers": {
@@ -64,20 +81,23 @@
   "forbidden_regressions": {
     "src/declaration_artifacts.zig": {
       "abi: ?[]const u8": 0,
-      "    attrs: []const ast.Attr,": 0
+      "    attrs: []const ast.Attr,": 0,
+      "backend_attrs: []const ast.Attr": 0
     },
     "src/lower_c_emitter.zig": {
       "function.attrs": 0,
       "function.abi": 0,
       "error_from.hasAttr(function": 0,
-      "backendNameOverride(function": 0
+      "backendNameOverride(function": 0,
+      "function.backend_attrs": 0
     },
     "src/lower_llvm.zig": {
       "function.attrs": 0,
       "function.abi": 0,
       "error_from.hasAttr(function": 0,
       "hasNamedAttr(function": 0,
-      "backendNameOverride(function": 0
+      "backendNameOverride(function": 0,
+      "function.backend_attrs": 0
     }
   }
 }

@@ -1,12 +1,31 @@
 //! Narrow attribute-syntax helpers shared by codegen and declaration-artifact
 //! collection.
 //!
-//! This module may inspect AST attributes. Backend modules should use this
-//! helper instead of re-implementing attribute spelling checks locally.
+//! This module may inspect AST attributes while declaration artifacts are being
+//! normalized. Backend modules should consume `FunctionRenderAttrs` facts rather
+//! than re-scanning declaration attribute payloads.
 
 const std = @import("std");
 
 const ast = @import("ast.zig");
+
+pub const FunctionRenderAttrs = struct {
+    naked: bool = false,
+    weak: bool = false,
+    noinline_attr: bool = false,
+    section: ?[]const u8 = null,
+    effective_align: ?u32 = null,
+};
+
+pub fn functionRenderAttrs(attrs: []const ast.Attr) FunctionRenderAttrs {
+    return .{
+        .naked = hasNakedAttr(attrs),
+        .weak = hasWeakAttr(attrs),
+        .noinline_attr = hasNoinlineAttr(attrs),
+        .section = sectionAttr(attrs),
+        .effective_align = effectiveAlign(attrs),
+    };
+}
 
 pub fn hasNakedAttr(attrs: []const ast.Attr) bool {
     for (attrs) |attr| {
@@ -29,31 +48,31 @@ pub fn hasNoinlineAttr(attrs: []const ast.Attr) bool {
     return false;
 }
 
-pub fn emitCFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
+pub fn emitCFunctionRenderAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: FunctionRenderAttrs) !void {
     try emitCLinkageFunctionAttrs(allocator, out, attrs);
     try emitCLayoutFunctionAttrs(allocator, out, attrs);
     try emitCInliningFunctionAttrs(allocator, out, attrs);
 }
 
-fn emitCLinkageFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
-    if (hasWeakAttr(attrs)) try out.appendSlice(allocator, "MC_WEAK ");
-    if (sectionAttr(attrs)) |sec| {
+fn emitCLinkageFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: FunctionRenderAttrs) !void {
+    if (attrs.weak) try out.appendSlice(allocator, "MC_WEAK ");
+    if (attrs.section) |sec| {
         try out.appendSlice(allocator, "__attribute__((section(\"");
         try out.appendSlice(allocator, sec);
         try out.appendSlice(allocator, "\"))) ");
     }
 }
 
-fn emitCLayoutFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
-    if (effectiveAlign(attrs)) |al| {
+fn emitCLayoutFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: FunctionRenderAttrs) !void {
+    if (attrs.effective_align) |al| {
         var buf: [32]u8 = undefined;
         try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "__attribute__((aligned({d}))) ", .{al}) catch unreachable);
     }
 }
 
-fn emitCInliningFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: []const ast.Attr) !void {
-    if (hasNoinlineAttr(attrs)) try out.appendSlice(allocator, "__attribute__((noinline)) ");
-    if (hasNakedAttr(attrs)) try out.appendSlice(allocator, "__attribute__((naked)) ");
+fn emitCInliningFunctionAttrs(allocator: std.mem.Allocator, out: *std.ArrayList(u8), attrs: FunctionRenderAttrs) !void {
+    if (attrs.noinline_attr) try out.appendSlice(allocator, "__attribute__((noinline)) ");
+    if (attrs.naked) try out.appendSlice(allocator, "__attribute__((naked)) ");
 }
 
 // The `#[section("...")]` target name, or null if the declaration has no section attribute.

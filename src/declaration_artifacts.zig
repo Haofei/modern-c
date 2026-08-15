@@ -2,6 +2,7 @@
 //! Backends consume these through `codegen_request`, not raw declaration slices.
 
 const ast = @import("ast.zig");
+const attr_syntax = @import("attr_syntax.zig");
 const module_parser = @import("module_parser.zig");
 const std = @import("std");
 
@@ -131,9 +132,7 @@ pub const FunctionArtifact = struct {
     exported: bool,
     is_variadic: bool,
     has_explicit_abi: bool,
-    /// Transitional backend-rendering attributes only. Semantic facts derived
-    /// from attributes must be normalized into the fields below before codegen.
-    backend_attrs: []const ast.Attr,
+    render_attrs: attr_syntax.FunctionRenderAttrs,
     backend_name: ?[]const u8,
     has_error_from: bool,
     has_mc_abi: bool,
@@ -149,7 +148,7 @@ pub const FunctionArtifact = struct {
             .exported = fn_decl.exported,
             .is_variadic = fn_decl.is_variadic,
             .has_explicit_abi = fn_decl.abi != null,
-            .backend_attrs = attrs,
+            .render_attrs = attr_syntax.functionRenderAttrs(attrs),
             .backend_name = backendNameOverride(attrs),
             .has_error_from = hasNamedAttr(attrs, "error_from"),
             .has_mc_abi = hasNamedAttr(attrs, "mc_abi"),
