@@ -201,6 +201,12 @@ test "lower-c emits simple void conditional direct calls from MIR" {
         \\        hit(4);
         \\    }
         \\}
+        \\fn choose_void_no_else(flag: bool) -> void {
+        \\    if (flag) {
+        \\        hit(5);
+        \\        hit(6);
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -226,6 +232,12 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectContains(sequence_body, "hit(3);");
     try expectContains(sequence_body, "hit(4);");
     try expectNotContains(sequence_body, "switch");
+
+    const no_else_body = try cFunctionBody(output.items, "static void choose_void_no_else(bool flag)");
+    try expectContains(no_else_body, "if (flag)");
+    try expectContains(no_else_body, "hit(5);");
+    try expectContains(no_else_body, "hit(6);");
+    try expectNotContains(no_else_body, "switch");
 }
 
 test "lower-c emits simple sequential void direct calls from MIR" {

@@ -2139,7 +2139,6 @@ const LlvmEmitter = struct {
 
     fn simpleMirDirectVoidCallsInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirDirectCalls {
         var calls: SimpleMirDirectCalls = .{};
-        var call_source: ?mir.SourcePoint = null;
         for (block.instructions) |instruction| {
             switch (instruction.kind) {
                 .expr, .target_type, .integer_literal_conversion => {},
@@ -2149,12 +2148,10 @@ const LlvmEmitter = struct {
                     if (calls.count >= max_simple_mir_void_calls) return null;
                     calls.calls[calls.count] = self.simpleMirDirectCallAtSource(function, fn_mir, source) orelse return null;
                     calls.count += 1;
-                    call_source = source;
                 },
                 else => return null,
             }
         }
-        _ = call_source orelse return null;
         return calls;
     }
 
