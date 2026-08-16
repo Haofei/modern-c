@@ -6,9 +6,7 @@ const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
-const declaration_artifact_fallbacks = declaration_artifacts;
-const FunctionBodyFallbackArtifact = declaration_artifact_fallbacks.FunctionBodyFallbackArtifact;
-const findLegacyFunctionBody = declaration_artifact_fallbacks.findLegacyFunctionBody;
+const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
@@ -270,7 +268,7 @@ fn backendLower(
 
 pub fn appendLlvmCheckedMirArtifacts(
     allocator: std.mem.Allocator,
-    artifacts: declaration_artifacts.CodegenDeclarationArtifacts,
+    artifacts: CodegenDeclArtifacts,
     module_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     source_path: []const u8,
@@ -292,7 +290,7 @@ pub fn appendLlvmCheckedMirArtifacts(
 
 fn appendLlvmCheckedMirProfileWithVerifiedProgram(
     allocator: std.mem.Allocator,
-    early_metadata: declaration_artifacts.CodegenDeclarationArtifacts,
+    early_metadata: CodegenDeclArtifacts,
     program: backend_mod.VerifiedProgram,
     out: *std.ArrayList(u8),
     source_path: []const u8,
@@ -346,8 +344,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .impl_methods = std.StringHashMap([]const ast_bridge.ImplTraitMethod).init(allocator),
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
-        .decl_artifacts = early_metadata.decl_artifacts,
-        .function_body_fallbacks = early_metadata.function_body_fallbacks,
+        .codegen_artifacts = early_metadata,
         .global_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
         .global_is_const = std.StringHashMap(bool).init(allocator),
         .global_initializers = std.StringHashMap(ast_bridge.Expr).init(allocator),
@@ -444,8 +441,7 @@ const LlvmEmitter = struct {
     // alias `@Y = alias <fnty>, ptr @name` so the override symbol is linkable (the C backend
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
-    decl_artifacts: []const declaration_artifacts.DeclArtifact = &.{},
-    function_body_fallbacks: []const FunctionBodyFallbackArtifact = &.{},
+    codegen_artifacts: CodegenDeclArtifacts = CodegenDeclArtifacts.empty,
     global_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
     global_initializers: std.StringHashMap(ast_bridge.Expr) = undefined,
@@ -560,7 +556,7 @@ const LlvmEmitter = struct {
         self.scratch.deinit();
     }
 
-    fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: declaration_artifacts.CodegenDeclarationArtifacts) !void {
+    fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: CodegenDeclArtifacts) !void {
         try eval.collectConstFunctionsFromDeclarations(eval.ComptimeDeclarations.fromDeclarationArtifacts(artifacts), &self.const_fns);
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
@@ -585,7 +581,7 @@ const LlvmEmitter = struct {
     }
 
     fn collectStructArtifacts(self: *LlvmEmitter) !void {
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| try self.collectStruct(struct_decl),
                 else => {},
@@ -615,7 +611,7 @@ const LlvmEmitter = struct {
     }
 
     fn collectNonStructTypeArtifacts(self: *LlvmEmitter) !void {
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
                 .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
@@ -686,7 +682,7 @@ const LlvmEmitter = struct {
     }
 
     fn collectFunctionGlobalAndTraitArtifacts(self: *LlvmEmitter) !void {
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| try self.collectFunctionArtifact(function),
             .global => |global| try self.collectGlobal(global),
             .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.facts.name.text, trait_decl),
@@ -785,18 +781,18 @@ const LlvmEmitter = struct {
     }
 
     fn emitCollectedGlobals(self: *LlvmEmitter) !void {
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| try self.emitGlobal(global),
             else => {},
         };
     }
 
     fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
                 if (function.signature.is_extern) {
                     try self.emitExternFunction(function);
-                } else if (findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)) |body| {
+                } else if (self.codegen_artifacts.legacyFunctionBody(function.signature.name.text)) |body| {
                     try self.emitFunction(function, body, function.render_attrs);
                 }
             },

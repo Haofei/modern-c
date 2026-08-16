@@ -6,9 +6,7 @@ const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
-const declaration_artifact_fallbacks = declaration_artifacts;
-const FunctionBodyFallbackArtifact = declaration_artifact_fallbacks.FunctionBodyFallbackArtifact;
-const findLegacyFunctionBody = declaration_artifact_fallbacks.findLegacyFunctionBody;
+const CodegenDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
 const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
@@ -147,7 +145,7 @@ const dynCalleeMethodName = syntax_bridge.dynCalleeMethodName;
 
 pub fn appendLayoutAsserts(
     allocator: std.mem.Allocator,
-    artifacts: declaration_artifacts.CodegenDeclarationArtifacts,
+    artifacts: CodegenDeclArtifacts,
     typed_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     struct_names: []const []const u8,
@@ -169,7 +167,7 @@ pub fn appendLayoutAsserts(
 
 pub fn appendStructDecls(
     allocator: std.mem.Allocator,
-    artifacts: declaration_artifacts.CodegenDeclarationArtifacts,
+    artifacts: CodegenDeclArtifacts,
     typed_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     struct_names: []const []const u8,
@@ -203,7 +201,7 @@ pub fn appendStructDecls(
 
 pub fn appendModuleMir(
     allocator: std.mem.Allocator,
-    early_metadata: declaration_artifacts.CodegenDeclarationArtifacts,
+    early_metadata: CodegenDeclArtifacts,
     typed_mir: *const mir.Module,
     out: *std.ArrayList(u8),
     source_path: ?[]const u8,
@@ -226,8 +224,7 @@ pub const CEmitter = struct {
     out: *std.ArrayList(u8),
     scratch: std.heap.ArenaAllocator,
     globals: std.StringHashMap(GlobalInfo),
-    decl_artifacts: []const declaration_artifacts.DeclArtifact = &.{},
-    function_body_fallbacks: []const FunctionBodyFallbackArtifact = &.{},
+    codegen_artifacts: CodegenDeclArtifacts = CodegenDeclArtifacts.empty,
     static_initializers: std.StringHashMap(ast_bridge.Expr),
     type_aliases: std.StringHashMap(ast_bridge.TypeExpr),
     functions: std.StringHashMap(FnInfo),
@@ -412,9 +409,8 @@ pub const CEmitter = struct {
         self.loop_labels.deinit(self.allocator);
     }
 
-    fn collectModule(self: *CEmitter, early_metadata: declaration_artifacts.CodegenDeclarationArtifacts) anyerror!void {
-        self.decl_artifacts = early_metadata.decl_artifacts;
-        self.function_body_fallbacks = early_metadata.function_body_fallbacks;
+    fn collectModule(self: *CEmitter, early_metadata: CodegenDeclArtifacts) anyerror!void {
+        self.codegen_artifacts = early_metadata;
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectConstGlobals();
@@ -422,11 +418,11 @@ pub const CEmitter = struct {
         try self.collectBindThunks();
     }
 
-    pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: declaration_artifacts.CodegenDeclarationArtifacts) void {
+    pub fn setComptimeDeclarationsFromArtifacts(self: *CEmitter, artifacts: CodegenDeclArtifacts) void {
         self.comptime_declarations = eval.ComptimeDeclarations.fromDeclarationArtifacts(artifacts);
     }
 
-    pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: declaration_artifacts.CodegenDeclarationArtifacts) !void {
+    pub fn collectEarlyDeclarationMetadata(self: *CEmitter, artifacts: CodegenDeclArtifacts) !void {
         // Pre-pass: collect const/comptime metadata and pre-register nominal type
         // names up front, so fixed-array lengths, reflection queries, and type-name
         // mangling resolve during the artifact-collection pass below. Const global
@@ -462,7 +458,7 @@ pub const CEmitter = struct {
         });
     }
 
-    pub fn collectDeclArtifacts(self: *CEmitter, artifacts: declaration_artifacts.CodegenDeclarationArtifacts) anyerror!void {
+    pub fn collectDeclArtifacts(self: *CEmitter, artifacts: CodegenDeclArtifacts) anyerror!void {
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| try self.collectFunctionArtifact(function),
             .global => |global| try self.collectGlobalDeclArtifact(global),
@@ -513,10 +509,10 @@ pub const CEmitter = struct {
     pub fn collectBindThunks(self: *CEmitter) anyerror!void {
         // Now that every function signature is known, scan all bodies for
         // `bind(scalar, f)` closures that need an env-widening thunk.
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
                 if (function.signature.is_extern) continue;
-                if (findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)) |body| {
+                if (self.codegen_artifacts.legacyFunctionBody(function.signature.name.text)) |body| {
                     const mir_function = self.mirFunctionNamed(function.signature.name.text) orelse return error.UnsupportedCEmission;
                     try self.collectBlockBindThunks(body, mir_function);
                 }
@@ -525,7 +521,7 @@ pub const CEmitter = struct {
         };
     }
 
-    fn emitModule(self: *CEmitter, early_metadata: declaration_artifacts.CodegenDeclarationArtifacts) anyerror!void {
+    fn emitModule(self: *CEmitter, early_metadata: CodegenDeclArtifacts) anyerror!void {
         defer self.deinit();
         try self.collectModule(early_metadata);
         try self.emitTypePrelude();
@@ -562,7 +558,7 @@ pub const CEmitter = struct {
     }
 
     fn emitMmioStructTypes(self: *CEmitter) !void {
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| {
                     if (self.mmio_structs.contains(struct_decl.name.text)) {
@@ -579,7 +575,7 @@ pub const CEmitter = struct {
         // Forward-declare every defined function up front so a call to a function
         // declared later in the (possibly import-merged) source resolves — MC
         // resolves calls module-wide, independent of declaration order.
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| if (function.signature.is_extern) {
                 // Extern prototypes must precede any function body that calls them;
                 // an imported `extern fn` can be merged after its caller.
@@ -609,20 +605,20 @@ pub const CEmitter = struct {
         // in an imported module). Globals are simple `static` definitions, so
         // emitting them first satisfies C's declare-before-use without needing
         // forward declarations.
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| try self.emitGlobal(global),
             else => {},
         };
     }
 
     pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
                 if (function.signature.is_extern) {
                     // Extern prototypes were already emitted in the forward-declaration pass.
                     continue;
                 }
-                if (findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)) |body| {
+                if (self.codegen_artifacts.legacyFunctionBody(function.signature.name.text)) |body| {
                     try self.emitFunction(function, body, function.render_attrs);
                 } else {
                     try self.emitFunctionPrototype(function);
@@ -862,7 +858,7 @@ pub const CEmitter = struct {
     // declaration; by-value embedding still relies on definition ordering.
     fn emitAggregateForwardDeclarations(self: *CEmitter) !void {
         var emitted = false;
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| {
                     if (!self.structs.contains(struct_decl.name.text)) continue;
@@ -991,7 +987,7 @@ pub const CEmitter = struct {
         var units: std.ArrayList(AggregateEmitUnit) = .empty;
         defer units.deinit(arena);
 
-        for (self.decl_artifacts) |artifact| switch (artifact) {
+        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |s| if (self.structs.contains(s.name.text)) try units.append(arena, .{ .struct_decl = s }),
                 .union_decl => |u| if (self.tagged_unions.contains(u.name.text)) try units.append(arena, .{ .tagged_union = u }),
@@ -2472,7 +2468,7 @@ pub const CEmitter = struct {
         defer self.current_function = previous_function;
         for (function.signature.params) |param| try self.collectTypeArtifacts(param.ty);
         if (function.signature.return_type) |ret| try self.collectTypeArtifacts(ret);
-        if (findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)) |body| try lower_c_collect.collectBlockTypeArtifacts(self.typeArtifactContext(), body);
+        if (self.codegen_artifacts.legacyFunctionBody(function.signature.name.text)) |body| try lower_c_collect.collectBlockTypeArtifacts(self.typeArtifactContext(), body);
     }
 
     fn collectBlockSliceTypes(self: *CEmitter, block: ast_bridge.Block) anyerror!void {

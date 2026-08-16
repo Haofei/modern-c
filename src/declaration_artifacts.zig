@@ -129,6 +129,11 @@ pub const CodegenDeclarationArtifacts = struct {
     decl_artifacts: []const DeclArtifact,
     function_body_fallbacks: []const FunctionBodyFallbackArtifact,
 
+    pub const empty = CodegenDeclarationArtifacts{
+        .decl_artifacts = &.{},
+        .function_body_fallbacks = &.{},
+    };
+
     pub fn legacyFunctionBody(self: CodegenDeclarationArtifacts, name: []const u8) ?ast.Block {
         return findLegacyFunctionBody(self.function_body_fallbacks, name);
     }
