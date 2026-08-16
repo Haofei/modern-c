@@ -250,6 +250,26 @@ test "lower-c preserves MIR void calls before simple returns" {
     try std.testing.expect(hit2 < ret);
 }
 
+test "lower-c preserves MIR void calls before direct-call returns" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\extern fn make(value: i32) -> i32;
+        \\fn side_then_call() -> i32 {
+        \\    hit(0);
+        \\    return make(1);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_void_calls_before_direct_call_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static int32_t side_then_call(void)");
+    const hit = std.mem.indexOf(u8, body, "hit(0);") orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, body, "return make(1);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hit < ret);
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c preserves MIR void calls before conditional returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

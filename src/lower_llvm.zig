@@ -2110,11 +2110,18 @@ const LlvmEmitter = struct {
         if (fn_mir.blocks.len != 1) return null;
         var calls: SimpleMirDirectCalls = .{};
         const block = fn_mir.blocks[0];
+        const ret = simpleMirReturnInstruction(block) orelse return null;
+        const return_value_id = ret.value_id;
         for (block.instructions) |instruction| {
             if (instruction.kind == .return_value) return calls;
             if (instruction.kind != .call) continue;
             const source = instructionSourcePoint(instruction);
-            if (!simpleMirDirectCallResultVoid(fn_mir, source)) return null;
+            if (!simpleMirDirectCallResultVoid(fn_mir, source)) {
+                if (return_value_id) |value_id| {
+                    if (std.mem.eql(u8, instruction.detail, value_id)) return calls;
+                }
+                return null;
+            }
             if (calls.count >= max_simple_mir_void_calls) return null;
             calls.calls[calls.count] = self.simpleMirDirectCallAtSource(function, fn_mir, source) orelse return null;
             calls.count += 1;
