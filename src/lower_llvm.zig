@@ -1255,6 +1255,11 @@ const LlvmEmitter = struct {
         checked_binary: SimpleMirCheckedBinary,
     };
 
+    const SimpleMirVoidBody = union(enum) {
+        empty,
+        direct_call: SimpleMirDirectCall,
+    };
+
     const max_simple_mir_call_args = 8;
 
     const SimpleMirArg = union(enum) {
@@ -1278,7 +1283,9 @@ const LlvmEmitter = struct {
 
     fn emitSimpleMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
-        const simple_return = self.simpleMirReturn(function, fn_mir) orelse return false;
+        const simple_return = self.simpleMirReturn(function, fn_mir);
+        const simple_void_body = if (simple_return == null) self.simpleMirVoidBody(function, fn_mir) else null;
+        if (simple_return == null and simple_void_body == null) return false;
 
         const sig_facts = function.signature;
         const ret_ty = sig_facts.return_type orelse simpleType(sig_facts.name.span, "void");
@@ -1330,37 +1337,31 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "){s} {{\n{s}:\n", .{ attr_str, entry_label });
         }
 
-        const return_span = self.simpleMirReturnSpan(fn_mir) orelse sig_facts.name.span;
-        switch (simple_return) {
-            .void => try self.emitReturnVoid(return_span),
-            .param => |name| try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}), return_span),
-            .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, return_span),
-            .checked_binary => |binary| {
-                const value = try self.emitSimpleMirCheckedBinary(binary, return_span);
-                try self.emitReturnValue(ret_ty, value, return_span);
-            },
-            .direct_call => |call| {
-                const tmp = try self.nextTemp();
-                const callee_sig = self.fn_sigs.get(call.callee) orelse return error.UnsupportedLlvmEmission;
-                const call_ret_ext = if (callee_sig.c_abi) self.cAbiExtension(callee_sig.ret) else "";
-                try self.out.print(self.allocator, "  {s} = call {s}{s} @{s}(", .{ tmp, call_ret_ext, try self.llvmType(callee_sig.ret), call.callee });
-                for (call.args[0..call.arg_count], 0..) |arg, i| {
-                    if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-                    const arg_ty = call.arg_facts[i].target_ty;
-                    const param_ext = if (callee_sig.c_abi) self.cAbiExtension(arg_ty) else "";
-                    const value = switch (arg) {
-                        .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
-                        .integer_literal => |literal| literal,
-                    };
-                    try self.out.print(self.allocator, "{s} {s}{s}", .{ try self.llvmType(arg_ty), param_ext, value });
-                }
-                if (try self.debugLocation(return_span)) |dbg| {
-                    try self.out.print(self.allocator, "), !dbg !{d}\n", .{dbg});
-                } else {
-                    try self.out.appendSlice(self.allocator, ")\n");
-                }
-                try self.emitReturnValue(ret_ty, tmp, return_span);
-            },
+        if (simple_return) |ret| {
+            const return_span = self.simpleMirReturnSpan(fn_mir) orelse sig_facts.name.span;
+            switch (ret) {
+                .void => try self.emitReturnVoid(return_span),
+                .param => |name| try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}), return_span),
+                .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, return_span),
+                .checked_binary => |binary| {
+                    const value = try self.emitSimpleMirCheckedBinary(binary, return_span);
+                    try self.emitReturnValue(ret_ty, value, return_span);
+                },
+                .direct_call => |call| {
+                    const tmp = try self.nextTemp();
+                    try self.emitSimpleMirDirectCall(call, tmp, return_span);
+                    try self.emitReturnValue(ret_ty, tmp, return_span);
+                },
+            }
+        } else if (simple_void_body) |body| {
+            switch (body) {
+                .empty => try self.emitReturnVoid(sig_facts.name.span),
+                .direct_call => |call| {
+                    const span = if (self.simpleMirCallSource(fn_mir)) |source| spanFromMirSourcePoint(source) else sig_facts.name.span;
+                    try self.emitSimpleMirDirectCall(call, null, span);
+                    try self.emitReturnVoid(span);
+                },
+            }
         }
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;
@@ -1396,6 +1397,20 @@ const LlvmEmitter = struct {
         return fn_mir.blocks.len == 1 and fn_mir.trap_edges.len == 0;
     }
 
+    fn simpleMirVoidBody(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirVoidBody {
+        if (fn_mir.return_ty != .void) return null;
+        if (!simpleMirNoTrap(fn_mir)) return null;
+        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
+        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+        const block = fn_mir.blocks[0];
+        if (block.terminator != .fallthrough) return null;
+        if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
+        const call_source = self.simpleMirCallSource(fn_mir) orelse return .empty;
+        if (!simpleMirDirectCallResultVoid(fn_mir, call_source)) return null;
+        const call = self.simpleMirDirectCallAtSource(function, fn_mir, call_source) orelse return null;
+        return .{ .direct_call = call };
+    }
+
     fn emitSimpleMirCheckedBinary(self: *LlvmEmitter, binary: SimpleMirCheckedBinary, span: diagnostics.Span) ![]const u8 {
         const ty = binary.target_fact.target_ty;
         const llvm_ty = try self.llvmType(ty);
@@ -1425,6 +1440,28 @@ const LlvmEmitter = struct {
             .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
             .integer_literal => |literal| literal,
         };
+    }
+
+    fn emitSimpleMirDirectCall(self: *LlvmEmitter, call: SimpleMirDirectCall, result: ?[]const u8, span: diagnostics.Span) !void {
+        const callee_sig = self.fn_sigs.get(call.callee) orelse return error.UnsupportedLlvmEmission;
+        const call_ret_ext = if (callee_sig.c_abi) self.cAbiExtension(callee_sig.ret) else "";
+        if (result) |tmp| {
+            try self.out.print(self.allocator, "  {s} = call {s}{s} @{s}(", .{ tmp, call_ret_ext, try self.llvmType(callee_sig.ret), call.callee });
+        } else {
+            try self.out.print(self.allocator, "  call {s}{s} @{s}(", .{ call_ret_ext, try self.llvmType(callee_sig.ret), call.callee });
+        }
+        for (call.args[0..call.arg_count], 0..) |arg, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            const arg_ty = call.arg_facts[i].target_ty;
+            const param_ext = if (callee_sig.c_abi) self.cAbiExtension(arg_ty) else "";
+            const value = try self.simpleMirArgValue(arg);
+            try self.out.print(self.allocator, "{s} {s}{s}", .{ try self.llvmType(arg_ty), param_ext, value });
+        }
+        if (try self.debugLocation(span)) |dbg| {
+            try self.out.print(self.allocator, "), !dbg !{d}\n", .{dbg});
+        } else {
+            try self.out.appendSlice(self.allocator, ")\n");
+        }
     }
 
     fn simpleMirCheckedBinaryAtReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirCheckedBinary {
@@ -1570,6 +1607,24 @@ const LlvmEmitter = struct {
             else => return false,
         };
         return true;
+    }
+
+    fn simpleMirCallSource(self: *LlvmEmitter, fn_mir: mir.Function) ?mir.SourcePoint {
+        _ = self;
+        var source: ?mir.SourcePoint = null;
+        for (fn_mir.blocks[0].instructions) |instruction| {
+            if (instruction.kind != .call) continue;
+            if (source != null) return null;
+            source = instructionSourcePoint(instruction);
+        }
+        return source;
+    }
+
+    fn simpleMirDirectCallResultVoid(fn_mir: mir.Function, source: mir.SourcePoint) bool {
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind == .direct_call_result and sameMirSourceLocation(fact.source, source)) return fact.result_ty == .void;
+        }
+        return false;
     }
 
     fn simpleMirBinaryOpSupported(op: []const u8) bool {

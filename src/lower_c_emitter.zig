@@ -1193,6 +1193,11 @@ pub const CEmitter = struct {
         checked_binary: SimpleMirCheckedBinary,
     };
 
+    const SimpleMirVoidBody = union(enum) {
+        empty,
+        direct_call: SimpleMirDirectCall,
+    };
+
     const max_simple_mir_call_args = 8;
 
     const SimpleMirArg = union(enum) {
@@ -1215,7 +1220,9 @@ pub const CEmitter = struct {
 
     fn emitSimpleMirFunction(self: *CEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
-        const simple_return = self.simpleMirReturn(function, fn_mir) orelse return false;
+        const simple_return = self.simpleMirReturn(function, fn_mir);
+        const simple_void_body = if (simple_return == null) self.simpleMirVoidBody(function, fn_mir) else null;
+        if (simple_return == null and simple_void_body == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1227,29 +1234,38 @@ pub const CEmitter = struct {
         self.indent += 1;
         defer self.indent -= 1;
 
-        const return_span = self.simpleMirReturnSpan(fn_mir);
-        if (return_span) |span| try self.writeLineDirective(span);
-        try self.writeIndent();
-        switch (simple_return) {
-            .void => try self.out.appendSlice(self.allocator, "return;\n"),
-            .param => |name| try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(name)}),
-            .integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
-            .checked_binary => |binary| {
-                const helper = try self.checkedHelperName(binary.op, binary.type_name);
-                try self.out.print(self.allocator, "return {s}(", .{helper});
-                try self.emitSimpleMirArg(binary.left);
-                try self.out.appendSlice(self.allocator, ", ");
-                try self.emitSimpleMirArg(binary.right);
-                try self.out.appendSlice(self.allocator, ");\n");
-            },
-            .direct_call => |call| {
-                try self.out.print(self.allocator, "return {s}(", .{try self.cIdent(call.callee)});
-                for (call.args[0..call.arg_count], 0..) |arg, i| {
-                    if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-                    try self.emitSimpleMirArg(arg);
-                }
-                try self.out.appendSlice(self.allocator, ");\n");
-            },
+        if (simple_return) |ret| {
+            const return_span = self.simpleMirReturnSpan(fn_mir);
+            if (return_span) |span| try self.writeLineDirective(span);
+            try self.writeIndent();
+            switch (ret) {
+                .void => try self.out.appendSlice(self.allocator, "return;\n"),
+                .param => |name| try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(name)}),
+                .integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
+                .checked_binary => |binary| {
+                    const helper = try self.checkedHelperName(binary.op, binary.type_name);
+                    try self.out.print(self.allocator, "return {s}(", .{helper});
+                    try self.emitSimpleMirArg(binary.left);
+                    try self.out.appendSlice(self.allocator, ", ");
+                    try self.emitSimpleMirArg(binary.right);
+                    try self.out.appendSlice(self.allocator, ");\n");
+                },
+                .direct_call => |call| {
+                    try self.out.appendSlice(self.allocator, "return ");
+                    try self.emitSimpleMirDirectCall(call);
+                    try self.out.appendSlice(self.allocator, ";\n");
+                },
+            }
+        } else if (simple_void_body) |body| {
+            switch (body) {
+                .empty => {},
+                .direct_call => |call| {
+                    if (self.simpleMirCallSource(fn_mir)) |source| try self.writeLineDirective(spanFromMirSourcePoint(source));
+                    try self.writeIndent();
+                    try self.emitSimpleMirDirectCall(call);
+                    try self.out.appendSlice(self.allocator, ";\n");
+                },
+            }
         }
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;
@@ -1285,11 +1301,34 @@ pub const CEmitter = struct {
         return fn_mir.blocks.len == 1 and fn_mir.trap_edges.len == 0;
     }
 
+    fn simpleMirVoidBody(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirVoidBody {
+        if (fn_mir.return_ty != .void) return null;
+        if (!simpleMirNoTrap(fn_mir)) return null;
+        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
+        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+        const block = fn_mir.blocks[0];
+        if (block.terminator != .fallthrough) return null;
+        if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
+        const call_source = self.simpleMirCallSource(fn_mir) orelse return .empty;
+        if (!simpleMirDirectCallResultVoid(fn_mir, call_source)) return null;
+        const call = self.simpleMirDirectCallAtSource(function, fn_mir, call_source) orelse return null;
+        return .{ .direct_call = call };
+    }
+
     fn emitSimpleMirArg(self: *CEmitter, arg: SimpleMirArg) !void {
         switch (arg) {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
         }
+    }
+
+    fn emitSimpleMirDirectCall(self: *CEmitter, call: SimpleMirDirectCall) !void {
+        try self.out.print(self.allocator, "{s}(", .{try self.cIdent(call.callee)});
+        for (call.args[0..call.arg_count], 0..) |arg, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.emitSimpleMirArg(arg);
+        }
+        try self.out.appendSlice(self.allocator, ")");
     }
 
     fn simpleMirCheckedBinaryAtReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirCheckedBinary {
@@ -1435,6 +1474,24 @@ pub const CEmitter = struct {
             else => return false,
         };
         return true;
+    }
+
+    fn simpleMirCallSource(self: *CEmitter, fn_mir: mir.Function) ?mir.SourcePoint {
+        _ = self;
+        var source: ?mir.SourcePoint = null;
+        for (fn_mir.blocks[0].instructions) |instruction| {
+            if (instruction.kind != .call) continue;
+            if (source != null) return null;
+            source = instructionSourcePoint(instruction);
+        }
+        return source;
+    }
+
+    fn simpleMirDirectCallResultVoid(fn_mir: mir.Function, source: mir.SourcePoint) bool {
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind == .direct_call_result and sameMirSourceLocation(fact.source, source)) return fact.result_ty == .void;
+        }
+        return false;
     }
 
     fn simpleMirBinaryOpSupported(op: []const u8) bool {
