@@ -1189,6 +1189,20 @@ pub const CEmitter = struct {
         void,
         param: []const u8,
         integer_literal: []const u8,
+        direct_call: SimpleMirDirectCall,
+    };
+
+    const max_simple_mir_call_args = 8;
+
+    const SimpleMirArg = union(enum) {
+        param: []const u8,
+        integer_literal: []const u8,
+    };
+
+    const SimpleMirDirectCall = struct {
+        callee: []const u8,
+        args: [max_simple_mir_call_args]SimpleMirArg = undefined,
+        arg_count: usize = 0,
     };
 
     fn emitSimpleMirFunction(self: *CEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
@@ -1212,13 +1226,23 @@ pub const CEmitter = struct {
             .void => try self.out.appendSlice(self.allocator, "return;\n"),
             .param => |name| try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(name)}),
             .integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
+            .direct_call => |call| {
+                try self.out.print(self.allocator, "return {s}(", .{try self.cIdent(call.callee)});
+                for (call.args[0..call.arg_count], 0..) |arg, i| {
+                    if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+                    switch (arg) {
+                        .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
+                        .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
+                    }
+                }
+                try self.out.appendSlice(self.allocator, ");\n");
+            },
         }
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;
     }
 
     fn simpleMirReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirReturn {
-        _ = self;
         if (fn_mir.blocks.len != 1 or fn_mir.trap_edges.len != 0) return null;
         if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
@@ -1232,7 +1256,49 @@ pub const CEmitter = struct {
         }
         if (std.mem.eql(u8, value_id, "int")) {
             for (fn_mir.integer_facts) |fact| {
-                if (sameMirSourcePoint(fact.source, instructionSourcePoint(ret))) return .{ .integer_literal = fact.literal };
+                if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return .{ .integer_literal = fact.literal };
+            }
+        }
+        if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| return .{ .direct_call = call };
+        return null;
+    }
+
+    fn simpleMirDirectCall(self: *CEmitter, function: anytype, fn_mir: mir.Function, callee: []const u8) ?SimpleMirDirectCall {
+        const call_source = blk: {
+            for (fn_mir.blocks[0].instructions) |instruction| {
+                if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, callee)) break :blk instructionSourcePoint(instruction);
+            }
+            return null;
+        };
+        var saw_result = false;
+        var arg_count: usize = 0;
+        var call: SimpleMirDirectCall = .{ .callee = callee };
+        for (fn_mir.target_type_facts) |fact| {
+            if (!std.mem.eql(u8, fact.target_owner orelse "", callee)) continue;
+            if (fact.kind == .direct_call_result and sameMirSourceLocation(fact.source, call_source)) {
+                saw_result = true;
+                continue;
+            }
+            if (fact.kind != .direct_call_argument) continue;
+            const arg_index = fact.target_index orelse return null;
+            if (arg_index >= max_simple_mir_call_args) return null;
+            call.args[arg_index] = self.simpleMirArgAt(function, fn_mir, fact.source) orelse return null;
+            arg_count = @max(arg_count, arg_index + 1);
+        }
+        if (!saw_result) return null;
+        call.arg_count = arg_count;
+        return call;
+    }
+
+    fn simpleMirArgAt(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirArg {
+        _ = self;
+        for (fn_mir.integer_facts) |fact| {
+            if (sameMirSourceLocation(fact.source, source)) return .{ .integer_literal = fact.literal };
+        }
+        for (fn_mir.blocks[0].instructions) |instruction| {
+            if (instruction.kind != .expr or !sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+            for (function.signature.params) |param| {
+                if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = param.name.text };
             }
         }
         return null;
@@ -1267,6 +1333,10 @@ pub const CEmitter = struct {
 
     fn sameMirSourcePoint(a: mir.SourcePoint, b: mir.SourcePoint) bool {
         return a.line == b.line and a.column == b.column and a.offset == b.offset and a.len == b.len;
+    }
+
+    fn sameMirSourceLocation(a: mir.SourcePoint, b: mir.SourcePoint) bool {
+        return a.line == b.line and a.column == b.column;
     }
 
     fn spanFromMirSourcePoint(source: mir.SourcePoint) diagnostics.Span {
