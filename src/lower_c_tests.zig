@@ -123,6 +123,22 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
         \\        return 0;
         \\    }
         \\}
+        \\fn choose_local(a: i32, b: i32) -> i32 {
+        \\    var c: bool = a < b;
+        \\    if (c) {
+        \\        return 1;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
+        \\fn choose_local_not(flag: bool) -> i32 {
+        \\    var c: bool = !flag;
+        \\    if (c) {
+        \\        return 1;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
         \\fn choose_reassign(a: i32, b: i32) -> i32 {
         \\    var c: bool = a < b;
         \\    c = false;
@@ -142,6 +158,14 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
 
     const not_body = try cFunctionBody(output.items, "static int32_t choose_not(bool flag)");
     try expectContains(not_body, "if (!flag)");
+
+    const local_body = try cFunctionBody(output.items, "static int32_t choose_local(int32_t a, int32_t b)");
+    try expectContains(local_body, "if ((a < b))");
+    try expectNotContains(local_body, "bool c = (a < b);");
+
+    const local_not_body = try cFunctionBody(output.items, "static int32_t choose_local_not(bool flag)");
+    try expectContains(local_not_body, "if (!flag)");
+    try expectNotContains(local_not_body, "bool c = !flag;");
 
     const reassign_body = try cFunctionBody(output.items, "static int32_t choose_reassign(int32_t a, int32_t b)");
     try expectContains(reassign_body, "bool c = (a < b);");

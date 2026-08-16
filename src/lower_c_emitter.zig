@@ -1487,10 +1487,32 @@ pub const CEmitter = struct {
                     for (function.signature.params) |param| {
                         if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = .{ .name = param.name.text } };
                     }
+                    if (mirBlockHasLocal(block, instruction.detail)) {
+                        return self.simpleMirLocalCondition(function, fn_mir, instruction.detail);
+                    }
                     return null;
                 },
                 else => return null,
             }
+        }
+        return null;
+    }
+
+    fn simpleMirLocalCondition(self: *CEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirCondition {
+        if (simpleMirBlockAssignsLocal(fn_mir.blocks[0], local_name)) return null;
+        const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
+        if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .compare_binary = binary };
+        if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| {
+            return switch (arg) {
+                .param => |name| .{ .param = .{ .name = name, .inverted = true } },
+                else => null,
+            };
+        }
+        if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
+            return switch (arg) {
+                .param => |name| .{ .param = .{ .name = name } },
+                else => null,
+            };
         }
         return null;
     }
@@ -2051,6 +2073,13 @@ pub const CEmitter = struct {
     fn mirBlockHasLocal(block: mir.Block, name: []const u8) bool {
         for (block.instructions) |instruction| {
             if (instruction.kind == .local and std.mem.eql(u8, instruction.detail, name)) return true;
+        }
+        return false;
+    }
+
+    fn simpleMirBlockAssignsLocal(block: mir.Block, name: []const u8) bool {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .assign and std.mem.eql(u8, instruction.detail, name)) return true;
         }
         return false;
     }

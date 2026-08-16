@@ -103,6 +103,22 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
         \\        return 0;
         \\    }
         \\}
+        \\fn choose_local(a: i32, b: i32) -> i32 {
+        \\    var c: bool = a < b;
+        \\    if (c) {
+        \\        return 1;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
+        \\fn choose_local_not(flag: bool) -> i32 {
+        \\    var c: bool = !flag;
+        \\    if (c) {
+        \\        return 1;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
         \\fn choose_reassign(a: i32, b: i32) -> i32 {
         \\    var c: bool = a < b;
         \\    c = false;
@@ -123,6 +139,15 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
 
     const not_body = try llvmFunctionBody(output.items, "define internal i32 @choose_not");
     try expectContains(not_body, "br i1 %flag, label %bb_if_else");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @choose_local");
+    try expectContains(local_body, "icmp slt i32 %a, %b");
+    try expectContains(local_body, "br i1 %t0, label %bb_if_then");
+    try expectNotContains(local_body, "alloca i1");
+
+    const local_not_body = try llvmFunctionBody(output.items, "define internal i32 @choose_local_not");
+    try expectContains(local_not_body, "br i1 %flag, label %bb_if_else");
+    try expectNotContains(local_not_body, "alloca i1");
 
     const reassign_body = try llvmFunctionBody(output.items, "define internal i32 @choose_reassign");
     try expectContains(reassign_body, "icmp slt i32 %a, %b");
