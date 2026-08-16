@@ -7115,7 +7115,13 @@ const FunctionBuilder = struct {
                 }
                 try self.addInstr(.expr, exprText(expr), ty, expr.span);
             },
-            .int_literal, .float_literal, .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal => {
+            .int_literal => {
+                if (integerLiteralFitsTarget(self.assignment_target_ty, expr)) {
+                    try self.addIntegerLiteralFact(self.assignment_target_ty, expr, expr.span);
+                }
+                try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
+            },
+            .float_literal, .string_literal, .char_literal, .bool_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal => {
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
             },
             .array_literal => |items| {
@@ -7265,8 +7271,8 @@ const FunctionBuilder = struct {
                 }
                 try self.addAggregateRangeFactForUncheckedExpr("binary_operand", self.rangeFactTypeForExpr(node.left.*), node.left.*);
                 try self.addAggregateRangeFactForUncheckedExpr("binary_operand", self.rangeFactTypeForExpr(node.right.*), node.right.*);
-                const left_target_ty = if (exprContainsTargetTypedLiteral(node.left.*)) self.typeExprForExpr(node.right.*) orelse self.assignment_target_type_expr else null;
-                const right_target_ty = if (exprContainsTargetTypedLiteral(node.right.*)) self.typeExprForExpr(node.left.*) orelse self.assignment_target_type_expr else null;
+                const left_target_ty = if (exprContainsTargetTypedLiteral(node.left.*)) self.typeExprForExpr(node.right.*) orelse self.simpleTypeExprForValueType(self.exprType(node.right.*), node.left.*.span) orelse self.assignment_target_type_expr else null;
+                const right_target_ty = if (exprContainsTargetTypedLiteral(node.right.*)) self.typeExprForExpr(node.left.*) orelse self.simpleTypeExprForValueType(self.exprType(node.left.*), node.right.*.span) orelse self.assignment_target_type_expr else null;
                 try self.buildExprWithTargetType(node.left.*, left_target_ty);
                 try self.addRepresentationUseForExpr("binary_operand", node.left.*);
                 try self.buildExprWithTargetType(node.right.*, right_target_ty);
@@ -11562,6 +11568,14 @@ const FunctionBuilder = struct {
             .grouped => |inner| self.typeExprForExpr(inner.*),
             .cast => |node| node.ty.*,
             .try_expr => |inner| if (mmioMapPayloadTypeForExpr(inner.operand.*)) |ty| ty else if (self.typeExprForExpr(inner.operand.*)) |ty| tryPayloadTypeExprAlias(ty, self.aliases) else null,
+            else => null,
+        };
+    }
+
+    fn simpleTypeExprForValueType(_: *FunctionBuilder, ty: ValueType, span: ast.Span) ?ast.TypeExpr {
+        return switch (ty) {
+            .integer => |name| ast_query.simpleNameType(name, span),
+            .bool => ast_query.simpleNameType("bool", span),
             else => null,
         };
     }
