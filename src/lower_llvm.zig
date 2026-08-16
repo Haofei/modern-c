@@ -1360,6 +1360,7 @@ const LlvmEmitter = struct {
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         const block = fn_mir.blocks[0];
         if (block.terminator != .return_) return null;
+        if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
         const ret = simpleMirReturnInstruction(block) orelse return null;
         if (ret.result_ty == .void or std.mem.eql(u8, ret.detail, "void")) return .void;
         const value_id = ret.value_id orelse return null;
@@ -1372,13 +1373,23 @@ const LlvmEmitter = struct {
             }
         }
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| return .{ .direct_call = call };
+        if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
         return null;
     }
 
     fn simpleMirDirectCall(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, callee: []const u8) ?SimpleMirDirectCall {
-        const call_source = blk: {
+        return self.simpleMirDirectCallAtSource(function, fn_mir, blk: {
             for (fn_mir.blocks[0].instructions) |instruction| {
                 if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, callee)) break :blk instructionSourcePoint(instruction);
+            }
+            return null;
+        });
+    }
+
+    fn simpleMirDirectCallAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint) ?SimpleMirDirectCall {
+        const callee = blk: {
+            for (fn_mir.blocks[0].instructions) |instruction| {
+                if (instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) break :blk instruction.detail;
             }
             return null;
         };
@@ -1403,6 +1414,39 @@ const LlvmEmitter = struct {
         return call;
     }
 
+    fn simpleMirLocalInitReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {
+        if (!mirBlockHasLocal(fn_mir.blocks[0], local_name)) return null;
+        const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
+        if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
+            return switch (arg) {
+                .param => |name| .{ .param = name },
+                .integer_literal => |literal| .{ .integer_literal = literal },
+            };
+        }
+        if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
+        return null;
+    }
+
+    fn simpleMirLocalInitSource(self: *LlvmEmitter, fn_mir: mir.Function, local_name: []const u8) ?mir.SourcePoint {
+        _ = self;
+        const block = fn_mir.blocks[0];
+        var after_local = false;
+        for (block.instructions) |instruction| {
+            if (!after_local) {
+                after_local = instruction.kind == .local and std.mem.eql(u8, instruction.detail, local_name);
+                continue;
+            }
+            switch (instruction.kind) {
+                .target_type => continue,
+                .integer_literal_conversion, .call => return instructionSourcePoint(instruction),
+                .expr => if (!std.mem.eql(u8, instruction.detail, local_name)) return instructionSourcePoint(instruction),
+                .return_value => return null,
+                else => return null,
+            }
+        }
+        return null;
+    }
+
     fn simpleMirArgAt(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirArg {
         _ = self;
         for (fn_mir.integer_facts) |fact| {
@@ -1415,6 +1459,41 @@ const LlvmEmitter = struct {
             }
         }
         return null;
+    }
+
+    fn blockOnlyContainsSimpleMirReturnInstructions(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) bool {
+        _ = self;
+        const block = fn_mir.blocks[0];
+        for (block.instructions) |instruction| switch (instruction.kind) {
+            .param, .local, .target_type, .integer_literal_conversion, .return_value => {},
+            .call => {},
+            .expr => {
+                if (std.mem.eql(u8, instruction.detail, "int")) continue;
+                for (function.signature.params) |param| {
+                    if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
+                } else {
+                    if (mirBlockHasLocal(block, instruction.detail)) continue;
+                    if (mirBlockHasCall(block, instruction.detail)) continue;
+                    return false;
+                }
+            },
+            else => return false,
+        };
+        return true;
+    }
+
+    fn mirBlockHasLocal(block: mir.Block, name: []const u8) bool {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .local and std.mem.eql(u8, instruction.detail, name)) return true;
+        }
+        return false;
+    }
+
+    fn mirBlockHasCall(block: mir.Block, name: []const u8) bool {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, name)) return true;
+        }
+        return false;
     }
 
     fn simpleMirReturnInstruction(block: mir.Block) ?mir.Instruction {
