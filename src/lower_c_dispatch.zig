@@ -183,7 +183,7 @@ fn emitVtableSlots(ctx: Context, trait: declaration_artifacts.TraitDeclArtifact,
 
 // The cast type for a vtable slot: `RET (*)(void *, P...)`.
 fn appendVtableSlotCastType(ctx: Context, trait: declaration_artifacts.TraitDeclArtifact, method: ast_bridge.TraitMethodSig) !void {
-    const ret_ty: ast_bridge.TypeExpr = method.return_type orelse ast_bridge.TypeExpr{ .span = trait.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.name.span } } };
+    const ret_ty: ast_bridge.TypeExpr = method.return_type orelse ast_bridge.TypeExpr{ .span = trait.facts.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.facts.name.span } } };
     try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, ret_ty));
     try ctx.out.appendSlice(ctx.allocator, " (*)(void *");
     for (method.params[1..]) |param| {

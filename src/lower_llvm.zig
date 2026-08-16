@@ -686,9 +686,9 @@ const LlvmEmitter = struct {
         for (self.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| try self.collectFunctionArtifact(function),
             .global => |global| try self.collectGlobal(global),
-            .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),
+            .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.facts.name.text, trait_decl),
             .impl_trait => |impl_trait| {
-                const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.trait_name.text, impl_trait.type_name.text });
+                const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.facts.trait_name.text, impl_trait.facts.type_name.text });
                 try self.impl_methods.put(key, impl_trait.facts.methods);
             },
             .type_decl => {},
@@ -7555,7 +7555,7 @@ const LlvmEmitter = struct {
         for (call.args, 0..) |arg, i| {
             if (i + 1 >= msig.params.len) return error.UnsupportedLlvmEmission;
             const declared_ty = msig.params[i + 1].ty;
-            const arg_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_argument, arg.span, trait.name.text, mir.dynDispatchArgumentFactIndex(slot, i)) orelse return error.UnsupportedLlvmEmission).target_ty;
+            const arg_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_argument, arg.span, trait.facts.name.text, mir.dynDispatchArgumentFactIndex(slot, i)) orelse return error.UnsupportedLlvmEmission).target_ty;
             if (!std.meta.eql(arg_ty, declared_ty)) return error.UnsupportedLlvmEmission;
             try args.append(self.allocator, .{ .ty = arg_ty, .value = try self.emitExprWithMirRangeTarget(arg, arg_ty, "call_arg") });
         }
@@ -7566,7 +7566,7 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
             return "0";
         }
-        const result_fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait.name.text, slot) orelse return error.UnsupportedLlvmEmission).target_ty;
+        const result_fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait.facts.name.text, slot) orelse return error.UnsupportedLlvmEmission).target_ty;
         if (!std.meta.eql(result_fact_ty, ret_ty)) return error.UnsupportedLlvmEmission;
         const result = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = call {s} {s}(ptr {s}", .{ result, try self.llvmType(ret_ty), code, data });
@@ -10044,7 +10044,7 @@ const LlvmEmitter = struct {
             const member = memberCallee(call) orelse return null;
             const slot = traitMethodIndex(trait, member.name.text) orelse return null;
             const declared_ty = trait.facts.methods[slot].return_type orelse return simpleType(call.callee.*.span, "void");
-            const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait.name.text, slot) orelse return null).target_ty;
+            const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait.facts.name.text, slot) orelse return null).target_ty;
             if (!std.meta.eql(fact_ty, declared_ty)) return null;
             return fact_ty;
         }

@@ -284,13 +284,13 @@ pub fn emitDynTraitTypes(ctx: Context, trait_decls: *std.StringHashMap(declarati
             try appendVtableSlotType(ctx, trait, method);
             try ctx.out.appendSlice(ctx.allocator, "; ");
         }
-        try ctx.out.print(ctx.allocator, "}} VT_{s};\n", .{trait.name.text});
-        try ctx.out.print(ctx.allocator, "typedef struct {{ void *data; VT_{s} const *vtable; }} mc_dyn_{s};\n\n", .{ trait.name.text, trait.name.text });
+        try ctx.out.print(ctx.allocator, "}} VT_{s};\n", .{trait.facts.name.text});
+        try ctx.out.print(ctx.allocator, "typedef struct {{ void *data; VT_{s} const *vtable; }} mc_dyn_{s};\n\n", .{ trait.facts.name.text, trait.facts.name.text });
     }
 }
 
 fn appendVtableSlotType(ctx: Context, trait: declaration_artifacts.TraitDeclArtifact, method: ast_bridge.TraitMethodSig) !void {
-    const ret_ty: ast_bridge.TypeExpr = method.return_type orelse ast_bridge.TypeExpr{ .span = trait.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.name.span } } };
+    const ret_ty: ast_bridge.TypeExpr = method.return_type orelse ast_bridge.TypeExpr{ .span = trait.facts.name.span, .kind = .{ .name = .{ .text = "void", .span = trait.facts.name.span } } };
     try ctx.out.appendSlice(ctx.allocator, try ctx.c_type(ctx.emit_ctx, ret_ty));
     try ctx.out.appendSlice(ctx.allocator, " (*");
     try ctx.out.appendSlice(ctx.allocator, method.name.text);

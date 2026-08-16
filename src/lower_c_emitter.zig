@@ -466,7 +466,7 @@ pub const CEmitter = struct {
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| try self.collectFunctionArtifact(function),
             .global => |global| try self.collectGlobalDeclArtifact(global),
-            .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),
+            .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.facts.name.text, trait_decl),
             .impl_trait => |impl_trait| try self.collectImplTraitArtifact(impl_trait),
             .type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
@@ -506,7 +506,7 @@ pub const CEmitter = struct {
     }
 
     fn collectImplTraitArtifact(self: *CEmitter, impl_trait: declaration_artifacts.ImplTraitArtifact) !void {
-        const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.trait_name.text, impl_trait.type_name.text });
+        const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.facts.trait_name.text, impl_trait.facts.type_name.text });
         try self.impl_methods.put(key, impl_trait.facts.methods);
     }
 

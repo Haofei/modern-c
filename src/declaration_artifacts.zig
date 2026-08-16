@@ -180,12 +180,10 @@ pub const GlobalArtifact = struct {
 };
 
 pub const TraitDeclArtifact = struct {
-    name: ast.Ident,
     facts: codegen_attrs.TraitDeclFacts,
 
     pub fn fromDecl(trait_decl: ast.TraitDecl) TraitDeclArtifact {
         return .{
-            .name = trait_decl.name,
             .facts = .{
                 .name = trait_decl.name,
                 .methods = trait_decl.methods,
@@ -195,14 +193,10 @@ pub const TraitDeclArtifact = struct {
 };
 
 pub const ImplTraitArtifact = struct {
-    trait_name: ast.Ident,
-    type_name: ast.Ident,
     facts: codegen_attrs.ImplTraitFacts,
 
     pub fn fromDecl(impl_trait: ast.ImplTrait) ImplTraitArtifact {
         return .{
-            .trait_name = impl_trait.trait_name,
-            .type_name = impl_trait.type_name,
             .facts = .{
                 .trait_name = impl_trait.trait_name,
                 .type_name = impl_trait.type_name,
