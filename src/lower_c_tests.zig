@@ -174,6 +174,41 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
     try expectNotContains(reassign_body, "if ((a < b))");
 }
 
+test "lower-c emits simple void conditional direct calls from MIR" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\fn choose_void(flag: bool) -> void {
+        \\    if (flag) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\}
+        \\fn choose_void_cmp(a: i32, b: i32) -> void {
+        \\    if (a < b) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_void_conditional_calls.mc", source, &output);
+
+    const param_body = try cFunctionBody(output.items, "static void choose_void(bool flag)");
+    try expectContains(param_body, "if (flag)");
+    try expectContains(param_body, "hit(1);");
+    try expectContains(param_body, "hit(0);");
+    try expectNotContains(param_body, "switch");
+
+    const compare_body = try cFunctionBody(output.items, "static void choose_void_cmp(int32_t a, int32_t b)");
+    try expectContains(compare_body, "if ((a < b))");
+    try expectContains(compare_body, "hit(1);");
+    try expectContains(compare_body, "hit(0);");
+    try expectNotContains(compare_body, "switch");
+}
+
 test "lower-c runtime hook suppression uses VerifiedProgram runtime hook facts" {
     const source =
         \\export fn mc_ksan_check(addr: usize, size: usize) -> void {}

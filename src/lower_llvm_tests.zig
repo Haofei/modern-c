@@ -156,6 +156,42 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     try expectNotContains(reassign_body, "br i1 %t1");
 }
 
+test "LLVM emits simple void conditional direct calls from MIR" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\fn choose_void(flag: bool) -> void {
+        \\    if (flag) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\}
+        \\fn choose_void_cmp(a: i32, b: i32) -> void {
+        \\    if (a < b) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_void_conditional_calls.mc", source, &output);
+
+    const param_body = try llvmFunctionBody(output.items, "define internal void @choose_void");
+    try expectContains(param_body, "br i1 %flag, label %bb_if_then");
+    try expectContains(param_body, "call void @hit(i32 1)");
+    try expectContains(param_body, "call void @hit(i32 0)");
+    try expectNotContains(param_body, "switch");
+
+    const compare_body = try llvmFunctionBody(output.items, "define internal void @choose_void_cmp");
+    try expectContains(compare_body, "icmp slt i32 %a, %b");
+    try expectContains(compare_body, "br i1 %t0, label %bb_if_then");
+    try expectContains(compare_body, "call void @hit(i32 1)");
+    try expectContains(compare_body, "call void @hit(i32 0)");
+    try expectNotContains(compare_body, "switch");
+}
+
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();
