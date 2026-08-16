@@ -3,6 +3,8 @@ const std = @import("std");
 const ast = @import("ast.zig");
 const numeric = @import("numeric.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
+const declaration_artifact_fallbacks = declaration_artifacts;
+const FunctionBodyFallbackArtifact = declaration_artifact_fallbacks.FunctionBodyFallbackArtifact;
 const string_literal = @import("string_literal.zig");
 const target_layout = @import("target_layout.zig");
 
@@ -605,12 +607,12 @@ pub const ComptimeFunction = struct {
         };
     }
 
-    pub fn fromDeclarationArtifact(function: declaration_artifacts.FunctionArtifact) ComptimeFunction {
+    pub fn fromDeclarationArtifact(function: declaration_artifacts.FunctionArtifact, body: ?ast.Block) ComptimeFunction {
         return .{
             .name = function.signature.name,
             .params = function.signature.params,
             .return_type = function.signature.return_type,
-            .body = function.legacySyntaxBody(),
+            .body = body,
         };
     }
 };
@@ -621,6 +623,7 @@ pub const ComptimeDeclarations = struct {
     structs: []const ast.StructDecl = &.{},
     legacy_decls: ?[]const ast.Decl = null,
     decl_artifacts: ?[]const declaration_artifacts.DeclArtifact = null,
+    function_body_fallbacks: []const FunctionBodyFallbackArtifact = &.{},
 
     pub fn fromDecls(decls: []const ast.Decl) ComptimeDeclarations {
         // Compatibility adapter for older frontend call sites. It keeps the
@@ -630,7 +633,10 @@ pub const ComptimeDeclarations = struct {
     }
 
     pub fn fromDeclarationArtifacts(artifacts: declaration_artifacts.CodegenDeclarationArtifacts) ComptimeDeclarations {
-        return .{ .decl_artifacts = artifacts.decl_artifacts };
+        return .{
+            .decl_artifacts = artifacts.decl_artifacts,
+            .function_body_fallbacks = artifacts.function_body_fallbacks,
+        };
     }
 };
 

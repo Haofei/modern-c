@@ -6,6 +6,9 @@ const backend_mod = @import("backend.zig");
 const diagnostics = @import("diagnostics.zig");
 const eval = @import("eval.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
+const declaration_artifact_fallbacks = declaration_artifacts;
+const FunctionBodyFallbackArtifact = declaration_artifact_fallbacks.FunctionBodyFallbackArtifact;
+const findLegacyFunctionBody = declaration_artifact_fallbacks.findLegacyFunctionBody;
 const syntax_bridge = @import("syntax_bridge.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
@@ -224,6 +227,7 @@ pub const CEmitter = struct {
     scratch: std.heap.ArenaAllocator,
     globals: std.StringHashMap(GlobalInfo),
     decl_artifacts: []const declaration_artifacts.DeclArtifact = &.{},
+    function_body_fallbacks: []const FunctionBodyFallbackArtifact = &.{},
     static_initializers: std.StringHashMap(ast_bridge.Expr),
     type_aliases: std.StringHashMap(ast_bridge.TypeExpr),
     functions: std.StringHashMap(FnInfo),
@@ -410,6 +414,7 @@ pub const CEmitter = struct {
 
     fn collectModule(self: *CEmitter, early_metadata: declaration_artifacts.CodegenDeclarationArtifacts) anyerror!void {
         self.decl_artifacts = early_metadata.decl_artifacts;
+        self.function_body_fallbacks = early_metadata.function_body_fallbacks;
         self.setComptimeDeclarationsFromArtifacts(early_metadata);
         try self.collectEarlyDeclarationMetadata(early_metadata);
         try self.collectConstGlobals();
@@ -429,7 +434,7 @@ pub const CEmitter = struct {
         // consult the reflection environment.
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
-                if (function.signature.is_const and !self.const_fns.contains(function.signature.name.text)) try self.const_fns.put(function.signature.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));
+                if (function.signature.is_const and !self.const_fns.contains(function.signature.name.text)) try self.const_fns.put(function.signature.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function, findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)));
             },
             else => {},
         };
@@ -516,7 +521,7 @@ pub const CEmitter = struct {
         for (self.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
                 if (function.signature.is_extern) continue;
-                if (function.legacySyntaxBody()) |body| {
+                if (findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)) |body| {
                     const mir_function = self.mirFunctionNamed(function.signature.name.text) orelse return error.UnsupportedCEmission;
                     try self.collectBlockBindThunks(body, mir_function);
                 }
@@ -622,7 +627,7 @@ pub const CEmitter = struct {
                     // Extern prototypes were already emitted in the forward-declaration pass.
                     continue;
                 }
-                if (function.legacySyntaxBody()) |body| {
+                if (findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)) |body| {
                     try self.emitFunction(function, body, function.render_attrs);
                 } else {
                     try self.emitFunctionPrototype(function);
@@ -2472,7 +2477,7 @@ pub const CEmitter = struct {
         defer self.current_function = previous_function;
         for (function.signature.params) |param| try self.collectTypeArtifacts(param.ty);
         if (function.signature.return_type) |ret| try self.collectTypeArtifacts(ret);
-        if (function.legacySyntaxBody()) |body| try lower_c_collect.collectBlockTypeArtifacts(self.typeArtifactContext(), body);
+        if (findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)) |body| try lower_c_collect.collectBlockTypeArtifacts(self.typeArtifactContext(), body);
     }
 
     fn collectBlockSliceTypes(self: *CEmitter, block: ast_bridge.Block) anyerror!void {

@@ -10,11 +10,14 @@ const std = @import("std");
 /// Transitional declaration artifacts isolated from backend lowering requests.
 pub const EarlyDeclarationArtifacts = struct {
     decl_artifacts: []const DeclArtifact,
+    function_body_fallbacks: []const FunctionBodyFallbackArtifact,
     source_map_artifacts: []const SourceMapArtifact,
 
     fn collectFromResolvedDeclItems(allocator: std.mem.Allocator, resolved_decls: anytype) !EarlyDeclarationArtifacts {
         var decl_artifacts: std.ArrayList(DeclArtifact) = .empty;
         errdefer decl_artifacts.deinit(allocator);
+        var function_body_fallbacks: std.ArrayList(FunctionBodyFallbackArtifact) = .empty;
+        errdefer function_body_fallbacks.deinit(allocator);
         var source_map_artifacts: std.ArrayList(SourceMapArtifact) = .empty;
         errdefer source_map_artifacts.deinit(allocator);
 
@@ -23,10 +26,12 @@ pub const EarlyDeclarationArtifacts = struct {
             switch (decl.kind) {
                 .fn_decl => |fn_decl| {
                     try decl_artifacts.append(allocator, .{ .function = FunctionArtifact.fromDecl(fn_decl, decl.attrs, false) });
+                    if (fn_decl.body) |body| try function_body_fallbacks.append(allocator, .{ .name = fn_decl.name.text, .syntax = body });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .extern_fn => |fn_decl| {
                     try decl_artifacts.append(allocator, .{ .function = FunctionArtifact.fromDecl(fn_decl, decl.attrs, true) });
+                    if (fn_decl.body) |body| try function_body_fallbacks.append(allocator, .{ .name = fn_decl.name.text, .syntax = body });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .global_decl => |global| {
@@ -73,11 +78,14 @@ pub const EarlyDeclarationArtifacts = struct {
 
         const owned_decl_artifacts = try decl_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_decl_artifacts);
+        const owned_function_body_fallbacks = try function_body_fallbacks.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_function_body_fallbacks);
         const owned_source_map_artifacts = try source_map_artifacts.toOwnedSlice(allocator);
         errdefer allocator.free(owned_source_map_artifacts);
 
         return .{
             .decl_artifacts = owned_decl_artifacts,
+            .function_body_fallbacks = owned_function_body_fallbacks,
             .source_map_artifacts = owned_source_map_artifacts,
         };
     }
@@ -92,17 +100,22 @@ pub const EarlyDeclarationArtifacts = struct {
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
         allocator.free(self.decl_artifacts);
+        allocator.free(self.function_body_fallbacks);
         allocator.free(self.source_map_artifacts);
         self.* = empty;
     }
 
     pub const empty = EarlyDeclarationArtifacts{
         .decl_artifacts = &.{},
+        .function_body_fallbacks = &.{},
         .source_map_artifacts = &.{},
     };
 
     pub fn codegen(self: EarlyDeclarationArtifacts) CodegenDeclarationArtifacts {
-        return .{ .decl_artifacts = self.decl_artifacts };
+        return .{
+            .decl_artifacts = self.decl_artifacts,
+            .function_body_fallbacks = self.function_body_fallbacks,
+        };
     }
 };
 
@@ -114,7 +127,19 @@ pub const EarlyDeclarationArtifacts = struct {
 /// remaining declaration-shaped payload is migrated into verified MIR facts.
 pub const CodegenDeclarationArtifacts = struct {
     decl_artifacts: []const DeclArtifact,
+    function_body_fallbacks: []const FunctionBodyFallbackArtifact,
+
+    pub fn legacyFunctionBody(self: CodegenDeclarationArtifacts, name: []const u8) ?ast.Block {
+        return findLegacyFunctionBody(self.function_body_fallbacks, name);
+    }
 };
+
+pub fn findLegacyFunctionBody(fallbacks: []const FunctionBodyFallbackArtifact, name: []const u8) ?ast.Block {
+    for (fallbacks) |fallback| {
+        if (std.mem.eql(u8, fallback.name, name)) return fallback.syntax;
+    }
+    return null;
+}
 
 fn declOrigin(decl: ast.Decl) []const u8 {
     for (decl.attrs) |attr| switch (attr.kind) {
@@ -125,14 +150,12 @@ fn declOrigin(decl: ast.Decl) []const u8 {
 }
 
 pub const FunctionArtifact = struct {
-    body_fallback: FunctionBodyFallback,
     signature: codegen_attrs.FunctionSignatureFacts,
     body_facts: codegen_attrs.FunctionBodyFacts,
     render_attrs: codegen_attrs.FunctionRenderAttrs,
 
     pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
         return .{
-            .body_fallback = .{ .syntax = fn_decl.body },
             .signature = .{
                 .name = fn_decl.name,
                 .params = fn_decl.params,
@@ -151,22 +174,14 @@ pub const FunctionArtifact = struct {
             .render_attrs = attr_syntax.functionRenderAttrs(attrs),
         };
     }
-
-    pub fn legacySyntaxBody(self: FunctionArtifact) ?ast.Block {
-        return self.body_fallback.syntaxBody();
-    }
 };
 
 /// Compatibility edge for function-body lowering that still needs source-shaped
-/// blocks. Keep all ordinary codegen body fallback access behind
-/// `FunctionArtifact.legacySyntaxBody()` so the final MIR-body migration has one
-/// boundary to remove.
-pub const FunctionBodyFallback = struct {
-    syntax: ?ast.Block,
-
-    pub fn syntaxBody(self: FunctionBodyFallback) ?ast.Block {
-        return self.syntax;
-    }
+/// blocks. It is kept out of `FunctionArtifact` so ordinary declaration facts do
+/// not grow another syntax body authority while MIR-body lowering is completed.
+pub const FunctionBodyFallbackArtifact = struct {
+    name: []const u8,
+    syntax: ast.Block,
 };
 
 pub const GlobalArtifact = struct {

@@ -6,6 +6,9 @@ const diagnostics = @import("diagnostics.zig");
 const error_from = @import("error_from.zig");
 const eval = @import("eval.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
+const declaration_artifact_fallbacks = declaration_artifacts;
+const FunctionBodyFallbackArtifact = declaration_artifact_fallbacks.FunctionBodyFallbackArtifact;
+const findLegacyFunctionBody = declaration_artifact_fallbacks.findLegacyFunctionBody;
 const syntax_bridge = @import("syntax_bridge.zig");
 const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
@@ -344,6 +347,7 @@ fn appendLlvmCheckedMirProfileWithVerifiedProgram(
         .bind_thunks = std.StringHashMap(BindThunk).init(allocator),
         .backend_names = std.StringHashMap([]const u8).init(allocator),
         .decl_artifacts = early_metadata.decl_artifacts,
+        .function_body_fallbacks = early_metadata.function_body_fallbacks,
         .global_types = std.StringHashMap(ast_bridge.TypeExpr).init(allocator),
         .global_is_const = std.StringHashMap(bool).init(allocator),
         .global_initializers = std.StringHashMap(ast_bridge.Expr).init(allocator),
@@ -441,6 +445,7 @@ const LlvmEmitter = struct {
     // achieves the same via an asm label).
     backend_names: std.StringHashMap([]const u8) = undefined,
     decl_artifacts: []const declaration_artifacts.DeclArtifact = &.{},
+    function_body_fallbacks: []const FunctionBodyFallbackArtifact = &.{},
     global_types: std.StringHashMap(ast_bridge.TypeExpr) = undefined,
     global_is_const: std.StringHashMap(bool) = undefined,
     global_initializers: std.StringHashMap(ast_bridge.Expr) = undefined,
@@ -558,7 +563,7 @@ const LlvmEmitter = struct {
     fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: declaration_artifacts.CodegenDeclarationArtifacts) !void {
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
-                if (function.signature.is_const and !self.const_fns.contains(function.signature.name.text)) try self.const_fns.put(function.signature.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));
+                if (function.signature.is_const and !self.const_fns.contains(function.signature.name.text)) try self.const_fns.put(function.signature.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function, findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)));
             },
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
@@ -793,7 +798,7 @@ const LlvmEmitter = struct {
             .function => |function| {
                 if (function.signature.is_extern) {
                     try self.emitExternFunction(function);
-                } else if (function.legacySyntaxBody()) |body| {
+                } else if (findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)) |body| {
                     try self.emitFunction(function, body, function.render_attrs);
                 }
             },
