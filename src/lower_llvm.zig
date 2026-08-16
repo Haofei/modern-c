@@ -679,7 +679,7 @@ const LlvmEmitter = struct {
             break :blk id;
         } else null;
         try self.fn_sigs.put(function.signature.name.text, .{ .ret = ret_ty, .params = sig.params, .c_abi = sig.c_abi, .is_variadic = sig.is_variadic, .debug_id = debug_id, .error_from = sig.error_from });
-        if (function.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
+        if (function.signature.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
     }
 
     fn collectFunctionGlobalAndTraitArtifacts(self: *LlvmEmitter) !void {

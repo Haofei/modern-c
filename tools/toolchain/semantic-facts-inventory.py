@@ -2508,7 +2508,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "for (function.attrs) |attr| switch (attr.kind)": 0,
         ".backend_name => |name| try self.backend_names.put(fn_decl.name.text, name)": 0,
         ".backend_name => |name| try self.backend_names.put(function.name.text, name)": 0,
-        "if (function.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);": 1,
+        "if (function.signature.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);": 1,
         ".error_from = function.has_error_from": 0,
         ".error_from = sig.error_from": 1,
         "function.has_explicit_abi": 0,

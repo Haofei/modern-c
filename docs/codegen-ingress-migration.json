@@ -32,7 +32,7 @@
   "normalized_fact_anchors": {
     "src/declaration_artifacts.zig": {
       "has_explicit_abi: bool": 0,
-      "backend_name: ?[]const u8": 1,
+      "backend_name: ?[]const u8": 0,
       "has_error_from: bool": 0,
       "has_mc_abi: bool": 0,
       "render_attrs: attr_syntax.FunctionRenderAttrs": 0,
@@ -50,7 +50,8 @@
     "src/lower_c_emitter.zig": {
       "function.backend_attrs": 0,
       "function.has_error_from": 0,
-      "function.backend_name": 1,
+      "function.backend_name": 0,
+      "function.signature.backend_name": 1,
       "function.has_explicit_abi": 0,
       "function.render_attrs": 1,
       "attr_syntax.emitCFunctionRenderAttrs": 0,
@@ -73,7 +74,8 @@
     "src/lower_llvm.zig": {
       "function.backend_attrs": 0,
       "function.has_error_from": 0,
-      "function.backend_name": 1,
+      "function.backend_name": 0,
+      "function.signature.backend_name": 1,
       "function.has_explicit_abi": 0,
       "function.has_mc_abi": 0,
       "function.render_attrs": 1,
@@ -109,6 +111,7 @@
       "params: []const ast_bridge.Param": 1,
       "return_type: ?ast_bridge.TypeExpr": 1,
       "has_definition: bool": 1,
+      "backend_name: ?[]const u8": 1,
       "c_abi: bool": 1,
       "error_from: bool": 1
     }

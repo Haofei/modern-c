@@ -129,7 +129,6 @@ pub const FunctionArtifact = struct {
     signature: codegen_attrs.FunctionSignatureFacts,
     body_facts: codegen_attrs.FunctionBodyFacts,
     render_attrs: codegen_attrs.FunctionRenderAttrs,
-    backend_name: ?[]const u8,
 
     pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
         return .{
@@ -144,12 +143,12 @@ pub const FunctionArtifact = struct {
                 .is_variadic = fn_decl.is_variadic,
                 .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi")),
                 .error_from = hasNamedAttr(attrs, "error_from"),
+                .backend_name = backendNameOverride(attrs),
             },
             .body_facts = .{
                 .has_definition = fn_decl.body != null,
             },
             .render_attrs = attr_syntax.functionRenderAttrs(attrs),
-            .backend_name = backendNameOverride(attrs),
         };
     }
 

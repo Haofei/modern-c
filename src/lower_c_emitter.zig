@@ -501,7 +501,7 @@ pub const CEmitter = struct {
     fn collectFunctionArtifact(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
         const sig = function.signature;
         try self.functions.put(function.signature.name.text, .{ .params = sig.params, .return_type = sig.return_type, .is_extern = sig.is_extern, .is_variadic = sig.is_variadic, .error_from = sig.error_from });
-        if (!function.signature.is_extern) if (function.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
+        if (!function.signature.is_extern) if (function.signature.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
         try self.collectFunctionArtifactSliceTypes(function);
     }
 

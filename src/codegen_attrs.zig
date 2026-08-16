@@ -17,6 +17,7 @@ pub const FunctionSignatureFacts = struct {
     is_variadic: bool,
     c_abi: bool,
     error_from: bool,
+    backend_name: ?[]const u8,
 };
 
 pub const FunctionBodyFacts = struct {
