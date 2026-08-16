@@ -609,20 +609,35 @@ pub const CEmitter = struct {
     }
 
     pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| {
-                if (function.signature.is_extern) {
-                    // Extern prototypes were already emitted in the forward-declaration pass.
-                    continue;
-                }
-                if (self.function_bodies.legacyFunctionBody(function.signature.name.text)) |body| {
-                    try self.emitFunction(function, body, function.render_attrs);
-                } else {
-                    try self.emitFunctionPrototype(function);
-                }
-            },
-            else => {},
-        };
+        // Function-definition admission is driven by verified MIR.  The
+        // source-shaped body artifact is still the transitional rendering
+        // payload, but it no longer decides which functions enter body
+        // lowering.
+        for (self.mir_module.functions) |fn_mir| {
+            if (fn_mir.is_extern) continue;
+            const artifact_index = self.functionArtifactIndexByName(fn_mir.name) orelse continue;
+            const function = switch (self.codegen_artifacts.decl_artifacts[artifact_index]) {
+                .function => |function| function,
+                else => unreachable,
+            };
+            if (function.signature.is_extern) continue;
+            if (self.function_bodies.legacyFunctionBody(fn_mir.name)) |body| {
+                try self.emitFunction(function, body, function.render_attrs);
+            } else {
+                return error.UnsupportedCEmission;
+            }
+        }
+    }
+
+    fn functionArtifactIndexByName(self: *const CEmitter, name: []const u8) ?usize {
+        var i: usize = 0;
+        while (i < self.codegen_artifacts.decl_artifacts.len) : (i += 1) {
+            switch (self.codegen_artifacts.decl_artifacts[i]) {
+                .function => |function| if (std.mem.eql(u8, function.signature.name.text, name)) return i,
+                else => {},
+            }
+        }
+        return null;
     }
 
     fn emitGlobal(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
