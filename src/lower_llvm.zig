@@ -1254,6 +1254,7 @@ const LlvmEmitter = struct {
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         compare_binary: SimpleMirCompareBinary,
+        logical_not: SimpleMirArg,
     };
 
     const SimpleMirVoidBody = union(enum) {
@@ -1273,6 +1274,7 @@ const LlvmEmitter = struct {
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         compare_binary: SimpleMirCompareBinary,
+        logical_not: SimpleMirArg,
     };
 
     const max_simple_mir_call_args = 8;
@@ -1374,6 +1376,10 @@ const LlvmEmitter = struct {
                     const value = try self.emitSimpleMirCompareBinary(binary, return_span);
                     try self.emitReturnValue(ret_ty, value, return_span);
                 },
+                .logical_not => |arg| {
+                    const value = try self.emitSimpleMirLogicalNot(arg, return_span);
+                    try self.emitReturnValue(ret_ty, value, return_span);
+                },
                 .direct_call => |call| {
                     const tmp = try self.nextTemp();
                     try self.emitSimpleMirDirectCall(call, tmp, return_span);
@@ -1423,6 +1429,9 @@ const LlvmEmitter = struct {
         if (std.mem.eql(u8, value_id, "binary")) {
             if (self.simpleMirCheckedBinaryAtReturn(function, fn_mir)) |binary| return .{ .checked_binary = binary };
             if (self.simpleMirCompareBinaryAtReturn(function, fn_mir)) |binary| return .{ .compare_binary = binary };
+        }
+        if (std.mem.eql(u8, value_id, "unary")) {
+            if (self.simpleMirLogicalNotAtReturn(function, fn_mir)) |arg| return .{ .logical_not = arg };
         }
         if (simpleMirNoTrap(fn_mir)) if (self.simpleMirAssignmentReturn(function, fn_mir, value_id)) |assigned| return assigned;
         if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
@@ -1545,6 +1554,13 @@ const LlvmEmitter = struct {
                 return null;
             }
         }
+        if (std.mem.eql(u8, value_id, "unary")) {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .unary) continue;
+                if (self.simpleMirLogicalNotAtSource(function, fn_mir, instructionSourcePoint(instruction))) |arg| return .{ .logical_not = arg };
+                return null;
+            }
+        }
         return null;
     }
 
@@ -1563,6 +1579,10 @@ const LlvmEmitter = struct {
             },
             .compare_binary => |binary| {
                 const value_name = try self.emitSimpleMirCompareBinary(binary, span);
+                try self.emitReturnValue(ret_ty, value_name, span);
+            },
+            .logical_not => |arg| {
+                const value_name = try self.emitSimpleMirLogicalNot(arg, span);
                 try self.emitReturnValue(ret_ty, value_name, span);
             },
         }
@@ -1621,6 +1641,17 @@ const LlvmEmitter = struct {
         else
             "";
         try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {s}{s}\n", .{ value, predicate, llvm_ty, left, right, dbg_suffix });
+        return value;
+    }
+
+    fn emitSimpleMirLogicalNot(self: *LlvmEmitter, arg: SimpleMirArg, span: diagnostics.Span) ![]const u8 {
+        const value = try self.nextTemp();
+        const input = try self.simpleMirArgValue(arg);
+        const dbg_suffix = if (try self.debugLocation(span)) |dbg|
+            try std.fmt.allocPrint(self.scratch.allocator(), ", !dbg !{d}", .{dbg})
+        else
+            "";
+        try self.out.print(self.allocator, "  {s} = xor i1 {s}, true{s}\n", .{ value, input, dbg_suffix });
         return value;
     }
 
@@ -1730,6 +1761,36 @@ const LlvmEmitter = struct {
         }
         if (count != 2) return null;
         return .{ .op = binary_instr.detail, .operand_fact = operand_fact orelse return null, .left = operands[0], .right = operands[1] };
+    }
+
+    fn simpleMirLogicalNotAtReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirArg {
+        return self.simpleMirLogicalNotAtSource(function, fn_mir, blk: {
+            for (fn_mir.blocks[0].instructions) |instruction| {
+                if (instruction.kind == .unary) break :blk instructionSourcePoint(instruction);
+            }
+            return null;
+        });
+    }
+
+    fn simpleMirLogicalNotAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirArg {
+        const block, const unary_instr = blk: {
+            for (fn_mir.blocks) |block| for (block.instructions) |instruction| {
+                if (instruction.kind == .unary and sameMirSourceLocation(instructionSourcePoint(instruction), source)) break :blk .{ block, instruction };
+            };
+            return null;
+        };
+        if (!std.mem.eql(u8, unary_instr.detail, "logical_not")) return null;
+        var after_unary = false;
+        for (block.instructions) |instruction| {
+            if (!after_unary) {
+                after_unary = instruction.kind == .unary and sameMirSourceLocation(instructionSourcePoint(instruction), source);
+                continue;
+            }
+            if (instruction.kind == .return_value or instruction.kind == .local) break;
+            if (instruction.kind != .expr) continue;
+            return self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction));
+        }
+        return null;
     }
 
     fn simpleMirDirectCall(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, callee: []const u8) ?SimpleMirDirectCall {
@@ -1891,7 +1952,7 @@ const LlvmEmitter = struct {
         _ = self;
         const block = fn_mir.blocks[0];
         for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .local, .assign, .target_type, .integer_literal_conversion, .binary, .add_overflow, .return_value => {},
+            .param, .local, .assign, .target_type, .integer_literal_conversion, .binary, .unary, .add_overflow, .return_value => {},
             .call => {},
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int")) continue;
