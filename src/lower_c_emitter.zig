@@ -1189,6 +1189,7 @@ pub const CEmitter = struct {
         void,
         param: []const u8,
         integer_literal: []const u8,
+        bool_literal: bool,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -1210,6 +1211,7 @@ pub const CEmitter = struct {
     const SimpleMirConditionalValue = union(enum) {
         param: []const u8,
         integer_literal: []const u8,
+        bool_literal: bool,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -1222,6 +1224,7 @@ pub const CEmitter = struct {
     const SimpleMirArg = union(enum) {
         param: []const u8,
         integer_literal: []const u8,
+        bool_literal: bool,
     };
 
     const SimpleMirDirectCall = struct {
@@ -1274,6 +1277,7 @@ pub const CEmitter = struct {
                 .void => try self.out.appendSlice(self.allocator, "return;\n"),
                 .param => |name| try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(name)}),
                 .integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
+                .bool_literal => |value| try self.out.print(self.allocator, "return {s};\n", .{if (value) "true" else "false"}),
                 .checked_binary => |binary| {
                     const helper = try self.checkedHelperName(binary.op, binary.type_name);
                     try self.out.print(self.allocator, "return {s}(", .{helper});
@@ -1356,6 +1360,11 @@ pub const CEmitter = struct {
                 if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return if (simpleMirNoTrap(fn_mir)) .{ .integer_literal = fact.literal } else null;
             }
         }
+        if (std.mem.eql(u8, value_id, "bool")) {
+            for (fn_mir.bool_facts) |fact| {
+                if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return if (simpleMirNoTrap(fn_mir)) .{ .bool_literal = fact.value } else null;
+            }
+        }
         if (simpleMirNoTrap(fn_mir)) if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| return .{ .direct_call = call };
         if (std.mem.eql(u8, value_id, "binary")) {
             if (self.simpleMirCheckedBinaryAtReturn(function, fn_mir)) |binary| return .{ .checked_binary = binary };
@@ -1431,6 +1440,7 @@ pub const CEmitter = struct {
         const initial_value: SimpleMirConditionalValue = switch (initial_arg) {
             .param => |name| .{ .param = name },
             .integer_literal => |literal| .{ .integer_literal = literal },
+            .bool_literal => |bool_value| .{ .bool_literal = bool_value },
         };
         const then_value = self.simpleMirAssignedValueInBlock(function, fn_mir, then_block, local_name) orelse initial_value;
         const else_value = self.simpleMirAssignedValueInBlock(function, fn_mir, else_block, local_name) orelse initial_value;
@@ -1471,6 +1481,7 @@ pub const CEmitter = struct {
             return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
                 .param => |name| .{ .param = name },
                 .integer_literal => |literal| .{ .integer_literal = literal },
+                .bool_literal => |value| .{ .bool_literal = value },
             };
         }
         for (block.instructions) |instruction| {
@@ -1501,6 +1512,7 @@ pub const CEmitter = struct {
         switch (value) {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
+            .bool_literal => |bool_value| try self.out.appendSlice(self.allocator, if (bool_value) "true" else "false"),
             .direct_call => |call| try self.emitSimpleMirDirectCall(call),
             .checked_binary => |binary| {
                 const helper = try self.checkedHelperName(binary.op, binary.type_name);
@@ -1532,6 +1544,7 @@ pub const CEmitter = struct {
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
             .integer_literal => |literal| .{ .integer_literal = literal },
+            .bool_literal => |value| .{ .bool_literal = value },
         };
     }
 
@@ -1555,6 +1568,7 @@ pub const CEmitter = struct {
         switch (arg) {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
+            .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
         }
     }
 
@@ -1780,6 +1794,7 @@ pub const CEmitter = struct {
             return switch (arg) {
                 .param => |name| .{ .param = name },
                 .integer_literal => |literal| .{ .integer_literal = literal },
+                .bool_literal => |value| .{ .bool_literal = value },
             };
         }
         return null;
@@ -1798,6 +1813,7 @@ pub const CEmitter = struct {
             return switch (arg) {
                 .param => |name| .{ .param = name },
                 .integer_literal => |literal| .{ .integer_literal = literal },
+                .bool_literal => |value| .{ .bool_literal = value },
             };
         }
         return null;
@@ -1860,6 +1876,9 @@ pub const CEmitter = struct {
         _ = self;
         for (fn_mir.integer_facts) |fact| {
             if (sameMirSourceLocation(fact.source, source)) return .{ .integer_literal = fact.literal };
+        }
+        for (fn_mir.bool_facts) |fact| {
+            if (sameMirSourceLocation(fact.source, source)) return .{ .bool_literal = fact.value };
         }
         for (fn_mir.blocks) |block| {
             for (block.instructions) |instruction| {

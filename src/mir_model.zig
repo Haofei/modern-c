@@ -275,6 +275,11 @@ pub const IntegerFact = struct {
     source: SourcePoint,
 };
 
+pub const BoolFact = struct {
+    value: bool,
+    source: SourcePoint,
+};
+
 pub const ConstGetFact = struct {
     index: usize,
     source: SourcePoint,
@@ -839,6 +844,7 @@ pub const Function = struct {
     range_facts: []RangeFact,
     bounds_facts: []BoundsFact = &.{},
     integer_facts: []IntegerFact = &.{},
+    bool_facts: []BoolFact = &.{},
     const_get_facts: []ConstGetFact = &.{},
     call_target_facts: []CallTargetFact = &.{},
     bind_thunk_facts: []BindThunkFact = &.{},
@@ -886,6 +892,7 @@ pub const Module = struct {
             self.allocator.free(function.range_facts);
             if (function.bounds_facts.len != 0) self.allocator.free(function.bounds_facts);
             if (function.integer_facts.len != 0) self.allocator.free(function.integer_facts);
+            if (function.bool_facts.len != 0) self.allocator.free(function.bool_facts);
             if (function.const_get_facts.len != 0) self.allocator.free(function.const_get_facts);
             if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);
             if (function.bind_thunk_facts.len != 0) self.allocator.free(function.bind_thunk_facts);

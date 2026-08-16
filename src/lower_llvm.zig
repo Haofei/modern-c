@@ -1251,6 +1251,7 @@ const LlvmEmitter = struct {
         void,
         param: []const u8,
         integer_literal: []const u8,
+        bool_literal: bool,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -1272,6 +1273,7 @@ const LlvmEmitter = struct {
     const SimpleMirConditionalValue = union(enum) {
         param: []const u8,
         integer_literal: []const u8,
+        bool_literal: bool,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -1284,6 +1286,7 @@ const LlvmEmitter = struct {
     const SimpleMirArg = union(enum) {
         param: []const u8,
         integer_literal: []const u8,
+        bool_literal: bool,
     };
 
     const SimpleMirDirectCall = struct {
@@ -1376,6 +1379,7 @@ const LlvmEmitter = struct {
                 .void => try self.emitReturnVoid(return_span),
                 .param => |name| try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}), return_span),
                 .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, return_span),
+                .bool_literal => |value| try self.emitReturnValue(ret_ty, if (value) "1" else "0", return_span),
                 .checked_binary => |binary| {
                     const value = try self.emitSimpleMirCheckedBinary(binary, return_span);
                     try self.emitReturnValue(ret_ty, value, return_span);
@@ -1435,6 +1439,11 @@ const LlvmEmitter = struct {
         if (std.mem.eql(u8, value_id, "int")) {
             for (fn_mir.integer_facts) |fact| {
                 if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return if (simpleMirNoTrap(fn_mir)) .{ .integer_literal = fact.literal } else null;
+            }
+        }
+        if (std.mem.eql(u8, value_id, "bool")) {
+            for (fn_mir.bool_facts) |fact| {
+                if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return if (simpleMirNoTrap(fn_mir)) .{ .bool_literal = fact.value } else null;
             }
         }
         if (simpleMirNoTrap(fn_mir)) if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| return .{ .direct_call = call };
@@ -1512,6 +1521,7 @@ const LlvmEmitter = struct {
         const initial_value: SimpleMirConditionalValue = switch (initial_arg) {
             .param => |name| .{ .param = name },
             .integer_literal => |literal| .{ .integer_literal = literal },
+            .bool_literal => |bool_value| .{ .bool_literal = bool_value },
         };
         const then_value = self.simpleMirAssignedValueInBlock(function, fn_mir, then_block, local_name) orelse initial_value;
         const else_value = self.simpleMirAssignedValueInBlock(function, fn_mir, else_block, local_name) orelse initial_value;
@@ -1552,6 +1562,7 @@ const LlvmEmitter = struct {
             return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
                 .param => |name| .{ .param = name },
                 .integer_literal => |literal| .{ .integer_literal = literal },
+                .bool_literal => |value| .{ .bool_literal = value },
             };
         }
         for (block.instructions) |instruction| {
@@ -1582,6 +1593,7 @@ const LlvmEmitter = struct {
         switch (value) {
             .param => |name| try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}), span),
             .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, span),
+            .bool_literal => |bool_value| try self.emitReturnValue(ret_ty, if (bool_value) "1" else "0", span),
             .direct_call => |call| {
                 const tmp = try self.nextTemp();
                 try self.emitSimpleMirDirectCall(call, tmp, span);
@@ -1622,6 +1634,7 @@ const LlvmEmitter = struct {
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
             .integer_literal => |literal| .{ .integer_literal = literal },
+            .bool_literal => |value| .{ .bool_literal = value },
         };
     }
 
@@ -1705,6 +1718,7 @@ const LlvmEmitter = struct {
         return switch (arg) {
             .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
             .integer_literal => |literal| literal,
+            .bool_literal => |value| if (value) "1" else "0",
         };
     }
 
@@ -1945,6 +1959,7 @@ const LlvmEmitter = struct {
             return switch (arg) {
                 .param => |name| .{ .param = name },
                 .integer_literal => |literal| .{ .integer_literal = literal },
+                .bool_literal => |value| .{ .bool_literal = value },
             };
         }
         return null;
@@ -1963,6 +1978,7 @@ const LlvmEmitter = struct {
             return switch (arg) {
                 .param => |name| .{ .param = name },
                 .integer_literal => |literal| .{ .integer_literal = literal },
+                .bool_literal => |value| .{ .bool_literal = value },
             };
         }
         return null;
@@ -2025,6 +2041,9 @@ const LlvmEmitter = struct {
         _ = self;
         for (fn_mir.integer_facts) |fact| {
             if (sameMirSourceLocation(fact.source, source)) return .{ .integer_literal = fact.literal };
+        }
+        for (fn_mir.bool_facts) |fact| {
+            if (sameMirSourceLocation(fact.source, source)) return .{ .bool_literal = fact.value };
         }
         for (fn_mir.blocks) |block| {
             for (block.instructions) |instruction| {
