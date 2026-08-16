@@ -35,7 +35,7 @@ EXACT_BACKEND_COUNTS = {
     '@import("ast_bridge.zig")': 41,
     '@import("declaration_artifacts.zig")': 9,
     '@import("eval.zig")': 7,
-    "ast_bridge.": 2832,
+    "ast_bridge.": 2825,
     "declaration_artifacts.": 44,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 6,

@@ -101,11 +101,7 @@ SEMANTIC_INFERENCE_FAMILIES: dict[str, dict[str, list[str]]] = {
         "src/lower_c_try.zig": [
             "ctx.call_ctx.mir_call_target_kind(ctx.call_ctx.emit_ctx, expr.span)",
         ],
-        "src/lower_c_collect.zig": [
-            "fn byteViewCallResultType(",
-            "mir_call_target_kind(ctx.emit_ctx, call.callee.*.span)",
-            "mir_target_type(ctx.emit_ctx, .byte_view_result",
-        ],
+        "src/lower_c_collect.zig": [],
     },
     "c-bounds-range-consumption": {
         "docs/typed-semantic-facts.md": ["| `c-bounds-range-consumption` |"],
@@ -2285,12 +2281,12 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "ast_query.isBindCallNode(": 0,
         "hasCallTargetFact(ctx.mir_function.*, .bind, expr.span)": 0,
         "fn hasCallTargetFact(": 0,
-        "fn byteViewCallResultType(": 1,
-        "mir_call_target_kind(ctx.emit_ctx, call.callee.*.span)": 2,
-        "mir_target_type(ctx.emit_ctx, .byte_view_result": 1,
+        "fn byteViewCallResultType(": 0,
+        "mir_call_target_kind(ctx.emit_ctx, call.callee.*.span)": 0,
+        "mir_target_type(ctx.emit_ctx, .byte_view_result": 0,
         "byteViewCallReturnTypeForCall": 0,
-        "mir_target_type(ctx.emit_ctx, .reduce_source": 1,
-        "fn reduceCallSourceType(": 1,
+        "mir_target_type(ctx.emit_ctx, .reduce_source": 0,
+        "fn reduceCallSourceType(": 0,
         "fn reduceCallElementType(": 0,
     },
     "src/lower_c_arith.zig": {

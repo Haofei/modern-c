@@ -26,13 +26,6 @@ pub const ExprTextFn = *const fn (ctx: *anyopaque, expr: ast_bridge.Expr) anyerr
 pub const ResultTypeNameFn = *const fn (ctx: *anyopaque, ok_ty: ast_bridge.TypeExpr, err_ty: ast_bridge.TypeExpr) anyerror![]const u8;
 pub const SliceTypeNameFn = *const fn (ctx: *anyopaque, child: ast_bridge.TypeExpr, mutability: ast_bridge.Mutability) anyerror![]const u8;
 
-pub const TypeArtifactContext = struct {
-    emit_ctx: *anyopaque,
-    collect_type_artifacts: TypeArtifactFn,
-    mir_call_target_kind: MirCallTargetKindFn,
-    mir_target_type: MirTargetTypeFn,
-};
-
 pub const FnPtrArtifactContext = struct {
     emit_ctx: *anyopaque,
     fn_ptr_type_name: TypeNameFn,
@@ -93,87 +86,6 @@ pub fn collectMmioStruct(
         if (mmioFieldFromType(field.ty)) |info| try fields.put(field.name.text, info);
     }
     try mmio_structs.put(struct_decl.name.text, .{ .fields = fields });
-}
-
-pub fn collectFunctionTypeArtifacts(ctx: TypeArtifactContext, fn_decl: ast_bridge.FnDecl) anyerror!void {
-    for (fn_decl.params) |param| try ctx.collect_type_artifacts(ctx.emit_ctx, param.ty);
-    if (fn_decl.return_type) |ret| try ctx.collect_type_artifacts(ctx.emit_ctx, ret);
-    if (fn_decl.body) |body| try collectBlockTypeArtifacts(ctx, body);
-}
-
-pub fn collectBlockTypeArtifacts(ctx: TypeArtifactContext, block: ast_bridge.Block) anyerror!void {
-    for (block.items) |stmt| switch (stmt.kind) {
-        .let_decl, .var_decl => |local| {
-            if (local.ty) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
-            if (local.init) |initializer| try collectExprTypeArtifacts(ctx, initializer);
-        },
-        .loop => |node| {
-            if (node.iterable) |expr| try collectExprTypeArtifacts(ctx, expr);
-            try collectBlockTypeArtifacts(ctx, node.body);
-        },
-        .if_let => |node| {
-            try collectExprTypeArtifacts(ctx, node.value);
-            try collectBlockTypeArtifacts(ctx, node.then_block);
-            if (node.else_block) |else_block| try collectBlockTypeArtifacts(ctx, else_block);
-        },
-        .@"switch" => |node| for (node.arms) |arm| switch (arm.body) {
-            .block => |arm_block| try collectBlockTypeArtifacts(ctx, arm_block),
-            .expr => |expr| try collectExprTypeArtifacts(ctx, expr),
-        },
-        .unsafe_block, .comptime_block, .block => |nested| try collectBlockTypeArtifacts(ctx, nested),
-        .contract_block => |contract| try collectBlockTypeArtifacts(ctx, contract.block),
-        .@"return" => |maybe| if (maybe) |expr| try collectExprTypeArtifacts(ctx, expr),
-        .@"defer", .expr, .assert => |expr| try collectExprTypeArtifacts(ctx, expr),
-        .assignment => |node| {
-            try collectExprTypeArtifacts(ctx, node.target);
-            try collectExprTypeArtifacts(ctx, node.value);
-        },
-        else => {},
-    };
-}
-
-fn collectExprTypeArtifacts(ctx: TypeArtifactContext, expr: ast_bridge.Expr) anyerror!void {
-    switch (expr.kind) {
-        .call => |node| {
-            if (byteViewCallResultType(ctx, node)) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
-            if (reduceCallSourceType(ctx, node)) |source_ty| try ctx.collect_type_artifacts(ctx.emit_ctx, source_ty);
-            for (node.type_args) |ty| try ctx.collect_type_artifacts(ctx.emit_ctx, ty);
-            try collectExprTypeArtifacts(ctx, node.callee.*);
-            for (node.args) |arg| try collectExprTypeArtifacts(ctx, arg);
-        },
-        .grouped, .address_of, .deref => |inner| try collectExprTypeArtifacts(ctx, inner.*),
-        .try_expr => |inner| try collectExprTypeArtifacts(ctx, inner.operand.*),
-        .unary => |node| try collectExprTypeArtifacts(ctx, node.expr.*),
-        .binary => |node| {
-            try collectExprTypeArtifacts(ctx, node.left.*);
-            try collectExprTypeArtifacts(ctx, node.right.*);
-        },
-        .index => |node| {
-            try collectExprTypeArtifacts(ctx, node.base.*);
-            try collectExprTypeArtifacts(ctx, node.index.*);
-        },
-        .member => |node| try collectExprTypeArtifacts(ctx, node.base.*),
-        .cast => |node| {
-            try ctx.collect_type_artifacts(ctx.emit_ctx, node.ty.*);
-            try collectExprTypeArtifacts(ctx, node.value.*);
-        },
-        .array_literal => |items| for (items) |item| try collectExprTypeArtifacts(ctx, item),
-        .struct_literal => |fields| for (fields) |field| try collectExprTypeArtifacts(ctx, field.value),
-        else => {},
-    }
-}
-
-fn byteViewCallResultType(ctx: TypeArtifactContext, call: anytype) ?ast_bridge.TypeExpr {
-    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
-    if (kind != .byte_view_as_bytes and kind != .byte_view_equal) return null;
-    return ctx.mir_target_type(ctx.emit_ctx, .byte_view_result, call.callee.*.span);
-}
-
-fn reduceCallSourceType(ctx: TypeArtifactContext, call: anytype) ?ast_bridge.TypeExpr {
-    if (call.type_args.len != 1 or call.args.len != 1) return null;
-    const kind = ctx.mir_call_target_kind(ctx.emit_ctx, call.callee.*.span) orelse return null;
-    if (kind != .reduce_sum_checked and kind != .reduce_sum_left and kind != .reduce_sum_fast) return null;
-    return ctx.mir_target_type(ctx.emit_ctx, .reduce_source, call.args[0].span);
 }
 
 pub fn collectFnPtrType(ctx: FnPtrArtifactContext, ty: ast_bridge.TypeExpr) anyerror!void {

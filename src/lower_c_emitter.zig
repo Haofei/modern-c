@@ -2449,24 +2449,18 @@ pub const CEmitter = struct {
         try lower_c_type.appendPointerType(self.typeEmitContext(), out, child, mutability, style);
     }
 
-    fn collectFunctionSliceTypes(self: *CEmitter, fn_decl: ast_bridge.FnDecl) !void {
-        const previous_function = self.current_function;
-        self.current_function = fn_decl.name.text;
-        defer self.current_function = previous_function;
-        try lower_c_collect.collectFunctionTypeArtifacts(self.typeArtifactContext(), fn_decl);
-    }
-
     fn collectFunctionArtifactSliceTypes(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
         const previous_function = self.current_function;
         self.current_function = function.signature.name.text;
         defer self.current_function = previous_function;
         for (function.signature.params) |param| try self.collectTypeArtifacts(param.ty);
         if (function.signature.return_type) |ret| try self.collectTypeArtifacts(ret);
-        if (self.codegen_artifacts.legacyFunctionBody(function.signature.name.text)) |body| try lower_c_collect.collectBlockTypeArtifacts(self.typeArtifactContext(), body);
+        if (self.mirFunctionNamed(function.signature.name.text)) |fn_mir| try self.collectMirFunctionBodyTypeArtifacts(fn_mir);
     }
 
-    fn collectBlockSliceTypes(self: *CEmitter, block: ast_bridge.Block) anyerror!void {
-        try lower_c_collect.collectBlockTypeArtifacts(self.typeArtifactContext(), block);
+    fn collectMirFunctionBodyTypeArtifacts(self: *CEmitter, fn_mir: *const mir.Function) !void {
+        for (fn_mir.body_type_artifact_facts) |fact| try self.collectTypeArtifacts(fact.ty);
+        for (fn_mir.target_type_facts) |fact| try self.collectTypeArtifacts(fact.target_ty);
     }
 
     fn collectTypeArtifacts(self: *CEmitter, ty: ast_bridge.TypeExpr) anyerror!void {
@@ -2515,15 +2509,6 @@ pub const CEmitter = struct {
             .name => |n| !std.mem.eql(u8, n.text, "c_void"),
             .qualified => |node| self.nullablePayloadIsValueOptional(node.child.*),
             else => false,
-        };
-    }
-
-    fn typeArtifactContext(self: *CEmitter) lower_c_collect.TypeArtifactContext {
-        return .{
-            .emit_ctx = self,
-            .collect_type_artifacts = collectTypeArtifactsForCollect,
-            .mir_call_target_kind = mirCallTargetKindForLowering,
-            .mir_target_type = mirTargetTypeForLowering,
         };
     }
 

@@ -94,6 +94,7 @@ pub const IntegerFact = mir_model.IntegerFact;
 pub const CallTargetKind = mir_model.CallTargetKind;
 pub const CallTargetFact = mir_model.CallTargetFact;
 pub const BindThunkFact = mir_model.BindThunkFact;
+pub const BodyTypeArtifactFact = mir_model.BodyTypeArtifactFact;
 pub const DropGlueFact = mir_model.DropGlueFact;
 pub const TargetTypeKind = mir_model.TargetTypeKind;
 pub const AggregateConstructionKind = mir_model.AggregateConstructionKind;
@@ -974,6 +975,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .integer_facts = try allocator.alloc(IntegerFact, 0),
                         .call_target_facts = try allocator.alloc(CallTargetFact, 0),
                         .bind_thunk_facts = try allocator.alloc(BindThunkFact, 0),
+                        .body_type_artifact_facts = try allocator.alloc(BodyTypeArtifactFact, 0),
                         .target_type_facts = try allocator.alloc(TargetTypeFact, 0),
                         .ownership_events = try allocator.alloc(OwnershipEvent, 0),
                         .pointer_provenance_facts = try allocator.alloc(PointerProvenanceFact, 0),
@@ -5199,6 +5201,7 @@ const FunctionBuilder = struct {
     const_get_facts: std.ArrayList(ConstGetFact),
     call_target_facts: std.ArrayList(CallTargetFact),
     bind_thunk_facts: std.ArrayList(BindThunkFact),
+    body_type_artifact_facts: std.ArrayList(BodyTypeArtifactFact),
     target_type_facts: std.ArrayList(TargetTypeFact),
     generated_type_expr_nodes: std.ArrayList(*ast.TypeExpr),
     generated_type_expr_args: std.ArrayList([]ast.TypeExpr),
@@ -5308,6 +5311,7 @@ const FunctionBuilder = struct {
             .const_get_facts = .empty,
             .call_target_facts = .empty,
             .bind_thunk_facts = .empty,
+            .body_type_artifact_facts = .empty,
             .target_type_facts = .empty,
             .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
@@ -5388,6 +5392,7 @@ const FunctionBuilder = struct {
             .const_get_facts = .empty,
             .call_target_facts = .empty,
             .bind_thunk_facts = .empty,
+            .body_type_artifact_facts = .empty,
             .target_type_facts = .empty,
             .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
@@ -5442,6 +5447,7 @@ const FunctionBuilder = struct {
         self.const_get_facts.deinit(self.allocator);
         self.call_target_facts.deinit(self.allocator);
         self.bind_thunk_facts.deinit(self.allocator);
+        self.body_type_artifact_facts.deinit(self.allocator);
         self.target_type_facts.deinit(self.allocator);
         self.ownership_events.deinit(self.allocator);
         for (self.generated_type_expr_nodes.items) |node| self.allocator.destroy(node);
@@ -5523,6 +5529,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(call_target_facts);
         const bind_thunk_facts = try self.bind_thunk_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(bind_thunk_facts);
+        const body_type_artifact_facts = try self.body_type_artifact_facts.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(body_type_artifact_facts);
         const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(target_type_facts);
         const ownership_events = try self.ownership_events.toOwnedSlice(self.allocator);
@@ -5619,6 +5627,7 @@ const FunctionBuilder = struct {
             .const_get_facts = const_get_facts,
             .call_target_facts = call_target_facts,
             .bind_thunk_facts = bind_thunk_facts,
+            .body_type_artifact_facts = body_type_artifact_facts,
             .target_type_facts = target_type_facts,
             .span_identities = span_identities,
             .type_identities = type_identities,
@@ -5634,10 +5643,95 @@ const FunctionBuilder = struct {
     }
 
     fn buildBody(self: *FunctionBuilder, body: ast.Block) anyerror!void {
+        try self.collectBodyTypeArtifactBlock(body);
         // OPT (annex E) — collect address-taken locals up front so no fact is ever formed about a
         // name a hidden alias could mutate (see `address_taken`). Only needed under `--optimize`.
         if (self.optimize) try self.collectAddressTakenBlock(body);
         _ = try self.buildBlock(body);
+    }
+
+    fn addBodyTypeArtifactFact(self: *FunctionBuilder, ty: ast.TypeExpr) !void {
+        try self.body_type_artifact_facts.append(self.allocator, .{
+            .ty = ty,
+            .source = sourcePointFromSpan(ty.span),
+        });
+    }
+
+    fn collectBodyTypeArtifactBlock(self: *FunctionBuilder, block: ast.Block) anyerror!void {
+        for (block.items) |stmt| try self.collectBodyTypeArtifactStmt(stmt);
+    }
+
+    fn collectBodyTypeArtifactStmt(self: *FunctionBuilder, stmt: ast.Stmt) anyerror!void {
+        switch (stmt.kind) {
+            .let_decl, .var_decl => |local| {
+                if (local.ty) |ty| try self.addBodyTypeArtifactFact(ty);
+                if (local.init) |init_expr| try self.collectBodyTypeArtifactExpr(init_expr);
+            },
+            .loop => |node| {
+                if (node.iterable) |expr| try self.collectBodyTypeArtifactExpr(expr);
+                try self.collectBodyTypeArtifactBlock(node.body);
+            },
+            .if_let => |node| {
+                try self.collectBodyTypeArtifactExpr(node.value);
+                try self.collectBodyTypeArtifactBlock(node.then_block);
+                if (node.else_block) |else_block| try self.collectBodyTypeArtifactBlock(else_block);
+            },
+            .@"switch" => |node| {
+                try self.collectBodyTypeArtifactExpr(node.subject);
+                for (node.arms) |arm| switch (arm.body) {
+                    .block => |arm_block| try self.collectBodyTypeArtifactBlock(arm_block),
+                    .expr => |expr| try self.collectBodyTypeArtifactExpr(expr),
+                };
+            },
+            .unsafe_block, .comptime_block, .block => |nested| try self.collectBodyTypeArtifactBlock(nested),
+            .contract_block => |contract| try self.collectBodyTypeArtifactBlock(contract.block),
+            .@"return" => |maybe| if (maybe) |expr| try self.collectBodyTypeArtifactExpr(expr),
+            .@"defer", .expr, .assert => |expr| try self.collectBodyTypeArtifactExpr(expr),
+            .assignment => |node| {
+                try self.collectBodyTypeArtifactExpr(node.target);
+                try self.collectBodyTypeArtifactExpr(node.value);
+            },
+            .@"break", .@"continue", .asm_stmt => {},
+        }
+    }
+
+    fn collectBodyTypeArtifactExpr(self: *FunctionBuilder, expr: ast.Expr) anyerror!void {
+        switch (expr.kind) {
+            .call => |node| {
+                for (node.type_args) |ty| try self.addBodyTypeArtifactFact(ty);
+                try self.collectBodyTypeArtifactExpr(node.callee.*);
+                for (node.args) |arg| try self.collectBodyTypeArtifactExpr(arg);
+            },
+            .grouped, .move_expr, .address_of, .deref, .await_expr => |inner| try self.collectBodyTypeArtifactExpr(inner.*),
+            .borrow_expr => |node| try self.collectBodyTypeArtifactExpr(node.value.*),
+            .try_expr => |inner| {
+                try self.collectBodyTypeArtifactExpr(inner.operand.*);
+                if (inner.mapped) |mapped| try self.collectBodyTypeArtifactExpr(mapped.*);
+            },
+            .unary => |node| try self.collectBodyTypeArtifactExpr(node.expr.*),
+            .binary => |node| {
+                try self.collectBodyTypeArtifactExpr(node.left.*);
+                try self.collectBodyTypeArtifactExpr(node.right.*);
+            },
+            .index => |node| {
+                try self.collectBodyTypeArtifactExpr(node.base.*);
+                try self.collectBodyTypeArtifactExpr(node.index.*);
+            },
+            .slice => |node| {
+                try self.collectBodyTypeArtifactExpr(node.base.*);
+                try self.collectBodyTypeArtifactExpr(node.start.*);
+                try self.collectBodyTypeArtifactExpr(node.end.*);
+            },
+            .member => |node| try self.collectBodyTypeArtifactExpr(node.base.*),
+            .cast => |node| {
+                try self.addBodyTypeArtifactFact(node.ty.*);
+                try self.collectBodyTypeArtifactExpr(node.value.*);
+            },
+            .array_literal => |items| for (items) |item| try self.collectBodyTypeArtifactExpr(item),
+            .struct_literal => |fields| for (fields) |field| try self.collectBodyTypeArtifactExpr(field.value),
+            .block => |nested| try self.collectBodyTypeArtifactBlock(nested),
+            else => {},
+        }
     }
 
     fn collectAddressTakenBlock(self: *FunctionBuilder, block: ast.Block) anyerror!void {
@@ -11795,6 +11889,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.const_get_facts.len != 0) allocator.free(function.const_get_facts);
     if (function.call_target_facts.len != 0) allocator.free(function.call_target_facts);
     if (function.bind_thunk_facts.len != 0) allocator.free(function.bind_thunk_facts);
+    if (function.body_type_artifact_facts.len != 0) allocator.free(function.body_type_artifact_facts);
     if (function.target_type_facts.len != 0) allocator.free(function.target_type_facts);
     if (function.span_identities.len != 0) allocator.free(function.span_identities);
     if (function.type_identities.len != 0) allocator.free(function.type_identities);
