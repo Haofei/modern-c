@@ -1076,7 +1076,7 @@ fn moduleAliasType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr 
     }
     if (declarations.decl_artifacts) |decl_artifacts| {
         for (decl_artifacts) |artifact| switch (artifact) {
-            .type_decl => |type_decl| switch (type_decl) {
+            .transitional_type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| if (std.mem.eql(u8, alias.name.text, name)) return alias.ty,
                 else => {},
             },
@@ -1129,7 +1129,7 @@ fn moduleStructDecl(scope: *const ComptimeScope, name: []const u8) ?ast.StructDe
     }
     if (declarations.decl_artifacts) |decl_artifacts| {
         for (decl_artifacts) |artifact| switch (artifact) {
-            .type_decl => |type_decl| switch (type_decl) {
+            .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| if (std.mem.eql(u8, struct_decl.name.text, name)) return struct_decl,
                 else => {},
             },

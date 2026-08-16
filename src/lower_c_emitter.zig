@@ -441,7 +441,7 @@ pub const CEmitter = struct {
                 const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
                 try self.const_global_widths.put(sig.name.text, bits);
             },
-            .type_decl => |type_decl| switch (type_decl) {
+            .transitional_type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
                 .struct_decl => |struct_decl| if (!isMmioStructAbi(struct_decl)) try self.structs.put(struct_decl.name.text, struct_decl),
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
@@ -468,7 +468,7 @@ pub const CEmitter = struct {
             .global => |global| try self.collectGlobalDeclArtifact(global),
             .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.facts.name.text, trait_decl),
             .impl_trait => |impl_trait| try self.collectImplTraitArtifact(impl_trait),
-            .type_decl => |type_decl| switch (type_decl) {
+            .transitional_type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
                 .struct_decl => |struct_decl| try self.collectStructDeclArtifact(struct_decl),
                 .enum_decl => |enum_decl| try self.enums.put(enum_decl.name.text, enum_decl),
@@ -563,7 +563,7 @@ pub const CEmitter = struct {
 
     fn emitMmioStructTypes(self: *CEmitter) !void {
         for (self.decl_artifacts) |artifact| switch (artifact) {
-            .type_decl => |type_decl| switch (type_decl) {
+            .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| {
                     if (self.mmio_structs.contains(struct_decl.name.text)) {
                         try lower_c_mmio.emitStruct(self.mmioStructEmitContext(), struct_decl);
@@ -863,7 +863,7 @@ pub const CEmitter = struct {
     fn emitAggregateForwardDeclarations(self: *CEmitter) !void {
         var emitted = false;
         for (self.decl_artifacts) |artifact| switch (artifact) {
-            .type_decl => |type_decl| switch (type_decl) {
+            .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| {
                     if (!self.structs.contains(struct_decl.name.text)) continue;
                     // A `#[c_union]` is a real C `union`; its forward tag must
@@ -992,7 +992,7 @@ pub const CEmitter = struct {
         defer units.deinit(arena);
 
         for (self.decl_artifacts) |artifact| switch (artifact) {
-            .type_decl => |type_decl| switch (type_decl) {
+            .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |s| if (self.structs.contains(s.name.text)) try units.append(arena, .{ .struct_decl = s }),
                 .union_decl => |u| if (self.tagged_unions.contains(u.name.text)) try units.append(arena, .{ .tagged_union = u }),
                 else => {},

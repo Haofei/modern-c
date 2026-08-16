@@ -34,27 +34,27 @@ pub const EarlyDeclarationArtifacts = struct {
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .type_alias => |alias| {
-                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .type_alias = alias } });
+                    try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .type_alias = alias } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .struct_decl => |struct_decl| {
-                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .struct_decl = struct_decl } });
+                    try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .struct_decl = struct_decl } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .enum_decl => |enum_decl| {
-                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .enum_decl = enum_decl } });
+                    try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .enum_decl = enum_decl } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .union_decl => |union_decl| {
-                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .union_decl = union_decl } });
+                    try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .union_decl = union_decl } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .packed_bits_decl => |packed_bits_decl| {
-                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .packed_bits_decl = packed_bits_decl } });
+                    try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .packed_bits_decl = packed_bits_decl } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .overlay_union_decl => |overlay_union| {
-                    try decl_artifacts.append(allocator, .{ .type_decl = .{ .overlay_union_decl = overlay_union } });
+                    try decl_artifacts.append(allocator, .{ .transitional_type_decl = .{ .overlay_union_decl = overlay_union } });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .opaque_decl => {
@@ -211,7 +211,7 @@ pub const DeclArtifact = union(enum) {
     global: GlobalArtifact,
     trait_decl: TraitDeclArtifact,
     impl_trait: ImplTraitArtifact,
-    type_decl: TransitionalTypeDeclArtifact,
+    transitional_type_decl: TransitionalTypeDeclArtifact,
 };
 
 pub const TransitionalTypeDeclArtifact = union(enum) {
@@ -363,7 +363,7 @@ test "declaration artifacts collect from resolved declaration stream" {
             try std.testing.expectEqualStrings("counter", global.signature.name.text);
             saw_global = true;
         },
-        .type_decl => |type_decl| {
+        .transitional_type_decl => |type_decl| {
             try std.testing.expectEqualStrings("Box", type_decl.struct_decl.name.text);
             saw_struct = true;
         },

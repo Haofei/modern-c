@@ -560,7 +560,7 @@ const LlvmEmitter = struct {
             .function => |function| {
                 if (function.is_const and !self.const_fns.contains(function.name.text)) try self.const_fns.put(function.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));
             },
-            .type_decl => |type_decl| switch (type_decl) {
+            .transitional_type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
                 .enum_decl => |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl),
                 .union_decl => |union_decl| try self.tagged_unions.put(union_decl.name.text, union_decl),
@@ -583,7 +583,7 @@ const LlvmEmitter = struct {
 
     fn collectStructArtifacts(self: *LlvmEmitter) !void {
         for (self.decl_artifacts) |artifact| switch (artifact) {
-            .type_decl => |type_decl| switch (type_decl) {
+            .transitional_type_decl => |type_decl| switch (type_decl) {
                 .struct_decl => |struct_decl| try self.collectStruct(struct_decl),
                 else => {},
             },
@@ -613,7 +613,7 @@ const LlvmEmitter = struct {
 
     fn collectNonStructTypeArtifacts(self: *LlvmEmitter) !void {
         for (self.decl_artifacts) |artifact| switch (artifact) {
-            .type_decl => |type_decl| switch (type_decl) {
+            .transitional_type_decl => |type_decl| switch (type_decl) {
                 .packed_bits_decl => |packed_bits| try self.collectPackedBits(packed_bits),
                 .overlay_union_decl => |overlay_union| try self.collectOverlayUnion(overlay_union),
                 .union_decl => |union_decl| try self.collectTaggedUnion(union_decl),
@@ -691,7 +691,7 @@ const LlvmEmitter = struct {
                 const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.facts.trait_name.text, impl_trait.facts.type_name.text });
                 try self.impl_methods.put(key, impl_trait.facts.methods);
             },
-            .type_decl => {},
+            .transitional_type_decl => {},
         };
     }
 
