@@ -1208,9 +1208,12 @@ pub const CEmitter = struct {
         else_value: SimpleMirConditionalValue,
     };
 
-    const SimpleMirCondition = struct {
-        name: []const u8,
-        inverted: bool = false,
+    const SimpleMirCondition = union(enum) {
+        param: struct {
+            name: []const u8,
+            inverted: bool = false,
+        },
+        compare_binary: SimpleMirCompareBinary,
     };
 
     const SimpleMirConditionalValue = union(enum) {
@@ -1325,11 +1328,9 @@ pub const CEmitter = struct {
             }
         } else if (simple_conditional_return) |conditional| {
             try self.writeIndent();
-            if (conditional.condition.inverted) {
-                try self.out.print(self.allocator, "if (!{s}) {{\n", .{try self.cIdent(conditional.condition.name)});
-            } else {
-                try self.out.print(self.allocator, "if ({s}) {{\n", .{try self.cIdent(conditional.condition.name)});
-            }
+            try self.out.appendSlice(self.allocator, "if (");
+            try self.emitSimpleMirCondition(conditional.condition);
+            try self.out.appendSlice(self.allocator, ") {\n");
             self.indent += 1;
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "return ");
@@ -1413,7 +1414,7 @@ pub const CEmitter = struct {
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         const entry = fn_mir.blocks[0];
         if (entry.terminator != .switch_ or entry.successors.len != 2) return null;
-        const condition = self.simpleMirSwitchConditionParam(function, entry) orelse return null;
+        const condition = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return null;
         const then_index = entry.successors[0];
         const else_index = entry.successors[1];
         if (then_index >= fn_mir.blocks.len or else_index >= fn_mir.blocks.len) return null;
@@ -1456,8 +1457,7 @@ pub const CEmitter = struct {
         return .{ then_value, else_value };
     }
 
-    fn simpleMirSwitchConditionParam(self: *CEmitter, function: anytype, block: mir.Block) ?SimpleMirCondition {
-        _ = self;
+    fn simpleMirSwitchConditionParam(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirCondition {
         var condition: ?[]const u8 = null;
         for (block.instructions) |instruction| {
             if (instruction.kind != .unary or !std.mem.eql(u8, instruction.detail, "logical_not")) continue;
@@ -1469,10 +1469,16 @@ pub const CEmitter = struct {
                 }
                 if (operand_instruction.kind != .expr or operand_instruction.result_ty != .bool) continue;
                 for (function.signature.params) |param| {
-                    if (std.mem.eql(u8, operand_instruction.detail, param.name.text)) return .{ .name = param.name.text, .inverted = true };
+                    if (std.mem.eql(u8, operand_instruction.detail, param.name.text)) return .{ .param = .{ .name = param.name.text, .inverted = true } };
                 }
                 return null;
             }
+            return null;
+        }
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .binary) continue;
+            if (std.mem.eql(u8, instruction.detail, "switch_subject")) continue;
+            if (self.simpleMirCompareBinaryAtSource(function, fn_mir, instructionSourcePoint(instruction))) |binary| return .{ .compare_binary = binary };
             return null;
         }
         for (block.instructions) |instruction| {
@@ -1483,7 +1489,17 @@ pub const CEmitter = struct {
                 condition = param.name.text;
             }
         }
-        return if (condition) |name| .{ .name = name } else null;
+        return if (condition) |name| .{ .param = .{ .name = name } } else null;
+    }
+
+    fn emitSimpleMirCondition(self: *CEmitter, condition: SimpleMirCondition) !void {
+        switch (condition) {
+            .param => |param| {
+                if (param.inverted) try self.out.appendSlice(self.allocator, "!");
+                try self.out.appendSlice(self.allocator, try self.cIdent(param.name));
+            },
+            .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
+        }
     }
 
     fn simpleMirReturnValueInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirConditionalValue {
