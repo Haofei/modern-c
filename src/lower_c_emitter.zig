@@ -1363,14 +1363,39 @@ pub const CEmitter = struct {
         const then_block = fn_mir.blocks[then_index];
         const else_block = fn_mir.blocks[else_index];
         if (!std.mem.eql(u8, then_block.kind, "switch_arm") or !std.mem.eql(u8, else_block.kind, "switch_arm")) return null;
-        const then_value = self.simpleMirReturnValueInBlock(function, fn_mir, then_block) orelse return null;
-        const else_value = self.simpleMirReturnValueInBlock(function, fn_mir, else_block) orelse return null;
+        const direct_then_value = self.simpleMirReturnValueInBlock(function, fn_mir, then_block);
+        const direct_else_value = self.simpleMirReturnValueInBlock(function, fn_mir, else_block);
+        const then_value, const else_value = if (direct_then_value != null and direct_else_value != null)
+            .{ direct_then_value.?, direct_else_value.? }
+        else
+            self.simpleMirConditionalAssignedReturn(function, fn_mir, then_block, else_block) orelse return null;
         for (fn_mir.blocks, 0..) |block, index| {
             if (index == 0 or index == 1 or index == then_index or index == else_index) continue;
             if (!std.mem.eql(u8, block.kind, "trap") or block.terminator != .trap_) return null;
         }
         if (fn_mir.trap_edges.len != simpleMirConditionalTrapCount(then_value) + simpleMirConditionalTrapCount(else_value)) return null;
         return .{ .condition = condition, .then_value = then_value, .else_value = else_value };
+    }
+
+    fn simpleMirConditionalAssignedReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, then_block: mir.Block, else_block: mir.Block) ?struct { SimpleMirConditionalValue, SimpleMirConditionalValue } {
+        if (fn_mir.trap_edges.len != 0) return null;
+        if (fn_mir.blocks.len != 4) return null;
+        const after_block = fn_mir.blocks[1];
+        if (after_block.terminator != .return_) return null;
+        if (then_block.terminator != .jump or else_block.terminator != .jump) return null;
+        if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
+        const ret = simpleMirReturnInstruction(after_block) orelse return null;
+        const local_name = ret.value_id orelse return null;
+        if (!mirBlockHasLocal(fn_mir.blocks[0], local_name)) return null;
+        const initial_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
+        const initial_arg = self.simpleMirArgAt(function, fn_mir, initial_source) orelse return null;
+        const initial_value: SimpleMirConditionalValue = switch (initial_arg) {
+            .param => |name| .{ .param = name },
+            .integer_literal => |literal| .{ .integer_literal = literal },
+        };
+        const then_value = self.simpleMirAssignedValueInBlock(function, fn_mir, then_block, local_name) orelse initial_value;
+        const else_value = self.simpleMirAssignedValueInBlock(function, fn_mir, else_block, local_name) orelse initial_value;
+        return .{ then_value, else_value };
     }
 
     fn simpleMirSwitchConditionParam(self: *CEmitter, function: anytype, block: mir.Block) ?[]const u8 {
@@ -1438,6 +1463,15 @@ pub const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
         }
+    }
+
+    fn simpleMirAssignedValueInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, local_name: []const u8) ?SimpleMirConditionalValue {
+        const source = self.simpleMirAssignmentSourceInBlock(block, local_name) orelse return null;
+        if (self.simpleMirDirectCallAtSource(function, fn_mir, source)) |call| return .{ .direct_call = call };
+        return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
+            .param => |name| .{ .param = name },
+            .integer_literal => |literal| .{ .integer_literal = literal },
+        };
     }
 
     fn simpleMirConditionalTrapCount(value: SimpleMirConditionalValue) usize {
@@ -1589,8 +1623,11 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirAssignmentSource(self: *CEmitter, fn_mir: mir.Function, local_name: []const u8) ?mir.SourcePoint {
-        _ = self;
         const block = fn_mir.blocks[0];
+        return self.simpleMirAssignmentSourceInBlock(block, local_name);
+    }
+
+    fn simpleMirAssignmentSourceInBlock(_: *CEmitter, block: mir.Block, local_name: []const u8) ?mir.SourcePoint {
         var source: ?mir.SourcePoint = null;
         var index: usize = 0;
         while (index < block.instructions.len) : (index += 1) {
