@@ -1164,7 +1164,7 @@ pub const CEmitter = struct {
         return fn_decl.params[fn_decl.params.len - 1].name.text;
     }
 
-    fn functionParamLocals(self: *CEmitter, params: []const ast_bridge.Param) !std.StringHashMap(LocalInfo) {
+    fn functionParamLocals(self: *CEmitter, params: []const codegen_attrs.FunctionParamFact) !std.StringHashMap(LocalInfo) {
         var locals = std.StringHashMap(LocalInfo).init(self.allocator);
         errdefer locals.deinit();
         for (params) |param| try locals.put(param.name.text, try self.localInfoFromType(param.ty));

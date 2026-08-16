@@ -876,7 +876,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     .return_type_expr = fn_decl.return_type,
                     .params = fn_decl.params,
                 });
-                if (decl.kind == .fn_decl and fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, eval.ComptimeFunction.fromFnDecl(fn_decl));
+                if (decl.kind == .fn_decl and fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, try eval.ComptimeFunction.fromFnDecl(allocator, fn_decl));
             },
             .global_decl => |global| {
                 if (global.ty) |ty| {

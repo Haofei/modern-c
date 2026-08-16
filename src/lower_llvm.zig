@@ -486,7 +486,7 @@ const LlvmEmitter = struct {
     current_debug_span: ?ast_bridge.Span = null,
     current_return_ty: ?ast_bridge.TypeExpr = null,
     current_function: ?[]const u8 = null,
-    current_params: ?[]const ast_bridge.Param = null,
+    current_params: ?[]const codegen_attrs.FunctionParamFact = null,
     current_function_body: ?ast_bridge.Block = null,
     current_mir_range_target: ?[]const u8 = null,
     source_path: []const u8,

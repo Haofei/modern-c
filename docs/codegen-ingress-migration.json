@@ -113,12 +113,17 @@
       "pub fn emitCFunctionRenderAttrs": 1,
       "pub const FunctionSignatureFacts = struct": 1,
       "pub const FunctionBodyFacts = struct": 1,
-      "params: []const ast_bridge.Param": 1,
+      "params: []const ast_bridge.Param": 0,
+      "params: []const FunctionParamFact": 1,
       "return_type: ?ast_bridge.TypeExpr": 1,
       "has_definition: bool": 1,
       "backend_name: ?[]const u8": 1,
       "c_abi: bool": 1,
       "error_from: bool": 1
+    },
+    "src/codegen_signature.zig": {
+      "pub const FunctionParamFact = struct": 1,
+      "pub fn fromParam(param: ast_bridge.Param) FunctionParamFact": 1
     }
   },
   "backend_artifact_consumers": {

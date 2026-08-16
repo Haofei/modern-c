@@ -560,14 +560,22 @@ pub const Checker = struct {
         self.checkTraits(decls, safe_module);
 
         var const_fns = std.StringHashMap(eval.ComptimeFunction).init(self.reporter.allocator);
-        defer const_fns.deinit();
+        defer {
+            eval.deinitComptimeFunctionMap(self.reporter.allocator, &const_fns);
+            const_fns.deinit();
+        }
         for (decls) |decl| {
             const fn_decl = switch (decl.kind) {
                 .fn_decl => |node| node,
                 else => continue,
             };
             if (fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) {
-                const_fns.put(fn_decl.name.text, eval.ComptimeFunction.fromFnDecl(fn_decl)) catch {
+                const comptime_function = eval.ComptimeFunction.fromFnDecl(self.reporter.allocator, fn_decl) catch {
+                    self.oom = true;
+                    continue;
+                };
+                const_fns.put(fn_decl.name.text, comptime_function) catch {
+                    comptime_function.deinit(self.reporter.allocator);
                     self.oom = true;
                 };
             }

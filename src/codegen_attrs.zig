@@ -6,10 +6,13 @@
 
 const std = @import("std");
 const ast_bridge = @import("ast_bridge.zig");
+const codegen_signature = @import("codegen_signature.zig");
+
+pub const FunctionParamFact = codegen_signature.FunctionParamFact;
 
 pub const FunctionSignatureFacts = struct {
     name: ast_bridge.Ident,
-    params: []const ast_bridge.Param,
+    params: []const FunctionParamFact,
     return_type: ?ast_bridge.TypeExpr,
     exported: bool,
     is_extern: bool,

@@ -267,7 +267,7 @@ pub fn transformDeclsReportOptions(arena: std.mem.Allocator, decls: []ast.Decl, 
     for (decls) |decl| {
         switch (decl.kind) {
             .fn_decl => |fn_decl| {
-                if (fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, eval.ComptimeFunction.fromFnDecl(fn_decl));
+                if (fn_decl.is_const and !const_fns.contains(fn_decl.name.text)) try const_fns.put(fn_decl.name.text, try eval.ComptimeFunction.fromFnDecl(arena, fn_decl));
                 if (try typeGenericParams(arena, fn_decl)) |params| {
                     try type_generic.put(fn_decl.name.text, .{ .decl = fn_decl, .comptime_params = params, .attrs = decl.attrs, .is_pub = decl.is_pub });
                 }

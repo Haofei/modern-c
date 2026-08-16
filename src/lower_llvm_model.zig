@@ -1,4 +1,5 @@
 const ast_bridge = @import("ast_bridge.zig");
+const codegen_signature = @import("codegen_signature.zig");
 const mir_model = @import("mir_model.zig");
 
 pub const LocalSlot = struct {
@@ -16,7 +17,7 @@ pub const LocalSlotKind = enum {
 
 pub const FnSig = struct {
     ret: ast_bridge.TypeExpr,
-    params: []const ast_bridge.Param,
+    params: []const codegen_signature.FunctionParamFact,
     c_abi: bool = false,
     is_variadic: bool = false,
     debug_id: ?usize = null,

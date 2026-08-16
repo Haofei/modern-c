@@ -7,6 +7,7 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
+const codegen_signature = @import("codegen_signature.zig");
 const builtin_syntax = @import("builtin_syntax.zig");
 const lower_c_op = @import("lower_c_op.zig");
 const mir = @import("mir.zig");
@@ -65,7 +66,7 @@ pub const LoopJumps = struct {
 };
 
 pub const FnInfo = struct {
-    params: []const ast_bridge.Param,
+    params: []const codegen_signature.FunctionParamFact,
     return_type: ?ast_bridge.TypeExpr,
     is_extern: bool,
     is_variadic: bool = false,

@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const ast = @import("ast.zig");
+const codegen_signature = @import("codegen_signature.zig");
 const numeric = @import("numeric.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const declaration_artifact_fallbacks = declaration_artifacts;
@@ -599,16 +600,21 @@ pub const ComptimeScope = struct {
 
 pub const ComptimeFunction = struct {
     name: ast.Ident,
-    params: []const ast.Param,
+    params: []const codegen_signature.FunctionParamFact,
     return_type: ?ast.TypeExpr,
     body: ?ast.Block,
+    owns_params: bool = false,
 
-    pub fn fromFnDecl(fn_decl: ast.FnDecl) ComptimeFunction {
+    pub fn fromFnDecl(allocator: std.mem.Allocator, fn_decl: ast.FnDecl) !ComptimeFunction {
+        const params = try allocator.alloc(codegen_signature.FunctionParamFact, fn_decl.params.len);
+        errdefer allocator.free(params);
+        for (fn_decl.params, 0..) |param, i| params[i] = codegen_signature.FunctionParamFact.fromParam(param);
         return .{
             .name = fn_decl.name,
-            .params = fn_decl.params,
+            .params = params,
             .return_type = fn_decl.return_type,
             .body = fn_decl.body,
+            .owns_params = true,
         };
     }
 
@@ -618,7 +624,12 @@ pub const ComptimeFunction = struct {
             .params = function.signature.params,
             .return_type = function.signature.return_type,
             .body = body,
+            .owns_params = false,
         };
+    }
+
+    pub fn deinit(self: ComptimeFunction, allocator: std.mem.Allocator) void {
+        if (self.owns_params) allocator.free(self.params);
     }
 };
 
@@ -648,13 +659,18 @@ pub const ComptimeDeclarations = struct {
     }
 };
 
+pub fn deinitComptimeFunctionMap(allocator: std.mem.Allocator, funcs: *std.StringHashMap(ComptimeFunction)) void {
+    var it = funcs.valueIterator();
+    while (it.next()) |function| function.deinit(allocator);
+}
+
 pub fn collectConstFunctionsFromDeclarations(
     declarations: ComptimeDeclarations,
     out: *std.StringHashMap(ComptimeFunction),
 ) !void {
     if (declarations.legacy_decls) |decls| {
         for (decls) |decl| switch (decl.kind) {
-            .fn_decl => |function| if (function.is_const and !out.contains(function.name.text)) try out.put(function.name.text, ComptimeFunction.fromFnDecl(function)),
+            .fn_decl => |function| if (function.is_const and !out.contains(function.name.text)) try out.put(function.name.text, try ComptimeFunction.fromFnDecl(out.allocator, function)),
             else => {},
         };
         return;
@@ -1012,7 +1028,7 @@ fn comptimeIdentValue(scope: *const ComptimeScope, name: []const u8) ?ComptimeVa
     return null;
 }
 
-fn isComptimeTypeParam(param: ast.Param) bool {
+fn isComptimeTypeParam(param: codegen_signature.FunctionParamFact) bool {
     if (!param.is_comptime) return false;
     return switch (param.ty.kind) {
         .name => |name| std.mem.eql(u8, name.text, "type"),

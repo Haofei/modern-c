@@ -15,6 +15,7 @@ pub const EarlyDeclarationArtifacts = struct {
 
     fn collectFromResolvedDeclItems(allocator: std.mem.Allocator, resolved_decls: anytype) !EarlyDeclarationArtifacts {
         var decl_artifacts: std.ArrayList(DeclArtifact) = .empty;
+        errdefer deinitDeclArtifacts(allocator, decl_artifacts.items);
         errdefer decl_artifacts.deinit(allocator);
         var function_body_fallbacks: std.ArrayList(FunctionBodyFallbackArtifact) = .empty;
         errdefer function_body_fallbacks.deinit(allocator);
@@ -25,12 +26,20 @@ pub const EarlyDeclarationArtifacts = struct {
             const decl = item.decl;
             switch (decl.kind) {
                 .fn_decl => |fn_decl| {
-                    try decl_artifacts.append(allocator, .{ .function = FunctionArtifact.fromDecl(fn_decl, decl.attrs, false) });
+                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, false);
+                    decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
+                        function.deinit(allocator);
+                        return err;
+                    };
                     if (fn_decl.body) |body| try function_body_fallbacks.append(allocator, .{ .name = fn_decl.name.text, .syntax = body });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
                 .extern_fn => |fn_decl| {
-                    try decl_artifacts.append(allocator, .{ .function = FunctionArtifact.fromDecl(fn_decl, decl.attrs, true) });
+                    const function = try FunctionArtifact.fromDecl(allocator, fn_decl, decl.attrs, true);
+                    decl_artifacts.append(allocator, .{ .function = function }) catch |err| {
+                        function.deinit(allocator);
+                        return err;
+                    };
                     if (fn_decl.body) |body| try function_body_fallbacks.append(allocator, .{ .name = fn_decl.name.text, .syntax = body });
                     if (sourceMapArtifactFromDecl(decl)) |artifact| try source_map_artifacts.append(allocator, artifact);
                 },
@@ -99,6 +108,7 @@ pub const EarlyDeclarationArtifacts = struct {
     }
 
     pub fn deinit(self: *EarlyDeclarationArtifacts, allocator: std.mem.Allocator) void {
+        deinitDeclArtifacts(allocator, self.decl_artifacts);
         allocator.free(self.decl_artifacts);
         allocator.free(self.function_body_fallbacks);
         allocator.free(self.source_map_artifacts);
@@ -123,6 +133,13 @@ pub const EarlyDeclarationArtifacts = struct {
         };
     }
 };
+
+fn deinitDeclArtifacts(allocator: std.mem.Allocator, artifacts: []const DeclArtifact) void {
+    for (artifacts) |artifact| switch (artifact) {
+        .function => |function| function.deinit(allocator),
+        else => {},
+    };
+}
 
 /// Transitional ordinary-codegen artifact view.
 ///
@@ -174,11 +191,14 @@ pub const FunctionArtifact = struct {
     body_facts: codegen_attrs.FunctionBodyFacts,
     render_attrs: codegen_attrs.FunctionRenderAttrs,
 
-    pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
+    pub fn fromDecl(allocator: std.mem.Allocator, fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) !FunctionArtifact {
+        const params = try allocator.alloc(codegen_attrs.FunctionParamFact, fn_decl.params.len);
+        errdefer allocator.free(params);
+        for (fn_decl.params, 0..) |param, i| params[i] = codegen_attrs.FunctionParamFact.fromParam(param);
         return .{
             .signature = .{
                 .name = fn_decl.name,
-                .params = fn_decl.params,
+                .params = params,
                 .return_type = fn_decl.return_type,
                 .exported = fn_decl.exported,
                 .is_extern = is_extern,
@@ -193,6 +213,10 @@ pub const FunctionArtifact = struct {
             },
             .render_attrs = attr_syntax.functionRenderAttrs(attrs),
         };
+    }
+
+    pub fn deinit(self: FunctionArtifact, allocator: std.mem.Allocator) void {
+        allocator.free(self.signature.params);
     }
 };
 
