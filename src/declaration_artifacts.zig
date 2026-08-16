@@ -126,7 +126,7 @@ fn declOrigin(decl: ast.Decl) []const u8 {
 
 pub const FunctionArtifact = struct {
     name: ast.Ident,
-    body: ?ast.Block,
+    body_fallback: FunctionBodyFallback,
     is_const: bool,
     exported: bool,
     is_variadic: bool,
@@ -138,7 +138,7 @@ pub const FunctionArtifact = struct {
     pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
         return .{
             .name = fn_decl.name,
-            .body = fn_decl.body,
+            .body_fallback = .{ .syntax = fn_decl.body },
             .is_const = fn_decl.is_const,
             .exported = fn_decl.exported,
             .is_variadic = fn_decl.is_variadic,
@@ -156,6 +156,30 @@ pub const FunctionArtifact = struct {
             .backend_name = backendNameOverride(attrs),
             .is_extern = is_extern,
         };
+    }
+
+    pub fn hasLegacySyntaxBody(self: FunctionArtifact) bool {
+        return self.body_fallback.hasBody();
+    }
+
+    pub fn legacySyntaxBody(self: FunctionArtifact) ?ast.Block {
+        return self.body_fallback.syntaxBody();
+    }
+};
+
+/// Compatibility edge for function-body lowering that still needs source-shaped
+/// blocks. Keep all ordinary codegen body fallback access behind
+/// `FunctionArtifact.legacySyntaxBody()` so the final MIR-body migration has one
+/// boundary to remove.
+pub const FunctionBodyFallback = struct {
+    syntax: ?ast.Block,
+
+    pub fn hasBody(self: FunctionBodyFallback) bool {
+        return self.syntax != null;
+    }
+
+    pub fn syntaxBody(self: FunctionBodyFallback) ?ast.Block {
+        return self.syntax;
     }
 };
 

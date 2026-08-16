@@ -11,7 +11,9 @@
     "src/declaration_artifacts.zig": {
       "params: []ast.Param": 0,
       "return_type: ?ast.TypeExpr": 0,
-      "body: ?ast.Block": 1,
+      "body: ?ast.Block": 0,
+      "body_fallback: FunctionBodyFallback": 1,
+      "syntax: ?ast.Block": 1,
       "backend_attrs: []const ast.Attr": 0,
       "ty: ?ast.TypeExpr": 0,
       "init: ?ast.Expr": 0,

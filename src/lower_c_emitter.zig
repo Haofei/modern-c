@@ -516,7 +516,7 @@ pub const CEmitter = struct {
         for (self.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
                 if (function.is_extern) continue;
-                if (function.body) |body| {
+                if (function.legacySyntaxBody()) |body| {
                     const mir_function = self.mirFunctionNamed(function.name.text) orelse return error.UnsupportedCEmission;
                     try self.collectBlockBindThunks(body, mir_function);
                 }
@@ -584,7 +584,7 @@ pub const CEmitter = struct {
                 // Extern prototypes must precede any function body that calls them;
                 // an imported `extern fn` can be merged after its caller.
                 try self.emitExternFunction(function);
-            } else if (function.body != null) {
+            } else if (function.hasLegacySyntaxBody()) {
                 try self.emitFunctionForwardDecl(function);
             },
             else => {},
@@ -622,7 +622,7 @@ pub const CEmitter = struct {
                     // Extern prototypes were already emitted in the forward-declaration pass.
                     continue;
                 }
-                if (function.body) |body| {
+                if (function.legacySyntaxBody()) |body| {
                     try self.emitFunction(function, body, function.render_attrs);
                 } else {
                     try self.emitFunctionPrototype(function);
@@ -2472,7 +2472,7 @@ pub const CEmitter = struct {
         defer self.current_function = previous_function;
         for (function.signature.params) |param| try self.collectTypeArtifacts(param.ty);
         if (function.signature.return_type) |ret| try self.collectTypeArtifacts(ret);
-        if (function.body) |body| try lower_c_collect.collectBlockTypeArtifacts(self.typeArtifactContext(), body);
+        if (function.legacySyntaxBody()) |body| try lower_c_collect.collectBlockTypeArtifacts(self.typeArtifactContext(), body);
     }
 
     fn collectBlockSliceTypes(self: *CEmitter, block: ast_bridge.Block) anyerror!void {

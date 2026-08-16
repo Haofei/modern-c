@@ -610,7 +610,7 @@ pub const ComptimeFunction = struct {
             .name = function.name,
             .params = function.signature.params,
             .return_type = function.signature.return_type,
-            .body = function.body,
+            .body = function.legacySyntaxBody(),
         };
     }
 };
