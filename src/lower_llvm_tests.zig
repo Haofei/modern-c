@@ -192,6 +192,26 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try expectNotContains(compare_body, "switch");
 }
 
+test "LLVM emits simple sequential void direct calls from MIR" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\fn sequence() -> void {
+        \\    hit(1);
+        \\    hit(2);
+        \\    hit(3);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_void_call_sequence.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal void @sequence");
+    try expectContains(body, "call void @hit(i32 1)");
+    try expectContains(body, "call void @hit(i32 2)");
+    try expectContains(body, "call void @hit(i32 3)");
+    try expectNotContains(body, "switch");
+}
+
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();

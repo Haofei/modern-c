@@ -1200,7 +1200,15 @@ pub const CEmitter = struct {
     const SimpleMirVoidBody = union(enum) {
         empty,
         direct_call: SimpleMirDirectCall,
+        direct_calls: SimpleMirDirectCalls,
         conditional_direct_calls: SimpleMirConditionalVoidBody,
+    };
+
+    const max_simple_mir_void_calls = 8;
+
+    const SimpleMirDirectCalls = struct {
+        calls: [max_simple_mir_void_calls]SimpleMirDirectCall = undefined,
+        count: usize = 0,
     };
 
     const SimpleMirConditionalVoidBody = struct {
@@ -1332,6 +1340,13 @@ pub const CEmitter = struct {
                     try self.emitSimpleMirDirectCall(call);
                     try self.out.appendSlice(self.allocator, ";\n");
                 },
+                .direct_calls => |calls| {
+                    for (calls.calls[0..calls.count]) |call| {
+                        try self.writeIndent();
+                        try self.emitSimpleMirDirectCall(call);
+                        try self.out.appendSlice(self.allocator, ";\n");
+                    }
+                },
                 .conditional_direct_calls => |conditional| {
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "if (");
@@ -1429,6 +1444,9 @@ pub const CEmitter = struct {
         const block = fn_mir.blocks[0];
         if (block.terminator != .fallthrough) return null;
         if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
+        if (self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block)) |calls| {
+            if (calls.count > 1) return .{ .direct_calls = calls };
+        }
         const call_source = self.simpleMirCallSource(fn_mir) orelse return .empty;
         if (!simpleMirDirectCallResultVoid(fn_mir, call_source)) return null;
         const call = self.simpleMirDirectCallAtSource(function, fn_mir, call_source) orelse return null;
@@ -1881,6 +1899,7 @@ pub const CEmitter = struct {
                 continue;
             }
             if (instruction.kind == .return_value) break;
+            if (instruction.kind == .call) break;
             if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion) continue;
             const arg_source = instructionSourcePoint(instruction);
             const fact = self.simpleMirDirectCallArgumentFactAt(fn_mir, callee, arg_source) orelse continue;
@@ -1904,20 +1923,30 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirDirectVoidCallInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirDirectCall {
+        const calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block) orelse return null;
+        if (calls.count != 1) return null;
+        return calls.calls[0];
+    }
+
+    fn simpleMirDirectVoidCallsInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirDirectCalls {
+        var calls: SimpleMirDirectCalls = .{};
         var call_source: ?mir.SourcePoint = null;
         for (block.instructions) |instruction| {
             switch (instruction.kind) {
                 .expr, .target_type, .integer_literal_conversion => {},
                 .call => {
-                    if (call_source != null) return null;
-                    call_source = instructionSourcePoint(instruction);
+                    const source = instructionSourcePoint(instruction);
+                    if (!simpleMirDirectCallResultVoid(fn_mir, source)) return null;
+                    if (calls.count >= max_simple_mir_void_calls) return null;
+                    calls.calls[calls.count] = self.simpleMirDirectCallAtSource(function, fn_mir, source) orelse return null;
+                    calls.count += 1;
+                    call_source = source;
                 },
                 else => return null,
             }
         }
-        const source = call_source orelse return null;
-        if (!simpleMirDirectCallResultVoid(fn_mir, source)) return null;
-        return self.simpleMirDirectCallAtSource(function, fn_mir, source);
+        _ = call_source orelse return null;
+        return calls;
     }
 
     fn simpleMirLocalInitReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {

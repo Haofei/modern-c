@@ -209,6 +209,26 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectNotContains(compare_body, "switch");
 }
 
+test "lower-c emits simple sequential void direct calls from MIR" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\fn sequence() -> void {
+        \\    hit(1);
+        \\    hit(2);
+        \\    hit(3);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_void_call_sequence.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static void sequence(void)");
+    try expectContains(body, "hit(1);");
+    try expectContains(body, "hit(2);");
+    try expectContains(body, "hit(3);");
+    try expectNotContains(body, "switch");
+}
+
 test "lower-c runtime hook suppression uses VerifiedProgram runtime hook facts" {
     const source =
         \\export fn mc_ksan_check(addr: usize, size: usize) -> void {}
