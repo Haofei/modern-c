@@ -361,6 +361,11 @@ pub const CallTargetFact = struct {
     source: SourcePoint,
 };
 
+pub const BindThunkFact = struct {
+    target_fn: []const u8,
+    source: SourcePoint,
+};
+
 pub const DropGlueFact = struct {
     resource_type: []const u8,
     typed_resource_symbol_id: SymbolId = .invalid,
@@ -826,6 +831,7 @@ pub const Function = struct {
     integer_facts: []IntegerFact = &.{},
     const_get_facts: []ConstGetFact = &.{},
     call_target_facts: []CallTargetFact = &.{},
+    bind_thunk_facts: []BindThunkFact = &.{},
     target_type_facts: []TargetTypeFact = &.{},
     span_identities: []SpanIdentity = &.{},
     type_identities: []TypeIdentity = &.{},
@@ -870,6 +876,7 @@ pub const Module = struct {
             if (function.integer_facts.len != 0) self.allocator.free(function.integer_facts);
             if (function.const_get_facts.len != 0) self.allocator.free(function.const_get_facts);
             if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);
+            if (function.bind_thunk_facts.len != 0) self.allocator.free(function.bind_thunk_facts);
             if (function.target_type_facts.len != 0) self.allocator.free(function.target_type_facts);
             if (function.span_identities.len != 0) self.allocator.free(function.span_identities);
             if (function.type_identities.len != 0) self.allocator.free(function.type_identities);

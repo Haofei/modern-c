@@ -3,22 +3,17 @@
 const std = @import("std");
 
 const ast_bridge = @import("ast_bridge.zig");
-const syntax_bridge = @import("syntax_bridge.zig");
 const lower_c_model = @import("lower_c_model.zig");
 const lower_c_shape = @import("lower_c_shape.zig");
 const mir = @import("mir.zig");
 const type_bridge = @import("type_bridge.zig");
 
 const ArrayInfo = lower_c_model.ArrayInfo;
-const BindThunk = lower_c_model.BindThunk;
-const FnInfo = lower_c_model.FnInfo;
 const MmioStruct = lower_c_model.MmioStruct;
 const PackedBitsField = lower_c_model.PackedBitsField;
 const PackedBitsInfo = lower_c_model.PackedBitsInfo;
 const ResultInfo = lower_c_model.ResultInfo;
 const SliceInfo = lower_c_model.SliceInfo;
-const calleeIdentName = syntax_bridge.calleeIdentName;
-const memberCallee = syntax_bridge.memberCallee;
 const mmioFieldFromType = lower_c_shape.mmioFieldFromType;
 const typeName = type_bridge.typeName;
 
@@ -67,14 +62,6 @@ pub const SliceArtifactContext = struct {
     slice_type_name: SliceTypeNameFn,
     pointer_type_for_slice_element: SliceTypeNameFn,
     slice_types: *std.StringHashMap(SliceInfo),
-};
-
-pub const BindThunkContext = struct {
-    name_allocator: std.mem.Allocator,
-    type_aliases: *const std.StringHashMap(ast_bridge.TypeExpr),
-    functions: *const std.StringHashMap(FnInfo),
-    bind_thunks: *std.StringHashMap(BindThunk),
-    mir_function: *const mir.Function,
 };
 
 pub fn collectPackedBits(
@@ -317,81 +304,4 @@ pub fn bindEnvIsPointerLike(type_aliases: *const std.StringHashMap(ast_bridge.Ty
         .qualified => |node| bindEnvIsPointerLike(type_aliases, node.child.*),
         else => false,
     };
-}
-
-pub fn collectBlockBindThunks(ctx: BindThunkContext, block: ast_bridge.Block) anyerror!void {
-    for (block.items) |stmt| switch (stmt.kind) {
-        .let_decl, .var_decl => |local| {
-            if (local.init) |initializer| try collectExprBindThunks(ctx, initializer);
-        },
-        .loop => |node| {
-            if (node.iterable) |expr| try collectExprBindThunks(ctx, expr);
-            try collectBlockBindThunks(ctx, node.body);
-        },
-        .if_let => |node| {
-            try collectExprBindThunks(ctx, node.value);
-            try collectBlockBindThunks(ctx, node.then_block);
-            if (node.else_block) |else_block| try collectBlockBindThunks(ctx, else_block);
-        },
-        .@"switch" => |node| {
-            try collectExprBindThunks(ctx, node.subject);
-            for (node.arms) |arm| switch (arm.body) {
-                .block => |arm_block| try collectBlockBindThunks(ctx, arm_block),
-                .expr => |expr| try collectExprBindThunks(ctx, expr),
-            };
-        },
-        .unsafe_block, .comptime_block, .block => |nested| try collectBlockBindThunks(ctx, nested),
-        .contract_block => |contract| try collectBlockBindThunks(ctx, contract.block),
-        .@"return" => |maybe| if (maybe) |expr| try collectExprBindThunks(ctx, expr),
-        .@"defer", .expr, .assert => |expr| try collectExprBindThunks(ctx, expr),
-        .assignment => |node| {
-            try collectExprBindThunks(ctx, node.target);
-            try collectExprBindThunks(ctx, node.value);
-        },
-        else => {},
-    };
-}
-
-fn collectExprBindThunks(ctx: BindThunkContext, expr: ast_bridge.Expr) anyerror!void {
-    switch (expr.kind) {
-        .call => |node| {
-            if (hasCallTargetFact(ctx.mir_function.*, .bind, expr.span)) try collectBindThunk(ctx, node);
-            try collectExprBindThunks(ctx, node.callee.*);
-            for (node.args) |arg| try collectExprBindThunks(ctx, arg);
-        },
-        .grouped, .address_of, .deref => |inner| try collectExprBindThunks(ctx, inner.*),
-        .try_expr => |inner| try collectExprBindThunks(ctx, inner.operand.*),
-        .unary => |node| try collectExprBindThunks(ctx, node.expr.*),
-        .binary => |node| {
-            try collectExprBindThunks(ctx, node.left.*);
-            try collectExprBindThunks(ctx, node.right.*);
-        },
-        .index => |node| {
-            try collectExprBindThunks(ctx, node.base.*);
-            try collectExprBindThunks(ctx, node.index.*);
-        },
-        .member => |node| try collectExprBindThunks(ctx, node.base.*),
-        .cast => |node| try collectExprBindThunks(ctx, node.value.*),
-        .array_literal => |items| for (items) |item| try collectExprBindThunks(ctx, item),
-        .struct_literal => |fields| for (fields) |field| try collectExprBindThunks(ctx, field.value),
-        .block => |block| try collectBlockBindThunks(ctx, block),
-        else => {},
-    }
-}
-
-fn collectBindThunk(ctx: BindThunkContext, node: anytype) !void {
-    if (node.type_args.len != 0 or node.args.len != 2) return error.UnsupportedCEmission;
-    const fname = calleeIdentName(node.args[1]) orelse return;
-    const info = ctx.functions.get(fname) orelse return;
-    if (info.params.len == 0 or info.is_extern) return;
-    if (bindEnvIsPointerLike(ctx.type_aliases, info.params[0].ty)) return;
-    const name = try std.fmt.allocPrint(ctx.name_allocator, "mc_envthunk_{s}", .{fname});
-    if (!ctx.bind_thunks.contains(name)) try ctx.bind_thunks.put(name, .{ .fname = fname, .info = info });
-}
-
-fn hasCallTargetFact(function: mir.Function, kind: mir.CallTargetKind, span: ast_bridge.Span) bool {
-    for (function.call_target_facts) |fact| {
-        if (fact.kind == kind and fact.source.line == span.line and fact.source.column == span.column) return true;
-    }
-    return false;
 }

@@ -507,18 +507,12 @@ pub const CEmitter = struct {
     }
 
     pub fn collectBindThunks(self: *CEmitter) anyerror!void {
-        // Now that every function signature is known, scan all bodies for
-        // `bind(scalar, f)` closures that need an env-widening thunk.
-        for (self.codegen_artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| {
-                if (function.signature.is_extern) continue;
-                if (self.codegen_artifacts.legacyFunctionBody(function.signature.name.text)) |body| {
-                    const mir_function = self.mirFunctionNamed(function.signature.name.text) orelse return error.UnsupportedCEmission;
-                    try self.collectBlockBindThunks(body, mir_function);
-                }
-            },
-            else => {},
-        };
+        // MIR owns the `bind(env, f)` call inventory. The C backend only uses it
+        // to predeclare scalar-env thunks before function bodies are emitted.
+        for (self.mir_module.functions) |fn_mir| {
+            if (fn_mir.is_extern) continue;
+            for (fn_mir.bind_thunk_facts) |fact| try self.collectBindThunkFact(fact);
+        }
     }
 
     fn emitModule(self: *CEmitter, early_metadata: CodegenDeclArtifacts) anyerror!void {
@@ -2674,14 +2668,12 @@ pub const CEmitter = struct {
         return lower_c_collect.bindEnvIsPointerLike(&self.type_aliases, ty);
     }
 
-    fn collectBlockBindThunks(self: *CEmitter, block: ast_bridge.Block, mir_function: *const mir.Function) anyerror!void {
-        try lower_c_collect.collectBlockBindThunks(.{
-            .name_allocator = self.scratch.allocator(),
-            .type_aliases = &self.type_aliases,
-            .functions = &self.functions,
-            .bind_thunks = &self.bind_thunks,
-            .mir_function = mir_function,
-        }, block);
+    fn collectBindThunkFact(self: *CEmitter, fact: mir.BindThunkFact) !void {
+        const info = self.functions.get(fact.target_fn) orelse return;
+        if (info.params.len == 0 or info.is_extern) return;
+        if (self.bindEnvIsPointerLike(info.params[0].ty)) return;
+        const name = try std.fmt.allocPrint(self.scratch.allocator(), "mc_envthunk_{s}", .{fact.target_fn});
+        if (!self.bind_thunks.contains(name)) try self.bind_thunks.put(name, .{ .fname = fact.target_fn, .info = info });
     }
 
     // Emit `bind(&env, f)` as a closure compound literal. `f` names a function whose

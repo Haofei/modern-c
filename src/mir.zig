@@ -93,6 +93,7 @@ pub const BoundsFactKind = mir_model.BoundsFactKind;
 pub const IntegerFact = mir_model.IntegerFact;
 pub const CallTargetKind = mir_model.CallTargetKind;
 pub const CallTargetFact = mir_model.CallTargetFact;
+pub const BindThunkFact = mir_model.BindThunkFact;
 pub const DropGlueFact = mir_model.DropGlueFact;
 pub const TargetTypeKind = mir_model.TargetTypeKind;
 pub const AggregateConstructionKind = mir_model.AggregateConstructionKind;
@@ -972,6 +973,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .bounds_facts = try allocator.alloc(BoundsFact, 0),
                         .integer_facts = try allocator.alloc(IntegerFact, 0),
                         .call_target_facts = try allocator.alloc(CallTargetFact, 0),
+                        .bind_thunk_facts = try allocator.alloc(BindThunkFact, 0),
                         .target_type_facts = try allocator.alloc(TargetTypeFact, 0),
                         .ownership_events = try allocator.alloc(OwnershipEvent, 0),
                         .pointer_provenance_facts = try allocator.alloc(PointerProvenanceFact, 0),
@@ -5196,6 +5198,7 @@ const FunctionBuilder = struct {
     integer_facts: std.ArrayList(IntegerFact),
     const_get_facts: std.ArrayList(ConstGetFact),
     call_target_facts: std.ArrayList(CallTargetFact),
+    bind_thunk_facts: std.ArrayList(BindThunkFact),
     target_type_facts: std.ArrayList(TargetTypeFact),
     generated_type_expr_nodes: std.ArrayList(*ast.TypeExpr),
     generated_type_expr_args: std.ArrayList([]ast.TypeExpr),
@@ -5304,6 +5307,7 @@ const FunctionBuilder = struct {
             .integer_facts = .empty,
             .const_get_facts = .empty,
             .call_target_facts = .empty,
+            .bind_thunk_facts = .empty,
             .target_type_facts = .empty,
             .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
@@ -5383,6 +5387,7 @@ const FunctionBuilder = struct {
             .integer_facts = .empty,
             .const_get_facts = .empty,
             .call_target_facts = .empty,
+            .bind_thunk_facts = .empty,
             .target_type_facts = .empty,
             .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
@@ -5436,6 +5441,7 @@ const FunctionBuilder = struct {
         self.integer_facts.deinit(self.allocator);
         self.const_get_facts.deinit(self.allocator);
         self.call_target_facts.deinit(self.allocator);
+        self.bind_thunk_facts.deinit(self.allocator);
         self.target_type_facts.deinit(self.allocator);
         self.ownership_events.deinit(self.allocator);
         for (self.generated_type_expr_nodes.items) |node| self.allocator.destroy(node);
@@ -5515,6 +5521,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(const_get_facts);
         const call_target_facts = try self.call_target_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(call_target_facts);
+        const bind_thunk_facts = try self.bind_thunk_facts.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(bind_thunk_facts);
         const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(target_type_facts);
         const ownership_events = try self.ownership_events.toOwnedSlice(self.allocator);
@@ -5610,6 +5618,7 @@ const FunctionBuilder = struct {
             .integer_facts = integer_facts,
             .const_get_facts = const_get_facts,
             .call_target_facts = call_target_facts,
+            .bind_thunk_facts = bind_thunk_facts,
             .target_type_facts = target_type_facts,
             .span_identities = span_identities,
             .type_identities = type_identities,
@@ -8256,6 +8265,19 @@ const FunctionBuilder = struct {
         });
     }
 
+    fn addBindThunkFactForExpr(self: *FunctionBuilder, expr: ast.Expr) !void {
+        const call = switch (expr.kind) {
+            .call => |call| call,
+            else => return,
+        };
+        if (call.type_args.len != 0 or call.args.len != 2) return;
+        const target_fn = calleeIdentName(call.args[1]) orelse return;
+        try self.bind_thunk_facts.append(self.allocator, .{
+            .target_fn = target_fn,
+            .source = sourcePointFromSpan(expr.span),
+        });
+    }
+
     const DiscardDropGlueIdentity = struct {
         resource_symbol_id: SymbolId,
         release_symbol_id: SymbolId,
@@ -8688,6 +8710,7 @@ const FunctionBuilder = struct {
         if (call_kind) |owned_kind| {
             try self.addInstr(.call_target, @tagName(owned_kind), result_ty, expr.span);
             try self.addCallTargetFact(owned_kind, result_ty, expr.span);
+            if (owned_kind == .bind) try self.addBindThunkFactForExpr(expr);
         }
     }
 
@@ -11771,6 +11794,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.integer_facts.len != 0) allocator.free(function.integer_facts);
     if (function.const_get_facts.len != 0) allocator.free(function.const_get_facts);
     if (function.call_target_facts.len != 0) allocator.free(function.call_target_facts);
+    if (function.bind_thunk_facts.len != 0) allocator.free(function.bind_thunk_facts);
     if (function.target_type_facts.len != 0) allocator.free(function.target_type_facts);
     if (function.span_identities.len != 0) allocator.free(function.span_identities);
     if (function.type_identities.len != 0) allocator.free(function.type_identities);
