@@ -432,12 +432,7 @@ pub const CEmitter = struct {
         // mangling resolve during the artifact-collection pass below. Const global
         // widths stay in this early pass because later type artifact collection can
         // consult the reflection environment.
-        for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| {
-                if (function.signature.is_const and !self.const_fns.contains(function.signature.name.text)) try self.const_fns.put(function.signature.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function, findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)));
-            },
-            else => {},
-        };
+        try eval.collectConstFunctionsFromDeclarations(eval.ComptimeDeclarations.fromDeclarationArtifacts(artifacts), &self.const_fns);
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| {
                 const sig = global.signature;

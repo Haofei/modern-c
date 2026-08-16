@@ -640,6 +640,29 @@ pub const ComptimeDeclarations = struct {
     }
 };
 
+pub fn collectConstFunctionsFromDeclarations(
+    declarations: ComptimeDeclarations,
+    out: *std.StringHashMap(ComptimeFunction),
+) !void {
+    if (declarations.legacy_decls) |decls| {
+        for (decls) |decl| switch (decl.kind) {
+            .fn_decl => |function| if (function.is_const and !out.contains(function.name.text)) try out.put(function.name.text, ComptimeFunction.fromFnDecl(function)),
+            else => {},
+        };
+        return;
+    }
+    if (declarations.decl_artifacts) |decl_artifacts| {
+        for (decl_artifacts) |artifact| switch (artifact) {
+            .function => |function| {
+                if (!function.signature.is_const or out.contains(function.signature.name.text)) continue;
+                const body = declaration_artifact_fallbacks.findLegacyFunctionBody(declarations.function_body_fallbacks, function.signature.name.text);
+                try out.put(function.signature.name.text, ComptimeFunction.fromDeclarationArtifact(function, body));
+            },
+            else => {},
+        };
+    }
+}
+
 // The declared bit-width of an integer type expression, or null for non-integer
 // (or width-unknown) types. usize/isize follow the explicit v0 target-data contract.
 // The arithmetic domain + width of a comptime integer binding (section 5): a plain `uN`/`iN`

@@ -561,10 +561,8 @@ const LlvmEmitter = struct {
     }
 
     fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: declaration_artifacts.CodegenDeclarationArtifacts) !void {
+        try eval.collectConstFunctionsFromDeclarations(eval.ComptimeDeclarations.fromDeclarationArtifacts(artifacts), &self.const_fns);
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| {
-                if (function.signature.is_const and !self.const_fns.contains(function.signature.name.text)) try self.const_fns.put(function.signature.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function, findLegacyFunctionBody(self.function_body_fallbacks, function.signature.name.text)));
-            },
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
                 .enum_decl => |enum_decl| try self.enum_types.put(enum_decl.name.text, enum_decl),
