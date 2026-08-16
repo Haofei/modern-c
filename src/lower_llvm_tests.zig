@@ -87,6 +87,50 @@ test "LLVM struct literal fields evaluate in lexical source order" {
     try std.testing.expect(second < first);
 }
 
+test "LLVM MIR conditional fast path uses only the switch subject expression" {
+    const source =
+        \\fn choose_cmp(a: i32, b: i32) -> i32 {
+        \\    if (a < b) {
+        \\        return 1;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
+        \\fn choose_not(flag: bool) -> i32 {
+        \\    if (!flag) {
+        \\        return 1;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
+        \\fn choose_reassign(a: i32, b: i32) -> i32 {
+        \\    var c: bool = a < b;
+        \\    c = false;
+        \\    if (c) {
+        \\        return 1;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_conditional_subject.mc", source, &output);
+
+    const compare_body = try llvmFunctionBody(output.items, "define internal i32 @choose_cmp");
+    try expectContains(compare_body, "icmp slt i32 %a, %b");
+    try expectContains(compare_body, "br i1 %t0, label %bb_if_then");
+
+    const not_body = try llvmFunctionBody(output.items, "define internal i32 @choose_not");
+    try expectContains(not_body, "br i1 %flag, label %bb_if_else");
+
+    const reassign_body = try llvmFunctionBody(output.items, "define internal i32 @choose_reassign");
+    try expectContains(reassign_body, "icmp slt i32 %a, %b");
+    try expectContains(reassign_body, "store i1 0");
+    try expectContains(reassign_body, "switch i1 %t2");
+    try expectNotContains(reassign_body, "br i1 %t1");
+}
+
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();

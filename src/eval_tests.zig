@@ -204,7 +204,7 @@ test "const fn parameter metadata OOM does not silently use untyped arithmetic" 
 
     var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("checked_add", ComptimeFunction.fromFnDecl(fn_decl));
+    try funcs.put("checked_add", try ComptimeFunction.fromFnDecl(a, fn_decl));
 
     const call = try ast.makePtr(a, ast.Expr{ .span = zero_span, .kind = .{ .call = .{
         .callee = try testIdent(a, "checked_add"),
@@ -269,7 +269,7 @@ test "foldComptimeExpr evaluates const fn calls" {
 
     var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("is_power_of_two", ComptimeFunction.fromFnDecl(fn_decl));
+    try funcs.put("is_power_of_two", try ComptimeFunction.fromFnDecl(a, fn_decl));
 
     var scope = ComptimeScope.init(std.testing.allocator);
     defer scope.deinit();
@@ -322,7 +322,7 @@ test "foldComptimeExpr evaluates assert statements in const fn calls" {
 
     var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("require_four", ComptimeFunction.fromFnDecl(fn_decl));
+    try funcs.put("require_four", try ComptimeFunction.fromFnDecl(a, fn_decl));
 
     var scope = ComptimeScope.init(std.testing.allocator);
     defer scope.deinit();
@@ -389,7 +389,7 @@ test "foldComptimeExpr evaluates a const fn with a while loop and fuel" {
 
     var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("count_down", ComptimeFunction.fromFnDecl(fn_decl));
+    try funcs.put("count_down", try ComptimeFunction.fromFnDecl(a, fn_decl));
 
     var scope = ComptimeScope.init(std.testing.allocator);
     defer scope.deinit();
@@ -490,7 +490,7 @@ test "foldComptimeExpr folds a const fn with a for loop over an array" {
 
     var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("sum", ComptimeFunction.fromFnDecl(fn_decl));
+    try funcs.put("sum", try ComptimeFunction.fromFnDecl(a, fn_decl));
 
     // Arena-backed scope so folded array temporaries are freed with the arena.
     var scope = ComptimeScope.init(a);
@@ -533,7 +533,7 @@ test "foldComptimeExpr folds a const fn with a comptime switch" {
 
     var funcs = std.StringHashMap(ComptimeFunction).init(std.testing.allocator);
     defer funcs.deinit();
-    try funcs.put("classify", ComptimeFunction.fromFnDecl(fn_decl));
+    try funcs.put("classify", try ComptimeFunction.fromFnDecl(a, fn_decl));
 
     var scope = ComptimeScope.init(a);
     defer scope.deinit();

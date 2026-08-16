@@ -107,6 +107,49 @@ test "lower-c nullable narrowing with long identifiers never falls back to const
     try std.testing.expect(std.mem.indexOf(u8, output.items, "if (0)") == null);
 }
 
+test "lower-c MIR conditional fast path uses only the switch subject expression" {
+    const source =
+        \\fn choose_cmp(a: i32, b: i32) -> i32 {
+        \\    if (a < b) {
+        \\        return 1;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
+        \\fn choose_not(flag: bool) -> i32 {
+        \\    if (!flag) {
+        \\        return 1;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
+        \\fn choose_reassign(a: i32, b: i32) -> i32 {
+        \\    var c: bool = a < b;
+        \\    c = false;
+        \\    if (c) {
+        \\        return 1;
+        \\    } else {
+        \\        return 0;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_conditional_subject.mc", source, &output);
+
+    const compare_body = try cFunctionBody(output.items, "static int32_t choose_cmp(int32_t a, int32_t b)");
+    try expectContains(compare_body, "if ((a < b))");
+
+    const not_body = try cFunctionBody(output.items, "static int32_t choose_not(bool flag)");
+    try expectContains(not_body, "if (!flag)");
+
+    const reassign_body = try cFunctionBody(output.items, "static int32_t choose_reassign(int32_t a, int32_t b)");
+    try expectContains(reassign_body, "bool c = (a < b);");
+    try expectContains(reassign_body, "c = mc_tmp0;");
+    try expectContains(reassign_body, "switch ((int)((c)))");
+    try expectNotContains(reassign_body, "if ((a < b))");
+}
+
 test "lower-c runtime hook suppression uses VerifiedProgram runtime hook facts" {
     const source =
         \\export fn mc_ksan_check(addr: usize, size: usize) -> void {}

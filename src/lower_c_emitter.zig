@@ -1458,38 +1458,48 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirSwitchConditionParam(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirCondition {
-        var condition: ?[]const u8 = null;
-        for (block.instructions) |instruction| {
-            if (instruction.kind != .unary or !std.mem.eql(u8, instruction.detail, "logical_not")) continue;
-            var after_unary = false;
-            for (block.instructions) |operand_instruction| {
-                if (!after_unary) {
-                    after_unary = operand_instruction.kind == .unary and sameMirSourceLocation(instructionSourcePoint(operand_instruction), instructionSourcePoint(instruction));
-                    continue;
-                }
-                if (operand_instruction.kind != .expr or operand_instruction.result_ty != .bool) continue;
-                for (function.signature.params) |param| {
-                    if (std.mem.eql(u8, operand_instruction.detail, param.name.text)) return .{ .param = .{ .name = param.name.text, .inverted = true } };
-                }
-                return null;
+        const subject_index = simpleMirSwitchSubjectIndex(block) orelse return null;
+        var index: usize = subject_index + 1;
+        while (index < block.instructions.len) : (index += 1) {
+            const instruction = block.instructions[index];
+            switch (instruction.kind) {
+                .target_type => continue,
+                .unary => {
+                    if (!std.mem.eql(u8, instruction.detail, "logical_not")) return null;
+                    var operand_index = index + 1;
+                    while (operand_index < block.instructions.len) : (operand_index += 1) {
+                        const operand = block.instructions[operand_index];
+                        if (operand.kind == .target_type) continue;
+                        if (operand.kind != .expr or operand.result_ty != .bool) return null;
+                        for (function.signature.params) |param| {
+                            if (std.mem.eql(u8, operand.detail, param.name.text)) return .{ .param = .{ .name = param.name.text, .inverted = true } };
+                        }
+                        return null;
+                    }
+                    return null;
+                },
+                .binary => {
+                    if (self.simpleMirCompareBinaryAtSource(function, fn_mir, instructionSourcePoint(instruction))) |binary| return .{ .compare_binary = binary };
+                    return null;
+                },
+                .expr => {
+                    if (instruction.result_ty != .bool) return null;
+                    for (function.signature.params) |param| {
+                        if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = .{ .name = param.name.text } };
+                    }
+                    return null;
+                },
+                else => return null,
             }
-            return null;
         }
-        for (block.instructions) |instruction| {
-            if (instruction.kind != .binary) continue;
-            if (std.mem.eql(u8, instruction.detail, "switch_subject")) continue;
-            if (self.simpleMirCompareBinaryAtSource(function, fn_mir, instructionSourcePoint(instruction))) |binary| return .{ .compare_binary = binary };
-            return null;
+        return null;
+    }
+
+    fn simpleMirSwitchSubjectIndex(block: mir.Block) ?usize {
+        for (block.instructions, 0..) |instruction, index| {
+            if (instruction.kind == .binary and std.mem.eql(u8, instruction.detail, "switch_subject")) return index;
         }
-        for (block.instructions) |instruction| {
-            if (instruction.kind != .expr or instruction.result_ty != .bool) continue;
-            for (function.signature.params) |param| {
-                if (!std.mem.eql(u8, instruction.detail, param.name.text)) continue;
-                if (condition != null) return null;
-                condition = param.name.text;
-            }
-        }
-        return if (condition) |name| .{ .param = .{ .name = name } } else null;
+        return null;
     }
 
     fn emitSimpleMirCondition(self: *CEmitter, condition: SimpleMirCondition) !void {
