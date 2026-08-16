@@ -1389,6 +1389,7 @@ const LlvmEmitter = struct {
         if (std.mem.eql(u8, value_id, "binary")) {
             if (self.simpleMirCheckedBinaryAtReturn(function, fn_mir)) |binary| return .{ .checked_binary = binary };
         }
+        if (simpleMirNoTrap(fn_mir)) if (self.simpleMirAssignmentReturn(function, fn_mir, value_id)) |assigned| return assigned;
         if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
         return null;
     }
@@ -1554,6 +1555,49 @@ const LlvmEmitter = struct {
         return null;
     }
 
+    fn simpleMirAssignmentReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {
+        if (fn_mir.pointer_provenance_facts.len != 0) return null;
+        const assigned_source = self.simpleMirAssignmentSource(fn_mir, local_name) orelse return null;
+        if (self.simpleMirDirectCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .direct_call = call };
+        if (self.simpleMirArgAt(function, fn_mir, assigned_source)) |arg| {
+            return switch (arg) {
+                .param => |name| .{ .param = name },
+                .integer_literal => |literal| .{ .integer_literal = literal },
+            };
+        }
+        return null;
+    }
+
+    fn simpleMirAssignmentSource(self: *LlvmEmitter, fn_mir: mir.Function, local_name: []const u8) ?mir.SourcePoint {
+        _ = self;
+        const block = fn_mir.blocks[0];
+        var source: ?mir.SourcePoint = null;
+        var index: usize = 0;
+        while (index < block.instructions.len) : (index += 1) {
+            const instruction = block.instructions[index];
+            if (instruction.kind != .assign or !std.mem.eql(u8, instruction.detail, local_name)) continue;
+            if (source != null) return null;
+            index += 1;
+            while (index < block.instructions.len) : (index += 1) {
+                const next = block.instructions[index];
+                switch (next.kind) {
+                    .target_type => continue,
+                    .expr => {
+                        if (std.mem.eql(u8, next.detail, local_name)) continue;
+                        source = instructionSourcePoint(next);
+                        break;
+                    },
+                    .integer_literal_conversion, .call => {
+                        source = instructionSourcePoint(next);
+                        break;
+                    },
+                    else => return null,
+                }
+            }
+        }
+        return source;
+    }
+
     fn simpleMirLocalInitSource(self: *LlvmEmitter, fn_mir: mir.Function, local_name: []const u8) ?mir.SourcePoint {
         _ = self;
         const block = fn_mir.blocks[0];
@@ -1592,7 +1636,7 @@ const LlvmEmitter = struct {
         _ = self;
         const block = fn_mir.blocks[0];
         for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .local, .target_type, .integer_literal_conversion, .binary, .add_overflow, .return_value => {},
+            .param, .local, .assign, .target_type, .integer_literal_conversion, .binary, .add_overflow, .return_value => {},
             .call => {},
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int")) continue;
