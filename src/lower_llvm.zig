@@ -1270,6 +1270,7 @@ const LlvmEmitter = struct {
         param: []const u8,
         integer_literal: []const u8,
         direct_call: SimpleMirDirectCall,
+        checked_binary: SimpleMirCheckedBinary,
     };
 
     const max_simple_mir_call_args = 8;
@@ -1434,7 +1435,7 @@ const LlvmEmitter = struct {
 
     fn simpleMirConditionalReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalReturn {
         if (fn_mir.return_ty == .void) return null;
-        if (fn_mir.blocks.len != 4 or fn_mir.trap_edges.len != 0 or fn_mir.pointer_provenance_facts.len != 0) return null;
+        if (fn_mir.blocks.len < 4 or fn_mir.pointer_provenance_facts.len != 0) return null;
         if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         const entry = fn_mir.blocks[0];
@@ -1448,6 +1449,11 @@ const LlvmEmitter = struct {
         if (!std.mem.eql(u8, then_block.kind, "switch_arm") or !std.mem.eql(u8, else_block.kind, "switch_arm")) return null;
         const then_value = self.simpleMirReturnValueInBlock(function, fn_mir, then_block) orelse return null;
         const else_value = self.simpleMirReturnValueInBlock(function, fn_mir, else_block) orelse return null;
+        for (fn_mir.blocks, 0..) |block, index| {
+            if (index == 0 or index == 1 or index == then_index or index == else_index) continue;
+            if (!std.mem.eql(u8, block.kind, "trap") or block.terminator != .trap_) return null;
+        }
+        if (fn_mir.trap_edges.len != simpleMirConditionalTrapCount(then_value) + simpleMirConditionalTrapCount(else_value)) return null;
         return .{ .condition = condition, .then_value = then_value, .else_value = else_value };
     }
 
@@ -1492,6 +1498,13 @@ const LlvmEmitter = struct {
             const call = self.simpleMirDirectCallAtSource(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
             return .{ .direct_call = call };
         }
+        if (std.mem.eql(u8, value_id, "binary")) {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .binary) continue;
+                const binary = self.simpleMirCheckedBinaryAtSource(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
+                return .{ .checked_binary = binary };
+            }
+        }
         return null;
     }
 
@@ -1504,7 +1517,18 @@ const LlvmEmitter = struct {
                 try self.emitSimpleMirDirectCall(call, tmp, span);
                 try self.emitReturnValue(ret_ty, tmp, span);
             },
+            .checked_binary => |binary| {
+                const value_name = try self.emitSimpleMirCheckedBinary(binary, span);
+                try self.emitReturnValue(ret_ty, value_name, span);
+            },
         }
+    }
+
+    fn simpleMirConditionalTrapCount(value: SimpleMirConditionalValue) usize {
+        return switch (value) {
+            .checked_binary => 1,
+            else => 0,
+        };
     }
 
     fn emitSimpleMirCheckedBinary(self: *LlvmEmitter, binary: SimpleMirCheckedBinary, span: diagnostics.Span) ![]const u8 {
@@ -1570,10 +1594,10 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirCheckedBinaryAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirCheckedBinary {
-        const binary_instr = blk: {
-            for (fn_mir.blocks[0].instructions) |instruction| {
-                if (instruction.kind == .binary and sameMirSourceLocation(instructionSourcePoint(instruction), source)) break :blk instruction;
-            }
+        const block, const binary_instr = blk: {
+            for (fn_mir.blocks) |block| for (block.instructions) |instruction| {
+                if (instruction.kind == .binary and sameMirSourceLocation(instructionSourcePoint(instruction), source)) break :blk .{ block, instruction };
+            };
             return null;
         };
         if (!simpleMirBinaryOpSupported(binary_instr.detail)) return null;
@@ -1582,7 +1606,7 @@ const LlvmEmitter = struct {
         var operands: [2]SimpleMirArg = undefined;
         var count: usize = 0;
         var after_binary = false;
-        for (fn_mir.blocks[0].instructions) |instruction| {
+        for (block.instructions) |instruction| {
             if (!after_binary) {
                 after_binary = instruction.kind == .binary and sameMirSourceLocation(instructionSourcePoint(instruction), source);
                 continue;
