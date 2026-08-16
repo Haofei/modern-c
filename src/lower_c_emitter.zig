@@ -1469,10 +1469,12 @@ pub const CEmitter = struct {
             if (std.mem.eql(u8, value_id, param.name.text)) return .{ .param = param.name.text };
         }
         var literal_source: ?mir.SourcePoint = null;
-        if (std.mem.eql(u8, value_id, "int")) {
+        if (std.mem.eql(u8, value_id, "int") or std.mem.eql(u8, value_id, "bool")) {
             for (block.instructions) |instruction| {
                 if (instruction.kind == .return_value) break;
-                if (instruction.kind == .integer_literal_conversion or (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, "int"))) {
+                if (instruction.kind == .integer_literal_conversion or
+                    (instruction.kind == .expr and (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool"))))
+                {
                     literal_source = instructionSourcePoint(instruction);
                 }
             }
