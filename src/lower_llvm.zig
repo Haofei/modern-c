@@ -1262,8 +1262,14 @@ const LlvmEmitter = struct {
 
     const SimpleMirConditionalReturn = struct {
         condition: []const u8,
-        then_value: SimpleMirArg,
-        else_value: SimpleMirArg,
+        then_value: SimpleMirConditionalValue,
+        else_value: SimpleMirConditionalValue,
+    };
+
+    const SimpleMirConditionalValue = union(enum) {
+        param: []const u8,
+        integer_literal: []const u8,
+        direct_call: SimpleMirDirectCall,
     };
 
     const max_simple_mir_call_args = 8;
@@ -1373,9 +1379,9 @@ const LlvmEmitter = struct {
             const then_label = try self.nextLabel("if_then");
             const else_label = try self.nextLabel("if_else");
             try self.out.print(self.allocator, "  br i1 %{s}, label %{s}, label %{s}{s}\n{s}:\n", .{ conditional.condition, then_label, else_label, try self.debugCallSuffix(), then_label });
-            try self.emitReturnValue(ret_ty, try self.simpleMirArgValue(conditional.then_value), sig_facts.name.span);
+            try self.emitSimpleMirConditionalReturnValue(ret_ty, conditional.then_value, sig_facts.name.span);
             try self.out.print(self.allocator, "{s}:\n", .{else_label});
-            try self.emitReturnValue(ret_ty, try self.simpleMirArgValue(conditional.else_value), sig_facts.name.span);
+            try self.emitSimpleMirConditionalReturnValue(ret_ty, conditional.else_value, sig_facts.name.span);
         }
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;
@@ -1440,8 +1446,8 @@ const LlvmEmitter = struct {
         const then_block = fn_mir.blocks[then_index];
         const else_block = fn_mir.blocks[else_index];
         if (!std.mem.eql(u8, then_block.kind, "switch_arm") or !std.mem.eql(u8, else_block.kind, "switch_arm")) return null;
-        const then_value = self.simpleMirReturnArgInBlock(function, fn_mir, then_block) orelse return null;
-        const else_value = self.simpleMirReturnArgInBlock(function, fn_mir, else_block) orelse return null;
+        const then_value = self.simpleMirReturnValueInBlock(function, fn_mir, then_block) orelse return null;
+        const else_value = self.simpleMirReturnValueInBlock(function, fn_mir, else_block) orelse return null;
         return .{ .condition = condition, .then_value = then_value, .else_value = else_value };
     }
 
@@ -1459,7 +1465,7 @@ const LlvmEmitter = struct {
         return condition;
     }
 
-    fn simpleMirReturnArgInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirArg {
+    fn simpleMirReturnValueInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirConditionalValue {
         if (block.terminator != .return_) return null;
         const ret = simpleMirReturnInstruction(block) orelse return null;
         const value_id = ret.value_id orelse return null;
@@ -1475,8 +1481,30 @@ const LlvmEmitter = struct {
                 }
             }
         }
-        if (literal_source) |source| return self.simpleMirArgAt(function, fn_mir, source);
+        if (literal_source) |source| {
+            return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
+                .param => |name| .{ .param = name },
+                .integer_literal => |literal| .{ .integer_literal = literal },
+            };
+        }
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .call or !std.mem.eql(u8, instruction.detail, value_id)) continue;
+            const call = self.simpleMirDirectCallAtSource(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
+            return .{ .direct_call = call };
+        }
         return null;
+    }
+
+    fn emitSimpleMirConditionalReturnValue(self: *LlvmEmitter, ret_ty: anytype, value: SimpleMirConditionalValue, span: diagnostics.Span) !void {
+        switch (value) {
+            .param => |name| try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}), span),
+            .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, span),
+            .direct_call => |call| {
+                const tmp = try self.nextTemp();
+                try self.emitSimpleMirDirectCall(call, tmp, span);
+                try self.emitReturnValue(ret_ty, tmp, span);
+            },
+        }
     }
 
     fn emitSimpleMirCheckedBinary(self: *LlvmEmitter, binary: SimpleMirCheckedBinary, span: diagnostics.Span) ![]const u8 {
@@ -1573,39 +1601,61 @@ const LlvmEmitter = struct {
 
     fn simpleMirDirectCall(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, callee: []const u8) ?SimpleMirDirectCall {
         return self.simpleMirDirectCallAtSource(function, fn_mir, blk: {
-            for (fn_mir.blocks[0].instructions) |instruction| {
-                if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, callee)) break :blk instructionSourcePoint(instruction);
+            for (fn_mir.blocks) |block| {
+                for (block.instructions) |instruction| {
+                    if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, callee)) break :blk instructionSourcePoint(instruction);
+                }
             }
             return null;
         });
     }
 
     fn simpleMirDirectCallAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint) ?SimpleMirDirectCall {
-        const callee = blk: {
-            for (fn_mir.blocks[0].instructions) |instruction| {
-                if (instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) break :blk instruction.detail;
+        const call_block, const callee = blk: {
+            for (fn_mir.blocks) |block| {
+                for (block.instructions) |instruction| {
+                    if (instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) break :blk .{ block, instruction.detail };
+                }
             }
             return null;
         };
-        var saw_result = false;
         var arg_count: usize = 0;
         var call: SimpleMirDirectCall = .{ .callee = callee };
+        var saw_result = false;
         for (fn_mir.target_type_facts) |fact| {
-            if (!std.mem.eql(u8, fact.target_owner orelse "", callee)) continue;
-            if (fact.kind == .direct_call_result and sameMirSourceLocation(fact.source, call_source)) {
+            if (fact.kind == .direct_call_result and std.mem.eql(u8, fact.target_owner orelse "", callee) and sameMirSourceLocation(fact.source, call_source)) {
                 saw_result = true;
+            }
+        }
+        if (!saw_result) return null;
+        var after_call = false;
+        for (call_block.instructions) |instruction| {
+            if (!after_call) {
+                after_call = instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source);
                 continue;
             }
-            if (fact.kind != .direct_call_argument) continue;
+            if (instruction.kind == .return_value) break;
+            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion) continue;
+            const arg_source = instructionSourcePoint(instruction);
+            const fact = self.simpleMirDirectCallArgumentFactAt(fn_mir, callee, arg_source) orelse continue;
             const arg_index = fact.target_index orelse return null;
             if (arg_index >= max_simple_mir_call_args) return null;
-            call.args[arg_index] = self.simpleMirArgAt(function, fn_mir, fact.source) orelse return null;
+            call.args[arg_index] = self.simpleMirArgAt(function, fn_mir, arg_source) orelse return null;
             call.arg_facts[arg_index] = fact;
             arg_count = @max(arg_count, arg_index + 1);
         }
-        if (!saw_result) return null;
         call.arg_count = arg_count;
         return call;
+    }
+
+    fn simpleMirDirectCallArgumentFactAt(self: *LlvmEmitter, fn_mir: mir.Function, callee: []const u8, source: mir.SourcePoint) ?mir.TargetTypeFact {
+        _ = self;
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind != .direct_call_argument) continue;
+            if (!std.mem.eql(u8, fact.target_owner orelse "", callee)) continue;
+            if (sameMirSourceLocation(fact.source, source)) return fact;
+        }
+        return null;
     }
 
     fn simpleMirLocalInitReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {
@@ -1690,10 +1740,12 @@ const LlvmEmitter = struct {
         for (fn_mir.integer_facts) |fact| {
             if (sameMirSourceLocation(fact.source, source)) return .{ .integer_literal = fact.literal };
         }
-        for (fn_mir.blocks[0].instructions) |instruction| {
-            if (instruction.kind != .expr or !sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
-            for (function.signature.params) |param| {
-                if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = param.name.text };
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .expr or !sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                for (function.signature.params) |param| {
+                    if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = param.name.text };
+                }
             }
         }
         return null;
