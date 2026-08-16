@@ -751,6 +751,7 @@ fn runEmitC(session: *CompilationSession, path: []const u8, artifact_source_path
     be.lowerRequest(allocator, .{
         .program = program,
         .declaration_artifacts = early_metadata.codegen(),
+        .function_bodies = early_metadata.codegenFunctionBodies(),
         .out = &output,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -803,6 +804,7 @@ fn runBuild(session: *CompilationSession, path: []const u8, artifact_source_path
     be.lowerRequest(allocator, .{
         .program = program,
         .declaration_artifacts = early_metadata.codegen(),
+        .function_bodies = early_metadata.codegenFunctionBodies(),
         .out = &raw_c,
         .opts = lower_opts,
     }) catch |err| switch (err) {
@@ -1164,6 +1166,7 @@ fn runEmitMap(session: *CompilationSession, path: []const u8, artifact_source_pa
     be.lowerRequest(allocator, .{
         .program = program,
         .declaration_artifacts = early_metadata.codegen(),
+        .function_bodies = early_metadata.codegenFunctionBodies(),
         .out = &generated_c,
         .opts = .{
             .profile = profile,
@@ -1242,6 +1245,7 @@ fn runEmitLlvm(session: *CompilationSession, path: []const u8, artifact_source_p
     be.lowerRequest(allocator, .{
         .program = program,
         .declaration_artifacts = early_metadata.codegen(),
+        .function_bodies = early_metadata.codegenFunctionBodies(),
         .out = &output,
         .opts = lower_opts,
     }) catch |err| switch (err) {

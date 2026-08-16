@@ -114,6 +114,11 @@ pub const EarlyDeclarationArtifacts = struct {
     pub fn codegen(self: EarlyDeclarationArtifacts) CodegenDeclarationArtifacts {
         return .{
             .decl_artifacts = self.decl_artifacts,
+        };
+    }
+
+    pub fn codegenFunctionBodies(self: EarlyDeclarationArtifacts) CodegenFunctionBodyArtifacts {
+        return .{
             .function_body_fallbacks = self.function_body_fallbacks,
         };
     }
@@ -127,14 +132,24 @@ pub const EarlyDeclarationArtifacts = struct {
 /// remaining declaration-shaped payload is migrated into verified MIR facts.
 pub const CodegenDeclarationArtifacts = struct {
     decl_artifacts: []const DeclArtifact,
-    function_body_fallbacks: []const FunctionBodyFallbackArtifact,
 
     pub const empty = CodegenDeclarationArtifacts{
         .decl_artifacts = &.{},
+    };
+};
+
+/// Transitional function-body syntax fallback isolated from ordinary
+/// declaration facts. C/LLVM function body emission still needs this until
+/// body lowering is MIR-driven; declaration collection and signature/global
+/// metadata do not receive this authority.
+pub const CodegenFunctionBodyArtifacts = struct {
+    function_body_fallbacks: []const FunctionBodyFallbackArtifact,
+
+    pub const empty = CodegenFunctionBodyArtifacts{
         .function_body_fallbacks = &.{},
     };
 
-    pub fn legacyFunctionBody(self: CodegenDeclarationArtifacts, name: []const u8) ?ast.Block {
+    pub fn legacyFunctionBody(self: CodegenFunctionBodyArtifacts, name: []const u8) ?ast.Block {
         return findLegacyFunctionBody(self.function_body_fallbacks, name);
     }
 };

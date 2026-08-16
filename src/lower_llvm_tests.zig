@@ -115,7 +115,7 @@ fn appendLlvmCheckedMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl
 fn appendLlvmCheckedMirProfileDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, output: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
-    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), artifacts.codegenFunctionBodies(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
 }
 
 fn appendLlvmTargetTest(source_name: []const u8, source: []const u8, target: @import("backend.zig").TargetArch, output: *std.ArrayList(u8)) !void {
@@ -13539,6 +13539,7 @@ test "LLVM unsupported diagnostics use nearest source span for generated nodes" 
     try std.testing.expectError(error.UnsupportedLlvmEmission, llvm_backend.lowerRequest(std.testing.allocator, .{
         .program = verified,
         .declaration_artifacts = early_metadata.codegen(),
+        .function_bodies = early_metadata.codegenFunctionBodies(),
         .out = &out,
         .opts = .{
             .profile = .kernel,

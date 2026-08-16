@@ -5,6 +5,11 @@ const numeric = @import("numeric.zig");
 const declaration_artifacts = @import("declaration_artifacts.zig");
 const declaration_artifact_fallbacks = declaration_artifacts;
 const FunctionBodyFallbackArtifact = declaration_artifact_fallbacks.FunctionBodyFallbackArtifact;
+const CgDeclArtifacts = declaration_artifacts.CodegenDeclarationArtifacts;
+const CodegenFunctionBodyArtifacts = declaration_artifacts.CodegenFunctionBodyArtifacts;
+const DeclArtifact = declaration_artifacts.DeclArtifact;
+const FunctionArtifact = declaration_artifacts.FunctionArtifact;
+const GlobalArtifact = declaration_artifacts.GlobalArtifact;
 const string_literal = @import("string_literal.zig");
 const target_layout = @import("target_layout.zig");
 
@@ -607,7 +612,7 @@ pub const ComptimeFunction = struct {
         };
     }
 
-    pub fn fromDeclarationArtifact(function: declaration_artifacts.FunctionArtifact, body: ?ast.Block) ComptimeFunction {
+    pub fn fromDeclarationArtifact(function: FunctionArtifact, body: ?ast.Block) ComptimeFunction {
         return .{
             .name = function.signature.name,
             .params = function.signature.params,
@@ -622,7 +627,7 @@ pub const ComptimeDeclarations = struct {
     type_aliases: []const ast.TypeAlias = &.{},
     structs: []const ast.StructDecl = &.{},
     legacy_decls: ?[]const ast.Decl = null,
-    decl_artifacts: ?[]const declaration_artifacts.DeclArtifact = null,
+    decl_artifacts: ?[]const DeclArtifact = null,
     function_body_fallbacks: []const FunctionBodyFallbackArtifact = &.{},
 
     pub fn fromDecls(decls: []const ast.Decl) ComptimeDeclarations {
@@ -632,10 +637,13 @@ pub const ComptimeDeclarations = struct {
         return .{ .legacy_decls = decls };
     }
 
-    pub fn fromDeclarationArtifacts(artifacts: declaration_artifacts.CodegenDeclarationArtifacts) ComptimeDeclarations {
+    pub fn fromDeclarationArtifacts(
+        artifacts: CgDeclArtifacts,
+        function_bodies: CodegenFunctionBodyArtifacts,
+    ) ComptimeDeclarations {
         return .{
             .decl_artifacts = artifacts.decl_artifacts,
-            .function_body_fallbacks = artifacts.function_body_fallbacks,
+            .function_body_fallbacks = function_bodies.function_body_fallbacks,
         };
     }
 };
@@ -982,7 +990,7 @@ fn collectConstGlobal(
 fn collectConstGlobalArtifact(
     allocator: std.mem.Allocator,
     scope: *ComptimeScope,
-    global: declaration_artifacts.GlobalArtifact,
+    global: GlobalArtifact,
     out: *std.StringHashMap(ComptimeValue),
     options: CollectConstGlobalsOptions,
 ) !void {

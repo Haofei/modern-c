@@ -18,7 +18,7 @@ fn appendLlvmDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *st
     defer module_mir.deinit();
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
-    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), artifacts.codegenFunctionBodies(), &module_mir, out, "input.mc", .{}, false, .riscv64, false, null);
 }
 
 fn appendCDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8)) !void {
@@ -36,7 +36,7 @@ fn appendCProfileWithSourcePathDeclsTest(allocator: std.mem.Allocator, decls: []
 fn appendCProfileWithMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) !void {
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
-    try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), module_mir, out, profile, source_path, checks, stub_asm, reporter);
+    try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), artifacts.codegenFunctionBodies(), module_mir, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: []const u8, generated_c_path: ?[]const u8) !void {
