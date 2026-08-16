@@ -13,6 +13,7 @@ pub const FunctionSignatureFacts = struct {
     return_type: ?ast_bridge.TypeExpr,
     exported: bool,
     is_extern: bool,
+    is_const: bool,
     is_variadic: bool,
     c_abi: bool,
     error_from: bool,

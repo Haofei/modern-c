@@ -126,7 +126,6 @@ fn declOrigin(decl: ast.Decl) []const u8 {
 
 pub const FunctionArtifact = struct {
     body_fallback: FunctionBodyFallback,
-    is_const: bool,
     signature: codegen_attrs.FunctionSignatureFacts,
     body_facts: codegen_attrs.FunctionBodyFacts,
     render_attrs: codegen_attrs.FunctionRenderAttrs,
@@ -135,13 +134,13 @@ pub const FunctionArtifact = struct {
     pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
         return .{
             .body_fallback = .{ .syntax = fn_decl.body },
-            .is_const = fn_decl.is_const,
             .signature = .{
                 .name = fn_decl.name,
                 .params = fn_decl.params,
                 .return_type = fn_decl.return_type,
                 .exported = fn_decl.exported,
                 .is_extern = is_extern,
+                .is_const = fn_decl.is_const,
                 .is_variadic = fn_decl.is_variadic,
                 .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi")),
                 .error_from = hasNamedAttr(attrs, "error_from"),

@@ -429,7 +429,7 @@ pub const CEmitter = struct {
         // consult the reflection environment.
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
-                if (function.is_const and !self.const_fns.contains(function.signature.name.text)) try self.const_fns.put(function.signature.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));
+                if (function.signature.is_const and !self.const_fns.contains(function.signature.name.text)) try self.const_fns.put(function.signature.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));
             },
             else => {},
         };
