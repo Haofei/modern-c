@@ -229,6 +229,27 @@ test "lower-c emits simple sequential void direct calls from MIR" {
     try expectNotContains(body, "switch");
 }
 
+test "lower-c preserves MIR void calls before simple returns" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\fn side_then_return(x: i32) -> i32 {
+        \\    hit(1);
+        \\    hit(2);
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_void_calls_before_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static int32_t side_then_return(int32_t x)");
+    const hit1 = std.mem.indexOf(u8, body, "hit(1);") orelse return error.TestUnexpectedResult;
+    const hit2 = std.mem.indexOf(u8, body, "hit(2);") orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, body, "return x;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hit1 < hit2);
+    try std.testing.expect(hit2 < ret);
+}
+
 test "lower-c runtime hook suppression uses VerifiedProgram runtime hook facts" {
     const source =
         \\export fn mc_ksan_check(addr: usize, size: usize) -> void {}

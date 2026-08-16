@@ -212,6 +212,27 @@ test "LLVM emits simple sequential void direct calls from MIR" {
     try expectNotContains(body, "switch");
 }
 
+test "LLVM preserves MIR void calls before simple returns" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\fn side_then_return(x: i32) -> i32 {
+        \\    hit(1);
+        \\    hit(2);
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_void_calls_before_return.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @side_then_return");
+    const hit1 = std.mem.indexOf(u8, body, "call void @hit(i32 1)") orelse return error.TestUnexpectedResult;
+    const hit2 = std.mem.indexOf(u8, body, "call void @hit(i32 2)") orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, body, "ret i32 %x") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hit1 < hit2);
+    try std.testing.expect(hit2 < ret);
+}
+
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();
