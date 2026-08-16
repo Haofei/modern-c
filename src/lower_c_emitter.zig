@@ -584,7 +584,7 @@ pub const CEmitter = struct {
                 // Extern prototypes must precede any function body that calls them;
                 // an imported `extern fn` can be merged after its caller.
                 try self.emitExternFunction(function);
-            } else if (function.hasLegacySyntaxBody()) {
+            } else if (function.body_facts.has_definition) {
                 try self.emitFunctionForwardDecl(function);
             },
             else => {},

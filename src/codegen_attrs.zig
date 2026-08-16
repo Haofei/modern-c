@@ -18,6 +18,10 @@ pub const FunctionSignatureFacts = struct {
     error_from: bool,
 };
 
+pub const FunctionBodyFacts = struct {
+    has_definition: bool,
+};
+
 pub const GlobalSignatureFacts = struct {
     name: ast_bridge.Ident,
     ty: ?ast_bridge.TypeExpr,

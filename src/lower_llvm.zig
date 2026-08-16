@@ -667,7 +667,7 @@ const LlvmEmitter = struct {
         const ret_ty = sig.return_type orelse simpleType(function.name.span, "void");
         _ = try self.llvmType(ret_ty);
         for (sig.params) |param| _ = try self.llvmType(param.ty);
-        const debug_id: ?usize = if (function.hasLegacySyntaxBody()) blk: {
+        const debug_id: ?usize = if (function.body_facts.has_definition) blk: {
             const id = self.debug_next_id;
             self.debug_next_id += 1;
             try self.debug_functions.append(self.allocator, .{

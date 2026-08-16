@@ -131,6 +131,7 @@ pub const FunctionArtifact = struct {
     exported: bool,
     is_variadic: bool,
     signature: codegen_attrs.FunctionSignatureFacts,
+    body_facts: codegen_attrs.FunctionBodyFacts,
     render_attrs: codegen_attrs.FunctionRenderAttrs,
     backend_name: ?[]const u8,
     is_extern: bool,
@@ -152,14 +153,13 @@ pub const FunctionArtifact = struct {
                 .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi")),
                 .error_from = hasNamedAttr(attrs, "error_from"),
             },
+            .body_facts = .{
+                .has_definition = fn_decl.body != null,
+            },
             .render_attrs = attr_syntax.functionRenderAttrs(attrs),
             .backend_name = backendNameOverride(attrs),
             .is_extern = is_extern,
         };
-    }
-
-    pub fn hasLegacySyntaxBody(self: FunctionArtifact) bool {
-        return self.body_fallback.hasBody();
     }
 
     pub fn legacySyntaxBody(self: FunctionArtifact) ?ast.Block {
@@ -173,10 +173,6 @@ pub const FunctionArtifact = struct {
 /// boundary to remove.
 pub const FunctionBodyFallback = struct {
     syntax: ?ast.Block,
-
-    pub fn hasBody(self: FunctionBodyFallback) bool {
-        return self.syntax != null;
-    }
 
     pub fn syntaxBody(self: FunctionBodyFallback) ?ast.Block {
         return self.syntax;

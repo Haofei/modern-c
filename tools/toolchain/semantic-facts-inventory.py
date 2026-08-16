@@ -1068,6 +1068,7 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
         "syntax: ?ast.Block": 1,
         "has_explicit_abi: bool": 0,
         "signature: codegen_attrs.FunctionSignatureFacts": 1,
+        "body_facts: codegen_attrs.FunctionBodyFacts": 1,
         "pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact": 1,
         "pub fn toDecl(self: FunctionArtifact) ast.FnDecl": 0,
         "pub fn comptimeFnDeclFromArtifact(function: FunctionArtifact) ast.FnDecl": 0,

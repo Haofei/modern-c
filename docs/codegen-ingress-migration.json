@@ -40,6 +40,7 @@
       "render_attrs: codegen_attrs.FunctionRenderAttrs": 1,
       "const codegen_attrs = @import(\"codegen_attrs.zig\")": 1,
       "signature: codegen_attrs.FunctionSignatureFacts": 1,
+      "body_facts: codegen_attrs.FunctionBodyFacts": 1,
       "signature: codegen_attrs.GlobalSignatureFacts": 1,
       "initializer: codegen_attrs.GlobalInitFacts": 1,
       ".signature = .{": 2,
@@ -59,6 +60,7 @@
       "attr_syntax.FunctionRenderAttrs": 0,
       "codegen_attrs.FunctionRenderAttrs": 1,
       "const sig = function.signature": 2,
+      "function.body_facts.has_definition": 1,
       ".error_from = sig.error_from": 1,
       ".error_from = function.has_error_from": 0,
       "fn emitFunctionPrototype(self: *CEmitter, function: anytype)": 1,
@@ -83,6 +85,7 @@
       "attr_syntax.FunctionRenderAttrs": 0,
       "codegen_attrs.FunctionRenderAttrs": 1,
       "const sig = function.signature": 1,
+      "function.body_facts.has_definition": 1,
       ".c_abi = sig.c_abi": 1,
       ".error_from = sig.error_from": 1,
       "fn emitFunction(self: *LlvmEmitter, function: anytype": 1,
@@ -99,8 +102,10 @@
       "pub const FunctionRenderAttrs = struct": 1,
       "pub fn emitCFunctionRenderAttrs": 1,
       "pub const FunctionSignatureFacts = struct": 1,
+      "pub const FunctionBodyFacts = struct": 1,
       "params: []const ast_bridge.Param": 1,
       "return_type: ?ast_bridge.TypeExpr": 1,
+      "has_definition: bool": 1,
       "c_abi: bool": 1,
       "error_from: bool": 1
     }
@@ -134,6 +139,7 @@
       "error_from.hasAttr(function": 0,
       "backendNameOverride(function": 0,
       "function.backend_attrs": 0,
+      "function.hasLegacySyntaxBody()": 0,
       "@import(\"attr_syntax.zig\")": 0,
       "attr_syntax.": 0
     },
@@ -144,6 +150,7 @@
       "hasNamedAttr(function": 0,
       "backendNameOverride(function": 0,
       "function.backend_attrs": 0,
+      "function.hasLegacySyntaxBody()": 0,
       "@import(\"attr_syntax.zig\")": 0,
       "attr_syntax.": 0
     }
