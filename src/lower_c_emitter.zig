@@ -429,7 +429,7 @@ pub const CEmitter = struct {
         // consult the reflection environment.
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
-                if (function.is_const and !self.const_fns.contains(function.name.text)) try self.const_fns.put(function.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));
+                if (function.is_const and !self.const_fns.contains(function.signature.name.text)) try self.const_fns.put(function.signature.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));
             },
             else => {},
         };
@@ -500,8 +500,8 @@ pub const CEmitter = struct {
 
     fn collectFunctionArtifact(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
         const sig = function.signature;
-        try self.functions.put(function.name.text, .{ .params = sig.params, .return_type = sig.return_type, .is_extern = sig.is_extern, .is_variadic = sig.is_variadic, .error_from = sig.error_from });
-        if (!function.is_extern) if (function.backend_name) |name| try self.backend_names.put(function.name.text, name);
+        try self.functions.put(function.signature.name.text, .{ .params = sig.params, .return_type = sig.return_type, .is_extern = sig.is_extern, .is_variadic = sig.is_variadic, .error_from = sig.error_from });
+        if (!function.signature.is_extern) if (function.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
         try self.collectFunctionArtifactSliceTypes(function);
     }
 
@@ -515,9 +515,9 @@ pub const CEmitter = struct {
         // `bind(scalar, f)` closures that need an env-widening thunk.
         for (self.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
-                if (function.is_extern) continue;
+                if (function.signature.is_extern) continue;
                 if (function.legacySyntaxBody()) |body| {
-                    const mir_function = self.mirFunctionNamed(function.name.text) orelse return error.UnsupportedCEmission;
+                    const mir_function = self.mirFunctionNamed(function.signature.name.text) orelse return error.UnsupportedCEmission;
                     try self.collectBlockBindThunks(body, mir_function);
                 }
             },
@@ -580,7 +580,7 @@ pub const CEmitter = struct {
         // declared later in the (possibly import-merged) source resolves — MC
         // resolves calls module-wide, independent of declaration order.
         for (self.decl_artifacts) |artifact| switch (artifact) {
-            .function => |function| if (function.is_extern) {
+            .function => |function| if (function.signature.is_extern) {
                 // Extern prototypes must precede any function body that calls them;
                 // an imported `extern fn` can be merged after its caller.
                 try self.emitExternFunction(function);
@@ -618,7 +618,7 @@ pub const CEmitter = struct {
     pub fn emitFunctionDefinitions(self: *CEmitter) anyerror!void {
         for (self.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
-                if (function.is_extern) {
+                if (function.signature.is_extern) {
                     // Extern prototypes were already emitted in the forward-declaration pass.
                     continue;
                 }

@@ -558,7 +558,7 @@ const LlvmEmitter = struct {
     fn preRegisterTypeDeclsFromArtifacts(self: *LlvmEmitter, artifacts: declaration_artifacts.CodegenDeclarationArtifacts) !void {
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
-                if (function.is_const and !self.const_fns.contains(function.name.text)) try self.const_fns.put(function.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));
+                if (function.is_const and !self.const_fns.contains(function.signature.name.text)) try self.const_fns.put(function.signature.name.text, eval.ComptimeFunction.fromDeclarationArtifact(function));
             },
             .transitional_type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
@@ -664,7 +664,7 @@ const LlvmEmitter = struct {
 
     fn collectFunctionArtifact(self: *LlvmEmitter, function: declaration_artifacts.FunctionArtifact) !void {
         const sig = function.signature;
-        const ret_ty = sig.return_type orelse simpleType(function.name.span, "void");
+        const ret_ty = sig.return_type orelse simpleType(function.signature.name.span, "void");
         _ = try self.llvmType(ret_ty);
         for (sig.params) |param| _ = try self.llvmType(param.ty);
         const debug_id: ?usize = if (function.body_facts.has_definition) blk: {
@@ -672,14 +672,14 @@ const LlvmEmitter = struct {
             self.debug_next_id += 1;
             try self.debug_functions.append(self.allocator, .{
                 .id = id,
-                .name = function.name.text,
-                .line = debugLine(function.name.span.line),
-                .column = debugColumn(function.name.span.column),
+                .name = function.signature.name.text,
+                .line = debugLine(function.signature.name.span.line),
+                .column = debugColumn(function.signature.name.span.column),
             });
             break :blk id;
         } else null;
-        try self.fn_sigs.put(function.name.text, .{ .ret = ret_ty, .params = sig.params, .c_abi = sig.c_abi, .is_variadic = sig.is_variadic, .debug_id = debug_id, .error_from = sig.error_from });
-        if (function.backend_name) |name| try self.backend_names.put(function.name.text, name);
+        try self.fn_sigs.put(function.signature.name.text, .{ .ret = ret_ty, .params = sig.params, .c_abi = sig.c_abi, .is_variadic = sig.is_variadic, .debug_id = debug_id, .error_from = sig.error_from });
+        if (function.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
     }
 
     fn collectFunctionGlobalAndTraitArtifacts(self: *LlvmEmitter) !void {
@@ -791,7 +791,7 @@ const LlvmEmitter = struct {
     fn emitCollectedCallableDeclarations(self: *LlvmEmitter) !void {
         for (self.decl_artifacts) |artifact| switch (artifact) {
             .function => |function| {
-                if (function.is_extern) {
+                if (function.signature.is_extern) {
                     try self.emitExternFunction(function);
                 } else if (function.legacySyntaxBody()) |body| {
                     try self.emitFunction(function, body, function.render_attrs);

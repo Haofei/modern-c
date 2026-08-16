@@ -131,11 +131,15 @@
       "backend_attrs: []const ast.Attr": 0,
       "has_explicit_abi: bool": 0,
       "has_error_from: bool": 0,
-      "has_mc_abi: bool": 0
+      "has_mc_abi: bool": 0,
+      "is_variadic: bool": 0
     },
     "src/lower_c_emitter.zig": {
       "function.attrs": 0,
       "function.abi": 0,
+      "function.name.text": 0,
+      "function.is_extern": 0,
+      "function.is_variadic": 0,
       "error_from.hasAttr(function": 0,
       "backendNameOverride(function": 0,
       "function.backend_attrs": 0,
@@ -146,6 +150,9 @@
     "src/lower_llvm.zig": {
       "function.attrs": 0,
       "function.abi": 0,
+      "function.name.text": 0,
+      "function.is_extern": 0,
+      "function.is_variadic": 0,
       "error_from.hasAttr(function": 0,
       "hasNamedAttr(function": 0,
       "backendNameOverride(function": 0,

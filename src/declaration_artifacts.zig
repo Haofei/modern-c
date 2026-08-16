@@ -125,24 +125,17 @@ fn declOrigin(decl: ast.Decl) []const u8 {
 }
 
 pub const FunctionArtifact = struct {
-    name: ast.Ident,
     body_fallback: FunctionBodyFallback,
     is_const: bool,
-    exported: bool,
-    is_variadic: bool,
     signature: codegen_attrs.FunctionSignatureFacts,
     body_facts: codegen_attrs.FunctionBodyFacts,
     render_attrs: codegen_attrs.FunctionRenderAttrs,
     backend_name: ?[]const u8,
-    is_extern: bool,
 
     pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
         return .{
-            .name = fn_decl.name,
             .body_fallback = .{ .syntax = fn_decl.body },
             .is_const = fn_decl.is_const,
-            .exported = fn_decl.exported,
-            .is_variadic = fn_decl.is_variadic,
             .signature = .{
                 .name = fn_decl.name,
                 .params = fn_decl.params,
@@ -158,7 +151,6 @@ pub const FunctionArtifact = struct {
             },
             .render_attrs = attr_syntax.functionRenderAttrs(attrs),
             .backend_name = backendNameOverride(attrs),
-            .is_extern = is_extern,
         };
     }
 
@@ -376,7 +368,7 @@ test "declaration artifacts collect from resolved declaration stream" {
     var saw_struct = false;
     for (from_resolved.decl_artifacts) |artifact| switch (artifact) {
         .function => |function| {
-            try std.testing.expectEqualStrings("inc", function.name.text);
+            try std.testing.expectEqualStrings("inc", function.signature.name.text);
             saw_function = true;
         },
         .global => |global| {

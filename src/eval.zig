@@ -607,7 +607,7 @@ pub const ComptimeFunction = struct {
 
     pub fn fromDeclarationArtifact(function: declaration_artifacts.FunctionArtifact) ComptimeFunction {
         return .{
-            .name = function.name,
+            .name = function.signature.name,
             .params = function.signature.params,
             .return_type = function.signature.return_type,
             .body = function.legacySyntaxBody(),
