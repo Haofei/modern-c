@@ -1446,7 +1446,7 @@ const LlvmEmitter = struct {
             if (self.simpleMirLogicalNotAtReturn(function, fn_mir)) |arg| return .{ .logical_not = arg };
             if (self.simpleMirCheckedUnaryAtReturn(function, fn_mir)) |unary| return .{ .checked_unary = unary };
         }
-        if (simpleMirNoTrap(fn_mir)) if (self.simpleMirAssignmentReturn(function, fn_mir, value_id)) |assigned| return assigned;
+        if (self.simpleMirAssignmentReturn(function, fn_mir, value_id)) |assigned| return assigned;
         if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
         return null;
     }
@@ -1617,6 +1617,8 @@ const LlvmEmitter = struct {
     fn simpleMirAssignedValueInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, local_name: []const u8) ?SimpleMirConditionalValue {
         const source = self.simpleMirAssignmentSourceInBlock(block, local_name) orelse return null;
         if (self.simpleMirDirectCallAtSource(function, fn_mir, source)) |call| return .{ .direct_call = call };
+        if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
+        if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
             .integer_literal => |literal| .{ .integer_literal = literal },
@@ -1935,7 +1937,10 @@ const LlvmEmitter = struct {
         const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
         if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .checked_binary = binary };
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, init_source)) |unary| return .{ .checked_unary = unary };
+        if (!simpleMirNoTrap(fn_mir)) return null;
         if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
+        if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .compare_binary = binary };
+        if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = name },
@@ -1948,7 +1953,12 @@ const LlvmEmitter = struct {
     fn simpleMirAssignmentReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {
         if (fn_mir.pointer_provenance_facts.len != 0) return null;
         const assigned_source = self.simpleMirAssignmentSource(fn_mir, local_name) orelse return null;
+        if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, assigned_source)) |binary| return .{ .checked_binary = binary };
+        if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, assigned_source)) |unary| return .{ .checked_unary = unary };
+        if (!simpleMirNoTrap(fn_mir)) return null;
         if (self.simpleMirDirectCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .direct_call = call };
+        if (self.simpleMirCompareBinaryAtSource(function, fn_mir, assigned_source)) |binary| return .{ .compare_binary = binary };
+        if (self.simpleMirLogicalNotAtSource(function, fn_mir, assigned_source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirArgAt(function, fn_mir, assigned_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = name },
@@ -1980,7 +1990,7 @@ const LlvmEmitter = struct {
                         source = instructionSourcePoint(next);
                         break;
                     },
-                    .integer_literal_conversion, .call => {
+                    .integer_literal_conversion, .binary, .unary, .call => {
                         source = instructionSourcePoint(next);
                         break;
                     },
@@ -2034,7 +2044,7 @@ const LlvmEmitter = struct {
             .param, .local, .assign, .target_type, .integer_literal_conversion, .binary, .unary, .add_overflow, .return_value => {},
             .call => {},
             .expr => {
-                if (std.mem.eql(u8, instruction.detail, "int")) continue;
+                if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool")) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {
