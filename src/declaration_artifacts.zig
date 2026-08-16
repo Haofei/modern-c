@@ -126,8 +126,6 @@ fn declOrigin(decl: ast.Decl) []const u8 {
 
 pub const FunctionArtifact = struct {
     name: ast.Ident,
-    params: []ast.Param,
-    return_type: ?ast.TypeExpr,
     body: ?ast.Block,
     is_const: bool,
     exported: bool,
@@ -140,8 +138,6 @@ pub const FunctionArtifact = struct {
     pub fn fromDecl(fn_decl: ast.FnDecl, attrs: []const ast.Attr, is_extern: bool) FunctionArtifact {
         return .{
             .name = fn_decl.name,
-            .params = fn_decl.params,
-            .return_type = fn_decl.return_type,
             .body = fn_decl.body,
             .is_const = fn_decl.is_const,
             .exported = fn_decl.exported,
