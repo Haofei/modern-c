@@ -809,8 +809,11 @@ const LlvmEmitter = struct {
                 else => unreachable,
             };
             if (function.signature.is_extern) continue;
-            if (self.function_bodies.legacyFunctionBody(fn_mir.name)) |body| {
-                try self.emitFunction(function, body, function.render_attrs);
+            const render_attrs = function.render_attrs;
+            if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs)) {
+                continue;
+            } else if (self.function_bodies.legacyFunctionBody(fn_mir.name)) |body| {
+                try self.emitFunction(function, body, render_attrs);
             } else {
                 return error.UnsupportedLlvmEmission;
             }
@@ -1242,6 +1245,132 @@ const LlvmEmitter = struct {
         }
         if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, ty) or self.fixedLayoutBitsOf(ty) != null or std.mem.eql(u8, try self.llvmType(ty), "ptr")) return .{ .ty = ty, .value = value };
         return error.UnsupportedLlvmEmission;
+    }
+
+    const SimpleMirReturn = union(enum) {
+        void,
+        param: []const u8,
+        integer_literal: []const u8,
+    };
+
+    fn emitSimpleMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
+        if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
+        const simple_return = self.simpleMirReturn(function, fn_mir) orelse return false;
+
+        const sig_facts = function.signature;
+        const ret_ty = sig_facts.return_type orelse simpleType(sig_facts.name.span, "void");
+        const ret_llvm = try self.llvmType(ret_ty);
+        const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
+        const ret_ext = if (fn_sig.c_abi) self.cAbiExtension(ret_ty) else "";
+
+        const old_scope = self.current_debug_scope;
+        const old_span = self.current_debug_span;
+        const old_return_ty = self.current_return_ty;
+        const old_function = self.current_function;
+        const old_params = self.current_params;
+        self.current_debug_scope = if (self.fn_sigs.get(sig_facts.name.text)) |sig| sig.debug_id else null;
+        self.current_debug_span = sig_facts.name.span;
+        self.current_return_ty = ret_ty;
+        self.current_function = sig_facts.name.text;
+        self.current_params = sig_facts.params;
+        defer {
+            self.current_debug_scope = old_scope;
+            self.current_debug_span = old_span;
+            self.current_return_ty = old_return_ty;
+            self.current_function = old_function;
+            self.current_params = old_params;
+        }
+
+        const attr_str: []const u8 = if (self.linux_kernel and self.target_arch == .x86_64)
+            " nounwind fn_ret_thunk_extern"
+        else if (self.linux_kernel and self.target_arch == .aarch64)
+            " nounwind \"branch-target-enforcement\""
+        else if (self.linux_kernel)
+            " nounwind"
+        else
+            "";
+        const weak_str: []const u8 = if (!sig_facts.exported)
+            "internal "
+        else
+            "";
+
+        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ weak_str, ret_ext, ret_llvm, sig_facts.name.text });
+        for (sig_facts.params, 0..) |param, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
+            try self.out.print(self.allocator, "{s} {s}%{s}", .{ try self.llvmType(param.ty), param_ext, param.name.text });
+        }
+        const entry_label = try self.functionEntryLabel();
+        if (self.current_debug_scope) |scope| {
+            try self.out.print(self.allocator, "){s} !dbg !{d} {{\n{s}:\n", .{ attr_str, scope, entry_label });
+        } else {
+            try self.out.print(self.allocator, "){s} {{\n{s}:\n", .{ attr_str, entry_label });
+        }
+
+        const return_span = self.simpleMirReturnSpan(fn_mir) orelse sig_facts.name.span;
+        switch (simple_return) {
+            .void => try self.emitReturnVoid(return_span),
+            .param => |name| try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}), return_span),
+            .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, return_span),
+        }
+        try self.out.appendSlice(self.allocator, "}\n\n");
+        return true;
+    }
+
+    fn simpleMirReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirReturn {
+        _ = self;
+        if (fn_mir.blocks.len != 1 or fn_mir.trap_edges.len != 0) return null;
+        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
+        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+        const block = fn_mir.blocks[0];
+        if (block.terminator != .return_) return null;
+        const ret = simpleMirReturnInstruction(block) orelse return null;
+        if (ret.result_ty == .void or std.mem.eql(u8, ret.detail, "void")) return .void;
+        const value_id = ret.value_id orelse return null;
+        for (function.signature.params) |param| {
+            if (std.mem.eql(u8, value_id, param.name.text)) return .{ .param = param.name.text };
+        }
+        if (std.mem.eql(u8, value_id, "int")) {
+            for (fn_mir.integer_facts) |fact| {
+                if (sameMirSourcePoint(fact.source, instructionSourcePoint(ret))) return .{ .integer_literal = fact.literal };
+            }
+        }
+        return null;
+    }
+
+    fn simpleMirReturnInstruction(block: mir.Block) ?mir.Instruction {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .return_value) return instruction;
+        }
+        return null;
+    }
+
+    fn plainFunctionRenderAttrs(render: anytype) bool {
+        return !render.naked and !render.weak and !render.noinline_attr and render.section == null and render.effective_align == null;
+    }
+
+    fn simpleMirReturnSpan(self: *LlvmEmitter, fn_mir: mir.Function) ?diagnostics.Span {
+        _ = self;
+        if (fn_mir.blocks.len != 1) return null;
+        const ret = simpleMirReturnInstruction(fn_mir.blocks[0]) orelse return null;
+        return spanFromMirSourcePoint(instructionSourcePoint(ret));
+    }
+
+    fn instructionSourcePoint(instruction: mir.Instruction) mir.SourcePoint {
+        return .{
+            .line = instruction.line,
+            .column = instruction.column,
+            .offset = instruction.source_offset,
+            .len = instruction.source_len,
+        };
+    }
+
+    fn sameMirSourcePoint(a: mir.SourcePoint, b: mir.SourcePoint) bool {
+        return a.line == b.line and a.column == b.column and a.offset == b.offset and a.len == b.len;
+    }
+
+    fn spanFromMirSourcePoint(source: mir.SourcePoint) diagnostics.Span {
+        return .{ .line = source.line, .column = source.column, .offset = source.offset, .len = source.len };
     }
 
     fn emitFunction(self: *LlvmEmitter, function: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) !void {

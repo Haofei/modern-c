@@ -621,8 +621,11 @@ pub const CEmitter = struct {
                 else => unreachable,
             };
             if (function.signature.is_extern) continue;
-            if (self.function_bodies.legacyFunctionBody(fn_mir.name)) |body| {
-                try self.emitFunction(function, body, function.render_attrs);
+            const render_attrs = function.render_attrs;
+            if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs)) {
+                continue;
+            } else if (self.function_bodies.legacyFunctionBody(fn_mir.name)) |body| {
+                try self.emitFunction(function, body, render_attrs);
             } else {
                 return error.UnsupportedCEmission;
             }
@@ -1180,6 +1183,94 @@ pub const CEmitter = struct {
         errdefer locals.deinit();
         for (params) |param| try locals.put(param.name.text, try self.localInfoFromType(param.ty));
         return locals;
+    }
+
+    const SimpleMirReturn = union(enum) {
+        void,
+        param: []const u8,
+        integer_literal: []const u8,
+    };
+
+    fn emitSimpleMirFunction(self: *CEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
+        if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
+        const simple_return = self.simpleMirReturn(function, fn_mir) orelse return false;
+
+        try self.writeLineDirective(function.signature.name.span);
+        try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
+        try self.out.appendSlice(self.allocator, " {\n");
+
+        const previous_function = self.current_function;
+        self.current_function = function.signature.name.text;
+        defer self.current_function = previous_function;
+        self.indent += 1;
+        defer self.indent -= 1;
+
+        const return_span = self.simpleMirReturnSpan(fn_mir);
+        if (return_span) |span| try self.writeLineDirective(span);
+        try self.writeIndent();
+        switch (simple_return) {
+            .void => try self.out.appendSlice(self.allocator, "return;\n"),
+            .param => |name| try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(name)}),
+            .integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
+        }
+        try self.out.appendSlice(self.allocator, "}\n\n");
+        return true;
+    }
+
+    fn simpleMirReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirReturn {
+        _ = self;
+        if (fn_mir.blocks.len != 1 or fn_mir.trap_edges.len != 0) return null;
+        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
+        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+        const block = fn_mir.blocks[0];
+        if (block.terminator != .return_) return null;
+        const ret = simpleMirReturnInstruction(block) orelse return null;
+        if (ret.result_ty == .void or std.mem.eql(u8, ret.detail, "void")) return .void;
+        const value_id = ret.value_id orelse return null;
+        for (function.signature.params) |param| {
+            if (std.mem.eql(u8, value_id, param.name.text)) return .{ .param = param.name.text };
+        }
+        if (std.mem.eql(u8, value_id, "int")) {
+            for (fn_mir.integer_facts) |fact| {
+                if (sameMirSourcePoint(fact.source, instructionSourcePoint(ret))) return .{ .integer_literal = fact.literal };
+            }
+        }
+        return null;
+    }
+
+    fn simpleMirReturnInstruction(block: mir.Block) ?mir.Instruction {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .return_value) return instruction;
+        }
+        return null;
+    }
+
+    fn plainFunctionRenderAttrs(render: anytype) bool {
+        return !render.naked and !render.weak and !render.noinline_attr and render.section == null and render.effective_align == null;
+    }
+
+    fn simpleMirReturnSpan(self: *CEmitter, fn_mir: mir.Function) ?diagnostics.Span {
+        _ = self;
+        if (fn_mir.blocks.len != 1) return null;
+        const ret = simpleMirReturnInstruction(fn_mir.blocks[0]) orelse return null;
+        return spanFromMirSourcePoint(instructionSourcePoint(ret));
+    }
+
+    fn instructionSourcePoint(instruction: mir.Instruction) mir.SourcePoint {
+        return .{
+            .line = instruction.line,
+            .column = instruction.column,
+            .offset = instruction.source_offset,
+            .len = instruction.source_len,
+        };
+    }
+
+    fn sameMirSourcePoint(a: mir.SourcePoint, b: mir.SourcePoint) bool {
+        return a.line == b.line and a.column == b.column and a.offset == b.offset and a.len == b.len;
+    }
+
+    fn spanFromMirSourcePoint(source: mir.SourcePoint) diagnostics.Span {
+        return .{ .line = source.line, .column = source.column, .offset = source.offset, .len = source.len };
     }
 
     fn emitIndentedFunctionBlock(self: *CEmitter, body: ast_bridge.Block, locals: *std.StringHashMap(LocalInfo), return_ty: ?ast_bridge.TypeExpr) anyerror!void {
