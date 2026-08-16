@@ -1265,9 +1265,14 @@ const LlvmEmitter = struct {
     };
 
     const SimpleMirConditionalReturn = struct {
-        condition: []const u8,
+        condition: SimpleMirCondition,
         then_value: SimpleMirConditionalValue,
         else_value: SimpleMirConditionalValue,
+    };
+
+    const SimpleMirCondition = struct {
+        name: []const u8,
+        inverted: bool = false,
     };
 
     const SimpleMirConditionalValue = union(enum) {
@@ -1414,7 +1419,9 @@ const LlvmEmitter = struct {
         } else if (simple_conditional_return) |conditional| {
             const then_label = try self.nextLabel("if_then");
             const else_label = try self.nextLabel("if_else");
-            try self.out.print(self.allocator, "  br i1 %{s}, label %{s}, label %{s}{s}\n{s}:\n", .{ conditional.condition, then_label, else_label, try self.debugCallSuffix(), then_label });
+            const true_label = if (conditional.condition.inverted) else_label else then_label;
+            const false_label = if (conditional.condition.inverted) then_label else else_label;
+            try self.out.print(self.allocator, "  br i1 %{s}, label %{s}, label %{s}{s}\n{s}:\n", .{ conditional.condition.name, true_label, false_label, try self.debugCallSuffix(), then_label });
             try self.emitSimpleMirConditionalReturnValue(ret_ty, conditional.then_value, sig_facts.name.span);
             try self.out.print(self.allocator, "{s}:\n", .{else_label});
             try self.emitSimpleMirConditionalReturnValue(ret_ty, conditional.else_value, sig_facts.name.span);
@@ -1528,9 +1535,25 @@ const LlvmEmitter = struct {
         return .{ then_value, else_value };
     }
 
-    fn simpleMirSwitchConditionParam(self: *LlvmEmitter, function: anytype, block: mir.Block) ?[]const u8 {
+    fn simpleMirSwitchConditionParam(self: *LlvmEmitter, function: anytype, block: mir.Block) ?SimpleMirCondition {
         _ = self;
         var condition: ?[]const u8 = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .unary or !std.mem.eql(u8, instruction.detail, "logical_not")) continue;
+            var after_unary = false;
+            for (block.instructions) |operand_instruction| {
+                if (!after_unary) {
+                    after_unary = operand_instruction.kind == .unary and sameMirSourceLocation(instructionSourcePoint(operand_instruction), instructionSourcePoint(instruction));
+                    continue;
+                }
+                if (operand_instruction.kind != .expr or operand_instruction.result_ty != .bool) continue;
+                for (function.signature.params) |param| {
+                    if (std.mem.eql(u8, operand_instruction.detail, param.name.text)) return .{ .name = param.name.text, .inverted = true };
+                }
+                return null;
+            }
+            return null;
+        }
         for (block.instructions) |instruction| {
             if (instruction.kind != .expr or instruction.result_ty != .bool) continue;
             for (function.signature.params) |param| {
@@ -1539,7 +1562,7 @@ const LlvmEmitter = struct {
                 condition = param.name.text;
             }
         }
-        return condition;
+        return if (condition) |name| .{ .name = name } else null;
     }
 
     fn simpleMirReturnValueInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirConditionalValue {

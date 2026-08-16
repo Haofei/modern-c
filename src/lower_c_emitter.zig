@@ -1203,9 +1203,14 @@ pub const CEmitter = struct {
     };
 
     const SimpleMirConditionalReturn = struct {
-        condition: []const u8,
+        condition: SimpleMirCondition,
         then_value: SimpleMirConditionalValue,
         else_value: SimpleMirConditionalValue,
+    };
+
+    const SimpleMirCondition = struct {
+        name: []const u8,
+        inverted: bool = false,
     };
 
     const SimpleMirConditionalValue = union(enum) {
@@ -1320,7 +1325,11 @@ pub const CEmitter = struct {
             }
         } else if (simple_conditional_return) |conditional| {
             try self.writeIndent();
-            try self.out.print(self.allocator, "if ({s}) {{\n", .{try self.cIdent(conditional.condition)});
+            if (conditional.condition.inverted) {
+                try self.out.print(self.allocator, "if (!{s}) {{\n", .{try self.cIdent(conditional.condition.name)});
+            } else {
+                try self.out.print(self.allocator, "if ({s}) {{\n", .{try self.cIdent(conditional.condition.name)});
+            }
             self.indent += 1;
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "return ");
@@ -1447,9 +1456,25 @@ pub const CEmitter = struct {
         return .{ then_value, else_value };
     }
 
-    fn simpleMirSwitchConditionParam(self: *CEmitter, function: anytype, block: mir.Block) ?[]const u8 {
+    fn simpleMirSwitchConditionParam(self: *CEmitter, function: anytype, block: mir.Block) ?SimpleMirCondition {
         _ = self;
         var condition: ?[]const u8 = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .unary or !std.mem.eql(u8, instruction.detail, "logical_not")) continue;
+            var after_unary = false;
+            for (block.instructions) |operand_instruction| {
+                if (!after_unary) {
+                    after_unary = operand_instruction.kind == .unary and sameMirSourceLocation(instructionSourcePoint(operand_instruction), instructionSourcePoint(instruction));
+                    continue;
+                }
+                if (operand_instruction.kind != .expr or operand_instruction.result_ty != .bool) continue;
+                for (function.signature.params) |param| {
+                    if (std.mem.eql(u8, operand_instruction.detail, param.name.text)) return .{ .name = param.name.text, .inverted = true };
+                }
+                return null;
+            }
+            return null;
+        }
         for (block.instructions) |instruction| {
             if (instruction.kind != .expr or instruction.result_ty != .bool) continue;
             for (function.signature.params) |param| {
@@ -1458,7 +1483,7 @@ pub const CEmitter = struct {
                 condition = param.name.text;
             }
         }
-        return condition;
+        return if (condition) |name| .{ .name = name } else null;
     }
 
     fn simpleMirReturnValueInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirConditionalValue {
