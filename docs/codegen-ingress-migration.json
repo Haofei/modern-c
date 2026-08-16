@@ -17,7 +17,8 @@
       "init: ?ast.Expr": 1,
       "methods: []ast.TraitMethodSig": 1,
       "methods: []ast.ImplTraitMethod": 1,
-      "pub const TypeDeclArtifact = union(enum)": 1,
+      "pub const TypeDeclArtifact = union(enum)": 0,
+      "pub const TransitionalTypeDeclArtifact = union(enum)": 1,
       "type_alias: ast.TypeAlias": 1,
       "struct_decl: ast.StructDecl": 1,
       "enum_decl: ast.EnumDecl": 1,
@@ -37,7 +38,10 @@
       "render_attrs: codegen_attrs.FunctionRenderAttrs": 1,
       "const codegen_attrs = @import(\"codegen_attrs.zig\")": 1,
       "signature: codegen_attrs.FunctionSignatureFacts": 1,
-      ".signature = .{": 1
+      "signature: codegen_attrs.GlobalSignatureFacts": 1,
+      "initializer: codegen_attrs.GlobalInitFacts": 1,
+      ".signature = .{": 2,
+      ".initializer = .{": 1
     },
     "src/lower_c_emitter.zig": {
       "function.backend_attrs": 0,
@@ -52,9 +56,13 @@
       "codegen_attrs.emitCFunctionRenderAttrs": 1,
       "attr_syntax.FunctionRenderAttrs": 0,
       "codegen_attrs.FunctionRenderAttrs": 1,
-      "const sig = function.signature": 1,
+      "const sig = function.signature": 2,
       ".error_from = sig.error_from": 1,
-      ".error_from = function.has_error_from": 0
+      ".error_from = function.has_error_from": 0,
+      "fn emitFunctionPrototype(self: *CEmitter, function: anytype)": 1,
+      "fn emitFunctionForwardDecl(self: *CEmitter, function: anytype)": 1,
+      "fn emitFunction(self: *CEmitter, function: anytype": 1,
+      "fn emitFunctionBody(self: *CEmitter, function: anytype": 1
     },
     "src/lower_llvm.zig": {
       "function.backend_attrs": 0,
@@ -74,7 +82,9 @@
       "codegen_attrs.FunctionRenderAttrs": 1,
       "const sig = function.signature": 1,
       ".c_abi = sig.c_abi": 1,
-      ".error_from = sig.error_from": 1
+      ".error_from = sig.error_from": 1,
+      "fn emitFunction(self: *LlvmEmitter, function: anytype": 1,
+      "fn emitExternFunction(self: *LlvmEmitter, function: anytype)": 1
     },
     "src/attr_syntax.zig": {
       "pub const FunctionRenderAttrs = struct": 0,

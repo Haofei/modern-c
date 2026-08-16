@@ -608,8 +608,8 @@ pub const ComptimeFunction = struct {
     pub fn fromDeclarationArtifact(function: declaration_artifacts.FunctionArtifact) ComptimeFunction {
         return .{
             .name = function.name,
-            .params = function.params,
-            .return_type = function.return_type,
+            .params = function.signature.params,
+            .return_type = function.signature.return_type,
             .body = function.body,
         };
     }
@@ -957,13 +957,15 @@ fn collectConstGlobalArtifact(
     out: *std.StringHashMap(ComptimeValue),
     options: CollectConstGlobalsOptions,
 ) !void {
+    const sig = global.signature;
+    const init_facts = global.initializer;
     return collectConstGlobal(allocator, scope, .{
-        .name = global.name,
-        .ty = global.ty,
-        .init = global.init,
-        .is_const = global.is_const,
-        .exported = global.exported,
-        .is_extern = global.is_extern,
+        .name = sig.name,
+        .ty = sig.ty,
+        .init = init_facts.init,
+        .is_const = sig.is_const,
+        .exported = sig.exported,
+        .is_extern = sig.is_extern,
     }, out, options);
 }
 
@@ -1102,7 +1104,7 @@ fn moduleGlobalType(scope: *const ComptimeScope, name: []const u8) ?ast.TypeExpr
     }
     if (declarations.decl_artifacts) |decl_artifacts| {
         for (decl_artifacts) |artifact| switch (artifact) {
-            .global => |global| if (std.mem.eql(u8, global.name.text, name)) return global.ty,
+            .global => |global| if (std.mem.eql(u8, global.signature.name.text, name)) return global.signature.ty,
             else => {},
         };
         return null;

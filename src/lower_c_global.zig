@@ -65,15 +65,17 @@ pub const AccessContext = struct {
 };
 
 pub fn emitGlobal(ctx: EmitContext, global: declaration_artifacts.GlobalArtifact) !void {
-    try ctx.write_line_directive(ctx.emit_ctx, global.name.span);
+    const sig = global.signature;
+    const init_facts = global.initializer;
+    try ctx.write_line_directive(ctx.emit_ctx, sig.name.span);
     // `extern global NAME: T;` — a declaration only (storage lives in another unit).
-    if (global.is_extern) {
-        try ctx.out.print(ctx.allocator, "#undef {s}\n", .{global.name.text});
+    if (sig.is_extern) {
+        try ctx.out.print(ctx.allocator, "#undef {s}\n", .{sig.name.text});
         try ctx.out.appendSlice(ctx.allocator, "extern ");
-        if (global.ty) |global_ty| {
-            try ctx.emit_declarator(ctx.emit_ctx, global_ty, global.name.text);
+        if (sig.ty) |global_ty| {
+            try ctx.emit_declarator(ctx.emit_ctx, global_ty, sig.name.text);
         } else {
-            try ctx.out.print(ctx.allocator, "uint32_t {s}", .{global.name.text});
+            try ctx.out.print(ctx.allocator, "uint32_t {s}", .{sig.name.text});
         }
         try ctx.out.appendSlice(ctx.allocator, ";\n\n");
         return;
@@ -83,22 +85,22 @@ pub fn emitGlobal(ctx: EmitContext, global: declaration_artifacts.GlobalArtifact
     // <limits.h>) — otherwise its declaration and every read expand the macro and
     // fail to compile. `#undef` of a non-macro is a legal no-op, so this is safe for
     // the common (non-colliding) case.
-    try ctx.out.print(ctx.allocator, "#undef {s}\n", .{global.name.text});
+    try ctx.out.print(ctx.allocator, "#undef {s}\n", .{sig.name.text});
     // `export global` gets EXTERNAL linkage (no `static`) so other compilation units —
     // e.g. a vendored C engine linking against `stdout`/`stderr` data symbols this
     // runtime provides — resolve it by name. Plain `global` stays file-local `static`.
-    try ctx.out.appendSlice(ctx.allocator, if (global.exported) "MC_UNUSED " else "static MC_UNUSED ");
-    if (global.ty) |global_ty| {
-        try ctx.emit_declarator(ctx.emit_ctx, global_ty, global.name.text);
+    try ctx.out.appendSlice(ctx.allocator, if (sig.exported) "MC_UNUSED " else "static MC_UNUSED ");
+    if (sig.ty) |global_ty| {
+        try ctx.emit_declarator(ctx.emit_ctx, global_ty, sig.name.text);
     } else {
-        try ctx.out.print(ctx.allocator, "uint32_t {s}", .{global.name.text});
+        try ctx.out.print(ctx.allocator, "uint32_t {s}", .{sig.name.text});
     }
-    if (global.init) |initializer| {
+    if (init_facts.init) |initializer| {
         // A `const` global (section 22) emits its folded compile-time value,
         // so initializers like `MAX * 2` that reference earlier const
         // globals lower to a plain C constant.
-        if (global.is_const) {
-            if (try ctx.const_global_c_value(ctx.emit_ctx, initializer, global.ty)) |text| {
+        if (sig.is_const) {
+            if (try ctx.const_global_c_value(ctx.emit_ctx, initializer, sig.ty)) |text| {
                 try ctx.out.print(ctx.allocator, " = {s};\n\n", .{text});
                 return;
             }
@@ -107,21 +109,21 @@ pub fn emitGlobal(ctx: EmitContext, global: declaration_artifacts.GlobalArtifact
             try ctx.out.appendSlice(ctx.allocator, " = ");
             if (try emitStaticCInitializer(ctx.allocator, ctx.out, static_initializer.expr)) {
                 // Emitted directly.
-            } else if (global.ty) |global_ty| {
+            } else if (sig.ty) |global_ty| {
                 try ctx.emit_expr_with_target_for_owner(ctx.emit_ctx, static_initializer.owner, static_initializer.expr, global_ty);
             } else {
                 try ctx.emit_expr(ctx.emit_ctx, static_initializer.expr);
             }
-            try ctx.static_initializers.put(global.name.text, static_initializer.expr);
-        } else if (global.ty != null and isArrayLiteralExpr(initializer)) {
+            try ctx.static_initializers.put(sig.name.text, static_initializer.expr);
+        } else if (sig.ty != null and isArrayLiteralExpr(initializer)) {
             try ctx.out.appendSlice(ctx.allocator, " = ");
-            try ctx.emit_expr_with_target(ctx.emit_ctx, initializer, global.ty.?);
-            try ctx.static_initializers.put(global.name.text, initializer);
-        } else if (global.ty != null and isStructLiteralExpr(initializer)) {
+            try ctx.emit_expr_with_target(ctx.emit_ctx, initializer, sig.ty.?);
+            try ctx.static_initializers.put(sig.name.text, initializer);
+        } else if (sig.ty != null and isStructLiteralExpr(initializer)) {
             try ctx.out.appendSlice(ctx.allocator, " = ");
-            try ctx.emit_expr_with_target(ctx.emit_ctx, initializer, global.ty.?);
-            try ctx.static_initializers.put(global.name.text, initializer);
-        } else if (global.ty) |global_ty| {
+            try ctx.emit_expr_with_target(ctx.emit_ctx, initializer, sig.ty.?);
+            try ctx.static_initializers.put(sig.name.text, initializer);
+        } else if (sig.ty) |global_ty| {
             if (try ctx.emit_const_global_initializer(ctx.emit_ctx, global_ty, initializer)) {
                 try ctx.out.appendSlice(ctx.allocator, ";\n\n");
                 return;
@@ -136,7 +138,7 @@ pub fn emitGlobal(ctx: EmitContext, global: declaration_artifacts.GlobalArtifact
             try ctx.out.appendSlice(ctx.allocator, "/* unsupported non-static global initializer */");
             return error.UnsupportedCEmission;
         }
-    } else if (global.ty != null and ctx.is_aggregate_global_type(ctx.emit_ctx, global.ty.?)) {
+    } else if (sig.ty != null and ctx.is_aggregate_global_type(ctx.emit_ctx, sig.ty.?)) {
         try ctx.out.appendSlice(ctx.allocator, " = {0}");
     } else {
         try ctx.out.appendSlice(ctx.allocator, " = 0");

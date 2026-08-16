@@ -8,12 +8,26 @@ const std = @import("std");
 const ast_bridge = @import("ast_bridge.zig");
 
 pub const FunctionSignatureFacts = struct {
+    name: ast_bridge.Ident,
     params: []const ast_bridge.Param,
     return_type: ?ast_bridge.TypeExpr,
+    exported: bool,
     is_extern: bool,
     is_variadic: bool,
     c_abi: bool,
     error_from: bool,
+};
+
+pub const GlobalSignatureFacts = struct {
+    name: ast_bridge.Ident,
+    ty: ?ast_bridge.TypeExpr,
+    is_const: bool,
+    exported: bool,
+    is_extern: bool,
+};
+
+pub const GlobalInitFacts = struct {
+    init: ?ast_bridge.Expr,
 };
 
 pub const FunctionRenderAttrs = struct {

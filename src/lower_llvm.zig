@@ -696,14 +696,15 @@ const LlvmEmitter = struct {
     }
 
     fn collectGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {
-        const ty = global.ty orelse return error.UnsupportedLlvmEmission;
+        const sig = global.signature;
+        const ty = sig.ty orelse return error.UnsupportedLlvmEmission;
         _ = try self.llvmType(ty);
-        try self.global_types.put(global.name.text, ty);
-        try self.global_is_const.put(global.name.text, global.is_const);
-        if (global.is_const) {
-            if (eval.comptimeTypeBitWidth(ty)) |bits| try self.const_global_widths.put(global.name.text, bits);
+        try self.global_types.put(sig.name.text, ty);
+        try self.global_is_const.put(sig.name.text, sig.is_const);
+        if (sig.is_const) {
+            if (eval.comptimeTypeBitWidth(ty)) |bits| try self.const_global_widths.put(sig.name.text, bits);
         }
-        if (global.init) |expr| try self.global_initializers.put(global.name.text, expr);
+        if (global.initializer.init) |expr| try self.global_initializers.put(sig.name.text, expr);
     }
 
     fn aggregateReturnPointerFieldKey(self: *LlvmEmitter, fn_name: []const u8, field_path: []const u8) ![]const u8 {
@@ -758,24 +759,26 @@ const LlvmEmitter = struct {
     }
 
     fn emitGlobal(self: *LlvmEmitter, global: declaration_artifacts.GlobalArtifact) !void {
+        const sig = global.signature;
+        const init_facts = global.initializer;
         const previous_function = self.current_function;
-        self.current_function = global.name.text;
+        self.current_function = sig.name.text;
         defer self.current_function = previous_function;
-        const ty = global.ty orelse return error.UnsupportedLlvmEmission;
+        const ty = sig.ty orelse return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(ty);
         // `extern global NAME: T;` — a declaration only; storage lives in another unit.
-        if (global.is_extern) {
-            try self.out.print(self.allocator, "@{s} = external global {s}\n", .{ global.name.text, llvm_ty });
+        if (sig.is_extern) {
+            try self.out.print(self.allocator, "@{s} = external global {s}\n", .{ sig.name.text, llvm_ty });
             return;
         }
-        const kind: []const u8 = if (global.is_const) "constant" else "global";
+        const kind: []const u8 = if (sig.is_const) "constant" else "global";
         // Mirror the C backend's `static` vs external split (lower_c.zig emitGlobal): a plain
         // `global`/`const` stays module-private (LLVM `internal` linkage), so two separately
         // compiled units may each define the same name (e.g. `PAGE`) without a link-time
         // duplicate-symbol error. Only `export global` keeps default (external) linkage.
-        const visibility: []const u8 = if (global.exported) "" else "internal ";
-        const init = if (global.init) |expr| try self.emitGlobalInitializer(expr, ty) else try self.zeroInitializer(ty);
-        try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ global.name.text, visibility, kind, llvm_ty, init });
+        const visibility: []const u8 = if (sig.exported) "" else "internal ";
+        const init = if (init_facts.init) |expr| try self.emitGlobalInitializer(expr, ty) else try self.zeroInitializer(ty);
+        try self.out.print(self.allocator, "@{s} = {s}{s} {s} {s}\n", .{ sig.name.text, visibility, kind, llvm_ty, init });
     }
 
     fn emitCollectedGlobals(self: *LlvmEmitter) !void {
@@ -1214,10 +1217,11 @@ const LlvmEmitter = struct {
         return error.UnsupportedLlvmEmission;
     }
 
-    fn emitFunction(self: *LlvmEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) !void {
-        const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
+    fn emitFunction(self: *LlvmEmitter, function: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) !void {
+        const sig_facts = function.signature;
+        const ret_ty = sig_facts.return_type orelse simpleType(sig_facts.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
-        const fn_sig = self.fn_sigs.get(fn_decl.name.text) orelse return error.UnsupportedLlvmEmission;
+        const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
         const ret_ext = if (fn_sig.c_abi) self.cAbiExtension(ret_ty) else "";
         const old_scope = self.current_debug_scope;
         const old_span = self.current_debug_span;
@@ -1225,11 +1229,11 @@ const LlvmEmitter = struct {
         const old_function = self.current_function;
         const old_params = self.current_params;
         const old_function_body = self.current_function_body;
-        self.current_debug_scope = if (self.fn_sigs.get(fn_decl.name.text)) |sig| sig.debug_id else null;
-        self.current_debug_span = fn_decl.name.span;
+        self.current_debug_scope = if (self.fn_sigs.get(sig_facts.name.text)) |sig| sig.debug_id else null;
+        self.current_debug_span = sig_facts.name.span;
         self.current_return_ty = ret_ty;
-        self.current_function = fn_decl.name.text;
-        self.current_params = fn_decl.params;
+        self.current_function = sig_facts.name.text;
+        self.current_params = sig_facts.params;
         self.current_function_body = body;
         const entry_label = try self.functionEntryLabel();
         defer {
@@ -1292,20 +1296,20 @@ const LlvmEmitter = struct {
         //   references resolve.
         const weak_str: []const u8 = if (attrs.weak)
             "weak "
-        else if (!fn_decl.exported)
+        else if (!sig_facts.exported)
             "internal "
         else
             "";
-        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ weak_str, ret_ext, ret_llvm, fn_decl.name.text });
-        for (fn_decl.params, 0..) |param, i| {
+        try self.out.print(self.allocator, "define {s}{s}{s} @{s}(", .{ weak_str, ret_ext, ret_llvm, sig_facts.name.text });
+        for (sig_facts.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (fn_sig.c_abi) self.cAbiExtension(param.ty) else "";
             try self.out.print(self.allocator, "{s} {s}%{s}", .{ try self.llvmType(param.ty), param_ext, param.name.text });
         }
         // C-ABI variadic tail: `define T @f(named..., ...)`. The body's `va.*` intrinsics
         // (llvm.va_start / the va_arg instruction / llvm.va_end) read the extra args.
-        if (fn_decl.is_variadic) {
-            if (fn_decl.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
+        if (sig_facts.is_variadic) {
+            if (sig_facts.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.appendSlice(self.allocator, "...");
         }
         // The naked path needs no entry-alloca buffering: its body is a single asm stmt.
@@ -1352,7 +1356,7 @@ const LlvmEmitter = struct {
         self.local_slice_global_pointer_arrays.clearRetainingCapacity();
         self.local_slice_pointer_array_ranges.clearRetainingCapacity();
         self.clearOwnedStringValueMapRetainingCapacity(&self.local_slice_aggregate_pointer_array_fields);
-        for (fn_decl.params, 0..) |param, i| {
+        for (sig_facts.params, 0..) |param, i| {
             try self.local_types.put(param.name.text, param.ty);
             if (self.isVaListType(param.ty)) {
                 const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}.addr", .{param.name.text});
@@ -1377,7 +1381,7 @@ const LlvmEmitter = struct {
 
         if (!try self.emitBlock(body, ret_ty)) {
             if (typeNameEql(ret_ty, "void")) {
-                try self.emitReturnVoid(fn_decl.name.span);
+                try self.emitReturnVoid(sig_facts.name.span);
             } else if (typeNameEql(ret_ty, "never")) {
                 try self.out.appendSlice(self.allocator, "  unreachable\n");
             } else {
@@ -1398,22 +1402,23 @@ const LlvmEmitter = struct {
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn emitExternFunction(self: *LlvmEmitter, fn_decl: anytype) !void {
+    fn emitExternFunction(self: *LlvmEmitter, function: anytype) !void {
+        const sig_facts = function.signature;
         // The KASAN shadow hooks (D2.1) get weak no-op `define`s in emitTrapDecl so every
         // build links; skip the `declare` here to avoid an LLVM declare-vs-define clash.
-        if (isKsanHook(fn_decl.name.text)) return;
-        const ret_ty = fn_decl.return_type orelse simpleType(fn_decl.name.span, "void");
-        const sig = self.fn_sigs.get(fn_decl.name.text) orelse return error.UnsupportedLlvmEmission;
+        if (isKsanHook(sig_facts.name.text)) return;
+        const ret_ty = sig_facts.return_type orelse simpleType(sig_facts.name.span, "void");
+        const sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
         const ret_ext = if (sig.c_abi) self.cAbiExtension(ret_ty) else "";
-        try self.out.print(self.allocator, "declare {s}{s} @{s}(", .{ ret_ext, try self.llvmType(ret_ty), fn_decl.name.text });
-        for (fn_decl.params, 0..) |param, i| {
+        try self.out.print(self.allocator, "declare {s}{s} @{s}(", .{ ret_ext, try self.llvmType(ret_ty), sig_facts.name.text });
+        for (sig_facts.params, 0..) |param, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const param_ext = if (sig.c_abi) self.cAbiExtension(param.ty) else "";
             try self.out.appendSlice(self.allocator, try self.llvmType(param.ty));
             if (param_ext.len != 0) try self.out.print(self.allocator, " {s}", .{std.mem.trimEnd(u8, param_ext, " ")});
         }
-        if (fn_decl.is_variadic) {
-            if (fn_decl.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
+        if (sig_facts.is_variadic) {
+            if (sig_facts.params.len != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.appendSlice(self.allocator, "...");
         }
         try self.out.appendSlice(self.allocator, ")\n\n");

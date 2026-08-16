@@ -147,8 +147,10 @@ pub const FunctionArtifact = struct {
             .exported = fn_decl.exported,
             .is_variadic = fn_decl.is_variadic,
             .signature = .{
+                .name = fn_decl.name,
                 .params = fn_decl.params,
                 .return_type = fn_decl.return_type,
+                .exported = fn_decl.exported,
                 .is_extern = is_extern,
                 .is_variadic = fn_decl.is_variadic,
                 .c_abi = fn_decl.is_variadic or fn_decl.abi != null or (fn_decl.exported and !hasNamedAttr(attrs, "mc_abi")),
@@ -168,6 +170,8 @@ pub const GlobalArtifact = struct {
     is_const: bool,
     exported: bool,
     is_extern: bool,
+    signature: codegen_attrs.GlobalSignatureFacts,
+    initializer: codegen_attrs.GlobalInitFacts,
 
     pub fn fromDecl(global: ast.GlobalDecl) GlobalArtifact {
         return .{
@@ -177,6 +181,16 @@ pub const GlobalArtifact = struct {
             .is_const = global.is_const,
             .exported = global.exported,
             .is_extern = global.is_extern,
+            .signature = .{
+                .name = global.name,
+                .ty = global.ty,
+                .is_const = global.is_const,
+                .exported = global.exported,
+                .is_extern = global.is_extern,
+            },
+            .initializer = .{
+                .init = global.init,
+            },
         };
     }
 };
@@ -212,10 +226,10 @@ pub const DeclArtifact = union(enum) {
     global: GlobalArtifact,
     trait_decl: TraitDeclArtifact,
     impl_trait: ImplTraitArtifact,
-    type_decl: TypeDeclArtifact,
+    type_decl: TransitionalTypeDeclArtifact,
 };
 
-pub const TypeDeclArtifact = union(enum) {
+pub const TransitionalTypeDeclArtifact = union(enum) {
     type_alias: ast.TypeAlias,
     struct_decl: ast.StructDecl,
     enum_decl: ast.EnumDecl,

@@ -435,10 +435,11 @@ pub const CEmitter = struct {
         };
         for (artifacts.decl_artifacts) |artifact| switch (artifact) {
             .global => |global| {
-                if (!global.is_const) continue;
-                const ty = global.ty orelse continue;
+                const sig = global.signature;
+                if (!sig.is_const) continue;
+                const ty = sig.ty orelse continue;
                 const bits = eval.comptimeTypeBitWidth(ty) orelse continue;
-                try self.const_global_widths.put(global.name.text, bits);
+                try self.const_global_widths.put(sig.name.text, bits);
             },
             .type_decl => |type_decl| switch (type_decl) {
                 .type_alias => |alias| try self.type_aliases.put(alias.name.text, alias.ty),
@@ -479,12 +480,13 @@ pub const CEmitter = struct {
     }
 
     fn collectGlobalDeclArtifact(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
-        if (global.ty) |ty| {
+        const sig = global.signature;
+        if (sig.ty) |ty| {
             var info = try self.globalInfoFromType(ty);
-            info.is_const = global.is_const;
-            try self.globals.put(global.name.text, info);
+            info.is_const = sig.is_const;
+            try self.globals.put(sig.name.text, info);
         }
-        if (global.ty) |ty| try self.collectTypeArtifacts(ty);
+        if (sig.ty) |ty| try self.collectTypeArtifacts(ty);
     }
 
     fn collectStructDeclArtifact(self: *CEmitter, struct_decl: ast_bridge.StructDecl) !void {
@@ -632,7 +634,7 @@ pub const CEmitter = struct {
 
     fn emitGlobal(self: *CEmitter, global: declaration_artifacts.GlobalArtifact) !void {
         const previous_function = self.current_function;
-        self.current_function = global.name.text;
+        self.current_function = global.signature.name.text;
         defer self.current_function = previous_function;
         try emitGlobalDecl(self.globalEmitContext(), global);
     }
@@ -1103,47 +1105,48 @@ pub const CEmitter = struct {
         try lower_c_defs.emitArrayType(self.defsContext(), array);
     }
 
-    fn emitFunctionPrototype(self: *CEmitter, fn_decl: anytype) !void {
-        try self.emitFunctionSignature(fn_decl, false, true);
+    fn emitFunctionPrototype(self: *CEmitter, function: anytype) !void {
+        try self.emitFunctionSignature(function.signature, false, true);
         try self.out.appendSlice(self.allocator, ";\n\n");
     }
 
     // Forward declaration for a *defined* function, matching the definition's
     // storage class (non-exported functions are `static`) so the prototype and
     // body agree.
-    fn emitFunctionForwardDecl(self: *CEmitter, fn_decl: anytype) !void {
-        try self.emitFunctionSignature(fn_decl, !fn_decl.exported, true);
+    fn emitFunctionForwardDecl(self: *CEmitter, function: anytype) !void {
+        try self.emitFunctionSignature(function.signature, !function.signature.exported, true);
         try self.out.appendSlice(self.allocator, ";\n");
     }
 
-    fn emitExternFunction(self: *CEmitter, fn_decl: anytype) !void {
-        try self.emitFunctionPrototype(fn_decl);
+    fn emitExternFunction(self: *CEmitter, function: anytype) !void {
+        try self.emitFunctionPrototype(function);
     }
 
-    fn emitFunction(self: *CEmitter, fn_decl: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) anyerror!void {
-        try self.writeLineDirective(fn_decl.name.span);
+    fn emitFunction(self: *CEmitter, function: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) anyerror!void {
+        try self.writeLineDirective(function.signature.name.span);
         try codegen_attrs.emitCFunctionRenderAttrs(self.allocator, self.out, attrs);
         if (attrs.naked) {
-            try self.emitNakedFunction(fn_decl, body);
+            try self.emitNakedFunction(function, body);
             return;
         }
-        try self.emitFunctionBody(fn_decl, body);
+        try self.emitFunctionBody(function, body);
     }
 
-    fn emitNakedFunction(self: *CEmitter, fn_decl: anytype, body: ast_bridge.Block) !void {
-        try self.emitFunctionSignature(fn_decl, !fn_decl.exported, false);
+    fn emitNakedFunction(self: *CEmitter, function: anytype, body: ast_bridge.Block) !void {
+        try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
         try self.emitNakedAsmBody(body);
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
-    fn emitFunctionBody(self: *CEmitter, fn_decl: anytype, body: ast_bridge.Block) anyerror!void {
-        try self.emitFunctionSignature(fn_decl, !fn_decl.exported, false);
+    fn emitFunctionBody(self: *CEmitter, function: anytype, body: ast_bridge.Block) anyerror!void {
+        const sig = function.signature;
+        try self.emitFunctionSignature(sig, !sig.exported, false);
         try self.out.appendSlice(self.allocator, " {\n");
 
         const previous_function = self.current_function;
         const previous_function_body = self.current_function_body;
-        self.current_function = fn_decl.name.text;
+        self.current_function = sig.name.text;
         self.current_function_body = body;
         defer self.current_function = previous_function;
         defer self.current_function_body = previous_function_body;
@@ -1153,12 +1156,12 @@ pub const CEmitter = struct {
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_aggregate_pointer_fields);
 
         const previous_variadic_last = self.current_variadic_last;
-        self.current_variadic_last = functionVariadicLastParam(fn_decl);
+        self.current_variadic_last = functionVariadicLastParam(sig);
         defer self.current_variadic_last = previous_variadic_last;
 
-        var locals = try self.functionParamLocals(fn_decl.params);
+        var locals = try self.functionParamLocals(sig.params);
         defer locals.deinit();
-        try self.emitIndentedFunctionBlock(body, &locals, fn_decl.return_type);
+        try self.emitIndentedFunctionBlock(body, &locals, sig.return_type);
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
@@ -1202,8 +1205,8 @@ pub const CEmitter = struct {
         self.indent -= 1;
     }
 
-    fn emitFunctionSignature(self: *CEmitter, fn_decl: anytype, is_static: bool, with_asm_label: bool) !void {
-        try lower_c_defs.emitFunctionSignature(self.defsContext(), fn_decl, is_static, with_asm_label);
+    fn emitFunctionSignature(self: *CEmitter, sig: codegen_attrs.FunctionSignatureFacts, is_static: bool, with_asm_label: bool) !void {
+        try lower_c_defs.emitFunctionSignature(self.defsContext(), sig, is_static, with_asm_label);
     }
 
     fn emitParamDecl(self: *CEmitter, ty: ast_bridge.TypeExpr, name: []const u8) !void {
@@ -2465,10 +2468,10 @@ pub const CEmitter = struct {
 
     fn collectFunctionArtifactSliceTypes(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
         const previous_function = self.current_function;
-        self.current_function = function.name.text;
+        self.current_function = function.signature.name.text;
         defer self.current_function = previous_function;
-        for (function.params) |param| try self.collectTypeArtifacts(param.ty);
-        if (function.return_type) |ret| try self.collectTypeArtifacts(ret);
+        for (function.signature.params) |param| try self.collectTypeArtifacts(param.ty);
+        if (function.signature.return_type) |ret| try self.collectTypeArtifacts(ret);
         if (function.body) |body| try lower_c_collect.collectBlockTypeArtifacts(self.typeArtifactContext(), body);
     }
 
