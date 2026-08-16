@@ -58,7 +58,7 @@ pub fn structLiteralField(fields: []const ast_bridge.StructLiteralField, field_n
 
 // The slot index of trait method `name` (the vtable lists methods in declaration order).
 pub fn traitMethodIndex(trait: declaration_artifacts.TraitDeclArtifact, name: []const u8) ?usize {
-    for (trait.methods, 0..) |m, i| {
+    for (trait.facts.methods, 0..) |m, i| {
         if (std.mem.eql(u8, m.name.text, name)) return i;
     }
     return null;
@@ -66,7 +66,7 @@ pub fn traitMethodIndex(trait: declaration_artifacts.TraitDeclArtifact, name: []
 
 // Mirrors sema.traitIsObjectSafe; the backend emits a vtable only for object-safe traits.
 pub fn llvmTraitIsObjectSafe(t: declaration_artifacts.TraitDeclArtifact) bool {
-    for (t.methods) |m| {
+    for (t.facts.methods) |m| {
         switch (m.self_mode) {
             .by_ptr, .by_mut_ptr => {},
             else => return false,

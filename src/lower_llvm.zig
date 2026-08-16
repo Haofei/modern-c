@@ -689,7 +689,7 @@ const LlvmEmitter = struct {
             .trait_decl => |trait_decl| try self.trait_decls.put(trait_decl.name.text, trait_decl),
             .impl_trait => |impl_trait| {
                 const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.trait_name.text, impl_trait.type_name.text });
-                try self.impl_methods.put(key, impl_trait.methods);
+                try self.impl_methods.put(key, impl_trait.facts.methods);
             },
             .type_decl => {},
         };
@@ -7361,7 +7361,7 @@ const LlvmEmitter = struct {
     fn dynVtableLlvmType(self: *LlvmEmitter, trait: declaration_artifacts.TraitDeclArtifact) ![]const u8 {
         var buf: std.ArrayList(u8) = .empty;
         try buf.appendSlice(self.scratch.allocator(), "{ ");
-        for (trait.methods, 0..) |_, i| {
+        for (trait.facts.methods, 0..) |_, i| {
             if (i != 0) try buf.appendSlice(self.scratch.allocator(), ", ");
             try buf.appendSlice(self.scratch.allocator(), "ptr");
         }
@@ -7384,7 +7384,7 @@ const LlvmEmitter = struct {
             if (!llvmTraitIsObjectSafe(trait)) continue;
             const vt_ty = try self.dynVtableLlvmType(trait);
             try self.out.print(self.allocator, "@__vt_{s}_{s} = internal constant {s} {{ ", .{ type_name, trait_name, vt_ty });
-            for (trait.methods, 0..) |m, i| {
+            for (trait.facts.methods, 0..) |m, i| {
                 if (i != 0) try self.out.appendSlice(self.allocator, ", ");
                 const mangled = implMethodMangledLlvm(entry.value_ptr.*, m.name.text) orelse return error.UnsupportedLlvmEmission;
                 try self.out.print(self.allocator, "ptr @{s}", .{mangled});
@@ -7535,7 +7535,7 @@ const LlvmEmitter = struct {
     fn emitDynDispatch(self: *LlvmEmitter, call: anytype, trait: declaration_artifacts.TraitDeclArtifact) ![]const u8 {
         const member = memberCallee(call) orelse return error.UnsupportedLlvmEmission;
         const slot = traitMethodIndex(trait, member.name.text) orelse return error.UnsupportedLlvmEmission;
-        const msig = trait.methods[slot];
+        const msig = trait.facts.methods[slot];
         const dyn_ty = self.exprType(member.base.*) orelse return error.UnsupportedLlvmEmission;
         const dyn_llvm = try self.llvmType(self.resolveAliasType(dyn_ty));
         const fat = try self.emitExpr(member.base.*, self.resolveAliasType(dyn_ty));
@@ -10043,7 +10043,7 @@ const LlvmEmitter = struct {
         if (self.dynDispatchTrait(call.callee.*)) |trait| {
             const member = memberCallee(call) orelse return null;
             const slot = traitMethodIndex(trait, member.name.text) orelse return null;
-            const declared_ty = trait.methods[slot].return_type orelse return simpleType(call.callee.*.span, "void");
+            const declared_ty = trait.facts.methods[slot].return_type orelse return simpleType(call.callee.*.span, "void");
             const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait.name.text, slot) orelse return null).target_ty;
             if (!std.meta.eql(fact_ty, declared_ty)) return null;
             return fact_ty;

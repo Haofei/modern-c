@@ -172,7 +172,7 @@ fn emitVtable(
 }
 
 fn emitVtableSlots(ctx: Context, trait: declaration_artifacts.TraitDeclArtifact, methods: []const ast_bridge.ImplTraitMethod) !void {
-    for (trait.methods, 0..) |method, i| {
+    for (trait.facts.methods, 0..) |method, i| {
         if (i != 0) try ctx.out.appendSlice(ctx.allocator, ", ");
         const mangled = implMethodMangled(methods, method.name.text) orelse return error.UnsupportedCEmission;
         try ctx.out.appendSlice(ctx.allocator, "(");

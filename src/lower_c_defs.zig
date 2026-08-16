@@ -280,7 +280,7 @@ pub fn emitDynTraitTypes(ctx: Context, trait_decls: *std.StringHashMap(declarati
         const trait = entry.value_ptr.*;
         if (!cTraitIsObjectSafe(trait)) continue;
         try ctx.out.print(ctx.allocator, "typedef struct {{ ", .{});
-        for (trait.methods) |method| {
+        for (trait.facts.methods) |method| {
             try appendVtableSlotType(ctx, trait, method);
             try ctx.out.appendSlice(ctx.allocator, "; ");
         }

@@ -507,7 +507,7 @@ pub const CEmitter = struct {
 
     fn collectImplTraitArtifact(self: *CEmitter, impl_trait: declaration_artifacts.ImplTraitArtifact) !void {
         const key = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}", .{ impl_trait.trait_name.text, impl_trait.type_name.text });
-        try self.impl_methods.put(key, impl_trait.methods);
+        try self.impl_methods.put(key, impl_trait.facts.methods);
     }
 
     pub fn collectBindThunks(self: *CEmitter) anyerror!void {
@@ -8472,7 +8472,7 @@ pub const CEmitter = struct {
         const trait_name = self.dynCalleeTrait(call.callee.*, locals) orelse return null;
         const trait = self.trait_decls.get(trait_name) orelse return null;
         const method_name = dynCalleeMethodName(call.callee.*) orelse return null;
-        for (trait.methods, 0..) |method, index| {
+        for (trait.facts.methods, 0..) |method, index| {
             if (!std.mem.eql(u8, method.name.text, method_name)) continue;
             const declared_ty = method.return_type orelse return null;
             const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, call.callee.*.span, trait_name, index) orelse return null).target_ty;
@@ -8485,7 +8485,7 @@ pub const CEmitter = struct {
     fn dynDispatchMethodIndex(self: *CEmitter, callee: ast_bridge.Expr, trait_name: []const u8) ?usize {
         const trait = self.trait_decls.get(trait_name) orelse return null;
         const method_name = dynCalleeMethodName(callee) orelse return null;
-        for (trait.methods, 0..) |method, index| {
+        for (trait.facts.methods, 0..) |method, index| {
             if (std.mem.eql(u8, method.name.text, method_name)) return index;
         }
         return null;
@@ -8493,8 +8493,8 @@ pub const CEmitter = struct {
 
     fn requireDynDispatchArgument(self: *CEmitter, span: ast_bridge.Span, trait_name: []const u8, method_index: usize, argument_index: usize) !void {
         const trait = self.trait_decls.get(trait_name) orelse return error.UnsupportedCEmission;
-        if (method_index >= trait.methods.len) return error.UnsupportedCEmission;
-        const method = trait.methods[method_index];
+        if (method_index >= trait.facts.methods.len) return error.UnsupportedCEmission;
+        const method = trait.facts.methods[method_index];
         if (argument_index + 1 >= method.params.len) return error.UnsupportedCEmission;
         const declared_ty = method.params[argument_index + 1].ty;
         const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_argument, span, trait_name, mir.dynDispatchArgumentFactIndex(method_index, argument_index)) orelse return error.UnsupportedCEmission).target_ty;
@@ -8508,8 +8508,8 @@ pub const CEmitter = struct {
 
     fn requireDynDispatchResult(self: *CEmitter, span: ast_bridge.Span, trait_name: []const u8, method_index: usize) !void {
         const trait = self.trait_decls.get(trait_name) orelse return error.UnsupportedCEmission;
-        if (method_index >= trait.methods.len) return error.UnsupportedCEmission;
-        const declared_ty = trait.methods[method_index].return_type orelse return;
+        if (method_index >= trait.facts.methods.len) return error.UnsupportedCEmission;
+        const declared_ty = trait.facts.methods[method_index].return_type orelse return;
         if (isVoidType(self.resolveAliasType(declared_ty))) return;
         const fact_ty = (self.mirTargetTypeFactAtOwned(.dyn_dispatch_result, span, trait_name, method_index) orelse return error.UnsupportedCEmission).target_ty;
         if (!std.meta.eql(fact_ty, declared_ty)) return error.UnsupportedCEmission;

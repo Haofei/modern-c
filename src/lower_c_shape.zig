@@ -244,7 +244,7 @@ pub fn isVoidLiteralExpr(expr: ast_bridge.Expr) bool {
 }
 
 pub fn cTraitIsObjectSafe(t: declaration_artifacts.TraitDeclArtifact) bool {
-    for (t.methods) |m| {
+    for (t.facts.methods) |m| {
         switch (m.self_mode) {
             .by_ptr, .by_mut_ptr => {},
             else => return false,

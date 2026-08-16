@@ -30,6 +30,17 @@ pub const GlobalInitFacts = struct {
     init: ?ast_bridge.Expr,
 };
 
+pub const TraitDeclFacts = struct {
+    name: ast_bridge.Ident,
+    methods: []const ast_bridge.TraitMethodSig,
+};
+
+pub const ImplTraitFacts = struct {
+    trait_name: ast_bridge.Ident,
+    type_name: ast_bridge.Ident,
+    methods: []const ast_bridge.ImplTraitMethod,
+};
+
 pub const FunctionRenderAttrs = struct {
     naked: bool = false,
     weak: bool = false,
