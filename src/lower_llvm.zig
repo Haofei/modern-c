@@ -1253,6 +1253,7 @@ const LlvmEmitter = struct {
         integer_literal: []const u8,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
+        checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
     };
@@ -1273,6 +1274,7 @@ const LlvmEmitter = struct {
         integer_literal: []const u8,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
+        checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
     };
@@ -1296,6 +1298,12 @@ const LlvmEmitter = struct {
         target_fact: mir.TargetTypeFact,
         left: SimpleMirArg,
         right: SimpleMirArg,
+    };
+
+    const SimpleMirCheckedUnary = struct {
+        op: []const u8,
+        target_fact: mir.TargetTypeFact,
+        operand: SimpleMirArg,
     };
 
     const SimpleMirCompareBinary = struct {
@@ -1372,6 +1380,10 @@ const LlvmEmitter = struct {
                     const value = try self.emitSimpleMirCheckedBinary(binary, return_span);
                     try self.emitReturnValue(ret_ty, value, return_span);
                 },
+                .checked_unary => |unary| {
+                    const value = try self.emitSimpleMirCheckedUnary(unary, return_span);
+                    try self.emitReturnValue(ret_ty, value, return_span);
+                },
                 .compare_binary => |binary| {
                     const value = try self.emitSimpleMirCompareBinary(binary, return_span);
                     try self.emitReturnValue(ret_ty, value, return_span);
@@ -1432,6 +1444,7 @@ const LlvmEmitter = struct {
         }
         if (std.mem.eql(u8, value_id, "unary")) {
             if (self.simpleMirLogicalNotAtReturn(function, fn_mir)) |arg| return .{ .logical_not = arg };
+            if (self.simpleMirCheckedUnaryAtReturn(function, fn_mir)) |unary| return .{ .checked_unary = unary };
         }
         if (simpleMirNoTrap(fn_mir)) if (self.simpleMirAssignmentReturn(function, fn_mir, value_id)) |assigned| return assigned;
         if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
@@ -1558,6 +1571,7 @@ const LlvmEmitter = struct {
             for (block.instructions) |instruction| {
                 if (instruction.kind != .unary) continue;
                 if (self.simpleMirLogicalNotAtSource(function, fn_mir, instructionSourcePoint(instruction))) |arg| return .{ .logical_not = arg };
+                if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, instructionSourcePoint(instruction))) |unary| return .{ .checked_unary = unary };
                 return null;
             }
         }
@@ -1577,6 +1591,10 @@ const LlvmEmitter = struct {
                 const value_name = try self.emitSimpleMirCheckedBinary(binary, span);
                 try self.emitReturnValue(ret_ty, value_name, span);
             },
+            .checked_unary => |unary| {
+                const value_name = try self.emitSimpleMirCheckedUnary(unary, span);
+                try self.emitReturnValue(ret_ty, value_name, span);
+            },
             .compare_binary => |binary| {
                 const value_name = try self.emitSimpleMirCompareBinary(binary, span);
                 try self.emitReturnValue(ret_ty, value_name, span);
@@ -1591,6 +1609,7 @@ const LlvmEmitter = struct {
     fn simpleMirConditionalTrapCount(value: SimpleMirConditionalValue) usize {
         return switch (value) {
             .checked_binary => 1,
+            .checked_unary => 1,
             else => 0,
         };
     }
@@ -1618,6 +1637,31 @@ const LlvmEmitter = struct {
         else
             "";
         try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} {s}, {s} {s}){s}\n", .{ pair, pair_ty, intrinsic, llvm_ty, left, llvm_ty, right, dbg_suffix });
+        const value = try self.nextTemp();
+        const overflow = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ value, pair_ty, pair });
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 1\n", .{ overflow, pair_ty, pair });
+        const cont = try self.nextLabel("cont");
+        const trap = try self.nextLabel("trap_overflow");
+        try self.emitTrapBranch(overflow, trap, cont, trap, cont, "IntegerOverflow");
+        return value;
+    }
+
+    fn emitSimpleMirCheckedUnary(self: *LlvmEmitter, unary: SimpleMirCheckedUnary, span: diagnostics.Span) ![]const u8 {
+        if (!std.mem.eql(u8, unary.op, "neg")) return error.UnsupportedLlvmEmission;
+        const ty = unary.target_fact.target_ty;
+        if (!self.isSignedIntegerType(ty)) return error.UnsupportedLlvmEmission;
+        const llvm_ty = try self.llvmType(ty);
+        const bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+        const intrinsic = try self.simpleMirOverflowIntrinsic("sub", true, bits);
+        const pair_ty = try std.fmt.allocPrint(self.scratch.allocator(), "{{ {s}, i1 }}", .{llvm_ty});
+        const operand = try self.simpleMirArgValue(unary.operand);
+        const pair = try self.nextTemp();
+        const dbg_suffix = if (try self.debugLocation(span)) |dbg|
+            try std.fmt.allocPrint(self.scratch.allocator(), ", !dbg !{d}", .{dbg})
+        else
+            "";
+        try self.out.print(self.allocator, "  {s} = call {s} @{s}({s} 0, {s} {s}){s}\n", .{ pair, pair_ty, intrinsic, llvm_ty, llvm_ty, operand, dbg_suffix });
         const value = try self.nextTemp();
         const overflow = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, 0\n", .{ value, pair_ty, pair });
@@ -1793,6 +1837,40 @@ const LlvmEmitter = struct {
         return null;
     }
 
+    fn simpleMirCheckedUnaryAtReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirCheckedUnary {
+        return self.simpleMirCheckedUnaryAtSource(function, fn_mir, blk: {
+            for (fn_mir.blocks[0].instructions) |instruction| {
+                if (instruction.kind == .unary) break :blk instructionSourcePoint(instruction);
+            }
+            return null;
+        });
+    }
+
+    fn simpleMirCheckedUnaryAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirCheckedUnary {
+        const block, const unary_instr = blk: {
+            for (fn_mir.blocks) |block| for (block.instructions) |instruction| {
+                if (instruction.kind == .unary and sameMirSourceLocation(instructionSourcePoint(instruction), source)) break :blk .{ block, instruction };
+            };
+            return null;
+        };
+        if (!std.mem.eql(u8, unary_instr.detail, "neg")) return null;
+        if (!mirHasIntegerOverflowTrapAt(fn_mir, source)) return null;
+        const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, source) orelse return null;
+        if (!self.isSignedIntegerType(target_fact.target_ty)) return null;
+        var after_unary = false;
+        for (block.instructions) |instruction| {
+            if (!after_unary) {
+                after_unary = instruction.kind == .unary and sameMirSourceLocation(instructionSourcePoint(instruction), source);
+                continue;
+            }
+            if (instruction.kind == .return_value or instruction.kind == .local) break;
+            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion) continue;
+            const operand = self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
+            return .{ .op = unary_instr.detail, .target_fact = target_fact, .operand = operand };
+        }
+        return null;
+    }
+
     fn simpleMirDirectCall(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, callee: []const u8) ?SimpleMirDirectCall {
         return self.simpleMirDirectCallAtSource(function, fn_mir, blk: {
             for (fn_mir.blocks) |block| {
@@ -1856,6 +1934,7 @@ const LlvmEmitter = struct {
         if (!mirBlockHasLocal(fn_mir.blocks[0], local_name)) return null;
         const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
         if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .checked_binary = binary };
+        if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, init_source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
@@ -1923,7 +2002,7 @@ const LlvmEmitter = struct {
             }
             switch (instruction.kind) {
                 .target_type => continue,
-                .integer_literal_conversion, .binary, .call => return instructionSourcePoint(instruction),
+                .integer_literal_conversion, .binary, .unary, .call => return instructionSourcePoint(instruction),
                 .expr => if (!std.mem.eql(u8, instruction.detail, local_name)) return instructionSourcePoint(instruction),
                 .return_value => return null,
                 else => return null,
