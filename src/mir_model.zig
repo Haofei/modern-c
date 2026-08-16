@@ -371,6 +371,11 @@ pub const BodyTypeArtifactFact = struct {
     source: SourcePoint,
 };
 
+pub const DeferCleanupExprFact = struct {
+    expr: ast.Expr,
+    source: SourcePoint,
+};
+
 pub const DropGlueFact = struct {
     resource_type: []const u8,
     typed_resource_symbol_id: SymbolId = .invalid,
@@ -838,6 +843,7 @@ pub const Function = struct {
     call_target_facts: []CallTargetFact = &.{},
     bind_thunk_facts: []BindThunkFact = &.{},
     body_type_artifact_facts: []BodyTypeArtifactFact = &.{},
+    defer_cleanup_expr_facts: []DeferCleanupExprFact = &.{},
     target_type_facts: []TargetTypeFact = &.{},
     span_identities: []SpanIdentity = &.{},
     type_identities: []TypeIdentity = &.{},
@@ -884,6 +890,7 @@ pub const Module = struct {
             if (function.call_target_facts.len != 0) self.allocator.free(function.call_target_facts);
             if (function.bind_thunk_facts.len != 0) self.allocator.free(function.bind_thunk_facts);
             if (function.body_type_artifact_facts.len != 0) self.allocator.free(function.body_type_artifact_facts);
+            if (function.defer_cleanup_expr_facts.len != 0) self.allocator.free(function.defer_cleanup_expr_facts);
             if (function.target_type_facts.len != 0) self.allocator.free(function.target_type_facts);
             if (function.span_identities.len != 0) self.allocator.free(function.span_identities);
             if (function.type_identities.len != 0) self.allocator.free(function.type_identities);

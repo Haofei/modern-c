@@ -1395,7 +1395,10 @@ EXACT_COUNTS: dict[str, dict[str, int]] = {
     },
     "src/syntax_bridge.zig": {
         "Transitional backend syntax-shape bridge.": 1,
-        "pub fn deferExprForRefInBlock(": 1,
+        "pub fn deferExprForRefInBlock(": 0,
+    },
+    "src/mir_model.zig": {
+        "pub const DeferCleanupExprFact = struct": 1,
     },
     "src/lower_c.zig": {
         "VerifiedProgram.init(typed_mir": 1,

@@ -487,7 +487,6 @@ const LlvmEmitter = struct {
     current_return_ty: ?ast_bridge.TypeExpr = null,
     current_function: ?[]const u8 = null,
     current_params: ?[]const codegen_attrs.FunctionParamFact = null,
-    current_function_body: ?ast_bridge.Block = null,
     current_mir_range_target: ?[]const u8 = null,
     source_path: []const u8,
     target_arch: backend_mod.TargetArch,
@@ -1232,13 +1231,11 @@ const LlvmEmitter = struct {
         const old_return_ty = self.current_return_ty;
         const old_function = self.current_function;
         const old_params = self.current_params;
-        const old_function_body = self.current_function_body;
         self.current_debug_scope = if (self.fn_sigs.get(sig_facts.name.text)) |sig| sig.debug_id else null;
         self.current_debug_span = sig_facts.name.span;
         self.current_return_ty = ret_ty;
         self.current_function = sig_facts.name.text;
         self.current_params = sig_facts.params;
-        self.current_function_body = body;
         const entry_label = try self.functionEntryLabel();
         defer {
             self.current_debug_scope = old_scope;
@@ -1246,7 +1243,6 @@ const LlvmEmitter = struct {
             self.current_return_ty = old_return_ty;
             self.current_function = old_function;
             self.current_params = old_params;
-            self.current_function_body = old_function_body;
         }
         try self.validateFunctionCleanupAuthority();
         // `#[naked]`: the `naked` function attribute tells LLVM to emit no prologue or
@@ -2000,8 +1996,7 @@ const LlvmEmitter = struct {
     fn deferExprForRef(self: *LlvmEmitter, ref: mir.DeferCleanupRef) ?ast_bridge.Expr {
         const function = self.currentMirFunction() orelse return null;
         if (!mir.deferCleanupRefValid(function.*, ref)) return null;
-        const body = self.current_function_body orelse return null;
-        return syntax_bridge.deferExprForRefInBlock(body, ref);
+        return mir.deferCleanupExprForRef(function.*, ref);
     }
 
     fn ordinaryDeferDirectCallCleanup(self: *LlvmEmitter, function: *const mir.Function, expr: ast_bridge.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedLlvmEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {

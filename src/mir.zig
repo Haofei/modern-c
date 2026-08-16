@@ -95,6 +95,7 @@ pub const CallTargetKind = mir_model.CallTargetKind;
 pub const CallTargetFact = mir_model.CallTargetFact;
 pub const BindThunkFact = mir_model.BindThunkFact;
 pub const BodyTypeArtifactFact = mir_model.BodyTypeArtifactFact;
+pub const DeferCleanupExprFact = mir_model.DeferCleanupExprFact;
 pub const DropGlueFact = mir_model.DropGlueFact;
 pub const TargetTypeKind = mir_model.TargetTypeKind;
 pub const AggregateConstructionKind = mir_model.AggregateConstructionKind;
@@ -199,6 +200,16 @@ pub fn deferCleanupRefValid(function: Function, ref: DeferCleanupRef) bool {
     if (ref.instruction_index >= block.instructions.len) return false;
     const instruction = block.instructions[ref.instruction_index];
     return instruction.kind == .defer_cleanup and sourcePointMatchesInstruction(ref.source, instruction);
+}
+
+pub fn deferCleanupExprForRef(function: Function, ref: DeferCleanupRef) ?ast.Expr {
+    if (!deferCleanupRefValid(function, ref)) return null;
+    for (function.defer_cleanup_expr_facts) |fact| {
+        if (fact.source.line != ref.source.line or fact.source.column != ref.source.column) continue;
+        if (fact.source.offset != ref.source.offset or fact.source.len != ref.source.len) continue;
+        return fact.expr;
+    }
+    return null;
 }
 
 pub fn hasDeferCleanupAtSource(function: Function, source: SourcePoint) bool {
@@ -976,6 +987,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .call_target_facts = try allocator.alloc(CallTargetFact, 0),
                         .bind_thunk_facts = try allocator.alloc(BindThunkFact, 0),
                         .body_type_artifact_facts = try allocator.alloc(BodyTypeArtifactFact, 0),
+                        .defer_cleanup_expr_facts = try allocator.alloc(DeferCleanupExprFact, 0),
                         .target_type_facts = try allocator.alloc(TargetTypeFact, 0),
                         .ownership_events = try allocator.alloc(OwnershipEvent, 0),
                         .pointer_provenance_facts = try allocator.alloc(PointerProvenanceFact, 0),
@@ -5202,6 +5214,7 @@ const FunctionBuilder = struct {
     call_target_facts: std.ArrayList(CallTargetFact),
     bind_thunk_facts: std.ArrayList(BindThunkFact),
     body_type_artifact_facts: std.ArrayList(BodyTypeArtifactFact),
+    defer_cleanup_expr_facts: std.ArrayList(DeferCleanupExprFact),
     target_type_facts: std.ArrayList(TargetTypeFact),
     generated_type_expr_nodes: std.ArrayList(*ast.TypeExpr),
     generated_type_expr_args: std.ArrayList([]ast.TypeExpr),
@@ -5312,6 +5325,7 @@ const FunctionBuilder = struct {
             .call_target_facts = .empty,
             .bind_thunk_facts = .empty,
             .body_type_artifact_facts = .empty,
+            .defer_cleanup_expr_facts = .empty,
             .target_type_facts = .empty,
             .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
@@ -5393,6 +5407,7 @@ const FunctionBuilder = struct {
             .call_target_facts = .empty,
             .bind_thunk_facts = .empty,
             .body_type_artifact_facts = .empty,
+            .defer_cleanup_expr_facts = .empty,
             .target_type_facts = .empty,
             .ownership_events = .empty,
             .generated_type_expr_nodes = .empty,
@@ -5448,6 +5463,7 @@ const FunctionBuilder = struct {
         self.call_target_facts.deinit(self.allocator);
         self.bind_thunk_facts.deinit(self.allocator);
         self.body_type_artifact_facts.deinit(self.allocator);
+        self.defer_cleanup_expr_facts.deinit(self.allocator);
         self.target_type_facts.deinit(self.allocator);
         self.ownership_events.deinit(self.allocator);
         for (self.generated_type_expr_nodes.items) |node| self.allocator.destroy(node);
@@ -5531,6 +5547,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(bind_thunk_facts);
         const body_type_artifact_facts = try self.body_type_artifact_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(body_type_artifact_facts);
+        const defer_cleanup_expr_facts = try self.defer_cleanup_expr_facts.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(defer_cleanup_expr_facts);
         const target_type_facts = try self.target_type_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(target_type_facts);
         const ownership_events = try self.ownership_events.toOwnedSlice(self.allocator);
@@ -5628,6 +5646,7 @@ const FunctionBuilder = struct {
             .call_target_facts = call_target_facts,
             .bind_thunk_facts = bind_thunk_facts,
             .body_type_artifact_facts = body_type_artifact_facts,
+            .defer_cleanup_expr_facts = defer_cleanup_expr_facts,
             .target_type_facts = target_type_facts,
             .span_identities = span_identities,
             .type_identities = type_identities,
@@ -5654,6 +5673,13 @@ const FunctionBuilder = struct {
         try self.body_type_artifact_facts.append(self.allocator, .{
             .ty = ty,
             .source = sourcePointFromSpan(ty.span),
+        });
+    }
+
+    fn addDeferCleanupExprFact(self: *FunctionBuilder, expr: ast.Expr, stmt_span: ast.Span) !void {
+        try self.defer_cleanup_expr_facts.append(self.allocator, .{
+            .expr = expr,
+            .source = sourcePointFromSpan(stmt_span),
         });
     }
 
@@ -6083,6 +6109,7 @@ const FunctionBuilder = struct {
             },
             .@"defer" => |expr| {
                 try self.addInstr(.defer_cleanup, "cleanup", .void, stmt.span);
+                try self.addDeferCleanupExprFact(expr, stmt.span);
                 try self.addResultDeferCheck(expr);
                 try self.buildExpr(expr);
                 return false;
@@ -11890,6 +11917,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.call_target_facts.len != 0) allocator.free(function.call_target_facts);
     if (function.bind_thunk_facts.len != 0) allocator.free(function.bind_thunk_facts);
     if (function.body_type_artifact_facts.len != 0) allocator.free(function.body_type_artifact_facts);
+    if (function.defer_cleanup_expr_facts.len != 0) allocator.free(function.defer_cleanup_expr_facts);
     if (function.target_type_facts.len != 0) allocator.free(function.target_type_facts);
     if (function.span_identities.len != 0) allocator.free(function.span_identities);
     if (function.type_identities.len != 0) allocator.free(function.type_identities);

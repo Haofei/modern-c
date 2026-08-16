@@ -291,7 +291,6 @@ pub const CEmitter = struct {
     // hook is not spliced into a context where the result must remain assignable.
     suppress_load_hook: bool = false,
     current_function: ?[]const u8 = null,
-    current_function_body: ?ast_bridge.Block = null,
     // Proven storage class per pointer-typed local, sourced from live MIR
     // pointer-provenance facts: .global_storage routes derefs through the
     // mc_race helpers; .local_storage is the positive locality proof that keeps
@@ -1139,11 +1138,8 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, " {\n");
 
         const previous_function = self.current_function;
-        const previous_function_body = self.current_function_body;
         self.current_function = sig.name.text;
-        self.current_function_body = body;
         defer self.current_function = previous_function;
-        defer self.current_function_body = previous_function_body;
         try self.validateFunctionCleanupAuthority();
         self.mir_pointer_local_provenance.clearRetainingCapacity();
         self.clearOwnedStringProvenanceMapRetainingCapacity(&self.mir_pointer_array_elements);
@@ -3511,8 +3507,7 @@ pub const CEmitter = struct {
     fn deferExprForRef(self: *CEmitter, ref: mir.DeferCleanupRef) ?ast_bridge.Expr {
         const function = self.currentMirFunction() orelse return null;
         if (!mir.deferCleanupRefValid(function.*, ref)) return null;
-        const body = self.current_function_body orelse return null;
-        return syntax_bridge.deferExprForRefInBlock(body, ref);
+        return mir.deferCleanupExprForRef(function.*, ref);
     }
 
     fn ordinaryDeferDirectCallCleanup(self: *CEmitter, function: *const mir.Function, expr: ast_bridge.Expr, defer_ref: mir.DeferCleanupRef) error{UnsupportedCEmission}!?backend_cleanup.OrdinaryDeferCallCleanup {

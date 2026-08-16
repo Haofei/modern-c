@@ -6,8 +6,6 @@
 //! MIR facts without hunting through C/LLVM emitters.
 
 const expr_syntax = @import("expr_syntax.zig");
-const ast_bridge = @import("ast_bridge.zig");
-const mir = @import("mir.zig");
 
 pub const CallExpr = expr_syntax.CallExpr;
 pub const IndexExpr = expr_syntax.IndexExpr;
@@ -42,41 +40,3 @@ pub const reduceCallKind = expr_syntax.reduceCallKind;
 pub const reflectionFieldName = expr_syntax.reflectionFieldName;
 pub const reflectionValueCallKind = expr_syntax.reflectionValueCallKind;
 pub const taggedUnionCase = expr_syntax.taggedUnionCase;
-
-pub fn deferExprForRefInBlock(block: ast_bridge.Block, ref: mir.DeferCleanupRef) ?ast_bridge.Expr {
-    for (block.items) |stmt| {
-        if (stmt.kind == .@"defer" and
-            ref.source.line == stmt.span.line and
-            ref.source.column == stmt.span.column and
-            ref.source.offset == stmt.span.offset and
-            ref.source.len == stmt.span.len)
-        {
-            return stmt.kind.@"defer";
-        }
-        switch (stmt.kind) {
-            .block, .comptime_block, .unsafe_block => |nested| {
-                if (deferExprForRefInBlock(nested, ref)) |expr| return expr;
-            },
-            .contract_block => |contract| {
-                if (deferExprForRefInBlock(contract.block, ref)) |expr| return expr;
-            },
-            .if_let => |node| {
-                if (deferExprForRefInBlock(node.then_block, ref)) |expr| return expr;
-                if (node.else_block) |else_block| {
-                    if (deferExprForRefInBlock(else_block, ref)) |expr| return expr;
-                }
-            },
-            .@"switch" => |node| {
-                for (node.arms) |arm| switch (arm.body) {
-                    .block => |nested| if (deferExprForRefInBlock(nested, ref)) |expr| return expr,
-                    .expr => {},
-                };
-            },
-            .loop => |node| {
-                if (deferExprForRefInBlock(node.body, ref)) |expr| return expr;
-            },
-            else => {},
-        }
-    }
-    return null;
-}

@@ -35,7 +35,7 @@ EXACT_BACKEND_COUNTS = {
     '@import("ast_bridge.zig")': 41,
     '@import("declaration_artifacts.zig")': 9,
     '@import("eval.zig")': 7,
-    "ast_bridge.": 2821,
+    "ast_bridge.": 2819,
     "declaration_artifacts.": 44,
     "EarlyDeclarationArtifacts": 0,
     "CodegenDeclarationArtifacts": 3,
@@ -537,7 +537,6 @@ REQUIRED_ANCHORS = {
     "src/syntax_bridge.zig": (
         "Transitional backend syntax-shape bridge.",
         "expression-shape helper access behind this narrow bridge",
-        "pub fn deferExprForRefInBlock(",
     ),
     "src/type_bridge.zig": (
         "Transitional backend type-shape bridge.",
