@@ -1274,12 +1274,14 @@ const LlvmEmitter = struct {
     };
 
     const SimpleMirConditionalVoidBody = struct {
+        prefix_calls: SimpleMirDirectCalls,
         condition: SimpleMirCondition,
         then_call: SimpleMirDirectCall,
         else_call: SimpleMirDirectCall,
     };
 
     const SimpleMirConditionalReturn = struct {
+        prefix_calls: SimpleMirDirectCalls,
         condition: SimpleMirCondition,
         then_value: SimpleMirConditionalValue,
         else_value: SimpleMirConditionalValue,
@@ -1400,9 +1402,7 @@ const LlvmEmitter = struct {
         if (simple_return) |ret| {
             const return_span = self.simpleMirReturnSpan(fn_mir) orelse sig_facts.name.span;
             if (simple_return_prefix_calls) |calls| {
-                for (calls.calls[0..calls.count]) |call| {
-                    try self.emitSimpleMirDirectCall(call, null, return_span);
-                }
+                try self.emitSimpleMirDirectCalls(calls, return_span);
             }
             switch (ret) {
                 .void => try self.emitReturnVoid(return_span),
@@ -1440,12 +1440,11 @@ const LlvmEmitter = struct {
                     try self.emitReturnVoid(span);
                 },
                 .direct_calls => |calls| {
-                    for (calls.calls[0..calls.count]) |call| {
-                        try self.emitSimpleMirDirectCall(call, null, sig_facts.name.span);
-                    }
+                    try self.emitSimpleMirDirectCalls(calls, sig_facts.name.span);
                     try self.emitReturnVoid(sig_facts.name.span);
                 },
                 .conditional_direct_calls => |conditional| {
+                    try self.emitSimpleMirDirectCalls(conditional.prefix_calls, sig_facts.name.span);
                     const then_label = try self.nextLabel("if_then");
                     const else_label = try self.nextLabel("if_else");
                     const done_label = try self.nextLabel("if_done");
@@ -1467,6 +1466,7 @@ const LlvmEmitter = struct {
         } else if (simple_conditional_return) |conditional| {
             const then_label = try self.nextLabel("if_then");
             const else_label = try self.nextLabel("if_else");
+            try self.emitSimpleMirDirectCalls(conditional.prefix_calls, sig_facts.name.span);
             const condition = try self.emitSimpleMirCondition(conditional.condition, sig_facts.name.span);
             const inverted = switch (conditional.condition) {
                 .param => |param| param.inverted,
@@ -1546,6 +1546,7 @@ const LlvmEmitter = struct {
         if (fn_mir.blocks.len != 4 or fn_mir.trap_edges.len != 0 or fn_mir.pointer_provenance_facts.len != 0) return null;
         const entry = fn_mir.blocks[0];
         if (entry.terminator != .switch_ or entry.successors.len != 2) return null;
+        const prefix_calls = self.simpleMirPrefixVoidCallsBeforeSwitch(function, fn_mir, entry) orelse return null;
         const condition = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return null;
         const after_block = fn_mir.blocks[1];
         if (after_block.terminator != .fallthrough) return null;
@@ -1558,7 +1559,7 @@ const LlvmEmitter = struct {
         if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
         const then_call = self.simpleMirDirectVoidCallInBlock(function, fn_mir, then_block) orelse return null;
         const else_call = self.simpleMirDirectVoidCallInBlock(function, fn_mir, else_block) orelse return null;
-        return .{ .condition = condition, .then_call = then_call, .else_call = else_call };
+        return .{ .prefix_calls = prefix_calls, .condition = condition, .then_call = then_call, .else_call = else_call };
     }
 
     fn simpleMirConditionalReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalReturn {
@@ -1568,6 +1569,7 @@ const LlvmEmitter = struct {
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         const entry = fn_mir.blocks[0];
         if (entry.terminator != .switch_ or entry.successors.len != 2) return null;
+        const prefix_calls = self.simpleMirPrefixVoidCallsBeforeSwitch(function, fn_mir, entry) orelse return null;
         const condition = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return null;
         const then_index = entry.successors[0];
         const else_index = entry.successors[1];
@@ -1586,7 +1588,7 @@ const LlvmEmitter = struct {
             if (!std.mem.eql(u8, block.kind, "trap") or block.terminator != .trap_) return null;
         }
         if (fn_mir.trap_edges.len != simpleMirConditionalTrapCount(then_value) + simpleMirConditionalTrapCount(else_value)) return null;
-        return .{ .condition = condition, .then_value = then_value, .else_value = else_value };
+        return .{ .prefix_calls = prefix_calls, .condition = condition, .then_value = then_value, .else_value = else_value };
     }
 
     fn simpleMirConditionalAssignedReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, then_block: mir.Block, else_block: mir.Block) ?struct { SimpleMirConditionalValue, SimpleMirConditionalValue } {
@@ -1760,6 +1762,12 @@ const LlvmEmitter = struct {
                 const value_name = try self.emitSimpleMirLogicalNot(arg, span);
                 try self.emitReturnValue(ret_ty, value_name, span);
             },
+        }
+    }
+
+    fn emitSimpleMirDirectCalls(self: *LlvmEmitter, calls: SimpleMirDirectCalls, span: diagnostics.Span) !void {
+        for (calls.calls[0..calls.count]) |call| {
+            try self.emitSimpleMirDirectCall(call, null, span);
         }
     }
 
@@ -2104,6 +2112,20 @@ const LlvmEmitter = struct {
         const block = fn_mir.blocks[0];
         for (block.instructions) |instruction| {
             if (instruction.kind == .return_value) return calls;
+            if (instruction.kind != .call) continue;
+            const source = instructionSourcePoint(instruction);
+            if (!simpleMirDirectCallResultVoid(fn_mir, source)) return null;
+            if (calls.count >= max_simple_mir_void_calls) return null;
+            calls.calls[calls.count] = self.simpleMirDirectCallAtSource(function, fn_mir, source) orelse return null;
+            calls.count += 1;
+        }
+        return null;
+    }
+
+    fn simpleMirPrefixVoidCallsBeforeSwitch(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirDirectCalls {
+        var calls: SimpleMirDirectCalls = .{};
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .binary and std.mem.eql(u8, instruction.detail, "switch_subject")) return calls;
             if (instruction.kind != .call) continue;
             const source = instructionSourcePoint(instruction);
             if (!simpleMirDirectCallResultVoid(fn_mir, source)) return null;

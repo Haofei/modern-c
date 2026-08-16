@@ -233,6 +233,30 @@ test "LLVM preserves MIR void calls before simple returns" {
     try std.testing.expect(hit2 < ret);
 }
 
+test "LLVM preserves MIR void calls before conditional returns" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\fn side_then_cond(flag: bool) -> i32 {
+        \\    hit(0);
+        \\    if (flag) {
+        \\        return 1;
+        \\    } else {
+        \\        return 2;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_void_calls_before_conditional_return.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @side_then_cond");
+    const hit = std.mem.indexOf(u8, body, "call void @hit(i32 0)") orelse return error.TestUnexpectedResult;
+    const branch = std.mem.indexOf(u8, body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hit < branch);
+    try expectContains(body, "ret i32 1");
+    try expectContains(body, "ret i32 2");
+}
+
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();

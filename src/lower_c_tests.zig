@@ -250,6 +250,30 @@ test "lower-c preserves MIR void calls before simple returns" {
     try std.testing.expect(hit2 < ret);
 }
 
+test "lower-c preserves MIR void calls before conditional returns" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\fn side_then_cond(flag: bool) -> i32 {
+        \\    hit(0);
+        \\    if (flag) {
+        \\        return 1;
+        \\    } else {
+        \\        return 2;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_void_calls_before_conditional_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static int32_t side_then_cond(bool flag)");
+    const hit = std.mem.indexOf(u8, body, "hit(0);") orelse return error.TestUnexpectedResult;
+    const branch = std.mem.indexOf(u8, body, "if (flag)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hit < branch);
+    try expectContains(body, "return 1;");
+    try expectContains(body, "return 2;");
+}
+
 test "lower-c runtime hook suppression uses VerifiedProgram runtime hook facts" {
     const source =
         \\export fn mc_ksan_check(addr: usize, size: usize) -> void {}
