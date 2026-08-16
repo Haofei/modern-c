@@ -160,23 +160,11 @@ pub const FunctionArtifact = struct {
 };
 
 pub const GlobalArtifact = struct {
-    name: ast.Ident,
-    ty: ?ast.TypeExpr,
-    init: ?ast.Expr,
-    is_const: bool,
-    exported: bool,
-    is_extern: bool,
     signature: codegen_attrs.GlobalSignatureFacts,
     initializer: codegen_attrs.GlobalInitFacts,
 
     pub fn fromDecl(global: ast.GlobalDecl) GlobalArtifact {
         return .{
-            .name = global.name,
-            .ty = global.ty,
-            .init = global.init,
-            .is_const = global.is_const,
-            .exported = global.exported,
-            .is_extern = global.is_extern,
             .signature = .{
                 .name = global.name,
                 .ty = global.ty,
@@ -378,7 +366,7 @@ test "declaration artifacts collect from resolved declaration stream" {
             saw_function = true;
         },
         .global => |global| {
-            try std.testing.expectEqualStrings("counter", global.name.text);
+            try std.testing.expectEqualStrings("counter", global.signature.name.text);
             saw_global = true;
         },
         .type_decl => |type_decl| {
