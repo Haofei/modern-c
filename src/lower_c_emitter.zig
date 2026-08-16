@@ -1190,6 +1190,7 @@ pub const CEmitter = struct {
         param: []const u8,
         integer_literal: []const u8,
         direct_call: SimpleMirDirectCall,
+        checked_binary: SimpleMirCheckedBinary,
     };
 
     const max_simple_mir_call_args = 8;
@@ -1203,6 +1204,13 @@ pub const CEmitter = struct {
         callee: []const u8,
         args: [max_simple_mir_call_args]SimpleMirArg = undefined,
         arg_count: usize = 0,
+    };
+
+    const SimpleMirCheckedBinary = struct {
+        op: []const u8,
+        type_name: []const u8,
+        left: SimpleMirArg,
+        right: SimpleMirArg,
     };
 
     fn emitSimpleMirFunction(self: *CEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
@@ -1226,14 +1234,19 @@ pub const CEmitter = struct {
             .void => try self.out.appendSlice(self.allocator, "return;\n"),
             .param => |name| try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(name)}),
             .integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
+            .checked_binary => |binary| {
+                const helper = try self.checkedHelperName(binary.op, binary.type_name);
+                try self.out.print(self.allocator, "return {s}(", .{helper});
+                try self.emitSimpleMirArg(binary.left);
+                try self.out.appendSlice(self.allocator, ", ");
+                try self.emitSimpleMirArg(binary.right);
+                try self.out.appendSlice(self.allocator, ");\n");
+            },
             .direct_call => |call| {
                 try self.out.print(self.allocator, "return {s}(", .{try self.cIdent(call.callee)});
                 for (call.args[0..call.arg_count], 0..) |arg, i| {
                     if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-                    switch (arg) {
-                        .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
-                        .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
-                    }
+                    try self.emitSimpleMirArg(arg);
                 }
                 try self.out.appendSlice(self.allocator, ");\n");
             },
@@ -1243,26 +1256,80 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirReturn {
-        if (fn_mir.blocks.len != 1 or fn_mir.trap_edges.len != 0) return null;
+        if (fn_mir.blocks.len == 0) return null;
         if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         const block = fn_mir.blocks[0];
         if (block.terminator != .return_) return null;
         if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
         const ret = simpleMirReturnInstruction(block) orelse return null;
-        if (ret.result_ty == .void or std.mem.eql(u8, ret.detail, "void")) return .void;
+        if (ret.result_ty == .void or std.mem.eql(u8, ret.detail, "void")) return if (simpleMirNoTrap(fn_mir)) .void else null;
         const value_id = ret.value_id orelse return null;
         for (function.signature.params) |param| {
-            if (std.mem.eql(u8, value_id, param.name.text)) return .{ .param = param.name.text };
+            if (std.mem.eql(u8, value_id, param.name.text)) return if (simpleMirNoTrap(fn_mir)) .{ .param = param.name.text } else null;
         }
         if (std.mem.eql(u8, value_id, "int")) {
             for (fn_mir.integer_facts) |fact| {
-                if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return .{ .integer_literal = fact.literal };
+                if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return if (simpleMirNoTrap(fn_mir)) .{ .integer_literal = fact.literal } else null;
             }
         }
-        if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| return .{ .direct_call = call };
+        if (simpleMirNoTrap(fn_mir)) if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| return .{ .direct_call = call };
+        if (std.mem.eql(u8, value_id, "binary")) {
+            if (self.simpleMirCheckedBinaryAtReturn(function, fn_mir)) |binary| return .{ .checked_binary = binary };
+        }
         if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
         return null;
+    }
+
+    fn simpleMirNoTrap(fn_mir: mir.Function) bool {
+        return fn_mir.blocks.len == 1 and fn_mir.trap_edges.len == 0;
+    }
+
+    fn emitSimpleMirArg(self: *CEmitter, arg: SimpleMirArg) !void {
+        switch (arg) {
+            .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
+            .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
+        }
+    }
+
+    fn simpleMirCheckedBinaryAtReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirCheckedBinary {
+        return self.simpleMirCheckedBinaryAtSource(function, fn_mir, blk: {
+            for (fn_mir.blocks[0].instructions) |instruction| {
+                if (instruction.kind == .binary) break :blk instructionSourcePoint(instruction);
+            }
+            return null;
+        });
+    }
+
+    fn simpleMirCheckedBinaryAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirCheckedBinary {
+        const binary_instr = blk: {
+            for (fn_mir.blocks[0].instructions) |instruction| {
+                if (instruction.kind == .binary and sameMirSourceLocation(instructionSourcePoint(instruction), source)) break :blk instruction;
+            }
+            return null;
+        };
+        if (!simpleMirBinaryOpSupported(binary_instr.detail)) return null;
+        if (!mirHasIntegerOverflowTrapAt(fn_mir, source)) return null;
+        const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, source) orelse return null;
+        const target_name = typeName(self.resolveAliasType(target_fact.target_ty)) orelse return null;
+        var operands: [2]SimpleMirArg = undefined;
+        var count: usize = 0;
+        var after_binary = false;
+        for (fn_mir.blocks[0].instructions) |instruction| {
+            if (!after_binary) {
+                after_binary = instruction.kind == .binary and sameMirSourceLocation(instructionSourcePoint(instruction), source);
+                continue;
+            }
+            if (instruction.kind == .return_value or instruction.kind == .local) break;
+            if (instruction.kind != .expr) continue;
+            const arg = self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
+            if (count >= operands.len) return null;
+            operands[count] = arg;
+            count += 1;
+            if (count == operands.len) break;
+        }
+        if (count != 2) return null;
+        return .{ .op = binary_instr.detail, .type_name = target_name, .left = operands[0], .right = operands[1] };
     }
 
     fn simpleMirDirectCall(self: *CEmitter, function: anytype, fn_mir: mir.Function, callee: []const u8) ?SimpleMirDirectCall {
@@ -1304,13 +1371,14 @@ pub const CEmitter = struct {
     fn simpleMirLocalInitReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {
         if (!mirBlockHasLocal(fn_mir.blocks[0], local_name)) return null;
         const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
+        if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .checked_binary = binary };
+        if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = name },
                 .integer_literal => |literal| .{ .integer_literal = literal },
             };
         }
-        if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
         return null;
     }
 
@@ -1325,7 +1393,7 @@ pub const CEmitter = struct {
             }
             switch (instruction.kind) {
                 .target_type => continue,
-                .integer_literal_conversion, .call => return instructionSourcePoint(instruction),
+                .integer_literal_conversion, .binary, .call => return instructionSourcePoint(instruction),
                 .expr => if (!std.mem.eql(u8, instruction.detail, local_name)) return instructionSourcePoint(instruction),
                 .return_value => return null,
                 else => return null,
@@ -1352,7 +1420,7 @@ pub const CEmitter = struct {
         _ = self;
         const block = fn_mir.blocks[0];
         for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .local, .target_type, .integer_literal_conversion, .return_value => {},
+            .param, .local, .target_type, .integer_literal_conversion, .binary, .add_overflow, .return_value => {},
             .call => {},
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int")) continue;
@@ -1367,6 +1435,38 @@ pub const CEmitter = struct {
             else => return false,
         };
         return true;
+    }
+
+    fn simpleMirBinaryOpSupported(op: []const u8) bool {
+        return std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul");
+    }
+
+    fn mirHasIntegerOverflowTrapAt(fn_mir: mir.Function, source: mir.SourcePoint) bool {
+        for (fn_mir.trap_edges) |edge| {
+            if (edge.kind == .IntegerOverflow and edge.source == .checked_arithmetic and edge.line == source.line and edge.column == source.column) return true;
+        }
+        return false;
+    }
+
+    fn checkedHelperName(self: *CEmitter, op: []const u8, type_name: []const u8) ![]const u8 {
+        const suffix = lower_c_type.checkedTypeSuffix(type_name) orelse return error.UnsupportedCEmission;
+        const prefix: []const u8 = if (std.mem.eql(u8, op, "add"))
+            "mc_checked_add_"
+        else if (std.mem.eql(u8, op, "sub"))
+            "mc_checked_sub_"
+        else if (std.mem.eql(u8, op, "mul"))
+            "mc_checked_mul_"
+        else
+            return error.UnsupportedCEmission;
+        return try std.fmt.allocPrint(self.scratch.allocator(), "{s}{s}", .{ prefix, suffix });
+    }
+
+    fn simpleMirTargetTypeFactAt(self: *CEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?mir.TargetTypeFact {
+        _ = self;
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind == .expression_result and sameMirSourceLocation(fact.source, source)) return fact;
+        }
+        return null;
     }
 
     fn mirBlockHasLocal(block: mir.Block, name: []const u8) bool {
