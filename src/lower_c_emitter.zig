@@ -1214,8 +1214,8 @@ pub const CEmitter = struct {
     const SimpleMirConditionalVoidBody = struct {
         prefix_calls: SimpleMirDirectCalls,
         condition: SimpleMirCondition,
-        then_call: SimpleMirDirectCall,
-        else_call: SimpleMirDirectCall,
+        then_calls: SimpleMirDirectCalls,
+        else_calls: SimpleMirDirectCalls,
     };
 
     const SimpleMirConditionalReturn = struct {
@@ -1356,16 +1356,12 @@ pub const CEmitter = struct {
                     try self.emitSimpleMirCondition(conditional.condition);
                     try self.out.appendSlice(self.allocator, ") {\n");
                     self.indent += 1;
-                    try self.writeIndent();
-                    try self.emitSimpleMirDirectCall(conditional.then_call);
-                    try self.out.appendSlice(self.allocator, ";\n");
+                    try self.emitSimpleMirDirectCallStatements(conditional.then_calls);
                     self.indent -= 1;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "} else {\n");
                     self.indent += 1;
-                    try self.writeIndent();
-                    try self.emitSimpleMirDirectCall(conditional.else_call);
-                    try self.out.appendSlice(self.allocator, ";\n");
+                    try self.emitSimpleMirDirectCallStatements(conditional.else_calls);
                     self.indent -= 1;
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "}\n");
@@ -1472,9 +1468,9 @@ pub const CEmitter = struct {
         const else_block = fn_mir.blocks[else_index];
         if (then_block.terminator != .jump or else_block.terminator != .jump) return null;
         if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
-        const then_call = self.simpleMirDirectVoidCallInBlock(function, fn_mir, then_block) orelse return null;
-        const else_call = self.simpleMirDirectVoidCallInBlock(function, fn_mir, else_block) orelse return null;
-        return .{ .prefix_calls = prefix_calls, .condition = condition, .then_call = then_call, .else_call = else_call };
+        const then_calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, then_block) orelse return null;
+        const else_calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, else_block) orelse return null;
+        return .{ .prefix_calls = prefix_calls, .condition = condition, .then_calls = then_calls, .else_calls = else_calls };
     }
 
     fn simpleMirConditionalReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalReturn {
@@ -1934,12 +1930,6 @@ pub const CEmitter = struct {
             if (sameMirSourceLocation(fact.source, source)) return fact;
         }
         return null;
-    }
-
-    fn simpleMirDirectVoidCallInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirDirectCall {
-        const calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block) orelse return null;
-        if (calls.count != 1) return null;
-        return calls.calls[0];
     }
 
     fn simpleMirPrefixVoidCallsBeforeReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirDirectCalls {
