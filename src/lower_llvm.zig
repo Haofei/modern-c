@@ -1376,6 +1376,7 @@ const LlvmEmitter = struct {
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
         bool_literal: bool,
+        global_load: []const u8,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -1428,6 +1429,7 @@ const LlvmEmitter = struct {
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
         bool_literal: bool,
+        global_load: []const u8,
         direct_call: SimpleMirNestedCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -2651,6 +2653,7 @@ const LlvmEmitter = struct {
         if (mirBlockHasLocal(block, value_id)) {
             return self.simpleMirLocalValueInBlock(function, fn_mir, block, value_id);
         }
+        if (self.global_types.contains(value_id)) return .{ .global_load = value_id };
         var literal_source: ?mir.SourcePoint = null;
         if (std.mem.eql(u8, value_id, "int") or std.mem.eql(u8, value_id, "bool")) {
             for (block.instructions) |instruction| {
@@ -2715,6 +2718,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal| return .{ .enum_literal = literal };
         if (simpleMirNullLiteralAtSource(fn_mir, source)) return .null_literal;
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
+        if (self.simpleMirGlobalAtSource(function, fn_mir, source)) |name| return .{ .global_load = name };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
             .param_field => |field| .{ .param_field = field },
@@ -2754,6 +2758,10 @@ const LlvmEmitter = struct {
             },
             .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, span),
             .bool_literal => |bool_value| try self.emitReturnValue(ret_ty, if (bool_value) "1" else "0", span),
+            .global_load => |name| {
+                const value_name = try self.emitSimpleMirGlobalLoad(name, ret_ty);
+                try self.emitReturnValue(ret_ty, value_name, span);
+            },
             .direct_call => |call| {
                 const tmp = try self.nextTemp();
                 try self.emitSimpleMirDirectCall(call, tmp, span);
@@ -3050,6 +3058,7 @@ const LlvmEmitter = struct {
             .param_field => |field| try self.emitSimpleMirParamFieldValue(field, span),
             .integer_literal => |literal| literal,
             .bool_literal => |value| if (value) "1" else "0",
+            .global_load => |name| try self.emitSimpleMirGlobalLoad(name, self.global_types.get(name) orelse return error.UnsupportedLlvmEmission),
             .direct_call => |call| blk: {
                 const tmp = try self.nextTemp();
                 try self.emitSimpleMirNestedCall(call, tmp, span);
@@ -3337,6 +3346,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirLocalCallArgAt(function, fn_mir, source)) |arg| return arg;
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
+        if (self.simpleMirGlobalAtSource(function, fn_mir, source)) |name| return .{ .global_load = name };
         if (self.simpleMirNestedCallAtSource(function, fn_mir, source)) |call| {
             if (self.simpleMirNestedCallReturnsValue(call)) return .{ .direct_call = call };
         }

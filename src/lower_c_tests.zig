@@ -2911,6 +2911,42 @@ test "lower-c loop checked scalar returns lower from MIR without body fallback" 
     try expectNotContains(neg_body, "mc_tmp");
 }
 
+test "lower-c loop call and global returns lower from MIR without body fallback" {
+    const source =
+        \\global g: u32 = 0;
+        \\extern fn hit_u16(value: u16) -> void;
+        \\extern fn hit_u32(value: u32) -> void;
+        \\extern fn make(value: u16) -> u16;
+        \\fn loop_direct_call(flag: bool, value: u16) -> u16 {
+        \\    while flag {
+        \\        hit_u16(value);
+        \\    }
+        \\    return make(value);
+        \\}
+        \\fn loop_global(flag: bool) -> u32 {
+        \\    while flag {
+        \\        hit_u32(g);
+        \\    }
+        \\    return g;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_loop_call_global_returns.mc", source, &output);
+
+    const call_body = try cFunctionBody(output.items, "static uint16_t loop_direct_call(bool flag, uint16_t value)");
+    try expectContains(call_body, "while (flag)");
+    try expectContains(call_body, "hit_u16(value);");
+    try expectContains(call_body, "return make(value);");
+    try expectNotContains(call_body, "mc_tmp");
+
+    const global_body = try cFunctionBody(output.items, "static uint32_t loop_global(bool flag)");
+    try expectContains(global_body, "while (flag)");
+    try expectContains(global_body, "hit_u32(((uint32_t)mc_race_load_u32(&g)));");
+    try expectContains(global_body, "return ((uint32_t)mc_race_load_u32(&g));");
+    try expectNotContains(global_body, "mc_tmp");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;

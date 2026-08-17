@@ -1318,6 +1318,7 @@ pub const CEmitter = struct {
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
         bool_literal: bool,
+        global_load: []const u8,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -1368,6 +1369,7 @@ pub const CEmitter = struct {
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
         bool_literal: bool,
+        global_load: []const u8,
         direct_call: SimpleMirNestedCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -2577,6 +2579,7 @@ pub const CEmitter = struct {
         if (mirBlockHasLocal(block, value_id)) {
             return self.simpleMirLocalValueInBlock(function, fn_mir, block, value_id);
         }
+        if (self.globals.contains(value_id)) return .{ .global_load = value_id };
         var literal_source: ?mir.SourcePoint = null;
         if (std.mem.eql(u8, value_id, "int") or std.mem.eql(u8, value_id, "bool")) {
             for (block.instructions) |instruction| {
@@ -2641,6 +2644,7 @@ pub const CEmitter = struct {
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal| return .{ .enum_literal = literal };
         if (self.simpleMirNullLiteralAtSource(fn_mir, source)) |literal| return .{ .null_literal = literal };
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
+        if (self.simpleMirGlobalAtSource(function, fn_mir, source)) |name| return .{ .global_load = name };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
             .param_field => |field| .{ .param_field = field },
@@ -2677,6 +2681,7 @@ pub const CEmitter = struct {
             .param_field => |field| try self.out.print(self.allocator, "{s}.{s}", .{ try self.cIdent(field.param_name), try self.cIdent(field.field_name) }),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |bool_value| try self.out.appendSlice(self.allocator, if (bool_value) "true" else "false"),
+            .global_load => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
             .direct_call => |call| try self.emitSimpleMirDirectCall(call),
             .checked_binary => |binary| {
                 const helper = try self.checkedHelperName(binary.op, binary.type_name);
@@ -2921,6 +2926,7 @@ pub const CEmitter = struct {
             .param_field => |field| try self.out.print(self.allocator, "{s}.{s}", .{ try self.cIdent(field.param_name), try self.cIdent(field.field_name) }),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
+            .global_load => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
             .direct_call => |call| try self.emitSimpleMirNestedCall(call),
             .checked_binary => |binary| {
                 const helper = try self.checkedHelperName(binary.op, binary.type_name);
@@ -3190,6 +3196,7 @@ pub const CEmitter = struct {
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirLocalCallArgAt(function, fn_mir, source)) |arg| return arg;
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
+        if (self.simpleMirGlobalAtSource(function, fn_mir, source)) |name| return .{ .global_load = name };
         if (self.simpleMirNestedCallAtSource(function, fn_mir, source)) |call| {
             if (self.simpleMirNestedCallReturnsValue(call)) return .{ .direct_call = call };
         }

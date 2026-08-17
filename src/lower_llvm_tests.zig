@@ -657,6 +657,44 @@ test "LLVM loop checked scalar returns lower from MIR without body fallback" {
     try expectNotContains(neg_body, "alloca");
 }
 
+test "LLVM loop call and global returns lower from MIR without body fallback" {
+    const source =
+        \\global g: u32 = 0;
+        \\extern fn hit_u16(value: u16) -> void;
+        \\extern fn hit_u32(value: u32) -> void;
+        \\extern fn make(value: u16) -> u16;
+        \\fn loop_direct_call(flag: bool, value: u16) -> u16 {
+        \\    while flag {
+        \\        hit_u16(value);
+        \\    }
+        \\    return make(value);
+        \\}
+        \\fn loop_global(flag: bool) -> u32 {
+        \\    while flag {
+        \\        hit_u32(g);
+        \\    }
+        \\    return g;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_loop_call_global_returns.mc", source, &output);
+
+    const call_body = try llvmFunctionBody(output.items, "define internal i16 @loop_direct_call");
+    try expectContains(call_body, "br i1 %flag");
+    try expectContains(call_body, "call void @hit_u16(i16 %value)");
+    try expectContains(call_body, "call i16 @make(i16 %value)");
+    try expectContains(call_body, "ret i16 %t");
+    try expectNotContains(call_body, "alloca");
+
+    const global_body = try llvmFunctionBody(output.items, "define internal i32 @loop_global");
+    try expectContains(global_body, "br i1 %flag");
+    try expectContains(global_body, "load atomic i32, ptr @g unordered, align 4");
+    try expectContains(global_body, "call void @hit_u32(i32 %t");
+    try expectContains(global_body, "ret i32 %t");
+    try expectNotContains(global_body, "alloca");
+}
+
 test "LLVM MIR conditional fast path uses only the switch subject expression" {
     const source =
         \\global g: u32 = 0;
