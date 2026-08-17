@@ -1475,7 +1475,9 @@ pub const CEmitter = struct {
     };
 
     const SimpleMirWrappingBinary = struct {
+        kind: enum { wrapping_add, unchecked_add },
         result_fact: mir.TargetTypeFact,
+        range_fact: ?mir.RangeFact = null,
         left: SimpleMirCallArg,
         right: SimpleMirCallArg,
     };
@@ -1592,6 +1594,14 @@ pub const CEmitter = struct {
                 },
                 .wrapping_binary => |binary| {
                     _ = binary.result_fact;
+                    switch (binary.kind) {
+                        .wrapping_add => {},
+                        .unchecked_add => {
+                            const fact = binary.range_fact orelse return error.UnsupportedCEmission;
+                            try self.out.print(self.allocator, "/* MC_MIR_RANGE no_overflow target={s} op={s} */\n", .{ fact.target, fact.op });
+                            try self.writeIndent();
+                        },
+                    }
                     try self.out.appendSlice(self.allocator, "return (");
                     try self.emitSimpleMirCallArg(binary.left);
                     try self.out.appendSlice(self.allocator, " + ");
@@ -1901,6 +1911,7 @@ pub const CEmitter = struct {
             return if (simpleMirNoTrap(fn_mir)) .{ .null_literal = literal } else null;
         }
         if (self.simpleMirWrappingBinaryReturn(function, fn_mir, block, value_id)) |binary| return .{ .wrapping_binary = binary };
+        if (self.simpleMirUncheckedBinaryReturn(function, fn_mir, block, value_id)) |binary| return .{ .wrapping_binary = binary };
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
             if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
         }
@@ -1976,7 +1987,54 @@ pub const CEmitter = struct {
         const left = self.simpleMirCallArgAt(function, fn_mir, left_fact_value.source) orelse return null;
         const right = self.simpleMirCallArgAt(function, fn_mir, right_fact_value.source) orelse return null;
         if (simpleMirCallArgHasDirectCall(left) or simpleMirCallArgHasDirectCall(right)) return null;
-        return .{ .result_fact = result_fact, .left = left, .right = right };
+        return .{ .kind = .wrapping_add, .result_fact = result_fact, .left = left, .right = right };
+    }
+
+    fn simpleMirUncheckedBinaryReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
+        if (!simpleMirNoTrap(fn_mir)) return null;
+        const call_source = simpleMirReturnValueSource(block, value_id) orelse return null;
+        var has_unchecked_call = false;
+        for (fn_mir.call_target_facts) |fact| {
+            if (fact.kind == .unchecked_add and sameMirSourceLocation(fact.source, call_source)) {
+                has_unchecked_call = true;
+                break;
+            }
+        }
+        if (!has_unchecked_call) return null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .unchecked_assume and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) {
+                if (!std.mem.eql(u8, instruction.detail, "unchecked.add")) return null;
+                break;
+            }
+        } else return null;
+
+        const result_fact = simpleMirTargetTypeFactKindAt(fn_mir, .unchecked_result, call_source) orelse return null;
+        const return_ty = function.signature.return_type orelse return null;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(result_fact.target_ty))) return null;
+        const result_name = type_bridge.typeName(self.resolveAliasType(result_fact.target_ty)) orelse return null;
+        if (unsignedTypeSuffix(result_name) == null) return null;
+        var left_fact: ?mir.TargetTypeFact = null;
+        var right_fact: ?mir.TargetTypeFact = null;
+        for (fn_mir.target_type_facts) |fact| {
+            switch (fact.kind) {
+                .unchecked_left => {
+                    if (left_fact != null) return null;
+                    left_fact = fact;
+                },
+                .unchecked_right => {
+                    if (right_fact != null) return null;
+                    right_fact = fact;
+                },
+                else => {},
+            }
+        }
+        const range_fact = simpleMirNoOverflowRangeFactAt(fn_mir, "value", "add", call_source);
+        const left_fact_value = left_fact orelse return null;
+        const right_fact_value = right_fact orelse return null;
+        const left = self.simpleMirCallArgAt(function, fn_mir, left_fact_value.source) orelse return null;
+        const right = self.simpleMirCallArgAt(function, fn_mir, right_fact_value.source) orelse return null;
+        if (simpleMirCallArgHasDirectCall(left) or simpleMirCallArgHasDirectCall(right)) return null;
+        return .{ .kind = .unchecked_add, .result_fact = result_fact, .range_fact = range_fact, .left = left, .right = right };
     }
 
     fn simpleMirStructLiteralReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirStructLiteralReturn {
@@ -3725,7 +3783,7 @@ pub const CEmitter = struct {
         }
         if (std.mem.eql(u8, value_id, "add")) {
             for (fn_mir.call_target_facts) |fact| {
-                if (fact.kind != .wrapping_add or !sameMirSourceLocation(fact.source, source)) continue;
+                if ((fact.kind != .wrapping_add and fact.kind != .unchecked_add) or !sameMirSourceLocation(fact.source, source)) continue;
                 for (block.instructions) |instruction| {
                     if (instruction.kind == .expr and
                         std.mem.eql(u8, instruction.detail, "add") and
@@ -4123,11 +4181,11 @@ pub const CEmitter = struct {
 
     fn blockOnlyContainsSimpleMirReturnInstructionsInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .local, .assign, .target_type, .integer_literal_conversion, .representation_check, .representation_use, .typed_load, .binary, .unary, .add_overflow, .return_value => {},
+            .param, .local, .assign, .target_type, .integer_literal_conversion, .representation_check, .representation_use, .typed_load, .binary, .unary, .add_overflow, .contract_begin, .unchecked_assume, .return_value => {},
             .call, .call_target => {},
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "char") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "struct_literal") or std.mem.eql(u8, instruction.detail, "array_literal")) continue;
-                if ((std.mem.eql(u8, instruction.detail, "add") or std.mem.eql(u8, instruction.detail, "wrapping")) and simpleMirWrappingCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
+                if ((std.mem.eql(u8, instruction.detail, "add") or std.mem.eql(u8, instruction.detail, "wrapping") or std.mem.eql(u8, instruction.detail, "unchecked")) and simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
                 if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
                 if (std.mem.eql(u8, instruction.detail, "null") and self.simpleMirNullLiteralAtSource(fn_mir, instructionSourcePoint(instruction)) != null) continue;
                 if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
@@ -4234,11 +4292,23 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn simpleMirWrappingCallAtSource(fn_mir: mir.Function, source: mir.SourcePoint) bool {
+    fn simpleMirArithmeticCallAtSource(fn_mir: mir.Function, source: mir.SourcePoint) bool {
         for (fn_mir.call_target_facts) |fact| {
-            if (fact.kind == .wrapping_add and sameMirSourceLocation(fact.source, source)) return true;
+            if ((fact.kind == .wrapping_add or fact.kind == .unchecked_add) and sameMirSourceLocation(fact.source, source)) return true;
         }
         return false;
+    }
+
+    fn simpleMirNoOverflowRangeFactAt(fn_mir: mir.Function, target: []const u8, op: []const u8, source: mir.SourcePoint) ?mir.RangeFact {
+        var found: ?mir.RangeFact = null;
+        for (fn_mir.range_facts) |fact| {
+            if (!std.mem.eql(u8, fact.target, target)) continue;
+            if (!std.mem.eql(u8, fact.op, op)) continue;
+            if (fact.line != source.line or fact.column != source.column) continue;
+            if (found != null) return null;
+            found = fact;
+        }
+        return found;
     }
 
     fn simpleMirBinaryOpSupported(op: []const u8) bool {
