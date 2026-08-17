@@ -6167,6 +6167,29 @@ test "lower-c emits enum switch returns from MIR without body fallback" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidRepresentation();") != null);
 }
 
+test "lower-c emits multi-arm enum switch returns from MIR without body fallback" {
+    const source =
+        \\enum Choice { left, middle, right }
+        \\fn choose(value: Choice) -> u32 {
+        \\    switch value {
+        \\        .left => { return 1; },
+        \\        .middle => { return 2; },
+        \\        .right => { return 3; },
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_switch_multi_arm_returns.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case Choice_left:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case Choice_middle:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 2;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "case Choice_right:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 3;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_InvalidRepresentation();") != null);
+}
+
 test "lower-c if-let statements require MIR subject types" {
     const source =
         \\extern fn make_result() -> Result<u32, u32>;

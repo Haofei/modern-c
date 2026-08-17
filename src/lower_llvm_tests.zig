@@ -7471,6 +7471,28 @@ test "LLVM emits enum switch returns from MIR without body fallback" {
     try expectContains(output.items, "call void @mc_trap_InvalidRepresentation()");
 }
 
+test "LLVM emits multi-arm enum switch returns from MIR without body fallback" {
+    const source =
+        \\enum Choice { left, middle, right }
+        \\fn choose(value: Choice) -> u32 {
+        \\    switch value {
+        \\        .left => { return 1; },
+        \\        .middle => { return 2; },
+        \\        .right => { return 3; },
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_switch_multi_arm_returns.mc", source, &output);
+    try expectContains(output.items, "switch ");
+    try expectContains(output.items, "label %bb_switch_arm");
+    try expectContains(output.items, "ret i32 1");
+    try expectContains(output.items, "ret i32 2");
+    try expectContains(output.items, "ret i32 3");
+    try expectContains(output.items, "call void @mc_trap_InvalidRepresentation()");
+}
+
 test "LLVM if-let statements require MIR subject types" {
     const source =
         \\extern fn make_result() -> Result<u32, u32>;
