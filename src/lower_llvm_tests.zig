@@ -621,6 +621,13 @@ test "LLVM emits simple global stores from MIR" {
         \\        g = y;
         \\    }
         \\}
+        \\fn call_if_store_call(flag: bool, x: u32) {
+        \\    hit(x);
+        \\    if (flag) {
+        \\        g = x;
+        \\    }
+        \\    hit(x);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -721,6 +728,17 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(call_if_body, "store atomic i32 %x, ptr @g unordered, align 4");
     try expectContains(call_if_body, "store atomic i32 %y, ptr @g unordered, align 4");
     try expectNotContains(call_if_body, "alloca");
+
+    const call_if_call_body = try llvmFunctionBody(output.items, "define internal void @call_if_store_call");
+    const first_call = std.mem.indexOf(u8, call_if_call_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    const branch = std.mem.indexOf(u8, call_if_call_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const store_index = std.mem.indexOf(u8, call_if_call_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const second_call = std.mem.lastIndexOf(u8, call_if_call_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first_call < branch);
+    try std.testing.expect(branch < store_index);
+    try std.testing.expect(store_index < second_call);
+    try expectNotContains(call_if_call_body, "switch");
+    try expectNotContains(call_if_call_body, "alloca");
 }
 
 test "LLVM preserves MIR void calls before simple returns" {
