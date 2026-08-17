@@ -1095,6 +1095,15 @@ test "LLVM emits direct struct parameter field returns from MIR" {
         \\fn first(p: Pair) -> u32 {
         \\    return p.a;
         \\}
+        \\fn local_first(p: Pair) -> u32 {
+        \\    let x: u32 = p.a;
+        \\    return x;
+        \\}
+        \\fn assigned_second(p: Pair) -> u32 {
+        \\    var x: u32 = 0;
+        \\    x = p.b;
+        \\    return x;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1105,6 +1114,18 @@ test "LLVM emits direct struct parameter field returns from MIR" {
     try expectContains(body, "ret i32 %t");
     try expectNotContains(body, "alloca");
     try expectNotContains(body, "store");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_first");
+    try expectContains(local_body, "extractvalue { i32, i32 } %p, 0");
+    try expectContains(local_body, "ret i32 %t");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i32 @assigned_second");
+    try expectContains(assigned_body, "extractvalue { i32, i32 } %p, 1");
+    try expectContains(assigned_body, "ret i32 %t");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
 }
 
 test "LLVM emits conditional struct parameter field returns from MIR" {

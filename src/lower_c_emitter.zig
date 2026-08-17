@@ -1680,7 +1680,7 @@ pub const CEmitter = struct {
         for (function.signature.params) |param| {
             if (std.mem.eql(u8, value_id, param.name.text)) return if (simpleMirNoTrap(fn_mir)) .{ .param = param.name.text } else null;
         }
-        if (self.simpleMirParamFieldReturn(function, fn_mir, block, ret, value_id)) |field| return if (simpleMirNoTrap(fn_mir)) .{ .param_field = field } else null;
+        if (self.simpleMirParamFieldReturn(function, block, ret, value_id)) |field| return if (simpleMirNoTrap(fn_mir)) .{ .param_field = field } else null;
         if (std.mem.eql(u8, value_id, "int")) {
             for (fn_mir.integer_facts) |fact| {
                 if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return if (simpleMirNoTrap(fn_mir)) .{ .integer_literal = fact.literal } else null;
@@ -1707,8 +1707,7 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn simpleMirParamFieldReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, ret: mir.Instruction, field_name: []const u8) ?SimpleMirParamField {
-        _ = fn_mir;
+    fn simpleMirParamFieldReturn(self: *CEmitter, function: anytype, block: mir.Block, ret: mir.Instruction, field_name: []const u8) ?SimpleMirParamField {
         var field_source: ?mir.SourcePoint = null;
         for (block.instructions) |instruction| {
             if (instruction.kind == .return_value) break;
@@ -1717,14 +1716,23 @@ pub const CEmitter = struct {
             field_source = source;
         }
         const source = field_source orelse return null;
+        return self.simpleMirParamFieldAtSource(function, block, source, field_name, ret.result_ty.name());
+    }
+
+    fn simpleMirParamFieldAtSource(self: *CEmitter, function: anytype, block: mir.Block, source: mir.SourcePoint, field_name_filter: ?[]const u8, expected_type_name: ?[]const u8) ?SimpleMirParamField {
         for (function.signature.params) |param| {
             if (!simpleMirBlockHasExprAt(block, param.name.text, source)) continue;
             const struct_name = type_bridge.typeName(self.resolveAliasType(param.ty)) orelse continue;
             const struct_decl = self.structs.get(struct_name) orelse continue;
             for (struct_decl.fields, 0..) |field, index| {
-                if (!std.mem.eql(u8, field.name.text, field_name)) continue;
+                if (field_name_filter) |field_name| {
+                    if (!std.mem.eql(u8, field.name.text, field_name)) continue;
+                }
+                if (!simpleMirBlockHasExprAt(block, field.name.text, source)) continue;
                 const field_type_name = type_bridge.typeName(self.resolveAliasType(field.ty)) orelse return null;
-                if (!std.mem.eql(u8, field_type_name, ret.result_ty.name())) return null;
+                if (expected_type_name) |expected| {
+                    if (!std.mem.eql(u8, field_type_name, expected)) continue;
+                }
                 return .{
                     .param_name = param.name.text,
                     .field_name = field.name.text,
@@ -1736,15 +1744,15 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirExprCouldBeParamField(self: *CEmitter, function: anytype, block: mir.Block, field_name: []const u8, source: mir.SourcePoint) bool {
-        for (function.signature.params) |param| {
-            if (!simpleMirBlockHasExprAt(block, param.name.text, source)) continue;
-            const struct_name = type_bridge.typeName(self.resolveAliasType(param.ty)) orelse continue;
-            const struct_decl = self.structs.get(struct_name) orelse continue;
-            for (struct_decl.fields) |field| {
-                if (std.mem.eql(u8, field.name.text, field_name)) return true;
-            }
+        return self.simpleMirParamFieldAtSource(function, block, source, field_name, null) != null;
+    }
+
+    fn simpleMirParamFieldValueAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirParamField {
+        const fact = self.simpleMirTargetTypeFactAt(fn_mir, source) orelse return null;
+        for (fn_mir.blocks) |block| {
+            if (self.simpleMirParamFieldAtSource(function, block, source, null, fact.result_ty.name())) |field| return field;
         }
-        return false;
+        return null;
     }
 
     fn simpleMirNoTrap(fn_mir: mir.Function) bool {
@@ -2366,7 +2374,7 @@ pub const CEmitter = struct {
         for (function.signature.params) |param| {
             if (std.mem.eql(u8, value_id, param.name.text)) return .{ .param = param.name.text };
         }
-        if (self.simpleMirParamFieldReturn(function, fn_mir, block, ret, value_id)) |field| return .{ .param_field = field };
+        if (self.simpleMirParamFieldReturn(function, block, ret, value_id)) |field| return .{ .param_field = field };
         if (mirBlockHasLocal(block, value_id)) {
             return self.simpleMirLocalValueInBlock(function, fn_mir, block, value_id);
         }
@@ -2418,6 +2426,7 @@ pub const CEmitter = struct {
         if (self.simpleMirDirectCallAtSource(function, fn_mir, source)) |call| return .{ .direct_call = call };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
+        if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
             .integer_literal => |literal| .{ .integer_literal = literal },
@@ -3175,6 +3184,7 @@ pub const CEmitter = struct {
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirGlobalAtSource(function, fn_mir, init_source)) |name| return .{ .global_load = name };
+        if (self.simpleMirParamFieldValueAtSource(function, fn_mir, init_source)) |field| return .{ .param_field = field };
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = name },
@@ -3203,6 +3213,7 @@ pub const CEmitter = struct {
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, assigned_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, assigned_source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirGlobalAtSource(function, fn_mir, assigned_source)) |name| return .{ .global_load = name };
+        if (self.simpleMirParamFieldValueAtSource(function, fn_mir, assigned_source)) |field| return .{ .param_field = field };
         if (self.simpleMirArgAt(function, fn_mir, assigned_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = name },

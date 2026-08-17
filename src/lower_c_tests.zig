@@ -1077,6 +1077,15 @@ test "lower-c emits direct struct parameter field returns from MIR" {
         \\fn first(p: Pair) -> u32 {
         \\    return p.a;
         \\}
+        \\fn local_first(p: Pair) -> u32 {
+        \\    let x: u32 = p.a;
+        \\    return x;
+        \\}
+        \\fn assigned_second(p: Pair) -> u32 {
+        \\    var x: u32 = 0;
+        \\    x = p.b;
+        \\    return x;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1086,6 +1095,17 @@ test "lower-c emits direct struct parameter field returns from MIR" {
     try expectContains(body, "return p.a;");
     try expectNotContains(body, "mc_tmp");
     try expectNotContains(body, "switch");
+
+    const local_body = try cFunctionBody(output.items, "static uint32_t local_first(Pair p)");
+    try expectContains(local_body, "return p.a;");
+    try expectNotContains(local_body, "uint32_t x");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static uint32_t assigned_second(Pair p)");
+    try expectContains(assigned_body, "return p.b;");
+    try expectNotContains(assigned_body, "uint32_t x");
+    try expectNotContains(assigned_body, "mc_tmp");
+    try expectNotContains(assigned_body, "x =");
 }
 
 test "lower-c emits conditional struct parameter field returns from MIR" {
