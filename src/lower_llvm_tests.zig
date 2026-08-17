@@ -433,6 +433,39 @@ test "LLVM local and assigned aggregate direct calls return from MIR without bod
     try expectNotContains(assigned_array_body, "store");
 }
 
+test "LLVM grouped scalar expressions return from MIR without body fallback" {
+    const source =
+        \\extern fn make(value: u16) -> u16;
+        \\fn grouped_param(value: u16) -> u16 {
+        \\    return (value);
+        \\}
+        \\fn grouped_binary(value: u16) -> u16 {
+        \\    return (value) + 1;
+        \\}
+        \\fn grouped_call(value: u16) -> u16 {
+        \\    let x: u16 = (make(value));
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_grouped_scalar_returns.mc", source, &output);
+
+    const param_body = try llvmFunctionBody(output.items, "define internal i16 @grouped_param");
+    try expectContains(param_body, "ret i16 %value");
+    try expectNotContains(param_body, "alloca");
+
+    const binary_body = try llvmFunctionBody(output.items, "define internal i16 @grouped_binary");
+    try expectContains(binary_body, "@llvm.uadd.with.overflow.i16");
+    try expectContains(binary_body, "ret i16 %t");
+    try expectNotContains(binary_body, "alloca");
+
+    const call_body = try llvmFunctionBody(output.items, "define internal i16 @grouped_call");
+    try expectContains(call_body, "call i16 @make(i16 %value)");
+    try expectContains(call_body, "ret i16 %t");
+    try expectNotContains(call_body, "alloca");
+}
+
 test "LLVM MIR conditional fast path uses only the switch subject expression" {
     const source =
         \\global g: u32 = 0;

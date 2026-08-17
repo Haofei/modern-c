@@ -2697,6 +2697,37 @@ test "lower-c local and assigned aggregate direct calls return from MIR without 
     try expectNotContains(assigned_array_body, "mc_array_u32_2 p");
 }
 
+test "lower-c grouped scalar expressions return from MIR without body fallback" {
+    const source =
+        \\extern fn make(value: u16) -> u16;
+        \\fn grouped_param(value: u16) -> u16 {
+        \\    return (value);
+        \\}
+        \\fn grouped_binary(value: u16) -> u16 {
+        \\    return (value) + 1;
+        \\}
+        \\fn grouped_call(value: u16) -> u16 {
+        \\    let x: u16 = (make(value));
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_grouped_scalar_returns.mc", source, &output);
+
+    const param_body = try cFunctionBody(output.items, "static uint16_t grouped_param(uint16_t value)");
+    try expectContains(param_body, "return value;");
+    try expectNotContains(param_body, "mc_tmp");
+
+    const binary_body = try cFunctionBody(output.items, "static uint16_t grouped_binary(uint16_t value)");
+    try expectContains(binary_body, "return mc_checked_add_u16(value, 1);");
+    try expectNotContains(binary_body, "mc_tmp");
+
+    const call_body = try cFunctionBody(output.items, "static uint16_t grouped_call(uint16_t value)");
+    try expectContains(call_body, "return make(value);");
+    try expectNotContains(call_body, "uint16_t x");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;
