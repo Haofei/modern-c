@@ -7369,7 +7369,7 @@ test "lower-c emits C ABI for simple Result types" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "void consume_result(mc_result_u32_Error result);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static mc_result_u32_Error pass_result(mc_result_u32_Error result)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return result;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_result_u32_Error mc_tmp0 = result;\n    consume_result(mc_tmp0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "consume_result(result);") != null);
 }
 
 test "lower-c emits C ABI for tagged unions" {
@@ -7507,7 +7507,7 @@ test "lower-c emits tagged union constructors" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_eof });") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Token mc_tmp0 = ((Token){ .tag = TokenTag_value, .payload.value = 7 });\n    return id(mc_tmp0);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Token token = ((Token){ .tag = TokenTag_value, .payload.value = 9 });") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return number(mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return number(11);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Token){ .tag = TokenTag_ok, .payload.ok = 12 });") != null);
 }
 

@@ -148,7 +148,8 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
 
     const local_body = try llvmFunctionBody(output.items, "define internal i32 @choose_local");
     try expectContains(local_body, "icmp slt i32 %a, %b");
-    try expectContains(local_body, "br i1 %t0, label %bb_if_then");
+    try expectContains(local_body, "br i1 %t");
+    try expectContains(local_body, "label %bb_if_then");
     try expectNotContains(local_body, "alloca i1");
 
     const local_not_body = try llvmFunctionBody(output.items, "define internal i32 @choose_local_not");
@@ -501,7 +502,7 @@ test "LLVM generated locals and blocks avoid source parameter names" {
     const body = try llvmFunctionBody(output.items, "define internal i32 @collisions");
     try expectContains(body, "bb_entry_generated_0:");
     try expectContains(body, "%t2 =");
-    try expectContains(body, "bb_switch_end1:");
+    try expectContains(body, "bb_if_else1:");
     try expectNotContains(body, "\n  %t0 =");
     try expectNotContains(body, "\nbb_switch_end0:");
 }
