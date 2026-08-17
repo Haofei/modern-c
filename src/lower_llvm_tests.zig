@@ -515,12 +515,20 @@ test "LLVM preserves MIR void calls before direct-call returns" {
 test "LLVM preserves MIR void calls before conditional returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
+        \\extern fn make(value: i32) -> i32;
         \\fn side_then_cond(flag: bool) -> i32 {
         \\    hit(0);
         \\    if (flag) {
         \\        return 1;
         \\    } else {
         \\        return 2;
+        \\    }
+        \\}
+        \\fn choose_return_call_checked(flag: bool, a: i32, b: i32) -> i32 {
+        \\    if (flag) {
+        \\        return make(a + b);
+        \\    } else {
+        \\        return make(a - b);
         \\    }
         \\}
     ;
@@ -534,6 +542,15 @@ test "LLVM preserves MIR void calls before conditional returns" {
     try std.testing.expect(hit < branch);
     try expectContains(body, "ret i32 1");
     try expectContains(body, "ret i32 2");
+
+    const checked_body = try llvmFunctionBody(output.items, "define internal i32 @choose_return_call_checked");
+    try expectContains(checked_body, "br i1 %flag, label %bb_if_then");
+    try expectContains(checked_body, "@llvm.sadd.with.overflow.i32");
+    try expectContains(checked_body, "@llvm.ssub.with.overflow.i32");
+    try expectContains(checked_body, "call i32 @make(i32 %t");
+    try expectNotContains(checked_body, "alloca");
+    try expectNotContains(checked_body, "store");
+    try expectNotContains(checked_body, "switch");
 }
 
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {

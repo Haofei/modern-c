@@ -510,12 +510,20 @@ test "lower-c preserves MIR void calls before direct-call returns" {
 test "lower-c preserves MIR void calls before conditional returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
+        \\extern fn make(value: i32) -> i32;
         \\fn side_then_cond(flag: bool) -> i32 {
         \\    hit(0);
         \\    if (flag) {
         \\        return 1;
         \\    } else {
         \\        return 2;
+        \\    }
+        \\}
+        \\fn choose_return_call_checked(flag: bool, a: i32, b: i32) -> i32 {
+        \\    if (flag) {
+        \\        return make(a + b);
+        \\    } else {
+        \\        return make(a - b);
         \\    }
         \\}
     ;
@@ -529,6 +537,13 @@ test "lower-c preserves MIR void calls before conditional returns" {
     try std.testing.expect(hit < branch);
     try expectContains(body, "return 1;");
     try expectContains(body, "return 2;");
+
+    const checked_body = try cFunctionBody(output.items, "static int32_t choose_return_call_checked(bool flag, int32_t a, int32_t b)");
+    try expectContains(checked_body, "if (flag)");
+    try expectContains(checked_body, "return make(mc_checked_add_i32(a, b));");
+    try expectContains(checked_body, "return make(mc_checked_sub_i32(a, b));");
+    try expectNotContains(checked_body, "mc_tmp");
+    try expectNotContains(checked_body, "switch");
 }
 
 test "lower-c runtime hook suppression uses VerifiedProgram runtime hook facts" {

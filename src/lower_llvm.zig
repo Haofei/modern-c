@@ -1896,6 +1896,7 @@ const LlvmEmitter = struct {
         return switch (value) {
             .checked_binary => 1,
             .checked_unary => 1,
+            .direct_call => |call| simpleMirDirectCallTrapCount(call),
             else => 0,
         };
     }
