@@ -3900,6 +3900,11 @@ test "LLVM explicit casts require MIR source and target type facts" {
     const cast_offset = std.mem.indexOf(u8, source, cast_text) orelse return error.TestUnexpectedResult;
     var parsed = try test_support.parseCheckedModule("llvm_explicit_cast_type_facts.mc", source);
     defer parsed.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_explicit_cast_type_facts.mc", source, &complete_output);
+    try expectContains(complete_output.items, "zext i32 %value to i64");
+
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "widen");

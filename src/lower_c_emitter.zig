@@ -1197,6 +1197,7 @@ pub const CEmitter = struct {
         global_load: []const u8,
         nested_call: SimpleMirNestedCall,
         direct_call: SimpleMirDirectCall,
+        explicit_cast_return: SimpleMirExplicitCastReturn,
         conversion_return: SimpleMirConversionReturn,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -1398,6 +1399,12 @@ pub const CEmitter = struct {
         operand: SimpleMirCallArg,
     };
 
+    const SimpleMirExplicitCastReturn = struct {
+        source_fact: mir.TargetTypeFact,
+        target_fact: mir.TargetTypeFact,
+        operand: SimpleMirCallArg,
+    };
+
     const SimpleMirGlobalStore = struct {
         name: []const u8,
         value: SimpleMirGlobalStoreValue,
@@ -1531,6 +1538,12 @@ pub const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, "return ");
                     try self.emitSimpleMirDirectCall(call);
                     try self.out.appendSlice(self.allocator, ";\n");
+                },
+                .explicit_cast_return => |cast| {
+                    _ = cast.source_fact;
+                    try self.out.print(self.allocator, "return (({s})(", .{try self.cTypeFor(cast.target_fact.target_ty, .typedef_name)});
+                    try self.emitSimpleMirCallArg(cast.operand);
+                    try self.out.appendSlice(self.allocator, "));\n");
                 },
                 .conversion_return => |conversion| {
                     _ = conversion.kind;
@@ -1785,6 +1798,9 @@ pub const CEmitter = struct {
         }
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
             if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
+        }
+        if (std.mem.eql(u8, value_id, "cast")) {
+            if (self.simpleMirExplicitCastReturn(function, fn_mir)) |cast| return .{ .explicit_cast_return = cast };
         }
         if (self.simpleMirConversionReturn(function, fn_mir, value_id)) |conversion| return .{ .conversion_return = conversion };
         if (std.mem.eql(u8, value_id, "struct_literal")) {
@@ -3257,6 +3273,32 @@ pub const CEmitter = struct {
         return null;
     }
 
+    fn simpleMirExplicitCastReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirExplicitCastReturn {
+        const block, const cast_source = blk: {
+            for (fn_mir.blocks) |block| {
+                for (block.instructions) |instruction| {
+                    if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, "cast")) break :blk .{ block, instructionSourcePoint(instruction) };
+                }
+            }
+            return null;
+        };
+        const source_fact = simpleMirTargetTypeFactKindAt(fn_mir, .explicit_cast_source, cast_source) orelse return null;
+        const target_fact = simpleMirTargetTypeFactKindAt(fn_mir, .explicit_cast_target, cast_source) orelse return null;
+        var after_cast = false;
+        for (block.instructions) |instruction| {
+            if (!after_cast) {
+                after_cast = instruction.kind == .expr and std.mem.eql(u8, instruction.detail, "cast") and sameMirSourceLocation(instructionSourcePoint(instruction), cast_source);
+                continue;
+            }
+            if (instruction.kind == .return_value or instruction.kind == .call) break;
+            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
+            const operand = self.simpleMirCallArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse continue;
+            if (fn_mir.trap_edges.len != simpleMirCallArgTrapCount(operand)) return null;
+            return .{ .source_fact = source_fact, .target_fact = target_fact, .operand = operand };
+        }
+        return null;
+    }
+
     fn simpleMirConversionCallTargetKindAt(self: *CEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?mir.CallTargetKind {
         _ = self;
         for (fn_mir.call_target_facts) |fact| {
@@ -3842,6 +3884,7 @@ pub const CEmitter = struct {
                 if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
                 if (std.mem.eql(u8, instruction.detail, "null") and self.simpleMirNullLiteralAtSource(fn_mir, instructionSourcePoint(instruction)) != null) continue;
                 if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
+                if (std.mem.eql(u8, instruction.detail, "cast") and simpleMirTargetTypeFactKindAt(fn_mir, .explicit_cast_source, instructionSourcePoint(instruction)) != null) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {

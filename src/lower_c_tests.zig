@@ -3673,6 +3673,11 @@ test "lower-c explicit casts require MIR source and target type facts" {
     ;
     var parsed = try test_support.parseCheckedModule("c_explicit_cast_type_facts.mc", source);
     defer parsed.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_explicit_cast_type_facts.mc", source, &complete_output);
+    try expectContains(complete_output.items, "return ((uint64_t)(value));");
+
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
     try clearTargetTypeFactsForFunction(&module_mir, "widen");
