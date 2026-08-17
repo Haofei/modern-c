@@ -5285,11 +5285,9 @@ test "lower-c grouped expressions consume their own MIR result facts" {
     var parsed = try test_support.parseCheckedModule("c_grouped_expression_result.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_grouped_expression_result.mc", .{}, false, null);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_grouped_expression_result_fact_gate.mc", source, &complete_output);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "grouped_result") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
