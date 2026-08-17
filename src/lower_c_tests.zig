@@ -1554,6 +1554,62 @@ test "lower-c emits array control-flow returns from MIR" {
     try expectNotContains(side_body, "mc_tmp");
 }
 
+test "lower-c emits scalar comparison returns from MIR" {
+    const source =
+        \\fn lt_u32(a: u32, b: u32) -> bool {
+        \\    return a < b;
+        \\}
+        \\fn eq_i32(a: i32, b: i32) -> bool {
+        \\    return a == b;
+        \\}
+        \\fn local_compare(a: u32, b: u32) -> bool {
+        \\    let out: bool = a >= b;
+        \\    return out;
+        \\}
+        \\fn assigned_compare(a: i32, b: i32) -> bool {
+        \\    var out: bool = false;
+        \\    out = a != b;
+        \\    return out;
+        \\}
+        \\fn choose_compare(flag: bool, a: u32, b: u32) -> bool {
+        \\    if (flag) {
+        \\        return a < b;
+        \\    } else {
+        \\        return a > b;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_scalar_comparison_returns.mc", source, &output);
+
+    const lt_body = try cFunctionBody(output.items, "static bool lt_u32(uint32_t a, uint32_t b)");
+    try expectContains(lt_body, "return (a < b);");
+    try expectNotContains(lt_body, "mc_tmp");
+
+    const eq_body = try cFunctionBody(output.items, "static bool eq_i32(int32_t a, int32_t b)");
+    try expectContains(eq_body, "return (a == b);");
+    try expectNotContains(eq_body, "mc_tmp");
+
+    const local_body = try cFunctionBody(output.items, "static bool local_compare(uint32_t a, uint32_t b)");
+    try expectContains(local_body, "return (a >= b);");
+    try expectNotContains(local_body, "bool out");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static bool assigned_compare(int32_t a, int32_t b)");
+    try expectContains(assigned_body, "return (a != b);");
+    try expectNotContains(assigned_body, "bool out");
+    try expectNotContains(assigned_body, "out =");
+    try expectNotContains(assigned_body, "mc_tmp");
+
+    const choose_body = try cFunctionBody(output.items, "static bool choose_compare(bool flag, uint32_t a, uint32_t b)");
+    try expectContains(choose_body, "if (flag) {");
+    try expectContains(choose_body, "return (a < b);");
+    try expectContains(choose_body, "return (a > b);");
+    try expectNotContains(choose_body, "mc_tmp");
+    try expectNotContains(choose_body, "switch");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

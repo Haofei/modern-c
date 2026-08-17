@@ -1675,6 +1675,69 @@ test "LLVM emits array control-flow returns from MIR" {
     try expectNotContains(side_body, "store");
 }
 
+test "LLVM emits scalar comparison returns from MIR" {
+    const source =
+        \\fn lt_u32(a: u32, b: u32) -> bool {
+        \\    return a < b;
+        \\}
+        \\fn eq_i32(a: i32, b: i32) -> bool {
+        \\    return a == b;
+        \\}
+        \\fn local_compare(a: u32, b: u32) -> bool {
+        \\    let out: bool = a >= b;
+        \\    return out;
+        \\}
+        \\fn assigned_compare(a: i32, b: i32) -> bool {
+        \\    var out: bool = false;
+        \\    out = a != b;
+        \\    return out;
+        \\}
+        \\fn choose_compare(flag: bool, a: u32, b: u32) -> bool {
+        \\    if (flag) {
+        \\        return a < b;
+        \\    } else {
+        \\        return a > b;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_comparison_returns.mc", source, &output);
+
+    const lt_body = try llvmFunctionBody(output.items, "define internal i1 @lt_u32");
+    try expectContains(lt_body, "icmp ult i32 %a, %b");
+    try expectContains(lt_body, "ret i1 %t");
+    try expectNotContains(lt_body, "alloca");
+    try expectNotContains(lt_body, "store");
+
+    const eq_body = try llvmFunctionBody(output.items, "define internal i1 @eq_i32");
+    try expectContains(eq_body, "icmp eq i32 %a, %b");
+    try expectContains(eq_body, "ret i1 %t");
+    try expectNotContains(eq_body, "alloca");
+    try expectNotContains(eq_body, "store");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i1 @local_compare");
+    try expectContains(local_body, "icmp uge i32 %a, %b");
+    try expectContains(local_body, "ret i1 %t");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i1 @assigned_compare");
+    try expectContains(assigned_body, "icmp ne i32 %a, %b");
+    try expectContains(assigned_body, "ret i1 %t");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+
+    const choose_body = try llvmFunctionBody(output.items, "define internal i1 @choose_compare");
+    try expectContains(choose_body, "br i1 %flag");
+    try expectContains(choose_body, "icmp ult i32 %a, %b");
+    try expectContains(choose_body, "icmp ugt i32 %a, %b");
+    try expectContains(choose_body, "ret i1 %t");
+    try expectNotContains(choose_body, "alloca");
+    try expectNotContains(choose_body, "store");
+    try expectNotContains(choose_body, "switch");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
