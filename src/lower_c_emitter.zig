@@ -1307,9 +1307,7 @@ pub const CEmitter = struct {
         const simple_return = self.simpleMirReturn(function, fn_mir);
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
-                const ret_trap_count = simpleMirReturnTrapCount(ret);
-                if (ret_trap_count != 0 and fn_mir.trap_edges.len == ret_trap_count) break :blk SimpleMirDirectCalls{};
-                break :blk self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir) orelse return false;
+                break :blk self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir, ret == .direct_call) orelse return false;
             }
             break :blk null;
         } else null;
@@ -1855,13 +1853,6 @@ pub const CEmitter = struct {
         };
     }
 
-    fn simpleMirReturnTrapCount(ret: SimpleMirReturn) usize {
-        return switch (ret) {
-            .direct_call => |call| simpleMirDirectCallTrapCount(call),
-            else => 0,
-        };
-    }
-
     fn simpleMirCallArgTrapCount(arg: SimpleMirCallArg) usize {
         return switch (arg) {
             .direct_call => 0,
@@ -2245,8 +2236,9 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn simpleMirPrefixVoidCallsBeforeReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirDirectCalls {
-        if (fn_mir.blocks.len != 1) return null;
+    fn simpleMirPrefixVoidCallsBeforeReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, allow_trap_blocks: bool) ?SimpleMirDirectCalls {
+        if (fn_mir.blocks.len == 0) return null;
+        if (!allow_trap_blocks and fn_mir.blocks.len != 1) return null;
         var calls: SimpleMirDirectCalls = .{};
         const block = fn_mir.blocks[0];
         const ret = simpleMirReturnInstruction(block) orelse return null;

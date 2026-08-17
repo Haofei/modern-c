@@ -582,6 +582,11 @@ test "LLVM preserves MIR void calls before direct-call returns" {
         \\    x = make(-a);
         \\    return x;
         \\}
+        \\fn side_then_local_call_add(a: i32, b: i32) -> i32 {
+        \\    hit(0);
+        \\    let x: i32 = make(a + b);
+        \\    return x;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -633,6 +638,17 @@ test "LLVM preserves MIR void calls before direct-call returns" {
     try expectContains(assigned_call_neg_body, "ret i32 %t");
     try expectNotContains(assigned_call_neg_body, "alloca");
     try expectNotContains(assigned_call_neg_body, "store");
+
+    const side_then_local_call_add_body = try llvmFunctionBody(output.items, "define internal i32 @side_then_local_call_add");
+    const side_hit = std.mem.indexOf(u8, side_then_local_call_add_body, "call void @hit(i32 0)") orelse return error.TestUnexpectedResult;
+    const side_add = std.mem.indexOf(u8, side_then_local_call_add_body, "@llvm.sadd.with.overflow.i32") orelse return error.TestUnexpectedResult;
+    const side_make = std.mem.indexOf(u8, side_then_local_call_add_body, "call i32 @make(i32 %t") orelse return error.TestUnexpectedResult;
+    const side_ret = std.mem.indexOf(u8, side_then_local_call_add_body, "ret i32 %t") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side_hit < side_add);
+    try std.testing.expect(side_add < side_make);
+    try std.testing.expect(side_make < side_ret);
+    try expectNotContains(side_then_local_call_add_body, "alloca");
+    try expectNotContains(side_then_local_call_add_body, "store");
 }
 
 test "LLVM preserves MIR void calls before conditional returns" {
