@@ -1634,6 +1634,12 @@ pub const CEmitter = struct {
                     if (mirBlockHasLocal(block, instruction.detail)) {
                         return self.simpleMirLocalCondition(function, fn_mir, instruction.detail);
                     }
+                    if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction))) |arg| {
+                        return switch (arg) {
+                            .bool_literal => |value| .{ .bool_literal = value },
+                            else => null,
+                        };
+                    }
                     return null;
                 },
                 else => return null,
