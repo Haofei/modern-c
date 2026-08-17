@@ -2155,6 +2155,44 @@ test "LLVM emits local and loop enum returns from MIR without body fallback" {
     try expectNotContains(loop_body, "store");
 }
 
+test "LLVM preserves MIR void calls before local enum returns" {
+    const source =
+        \\enum Color {
+        \\    red,
+        \\    blue,
+        \\}
+        \\extern fn hit(value: u32) -> void;
+        \\fn side_then_local_color() -> Color {
+        \\    hit(2);
+        \\    let c: Color = .blue;
+        \\    return c;
+        \\}
+        \\fn side_then_assigned_color() -> Color {
+        \\    hit(3);
+        \\    var c: Color = .red;
+        \\    c = .blue;
+        \\    return c;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_local_enum_return.mc", source, &output);
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i64 @side_then_local_color");
+    const local_hit = std.mem.indexOf(u8, local_body, "call void @hit(i32 2)") orelse return error.TestUnexpectedResult;
+    const local_ret = std.mem.indexOf(u8, local_body, "ret i64 1") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(local_hit < local_ret);
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i64 @side_then_assigned_color");
+    const assigned_hit = std.mem.indexOf(u8, assigned_body, "call void @hit(i32 3)") orelse return error.TestUnexpectedResult;
+    const assigned_ret = std.mem.indexOf(u8, assigned_body, "ret i64 1") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(assigned_hit < assigned_ret);
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+}
+
 test "LLVM emits conditional enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {

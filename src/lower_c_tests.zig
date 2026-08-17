@@ -2006,6 +2006,45 @@ test "lower-c emits local and loop enum returns from MIR without body fallback" 
     try expectNotContains(loop_body, "mc_tmp");
 }
 
+test "lower-c preserves MIR void calls before local enum returns" {
+    const source =
+        \\enum Color {
+        \\    red,
+        \\    blue,
+        \\}
+        \\extern fn hit(value: u32) -> void;
+        \\fn side_then_local_color() -> Color {
+        \\    hit(2);
+        \\    let c: Color = .blue;
+        \\    return c;
+        \\}
+        \\fn side_then_assigned_color() -> Color {
+        \\    hit(3);
+        \\    var c: Color = .red;
+        \\    c = .blue;
+        \\    return c;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_local_enum_return.mc", source, &output);
+
+    const local_body = try cFunctionBody(output.items, "static Color side_then_local_color(void)");
+    const local_hit = std.mem.indexOf(u8, local_body, "hit(2);") orelse return error.TestUnexpectedResult;
+    const local_ret = std.mem.indexOf(u8, local_body, "return Color_blue;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(local_hit < local_ret);
+    try expectNotContains(local_body, "Color c");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static Color side_then_assigned_color(void)");
+    const assigned_hit = std.mem.indexOf(u8, assigned_body, "hit(3);") orelse return error.TestUnexpectedResult;
+    const assigned_ret = std.mem.indexOf(u8, assigned_body, "return Color_blue;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(assigned_hit < assigned_ret);
+    try expectNotContains(assigned_body, "Color c");
+    try expectNotContains(assigned_body, "c =");
+    try expectNotContains(assigned_body, "mc_tmp");
+}
+
 test "lower-c emits conditional enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {
