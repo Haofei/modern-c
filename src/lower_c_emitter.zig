@@ -3345,10 +3345,10 @@ pub const CEmitter = struct {
         for (fn_mir.blocks) |block| {
             for (block.instructions) |instruction| {
                 if (instruction.kind != .expr or !sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                if (self.simpleMirParamFieldAtSource(function, block, source, instruction.detail, instruction.result_ty.name())) |field| return .{ .param_field = field };
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = param.name.text };
                 }
-                if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
                 if (mirFunctionHasLocal(fn_mir, instruction.detail)) {
                     if (self.simpleMirLocalValueArg(function, fn_mir, block, instruction.detail, source)) |arg| return arg;
                 }

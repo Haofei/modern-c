@@ -1179,6 +1179,28 @@ test "lower-c emits struct parameter field checked operands from MIR" {
     try expectNotContains(right_body, "mc_tmp");
 }
 
+test "lower-c emits struct parameter field comparisons from MIR" {
+    const source =
+        \\struct Pair { a: u32, b: u32 }
+        \\fn cmp_left(p: Pair, x: u32) -> bool {
+        \\    return p.a == x;
+        \\}
+        \\fn cmp_right(p: Pair, x: u32) -> bool {
+        \\    return x < p.b;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_param_field_compare_operands.mc", source, &output);
+
+    const left_body = try cFunctionBody(output.items, "static bool cmp_left(Pair p, uint32_t x)");
+    try expectContains(left_body, "return (p.a == x);");
+    try expectNotContains(left_body, "return (p == x);");
+
+    const right_body = try cFunctionBody(output.items, "static bool cmp_right(Pair p, uint32_t x)");
+    try expectContains(right_body, "return (x < p.b);");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

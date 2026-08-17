@@ -1210,6 +1210,31 @@ test "LLVM emits struct parameter field checked operands from MIR" {
     try expectNotContains(right_body, "store");
 }
 
+test "LLVM emits struct parameter field comparisons from MIR" {
+    const source =
+        \\struct Pair { a: u32, b: u32 }
+        \\fn cmp_left(p: Pair, x: u32) -> bool {
+        \\    return p.a == x;
+        \\}
+        \\fn cmp_right(p: Pair, x: u32) -> bool {
+        \\    return x < p.b;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_param_field_compare_operands.mc", source, &output);
+
+    const left_body = try llvmFunctionBody(output.items, "define internal i1 @cmp_left");
+    try expectContains(left_body, "extractvalue { i32, i32 } %p, 0");
+    try expectContains(left_body, "icmp eq i32 %t");
+    try expectContains(left_body, ", %x");
+    try expectNotContains(left_body, "icmp eq i32 %p, %x");
+
+    const right_body = try llvmFunctionBody(output.items, "define internal i1 @cmp_right");
+    try expectContains(right_body, "extractvalue { i32, i32 } %p, 1");
+    try expectContains(right_body, "icmp ult i32 %x, %t");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
