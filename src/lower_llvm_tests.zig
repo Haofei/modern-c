@@ -2504,6 +2504,32 @@ test "LLVM emits checked arithmetic returns from MIR without body fallback" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "LLVM emits checked division returns from MIR without body fallback" {
+    const source =
+        \\fn div_i32(a: i32, b: i32) -> i32 {
+        \\    return a / b;
+        \\}
+        \\fn div_u32(a: u32, b: u32) -> u32 {
+        \\    return a / b;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_checked_division_returns.mc", source, &output);
+
+    const signed_body = try llvmFunctionBody(output.items, "define internal i32 @div_i32");
+    try expectContains(signed_body, "call void @mc_trap_DivideByZero()");
+    try expectContains(signed_body, "call void @mc_trap_IntegerOverflow()");
+    try expectContains(signed_body, "sdiv i32 %a, %b");
+    try expectNotContains(signed_body, "alloca");
+
+    const unsigned_body = try llvmFunctionBody(output.items, "define internal i32 @div_u32");
+    try expectContains(unsigned_body, "call void @mc_trap_DivideByZero()");
+    try expectNotContains(unsigned_body, "call void @mc_trap_IntegerOverflow()");
+    try expectContains(unsigned_body, "udiv i32 %a, %b");
+    try expectNotContains(unsigned_body, "alloca");
+}
+
 test "LLVM emits checked unary returns from MIR without body fallback" {
     const source =
         \\fn neg_i32(a: i32) -> i32 {

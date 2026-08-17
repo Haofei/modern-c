@@ -2305,7 +2305,8 @@ const LlvmEmitter = struct {
 
     fn simpleMirGlobalStoreValueTrapCount(value: SimpleMirGlobalStoreValue) usize {
         return switch (value) {
-            .checked_binary, .checked_unary => 1,
+            .checked_binary => |binary| simpleMirCheckedBinaryTrapCount(binary),
+            .checked_unary => 1,
             .direct_call => |call| simpleMirDirectCallTrapCount(call),
             else => 0,
         };
@@ -2903,7 +2904,7 @@ const LlvmEmitter = struct {
 
     fn simpleMirConditionalTrapCount(value: SimpleMirConditionalValue) usize {
         return switch (value) {
-            .checked_binary => 1,
+            .checked_binary => |binary| simpleMirCheckedBinaryTrapCount(binary),
             .checked_unary => 1,
             .direct_call => |call| simpleMirDirectCallTrapCount(call),
             else => 0,
@@ -2914,7 +2915,7 @@ const LlvmEmitter = struct {
         return switch (ret) {
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call),
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
-            .checked_binary => |binary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
+            .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
             .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirArgUsesParamField(unary.operand)),
             .struct_literal => |literal| fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal),
             .array_literal => |literal| fn_mir.trap_edges.len == simpleMirArrayLiteralTrapCount(literal),
@@ -2945,9 +2946,15 @@ const LlvmEmitter = struct {
     fn simpleMirCallArgTrapCount(arg: SimpleMirCallArg) usize {
         return switch (arg) {
             .direct_call => 0,
-            .checked_binary, .checked_unary => 1,
+            .checked_binary => |binary| simpleMirCheckedBinaryTrapCount(binary),
+            .checked_unary => 1,
             else => 0,
         };
+    }
+
+    fn simpleMirCheckedBinaryTrapCount(binary: SimpleMirCheckedBinary) usize {
+        if (!std.mem.eql(u8, binary.op, "div")) return 1;
+        return if (simpleMirSignedIntegerTypeName(typeName(binary.target_fact.target_ty) orelse "")) 2 else 1;
     }
 
     fn simpleMirStructLiteralTrapCount(literal: SimpleMirStructLiteralReturn) usize {
@@ -2990,6 +2997,7 @@ const LlvmEmitter = struct {
     fn emitSimpleMirCheckedBinary(self: *LlvmEmitter, binary: SimpleMirCheckedBinary, span: diagnostics.Span) ![]const u8 {
         const ty = binary.target_fact.target_ty;
         const llvm_ty = try self.llvmType(ty);
+        if (std.mem.eql(u8, binary.op, "div")) return self.emitSimpleMirCheckedDiv(binary, llvm_ty, span);
         const bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         const intrinsic = try self.simpleMirOverflowIntrinsic(binary.op, self.isSignedIntegerType(ty), bits);
         const pair_ty = try std.fmt.allocPrint(self.scratch.allocator(), "{{ {s}, i1 }}", .{llvm_ty});
@@ -3008,6 +3016,41 @@ const LlvmEmitter = struct {
         const cont = try self.nextLabel("cont");
         const trap = try self.nextLabel("trap_overflow");
         try self.emitTrapBranch(overflow, trap, cont, trap, cont, "IntegerOverflow");
+        return value;
+    }
+
+    fn emitSimpleMirCheckedDiv(self: *LlvmEmitter, binary: SimpleMirCheckedBinary, llvm_ty: []const u8, span: diagnostics.Span) ![]const u8 {
+        const ty = binary.target_fact.target_ty;
+        _ = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+        const left = try self.simpleMirArgValue(binary.left, span);
+        const right = try self.simpleMirArgValue(binary.right, span);
+        const dbg_suffix = if (try self.debugLocation(span)) |dbg|
+            try std.fmt.allocPrint(self.scratch.allocator(), ", !dbg !{d}", .{dbg})
+        else
+            "";
+
+        const zero_cmp = try self.nextTemp();
+        const zero_trap = try self.nextLabel("trap_div_zero");
+        const nonzero = try self.nextLabel("div_nonzero");
+        try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, 0{s}\n", .{ zero_cmp, llvm_ty, right, dbg_suffix });
+        try self.emitTrapBranch(zero_cmp, zero_trap, nonzero, zero_trap, nonzero, "DivideByZero");
+
+        if (self.isSignedIntegerType(ty)) {
+            const min_literal = self.signedMinLiteralOf(ty) orelse return error.UnsupportedLlvmEmission;
+            const min_cmp = try self.nextTemp();
+            const neg_one_cmp = try self.nextTemp();
+            const overflow_cmp = try self.nextTemp();
+            const overflow_trap = try self.nextLabel("trap_div_overflow");
+            const safe = try self.nextLabel("div_safe");
+            try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, {s}{s}\n", .{ min_cmp, llvm_ty, left, min_literal, dbg_suffix });
+            try self.out.print(self.allocator, "  {s} = icmp eq {s} {s}, -1{s}\n", .{ neg_one_cmp, llvm_ty, right, dbg_suffix });
+            try self.out.print(self.allocator, "  {s} = and i1 {s}, {s}{s}\n", .{ overflow_cmp, min_cmp, neg_one_cmp, dbg_suffix });
+            try self.emitTrapBranch(overflow_cmp, overflow_trap, safe, overflow_trap, safe, "IntegerOverflow");
+        }
+
+        const value = try self.nextTemp();
+        const op: []const u8 = if (self.isSignedIntegerType(ty)) "sdiv" else "udiv";
+        try self.out.print(self.allocator, "  {s} = {s} {s} {s}, {s}{s}\n", .{ value, op, llvm_ty, left, right, dbg_suffix });
         return value;
     }
 
@@ -3250,9 +3293,9 @@ const LlvmEmitter = struct {
             };
             return null;
         };
-        if (!simpleMirBinaryOpSupported(binary_instr.detail)) return null;
-        if (!mirHasIntegerOverflowTrapAt(fn_mir, source)) return null;
         const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, source) orelse return null;
+        if (!simpleMirBinaryOpSupported(binary_instr.detail)) return null;
+        if (!mirHasCheckedBinaryTrapsAt(fn_mir, source, binary_instr.detail, target_fact.target_ty)) return null;
         var operands: [2]SimpleMirArg = undefined;
         var count: usize = 0;
         var after_binary = false;
@@ -4268,7 +4311,16 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirBinaryOpSupported(op: []const u8) bool {
-        return std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul");
+        return std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul") or std.mem.eql(u8, op, "div");
+    }
+
+    fn simpleMirSignedIntegerTypeName(type_name: []const u8) bool {
+        return std.mem.eql(u8, type_name, "i8") or
+            std.mem.eql(u8, type_name, "i16") or
+            std.mem.eql(u8, type_name, "i32") or
+            std.mem.eql(u8, type_name, "i64") or
+            std.mem.eql(u8, type_name, "i128") or
+            std.mem.eql(u8, type_name, "isize");
     }
 
     fn simpleMirCompareOpSupported(op: []const u8) bool {
@@ -4291,6 +4343,20 @@ const LlvmEmitter = struct {
             if (edge.kind == .IntegerOverflow and edge.source == .checked_arithmetic and edge.line == source.line and edge.column == source.column) return true;
         }
         return false;
+    }
+
+    fn mirHasDivideByZeroTrapAt(fn_mir: mir.Function, source: mir.SourcePoint) bool {
+        for (fn_mir.trap_edges) |edge| {
+            if (edge.kind == .DivideByZero and edge.source == .checked_arithmetic and edge.line == source.line and edge.column == source.column) return true;
+        }
+        return false;
+    }
+
+    fn mirHasCheckedBinaryTrapsAt(fn_mir: mir.Function, source: mir.SourcePoint, op: []const u8, target_ty: anytype) bool {
+        if (!std.mem.eql(u8, op, "div")) return mirHasIntegerOverflowTrapAt(fn_mir, source);
+        if (!mirHasDivideByZeroTrapAt(fn_mir, source)) return false;
+        const type_name = typeName(target_ty) orelse return false;
+        return !simpleMirSignedIntegerTypeName(type_name) or mirHasIntegerOverflowTrapAt(fn_mir, source);
     }
 
     fn simpleMirOverflowIntrinsic(self: *LlvmEmitter, op: []const u8, signed: bool, bits: u16) ![]const u8 {
