@@ -1259,6 +1259,7 @@ const LlvmEmitter = struct {
         global_load: []const u8,
         nested_call: SimpleMirNestedCall,
         direct_call: SimpleMirDirectCall,
+        result_constructor: SimpleMirResultConstructorReturn,
         explicit_cast_return: SimpleMirExplicitCastReturn,
         conversion_return: SimpleMirConversionReturn,
         checked_binary: SimpleMirCheckedBinary,
@@ -1454,6 +1455,12 @@ const LlvmEmitter = struct {
         arg_count: usize = 0,
     };
 
+    const SimpleMirResultConstructorReturn = struct {
+        tag: []const u8,
+        result_fact: mir.TargetTypeFact,
+        payload: SimpleMirCallArg,
+    };
+
     const SimpleMirConversionReturn = struct {
         kind: mir.CallTargetKind,
         source_fact: mir.TargetTypeFact,
@@ -1635,6 +1642,10 @@ const LlvmEmitter = struct {
                     const tmp = try self.nextTemp();
                     try self.emitSimpleMirDirectCall(call, tmp, return_span);
                     try self.emitReturnValue(ret_ty, tmp, return_span);
+                },
+                .result_constructor => |constructor| {
+                    const value = try self.emitSimpleMirResultConstructorReturn(constructor, return_span);
+                    try self.emitReturnValue(ret_ty, value, return_span);
                 },
                 .explicit_cast_return => |cast| {
                     const value = try self.emitSimpleMirExplicitCastReturn(cast, return_span);
@@ -1856,6 +1867,9 @@ const LlvmEmitter = struct {
         }
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
             if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
+        }
+        if (self.simpleMirResultConstructorReturn(function, fn_mir, block, value_id)) |constructor| {
+            if (fn_mir.trap_edges.len == simpleMirCallArgTrapCount(constructor.payload)) return .{ .result_constructor = constructor };
         }
         if (std.mem.eql(u8, value_id, "cast")) {
             if (self.simpleMirExplicitCastReturn(function, fn_mir)) |cast| return .{ .explicit_cast_return = cast };
@@ -3058,6 +3072,30 @@ const LlvmEmitter = struct {
         return self.castValue(operand, cast.source_fact.target_ty, cast.target_fact.target_ty);
     }
 
+    fn emitSimpleMirResultConstructorReturn(self: *LlvmEmitter, constructor: SimpleMirResultConstructorReturn, span: diagnostics.Span) ![]const u8 {
+        const info = lower_llvm_shape.resultInfo(&self.type_aliases, constructor.result_fact.target_ty) orelse return error.UnsupportedLlvmEmission;
+        const result_ty = try self.llvmType(constructor.result_fact.target_ty);
+        const is_ok = std.mem.eql(u8, constructor.tag, "ok");
+
+        const tagged = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 {s}, 0\n", .{ tagged, result_ty, if (is_ok) "true" else "false" });
+
+        const ok_value = if (is_ok)
+            try self.simpleMirCallArgValue(constructor.payload, span)
+        else
+            try self.resultPayloadZero(info.ok_ty);
+        const with_ok = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 1\n", .{ with_ok, result_ty, tagged, try self.resultPayloadLlvmType(info.ok_ty), ok_value });
+
+        const err_value = if (is_ok)
+            try self.resultPayloadZero(info.err_ty)
+        else
+            try self.simpleMirCallArgValue(constructor.payload, span);
+        const with_err = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 2\n", .{ with_err, result_ty, with_ok, try self.resultPayloadLlvmType(info.err_ty), err_value });
+        return with_err;
+    }
+
     fn simpleMirArgValue(self: *LlvmEmitter, arg: SimpleMirArg, span: diagnostics.Span) ![]const u8 {
         return switch (arg) {
             .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
@@ -3403,6 +3441,49 @@ const LlvmEmitter = struct {
             for (call.args[0..arg_count]) |arg| if (simpleMirCallArgHasDirectCall(arg)) return null;
         }
         return call;
+    }
+
+    fn simpleMirResultConstructorReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirResultConstructorReturn {
+        const call_source, const kind = blk: {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .call or !std.mem.eql(u8, instruction.detail, value_id)) continue;
+                const source = instructionSourcePoint(instruction);
+                for (fn_mir.call_target_facts) |fact| {
+                    if (!sameMirSourceLocation(fact.source, source)) continue;
+                    switch (fact.kind) {
+                        .result_ok, .result_err => break :blk .{ source, fact.kind },
+                        else => {},
+                    }
+                }
+            }
+            return null;
+        };
+        const constructor = mir.resultConstructorFactInfo(kind) orelse return null;
+        const target_fact = simpleMirTargetTypeFactKindAt(fn_mir, constructor.target_kind, call_source) orelse return null;
+        const return_ty = function.signature.return_type orelse return null;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(target_fact.target_ty))) return null;
+
+        var payload: ?SimpleMirCallArg = null;
+        var after_call = false;
+        for (block.instructions) |instruction| {
+            if (!after_call) {
+                after_call = instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source);
+                continue;
+            }
+            if (instruction.kind == .return_value) break;
+            if (instruction.kind == .target_type or instruction.kind == .call_target or instruction.kind == .integer_literal_conversion) continue;
+            if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .binary and instruction.kind != .unary) continue;
+            const source = instructionSourcePoint(instruction);
+            if (sameMirSourceLocation(source, call_source)) continue;
+            const arg = self.simpleMirCallArgAt(function, fn_mir, source) orelse continue;
+            if (payload != null) return null;
+            payload = arg;
+        }
+        return .{
+            .tag = constructor.tag,
+            .result_fact = target_fact,
+            .payload = payload orelse return null,
+        };
     }
 
     fn simpleMirConversionReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, value_id: []const u8) ?SimpleMirConversionReturn {

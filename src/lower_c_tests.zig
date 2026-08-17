@@ -3437,6 +3437,10 @@ test "lower-c rejects prebuilt MIR with missing target type facts" {
     defer parsed.deinit();
     var module_mir = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer module_mir.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_result_constructor_target_type_facts.mc", source, &complete_output);
+
     try clearTargetTypeFactsForFunction(&module_mir, "make");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
