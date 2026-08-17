@@ -1373,6 +1373,7 @@ const LlvmEmitter = struct {
         checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
+        struct_literal: SimpleMirStructLiteralReturn,
     };
 
     const SimpleMirParamField = struct {
@@ -1800,7 +1801,7 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirStructLiteralReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirStructLiteralReturn {
-        if (!simpleMirNoTrap(fn_mir)) return null;
+        if (fn_mir.trap_edges.len != 0) return null;
         const ret_ty = function.signature.return_type orelse return null;
         const type_name = type_bridge.typeName(self.resolveAliasType(ret_ty)) orelse return null;
         const struct_decl = self.struct_types.get(type_name) orelse return null;
@@ -2566,6 +2567,10 @@ const LlvmEmitter = struct {
             const call = self.simpleMirDirectCallAtSource(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
             return .{ .direct_call = call };
         }
+        if (std.mem.eql(u8, value_id, "struct_literal")) {
+            if (self.simpleMirStructLiteralReturn(function, fn_mir, block)) |literal| return .{ .struct_literal = literal };
+            return null;
+        }
         if (std.mem.eql(u8, value_id, "binary")) {
             for (block.instructions) |instruction| {
                 if (instruction.kind != .binary) continue;
@@ -2628,6 +2633,10 @@ const LlvmEmitter = struct {
             },
             .logical_not => |arg| {
                 const value_name = try self.emitSimpleMirLogicalNot(arg, span);
+                try self.emitReturnValue(ret_ty, value_name, span);
+            },
+            .struct_literal => |literal| {
+                const value_name = try self.emitSimpleMirStructLiteralReturn(literal, span);
                 try self.emitReturnValue(ret_ty, value_name, span);
             },
         }

@@ -1337,6 +1337,20 @@ test "LLVM emits simple struct literal returns from MIR" {
         \\fn bool_pair(f: Flags) -> Flags {
         \\    return .{ .ok = f.ok };
         \\}
+        \\fn choose_pair(flag: bool, a: i32, b: i32) -> Pair {
+        \\    if (flag) {
+        \\        return .{ .a = a, .b = b };
+        \\    } else {
+        \\        return .{ .a = b, .b = a };
+        \\    }
+        \\}
+        \\fn choose_field_pair(flag: bool, p: Pair) -> Pair {
+        \\    if (flag) {
+        \\        return .{ .a = p.a, .b = p.b };
+        \\    } else {
+        \\        return .{ .a = p.b, .b = p.a };
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1364,6 +1378,27 @@ test "LLVM emits simple struct literal returns from MIR" {
     try expectContains(bool_body, "ret { i1 } %t");
     try expectNotContains(bool_body, "alloca");
     try expectNotContains(bool_body, "store");
+
+    const choose_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @choose_pair");
+    try expectContains(choose_body, "br i1 %flag");
+    try expectContains(choose_body, "insertvalue { i32, i32 } zeroinitializer, i32 %a, 0");
+    try expectContains(choose_body, "insertvalue { i32, i32 } %t");
+    try expectContains(choose_body, "i32 %b, 1");
+    try expectContains(choose_body, "insertvalue { i32, i32 } zeroinitializer, i32 %b, 0");
+    try expectContains(choose_body, "i32 %a, 1");
+    try expectContains(choose_body, "ret { i32, i32 } %t");
+    try expectNotContains(choose_body, "alloca");
+    try expectNotContains(choose_body, "store");
+    try expectNotContains(choose_body, "switch");
+
+    const choose_field_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @choose_field_pair");
+    try expectContains(choose_field_body, "extractvalue { i32, i32 } %p, 0");
+    try expectContains(choose_field_body, "extractvalue { i32, i32 } %p, 1");
+    try expectContains(choose_field_body, "insertvalue { i32, i32 } zeroinitializer, i32 %t");
+    try expectContains(choose_field_body, "ret { i32, i32 } %t");
+    try expectNotContains(choose_field_body, "alloca");
+    try expectNotContains(choose_field_body, "store");
+    try expectNotContains(choose_field_body, "switch");
 }
 
 test "LLVM preserves MIR void calls before direct-call returns" {

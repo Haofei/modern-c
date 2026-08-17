@@ -1287,6 +1287,20 @@ test "lower-c emits simple struct literal returns from MIR" {
         \\fn bool_pair(f: Flags) -> Flags {
         \\    return .{ .ok = f.ok };
         \\}
+        \\fn choose_pair(flag: bool, a: i32, b: i32) -> Pair {
+        \\    if (flag) {
+        \\        return .{ .a = a, .b = b };
+        \\    } else {
+        \\        return .{ .a = b, .b = a };
+        \\    }
+        \\}
+        \\fn choose_field_pair(flag: bool, p: Pair) -> Pair {
+        \\    if (flag) {
+        \\        return .{ .a = p.a, .b = p.b };
+        \\    } else {
+        \\        return .{ .a = p.b, .b = p.a };
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1303,6 +1317,19 @@ test "lower-c emits simple struct literal returns from MIR" {
     const bool_body = try cFunctionBody(output.items, "static Flags bool_pair(Flags f)");
     try expectContains(bool_body, "return (Flags){ .ok = f.ok };");
     try expectNotContains(bool_body, "mc_tmp");
+
+    const choose_body = try cFunctionBody(output.items, "static Pair choose_pair(bool flag, int32_t a, int32_t b)");
+    try expectContains(choose_body, "if (flag) {");
+    try expectContains(choose_body, "return (Pair){ .a = a, .b = b };");
+    try expectContains(choose_body, "return (Pair){ .a = b, .b = a };");
+    try expectNotContains(choose_body, "mc_tmp");
+    try expectNotContains(choose_body, "switch");
+
+    const choose_field_body = try cFunctionBody(output.items, "static Pair choose_field_pair(bool flag, Pair p)");
+    try expectContains(choose_field_body, "return (Pair){ .a = p.a, .b = p.b };");
+    try expectContains(choose_field_body, "return (Pair){ .a = p.b, .b = p.a };");
+    try expectNotContains(choose_field_body, "mc_tmp");
+    try expectNotContains(choose_field_body, "switch");
 }
 
 test "lower-c preserves MIR void calls before direct-call returns" {
