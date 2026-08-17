@@ -5390,6 +5390,19 @@ test "lower-c checked-binary inferred local lowers without function body fallbac
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_add_u64(left, right);") != null);
 }
 
+test "lower-c logical-not inferred local lowers without function body fallback" {
+    const source =
+        \\fn not_local(enabled: bool) -> bool {
+        \\    let disabled = !enabled;
+        \\    return disabled;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_logical_not_return.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return !enabled;") != null);
+}
+
 test "lower-c diagnoses source block expressions instead of inferring their result" {
     const source =
         \\fn block_result() -> u32 {

@@ -4145,6 +4145,12 @@ pub const CEmitter = struct {
                 if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
                 return .{ .checked_unary = unary };
             }
+            if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| {
+                const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
+                const result = simpleMirTargetTypeFactKindAt(fn_mir, .expression_result, init_source) orelse return null;
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
+                return .{ .logical_not = arg };
+            }
             if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| {
                 const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
                 const result = simpleMirTargetTypeFactKindAt(fn_mir, .direct_call_result, init_source) orelse return null;
