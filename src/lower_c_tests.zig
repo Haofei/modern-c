@@ -16019,6 +16019,22 @@ test "lower-c emits checked u32 arithmetic helpers" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_shr_u32(") != null);
 }
 
+test "lower-c emits checked u32 mod and shifts from MIR without body fallback" {
+    const source =
+        \\fn mod_u32(a: u32, b: u32) -> u32 { return a % b; }
+        \\fn shl_u32(a: u32, n: u32) -> u32 { return a << n; }
+        \\fn shr_u32(a: u32, n: u32) -> u32 { return a >> n; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_checked_mod_shift_returns.mc", source, &output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_mod_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_shl_u32(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_shr_u32(") != null);
+}
+
 test "lower-c emits integer switch arms" {
     const source =
         \\fn classify(n: u32) -> u32 {

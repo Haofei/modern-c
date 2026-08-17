@@ -2924,8 +2924,11 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirCheckedBinaryTrapCount(binary: SimpleMirCheckedBinary) usize {
-        if (!std.mem.eql(u8, binary.op, "div")) return 1;
-        return if (simpleMirSignedIntegerTypeName(binary.type_name)) 2 else 1;
+        if (std.mem.eql(u8, binary.op, "div") or std.mem.eql(u8, binary.op, "mod")) {
+            return if (simpleMirSignedIntegerTypeName(binary.type_name)) 2 else 1;
+        }
+        if (std.mem.eql(u8, binary.op, "shl")) return 2;
+        return 1;
     }
 
     fn simpleMirStructLiteralTrapCount(literal: SimpleMirStructLiteralReturn) usize {
@@ -4078,7 +4081,13 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirBinaryOpSupported(op: []const u8) bool {
-        return std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul") or std.mem.eql(u8, op, "div");
+        return std.mem.eql(u8, op, "add") or
+            std.mem.eql(u8, op, "sub") or
+            std.mem.eql(u8, op, "mul") or
+            std.mem.eql(u8, op, "div") or
+            std.mem.eql(u8, op, "mod") or
+            std.mem.eql(u8, op, "shl") or
+            std.mem.eql(u8, op, "shr");
     }
 
     fn simpleMirCompareOpSupported(op: []const u8) bool {
@@ -4109,10 +4118,25 @@ pub const CEmitter = struct {
         return false;
     }
 
+    fn mirHasInvalidShiftTrapAt(fn_mir: mir.Function, source: mir.SourcePoint) bool {
+        for (fn_mir.trap_edges) |edge| {
+            if (edge.kind == .InvalidShift and edge.source == .checked_shift and edge.line == source.line and edge.column == source.column) return true;
+        }
+        return false;
+    }
+
     fn mirHasCheckedBinaryTrapsAt(fn_mir: mir.Function, source: mir.SourcePoint, op: []const u8, type_name: []const u8) bool {
-        if (!std.mem.eql(u8, op, "div")) return mirHasIntegerOverflowTrapAt(fn_mir, source);
-        if (!mirHasDivideByZeroTrapAt(fn_mir, source)) return false;
-        return !simpleMirSignedIntegerTypeName(type_name) or mirHasIntegerOverflowTrapAt(fn_mir, source);
+        if (std.mem.eql(u8, op, "div") or std.mem.eql(u8, op, "mod")) {
+            if (!mirHasDivideByZeroTrapAt(fn_mir, source)) return false;
+            return !simpleMirSignedIntegerTypeName(type_name) or mirHasIntegerOverflowTrapAt(fn_mir, source);
+        }
+        if (std.mem.eql(u8, op, "shl")) {
+            return mirHasInvalidShiftTrapAt(fn_mir, source) and mirHasIntegerOverflowTrapAt(fn_mir, source);
+        }
+        if (std.mem.eql(u8, op, "shr")) {
+            return mirHasInvalidShiftTrapAt(fn_mir, source);
+        }
+        return mirHasIntegerOverflowTrapAt(fn_mir, source);
     }
 
     fn checkedHelperName(self: *CEmitter, op: []const u8, type_name: []const u8) ![]const u8 {
@@ -4125,6 +4149,12 @@ pub const CEmitter = struct {
             "mc_checked_mul_"
         else if (std.mem.eql(u8, op, "div"))
             "mc_checked_div_"
+        else if (std.mem.eql(u8, op, "mod"))
+            "mc_checked_mod_"
+        else if (std.mem.eql(u8, op, "shl"))
+            "mc_checked_shl_"
+        else if (std.mem.eql(u8, op, "shr"))
+            "mc_checked_shr_"
         else
             return error.UnsupportedCEmission;
         return try std.fmt.allocPrint(self.scratch.allocator(), "{s}{s}", .{ prefix, suffix });
