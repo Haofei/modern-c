@@ -5337,6 +5337,20 @@ test "lower-c grouped direct calls consume the outer MIR result fact" {
     try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_grouped_call_result.mc", .{}, false, null));
 }
 
+test "lower-c direct-call inferred local lowers without function body fallback" {
+    const source =
+        \\fn make_count() -> u64 { return 7; }
+        \\fn caller() -> u64 {
+        \\    let count = make_count();
+        \\    return count;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_direct_call_return.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return make_count();") != null);
+}
+
 test "lower-c diagnoses source block expressions instead of inferring their result" {
     const source =
         \\fn block_result() -> u32 {
