@@ -1252,6 +1252,7 @@ const LlvmEmitter = struct {
         param: []const u8,
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
+        checked_integer_literal: []const u8,
         bool_literal: bool,
         enum_literal: SimpleMirEnumLiteral,
         null_literal,
@@ -1583,6 +1584,7 @@ const LlvmEmitter = struct {
                     try self.emitReturnValue(ret_ty, tmp, return_span);
                 },
                 .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, return_span),
+                .checked_integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, return_span),
                 .bool_literal => |value| try self.emitReturnValue(ret_ty, if (value) "1" else "0", return_span),
                 .enum_literal => |literal| {
                     const enum_decl = self.enum_types.get(literal.enum_name) orelse return error.UnsupportedLlvmEmission;
@@ -1835,7 +1837,10 @@ const LlvmEmitter = struct {
         }
         if (std.mem.eql(u8, value_id, "unary")) {
             if (self.simpleMirLogicalNotAtReturn(function, fn_mir)) |arg| return .{ .logical_not = arg };
-            if (self.simpleMirCheckedUnaryAtReturn(function, fn_mir)) |unary| return .{ .checked_unary = unary };
+            if (self.simpleMirCheckedUnaryAtReturn(function, fn_mir)) |unary| {
+                if (self.simpleMirFoldedNegatedIntegerLiteral(unary)) |literal| return .{ .checked_integer_literal = literal };
+                return .{ .checked_unary = unary };
+            }
         }
         if (self.simpleMirAssignmentReturn(function, fn_mir, value_id)) |assigned| return assigned;
         if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
@@ -2853,6 +2858,7 @@ const LlvmEmitter = struct {
     fn simpleMirReturnAllowsTrapBlocks(self: *const LlvmEmitter, fn_mir: mir.Function, ret: SimpleMirReturn) bool {
         return switch (ret) {
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call),
+            .checked_integer_literal => fn_mir.trap_edges.len == 1,
             .checked_binary => |binary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
             .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirArgUsesParamField(unary.operand)),
             .struct_literal => |literal| fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal),
@@ -3277,6 +3283,16 @@ const LlvmEmitter = struct {
             return .{ .op = unary_instr.detail, .target_fact = target_fact, .operand = operand };
         }
         return null;
+    }
+
+    fn simpleMirFoldedNegatedIntegerLiteral(self: *LlvmEmitter, unary: SimpleMirCheckedUnary) ?[]const u8 {
+        if (!std.mem.eql(u8, unary.op, "neg")) return null;
+        const literal = switch (unary.operand) {
+            .integer_literal => |value| value,
+            else => return null,
+        };
+        if (literal.len == 0 or literal[0] == '-') return null;
+        return std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{literal}) catch null;
     }
 
     fn simpleMirDirectCall(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, callee: []const u8) ?SimpleMirDirectCall {

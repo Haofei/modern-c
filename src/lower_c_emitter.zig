@@ -1190,6 +1190,7 @@ pub const CEmitter = struct {
         param: []const u8,
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
+        checked_integer_literal: []const u8,
         bool_literal: bool,
         enum_literal: SimpleMirEnumLiteral,
         null_literal: SimpleMirNullLiteral,
@@ -1480,6 +1481,7 @@ pub const CEmitter = struct {
                 .param => |name| try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(name)}),
                 .param_field => |field| try self.out.print(self.allocator, "return {s}.{s};\n", .{ try self.cIdent(field.param_name), try self.cIdent(field.field_name) }),
                 .integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
+                .checked_integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
                 .bool_literal => |value| try self.out.print(self.allocator, "return {s};\n", .{if (value) "true" else "false"}),
                 .enum_literal => |literal| try self.out.print(self.allocator, "return {s}_{s};\n", .{ literal.enum_name, literal.case_name }),
                 .null_literal => |literal| try self.emitSimpleMirNullReturn(literal),
@@ -1771,7 +1773,10 @@ pub const CEmitter = struct {
         }
         if (std.mem.eql(u8, value_id, "unary")) {
             if (self.simpleMirLogicalNotAtReturn(function, fn_mir)) |arg| return .{ .logical_not = arg };
-            if (self.simpleMirCheckedUnaryAtReturn(function, fn_mir)) |unary| return .{ .checked_unary = unary };
+            if (self.simpleMirCheckedUnaryAtReturn(function, fn_mir)) |unary| {
+                if (self.simpleMirFoldedNegatedIntegerLiteral(unary)) |literal| return .{ .checked_integer_literal = literal };
+                return .{ .checked_unary = unary };
+            }
         }
         if (self.simpleMirAssignmentReturn(function, fn_mir, value_id)) |assigned| return assigned;
         if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
@@ -2816,6 +2821,7 @@ pub const CEmitter = struct {
     fn simpleMirReturnAllowsTrapBlocks(self: *const CEmitter, fn_mir: mir.Function, ret: SimpleMirReturn) bool {
         return switch (ret) {
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call),
+            .checked_integer_literal => fn_mir.trap_edges.len == 1,
             .checked_binary => |binary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
             .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirArgUsesParamField(unary.operand)),
             .struct_literal => |literal| fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal),
@@ -3120,6 +3126,16 @@ pub const CEmitter = struct {
             return .{ .op = unary_instr.detail, .type_name = target_name, .operand = operand };
         }
         return null;
+    }
+
+    fn simpleMirFoldedNegatedIntegerLiteral(self: *CEmitter, unary: SimpleMirCheckedUnary) ?[]const u8 {
+        if (!std.mem.eql(u8, unary.op, "neg")) return null;
+        const literal = switch (unary.operand) {
+            .integer_literal => |value| value,
+            else => return null,
+        };
+        if (literal.len == 0 or literal[0] == '-') return null;
+        return std.fmt.allocPrint(self.scratch.allocator(), "-{s}", .{literal}) catch null;
     }
 
     fn simpleMirDirectCall(self: *CEmitter, function: anytype, fn_mir: mir.Function, callee: []const u8) ?SimpleMirDirectCall {

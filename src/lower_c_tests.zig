@@ -1715,6 +1715,22 @@ test "lower-c emits checked unary returns from MIR without body fallback" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "lower-c emits negative integer literal return from MIR without body fallback" {
+    const source =
+        \\fn negative_one() -> i32 {
+        \\    return -1;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_negative_integer_literal_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static int32_t negative_one(void)");
+    try expectContains(body, "return -1;");
+    try expectNotContains(body, "mc_checked_neg_i32");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c emits logical-not returns from MIR without body fallback" {
     const source =
         \\fn not_param(flag: bool) -> bool {
