@@ -1266,6 +1266,10 @@ const LlvmEmitter = struct {
         conditional_direct_calls: SimpleMirConditionalVoidBody,
     };
 
+    const SimpleMirTrapBody = struct {
+        helper: []const u8,
+    };
+
     const max_simple_mir_void_calls = 8;
 
     const SimpleMirDirectCalls = struct {
@@ -1343,11 +1347,12 @@ const LlvmEmitter = struct {
 
     fn emitSimpleMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
+        const simple_trap = self.simpleMirTrapBody(fn_mir);
         const simple_return = self.simpleMirReturn(function, fn_mir);
-        const simple_return_prefix_calls = if (simple_return != null) self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir) orelse return false else null;
-        const simple_void_body = if (simple_return == null) self.simpleMirVoidBody(function, fn_mir) else null;
-        const simple_conditional_return = if (simple_return == null and simple_void_body == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
-        if (simple_return == null and simple_void_body == null and simple_conditional_return == null) return false;
+        const simple_return_prefix_calls = if (simple_trap == null and simple_return != null) self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir) orelse return false else null;
+        const simple_void_body = if (simple_trap == null and simple_return == null) self.simpleMirVoidBody(function, fn_mir) else null;
+        const simple_conditional_return = if (simple_trap == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
+        if (simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null) return false;
 
         const sig_facts = function.signature;
         const ret_ty = sig_facts.return_type orelse simpleType(sig_facts.name.span, "void");
@@ -1399,7 +1404,9 @@ const LlvmEmitter = struct {
             try self.out.print(self.allocator, "){s} {{\n{s}:\n", .{ attr_str, entry_label });
         }
 
-        if (simple_return) |ret| {
+        if (simple_trap) |trap| {
+            try self.out.print(self.allocator, "  call void @{s}(){s}\n  unreachable\n", .{ trap.helper, try self.debugCallSuffix() });
+        } else if (simple_return) |ret| {
             const return_span = self.simpleMirReturnSpan(fn_mir) orelse sig_facts.name.span;
             if (simple_return_prefix_calls) |calls| {
                 try self.emitSimpleMirDirectCalls(calls, return_span);
@@ -1481,6 +1488,32 @@ const LlvmEmitter = struct {
         }
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;
+    }
+
+    fn simpleMirTrapBody(self: *LlvmEmitter, fn_mir: mir.Function) ?SimpleMirTrapBody {
+        _ = self;
+        if (fn_mir.blocks.len != 2 or fn_mir.trap_edges.len != 1) return null;
+        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
+        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+        const edge = fn_mir.trap_edges[0];
+        if (edge.from_block != 0 or edge.trap_block != 1) return null;
+        const entry = fn_mir.blocks[0];
+        const trap_block = fn_mir.blocks[1];
+        if (!std.mem.eql(u8, trap_block.kind, "trap") or trap_block.terminator != .trap_) return null;
+        switch (entry.terminator) {
+            .return_, .unreachable_ => {},
+            else => return null,
+        }
+        if (edge.kind == .Unreachable) return .{ .helper = "mc_trap_Unreachable" };
+        if (edge.kind != .ExplicitTrap) return null;
+        for (fn_mir.call_target_facts) |fact| {
+            if (!sameMirSourceLocation(fact.source, .{ .line = edge.line, .column = edge.column })) continue;
+            if (mir.explicitTrapHelperForTarget(fact.kind)) |helper| return .{ .helper = helper };
+        }
+        if (fn_mir.call_target_facts.len == 1) {
+            if (mir.explicitTrapHelperForTarget(fn_mir.call_target_facts[0].kind)) |helper| return .{ .helper = helper };
+        }
+        return null;
     }
 
     fn simpleMirReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirReturn {
