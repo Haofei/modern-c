@@ -69,6 +69,7 @@ def main() -> int:
         for key in (
             "ast_shaped_payload_budget",
             "normalized_fact_anchors",
+            "mir_body_fast_path_ratchet",
             "backend_artifact_consumers",
             "forbidden_regressions",
         ):
