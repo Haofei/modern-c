@@ -2107,6 +2107,54 @@ test "LLVM emits enum literal returns from MIR without body fallback" {
     try expectNotContains(body, "store");
 }
 
+test "LLVM emits local and loop enum returns from MIR without body fallback" {
+    const source =
+        \\enum Color {
+        \\    red,
+        \\    blue,
+        \\}
+        \\extern fn hit(value: u32) -> void;
+        \\fn local_color() -> Color {
+        \\    let c: Color = .blue;
+        \\    return c;
+        \\}
+        \\fn assigned_color() -> Color {
+        \\    var c: Color = .red;
+        \\    c = .blue;
+        \\    return c;
+        \\}
+        \\fn loop_color(flag: bool) -> Color {
+        \\    while flag {
+        \\        hit(1);
+        \\    }
+        \\    return .blue;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_loop_enum_returns.mc", source, &output);
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i64 @local_color");
+    try expectContains(local_body, "ret i64 1");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i64 @assigned_color");
+    try expectContains(assigned_body, "ret i64 1");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+
+    const loop_body = try llvmFunctionBody(output.items, "define internal i64 @loop_color");
+    const branch = std.mem.indexOf(u8, loop_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const hit = std.mem.indexOf(u8, loop_body, "call void @hit(i32 1)") orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, loop_body, "ret i64 1") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(branch < hit);
+    try std.testing.expect(hit < ret);
+    try expectNotContains(loop_body, "switch");
+    try expectNotContains(loop_body, "alloca");
+    try expectNotContains(loop_body, "store");
+}
+
 test "LLVM emits conditional enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {

@@ -1958,6 +1958,54 @@ test "lower-c emits enum literal returns from MIR without body fallback" {
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c emits local and loop enum returns from MIR without body fallback" {
+    const source =
+        \\enum Color {
+        \\    red,
+        \\    blue,
+        \\}
+        \\extern fn hit(value: u32) -> void;
+        \\fn local_color() -> Color {
+        \\    let c: Color = .blue;
+        \\    return c;
+        \\}
+        \\fn assigned_color() -> Color {
+        \\    var c: Color = .red;
+        \\    c = .blue;
+        \\    return c;
+        \\}
+        \\fn loop_color(flag: bool) -> Color {
+        \\    while flag {
+        \\        hit(1);
+        \\    }
+        \\    return .blue;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_loop_enum_returns.mc", source, &output);
+
+    const local_body = try cFunctionBody(output.items, "static Color local_color(void)");
+    try expectContains(local_body, "return Color_blue;");
+    try expectNotContains(local_body, "Color c");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static Color assigned_color(void)");
+    try expectContains(assigned_body, "return Color_blue;");
+    try expectNotContains(assigned_body, "Color c");
+    try expectNotContains(assigned_body, "c =");
+    try expectNotContains(assigned_body, "mc_tmp");
+
+    const loop_body = try cFunctionBody(output.items, "static Color loop_color(bool flag)");
+    const loop = std.mem.indexOf(u8, loop_body, "while (flag)") orelse return error.TestUnexpectedResult;
+    const hit = std.mem.indexOf(u8, loop_body, "hit(1);") orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, loop_body, "return Color_blue;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop < hit);
+    try std.testing.expect(hit < ret);
+    try expectNotContains(loop_body, "switch");
+    try expectNotContains(loop_body, "mc_tmp");
+}
+
 test "lower-c emits conditional enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {
