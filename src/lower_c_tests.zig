@@ -1181,12 +1181,16 @@ test "lower-c emits struct parameter field checked operands from MIR" {
 
 test "lower-c emits struct parameter field comparisons from MIR" {
     const source =
+        \\extern fn take_bool(v: bool) -> void;
         \\struct Pair { a: u32, b: u32 }
         \\fn cmp_left(p: Pair, x: u32) -> bool {
         \\    return p.a == x;
         \\}
         \\fn cmp_right(p: Pair, x: u32) -> bool {
         \\    return x < p.b;
+        \\}
+        \\fn call_cmp(p: Pair, x: u32) -> void {
+        \\    take_bool(p.a == x);
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -1199,6 +1203,10 @@ test "lower-c emits struct parameter field comparisons from MIR" {
 
     const right_body = try cFunctionBody(output.items, "static bool cmp_right(Pair p, uint32_t x)");
     try expectContains(right_body, "return (x < p.b);");
+
+    const call_body = try cFunctionBody(output.items, "static void call_cmp(Pair p, uint32_t x)");
+    try expectContains(call_body, "take_bool((p.a == x));");
+    try expectNotContains(call_body, "take_bool((p == x));");
 }
 
 test "lower-c preserves MIR void calls before direct-call returns" {
