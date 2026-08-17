@@ -3890,7 +3890,7 @@ test "LLVM negative integer literal uses the MIR unary result type" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTestNoFunctionBodyFallback("llvm_negative_integer_literal_result_type.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_negative_integer_literal_return.mc", source, &output);
     try expectContains(output.items, "ret i32 -1");
 }
 
