@@ -2350,6 +2350,43 @@ test "LLVM emits local global returns from MIR" {
     try expectNotContains(assigned_body, "store");
 }
 
+test "LLVM preserves MIR void calls before global returns" {
+    const source =
+        \\global g: u32 = 0;
+        \\extern fn hit(value: i32) -> void;
+        \\fn side_then_global_return() -> u32 {
+        \\    hit(4);
+        \\    return g;
+        \\}
+        \\fn side_then_local_global_return() -> u32 {
+        \\    hit(5);
+        \\    let x: u32 = g;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_global_return.mc", source, &output);
+
+    const direct_body = try llvmFunctionBody(output.items, "define internal i32 @side_then_global_return");
+    const direct_hit = std.mem.indexOf(u8, direct_body, "call void @hit(i32 4)") orelse return error.TestUnexpectedResult;
+    const direct_load = std.mem.indexOf(u8, direct_body, "load atomic i32, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const direct_ret = std.mem.indexOf(u8, direct_body, "ret i32 %t") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(direct_hit < direct_load);
+    try std.testing.expect(direct_load < direct_ret);
+    try expectNotContains(direct_body, "alloca");
+    try expectNotContains(direct_body, "store");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @side_then_local_global_return");
+    const local_hit = std.mem.indexOf(u8, local_body, "call void @hit(i32 5)") orelse return error.TestUnexpectedResult;
+    const local_load = std.mem.indexOf(u8, local_body, "load atomic i32, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const local_ret = std.mem.indexOf(u8, local_body, "ret i32 %t") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(local_hit < local_load);
+    try std.testing.expect(local_load < local_ret);
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+}
+
 test "LLVM preserves MIR void calls before conditional returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

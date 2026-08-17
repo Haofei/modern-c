@@ -1799,6 +1799,7 @@ const LlvmEmitter = struct {
             if (std.mem.eql(u8, value_id, param.name.text)) return if (simpleMirNoTrap(fn_mir)) .{ .param = param.name.text } else null;
         }
         if (self.simpleMirParamFieldReturn(function, block, ret, value_id)) |field| return if (simpleMirNoTrap(fn_mir)) .{ .param_field = field } else null;
+        if (self.global_types.contains(value_id)) return if (simpleMirNoTrap(fn_mir)) .{ .global_load = value_id } else null;
         if (std.mem.eql(u8, value_id, "int")) {
             const source = simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret);
             for (fn_mir.integer_facts) |fact| {
@@ -3742,7 +3743,7 @@ const LlvmEmitter = struct {
         const global_ty = self.global_types.get(name) orelse return error.UnsupportedLlvmEmission;
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(global_ty), self.resolveAliasType(expected_ty))) return error.UnsupportedLlvmEmission;
         const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{name});
-        return self.emitOrdinaryLoad(global_ty, ptr, true);
+        return self.emitOrdinaryLoad(global_ty, ptr, !(self.global_is_const.get(name) orelse false));
     }
 
     fn simpleMirLocalInitSource(self: *LlvmEmitter, fn_mir: mir.Function, local_name: []const u8) ?mir.SourcePoint {

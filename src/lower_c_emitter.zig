@@ -1735,6 +1735,7 @@ pub const CEmitter = struct {
             if (std.mem.eql(u8, value_id, param.name.text)) return if (simpleMirNoTrap(fn_mir)) .{ .param = param.name.text } else null;
         }
         if (self.simpleMirParamFieldReturn(function, block, ret, value_id)) |field| return if (simpleMirNoTrap(fn_mir)) .{ .param_field = field } else null;
+        if (self.globals.contains(value_id)) return if (simpleMirNoTrap(fn_mir)) .{ .global_load = value_id } else null;
         if (std.mem.eql(u8, value_id, "int")) {
             const source = simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret);
             for (fn_mir.integer_facts) |fact| {

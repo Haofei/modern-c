@@ -2185,6 +2185,38 @@ test "lower-c emits local global returns from MIR" {
     try expectNotContains(assigned_body, "mc_tmp");
 }
 
+test "lower-c preserves MIR void calls before global returns" {
+    const source =
+        \\global g: u32 = 0;
+        \\extern fn hit(value: i32) -> void;
+        \\fn side_then_global_return() -> u32 {
+        \\    hit(4);
+        \\    return g;
+        \\}
+        \\fn side_then_local_global_return() -> u32 {
+        \\    hit(5);
+        \\    let x: u32 = g;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_global_return.mc", source, &output);
+
+    const direct_body = try cFunctionBody(output.items, "static uint32_t side_then_global_return(void)");
+    const direct_hit = std.mem.indexOf(u8, direct_body, "hit(4);") orelse return error.TestUnexpectedResult;
+    const direct_ret = std.mem.indexOf(u8, direct_body, "return ((uint32_t)mc_race_load_u32(&g));") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(direct_hit < direct_ret);
+    try expectNotContains(direct_body, "mc_tmp");
+
+    const local_body = try cFunctionBody(output.items, "static uint32_t side_then_local_global_return(void)");
+    const local_hit = std.mem.indexOf(u8, local_body, "hit(5);") orelse return error.TestUnexpectedResult;
+    const local_ret = std.mem.indexOf(u8, local_body, "return ((uint32_t)mc_race_load_u32(&g));") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(local_hit < local_ret);
+    try expectNotContains(local_body, "uint32_t x");
+    try expectNotContains(local_body, "mc_tmp");
+}
+
 test "lower-c preserves MIR void calls before conditional returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
