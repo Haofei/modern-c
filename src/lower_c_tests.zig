@@ -2604,6 +2604,63 @@ test "lower-c local and assigned literal call components return from MIR without
     try expectContains(assigned_array_body, "return (mc_array_u32_2){ .elems = { mark(7), mark(8) } };");
 }
 
+test "lower-c local and assigned aggregate direct calls return from MIR without body fallback" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\extern fn hit(value: u32) -> void;
+        \\extern fn make_pair(value: u32) -> Pair;
+        \\extern fn make_array(value: u32) -> [2]u32;
+        \\fn local_struct(value: u32) -> Pair {
+        \\    let p: Pair = make_pair(value);
+        \\    return p;
+        \\}
+        \\fn assigned_struct(value: u32) -> Pair {
+        \\    var p: Pair = .{ .first = 0, .second = 0 };
+        \\    p = make_pair(value);
+        \\    return p;
+        \\}
+        \\fn side_then_local_struct(value: u32) -> Pair {
+        \\    hit(1);
+        \\    let p: Pair = make_pair(value);
+        \\    return p;
+        \\}
+        \\fn local_array(value: u32) -> [2]u32 {
+        \\    let p: [2]u32 = make_array(value);
+        \\    return p;
+        \\}
+        \\fn assigned_array(value: u32) -> [2]u32 {
+        \\    var p: [2]u32 = .{ 0, 0 };
+        \\    p = make_array(value);
+        \\    return p;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_aggregate_direct_calls.mc", source, &output);
+
+    const local_struct_body = try cFunctionBody(output.items, "static Pair local_struct(uint32_t value)");
+    try expectContains(local_struct_body, "return make_pair(value);");
+    try expectNotContains(local_struct_body, "Pair p");
+
+    const assigned_struct_body = try cFunctionBody(output.items, "static Pair assigned_struct(uint32_t value)");
+    try expectContains(assigned_struct_body, "return make_pair(value);");
+    try expectNotContains(assigned_struct_body, "Pair p");
+
+    const side_body = try cFunctionBody(output.items, "static Pair side_then_local_struct(uint32_t value)");
+    const hit = std.mem.indexOf(u8, side_body, "hit(1);") orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, side_body, "return make_pair(value);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hit < ret);
+    try expectNotContains(side_body, "Pair p");
+
+    const local_array_body = try cFunctionBody(output.items, "static mc_array_u32_2 local_array(uint32_t value)");
+    try expectContains(local_array_body, "return make_array(value);");
+    try expectNotContains(local_array_body, "mc_array_u32_2 p");
+
+    const assigned_array_body = try cFunctionBody(output.items, "static mc_array_u32_2 assigned_array(uint32_t value)");
+    try expectContains(assigned_array_body, "return make_array(value);");
+    try expectNotContains(assigned_array_body, "mc_array_u32_2 p");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;
