@@ -532,11 +532,15 @@ test "LLVM emits pure local-only void functions from MIR" {
 test "LLVM emits simple global stores from MIR" {
     const source =
         \\global g: u32 = 0;
+        \\global h: u32 = 0;
         \\fn store_param(x: u32) {
         \\    g = x;
         \\}
         \\fn store_literal() {
         \\    g = 7;
+        \\}
+        \\fn store_global() {
+        \\    h = g;
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -550,6 +554,12 @@ test "LLVM emits simple global stores from MIR" {
     const literal_body = try llvmFunctionBody(output.items, "define internal void @store_literal");
     try expectContains(literal_body, "store atomic i32 7, ptr @g unordered, align 4");
     try expectNotContains(literal_body, "alloca");
+
+    const global_body = try llvmFunctionBody(output.items, "define internal void @store_global");
+    try expectContains(global_body, "load atomic i32, ptr @g unordered, align 4");
+    try expectContains(global_body, "store atomic i32 %t");
+    try expectContains(global_body, "ptr @h unordered, align 4");
+    try expectNotContains(global_body, "alloca");
 }
 
 test "LLVM preserves MIR void calls before simple returns" {

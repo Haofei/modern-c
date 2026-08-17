@@ -1350,8 +1350,13 @@ const LlvmEmitter = struct {
 
     const SimpleMirGlobalStore = struct {
         name: []const u8,
-        value: SimpleMirArg,
+        value: SimpleMirGlobalStoreValue,
         source: mir.SourcePoint,
+    };
+
+    const SimpleMirGlobalStoreValue = union(enum) {
+        arg: SimpleMirArg,
+        global_load: []const u8,
     };
 
     const SimpleMirCheckedBinary = struct {
@@ -1488,7 +1493,7 @@ const LlvmEmitter = struct {
                     const span = spanFromMirSourcePoint(store.source);
                     const global_ty = self.global_types.get(store.name) orelse return error.UnsupportedLlvmEmission;
                     const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{store.name});
-                    try self.emitOrdinaryStore(global_ty, try self.llvmType(global_ty), try self.simpleMirArgValue(store.value), ptr, true);
+                    try self.emitOrdinaryStore(global_ty, try self.llvmType(global_ty), try self.simpleMirGlobalStoreValue(store.value, global_ty), ptr, true);
                     try self.emitReturnVoid(span);
                 },
                 .direct_call => |call| {
@@ -1689,12 +1694,17 @@ const LlvmEmitter = struct {
         const name = target_name orelse return null;
         const source = target_source.?;
         const value_source = self.simpleMirAssignmentSourceInBlock(block, name) orelse return null;
-        const value = self.simpleMirArgAt(function, fn_mir, value_source) orelse return null;
+        const value: SimpleMirGlobalStoreValue = if (self.simpleMirArgAt(function, fn_mir, value_source)) |arg|
+            .{ .arg = arg }
+        else if (self.simpleMirGlobalAtSource(function, fn_mir, value_source)) |source_name|
+            .{ .global_load = source_name }
+        else
+            return null;
         if (!self.blockOnlyContainsSimpleMirGlobalStoreInstructions(function, block, name)) return null;
         return .{ .name = name, .value = value, .source = source };
     }
 
-    fn blockOnlyContainsSimpleMirGlobalStoreInstructions(_: *LlvmEmitter, function: anytype, block: mir.Block, target_name: []const u8) bool {
+    fn blockOnlyContainsSimpleMirGlobalStoreInstructions(self: *LlvmEmitter, function: anytype, block: mir.Block, target_name: []const u8) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
             .param, .target_type, .integer_literal_conversion => {},
             .assign => {
@@ -1707,7 +1717,10 @@ const LlvmEmitter = struct {
                     std.mem.eql(u8, instruction.detail, "literal")) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
-                } else return false;
+                } else {
+                    if (self.global_types.contains(instruction.detail)) continue;
+                    return false;
+                }
             },
             else => return false,
         };
@@ -2106,6 +2119,13 @@ const LlvmEmitter = struct {
             .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
             .integer_literal => |literal| literal,
             .bool_literal => |value| if (value) "1" else "0",
+        };
+    }
+
+    fn simpleMirGlobalStoreValue(self: *LlvmEmitter, value: SimpleMirGlobalStoreValue, expected_ty: anytype) ![]const u8 {
+        return switch (value) {
+            .arg => |arg| try self.simpleMirArgValue(arg),
+            .global_load => |name| try self.emitSimpleMirGlobalLoad(name, expected_ty),
         };
     }
 

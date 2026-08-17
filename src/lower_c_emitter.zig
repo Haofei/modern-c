@@ -1286,8 +1286,13 @@ pub const CEmitter = struct {
 
     const SimpleMirGlobalStore = struct {
         name: []const u8,
-        value: SimpleMirArg,
+        value: SimpleMirGlobalStoreValue,
         source: mir.SourcePoint,
+    };
+
+    const SimpleMirGlobalStoreValue = union(enum) {
+        arg: SimpleMirArg,
+        global_load: []const u8,
     };
 
     const SimpleMirCheckedBinary = struct {
@@ -1399,7 +1404,7 @@ pub const CEmitter = struct {
                         .info = self.globals.get(store.name) orelse return error.UnsupportedCEmission,
                     };
                     try appendGlobalStorePrefix(self.allocator, self.out, target);
-                    try self.emitSimpleMirArg(store.value);
+                    try self.emitSimpleMirGlobalStoreValue(store.value);
                     try appendGlobalStoreSuffix(self.allocator, self.out, target);
                 },
                 .direct_call => |call| {
@@ -1605,12 +1610,17 @@ pub const CEmitter = struct {
         const name = target_name orelse return null;
         const source = target_source.?;
         const value_source = self.simpleMirAssignmentSourceInBlock(block, name) orelse return null;
-        const value = self.simpleMirArgAt(function, fn_mir, value_source) orelse return null;
+        const value: SimpleMirGlobalStoreValue = if (self.simpleMirArgAt(function, fn_mir, value_source)) |arg|
+            .{ .arg = arg }
+        else if (self.simpleMirGlobalAtSource(function, fn_mir, value_source)) |source_name|
+            .{ .global_load = source_name }
+        else
+            return null;
         if (!self.blockOnlyContainsSimpleMirGlobalStoreInstructions(function, block, name)) return null;
         return .{ .name = name, .value = value, .source = source };
     }
 
-    fn blockOnlyContainsSimpleMirGlobalStoreInstructions(_: *CEmitter, function: anytype, block: mir.Block, target_name: []const u8) bool {
+    fn blockOnlyContainsSimpleMirGlobalStoreInstructions(self: *CEmitter, function: anytype, block: mir.Block, target_name: []const u8) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
             .param, .target_type, .integer_literal_conversion => {},
             .assign => {
@@ -1623,7 +1633,10 @@ pub const CEmitter = struct {
                     std.mem.eql(u8, instruction.detail, "literal")) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
-                } else return false;
+                } else {
+                    if (self.globals.contains(instruction.detail)) continue;
+                    return false;
+                }
             },
             else => return false,
         };
@@ -1954,6 +1967,13 @@ pub const CEmitter = struct {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
+        }
+    }
+
+    fn emitSimpleMirGlobalStoreValue(self: *CEmitter, value: SimpleMirGlobalStoreValue) !void {
+        switch (value) {
+            .arg => |arg| try self.emitSimpleMirArg(arg),
+            .global_load => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
         }
     }
 

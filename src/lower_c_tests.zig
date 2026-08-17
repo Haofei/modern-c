@@ -529,11 +529,15 @@ test "lower-c emits pure local-only void functions from MIR" {
 test "lower-c emits simple global stores from MIR" {
     const source =
         \\global g: u32 = 0;
+        \\global h: u32 = 0;
         \\fn store_param(x: u32) {
         \\    g = x;
         \\}
         \\fn store_literal() {
         \\    g = 7;
+        \\}
+        \\fn store_global() {
+        \\    h = g;
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -547,6 +551,10 @@ test "lower-c emits simple global stores from MIR" {
     const literal_body = try cFunctionBody(output.items, "static void store_literal(void)");
     try expectContains(literal_body, "mc_race_store_u32(&g, (uint32_t)7);");
     try expectNotContains(literal_body, "mc_tmp");
+
+    const global_body = try cFunctionBody(output.items, "static void store_global(void)");
+    try expectContains(global_body, "mc_race_store_u32(&h, (uint32_t)((uint32_t)mc_race_load_u32(&g)));");
+    try expectNotContains(global_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before simple returns" {
