@@ -1731,6 +1731,22 @@ test "lower-c emits negative integer literal return from MIR without body fallba
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c emits conversion literal return from MIR without body fallback" {
+    const source =
+        \\type W = wrap<u8>;
+        \\fn convert() -> W {
+        \\    return W.from_mod(300);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conversion_literal_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint8_t convert(void)");
+    try expectContains(body, "return ((uint8_t)(300));");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c emits logical-not returns from MIR without body fallback" {
     const source =
         \\fn not_param(flag: bool) -> bool {

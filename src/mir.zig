@@ -9042,6 +9042,7 @@ const FunctionBuilder = struct {
 
     fn targetTypeForBuiltinMemberCallArg(self: *FunctionBuilder, call: anytype, index: usize) ?ast.TypeExpr {
         if (index == 0) if (self.atomicInitCallTarget(call)) |target| return target.payload_type_expr;
+        if (index == 0) if (self.conversionCallFactInfo(call)) |target| return target.source_ty;
         const member = memberExpr(call.callee.*) orelse return null;
         const base_ty = self.typeExprForExpr(member.base.*) orelse return null;
         if (index == 0) {

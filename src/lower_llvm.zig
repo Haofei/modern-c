@@ -1259,6 +1259,7 @@ const LlvmEmitter = struct {
         global_load: []const u8,
         nested_call: SimpleMirNestedCall,
         direct_call: SimpleMirDirectCall,
+        conversion_return: SimpleMirConversionReturn,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
@@ -1452,6 +1453,13 @@ const LlvmEmitter = struct {
         arg_count: usize = 0,
     };
 
+    const SimpleMirConversionReturn = struct {
+        kind: mir.CallTargetKind,
+        source_fact: mir.TargetTypeFact,
+        target_fact: mir.TargetTypeFact,
+        operand: SimpleMirCallArg,
+    };
+
     const SimpleMirGlobalStore = struct {
         name: []const u8,
         value: SimpleMirGlobalStoreValue,
@@ -1620,6 +1628,10 @@ const LlvmEmitter = struct {
                     const tmp = try self.nextTemp();
                     try self.emitSimpleMirDirectCall(call, tmp, return_span);
                     try self.emitReturnValue(ret_ty, tmp, return_span);
+                },
+                .conversion_return => |conversion| {
+                    const value = try self.emitSimpleMirConversionReturn(conversion, return_span);
+                    try self.emitReturnValue(ret_ty, value, return_span);
                 },
                 .struct_literal => |literal| {
                     const value = try self.emitSimpleMirStructLiteralReturn(literal, return_span);
@@ -1825,6 +1837,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
             if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
         }
+        if (self.simpleMirConversionReturn(function, fn_mir, value_id)) |conversion| return .{ .conversion_return = conversion };
         if (std.mem.eql(u8, value_id, "struct_literal")) {
             if (self.simpleMirStructLiteralReturn(function, fn_mir, block)) |literal| return .{ .struct_literal = literal };
         }
@@ -3008,6 +3021,15 @@ const LlvmEmitter = struct {
         return value;
     }
 
+    fn emitSimpleMirConversionReturn(self: *LlvmEmitter, conversion: SimpleMirConversionReturn, span: diagnostics.Span) ![]const u8 {
+        switch (conversion.kind) {
+            .conversion_from, .conversion_wrap_from, .conversion_from_mod => {},
+            else => return error.UnsupportedLlvmEmission,
+        }
+        const operand = try self.simpleMirCallArgValue(conversion.operand, span);
+        return self.castValue(operand, conversion.source_fact.target_ty, conversion.target_fact.target_ty);
+    }
+
     fn simpleMirArgValue(self: *LlvmEmitter, arg: SimpleMirArg, span: diagnostics.Span) ![]const u8 {
         return switch (arg) {
             .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
@@ -3353,6 +3375,44 @@ const LlvmEmitter = struct {
             for (call.args[0..arg_count]) |arg| if (simpleMirCallArgHasDirectCall(arg)) return null;
         }
         return call;
+    }
+
+    fn simpleMirConversionReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, value_id: []const u8) ?SimpleMirConversionReturn {
+        const block, const call_source = blk: {
+            for (fn_mir.blocks) |block| {
+                for (block.instructions) |instruction| {
+                    if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, value_id)) break :blk .{ block, instructionSourcePoint(instruction) };
+                }
+            }
+            return null;
+        };
+        const kind = self.simpleMirConversionCallTargetKindAt(fn_mir, call_source) orelse return null;
+        const source_fact = simpleMirTargetTypeFactKindAt(fn_mir, .conversion_source, call_source) orelse return null;
+        const target_fact = simpleMirTargetTypeFactKindAt(fn_mir, .conversion_target, call_source) orelse return null;
+        var after_call = false;
+        for (block.instructions) |instruction| {
+            if (!after_call) {
+                after_call = instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source);
+                continue;
+            }
+            if (instruction.kind == .return_value or instruction.kind == .call) break;
+            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
+            const operand = self.simpleMirCallArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse continue;
+            return .{ .kind = kind, .source_fact = source_fact, .target_fact = target_fact, .operand = operand };
+        }
+        return null;
+    }
+
+    fn simpleMirConversionCallTargetKindAt(self: *LlvmEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?mir.CallTargetKind {
+        _ = self;
+        for (fn_mir.call_target_facts) |fact| {
+            if (!sameMirSourceLocation(fact.source, source)) continue;
+            switch (fact.kind) {
+                .conversion_from, .conversion_wrap_from, .conversion_from_mod => return fact.kind,
+                else => {},
+            }
+        }
+        return null;
     }
 
     fn simpleMirCallArgAt(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirCallArg {
@@ -3937,11 +3997,12 @@ const LlvmEmitter = struct {
     fn blockOnlyContainsSimpleMirReturnInstructionsInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
             .param, .local, .assign, .target_type, .integer_literal_conversion, .representation_check, .representation_use, .typed_load, .binary, .unary, .add_overflow, .return_value => {},
-            .call => {},
+            .call, .call_target => {},
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "struct_literal") or std.mem.eql(u8, instruction.detail, "array_literal")) continue;
                 if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
                 if (std.mem.eql(u8, instruction.detail, "null") and simpleMirNullLiteralAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
+                if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {

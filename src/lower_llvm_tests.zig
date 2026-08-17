@@ -3880,7 +3880,7 @@ test "LLVM conversion literal source type comes from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_conversion_literal_source_type.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conversion_literal_source_type.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "trunc i32 300 to i8") != null);
 }
 
