@@ -229,7 +229,7 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_conditional_subject.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_subject.mc", source, &output);
 
     const compare_body = try llvmFunctionBody(output.items, "define internal i32 @choose_cmp");
     try expectContains(compare_body, "icmp slt i32 %a, %b");
@@ -528,7 +528,7 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_void_conditional_calls.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_conditional_calls.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal void @choose_void");
     try expectContains(param_body, "br i1 %flag, label %bb_if_then");
@@ -765,7 +765,7 @@ test "LLVM emits simple sequential void direct calls from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_void_call_sequence.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_call_sequence.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal void @sequence");
     try expectContains(body, "call void @hit(i32 1)");
@@ -843,7 +843,7 @@ test "LLVM emits pure local-only void functions from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_void_local_only.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_local_only.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal void @local_only");
     try expectContains(local_body, "ret void");
@@ -992,7 +992,7 @@ test "LLVM emits simple global stores from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_global_store.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_global_store.mc", source, &output);
 
     const param_body = try llvmFunctionBody(output.items, "define internal void @store_param");
     try expectContains(param_body, "store atomic i32 %x, ptr @g unordered, align 4");
@@ -1135,7 +1135,7 @@ test "LLVM preserves MIR void calls before simple returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_void_calls_before_return.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @side_then_return");
     const hit1 = std.mem.indexOf(u8, body, "call void @hit(i32 1)") orelse return error.TestUnexpectedResult;
@@ -1163,7 +1163,7 @@ test "LLVM emits direct struct parameter field returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_param_field_return.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @first");
     try expectContains(body, "extractvalue { i32, i32 } %p, 0");
@@ -1197,7 +1197,7 @@ test "LLVM emits conditional struct parameter field returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_conditional_param_field_return.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_param_field_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @choose");
     try expectContains(body, "br i1 %flag");
@@ -1221,7 +1221,7 @@ test "LLVM emits conditional boolean struct field conditions from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_conditional_param_bool_field.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_param_bool_field.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i1 @choose");
     try expectContains(body, "extractvalue { i1, i1 } %f, 0");
@@ -1246,7 +1246,7 @@ test "LLVM emits struct parameter field call arguments from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_param_field_call_args.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_call_args.mc", source, &output);
 
     const call_body = try llvmFunctionBody(output.items, "define internal i32 @call_field");
     try expectContains(call_body, "extractvalue { i32, i32 } %p, 0");
@@ -1274,7 +1274,7 @@ test "LLVM emits struct parameter field checked operands from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_param_field_checked_operands.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_checked_operands.mc", source, &output);
 
     const left_body = try llvmFunctionBody(output.items, "define internal i32 @add_left");
     try expectContains(left_body, "extractvalue { i32, i32 } %p, 0");
@@ -1306,7 +1306,7 @@ test "LLVM emits struct parameter field comparisons from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_param_field_compare_operands.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_param_field_compare_operands.mc", source, &output);
 
     const left_body = try llvmFunctionBody(output.items, "define internal i1 @cmp_left");
     try expectContains(left_body, "extractvalue { i32, i32 } %p, 0");
@@ -1599,7 +1599,7 @@ test "LLVM preserves MIR void calls before direct-call returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_void_calls_before_direct_call_return.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_direct_call_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @side_then_call");
     const hit = std.mem.indexOf(u8, body, "call void @hit(i32 0)") orelse return error.TestUnexpectedResult;
@@ -1675,7 +1675,7 @@ test "LLVM emits local global returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_local_global_return.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_global_return.mc", source, &output);
 
     const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_global_return");
     try expectContains(local_body, "load atomic i32, ptr @g unordered, align 4");
@@ -1712,7 +1712,7 @@ test "LLVM preserves MIR void calls before conditional returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_void_calls_before_conditional_return.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_conditional_return.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @side_then_cond");
     const hit = std.mem.indexOf(u8, body, "call void @hit(i32 0)") orelse return error.TestUnexpectedResult;

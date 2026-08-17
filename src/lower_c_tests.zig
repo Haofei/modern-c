@@ -255,7 +255,7 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_conditional_subject.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_subject.mc", source, &output);
 
     const compare_body = try cFunctionBody(output.items, "static int32_t choose_cmp(int32_t a, int32_t b)");
     try expectContains(compare_body, "if ((a < b))");
@@ -549,7 +549,7 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_void_conditional_calls.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_conditional_calls.mc", source, &output);
 
     const param_body = try cFunctionBody(output.items, "static void choose_void(bool flag)");
     try expectContains(param_body, "if (flag)");
@@ -758,7 +758,7 @@ test "lower-c emits simple sequential void direct calls from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_void_call_sequence.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_call_sequence.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static void sequence(void)");
     try expectContains(body, "hit(1);");
@@ -832,7 +832,7 @@ test "lower-c emits pure local-only void functions from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_void_local_only.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_local_only.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static void local_only(void)");
     try expectNotContains(local_body, "uint32_t x");
@@ -974,7 +974,7 @@ test "lower-c emits simple global stores from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_global_store.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_global_store.mc", source, &output);
 
     const param_body = try cFunctionBody(output.items, "static void store_param(uint32_t x)");
     try expectContains(param_body, "mc_race_store_u32(&g, (uint32_t)x);");
@@ -1110,7 +1110,7 @@ test "lower-c preserves MIR void calls before simple returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_void_calls_before_return.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static int32_t side_then_return(int32_t x)");
     const hit1 = std.mem.indexOf(u8, body, "hit(1);") orelse return error.TestUnexpectedResult;
@@ -1138,7 +1138,7 @@ test "lower-c emits direct struct parameter field returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_param_field_return.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t first(Pair p)");
     try expectContains(body, "return p.a;");
@@ -1170,7 +1170,7 @@ test "lower-c emits conditional struct parameter field returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_conditional_param_field_return.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_param_field_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static uint32_t choose(bool flag, Pair p)");
     try expectContains(body, "if (flag)");
@@ -1193,7 +1193,7 @@ test "lower-c emits conditional boolean struct field conditions from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_conditional_param_bool_field.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_param_bool_field.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static bool choose(Flags f)");
     try expectContains(body, "if (f.ok)");
@@ -1217,7 +1217,7 @@ test "lower-c emits struct parameter field call arguments from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_param_field_call_args.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_call_args.mc", source, &output);
 
     const call_body = try cFunctionBody(output.items, "static uint32_t call_field(Pair p)");
     try expectContains(call_body, "return make(p.a);");
@@ -1240,7 +1240,7 @@ test "lower-c emits struct parameter field checked operands from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_param_field_checked_operands.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_checked_operands.mc", source, &output);
 
     const left_body = try cFunctionBody(output.items, "static uint32_t add_left(Pair p, uint32_t x)");
     try expectContains(left_body, "return mc_checked_add_u32(p.a, x);");
@@ -1267,7 +1267,7 @@ test "lower-c emits struct parameter field comparisons from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_param_field_compare_operands.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_param_field_compare_operands.mc", source, &output);
 
     const left_body = try cFunctionBody(output.items, "static bool cmp_left(Pair p, uint32_t x)");
     try expectContains(left_body, "return (p.a == x);");
@@ -1500,7 +1500,7 @@ test "lower-c preserves MIR void calls before direct-call returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_void_calls_before_direct_call_return.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_direct_call_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static int32_t side_then_call(void)");
     const hit = std.mem.indexOf(u8, body, "hit(0);") orelse return error.TestUnexpectedResult;
@@ -1561,7 +1561,7 @@ test "lower-c emits local global returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_local_global_return.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_global_return.mc", source, &output);
 
     const local_body = try cFunctionBody(output.items, "static uint32_t local_global_return(void)");
     try expectContains(local_body, "return ((uint32_t)mc_race_load_u32(&g));");
@@ -1597,7 +1597,7 @@ test "lower-c preserves MIR void calls before conditional returns" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_void_calls_before_conditional_return.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_conditional_return.mc", source, &output);
 
     const body = try cFunctionBody(output.items, "static int32_t side_then_cond(bool flag)");
     const hit = std.mem.indexOf(u8, body, "hit(0);") orelse return error.TestUnexpectedResult;
