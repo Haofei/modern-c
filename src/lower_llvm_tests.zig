@@ -232,6 +232,15 @@ test "LLVM emits simple void conditional direct calls from MIR" {
         \\        hit(4);
         \\    }
         \\}
+        \\fn choose_void_sequence_suffix(flag: bool) -> void {
+        \\    hit(9);
+        \\    if (flag) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\    hit(8);
+        \\}
         \\fn choose_void_no_else(flag: bool) -> void {
         \\    if (flag) {
         \\        hit(5);
@@ -304,6 +313,19 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try expectContains(sequence_body, "call void @hit(i32 3)");
     try expectContains(sequence_body, "call void @hit(i32 4)");
     try expectNotContains(sequence_body, "switch");
+
+    const suffix_body = try llvmFunctionBody(output.items, "define internal void @choose_void_sequence_suffix");
+    const prefix_index = std.mem.indexOf(u8, suffix_body, "call void @hit(i32 9)") orelse return error.TestUnexpectedResult;
+    const suffix_branch_index = std.mem.indexOf(u8, suffix_body, "br i1 %flag, label %bb_if_then") orelse return error.TestUnexpectedResult;
+    const then_call_index = std.mem.indexOf(u8, suffix_body, "call void @hit(i32 1)") orelse return error.TestUnexpectedResult;
+    const else_call_index = std.mem.indexOf(u8, suffix_body, "call void @hit(i32 0)") orelse return error.TestUnexpectedResult;
+    const suffix_index = std.mem.indexOf(u8, suffix_body, "call void @hit(i32 8)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(prefix_index < suffix_branch_index);
+    try std.testing.expect(suffix_branch_index < then_call_index);
+    try std.testing.expect(then_call_index < suffix_index);
+    try std.testing.expect(else_call_index < suffix_index);
+    try expectNotContains(suffix_body, "switch");
+    try expectNotContains(suffix_body, "alloca");
 
     const no_else_body = try llvmFunctionBody(output.items, "define internal void @choose_void_no_else");
     try expectContains(no_else_body, "br i1 %flag, label %bb_if_then");

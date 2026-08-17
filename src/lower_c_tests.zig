@@ -249,6 +249,15 @@ test "lower-c emits simple void conditional direct calls from MIR" {
         \\        hit(4);
         \\    }
         \\}
+        \\fn choose_void_sequence_suffix(flag: bool) -> void {
+        \\    hit(9);
+        \\    if (flag) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\    hit(8);
+        \\}
         \\fn choose_void_no_else(flag: bool) -> void {
         \\    if (flag) {
         \\        hit(5);
@@ -320,6 +329,19 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectContains(sequence_body, "hit(3);");
     try expectContains(sequence_body, "hit(4);");
     try expectNotContains(sequence_body, "switch");
+
+    const suffix_body = try cFunctionBody(output.items, "static void choose_void_sequence_suffix(bool flag)");
+    const prefix_index = std.mem.indexOf(u8, suffix_body, "hit(9);") orelse return error.TestUnexpectedResult;
+    const suffix_if_index = std.mem.indexOf(u8, suffix_body, "if (flag)") orelse return error.TestUnexpectedResult;
+    const then_call_index = std.mem.indexOf(u8, suffix_body, "hit(1);") orelse return error.TestUnexpectedResult;
+    const else_call_index = std.mem.indexOf(u8, suffix_body, "hit(0);") orelse return error.TestUnexpectedResult;
+    const suffix_index = std.mem.indexOf(u8, suffix_body, "hit(8);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(prefix_index < suffix_if_index);
+    try std.testing.expect(suffix_if_index < then_call_index);
+    try std.testing.expect(then_call_index < suffix_index);
+    try std.testing.expect(else_call_index < suffix_index);
+    try expectNotContains(suffix_body, "switch");
+    try expectNotContains(suffix_body, "mc_tmp");
 
     const no_else_body = try cFunctionBody(output.items, "static void choose_void_no_else(bool flag)");
     try expectContains(no_else_body, "if (flag)");
