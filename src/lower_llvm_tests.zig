@@ -8520,7 +8520,7 @@ test "LLVM backend emits checked integer add from MIR-gated source" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_smoke.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_smoke_checked_add.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "define internal i32 @add_one(i32 %value)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@llvm.uadd.with.overflow.i32") != null);
