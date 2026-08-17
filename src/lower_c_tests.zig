@@ -219,6 +219,16 @@ test "lower-c emits simple void conditional direct calls from MIR" {
         \\        hit(6);
         \\    }
         \\}
+        \\fn choose_void_local_args(flag: bool) -> void {
+        \\    if (flag) {
+        \\        let x: i32 = 1;
+        \\        hit(x);
+        \\    } else {
+        \\        var y: i32 = 0;
+        \\        y = 2;
+        \\        hit(y);
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -250,6 +260,15 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectContains(no_else_body, "hit(5);");
     try expectContains(no_else_body, "hit(6);");
     try expectNotContains(no_else_body, "switch");
+
+    const local_args_body = try cFunctionBody(output.items, "static void choose_void_local_args(bool flag)");
+    try expectContains(local_args_body, "if (flag)");
+    try expectContains(local_args_body, "hit(1);");
+    try expectContains(local_args_body, "hit(2);");
+    try expectNotContains(local_args_body, "int32_t x");
+    try expectNotContains(local_args_body, "int32_t y");
+    try expectNotContains(local_args_body, "y =");
+    try expectNotContains(local_args_body, "switch");
 }
 
 test "lower-c emits simple sequential void direct calls from MIR" {

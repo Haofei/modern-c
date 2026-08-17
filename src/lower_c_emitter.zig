@@ -2154,8 +2154,10 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirLocalInitSource(self: *CEmitter, fn_mir: mir.Function, local_name: []const u8) ?mir.SourcePoint {
-        _ = self;
-        const block = fn_mir.blocks[0];
+        return self.simpleMirLocalInitSourceInBlock(fn_mir.blocks[0], local_name);
+    }
+
+    fn simpleMirLocalInitSourceInBlock(_: *CEmitter, block: mir.Block, local_name: []const u8) ?mir.SourcePoint {
         var after_local = false;
         for (block.instructions) |instruction| {
             if (!after_local) {
@@ -2187,19 +2189,19 @@ pub const CEmitter = struct {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = param.name.text };
                 }
                 if (mirFunctionHasLocal(fn_mir, instruction.detail)) {
-                    if (self.simpleMirLocalValueArg(function, fn_mir, instruction.detail, source)) |arg| return arg;
+                    if (self.simpleMirLocalValueArg(function, fn_mir, block, instruction.detail, source)) |arg| return arg;
                 }
             }
         }
         return null;
     }
 
-    fn simpleMirLocalValueArg(self: *CEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8, use_source: mir.SourcePoint) ?SimpleMirArg {
-        if (self.simpleMirAssignmentSource(fn_mir, local_name)) |assigned_source| {
+    fn simpleMirLocalValueArg(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, local_name: []const u8, use_source: mir.SourcePoint) ?SimpleMirArg {
+        if (self.simpleMirAssignmentSourceInBlock(block, local_name)) |assigned_source| {
             if (sameMirSourceLocation(assigned_source, use_source)) return null;
             return self.simpleMirArgAt(function, fn_mir, assigned_source);
         }
-        const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
+        const init_source = self.simpleMirLocalInitSourceInBlock(block, local_name) orelse return null;
         if (sameMirSourceLocation(init_source, use_source)) return null;
         return self.simpleMirArgAt(function, fn_mir, init_source);
     }

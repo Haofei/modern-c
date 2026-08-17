@@ -202,6 +202,16 @@ test "LLVM emits simple void conditional direct calls from MIR" {
         \\        hit(6);
         \\    }
         \\}
+        \\fn choose_void_local_args(flag: bool) -> void {
+        \\    if (flag) {
+        \\        let x: i32 = 1;
+        \\        hit(x);
+        \\    } else {
+        \\        var y: i32 = 0;
+        \\        y = 2;
+        \\        hit(y);
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -234,6 +244,14 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try expectContains(no_else_body, "call void @hit(i32 5)");
     try expectContains(no_else_body, "call void @hit(i32 6)");
     try expectNotContains(no_else_body, "switch");
+
+    const local_args_body = try llvmFunctionBody(output.items, "define internal void @choose_void_local_args");
+    try expectContains(local_args_body, "br i1 %flag, label %bb_if_then");
+    try expectContains(local_args_body, "call void @hit(i32 1)");
+    try expectContains(local_args_body, "call void @hit(i32 2)");
+    try expectNotContains(local_args_body, "alloca");
+    try expectNotContains(local_args_body, "store");
+    try expectNotContains(local_args_body, "switch");
 }
 
 test "LLVM emits simple sequential void direct calls from MIR" {
