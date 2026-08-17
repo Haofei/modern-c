@@ -1600,7 +1600,7 @@ pub const CEmitter = struct {
         var target_source: ?mir.SourcePoint = null;
         for (block.instructions) |instruction| {
             if (instruction.kind != .assign) continue;
-            if (mirFunctionHasLocal(fn_mir, instruction.detail)) return null;
+            if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
             for (function.signature.params) |param| {
                 if (std.mem.eql(u8, instruction.detail, param.name.text)) return null;
             }
@@ -1628,8 +1628,13 @@ pub const CEmitter = struct {
 
     fn blockOnlyContainsSimpleMirGlobalStoreInstructions(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, target_name: []const u8) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .target_type, .integer_literal_conversion => {},
+            .param, .local, .target_type, .integer_literal_conversion => {},
             .assign => {
+                if (mirFunctionHasLocal(fn_mir, instruction.detail)) {
+                    const source = self.simpleMirAssignmentSourceInBlock(block, instruction.detail) orelse return false;
+                    if (self.simpleMirArgAt(function, fn_mir, source) == null) return false;
+                    continue;
+                }
                 if (!std.mem.eql(u8, instruction.detail, target_name)) return false;
             },
             .binary => {
@@ -1648,6 +1653,7 @@ pub const CEmitter = struct {
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {
+                    if (mirBlockHasLocal(block, instruction.detail)) continue;
                     if (self.globals.contains(instruction.detail)) continue;
                     return false;
                 }
