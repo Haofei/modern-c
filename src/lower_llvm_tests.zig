@@ -14745,7 +14745,7 @@ test "LLVM ordinary bool global accesses use byte-sized atomics" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("ordinary_bool_global.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_ordinary_bool_global.mc", source, &output);
 
     const load_body = try llvmFunctionBody(output.items, "define internal i1 @read_flag");
     try expectContains(load_body, "load atomic i8, ptr @flag unordered, align 1");
@@ -14770,7 +14770,7 @@ test "LLVM immutable scalar global value reads avoid atomic traffic" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("immutable_scalar_global.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_immutable_scalar_global.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @read_limit");
     try expectContains(body, "load i32, ptr @LIMIT");
