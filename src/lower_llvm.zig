@@ -1569,7 +1569,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block, false)) |calls| {
             if (calls.count > 1) return .{ .direct_calls = calls };
         }
-        const call_source = self.simpleMirCallSource(fn_mir) orelse return if (simpleMirEmptyVoidBlock(block)) .empty else null;
+        const call_source = self.simpleMirCallSource(fn_mir) orelse return if (simpleMirEmptyVoidBlock(function, block)) .empty else null;
         if (!simpleMirDirectCallResultVoid(fn_mir, call_source)) return null;
         const call = self.simpleMirDirectCallAtSource(function, fn_mir, call_source) orelse return null;
         return .{ .direct_call = call };
@@ -2360,9 +2360,17 @@ const LlvmEmitter = struct {
         return source;
     }
 
-    fn simpleMirEmptyVoidBlock(block: mir.Block) bool {
+    fn simpleMirEmptyVoidBlock(function: anytype, block: mir.Block) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .target_type => {},
+            .param, .local, .target_type, .integer_literal_conversion => {},
+            .assign => if (!mirBlockHasLocal(block, instruction.detail)) return false,
+            .expr => {
+                if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool")) continue;
+                if (mirBlockHasLocal(block, instruction.detail)) continue;
+                for (function.signature.params) |param| {
+                    if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
+                } else return false;
+            },
             else => return false,
         };
         return true;

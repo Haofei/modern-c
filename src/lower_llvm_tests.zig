@@ -256,6 +256,32 @@ test "LLVM emits simple sequential void direct calls from MIR" {
     try expectNotContains(body, "switch");
 }
 
+test "LLVM emits pure local-only void functions from MIR" {
+    const source =
+        \\fn local_only() { let x: u32 = 1; }
+        \\fn param_local(p: u32) { let x: u32 = p; }
+        \\fn var_only() { var x: u32 = 1; x = 2; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_void_local_only.mc", source, &output);
+
+    const local_body = try llvmFunctionBody(output.items, "define internal void @local_only");
+    try expectContains(local_body, "ret void");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const param_body = try llvmFunctionBody(output.items, "define internal void @param_local");
+    try expectContains(param_body, "ret void");
+    try expectNotContains(param_body, "alloca");
+    try expectNotContains(param_body, "store");
+
+    const var_body = try llvmFunctionBody(output.items, "define internal void @var_only");
+    try expectContains(var_body, "ret void");
+    try expectNotContains(var_body, "alloca");
+    try expectNotContains(var_body, "store");
+}
+
 test "LLVM preserves MIR void calls before simple returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

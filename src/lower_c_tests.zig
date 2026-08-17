@@ -272,6 +272,29 @@ test "lower-c emits simple sequential void direct calls from MIR" {
     try expectNotContains(body, "switch");
 }
 
+test "lower-c emits pure local-only void functions from MIR" {
+    const source =
+        \\fn local_only() { let x: u32 = 1; }
+        \\fn param_local(p: u32) { let x: u32 = p; }
+        \\fn var_only() { var x: u32 = 1; x = 2; }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_void_local_only.mc", source, &output);
+
+    const local_body = try cFunctionBody(output.items, "static void local_only(void)");
+    try expectNotContains(local_body, "uint32_t x");
+    try expectNotContains(local_body, "x =");
+
+    const param_body = try cFunctionBody(output.items, "static void param_local(uint32_t p)");
+    try expectNotContains(param_body, "uint32_t x");
+    try expectNotContains(param_body, "x =");
+
+    const var_body = try cFunctionBody(output.items, "static void var_only(void)");
+    try expectNotContains(var_body, "uint32_t x");
+    try expectNotContains(var_body, "x =");
+}
+
 test "lower-c preserves MIR void calls before simple returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
@@ -6457,7 +6480,9 @@ fn cFunctionBody(output: []const u8, signature_prefix: []const u8) ![]const u8 {
     } else return error.TestExpectedEqual;
     const body_start = std.mem.indexOfPos(u8, output, start, "{\n") orelse return error.TestExpectedEqual;
     const body_end = std.mem.indexOfPos(u8, output, body_start, "\n}\n\n") orelse return error.TestExpectedEqual;
-    return output[body_start + 2 .. body_end];
+    const content_start = body_start + 2;
+    if (body_end < content_start) return output[body_end..body_end];
+    return output[content_start..body_end];
 }
 
 test "C bitcast query accepts only the real builtin call shape" {
