@@ -17887,7 +17887,7 @@ test "lower-c uses type-directed helpers for fixed-width checked arithmetic" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_fixed_width_arith.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_fixed_width_arith.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_DEFINE_CHECKED_SIGNED(i32, int32_t, INT32_MIN, INT32_MAX)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_i32(") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_div_i32(") != null);

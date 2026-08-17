@@ -2245,7 +2245,8 @@ pub const CEmitter = struct {
 
     fn simpleMirGlobalStoreValueTrapCount(value: SimpleMirGlobalStoreValue) usize {
         return switch (value) {
-            .checked_binary, .checked_unary => 1,
+            .checked_binary => |binary| simpleMirCheckedBinaryTrapCount(binary),
+            .checked_unary => 1,
             .direct_call => |call| simpleMirDirectCallTrapCount(call),
             else => 0,
         };
@@ -2874,7 +2875,7 @@ pub const CEmitter = struct {
 
     fn simpleMirConditionalTrapCount(value: SimpleMirConditionalValue) usize {
         return switch (value) {
-            .checked_binary => 1,
+            .checked_binary => |binary| simpleMirCheckedBinaryTrapCount(binary),
             .checked_unary => 1,
             .direct_call => |call| simpleMirDirectCallTrapCount(call),
             else => 0,
@@ -2885,7 +2886,7 @@ pub const CEmitter = struct {
         return switch (ret) {
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call),
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
-            .checked_binary => |binary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
+            .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
             .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirArgUsesParamField(unary.operand)),
             .struct_literal => |literal| fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal),
             .array_literal => |literal| fn_mir.trap_edges.len == simpleMirArrayLiteralTrapCount(literal),
@@ -2916,9 +2917,15 @@ pub const CEmitter = struct {
     fn simpleMirCallArgTrapCount(arg: SimpleMirCallArg) usize {
         return switch (arg) {
             .direct_call => 0,
-            .checked_binary, .checked_unary => 1,
+            .checked_binary => |binary| simpleMirCheckedBinaryTrapCount(binary),
+            .checked_unary => 1,
             else => 0,
         };
+    }
+
+    fn simpleMirCheckedBinaryTrapCount(binary: SimpleMirCheckedBinary) usize {
+        if (!std.mem.eql(u8, binary.op, "div")) return 1;
+        return if (simpleMirSignedIntegerTypeName(binary.type_name)) 2 else 1;
     }
 
     fn simpleMirStructLiteralTrapCount(literal: SimpleMirStructLiteralReturn) usize {
@@ -3053,10 +3060,10 @@ pub const CEmitter = struct {
             };
             return null;
         };
-        if (!simpleMirBinaryOpSupported(binary_instr.detail)) return null;
-        if (!mirHasIntegerOverflowTrapAt(fn_mir, source)) return null;
         const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, source) orelse return null;
         const target_name = typeName(self.resolveAliasType(target_fact.target_ty)) orelse return null;
+        if (!simpleMirBinaryOpSupported(binary_instr.detail)) return null;
+        if (!mirHasCheckedBinaryTrapsAt(fn_mir, source, binary_instr.detail, target_name)) return null;
         var operands: [2]SimpleMirArg = undefined;
         var count: usize = 0;
         var after_binary = false;
@@ -4071,7 +4078,7 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirBinaryOpSupported(op: []const u8) bool {
-        return std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul");
+        return std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul") or std.mem.eql(u8, op, "div");
     }
 
     fn simpleMirCompareOpSupported(op: []const u8) bool {
@@ -4095,6 +4102,19 @@ pub const CEmitter = struct {
         return false;
     }
 
+    fn mirHasDivideByZeroTrapAt(fn_mir: mir.Function, source: mir.SourcePoint) bool {
+        for (fn_mir.trap_edges) |edge| {
+            if (edge.kind == .DivideByZero and edge.source == .checked_arithmetic and edge.line == source.line and edge.column == source.column) return true;
+        }
+        return false;
+    }
+
+    fn mirHasCheckedBinaryTrapsAt(fn_mir: mir.Function, source: mir.SourcePoint, op: []const u8, type_name: []const u8) bool {
+        if (!std.mem.eql(u8, op, "div")) return mirHasIntegerOverflowTrapAt(fn_mir, source);
+        if (!mirHasDivideByZeroTrapAt(fn_mir, source)) return false;
+        return !simpleMirSignedIntegerTypeName(type_name) or mirHasIntegerOverflowTrapAt(fn_mir, source);
+    }
+
     fn checkedHelperName(self: *CEmitter, op: []const u8, type_name: []const u8) ![]const u8 {
         const suffix = lower_c_type.checkedTypeSuffix(type_name) orelse return error.UnsupportedCEmission;
         const prefix: []const u8 = if (std.mem.eql(u8, op, "add"))
@@ -4103,6 +4123,8 @@ pub const CEmitter = struct {
             "mc_checked_sub_"
         else if (std.mem.eql(u8, op, "mul"))
             "mc_checked_mul_"
+        else if (std.mem.eql(u8, op, "div"))
+            "mc_checked_div_"
         else
             return error.UnsupportedCEmission;
         return try std.fmt.allocPrint(self.scratch.allocator(), "{s}{s}", .{ prefix, suffix });
