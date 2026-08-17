@@ -80,7 +80,7 @@ test "LLVM struct literal fields evaluate in lexical source order" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_struct_literal_order.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_struct_literal_order.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @ordered_literal");
     const second = std.mem.indexOf(u8, body, "call i32 @mark(i32 2)") orelse return error.TestUnexpectedResult;
