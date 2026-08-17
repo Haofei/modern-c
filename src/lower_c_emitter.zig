@@ -1231,6 +1231,11 @@ pub const CEmitter = struct {
         helper: []const u8,
     };
 
+    const SimpleMirAssertBody = struct {
+        condition: SimpleMirCondition,
+        source: mir.SourcePoint,
+    };
+
     const max_simple_mir_void_calls = 8;
     const max_simple_mir_void_statements = 8;
     const max_simple_mir_global_stores = 8;
@@ -1470,6 +1475,7 @@ pub const CEmitter = struct {
     fn emitSimpleMirFunction(self: *CEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
+        const simple_assert = if (simple_trap == null) self.simpleMirAssertBody(function, fn_mir) else null;
         const simple_return = self.simpleMirReturn(function, fn_mir);
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
@@ -1477,11 +1483,11 @@ pub const CEmitter = struct {
             }
             break :blk null;
         } else null;
-        const simple_void_body = if (simple_trap == null and simple_return == null) self.simpleMirVoidBody(function, fn_mir) else null;
-        const simple_conditional_statement_return = if (simple_trap == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalStatementReturn(function, fn_mir) else null;
-        const simple_conditional_return = if (simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
-        const simple_loop_return = if (simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        if (simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_loop_return == null) return false;
+        const simple_void_body = if (simple_trap == null and simple_assert == null and simple_return == null) self.simpleMirVoidBody(function, fn_mir) else null;
+        const simple_conditional_statement_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalStatementReturn(function, fn_mir) else null;
+        const simple_conditional_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
+        const simple_loop_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
+        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_loop_return == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1496,6 +1502,12 @@ pub const CEmitter = struct {
         if (simple_trap) |trap| {
             try self.writeIndent();
             try self.out.print(self.allocator, "{s}();\n", .{trap.helper});
+        } else if (simple_assert) |assert_body| {
+            try self.writeLineDirective(spanFromMirSourcePoint(assert_body.source));
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "if (!(");
+            try self.emitSimpleMirCondition(assert_body.condition);
+            try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
         } else if (simple_return) |ret| {
             if (simple_return_prefix_calls) |calls| {
                 try self.emitSimpleMirDirectCallStatements(calls);
@@ -1767,6 +1779,59 @@ pub const CEmitter = struct {
         }
         if (fn_mir.call_target_facts.len == 1) {
             if (mir.explicitTrapHelperForTarget(fn_mir.call_target_facts[0].kind)) |helper| return .{ .helper = helper };
+        }
+        return null;
+    }
+
+    fn simpleMirAssertBody(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirAssertBody {
+        if (fn_mir.blocks.len != 2 or fn_mir.trap_edges.len != 1) return null;
+        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
+        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+        const edge = fn_mir.trap_edges[0];
+        if (edge.from_block != 0 or edge.trap_block != 1 or edge.kind != .Assert or edge.source != .assert_stmt) return null;
+        const entry = fn_mir.blocks[0];
+        const trap_block = fn_mir.blocks[1];
+        if (entry.terminator != .fallthrough) return null;
+        if (!std.mem.eql(u8, trap_block.kind, "trap") or trap_block.terminator != .trap_) return null;
+        const source = self.simpleMirAssertConditionSource(entry) orelse return null;
+        const condition = self.simpleMirAssertCondition(function, fn_mir, entry, source) orelse return null;
+        return .{ .condition = condition, .source = .{ .line = edge.line, .column = edge.column, .offset = 0, .len = 0 } };
+    }
+
+    fn simpleMirAssertConditionSource(self: *CEmitter, block: mir.Block) ?mir.SourcePoint {
+        _ = self;
+        var saw_assert = false;
+        for (block.instructions) |instruction| {
+            if (!saw_assert) {
+                saw_assert = instruction.kind == .assert_condition;
+                continue;
+            }
+            if (instruction.kind == .target_type) continue;
+            if (instruction.result_ty != .bool) return null;
+            return instructionSourcePoint(instruction);
+        }
+        return null;
+    }
+
+    fn simpleMirAssertCondition(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, source: mir.SourcePoint) ?SimpleMirCondition {
+        if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
+        for (block.instructions) |instruction| {
+            if (!sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+            if (instruction.kind == .target_type) continue;
+            if (instruction.kind == .expr and instruction.result_ty == .bool) {
+                for (function.signature.params) |param| {
+                    if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = .{ .name = param.name.text } };
+                }
+                if (mirBlockHasLocal(block, instruction.detail)) return self.simpleMirLocalCondition(function, fn_mir, instruction.detail);
+                if (self.simpleMirArgAt(function, fn_mir, source)) |arg| {
+                    return switch (arg) {
+                        .param_field => |field| .{ .param_field = .{ .field = field } },
+                        .bool_literal => |value| .{ .bool_literal = value },
+                        else => null,
+                    };
+                }
+            }
+            return null;
         }
         return null;
     }

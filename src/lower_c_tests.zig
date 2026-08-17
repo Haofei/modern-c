@@ -5976,7 +5976,7 @@ test "lower-c runtime asserts require MIR bool condition types" {
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_assert_condition_type_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "if (!(flag)) mc_trap_Assert();") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -5992,6 +5992,16 @@ test "lower-c runtime asserts require MIR bool condition types" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_assert_condition_type_facts.mc", .{}, false, null));
+}
+
+test "lower-c emits runtime assert from MIR without body fallback" {
+    const source =
+        \\fn require_flag(flag: bool) -> void { assert(flag); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_runtime_assert.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "if (!(flag)) mc_trap_Assert();") != null);
 }
 
 test "lower-c while loops require MIR bool condition types" {
