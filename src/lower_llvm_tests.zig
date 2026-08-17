@@ -1801,6 +1801,59 @@ test "LLVM emits checked arithmetic returns from MIR without body fallback" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "LLVM emits checked unary returns from MIR without body fallback" {
+    const source =
+        \\fn neg_i32(a: i32) -> i32 {
+        \\    return -a;
+        \\}
+        \\fn local_neg(a: i32) -> i32 {
+        \\    let out: i32 = -a;
+        \\    return out;
+        \\}
+        \\fn assigned_neg(a: i32) -> i32 {
+        \\    var out: i32 = 0;
+        \\    out = -a;
+        \\    return out;
+        \\}
+        \\fn choose_neg(flag: bool, a: i32, b: i32) -> i32 {
+        \\    if (flag) {
+        \\        return -a;
+        \\    } else {
+        \\        return -b;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_checked_unary_returns.mc", source, &output);
+
+    const neg_body = try llvmFunctionBody(output.items, "define internal i32 @neg_i32");
+    try expectContains(neg_body, "@llvm.ssub.with.overflow.i32");
+    try expectContains(neg_body, "ret i32 %t");
+    try expectNotContains(neg_body, "alloca");
+    try expectNotContains(neg_body, "store");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_neg");
+    try expectContains(local_body, "@llvm.ssub.with.overflow.i32");
+    try expectContains(local_body, "ret i32 %t");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i32 @assigned_neg");
+    try expectContains(assigned_body, "@llvm.ssub.with.overflow.i32");
+    try expectContains(assigned_body, "ret i32 %t");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+
+    const choose_body = try llvmFunctionBody(output.items, "define internal i32 @choose_neg");
+    try expectContains(choose_body, "br i1 %flag");
+    try std.testing.expect(std.mem.count(u8, choose_body, "@llvm.ssub.with.overflow.i32") == 2);
+    try expectContains(choose_body, "ret i32 %t");
+    try expectNotContains(choose_body, "alloca");
+    try expectNotContains(choose_body, "store");
+    try expectNotContains(choose_body, "switch");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

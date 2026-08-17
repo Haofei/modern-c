@@ -1666,6 +1666,55 @@ test "lower-c emits checked arithmetic returns from MIR without body fallback" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "lower-c emits checked unary returns from MIR without body fallback" {
+    const source =
+        \\fn neg_i32(a: i32) -> i32 {
+        \\    return -a;
+        \\}
+        \\fn local_neg(a: i32) -> i32 {
+        \\    let out: i32 = -a;
+        \\    return out;
+        \\}
+        \\fn assigned_neg(a: i32) -> i32 {
+        \\    var out: i32 = 0;
+        \\    out = -a;
+        \\    return out;
+        \\}
+        \\fn choose_neg(flag: bool, a: i32, b: i32) -> i32 {
+        \\    if (flag) {
+        \\        return -a;
+        \\    } else {
+        \\        return -b;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_checked_unary_returns.mc", source, &output);
+
+    const neg_body = try cFunctionBody(output.items, "static int32_t neg_i32(int32_t a)");
+    try expectContains(neg_body, "return mc_checked_neg_i32(a);");
+    try expectNotContains(neg_body, "mc_tmp");
+
+    const local_body = try cFunctionBody(output.items, "static int32_t local_neg(int32_t a)");
+    try expectContains(local_body, "return mc_checked_neg_i32(a);");
+    try expectNotContains(local_body, "int32_t out");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static int32_t assigned_neg(int32_t a)");
+    try expectContains(assigned_body, "return mc_checked_neg_i32(a);");
+    try expectNotContains(assigned_body, "int32_t out");
+    try expectNotContains(assigned_body, "out =");
+    try expectNotContains(assigned_body, "mc_tmp");
+
+    const choose_body = try cFunctionBody(output.items, "static int32_t choose_neg(bool flag, int32_t a, int32_t b)");
+    try expectContains(choose_body, "if (flag) {");
+    try expectContains(choose_body, "return mc_checked_neg_i32(a);");
+    try expectContains(choose_body, "return mc_checked_neg_i32(b);");
+    try expectNotContains(choose_body, "mc_tmp");
+    try expectNotContains(choose_body, "switch");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
