@@ -2497,6 +2497,24 @@ test "lower-c struct literal call fields lower from MIR in lexical order" {
     try expectContains(body, "return (Pair){ .first = mark(1), .second = mark(2) };");
 }
 
+test "lower-c struct literal call fields keep source order from MIR" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\extern fn mark(value: u32) -> u32;
+        \\fn ordered_literal() -> Pair {
+        \\    return .{ .second = mark(2), .first = mark(1) };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_struct_literal_source_order.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static Pair ordered_literal(void)");
+    const second = std.mem.indexOf(u8, body, "mark(2)") orelse return error.TestUnexpectedResult;
+    const first = std.mem.indexOfPos(u8, body, second + "mark(2)".len, "mark(1)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(second < first);
+}
+
 test "lower-c array literal call elements lower from MIR in lexical order" {
     const source =
         \\extern fn mark(value: u32) -> u32;
