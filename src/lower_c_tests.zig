@@ -186,6 +186,20 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
         \\    }
         \\    return x;
         \\}
+        \\fn choose_store_suffix_return(flag: bool, x: u32) -> u32 {
+        \\    if (flag) {
+        \\        g = x;
+        \\    }
+        \\    hit(x);
+        \\    return x;
+        \\}
+        \\fn choose_call_suffix_return(flag: bool, x: u32) -> u32 {
+        \\    if (flag) {
+        \\        hit(x);
+        \\    }
+        \\    g = x;
+        \\    return x;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -252,6 +266,28 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
     try std.testing.expect(call_stmt < call_return);
     try expectNotContains(call_return_body, "switch");
     try expectNotContains(call_return_body, "mc_tmp");
+
+    const store_suffix_return_body = try cFunctionBody(output.items, "static uint32_t choose_store_suffix_return(bool flag, uint32_t x)");
+    const store_suffix_if = std.mem.indexOf(u8, store_suffix_return_body, "if (flag)") orelse return error.TestUnexpectedResult;
+    const store_suffix_store = std.mem.indexOf(u8, store_suffix_return_body, "mc_race_store_u32(&g, (uint32_t)x);") orelse return error.TestUnexpectedResult;
+    const store_suffix_call = std.mem.indexOf(u8, store_suffix_return_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    const store_suffix_return = std.mem.indexOf(u8, store_suffix_return_body, "return x;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(store_suffix_if < store_suffix_store);
+    try std.testing.expect(store_suffix_store < store_suffix_call);
+    try std.testing.expect(store_suffix_call < store_suffix_return);
+    try expectNotContains(store_suffix_return_body, "switch");
+    try expectNotContains(store_suffix_return_body, "mc_tmp");
+
+    const call_suffix_return_body = try cFunctionBody(output.items, "static uint32_t choose_call_suffix_return(bool flag, uint32_t x)");
+    const call_suffix_if = std.mem.indexOf(u8, call_suffix_return_body, "if (flag)") orelse return error.TestUnexpectedResult;
+    const call_suffix_call = std.mem.indexOf(u8, call_suffix_return_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    const call_suffix_store = std.mem.indexOf(u8, call_suffix_return_body, "mc_race_store_u32(&g, (uint32_t)x);") orelse return error.TestUnexpectedResult;
+    const call_suffix_return = std.mem.indexOf(u8, call_suffix_return_body, "return x;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(call_suffix_if < call_suffix_call);
+    try std.testing.expect(call_suffix_call < call_suffix_store);
+    try std.testing.expect(call_suffix_store < call_suffix_return);
+    try expectNotContains(call_suffix_return_body, "switch");
+    try expectNotContains(call_suffix_return_body, "mc_tmp");
 }
 
 test "lower-c emits simple void conditional direct calls from MIR" {

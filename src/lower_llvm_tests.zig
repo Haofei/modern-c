@@ -166,6 +166,20 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
         \\    }
         \\    return x;
         \\}
+        \\fn choose_store_suffix_return(flag: bool, x: u32) -> u32 {
+        \\    if (flag) {
+        \\        g = x;
+        \\    }
+        \\    hit(x);
+        \\    return x;
+        \\}
+        \\fn choose_call_suffix_return(flag: bool, x: u32) -> u32 {
+        \\    if (flag) {
+        \\        hit(x);
+        \\    }
+        \\    g = x;
+        \\    return x;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -235,6 +249,28 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     try std.testing.expect(call_stmt < call_return);
     try expectNotContains(call_return_body, "switch");
     try expectNotContains(call_return_body, "alloca");
+
+    const store_suffix_return_body = try llvmFunctionBody(output.items, "define internal i32 @choose_store_suffix_return");
+    const store_suffix_branch = std.mem.indexOf(u8, store_suffix_return_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const store_suffix_store = std.mem.indexOf(u8, store_suffix_return_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const store_suffix_call = std.mem.indexOf(u8, store_suffix_return_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    const store_suffix_return = std.mem.indexOf(u8, store_suffix_return_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(store_suffix_branch < store_suffix_store);
+    try std.testing.expect(store_suffix_store < store_suffix_call);
+    try std.testing.expect(store_suffix_call < store_suffix_return);
+    try expectNotContains(store_suffix_return_body, "switch");
+    try expectNotContains(store_suffix_return_body, "alloca");
+
+    const call_suffix_return_body = try llvmFunctionBody(output.items, "define internal i32 @choose_call_suffix_return");
+    const call_suffix_branch = std.mem.indexOf(u8, call_suffix_return_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const call_suffix_call = std.mem.indexOf(u8, call_suffix_return_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    const call_suffix_store = std.mem.indexOf(u8, call_suffix_return_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const call_suffix_return = std.mem.indexOf(u8, call_suffix_return_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(call_suffix_branch < call_suffix_call);
+    try std.testing.expect(call_suffix_call < call_suffix_store);
+    try std.testing.expect(call_suffix_store < call_suffix_return);
+    try expectNotContains(call_suffix_return_body, "switch");
+    try expectNotContains(call_suffix_return_body, "alloca");
 }
 
 test "LLVM emits simple void conditional direct calls from MIR" {
