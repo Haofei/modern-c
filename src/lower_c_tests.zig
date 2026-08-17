@@ -2564,6 +2564,46 @@ test "lower-c assigned literal checked components return from MIR without body f
     try expectContains(array_body, "return (mc_array_u32_2){ .elems = { mc_checked_add_u32(a, b), mc_checked_add_u32(b, c) } };");
 }
 
+test "lower-c local and assigned literal call components return from MIR without body fallback" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\extern fn mark(value: u32) -> u32;
+        \\fn local_struct() -> Pair {
+        \\    let p: Pair = .{ .first = mark(1), .second = mark(2) };
+        \\    return p;
+        \\}
+        \\fn assigned_struct() -> Pair {
+        \\    var p: Pair = .{ .first = 0, .second = 0 };
+        \\    p = .{ .first = mark(3), .second = mark(4) };
+        \\    return p;
+        \\}
+        \\fn local_array() -> [2]u32 {
+        \\    let p: [2]u32 = .{ mark(5), mark(6) };
+        \\    return p;
+        \\}
+        \\fn assigned_array() -> [2]u32 {
+        \\    var p: [2]u32 = .{ 0, 0 };
+        \\    p = .{ mark(7), mark(8) };
+        \\    return p;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_literal_call_components.mc", source, &output);
+
+    const local_struct_body = try cFunctionBody(output.items, "static Pair local_struct(void)");
+    try expectContains(local_struct_body, "return (Pair){ .first = mark(1), .second = mark(2) };");
+
+    const assigned_struct_body = try cFunctionBody(output.items, "static Pair assigned_struct(void)");
+    try expectContains(assigned_struct_body, "return (Pair){ .first = mark(3), .second = mark(4) };");
+
+    const local_array_body = try cFunctionBody(output.items, "static mc_array_u32_2 local_array(void)");
+    try expectContains(local_array_body, "return (mc_array_u32_2){ .elems = { mark(5), mark(6) } };");
+
+    const assigned_array_body = try cFunctionBody(output.items, "static mc_array_u32_2 assigned_array(void)");
+    try expectContains(assigned_array_body, "return (mc_array_u32_2){ .elems = { mark(7), mark(8) } };");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;

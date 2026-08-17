@@ -3360,7 +3360,24 @@ pub const CEmitter = struct {
         if (!mirFunctionHasLocal(fn_mir, value_id)) return false;
         const local_source = self.simpleMirAssignmentSourceInBlock(block, value_id) orelse
             self.simpleMirLocalInitSourceInBlock(block, value_id) orelse return false;
-        return sameMirSourceLocation(local_source, source);
+        if (sameMirSourceLocation(local_source, source)) return true;
+        return simpleMirCallFeedsAggregateLiteralAtSource(block, source, local_source);
+    }
+
+    fn simpleMirCallFeedsAggregateLiteralAtSource(block: mir.Block, call_source: mir.SourcePoint, literal_source: mir.SourcePoint) bool {
+        var after_literal = false;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .return_value) break;
+            if (instruction.kind == .expr and
+                (std.mem.eql(u8, instruction.detail, "struct_literal") or std.mem.eql(u8, instruction.detail, "array_literal")) and
+                sameMirSourceLocation(instructionSourcePoint(instruction), literal_source))
+            {
+                after_literal = true;
+                continue;
+            }
+            if (after_literal and instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) return true;
+        }
+        return false;
     }
 
     fn simpleMirDirectVoidCallsInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, allow_empty: bool) ?SimpleMirDirectCalls {

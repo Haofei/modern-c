@@ -309,6 +309,62 @@ test "LLVM assigned literal checked components return from MIR without body fall
     try expectNotContains(array_body, "store");
 }
 
+test "LLVM local and assigned literal call components return from MIR without body fallback" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\extern fn mark(value: u32) -> u32;
+        \\fn local_struct() -> Pair {
+        \\    let p: Pair = .{ .first = mark(1), .second = mark(2) };
+        \\    return p;
+        \\}
+        \\fn assigned_struct() -> Pair {
+        \\    var p: Pair = .{ .first = 0, .second = 0 };
+        \\    p = .{ .first = mark(3), .second = mark(4) };
+        \\    return p;
+        \\}
+        \\fn local_array() -> [2]u32 {
+        \\    let p: [2]u32 = .{ mark(5), mark(6) };
+        \\    return p;
+        \\}
+        \\fn assigned_array() -> [2]u32 {
+        \\    var p: [2]u32 = .{ 0, 0 };
+        \\    p = .{ mark(7), mark(8) };
+        \\    return p;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_assigned_literal_call_components.mc", source, &output);
+
+    const local_struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @local_struct");
+    try expectContains(local_struct_body, "call i32 @mark(i32 1)");
+    try expectContains(local_struct_body, "call i32 @mark(i32 2)");
+    try expectContains(local_struct_body, "ret { i32, i32 } %t");
+    try expectNotContains(local_struct_body, "alloca");
+    try expectNotContains(local_struct_body, "store");
+
+    const assigned_struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @assigned_struct");
+    try expectContains(assigned_struct_body, "call i32 @mark(i32 3)");
+    try expectContains(assigned_struct_body, "call i32 @mark(i32 4)");
+    try expectContains(assigned_struct_body, "ret { i32, i32 } %t");
+    try expectNotContains(assigned_struct_body, "alloca");
+    try expectNotContains(assigned_struct_body, "store");
+
+    const local_array_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @local_array");
+    try expectContains(local_array_body, "call i32 @mark(i32 5)");
+    try expectContains(local_array_body, "call i32 @mark(i32 6)");
+    try expectContains(local_array_body, "ret [2 x i32] %t");
+    try expectNotContains(local_array_body, "alloca");
+    try expectNotContains(local_array_body, "store");
+
+    const assigned_array_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @assigned_array");
+    try expectContains(assigned_array_body, "call i32 @mark(i32 7)");
+    try expectContains(assigned_array_body, "call i32 @mark(i32 8)");
+    try expectContains(assigned_array_body, "ret [2 x i32] %t");
+    try expectNotContains(assigned_array_body, "alloca");
+    try expectNotContains(assigned_array_body, "store");
+}
+
 test "LLVM MIR conditional fast path uses only the switch subject expression" {
     const source =
         \\global g: u32 = 0;
