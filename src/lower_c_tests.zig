@@ -1274,6 +1274,37 @@ test "lower-c emits struct parameter field comparisons from MIR" {
     try expectNotContains(call_body, "take_bool((p == x));");
 }
 
+test "lower-c emits simple struct literal returns from MIR" {
+    const source =
+        \\struct Pair { a: i32, b: i32 }
+        \\struct Flags { ok: bool }
+        \\fn make_pair(a: i32, b: i32) -> Pair {
+        \\    return .{ .a = a, .b = b };
+        \\}
+        \\fn return_field_pair(p: Pair) -> Pair {
+        \\    return .{ .a = p.a, .b = p.b };
+        \\}
+        \\fn bool_pair(f: Flags) -> Flags {
+        \\    return .{ .ok = f.ok };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_struct_literal_returns.mc", source, &output);
+
+    const make_body = try cFunctionBody(output.items, "static Pair make_pair(int32_t a, int32_t b)");
+    try expectContains(make_body, "return (Pair){ .a = a, .b = b };");
+    try expectNotContains(make_body, "mc_tmp");
+
+    const field_body = try cFunctionBody(output.items, "static Pair return_field_pair(Pair p)");
+    try expectContains(field_body, "return (Pair){ .a = p.a, .b = p.b };");
+    try expectNotContains(field_body, "mc_tmp");
+
+    const bool_body = try cFunctionBody(output.items, "static Flags bool_pair(Flags f)");
+    try expectContains(bool_body, "return (Flags){ .ok = f.ok };");
+    try expectNotContains(bool_body, "mc_tmp");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

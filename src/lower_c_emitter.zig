@@ -1198,6 +1198,7 @@ pub const CEmitter = struct {
         checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
+        struct_literal: SimpleMirStructLiteralReturn,
     };
 
     const SimpleMirVoidBody = union(enum) {
@@ -1319,6 +1320,18 @@ pub const CEmitter = struct {
     };
 
     const max_simple_mir_call_args = 8;
+    const max_simple_mir_struct_fields = 8;
+
+    const SimpleMirStructLiteralField = struct {
+        name: []const u8,
+        value: SimpleMirArg,
+    };
+
+    const SimpleMirStructLiteralReturn = struct {
+        type_name: []const u8,
+        fields: [max_simple_mir_struct_fields]SimpleMirStructLiteralField = undefined,
+        field_count: usize = 0,
+    };
 
     const SimpleMirArg = union(enum) {
         param: []const u8,
@@ -1481,6 +1494,15 @@ pub const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, "return ");
                     try self.emitSimpleMirDirectCall(call);
                     try self.out.appendSlice(self.allocator, ";\n");
+                },
+                .struct_literal => |literal| {
+                    try self.out.print(self.allocator, "return ({s}){{ ", .{try self.cIdent(literal.type_name)});
+                    for (literal.fields[0..literal.field_count], 0..) |field, index| {
+                        if (index != 0) try self.out.appendSlice(self.allocator, ", ");
+                        try self.out.print(self.allocator, ".{s} = ", .{try self.cIdent(field.name)});
+                        try self.emitSimpleMirArg(field.value);
+                    }
+                    try self.out.appendSlice(self.allocator, " };\n");
                 },
             }
         } else if (simple_void_body) |body| {
@@ -1700,6 +1722,9 @@ pub const CEmitter = struct {
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
             if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
         }
+        if (std.mem.eql(u8, value_id, "struct_literal")) {
+            if (self.simpleMirStructLiteralReturn(function, fn_mir, block)) |literal| return .{ .struct_literal = literal };
+        }
         if (std.mem.eql(u8, value_id, "binary")) {
             if (self.simpleMirCheckedBinaryAtReturn(function, fn_mir)) |binary| return .{ .checked_binary = binary };
             if (self.simpleMirCompareBinaryAtReturn(function, fn_mir)) |binary| return .{ .compare_binary = binary };
@@ -1711,6 +1736,50 @@ pub const CEmitter = struct {
         if (self.simpleMirAssignmentReturn(function, fn_mir, value_id)) |assigned| return assigned;
         if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
         return null;
+    }
+
+    fn simpleMirStructLiteralReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirStructLiteralReturn {
+        if (!simpleMirNoTrap(fn_mir)) return null;
+        const ret_ty = function.signature.return_type orelse return null;
+        const type_name = type_bridge.typeName(self.resolveAliasType(ret_ty)) orelse return null;
+        const struct_decl = self.structs.get(type_name) orelse return null;
+        if (struct_decl.fields.len > max_simple_mir_struct_fields) return null;
+
+        var literal_source: ?mir.SourcePoint = null;
+        var literal_index: usize = 0;
+        for (block.instructions, 0..) |instruction, index| {
+            if (instruction.kind == .return_value) break;
+            if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, "struct_literal")) {
+                literal_source = instructionSourcePoint(instruction);
+                literal_index = index;
+                break;
+            }
+        }
+        const source = literal_source orelse return null;
+        const fact = simpleMirTargetTypeFactKindAt(fn_mir, .struct_literal, source) orelse return null;
+        if (!std.mem.eql(u8, fact.result_ty.name(), type_name)) return null;
+
+        var result: SimpleMirStructLiteralReturn = .{ .type_name = type_name };
+        var scan_index = literal_index + 1;
+        for (struct_decl.fields) |field| {
+            while (scan_index < block.instructions.len) : (scan_index += 1) {
+                const instruction = block.instructions[scan_index];
+                if (instruction.kind == .return_value) return null;
+                if (instruction.kind == .target_type or instruction.kind == .integer_literal_conversion) continue;
+                if (instruction.kind != .expr) return null;
+                const value_source = instructionSourcePoint(instruction);
+                const arg = self.simpleMirArgAt(function, fn_mir, value_source) orelse return null;
+                result.fields[result.field_count] = .{
+                    .name = field.name.text,
+                    .value = arg,
+                };
+                result.field_count += 1;
+                scan_index += 1;
+                while (scan_index < block.instructions.len and sameMirSourceLocation(instructionSourcePoint(block.instructions[scan_index]), value_source)) : (scan_index += 1) {}
+                break;
+            } else return null;
+        }
+        return result;
     }
 
     fn simpleMirParamFieldReturn(self: *CEmitter, function: anytype, block: mir.Block, ret: mir.Instruction, field_name: []const u8) ?SimpleMirParamField {
@@ -3403,7 +3472,7 @@ pub const CEmitter = struct {
             .param, .local, .assign, .target_type, .integer_literal_conversion, .binary, .unary, .add_overflow, .return_value => {},
             .call => {},
             .expr => {
-                if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool")) continue;
+                if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "struct_literal")) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {
@@ -3567,6 +3636,13 @@ pub const CEmitter = struct {
         _ = self;
         for (fn_mir.target_type_facts) |fact| {
             if (fact.kind == .expression_result and sameMirSourceLocation(fact.source, source)) return fact;
+        }
+        return null;
+    }
+
+    fn simpleMirTargetTypeFactKindAt(fn_mir: mir.Function, kind: mir.TargetTypeKind, source: mir.SourcePoint) ?mir.TargetTypeFact {
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind == kind and sameMirSourceLocation(fact.source, source)) return fact;
         }
         return null;
     }

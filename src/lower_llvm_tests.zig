@@ -1324,6 +1324,48 @@ test "LLVM emits struct parameter field comparisons from MIR" {
     try expectNotContains(call_body, "icmp eq i32 %p, %x");
 }
 
+test "LLVM emits simple struct literal returns from MIR" {
+    const source =
+        \\struct Pair { a: i32, b: i32 }
+        \\struct Flags { ok: bool }
+        \\fn make_pair(a: i32, b: i32) -> Pair {
+        \\    return .{ .a = a, .b = b };
+        \\}
+        \\fn return_field_pair(p: Pair) -> Pair {
+        \\    return .{ .a = p.a, .b = p.b };
+        \\}
+        \\fn bool_pair(f: Flags) -> Flags {
+        \\    return .{ .ok = f.ok };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_struct_literal_returns.mc", source, &output);
+
+    const make_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @make_pair");
+    try expectContains(make_body, "insertvalue { i32, i32 } zeroinitializer, i32 %a, 0");
+    try expectContains(make_body, "insertvalue { i32, i32 } %t");
+    try expectContains(make_body, "i32 %b, 1");
+    try expectContains(make_body, "ret { i32, i32 } %t");
+    try expectNotContains(make_body, "alloca");
+    try expectNotContains(make_body, "store");
+
+    const field_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @return_field_pair");
+    try expectContains(field_body, "extractvalue { i32, i32 } %p, 0");
+    try expectContains(field_body, "extractvalue { i32, i32 } %p, 1");
+    try expectContains(field_body, "insertvalue { i32, i32 } zeroinitializer, i32 %t");
+    try expectContains(field_body, "ret { i32, i32 } %t");
+    try expectNotContains(field_body, "alloca");
+    try expectNotContains(field_body, "store");
+
+    const bool_body = try llvmFunctionBody(output.items, "define internal { i1 } @bool_pair");
+    try expectContains(bool_body, "extractvalue { i1 } %f, 0");
+    try expectContains(bool_body, "insertvalue { i1 } zeroinitializer, i1 %t");
+    try expectContains(bool_body, "ret { i1 } %t");
+    try expectNotContains(bool_body, "alloca");
+    try expectNotContains(bool_body, "store");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
