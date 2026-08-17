@@ -2316,13 +2316,7 @@ const LlvmEmitter = struct {
         const local_name = ret.value_id orelse return null;
         if (!mirBlockHasLocal(fn_mir.blocks[0], local_name)) return null;
         const initial_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
-        const initial_arg = self.simpleMirArgAt(function, fn_mir, initial_source) orelse return null;
-        const initial_value: SimpleMirConditionalValue = switch (initial_arg) {
-            .param => |name| .{ .param = name },
-            .param_field => |field| .{ .param_field = field },
-            .integer_literal => |literal| .{ .integer_literal = literal },
-            .bool_literal => |bool_value| .{ .bool_literal = bool_value },
-        };
+        const initial_value = self.simpleMirConditionalValueAtSource(function, fn_mir, initial_source) orelse return null;
         const then_value = self.simpleMirAssignedValueInBlock(function, fn_mir, then_block, local_name) orelse initial_value;
         const else_value = self.simpleMirAssignedValueInBlock(function, fn_mir, else_block, local_name) orelse initial_value;
         return .{ then_value, else_value };
@@ -2596,6 +2590,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirDirectCallAtSource(function, fn_mir, source)) |call| return .{ .direct_call = call };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
+        if (self.simpleMirStructLiteralAtSource(function, fn_mir, source)) |literal| return .{ .struct_literal = literal };
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
@@ -2603,6 +2598,17 @@ const LlvmEmitter = struct {
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
         };
+    }
+
+    fn simpleMirStructLiteralAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirStructLiteralReturn {
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .expr or !std.mem.eql(u8, instruction.detail, "struct_literal")) continue;
+                if (!sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                return self.simpleMirStructLiteralReturn(function, fn_mir, block);
+            }
+        }
+        return null;
     }
 
     fn emitSimpleMirConditionalReturnValue(self: *LlvmEmitter, ret_ty: anytype, value: SimpleMirConditionalValue, span: diagnostics.Span) !void {

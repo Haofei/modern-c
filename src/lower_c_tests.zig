@@ -1301,6 +1301,20 @@ test "lower-c emits simple struct literal returns from MIR" {
         \\        return .{ .a = p.b, .b = p.a };
         \\    }
         \\}
+        \\fn choose_assign_pair(flag: bool, a: i32, b: i32) -> Pair {
+        \\    var out: Pair = .{ .a = a, .b = b };
+        \\    if (flag) {
+        \\        out = .{ .a = b, .b = a };
+        \\    }
+        \\    return out;
+        \\}
+        \\fn choose_assign_field_pair(flag: bool, p: Pair) -> Pair {
+        \\    var out: Pair = .{ .a = p.a, .b = p.b };
+        \\    if (flag) {
+        \\        out = .{ .a = p.b, .b = p.a };
+        \\    }
+        \\    return out;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1330,6 +1344,19 @@ test "lower-c emits simple struct literal returns from MIR" {
     try expectContains(choose_field_body, "return (Pair){ .a = p.b, .b = p.a };");
     try expectNotContains(choose_field_body, "mc_tmp");
     try expectNotContains(choose_field_body, "switch");
+
+    const choose_assign_body = try cFunctionBody(output.items, "static Pair choose_assign_pair(bool flag, int32_t a, int32_t b)");
+    try expectContains(choose_assign_body, "if (flag) {");
+    try expectContains(choose_assign_body, "return (Pair){ .a = b, .b = a };");
+    try expectContains(choose_assign_body, "return (Pair){ .a = a, .b = b };");
+    try expectNotContains(choose_assign_body, "mc_tmp");
+    try expectNotContains(choose_assign_body, "switch");
+
+    const choose_assign_field_body = try cFunctionBody(output.items, "static Pair choose_assign_field_pair(bool flag, Pair p)");
+    try expectContains(choose_assign_field_body, "return (Pair){ .a = p.b, .b = p.a };");
+    try expectContains(choose_assign_field_body, "return (Pair){ .a = p.a, .b = p.b };");
+    try expectNotContains(choose_assign_field_body, "mc_tmp");
+    try expectNotContains(choose_assign_field_body, "switch");
 }
 
 test "lower-c preserves MIR void calls before direct-call returns" {
