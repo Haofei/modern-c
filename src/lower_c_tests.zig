@@ -467,6 +467,12 @@ test "lower-c preserves MIR void calls before direct-call returns" {
         \\    hit(0);
         \\    return make(1);
         \\}
+        \\fn return_call_add(a: i32, b: i32) -> i32 {
+        \\    return make(a + b);
+        \\}
+        \\fn return_call_neg(a: i32) -> i32 {
+        \\    return make(-a);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -477,6 +483,14 @@ test "lower-c preserves MIR void calls before direct-call returns" {
     const ret = std.mem.indexOf(u8, body, "return make(1);") orelse return error.TestUnexpectedResult;
     try std.testing.expect(hit < ret);
     try expectNotContains(body, "mc_tmp");
+
+    const add_body = try cFunctionBody(output.items, "static int32_t return_call_add(int32_t a, int32_t b)");
+    try expectContains(add_body, "return make(mc_checked_add_i32(a, b));");
+    try expectNotContains(add_body, "mc_tmp");
+
+    const neg_body = try cFunctionBody(output.items, "static int32_t return_call_neg(int32_t a)");
+    try expectContains(neg_body, "return make(mc_checked_neg_i32(a));");
+    try expectNotContains(neg_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before conditional returns" {

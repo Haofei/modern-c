@@ -1360,7 +1360,14 @@ const LlvmEmitter = struct {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
         const simple_return = self.simpleMirReturn(function, fn_mir);
-        const simple_return_prefix_calls = if (simple_trap == null and simple_return != null) self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir) orelse return false else null;
+        const simple_return_prefix_calls = if (simple_trap == null) blk: {
+            if (simple_return) |ret| {
+                const ret_trap_count = simpleMirReturnTrapCount(ret);
+                if (ret_trap_count != 0 and fn_mir.trap_edges.len == ret_trap_count) break :blk SimpleMirDirectCalls{};
+                break :blk self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir) orelse return false;
+            }
+            break :blk null;
+        } else null;
         const simple_void_body = if (simple_trap == null and simple_return == null) self.simpleMirVoidBody(function, fn_mir) else null;
         const simple_conditional_return = if (simple_trap == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
         if (simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_return == null) return false;
@@ -1550,7 +1557,9 @@ const LlvmEmitter = struct {
                 if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return if (simpleMirNoTrap(fn_mir)) .{ .bool_literal = fact.value } else null;
             }
         }
-        if (simpleMirNoTrap(fn_mir)) if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| return .{ .direct_call = call };
+        if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
+            if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
+        }
         if (std.mem.eql(u8, value_id, "binary")) {
             if (self.simpleMirCheckedBinaryAtReturn(function, fn_mir)) |binary| return .{ .checked_binary = binary };
             if (self.simpleMirCompareBinaryAtReturn(function, fn_mir)) |binary| return .{ .compare_binary = binary };
@@ -1886,6 +1895,13 @@ const LlvmEmitter = struct {
         return switch (value) {
             .checked_binary => 1,
             .checked_unary => 1,
+            else => 0,
+        };
+    }
+
+    fn simpleMirReturnTrapCount(ret: SimpleMirReturn) usize {
+        return switch (ret) {
+            .direct_call => |call| simpleMirDirectCallTrapCount(call),
             else => 0,
         };
     }
