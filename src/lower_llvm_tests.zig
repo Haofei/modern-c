@@ -255,6 +255,22 @@ test "LLVM emits simple void conditional direct calls from MIR" {
         \\        hit(a - b);
         \\    }
         \\}
+        \\extern fn pred(value: i32) -> bool;
+        \\fn choose_void_call_cond(a: i32) -> void {
+        \\    if pred(a) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\}
+        \\fn choose_void_local_call_cond(a: i32) -> void {
+        \\    let ok: bool = pred(a);
+        \\    if ok {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\}
         \\extern fn hit_bool(value: bool) -> void;
         \\fn call_compare_arg(a: i32, b: i32) -> void {
         \\    hit_bool(a < b);
@@ -311,6 +327,24 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try expectNotContains(checked_args_body, "alloca");
     try expectNotContains(checked_args_body, "store");
     try expectNotContains(checked_args_body, "switch");
+
+    const call_cond_body = try llvmFunctionBody(output.items, "define internal void @choose_void_call_cond");
+    try expectContains(call_cond_body, "call i1 @pred(i32 %a)");
+    try expectContains(call_cond_body, "br i1 %t");
+    try expectContains(call_cond_body, "call void @hit(i32 1)");
+    try expectContains(call_cond_body, "call void @hit(i32 0)");
+    try expectNotContains(call_cond_body, "alloca");
+    try expectNotContains(call_cond_body, "store");
+    try expectNotContains(call_cond_body, "switch");
+
+    const local_call_cond_body = try llvmFunctionBody(output.items, "define internal void @choose_void_local_call_cond");
+    try expectContains(local_call_cond_body, "call i1 @pred(i32 %a)");
+    try expectContains(local_call_cond_body, "br i1 %t");
+    try expectContains(local_call_cond_body, "call void @hit(i32 1)");
+    try expectContains(local_call_cond_body, "call void @hit(i32 0)");
+    try expectNotContains(local_call_cond_body, "alloca");
+    try expectNotContains(local_call_cond_body, "store");
+    try expectNotContains(local_call_cond_body, "switch");
 
     const compare_arg_body = try llvmFunctionBody(output.items, "define internal void @call_compare_arg");
     try expectContains(compare_arg_body, "icmp slt i32 %a, %b");

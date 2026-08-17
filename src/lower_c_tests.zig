@@ -272,6 +272,22 @@ test "lower-c emits simple void conditional direct calls from MIR" {
         \\        hit(a - b);
         \\    }
         \\}
+        \\extern fn pred(value: i32) -> bool;
+        \\fn choose_void_call_cond(a: i32) -> void {
+        \\    if pred(a) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\}
+        \\fn choose_void_local_call_cond(a: i32) -> void {
+        \\    let ok: bool = pred(a);
+        \\    if ok {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\}
         \\extern fn hit_bool(value: bool) -> void;
         \\fn call_compare_arg(a: i32, b: i32) -> void {
         \\    hit_bool(a < b);
@@ -326,6 +342,21 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectContains(checked_args_body, "hit(mc_checked_sub_i32(a, b));");
     try expectNotContains(checked_args_body, "mc_tmp");
     try expectNotContains(checked_args_body, "switch");
+
+    const call_cond_body = try cFunctionBody(output.items, "static void choose_void_call_cond(int32_t a)");
+    try expectContains(call_cond_body, "if (pred(a))");
+    try expectContains(call_cond_body, "hit(1);");
+    try expectContains(call_cond_body, "hit(0);");
+    try expectNotContains(call_cond_body, "switch");
+    try expectNotContains(call_cond_body, "mc_tmp");
+
+    const local_call_cond_body = try cFunctionBody(output.items, "static void choose_void_local_call_cond(int32_t a)");
+    try expectContains(local_call_cond_body, "if (pred(a))");
+    try expectContains(local_call_cond_body, "hit(1);");
+    try expectContains(local_call_cond_body, "hit(0);");
+    try expectNotContains(local_call_cond_body, "bool ok");
+    try expectNotContains(local_call_cond_body, "switch");
+    try expectNotContains(local_call_cond_body, "mc_tmp");
 
     const compare_arg_body = try cFunctionBody(output.items, "static void call_compare_arg(int32_t a, int32_t b)");
     try expectContains(compare_arg_body, "hit_bool((a < b));");

@@ -1235,6 +1235,7 @@ pub const CEmitter = struct {
             inverted: bool = false,
         },
         bool_literal: bool,
+        direct_call: SimpleMirNestedCall,
         compare_binary: SimpleMirCompareBinary,
     };
 
@@ -1655,6 +1656,12 @@ pub const CEmitter = struct {
                     if (self.simpleMirCompareBinaryAtSource(function, fn_mir, instructionSourcePoint(instruction))) |binary| return .{ .compare_binary = binary };
                     return null;
                 },
+                .call => {
+                    if (self.simpleMirNestedCallAtSource(function, fn_mir, instructionSourcePoint(instruction))) |call| {
+                        if (self.simpleMirNestedCallReturnsBool(call)) return .{ .direct_call = call };
+                    }
+                    return null;
+                },
                 .expr => {
                     if (instruction.result_ty != .bool) return null;
                     for (function.signature.params) |param| {
@@ -1681,6 +1688,9 @@ pub const CEmitter = struct {
         const init_source = self.simpleMirAssignmentSource(fn_mir, local_name) orelse
             self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .compare_binary = binary };
+        if (self.simpleMirNestedCallAtSource(function, fn_mir, init_source)) |call| {
+            if (self.simpleMirNestedCallReturnsBool(call)) return .{ .direct_call = call };
+        }
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = .{ .name = name, .inverted = true } },
@@ -1711,6 +1721,7 @@ pub const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, try self.cIdent(param.name));
             },
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
+            .direct_call => |call| try self.emitSimpleMirNestedCall(call),
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
         }
     }
@@ -2165,6 +2176,12 @@ pub const CEmitter = struct {
         return !isVoidType(return_ty);
     }
 
+    fn simpleMirNestedCallReturnsBool(self: *CEmitter, call: SimpleMirNestedCall) bool {
+        const fn_info = self.functions.get(call.callee) orelse return false;
+        const return_ty = fn_info.return_type orelse return false;
+        return isBoolType(return_ty);
+    }
+
     fn simpleMirNestedCallAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint) ?SimpleMirNestedCall {
         const call_block, const callee = blk: {
             for (fn_mir.blocks) |block| {
@@ -2251,12 +2268,34 @@ pub const CEmitter = struct {
             if (instruction.kind == .binary and std.mem.eql(u8, instruction.detail, "switch_subject")) return calls;
             if (instruction.kind != .call) continue;
             const source = instructionSourcePoint(instruction);
-            if (!simpleMirDirectCallResultVoid(fn_mir, source)) return null;
+            if (!simpleMirDirectCallResultVoid(fn_mir, source)) {
+                if (self.simpleMirCallFeedsSwitchCondition(function, fn_mir, block, source)) continue;
+                return null;
+            }
             if (calls.count >= max_simple_mir_void_calls) return null;
             calls.calls[calls.count] = self.simpleMirDirectCallAtSource(function, fn_mir, source) orelse return null;
             calls.count += 1;
         }
         return null;
+    }
+
+    fn simpleMirCallFeedsSwitchCondition(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, source: mir.SourcePoint) bool {
+        _ = function;
+        _ = fn_mir;
+        const subject_index = simpleMirSwitchSubjectIndex(block) orelse return false;
+        var index: usize = subject_index + 1;
+        while (index < block.instructions.len) : (index += 1) {
+            const instruction = block.instructions[index];
+            if (instruction.kind == .target_type) continue;
+            if (instruction.kind == .call) return sameMirSourceLocation(instructionSourcePoint(instruction), source);
+            if (instruction.kind != .expr) return false;
+            if (sameMirSourceLocation(instructionSourcePoint(instruction), source)) return true;
+            if (!mirBlockHasLocal(block, instruction.detail)) return false;
+            const local_source = self.simpleMirAssignmentSourceInBlock(block, instruction.detail) orelse
+                self.simpleMirLocalInitSourceInBlock(block, instruction.detail) orelse return false;
+            return sameMirSourceLocation(local_source, source);
+        }
+        return false;
     }
 
     fn simpleMirDirectVoidCallsInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, allow_empty: bool) ?SimpleMirDirectCalls {
