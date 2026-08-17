@@ -874,6 +874,8 @@ test "lower-c emits simple global stores from MIR" {
         \\global h: u32 = 0;
         \\global flag: bool = false;
         \\global s: i32 = 0;
+        \\global wide: u64 = 0;
+        \\global byte: u8 = 0;
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
@@ -920,6 +922,12 @@ test "lower-c emits simple global stores from MIR" {
         \\    #[unsafe_contract(no_overflow)] {
         \\        g = unchecked.add(a, 1);
         \\    }
+        \\}
+        \\fn store_cast(value: u32) {
+        \\    wide = value as u64;
+        \\}
+        \\fn store_conversion(value: u64) {
+        \\    byte = u8.wrap_from(value);
         \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
@@ -1036,6 +1044,14 @@ test "lower-c emits simple global stores from MIR" {
     try expectContains(unchecked_body, "/* MC_MIR_RANGE no_overflow target=g op=add */");
     try expectContains(unchecked_body, "mc_race_store_u32(&g, (uint32_t)(a + 1));");
     try expectNotContains(unchecked_body, "mc_tmp");
+
+    const cast_body = try cFunctionBody(output.items, "static void store_cast(uint32_t value)");
+    try expectContains(cast_body, "mc_race_store_u64(&wide, (uint64_t)((uint64_t)(value)));");
+    try expectNotContains(cast_body, "mc_tmp");
+
+    const conversion_body = try cFunctionBody(output.items, "static void store_conversion(uint64_t value)");
+    try expectContains(conversion_body, "mc_race_store_u8(&byte, (uint8_t)((uint8_t)(value)));");
+    try expectNotContains(conversion_body, "mc_tmp");
 
     const neg_body = try cFunctionBody(output.items, "static void store_neg(int32_t a)");
     try expectContains(neg_body, "mc_race_store_i32(&s, (int32_t)mc_checked_neg_i32(a));");

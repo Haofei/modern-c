@@ -1467,6 +1467,8 @@ pub const CEmitter = struct {
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
         wrapping_binary: SimpleMirWrappingBinary,
+        explicit_cast: SimpleMirExplicitCastReturn,
+        conversion: SimpleMirConversionReturn,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
     };
@@ -2591,6 +2593,10 @@ pub const CEmitter = struct {
             .{ .wrapping_binary = binary }
         else if (self.simpleMirUncheckedBinaryAtSource(function, fn_mir, value_source, global_info.type_name, store_name)) |binary|
             .{ .wrapping_binary = binary }
+        else if (self.simpleMirExplicitCastAtSource(function, fn_mir, value_source)) |cast|
+            .{ .explicit_cast = cast }
+        else if (self.simpleMirConversionAtSource(function, fn_mir, value_source)) |conversion|
+            .{ .conversion = conversion }
         else if (self.simpleMirCompareBinaryAtSource(function, fn_mir, value_source)) |binary|
             .{ .compare_binary = binary }
         else if (self.simpleMirLogicalNotAtSource(function, fn_mir, value_source)) |arg|
@@ -2644,6 +2650,7 @@ pub const CEmitter = struct {
             .call => {
                 const source = instructionSourcePoint(instruction);
                 if (simpleMirArithmeticCallAtSource(fn_mir, source)) continue;
+                if (self.simpleMirConversionCallTargetKindAt(fn_mir, source) != null) continue;
                 if (self.simpleMirDirectCallAtSource(function, fn_mir, source) == null) return false;
             },
             .expr => {
@@ -2656,6 +2663,8 @@ pub const CEmitter = struct {
                     std.mem.eql(u8, instruction.detail, "wrapping") or
                     std.mem.eql(u8, instruction.detail, "unchecked")) and
                     simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
+                if (std.mem.eql(u8, instruction.detail, "cast") and simpleMirTargetTypeFactKindAt(fn_mir, .explicit_cast_source, instructionSourcePoint(instruction)) != null) continue;
+                if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {
@@ -3366,6 +3375,8 @@ pub const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .wrapping_binary => |binary| try self.emitSimpleMirWrappingBinaryExpr(binary),
+            .explicit_cast => |cast| try self.emitSimpleMirExplicitCastExpr(cast),
+            .conversion => |conversion| try self.emitSimpleMirConversionExpr(conversion),
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
             .logical_not => |arg| {
                 try self.out.appendSlice(self.allocator, "!");
@@ -3386,6 +3397,21 @@ pub const CEmitter = struct {
             },
             else => {},
         }
+    }
+
+    fn emitSimpleMirExplicitCastExpr(self: *CEmitter, cast: SimpleMirExplicitCastReturn) !void {
+        _ = cast.source_fact;
+        try self.out.print(self.allocator, "(({s})(", .{try self.cTypeFor(cast.target_fact.target_ty, .typedef_name)});
+        try self.emitSimpleMirCallArg(cast.operand);
+        try self.out.appendSlice(self.allocator, "))");
+    }
+
+    fn emitSimpleMirConversionExpr(self: *CEmitter, conversion: SimpleMirConversionReturn) !void {
+        _ = conversion.kind;
+        _ = conversion.source_fact;
+        try self.out.print(self.allocator, "(({s})(", .{try self.cTypeFor(conversion.target_fact.target_ty, .typedef_name)});
+        try self.emitSimpleMirCallArg(conversion.operand);
+        try self.out.appendSlice(self.allocator, "))");
     }
 
     fn emitSimpleMirWrappingBinaryExpr(self: *CEmitter, binary: SimpleMirWrappingBinary) !void {
@@ -4117,7 +4143,7 @@ pub const CEmitter = struct {
         var result: SimpleMirVoidStatementSources = .{};
         for (block.instructions) |instruction| {
             switch (instruction.kind) {
-                .param, .local, .target_type, .integer_literal_conversion, .add_overflow => {},
+                .param, .local, .target_type, .integer_literal_conversion, .add_overflow, .contract_begin, .contract_end, .unchecked_assume, .call_target => {},
                 .return_value => {},
                 .assign => {
                     if (mirFunctionHasLocal(fn_mir, instruction.detail)) return null;
@@ -4149,6 +4175,14 @@ pub const CEmitter = struct {
                     if (std.mem.eql(u8, instruction.detail, "int") or
                         std.mem.eql(u8, instruction.detail, "bool") or
                         std.mem.eql(u8, instruction.detail, "literal")) continue;
+                    if ((std.mem.eql(u8, instruction.detail, "add") or
+                        std.mem.eql(u8, instruction.detail, "sub") or
+                        std.mem.eql(u8, instruction.detail, "mul") or
+                        std.mem.eql(u8, instruction.detail, "wrapping") or
+                        std.mem.eql(u8, instruction.detail, "unchecked")) and
+                        simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
+                    if (std.mem.eql(u8, instruction.detail, "cast") and simpleMirTargetTypeFactKindAt(fn_mir, .explicit_cast_source, instructionSourcePoint(instruction)) != null) continue;
+                    if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
                     if (self.globals.contains(instruction.detail)) continue;
                     if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                     if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
@@ -4161,6 +4195,8 @@ pub const CEmitter = struct {
                 },
                 .call => {
                     const source = instructionSourcePoint(instruction);
+                    if (simpleMirArithmeticCallAtSource(fn_mir, source)) continue;
+                    if (self.simpleMirConversionCallTargetKindAt(fn_mir, source) != null) continue;
                     if (!simpleMirDirectCallResultVoid(fn_mir, source)) {
                         if (simpleMirReturnInstruction(block)) |ret| {
                             if (ret.value_id) |value_id| {
