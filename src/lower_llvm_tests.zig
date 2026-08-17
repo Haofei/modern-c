@@ -245,6 +245,37 @@ test "LLVM literal checked unary components lower from MIR without body fallback
     try expectNotContains(array_body, "store");
 }
 
+test "LLVM local literal checked components return from MIR without body fallback" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\fn local_struct(a: u32, b: u32, c: u32) -> Pair {
+        \\    let p: Pair = .{ .first = a + b, .second = b + c };
+        \\    return p;
+        \\}
+        \\fn local_array(a: u32, b: u32, c: u32) -> [2]u32 {
+        \\    let p: [2]u32 = .{ a + b, b + c };
+        \\    return p;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_literal_checked_components.mc", source, &output);
+
+    const struct_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @local_struct");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, struct_body, "llvm.uadd.with.overflow.i32"));
+    try expectContains(struct_body, "trap_overflow");
+    try expectContains(struct_body, "ret { i32, i32 } %t");
+    try expectNotContains(struct_body, "alloca");
+    try expectNotContains(struct_body, "store");
+
+    const array_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @local_array");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, array_body, "llvm.uadd.with.overflow.i32"));
+    try expectContains(array_body, "trap_overflow");
+    try expectContains(array_body, "ret [2 x i32] %t");
+    try expectNotContains(array_body, "alloca");
+    try expectNotContains(array_body, "store");
+}
+
 test "LLVM MIR conditional fast path uses only the switch subject expression" {
     const source =
         \\global g: u32 = 0;

@@ -3521,13 +3521,17 @@ pub const CEmitter = struct {
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, init_source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, init_source)) |literal| return .{ .enum_literal = literal };
+        if (self.simpleMirStructLiteralAtSource(function, fn_mir, init_source)) |literal| {
+            if (fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal)) return .{ .struct_literal = literal };
+        }
+        if (self.simpleMirArrayLiteralAtSource(function, fn_mir, init_source)) |literal| {
+            if (fn_mir.trap_edges.len == simpleMirArrayLiteralTrapCount(literal)) return .{ .array_literal = literal };
+        }
         if (!simpleMirNoTrap(fn_mir)) return null;
         if (self.simpleMirNestedCallAtSource(function, fn_mir, init_source)) |call| return .{ .nested_call = call };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirGlobalAtSource(function, fn_mir, init_source)) |name| return .{ .global_load = name };
-        if (self.simpleMirStructLiteralAtSource(function, fn_mir, init_source)) |literal| return .{ .struct_literal = literal };
-        if (self.simpleMirArrayLiteralAtSource(function, fn_mir, init_source)) |literal| return .{ .array_literal = literal };
         if (self.simpleMirNullLiteralAtSource(fn_mir, init_source)) |literal| return .{ .null_literal = literal };
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, init_source)) |field| return .{ .param_field = field };
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
@@ -3555,13 +3559,17 @@ pub const CEmitter = struct {
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, assigned_source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirDirectCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .direct_call = call };
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, assigned_source)) |literal| return .{ .enum_literal = literal };
+        if (self.simpleMirStructLiteralAtSource(function, fn_mir, assigned_source)) |literal| {
+            if (fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal)) return .{ .struct_literal = literal };
+        }
+        if (self.simpleMirArrayLiteralAtSource(function, fn_mir, assigned_source)) |literal| {
+            if (fn_mir.trap_edges.len == simpleMirArrayLiteralTrapCount(literal)) return .{ .array_literal = literal };
+        }
         if (!simpleMirNoTrap(fn_mir)) return null;
         if (self.simpleMirNestedCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .nested_call = call };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, assigned_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, assigned_source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirGlobalAtSource(function, fn_mir, assigned_source)) |name| return .{ .global_load = name };
-        if (self.simpleMirStructLiteralAtSource(function, fn_mir, assigned_source)) |literal| return .{ .struct_literal = literal };
-        if (self.simpleMirArrayLiteralAtSource(function, fn_mir, assigned_source)) |literal| return .{ .array_literal = literal };
         if (self.simpleMirNullLiteralAtSource(fn_mir, assigned_source)) |literal| return .{ .null_literal = literal };
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, assigned_source)) |field| return .{ .param_field = field };
         if (self.simpleMirArgAt(function, fn_mir, assigned_source)) |arg| {
