@@ -1657,7 +1657,7 @@ pub const CEmitter = struct {
         if (!std.mem.eql(u8, then_block.kind, "switch_arm") or !std.mem.eql(u8, else_block.kind, "switch_arm")) return null;
         if (then_block.terminator != .jump or else_block.terminator != .jump) return null;
         if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
-        const then_statements = self.simpleMirVoidStatementsInBlock(function, fn_mir, then_block, true) orelse return null;
+        const then_statements = self.simpleMirVoidStatementsInBlock(function, fn_mir, then_block, false) orelse return null;
         const else_statements = self.simpleMirVoidStatementsInBlock(function, fn_mir, else_block, false) orelse return null;
         const then_stores = simpleMirVoidStatementsGlobalStores(then_statements);
         const else_stores = simpleMirVoidStatementsGlobalStores(else_statements);

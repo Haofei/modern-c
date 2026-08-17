@@ -310,6 +310,7 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try expectContains(no_else_body, "call void @hit(i32 5)");
     try expectContains(no_else_body, "call void @hit(i32 6)");
     try expectNotContains(no_else_body, "switch");
+    try expectNotContains(no_else_body, "alloca");
 
     const local_args_body = try llvmFunctionBody(output.items, "define internal void @choose_void_local_args");
     try expectContains(local_args_body, "br i1 %flag, label %bb_if_then");
@@ -606,6 +607,12 @@ test "LLVM emits simple global stores from MIR" {
         \\        g = x;
         \\    }
         \\}
+        \\fn if_store_else_only(flag: bool, x: u32) {
+        \\    if (flag) {
+        \\    } else {
+        \\        g = x;
+        \\    }
+        \\}
         \\fn call_then_if_store(flag: bool, x: u32, y: u32) {
         \\    hit(x);
         \\    if (flag) {
@@ -701,6 +708,11 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(no_else_body, "br i1 %flag");
     try expectContains(no_else_body, "store atomic i32 %x, ptr @g unordered, align 4");
     try expectNotContains(no_else_body, "alloca");
+
+    const else_only_body = try llvmFunctionBody(output.items, "define internal void @if_store_else_only");
+    try expectContains(else_only_body, "br i1 %flag");
+    try expectContains(else_only_body, "store atomic i32 %x, ptr @g unordered, align 4");
+    try expectNotContains(else_only_body, "alloca");
 
     const call_if_body = try llvmFunctionBody(output.items, "define internal void @call_then_if_store");
     const call_index = std.mem.indexOf(u8, call_if_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;

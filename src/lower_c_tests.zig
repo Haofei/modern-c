@@ -326,6 +326,7 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectContains(no_else_body, "hit(5);");
     try expectContains(no_else_body, "hit(6);");
     try expectNotContains(no_else_body, "switch");
+    try expectNotContains(no_else_body, "mc_tmp");
 
     const local_args_body = try cFunctionBody(output.items, "static void choose_void_local_args(bool flag)");
     try expectContains(local_args_body, "if (flag)");
@@ -603,6 +604,12 @@ test "lower-c emits simple global stores from MIR" {
         \\        g = x;
         \\    }
         \\}
+        \\fn if_store_else_only(flag: bool, x: u32) {
+        \\    if (flag) {
+        \\    } else {
+        \\        g = x;
+        \\    }
+        \\}
         \\fn call_then_if_store(flag: bool, x: u32, y: u32) {
         \\    hit(x);
         \\    if (flag) {
@@ -688,6 +695,13 @@ test "lower-c emits simple global stores from MIR" {
     try expectContains(no_else_body, "} else {");
     try expectNotContains(no_else_body, "switch");
     try expectNotContains(no_else_body, "mc_tmp");
+
+    const else_only_body = try cFunctionBody(output.items, "static void if_store_else_only(bool flag, uint32_t x)");
+    try expectContains(else_only_body, "if (flag) {");
+    try expectContains(else_only_body, "} else {");
+    try expectContains(else_only_body, "mc_race_store_u32(&g, (uint32_t)x);");
+    try expectNotContains(else_only_body, "switch");
+    try expectNotContains(else_only_body, "mc_tmp");
 
     const call_if_body = try cFunctionBody(output.items, "static void call_then_if_store(bool flag, uint32_t x, uint32_t y)");
     const hit_index = std.mem.indexOf(u8, call_if_body, "hit(x);") orelse return error.TestUnexpectedResult;
