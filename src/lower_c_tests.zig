@@ -17835,7 +17835,7 @@ test "lower-c emits explicit traps and unreachable" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_traps.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_explicit_traps.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t trap_as_value(void)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Bounds();") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_trap_Unreachable();") != null);
