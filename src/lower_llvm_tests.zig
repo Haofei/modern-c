@@ -1595,6 +1595,10 @@ test "LLVM emits simple global stores from MIR" {
         \\    red,
         \\    blue,
         \\}
+        \\struct Pair {
+        \\    a: u32,
+        \\    b: u32,
+        \\}
         \\global g: u32 = 0;
         \\global h: u32 = 0;
         \\global flag: bool = false;
@@ -1603,6 +1607,7 @@ test "LLVM emits simple global stores from MIR" {
         \\global byte: u8 = 0;
         \\global current: Color = .red;
         \\global maybe: ?u32 = null;
+        \\global pair: Pair = .{ .a = 0, .b = 0 };
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
@@ -1661,6 +1666,9 @@ test "LLVM emits simple global stores from MIR" {
         \\}
         \\fn store_none() {
         \\    maybe = null;
+        \\}
+        \\fn store_pair(x: u32) {
+        \\    pair = .{ .a = x, .b = 7 };
         \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
@@ -1815,6 +1823,13 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(none_body, "extractvalue { i1, i32 } zeroinitializer, 0");
     try expectContains(none_body, "extractvalue { i1, i32 } zeroinitializer, 1");
     try expectNotContains(none_body, "alloca");
+
+    const pair_body = try llvmFunctionBody(output.items, "define internal void @store_pair");
+    try expectContains(pair_body, "insertvalue { i32, i32 } zeroinitializer, i32 %x, 0");
+    try expectContains(pair_body, "insertvalue { i32, i32 }");
+    try expectContains(pair_body, "i32 7, 1");
+    try expectContains(pair_body, "ptr @pair");
+    try expectNotContains(pair_body, "alloca");
 
     const neg_body = try llvmFunctionBody(output.items, "define internal void @store_neg");
     try expectContains(neg_body, "@llvm.ssub.with.overflow.i32");

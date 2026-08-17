@@ -874,6 +874,10 @@ test "lower-c emits simple global stores from MIR" {
         \\    red,
         \\    blue,
         \\}
+        \\struct Pair {
+        \\    a: u32,
+        \\    b: u32,
+        \\}
         \\global g: u32 = 0;
         \\global h: u32 = 0;
         \\global flag: bool = false;
@@ -882,6 +886,7 @@ test "lower-c emits simple global stores from MIR" {
         \\global byte: u8 = 0;
         \\global current: Color = .red;
         \\global maybe: ?u32 = null;
+        \\global pair: Pair = .{ .a = 0, .b = 0 };
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
@@ -940,6 +945,9 @@ test "lower-c emits simple global stores from MIR" {
         \\}
         \\fn store_none() {
         \\    maybe = null;
+        \\}
+        \\fn store_pair(x: u32) {
+        \\    pair = .{ .a = x, .b = 7 };
         \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
@@ -1072,6 +1080,10 @@ test "lower-c emits simple global stores from MIR" {
     const none_body = try cFunctionBody(output.items, "static void store_none(void)");
     try expectContains(none_body, "maybe = (mc_opt_u32)((mc_opt_u32){ .present = false });");
     try expectNotContains(none_body, "mc_tmp");
+
+    const pair_body = try cFunctionBody(output.items, "static void store_pair(uint32_t x)");
+    try expectContains(pair_body, "pair = (Pair)((Pair){ .a = x, .b = 7 });");
+    try expectNotContains(pair_body, "mc_tmp");
 
     const neg_body = try cFunctionBody(output.items, "static void store_neg(int32_t a)");
     try expectContains(neg_body, "mc_race_store_i32(&s, (int32_t)mc_checked_neg_i32(a));");
