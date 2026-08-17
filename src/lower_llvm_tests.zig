@@ -8509,7 +8509,7 @@ test "LLVM backend emits a backend_name alias for the override symbol" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("bn_llvm.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_backend_name_alias.mc", source, &output);
 
     // The function keeps its source name; the override is exposed via a module-level alias.
     try std.testing.expect(std.mem.indexOf(u8, output.items, "define internal i64 @helper(i64 %x)") != null);

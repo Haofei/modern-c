@@ -132,7 +132,7 @@
       "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 1
     },
     "src/lower_llvm_tests.zig": {
-      "appendLlvmTestNoFunctionBodyFallback(\"llvm_mir_": 63,
+      "appendLlvmTestNoFunctionBodyFallback(\"llvm_mir_": 64,
       "declaration_artifacts.CodegenFunctionBodyArtifacts.empty": 1
     }
   },
