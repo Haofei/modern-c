@@ -1088,6 +1088,29 @@ test "lower-c emits direct struct parameter field returns from MIR" {
     try expectNotContains(body, "switch");
 }
 
+test "lower-c emits conditional struct parameter field returns from MIR" {
+    const source =
+        \\struct Pair { a: u32, b: u32 }
+        \\fn choose(flag: bool, p: Pair) -> u32 {
+        \\    if (flag) {
+        \\        return p.a;
+        \\    } else {
+        \\        return p.b;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_conditional_param_field_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint32_t choose(bool flag, Pair p)");
+    try expectContains(body, "if (flag)");
+    try expectContains(body, "return p.a;");
+    try expectContains(body, "return p.b;");
+    try expectNotContains(body, "mc_tmp");
+    try expectNotContains(body, "switch");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

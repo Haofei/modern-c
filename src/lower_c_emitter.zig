@@ -1298,6 +1298,7 @@ pub const CEmitter = struct {
 
     const SimpleMirConditionalValue = union(enum) {
         param: []const u8,
+        param_field: SimpleMirParamField,
         integer_literal: []const u8,
         bool_literal: bool,
         direct_call: SimpleMirDirectCall,
@@ -2365,6 +2366,7 @@ pub const CEmitter = struct {
         for (function.signature.params) |param| {
             if (std.mem.eql(u8, value_id, param.name.text)) return .{ .param = param.name.text };
         }
+        if (self.simpleMirParamFieldReturn(function, fn_mir, block, ret, value_id)) |field| return .{ .param_field = field };
         if (mirBlockHasLocal(block, value_id)) {
             return self.simpleMirLocalValueInBlock(function, fn_mir, block, value_id);
         }
@@ -2426,6 +2428,7 @@ pub const CEmitter = struct {
     fn emitSimpleMirConditionalValue(self: *CEmitter, value: SimpleMirConditionalValue) !void {
         switch (value) {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
+            .param_field => |field| try self.out.print(self.allocator, "{s}.{s}", .{ try self.cIdent(field.param_name), try self.cIdent(field.field_name) }),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |bool_value| try self.out.appendSlice(self.allocator, if (bool_value) "true" else "false"),
             .direct_call => |call| try self.emitSimpleMirDirectCall(call),

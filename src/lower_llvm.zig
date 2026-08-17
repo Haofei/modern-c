@@ -1360,6 +1360,7 @@ const LlvmEmitter = struct {
 
     const SimpleMirConditionalValue = union(enum) {
         param: []const u8,
+        param_field: SimpleMirParamField,
         integer_literal: []const u8,
         bool_literal: bool,
         direct_call: SimpleMirDirectCall,
@@ -2453,6 +2454,7 @@ const LlvmEmitter = struct {
         for (function.signature.params) |param| {
             if (std.mem.eql(u8, value_id, param.name.text)) return .{ .param = param.name.text };
         }
+        if (self.simpleMirParamFieldReturn(function, fn_mir, block, ret, value_id)) |field| return .{ .param_field = field };
         if (mirBlockHasLocal(block, value_id)) {
             return self.simpleMirLocalValueInBlock(function, fn_mir, block, value_id);
         }
@@ -2514,6 +2516,12 @@ const LlvmEmitter = struct {
     fn emitSimpleMirConditionalReturnValue(self: *LlvmEmitter, ret_ty: anytype, value: SimpleMirConditionalValue, span: diagnostics.Span) !void {
         switch (value) {
             .param => |name| try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}), span),
+            .param_field => |field| {
+                const tmp = try self.nextTemp();
+                const param_ty = type_bridge.simpleNameType(field.struct_name, span);
+                try self.out.print(self.allocator, "  {s} = extractvalue {s} %{s}, {d}{s}\n", .{ tmp, try self.llvmType(param_ty), field.param_name, field.field_index, try self.debugCallSuffix() });
+                try self.emitReturnValue(ret_ty, tmp, span);
+            },
             .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, span),
             .bool_literal => |bool_value| try self.emitReturnValue(ret_ty, if (bool_value) "1" else "0", span),
             .direct_call => |call| {
