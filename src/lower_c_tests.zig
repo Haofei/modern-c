@@ -5382,6 +5382,21 @@ test "lower-c literal inferred local lowers without function body fallback" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return 7;") != null);
 }
 
+test "lower-c bool-literal inferred local lowers without function body fallback" {
+    const source =
+        \\fn bool_local() -> bool {
+        \\    let flag = true;
+        \\    return flag;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_bool_literal_return.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static bool bool_local(void)");
+    try expectContains(body, "return true;");
+    try expectNotContains(body, "bool flag");
+}
+
 test "lower-c checked-unary inferred local lowers without function body fallback" {
     const source =
         \\fn unary_local(value: i64) -> i64 {

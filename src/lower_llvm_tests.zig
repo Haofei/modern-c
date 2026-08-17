@@ -6707,6 +6707,23 @@ test "LLVM grouped direct calls consume the outer MIR result fact" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_grouped_call_result.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM direct-call inferred local lowers without function body fallback" {
+    const source =
+        \\fn make_count() -> u64 { return 7; }
+        \\fn caller() -> u64 {
+        \\    let count = make_count();
+        \\    return count;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_direct_call_return.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i64 @caller");
+    try expectContains(body, "call i64 @make_count()");
+    try expectContains(body, "ret i64 %t");
+    try expectNotContains(body, "alloca");
+}
+
 test "LLVM literal inferred local lowers without function body fallback" {
     const source =
         \\fn literal_local() -> u32 {
@@ -6718,6 +6735,21 @@ test "LLVM literal inferred local lowers without function body fallback" {
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_literal_return.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i32 7") != null);
+}
+
+test "LLVM bool-literal inferred local lowers without function body fallback" {
+    const source =
+        \\fn bool_local() -> bool {
+        \\    let flag = true;
+        \\    return flag;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_bool_literal_return.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i1 @bool_local");
+    try expectContains(body, "ret i1 1");
+    try expectNotContains(body, "alloca");
 }
 
 test "LLVM checked-unary inferred local lowers without function body fallback" {
