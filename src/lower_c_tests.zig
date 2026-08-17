@@ -2434,23 +2434,23 @@ test "lower-c array literal call elements lower from MIR in lexical order" {
 
 test "lower-c literal unary components lower from MIR without body fallback" {
     const source =
-        \\struct Flag { value: bool }
-        \\fn struct_ops(flag: bool) -> Flag {
-        \\    return .{ .value = !flag };
+        \\struct Flags { first: bool, second: bool }
+        \\fn struct_ops(flag: bool, other: bool) -> Flags {
+        \\    return .{ .first = !flag, .second = !other };
         \\}
-        \\fn array_ops(flag: bool) -> [1]bool {
-        \\    return .{ !flag };
+        \\fn array_ops(flag: bool, other: bool) -> [2]bool {
+        \\    return .{ !flag, !other };
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_literal_unary_components.mc", source, &output);
 
-    const struct_body = try cFunctionBody(output.items, "static Flag struct_ops(bool flag)");
-    try expectContains(struct_body, "return (Flag){ .value = !flag };");
+    const struct_body = try cFunctionBody(output.items, "static Flags struct_ops(bool flag, bool other)");
+    try expectContains(struct_body, "return (Flags){ .first = !flag, .second = !other };");
 
-    const array_body = try cFunctionBody(output.items, "static mc_array_bool_1 array_ops(bool flag)");
-    try expectContains(array_body, "return (mc_array_bool_1){ .elems = { !flag } };");
+    const array_body = try cFunctionBody(output.items, "static mc_array_bool_2 array_ops(bool flag, bool other)");
+    try expectContains(array_body, "return (mc_array_bool_2){ .elems = { !flag, !other } };");
 }
 
 test "lower-c sequences C variadic arguments through typed temporaries" {

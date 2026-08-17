@@ -131,27 +131,29 @@ test "LLVM array literal call elements lower from MIR without body fallback" {
 
 test "LLVM literal unary components lower from MIR without body fallback" {
     const source =
-        \\struct Flag { value: bool }
-        \\fn struct_ops(flag: bool) -> Flag {
-        \\    return .{ .value = !flag };
+        \\struct Flags { first: bool, second: bool }
+        \\fn struct_ops(flag: bool, other: bool) -> Flags {
+        \\    return .{ .first = !flag, .second = !other };
         \\}
-        \\fn array_ops(flag: bool) -> [1]bool {
-        \\    return .{ !flag };
+        \\fn array_ops(flag: bool, other: bool) -> [2]bool {
+        \\    return .{ !flag, !other };
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_literal_unary_components.mc", source, &output);
 
-    const struct_body = try llvmFunctionBody(output.items, "define internal { i1 } @struct_ops");
+    const struct_body = try llvmFunctionBody(output.items, "define internal { i1, i1 } @struct_ops");
     try expectContains(struct_body, "xor i1 %flag, true");
-    try expectContains(struct_body, "ret { i1 } %t");
+    try expectContains(struct_body, "xor i1 %other, true");
+    try expectContains(struct_body, "ret { i1, i1 } %t");
     try expectNotContains(struct_body, "alloca");
     try expectNotContains(struct_body, "store");
 
-    const array_body = try llvmFunctionBody(output.items, "define internal [1 x i1] @array_ops");
+    const array_body = try llvmFunctionBody(output.items, "define internal [2 x i1] @array_ops");
     try expectContains(array_body, "xor i1 %flag, true");
-    try expectContains(array_body, "ret [1 x i1] %t");
+    try expectContains(array_body, "xor i1 %other, true");
+    try expectContains(array_body, "ret [2 x i1] %t");
     try expectNotContains(array_body, "alloca");
     try expectNotContains(array_body, "store");
 }

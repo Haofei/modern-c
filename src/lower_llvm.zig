@@ -1886,8 +1886,8 @@ const LlvmEmitter = struct {
                 };
                 result.field_count += 1;
                 scan_index += 1;
-                if (instruction.kind == .call) {
-                    while (scan_index < block.instructions.len and block.instructions[scan_index].kind != .call and block.instructions[scan_index].kind != .return_value) : (scan_index += 1) {}
+                if (instruction.kind == .call or instruction.kind == .unary) {
+                    while (scan_index < block.instructions.len and !simpleMirLiteralBoundaryInstruction(block.instructions[scan_index])) : (scan_index += 1) {}
                 } else {
                     while (scan_index < block.instructions.len and sameMirSourceLocation(instructionSourcePoint(block.instructions[scan_index]), value_source)) : (scan_index += 1) {}
                 }
@@ -1941,8 +1941,8 @@ const LlvmEmitter = struct {
                 result.items[result.item_count] = self.simpleMirCallArgAt(function, fn_mir, value_source) orelse return null;
                 result.item_count += 1;
                 scan_index += 1;
-                if (instruction.kind == .call) {
-                    while (scan_index < block.instructions.len and block.instructions[scan_index].kind != .call and block.instructions[scan_index].kind != .return_value) : (scan_index += 1) {}
+                if (instruction.kind == .call or instruction.kind == .unary) {
+                    while (scan_index < block.instructions.len and !simpleMirLiteralBoundaryInstruction(block.instructions[scan_index])) : (scan_index += 1) {}
                 } else {
                     while (scan_index < block.instructions.len and sameMirSourceLocation(instructionSourcePoint(block.instructions[scan_index]), value_source)) : (scan_index += 1) {}
                 }
@@ -2848,6 +2848,10 @@ const LlvmEmitter = struct {
 
     fn noFunctionBodyFallbacksAvailable(self: *const LlvmEmitter) bool {
         return self.function_bodies.function_body_fallbacks.len == 0;
+    }
+
+    fn simpleMirLiteralBoundaryInstruction(instruction: mir.Instruction) bool {
+        return instruction.kind == .call or instruction.kind == .unary or instruction.kind == .return_value;
     }
 
     fn simpleMirCheckedBinaryUsesParamField(binary: SimpleMirCheckedBinary) bool {
