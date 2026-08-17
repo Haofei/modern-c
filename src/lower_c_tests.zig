@@ -2495,6 +2495,27 @@ test "lower-c literal checked arithmetic components lower from MIR without body 
     try expectContains(array_body, "return (mc_array_u32_2){ .elems = { mc_checked_add_u32(a, b), mc_checked_add_u32(b, c) } };");
 }
 
+test "lower-c literal checked unary components lower from MIR without body fallback" {
+    const source =
+        \\struct Pair { first: i32, second: i32 }
+        \\fn struct_ops(a: i32, b: i32) -> Pair {
+        \\    return .{ .first = -a, .second = -b };
+        \\}
+        \\fn array_ops(a: i32, b: i32) -> [2]i32 {
+        \\    return .{ -a, -b };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_literal_checked_unary_components.mc", source, &output);
+
+    const struct_body = try cFunctionBody(output.items, "static Pair struct_ops(int32_t a, int32_t b)");
+    try expectContains(struct_body, "return (Pair){ .first = mc_checked_neg_i32(a), .second = mc_checked_neg_i32(b) };");
+
+    const array_body = try cFunctionBody(output.items, "static mc_array_i32_2 array_ops(int32_t a, int32_t b)");
+    try expectContains(array_body, "return (mc_array_i32_2){ .elems = { mc_checked_neg_i32(a), mc_checked_neg_i32(b) } };");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;
