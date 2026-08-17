@@ -3126,11 +3126,11 @@ const LlvmEmitter = struct {
         }
         if (self.global_types.contains(value_id)) return .{ .global_load = value_id };
         var literal_source: ?mir.SourcePoint = null;
-        if (std.mem.eql(u8, value_id, "int") or std.mem.eql(u8, value_id, "bool") or std.mem.eql(u8, value_id, "float")) {
+        if (std.mem.eql(u8, value_id, "int") or std.mem.eql(u8, value_id, "bool") or std.mem.eql(u8, value_id, "char") or std.mem.eql(u8, value_id, "float")) {
             for (block.instructions) |instruction| {
                 if (instruction.kind == .return_value) break;
                 if (instruction.kind == .integer_literal_conversion or
-                    (instruction.kind == .expr and (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "float"))))
+                    (instruction.kind == .expr and (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "char") or std.mem.eql(u8, instruction.detail, "float"))))
                 {
                     literal_source = instructionSourcePoint(instruction);
                 }

@@ -1993,6 +1993,19 @@ test "lower-c emits local and assigned char literal returns from MIR without bod
         \\    x = 'B';
         \\    return x;
         \\}
+        \\fn choose_char(flag: bool) -> u16 {
+        \\    if (flag) {
+        \\        return 'A';
+        \\    } else {
+        \\        return 'B';
+        \\    }
+        \\}
+        \\fn choose_char_early(flag: bool) -> u16 {
+        \\    if (flag) {
+        \\        return 'A';
+        \\    }
+        \\    return 'B';
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -2008,6 +2021,16 @@ test "lower-c emits local and assigned char literal returns from MIR without bod
     try expectNotContains(assigned_body, "uint16_t x");
     try expectNotContains(assigned_body, "x =");
     try expectNotContains(assigned_body, "mc_tmp");
+
+    const choose_body = try cFunctionBody(output.items, "static uint16_t choose_char(bool flag)");
+    try expectContains(choose_body, "return 65;");
+    try expectContains(choose_body, "return 66;");
+    try expectNotContains(choose_body, "mc_tmp");
+
+    const choose_early_body = try cFunctionBody(output.items, "static uint16_t choose_char_early(bool flag)");
+    try expectContains(choose_early_body, "return 65;");
+    try expectContains(choose_early_body, "return 66;");
+    try expectNotContains(choose_early_body, "mc_tmp");
 }
 
 test "lower-c emits logical-not returns from MIR without body fallback" {

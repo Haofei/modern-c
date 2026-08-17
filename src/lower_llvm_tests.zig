@@ -3622,6 +3622,19 @@ test "LLVM local and assigned char literal returns lower without body fallback" 
         \\    x = 'B';
         \\    return x;
         \\}
+        \\fn choose_char(flag: bool) -> u16 {
+        \\    if (flag) {
+        \\        return 'A';
+        \\    } else {
+        \\        return 'B';
+        \\    }
+        \\}
+        \\fn choose_char_early(flag: bool) -> u16 {
+        \\    if (flag) {
+        \\        return 'A';
+        \\    }
+        \\    return 'B';
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -3636,6 +3649,16 @@ test "LLVM local and assigned char literal returns lower without body fallback" 
     try expectContains(assigned_body, "ret i16 66");
     try expectNotContains(assigned_body, "alloca");
     try expectNotContains(assigned_body, "store");
+
+    const choose_body = try llvmFunctionBody(output.items, "define internal i16 @choose_char");
+    try expectContains(choose_body, "ret i16 65");
+    try expectContains(choose_body, "ret i16 66");
+    try expectNotContains(choose_body, "alloca");
+
+    const choose_early_body = try llvmFunctionBody(output.items, "define internal i16 @choose_char_early");
+    try expectContains(choose_early_body, "ret i16 65");
+    try expectContains(choose_early_body, "ret i16 66");
+    try expectNotContains(choose_early_body, "alloca");
 }
 
 test "LLVM float literal returns lower without body fallback" {
