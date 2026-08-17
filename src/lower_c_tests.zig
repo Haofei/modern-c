@@ -2395,6 +2395,25 @@ test "lower-c synthesized array names encode every generic argument in either so
     }
 }
 
+test "lower-c struct literal call fields lower from MIR in lexical order" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\extern fn mark(value: u32) -> u32;
+        \\fn ordered_literal() -> Pair {
+        \\    return .{ .first = mark(1), .second = mark(2) };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_struct_literal_call_fields.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static Pair ordered_literal(void)");
+    const first = std.mem.indexOf(u8, body, "mark(1)") orelse return error.TestUnexpectedResult;
+    const second = std.mem.indexOfPos(u8, body, first + "mark(1)".len, "mark(2)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first < second);
+    try expectContains(body, "return (Pair){ .first = mark(1), .second = mark(2) };");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;

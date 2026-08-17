@@ -88,6 +88,27 @@ test "LLVM struct literal fields evaluate in lexical source order" {
     try std.testing.expect(second < first);
 }
 
+test "LLVM struct literal call fields lower from MIR without body fallback" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\extern fn mark(value: u32) -> u32;
+        \\fn ordered_literal() -> Pair {
+        \\    return .{ .first = mark(1), .second = mark(2) };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_struct_literal_call_fields.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @ordered_literal");
+    const first = std.mem.indexOf(u8, body, "call i32 @mark(i32 1)") orelse return error.TestUnexpectedResult;
+    const second = std.mem.indexOfPos(u8, body, first + "call i32 @mark(i32 1)".len, "call i32 @mark(i32 2)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first < second);
+    try expectContains(body, "ret { i32, i32 } %t");
+    try expectNotContains(body, "alloca");
+    try expectNotContains(body, "store");
+}
+
 test "LLVM MIR conditional fast path uses only the switch subject expression" {
     const source =
         \\global g: u32 = 0;

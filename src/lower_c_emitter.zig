@@ -1341,7 +1341,7 @@ pub const CEmitter = struct {
 
     const SimpleMirStructLiteralField = struct {
         name: []const u8,
-        value: SimpleMirArg,
+        value: SimpleMirCallArg,
     };
 
     const SimpleMirStructLiteralReturn = struct {
@@ -1812,16 +1812,21 @@ pub const CEmitter = struct {
                 const instruction = block.instructions[scan_index];
                 if (instruction.kind == .return_value) return null;
                 if (instruction.kind == .target_type or instruction.kind == .integer_literal_conversion) continue;
-                if (instruction.kind != .expr) return null;
+                if (instruction.kind != .expr and instruction.kind != .call) return null;
+                if (instruction.kind == .call and !self.noFunctionBodyFallbacksAvailable()) return null;
                 const value_source = instructionSourcePoint(instruction);
-                const arg = self.simpleMirArgAt(function, fn_mir, value_source) orelse return null;
+                const arg = self.simpleMirCallArgAt(function, fn_mir, value_source) orelse return null;
                 result.fields[result.field_count] = .{
                     .name = field.name.text,
                     .value = arg,
                 };
                 result.field_count += 1;
                 scan_index += 1;
-                while (scan_index < block.instructions.len and sameMirSourceLocation(instructionSourcePoint(block.instructions[scan_index]), value_source)) : (scan_index += 1) {}
+                if (instruction.kind == .call) {
+                    while (scan_index < block.instructions.len and block.instructions[scan_index].kind != .call and block.instructions[scan_index].kind != .return_value) : (scan_index += 1) {}
+                } else {
+                    while (scan_index < block.instructions.len and sameMirSourceLocation(instructionSourcePoint(block.instructions[scan_index]), value_source)) : (scan_index += 1) {}
+                }
                 break;
             } else return null;
         }
@@ -2693,7 +2698,7 @@ pub const CEmitter = struct {
         for (literal.fields[0..literal.field_count], 0..) |field, index| {
             if (index != 0) try self.out.appendSlice(self.allocator, ", ");
             try self.out.print(self.allocator, ".{s} = ", .{try self.cIdent(field.name)});
-            try self.emitSimpleMirArg(field.value);
+            try self.emitSimpleMirCallArg(field.value);
         }
         try self.out.appendSlice(self.allocator, " }");
     }
@@ -3309,6 +3314,17 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirCallFeedsReturnValue(self: *CEmitter, fn_mir: mir.Function, block: mir.Block, source: mir.SourcePoint, value_id: []const u8) bool {
+        if (std.mem.eql(u8, value_id, "struct_literal")) {
+            var after_literal = false;
+            for (block.instructions) |instruction| {
+                if (instruction.kind == .return_value) break;
+                if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, "struct_literal")) {
+                    after_literal = true;
+                    continue;
+                }
+                if (after_literal and instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), source)) return true;
+            }
+        }
         if (mirBlockHasCall(block, value_id)) {
             for (block.instructions) |instruction| {
                 if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, value_id)) {
