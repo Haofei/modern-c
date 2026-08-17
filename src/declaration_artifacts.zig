@@ -4,8 +4,11 @@
 const ast = @import("ast.zig");
 const attr_syntax = @import("attr_syntax.zig");
 const codegen_attrs = @import("codegen_attrs.zig");
+const declaration_artifact_fallbacks = @import("declaration_artifact_fallbacks.zig");
 const module_parser = @import("module_parser.zig");
 const std = @import("std");
+
+pub const FunctionBodyFallbackArtifact = declaration_artifact_fallbacks.FunctionBodyFallbackArtifact;
 
 /// Transitional declaration artifacts isolated from backend lowering requests.
 pub const EarlyDeclarationArtifacts = struct {
@@ -167,16 +170,9 @@ pub const CodegenFunctionBodyArtifacts = struct {
     };
 
     pub fn legacyFunctionBody(self: CodegenFunctionBodyArtifacts, name: []const u8) ?ast.Block {
-        return findLegacyFunctionBody(self.function_body_fallbacks, name);
+        return declaration_artifact_fallbacks.findLegacyFunctionBody(self.function_body_fallbacks, name);
     }
 };
-
-pub fn findLegacyFunctionBody(fallbacks: []const FunctionBodyFallbackArtifact, name: []const u8) ?ast.Block {
-    for (fallbacks) |fallback| {
-        if (std.mem.eql(u8, fallback.name, name)) return fallback.syntax;
-    }
-    return null;
-}
 
 fn declOrigin(decl: ast.Decl) []const u8 {
     for (decl.attrs) |attr| switch (attr.kind) {
@@ -218,14 +214,6 @@ pub const FunctionArtifact = struct {
     pub fn deinit(self: FunctionArtifact, allocator: std.mem.Allocator) void {
         allocator.free(self.signature.params);
     }
-};
-
-/// Compatibility edge for function-body lowering that still needs source-shaped
-/// blocks. It is kept out of `FunctionArtifact` so ordinary declaration facts do
-/// not grow another syntax body authority while MIR-body lowering is completed.
-pub const FunctionBodyFallbackArtifact = struct {
-    name: []const u8,
-    syntax: ast.Block,
 };
 
 pub const GlobalArtifact = struct {

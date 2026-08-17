@@ -13,10 +13,10 @@
       "return_type: ?ast.TypeExpr": 0,
       "body: ?ast.Block": 0,
       "body_fallback: FunctionBodyFallback": 0,
-      "pub const FunctionBodyFallbackArtifact = struct": 1,
+      "pub const FunctionBodyFallbackArtifact = struct": 0,
       "function_body_fallbacks: []const FunctionBodyFallbackArtifact": 2,
       "syntax: ?ast.Block": 0,
-      "syntax: ast.Block": 1,
+      "syntax: ast.Block": 0,
       "backend_attrs: []const ast.Attr": 0,
       "ty: ?ast.TypeExpr": 0,
       "init: ?ast.Expr": 0,
@@ -30,6 +30,11 @@
       "union_decl: ast.UnionDecl": 1,
       "packed_bits_decl: ast.PackedBitsDecl": 1,
       "overlay_union_decl: ast.OverlayUnionDecl": 1
+    },
+    "src/declaration_artifact_fallbacks.zig": {
+      "pub const FunctionBodyFallbackArtifact = struct": 1,
+      "syntax: ast.Block": 1,
+      "pub fn findLegacyFunctionBody(fallbacks: []const FunctionBodyFallbackArtifact, name: []const u8) ?ast.Block": 1
     }
   },
   "normalized_fact_anchors": {
