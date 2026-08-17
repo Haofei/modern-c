@@ -1402,6 +1402,7 @@ const LlvmEmitter = struct {
         param: []const u8,
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
+        float_literal: SimpleMirFloatLiteral,
         bool_literal: bool,
         global_load: []const u8,
         direct_call: SimpleMirDirectCall,
@@ -3125,11 +3126,11 @@ const LlvmEmitter = struct {
         }
         if (self.global_types.contains(value_id)) return .{ .global_load = value_id };
         var literal_source: ?mir.SourcePoint = null;
-        if (std.mem.eql(u8, value_id, "int") or std.mem.eql(u8, value_id, "bool")) {
+        if (std.mem.eql(u8, value_id, "int") or std.mem.eql(u8, value_id, "bool") or std.mem.eql(u8, value_id, "float")) {
             for (block.instructions) |instruction| {
                 if (instruction.kind == .return_value) break;
                 if (instruction.kind == .integer_literal_conversion or
-                    (instruction.kind == .expr and (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool"))))
+                    (instruction.kind == .expr and (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "float"))))
                 {
                     literal_source = instructionSourcePoint(instruction);
                 }
@@ -3141,7 +3142,7 @@ const LlvmEmitter = struct {
                 .param_field => |field| .{ .param_field = field },
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
-                .float_literal => null,
+                .float_literal => |literal| .{ .float_literal = literal },
             };
         }
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| return .{ .enum_literal = literal };
@@ -3195,7 +3196,7 @@ const LlvmEmitter = struct {
             .param_field => |field| .{ .param_field = field },
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
-            .float_literal => null,
+            .float_literal => |literal| .{ .float_literal = literal },
         };
     }
 
@@ -3240,6 +3241,7 @@ const LlvmEmitter = struct {
                 try self.emitReturnValue(ret_ty, tmp, span);
             },
             .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, span),
+            .float_literal => |literal| try self.emitReturnValue(ret_ty, try self.simpleMirFloatLiteralValue(literal), span),
             .bool_literal => |bool_value| try self.emitReturnValue(ret_ty, if (bool_value) "1" else "0", span),
             .global_load => |name| {
                 const value_name = try self.emitSimpleMirGlobalLoad(name, ret_ty);
@@ -4424,6 +4426,8 @@ const LlvmEmitter = struct {
                 .expr => {
                     if (std.mem.eql(u8, instruction.detail, "int") or
                         std.mem.eql(u8, instruction.detail, "bool") or
+                        std.mem.eql(u8, instruction.detail, "char") or
+                        std.mem.eql(u8, instruction.detail, "float") or
                         std.mem.eql(u8, instruction.detail, "literal")) continue;
                     if ((std.mem.eql(u8, instruction.detail, "add") or
                         std.mem.eql(u8, instruction.detail, "sub") or
@@ -4499,6 +4503,8 @@ const LlvmEmitter = struct {
                 .expr => {
                     if (std.mem.eql(u8, instruction.detail, "int") or
                         std.mem.eql(u8, instruction.detail, "bool") or
+                        std.mem.eql(u8, instruction.detail, "char") or
+                        std.mem.eql(u8, instruction.detail, "float") or
                         std.mem.eql(u8, instruction.detail, "literal")) continue;
                     if ((std.mem.eql(u8, instruction.detail, "add") or
                         std.mem.eql(u8, instruction.detail, "sub") or
@@ -4985,6 +4991,8 @@ const LlvmEmitter = struct {
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or
                     std.mem.eql(u8, instruction.detail, "bool") or
+                    std.mem.eql(u8, instruction.detail, "char") or
+                    std.mem.eql(u8, instruction.detail, "float") or
                     std.mem.eql(u8, instruction.detail, "literal")) continue;
                 if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
                 for (function.signature.params) |param| {

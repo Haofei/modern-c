@@ -1344,6 +1344,7 @@ pub const CEmitter = struct {
         param: []const u8,
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
+        float_literal: SimpleMirFloatLiteral,
         bool_literal: bool,
         global_load: []const u8,
         direct_call: SimpleMirDirectCall,
@@ -3071,11 +3072,11 @@ pub const CEmitter = struct {
         }
         if (self.globals.contains(value_id)) return .{ .global_load = value_id };
         var literal_source: ?mir.SourcePoint = null;
-        if (std.mem.eql(u8, value_id, "int") or std.mem.eql(u8, value_id, "bool")) {
+        if (std.mem.eql(u8, value_id, "int") or std.mem.eql(u8, value_id, "bool") or std.mem.eql(u8, value_id, "float")) {
             for (block.instructions) |instruction| {
                 if (instruction.kind == .return_value) break;
                 if (instruction.kind == .integer_literal_conversion or
-                    (instruction.kind == .expr and (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool"))))
+                    (instruction.kind == .expr and (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "float"))))
                 {
                     literal_source = instructionSourcePoint(instruction);
                 }
@@ -3087,7 +3088,7 @@ pub const CEmitter = struct {
                 .param_field => |field| .{ .param_field = field },
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
-                .float_literal => null,
+                .float_literal => |literal| .{ .float_literal = literal },
             };
         }
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| return .{ .enum_literal = literal };
@@ -3141,7 +3142,7 @@ pub const CEmitter = struct {
             .param_field => |field| .{ .param_field = field },
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
-            .float_literal => null,
+            .float_literal => |literal| .{ .float_literal = literal },
         };
     }
 
@@ -3183,6 +3184,7 @@ pub const CEmitter = struct {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
             .param_field => |field| try self.out.print(self.allocator, "{s}.{s}", .{ try self.cIdent(field.param_name), try self.cIdent(field.field_name) }),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
+            .float_literal => |literal| try self.emitSimpleMirFloatLiteral(literal),
             .bool_literal => |bool_value| try self.out.appendSlice(self.allocator, if (bool_value) "true" else "false"),
             .global_load => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
             .direct_call => |call| try self.emitSimpleMirDirectCall(call),
@@ -4190,6 +4192,8 @@ pub const CEmitter = struct {
                 .expr => {
                     if (std.mem.eql(u8, instruction.detail, "int") or
                         std.mem.eql(u8, instruction.detail, "bool") or
+                        std.mem.eql(u8, instruction.detail, "char") or
+                        std.mem.eql(u8, instruction.detail, "float") or
                         std.mem.eql(u8, instruction.detail, "literal")) continue;
                     if ((std.mem.eql(u8, instruction.detail, "add") or
                         std.mem.eql(u8, instruction.detail, "sub") or
@@ -4265,6 +4269,8 @@ pub const CEmitter = struct {
                 .expr => {
                     if (std.mem.eql(u8, instruction.detail, "int") or
                         std.mem.eql(u8, instruction.detail, "bool") or
+                        std.mem.eql(u8, instruction.detail, "char") or
+                        std.mem.eql(u8, instruction.detail, "float") or
                         std.mem.eql(u8, instruction.detail, "literal")) continue;
                     if ((std.mem.eql(u8, instruction.detail, "add") or
                         std.mem.eql(u8, instruction.detail, "sub") or
@@ -4747,6 +4753,8 @@ pub const CEmitter = struct {
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or
                     std.mem.eql(u8, instruction.detail, "bool") or
+                    std.mem.eql(u8, instruction.detail, "char") or
+                    std.mem.eql(u8, instruction.detail, "float") or
                     std.mem.eql(u8, instruction.detail, "literal")) continue;
                 if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
                 for (function.signature.params) |param| {

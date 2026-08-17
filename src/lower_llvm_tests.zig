@@ -3659,6 +3659,13 @@ test "LLVM float literal returns lower without body fallback" {
         \\fn direct_call_small() -> f32 {
         \\    return mark_float(1.5);
         \\}
+        \\fn choose(flag: bool) -> f32 {
+        \\    if (flag) {
+        \\        return 1.5;
+        \\    } else {
+        \\        return 2.5;
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -3684,6 +3691,11 @@ test "LLVM float literal returns lower without body fallback" {
     try expectContains(call_body, "call float @mark_float(float 0x3FF8000000000000)");
     try expectContains(call_body, "ret float %t");
     try expectNotContains(call_body, "alloca");
+
+    const choose_body = try llvmFunctionBody(output.items, "define internal float @choose");
+    try expectContains(choose_body, "ret float 0x3FF8000000000000");
+    try expectContains(choose_body, "ret float 0x4004000000000000");
+    try expectNotContains(choose_body, "alloca");
 }
 
 fn clearPointerProvenanceFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
