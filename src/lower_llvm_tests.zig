@@ -1724,6 +1724,13 @@ test "LLVM emits simple global stores from MIR" {
         \\        g = y;
         \\    }
         \\}
+        \\fn if_store_float(flag: bool) {
+        \\    if (flag) {
+        \\        small_float = 1.5;
+        \\    } else {
+        \\        small_float = 2.5;
+        \\    }
+        \\}
         \\fn if_store_no_else(flag: bool, x: u32) {
         \\    if (flag) {
         \\        g = x;
@@ -1932,6 +1939,12 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(if_body, "store atomic i32 %x, ptr @g unordered, align 4");
     try expectContains(if_body, "store atomic i32 %y, ptr @g unordered, align 4");
     try expectNotContains(if_body, "alloca");
+
+    const if_float_body = try llvmFunctionBody(output.items, "define internal void @if_store_float");
+    try expectContains(if_float_body, "br i1 %flag");
+    try expectContains(if_float_body, "store atomic float 0x3FF8000000000000, ptr @small_float unordered, align 4");
+    try expectContains(if_float_body, "store atomic float 0x4004000000000000, ptr @small_float unordered, align 4");
+    try expectNotContains(if_float_body, "alloca");
 
     const no_else_body = try llvmFunctionBody(output.items, "define internal void @if_store_no_else");
     try expectContains(no_else_body, "br i1 %flag");
@@ -3695,6 +3708,9 @@ test "LLVM float literal returns lower without body fallback" {
         \\    }
         \\    return 2.5;
         \\}
+        \\fn less_than_literal(value: f32) -> bool {
+        \\    return value < 1.5;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -3730,6 +3746,11 @@ test "LLVM float literal returns lower without body fallback" {
     try expectContains(choose_early_body, "ret float 0x3FF8000000000000");
     try expectContains(choose_early_body, "ret float 0x4004000000000000");
     try expectNotContains(choose_early_body, "alloca");
+
+    const less_body = try llvmFunctionBody(output.items, "define internal i1 @less_than_literal");
+    try expectContains(less_body, "fcmp olt float %value, 0x3FF8000000000000");
+    try expectContains(less_body, "ret i1 %t");
+    try expectNotContains(less_body, "alloca");
 }
 
 fn clearPointerProvenanceFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {

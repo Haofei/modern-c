@@ -3580,8 +3580,12 @@ const LlvmEmitter = struct {
     fn emitSimpleMirCompareBinary(self: *LlvmEmitter, binary: SimpleMirCompareBinary, span: diagnostics.Span) ![]const u8 {
         const ty = binary.operand_fact.target_ty;
         const llvm_ty = try self.llvmType(ty);
-        if (!self.isBoolType(ty)) _ = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
-        const predicate = try self.simpleMirComparePredicate(binary.op, self.isSignedIntegerType(ty));
+        const is_float = lower_llvm_shape.isFloatTypeOf(&self.type_aliases, ty);
+        if (!is_float and !self.isBoolType(ty)) _ = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+        const predicate = if (is_float)
+            try simpleMirFloatComparePredicate(binary.op)
+        else
+            try self.simpleMirComparePredicate(binary.op, self.isSignedIntegerType(ty));
         const left = try self.simpleMirArgValue(binary.left, span);
         const right = try self.simpleMirArgValue(binary.right, span);
         const value = try self.nextTemp();
@@ -3589,8 +3593,18 @@ const LlvmEmitter = struct {
             try std.fmt.allocPrint(self.scratch.allocator(), ", !dbg !{d}", .{dbg})
         else
             "";
-        try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {s}{s}\n", .{ value, predicate, llvm_ty, left, right, dbg_suffix });
+        try self.out.print(self.allocator, "  {s} = {s} {s} {s} {s}, {s}{s}\n", .{ value, if (is_float) "fcmp" else "icmp", predicate, llvm_ty, left, right, dbg_suffix });
         return value;
+    }
+
+    fn simpleMirFloatComparePredicate(op: []const u8) ![]const u8 {
+        if (std.mem.eql(u8, op, "eq")) return "oeq";
+        if (std.mem.eql(u8, op, "ne")) return "une";
+        if (std.mem.eql(u8, op, "lt")) return "olt";
+        if (std.mem.eql(u8, op, "le")) return "ole";
+        if (std.mem.eql(u8, op, "gt")) return "ogt";
+        if (std.mem.eql(u8, op, "ge")) return "oge";
+        return error.UnsupportedLlvmEmission;
     }
 
     fn emitSimpleMirLogicalNot(self: *LlvmEmitter, arg: SimpleMirArg, span: diagnostics.Span) ![]const u8 {

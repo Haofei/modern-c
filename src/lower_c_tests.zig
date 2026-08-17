@@ -1003,6 +1003,13 @@ test "lower-c emits simple global stores from MIR" {
         \\        g = y;
         \\    }
         \\}
+        \\fn if_store_float(flag: bool) {
+        \\    if (flag) {
+        \\        small_float = 1.5;
+        \\    } else {
+        \\        small_float = 2.5;
+        \\    }
+        \\}
         \\fn if_store_no_else(flag: bool, x: u32) {
         \\    if (flag) {
         \\        g = x;
@@ -1185,6 +1192,14 @@ test "lower-c emits simple global stores from MIR" {
     try expectContains(if_body, "mc_race_store_u32(&g, (uint32_t)y);");
     try expectNotContains(if_body, "switch");
     try expectNotContains(if_body, "mc_tmp");
+
+    const if_float_body = try cFunctionBody(output.items, "static void if_store_float(bool flag)");
+    try expectContains(if_float_body, "if (flag) {");
+    try expectContains(if_float_body, "mc_race_store_f32(&small_float, (float)1.5f);");
+    try expectContains(if_float_body, "} else {");
+    try expectContains(if_float_body, "mc_race_store_f32(&small_float, (float)2.5f);");
+    try expectNotContains(if_float_body, "switch");
+    try expectNotContains(if_float_body, "mc_tmp");
 
     const no_else_body = try cFunctionBody(output.items, "static void if_store_no_else(bool flag, uint32_t x)");
     try expectContains(no_else_body, "if (flag) {");
@@ -1940,6 +1955,9 @@ test "lower-c emits float literal returns from MIR without body fallback" {
         \\    }
         \\    return 2.5;
         \\}
+        \\fn less_than_literal(value: f32) -> bool {
+        \\    return value < 1.5;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1980,6 +1998,10 @@ test "lower-c emits float literal returns from MIR without body fallback" {
     try expectContains(choose_early_body, "return 1.5f;");
     try expectContains(choose_early_body, "return 2.5f;");
     try expectNotContains(choose_early_body, "mc_tmp");
+
+    const less_body = try cFunctionBody(output.items, "static bool less_than_literal(float value)");
+    try expectContains(less_body, "return (value < 1.5f);");
+    try expectNotContains(less_body, "mc_tmp");
 }
 
 test "lower-c emits local and assigned char literal returns from MIR without body fallback" {
