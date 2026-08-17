@@ -535,6 +535,7 @@ test "lower-c emits simple global stores from MIR" {
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
+        \\extern fn hit(x: u32) -> void;
         \\fn store_param(x: u32) {
         \\    g = x;
         \\}
@@ -572,6 +573,14 @@ test "lower-c emits simple global stores from MIR" {
         \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
+        \\}
+        \\fn call_then_store(x: u32) {
+        \\    hit(x);
+        \\    g = x;
+        \\}
+        \\fn store_then_call(x: u32) {
+        \\    g = x;
+        \\    hit(x);
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -625,6 +634,16 @@ test "lower-c emits simple global stores from MIR" {
     const neg_body = try cFunctionBody(output.items, "static void store_neg(int32_t a)");
     try expectContains(neg_body, "mc_race_store_i32(&s, (int32_t)mc_checked_neg_i32(a));");
     try expectNotContains(neg_body, "mc_tmp");
+
+    const call_then_store_body = try cFunctionBody(output.items, "static void call_then_store(uint32_t x)");
+    try expectContains(call_then_store_body, "hit(x);");
+    try expectContains(call_then_store_body, "mc_race_store_u32(&g, (uint32_t)x);");
+    try expectNotContains(call_then_store_body, "mc_tmp");
+
+    const store_then_call_body = try cFunctionBody(output.items, "static void store_then_call(uint32_t x)");
+    try expectContains(store_then_call_body, "mc_race_store_u32(&g, (uint32_t)x);");
+    try expectContains(store_then_call_body, "hit(x);");
+    try expectNotContains(store_then_call_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before simple returns" {

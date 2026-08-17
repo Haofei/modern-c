@@ -538,6 +538,7 @@ test "LLVM emits simple global stores from MIR" {
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
+        \\extern fn hit(x: u32) -> void;
         \\fn store_param(x: u32) {
         \\    g = x;
         \\}
@@ -575,6 +576,14 @@ test "LLVM emits simple global stores from MIR" {
         \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
+        \\}
+        \\fn call_then_store(x: u32) {
+        \\    hit(x);
+        \\    g = x;
+        \\}
+        \\fn store_then_call(x: u32) {
+        \\    g = x;
+        \\    hit(x);
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -642,6 +651,16 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(neg_body, "store atomic i32 %t");
     try expectContains(neg_body, "ptr @s unordered, align 4");
     try expectNotContains(neg_body, "alloca");
+
+    const call_then_store_body = try llvmFunctionBody(output.items, "define internal void @call_then_store");
+    try expectContains(call_then_store_body, "call void @hit(i32 %x)");
+    try expectContains(call_then_store_body, "store atomic i32 %x, ptr @g unordered, align 4");
+    try expectNotContains(call_then_store_body, "alloca");
+
+    const store_then_call_body = try llvmFunctionBody(output.items, "define internal void @store_then_call");
+    try expectContains(store_then_call_body, "store atomic i32 %x, ptr @g unordered, align 4");
+    try expectContains(store_then_call_body, "call void @hit(i32 %x)");
+    try expectNotContains(store_then_call_body, "alloca");
 }
 
 test "LLVM preserves MIR void calls before simple returns" {
