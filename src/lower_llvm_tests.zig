@@ -3351,11 +3351,9 @@ test "LLVM target-typed char literals require MIR facts" {
     defer parsed.deinit();
 
     {
-        var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
-        defer module_mir.deinit();
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
-        try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, "llvm_char_literal_facts.mc", .{}, false, .riscv64, null);
+        try appendLlvmTestNoFunctionBodyFallback("llvm_mir_char_literal_facts.mc", source, &output);
         try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i16 65") != null);
     }
     {

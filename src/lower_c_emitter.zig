@@ -1761,6 +1761,16 @@ pub const CEmitter = struct {
                 if (sameMirSourceLocation(fact.source, source)) return if (simpleMirNoTrap(fn_mir)) .{ .integer_literal = fact.literal } else null;
             }
         }
+        if (std.mem.eql(u8, value_id, "char")) {
+            const source = simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret);
+            for (fn_mir.integer_facts) |fact| {
+                if (sameMirSourceLocation(fact.source, source)) {
+                    const value = numeric.parseCharLiteral(fact.literal) orelse return null;
+                    const literal = std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value}) catch return null;
+                    return if (simpleMirNoTrap(fn_mir)) .{ .integer_literal = literal } else null;
+                }
+            }
+        }
         if (std.mem.eql(u8, value_id, "bool")) {
             const source = simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret);
             for (fn_mir.bool_facts) |fact| {
@@ -3828,7 +3838,7 @@ pub const CEmitter = struct {
             .param, .local, .assign, .target_type, .integer_literal_conversion, .representation_check, .representation_use, .typed_load, .binary, .unary, .add_overflow, .return_value => {},
             .call, .call_target => {},
             .expr => {
-                if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "struct_literal") or std.mem.eql(u8, instruction.detail, "array_literal")) continue;
+                if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "char") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "struct_literal") or std.mem.eql(u8, instruction.detail, "array_literal")) continue;
                 if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
                 if (std.mem.eql(u8, instruction.detail, "null") and self.simpleMirNullLiteralAtSource(fn_mir, instructionSourcePoint(instruction)) != null) continue;
                 if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;

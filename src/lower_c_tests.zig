@@ -1747,6 +1747,21 @@ test "lower-c emits conversion literal return from MIR without body fallback" {
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c emits char literal return from MIR without body fallback" {
+    const source =
+        \\fn char_value() -> u16 {
+        \\    return 'A';
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_char_literal_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint16_t char_value(void)");
+    try expectContains(body, "return 65;");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c emits logical-not returns from MIR without body fallback" {
     const source =
         \\fn not_param(flag: bool) -> bool {
@@ -3123,7 +3138,8 @@ test "lower-c target-typed char literals require MIR facts" {
         var output: std.ArrayList(u8) = .empty;
         defer output.deinit(std.testing.allocator);
         try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_char_literal_facts.mc", .{}, false, null);
-        try std.testing.expect(std.mem.indexOf(u8, output.items, "((uint16_t)65)") != null);
+        try std.testing.expect(std.mem.indexOf(u8, output.items, "return 65;") != null or
+            std.mem.indexOf(u8, output.items, "((uint16_t)65)") != null);
     }
     {
         var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});

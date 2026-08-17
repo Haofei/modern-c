@@ -12138,6 +12138,7 @@ fn integerFactLiteralText(expr: ast.Expr) []const u8 {
         .grouped => |inner| integerFactLiteralText(inner.*),
         .cast => |node| integerFactLiteralText(node.value.*),
         .int_literal => |text| text,
+        .char_literal => |text| text,
         else => exprText(expr),
     };
 }
