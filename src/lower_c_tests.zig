@@ -277,6 +277,9 @@ test "lower-c emits pure local-only void functions from MIR" {
         \\fn local_only() { let x: u32 = 1; }
         \\fn param_local(p: u32) { let x: u32 = p; }
         \\fn var_only() { var x: u32 = 1; x = 2; }
+        \\fn if_local(flag: bool) { if (flag) { let x: u32 = 1; } else { let y: u32 = 2; } }
+        \\fn if_assign(flag: bool) { var x: u32 = 0; if (flag) { x = 1; } else { x = 2; } }
+        \\fn if_no_else(flag: bool) { if (flag) { let x: u32 = 1; } }
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -293,6 +296,20 @@ test "lower-c emits pure local-only void functions from MIR" {
     const var_body = try cFunctionBody(output.items, "static void var_only(void)");
     try expectNotContains(var_body, "uint32_t x");
     try expectNotContains(var_body, "x =");
+
+    const if_local_body = try cFunctionBody(output.items, "static void if_local(bool flag)");
+    try expectNotContains(if_local_body, "if (flag)");
+    try expectNotContains(if_local_body, "uint32_t x");
+    try expectNotContains(if_local_body, "uint32_t y");
+
+    const if_assign_body = try cFunctionBody(output.items, "static void if_assign(bool flag)");
+    try expectNotContains(if_assign_body, "if (flag)");
+    try expectNotContains(if_assign_body, "uint32_t x");
+    try expectNotContains(if_assign_body, "x =");
+
+    const if_no_else_body = try cFunctionBody(output.items, "static void if_no_else(bool flag)");
+    try expectNotContains(if_no_else_body, "if (flag)");
+    try expectNotContains(if_no_else_body, "uint32_t x");
 }
 
 test "lower-c preserves MIR void calls before simple returns" {

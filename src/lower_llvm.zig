@@ -1561,6 +1561,7 @@ const LlvmEmitter = struct {
         if (fn_mir.return_ty != .void) return null;
         if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+        if (self.simpleMirConditionalEmptyVoidBody(function, fn_mir)) return .empty;
         if (self.simpleMirConditionalVoidBody(function, fn_mir)) |conditional| return .{ .conditional_direct_calls = conditional };
         if (!simpleMirNoTrap(fn_mir)) return null;
         const block = fn_mir.blocks[0];
@@ -1569,10 +1570,29 @@ const LlvmEmitter = struct {
         if (self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block, false)) |calls| {
             if (calls.count > 1) return .{ .direct_calls = calls };
         }
-        const call_source = self.simpleMirCallSource(fn_mir) orelse return if (simpleMirEmptyVoidBlock(function, block)) .empty else null;
+        const call_source = self.simpleMirCallSource(fn_mir) orelse return if (simpleMirEmptyVoidBlock(function, fn_mir, block)) .empty else null;
         if (!simpleMirDirectCallResultVoid(fn_mir, call_source)) return null;
         const call = self.simpleMirDirectCallAtSource(function, fn_mir, call_source) orelse return null;
         return .{ .direct_call = call };
+    }
+
+    fn simpleMirConditionalEmptyVoidBody(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) bool {
+        if (fn_mir.blocks.len != 4 or fn_mir.trap_edges.len != 0 or fn_mir.pointer_provenance_facts.len != 0) return false;
+        const entry = fn_mir.blocks[0];
+        if (entry.terminator != .switch_ or entry.successors.len != 2) return false;
+        _ = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return false;
+        const after_block = fn_mir.blocks[1];
+        if (after_block.terminator != .fallthrough or !simpleMirEmptyVoidBlock(function, fn_mir, after_block)) return false;
+        const then_index = entry.successors[0];
+        const else_index = entry.successors[1];
+        if (then_index >= fn_mir.blocks.len or else_index >= fn_mir.blocks.len) return false;
+        const then_block = fn_mir.blocks[then_index];
+        const else_block = fn_mir.blocks[else_index];
+        if (then_block.terminator != .jump or else_block.terminator != .jump) return false;
+        if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return false;
+        return simpleMirEntrySwitchBlockIsPure(function, entry) and
+            simpleMirEmptyVoidBlock(function, fn_mir, then_block) and
+            simpleMirEmptyVoidBlock(function, fn_mir, else_block);
     }
 
     fn simpleMirConditionalVoidBody(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalVoidBody {
@@ -2360,10 +2380,29 @@ const LlvmEmitter = struct {
         return source;
     }
 
-    fn simpleMirEmptyVoidBlock(function: anytype, block: mir.Block) bool {
+    fn simpleMirEmptyVoidBlock(function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
+        for (block.instructions) |instruction| switch (instruction.kind) {
+            .param, .local, .target_type, .integer_literal_conversion => {},
+            .assign => if (!mirFunctionHasLocal(fn_mir, instruction.detail)) return false,
+            .expr => {
+                if (std.mem.eql(u8, instruction.detail, "int") or
+                    std.mem.eql(u8, instruction.detail, "bool") or
+                    std.mem.eql(u8, instruction.detail, "literal")) continue;
+                if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
+                for (function.signature.params) |param| {
+                    if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
+                } else return false;
+            },
+            else => return false,
+        };
+        return true;
+    }
+
+    fn simpleMirEntrySwitchBlockIsPure(function: anytype, block: mir.Block) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
             .param, .local, .target_type, .integer_literal_conversion => {},
             .assign => if (!mirBlockHasLocal(block, instruction.detail)) return false,
+            .binary => if (!std.mem.eql(u8, instruction.detail, "switch_subject")) return false,
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool")) continue;
                 if (mirBlockHasLocal(block, instruction.detail)) continue;
@@ -2450,6 +2489,13 @@ const LlvmEmitter = struct {
     fn mirBlockHasLocal(block: mir.Block, name: []const u8) bool {
         for (block.instructions) |instruction| {
             if (instruction.kind == .local and std.mem.eql(u8, instruction.detail, name)) return true;
+        }
+        return false;
+    }
+
+    fn mirFunctionHasLocal(fn_mir: mir.Function, name: []const u8) bool {
+        for (fn_mir.blocks) |block| {
+            if (mirBlockHasLocal(block, name)) return true;
         }
         return false;
     }

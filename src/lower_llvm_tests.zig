@@ -261,6 +261,9 @@ test "LLVM emits pure local-only void functions from MIR" {
         \\fn local_only() { let x: u32 = 1; }
         \\fn param_local(p: u32) { let x: u32 = p; }
         \\fn var_only() { var x: u32 = 1; x = 2; }
+        \\fn if_local(flag: bool) { if (flag) { let x: u32 = 1; } else { let y: u32 = 2; } }
+        \\fn if_assign(flag: bool) { var x: u32 = 0; if (flag) { x = 1; } else { x = 2; } }
+        \\fn if_no_else(flag: bool) { if (flag) { let x: u32 = 1; } }
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -280,6 +283,24 @@ test "LLVM emits pure local-only void functions from MIR" {
     try expectContains(var_body, "ret void");
     try expectNotContains(var_body, "alloca");
     try expectNotContains(var_body, "store");
+
+    const if_local_body = try llvmFunctionBody(output.items, "define internal void @if_local");
+    try expectContains(if_local_body, "ret void");
+    try expectNotContains(if_local_body, "br i1");
+    try expectNotContains(if_local_body, "alloca");
+    try expectNotContains(if_local_body, "store");
+
+    const if_assign_body = try llvmFunctionBody(output.items, "define internal void @if_assign");
+    try expectContains(if_assign_body, "ret void");
+    try expectNotContains(if_assign_body, "br i1");
+    try expectNotContains(if_assign_body, "alloca");
+    try expectNotContains(if_assign_body, "store");
+
+    const if_no_else_body = try llvmFunctionBody(output.items, "define internal void @if_no_else");
+    try expectContains(if_no_else_body, "ret void");
+    try expectNotContains(if_no_else_body, "br i1");
+    try expectNotContains(if_no_else_body, "alloca");
+    try expectNotContains(if_no_else_body, "store");
 }
 
 test "LLVM preserves MIR void calls before simple returns" {
