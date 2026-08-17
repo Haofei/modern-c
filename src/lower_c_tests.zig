@@ -2767,6 +2767,50 @@ test "lower-c void calls before grouped scalar returns lower from MIR without bo
     try expectNotContains(call_body, "uint16_t x");
 }
 
+test "lower-c conditional grouped scalar returns lower from MIR without body fallback" {
+    const source =
+        \\extern fn make(value: u16) -> u16;
+        \\fn choose_grouped_param(flag: bool, value: u16) -> u16 {
+        \\    if (flag) {
+        \\        return (value);
+        \\    } else {
+        \\        return (value);
+        \\    }
+        \\}
+        \\fn choose_grouped_binary(flag: bool, value: u16) -> u16 {
+        \\    if (flag) {
+        \\        return (value) + 1;
+        \\    } else {
+        \\        return (value) + 2;
+        \\    }
+        \\}
+        \\fn choose_grouped_call(flag: bool, value: u16) -> u16 {
+        \\    if (flag) {
+        \\        return (make(value));
+        \\    } else {
+        \\        return (make(value));
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_grouped_scalar_returns.mc", source, &output);
+
+    const param_body = try cFunctionBody(output.items, "static uint16_t choose_grouped_param(bool flag, uint16_t value)");
+    try expectContains(param_body, "if (flag)");
+    try expectContains(param_body, "return value;");
+    try expectNotContains(param_body, "mc_tmp");
+
+    const binary_body = try cFunctionBody(output.items, "static uint16_t choose_grouped_binary(bool flag, uint16_t value)");
+    try expectContains(binary_body, "return mc_checked_add_u16(value, 1);");
+    try expectContains(binary_body, "return mc_checked_add_u16(value, 2);");
+    try expectNotContains(binary_body, "mc_tmp");
+
+    const call_body = try cFunctionBody(output.items, "static uint16_t choose_grouped_call(bool flag, uint16_t value)");
+    try expectContains(call_body, "return make(value);");
+    try expectNotContains(call_body, "mc_tmp");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;
