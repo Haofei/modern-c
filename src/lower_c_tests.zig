@@ -4349,6 +4349,28 @@ test "lower-c emits unchecked arithmetic call from MIR without body fallback" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "(a + 1)") != null);
 }
 
+test "lower-c emits unchecked sub and mul returns from MIR without body fallback" {
+    const source =
+        \\fn unchecked_sub_gate(a: u32, b: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        return unchecked.sub(a, b);
+        \\    }
+        \\}
+        \\fn unchecked_mul_gate(a: u32, b: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        return unchecked.mul(a, b);
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_unchecked_sub_mul_calls.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow target=value op=sub") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return (a - b);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow target=value op=mul") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return (a * b);") != null);
+}
+
 test "lower-c rejects prebuilt MIR with missing atomic call target facts" {
     const source =
         \\fn atomic_call_target_fact_gate() -> u32 {

@@ -1538,7 +1538,8 @@ const LlvmEmitter = struct {
     };
 
     const SimpleMirWrappingBinary = struct {
-        kind: enum { wrapping_add, unchecked_add },
+        kind: enum { wrapping_add, unchecked },
+        op: []const u8,
         result_fact: mir.TargetTypeFact,
         range_fact: ?mir.RangeFact = null,
         left: SimpleMirCallArg,
@@ -2036,23 +2037,32 @@ const LlvmEmitter = struct {
         const left = self.simpleMirCallArgAt(function, fn_mir, left_fact_value.source) orelse return null;
         const right = self.simpleMirCallArgAt(function, fn_mir, right_fact_value.source) orelse return null;
         if (simpleMirCallArgHasDirectCall(left) or simpleMirCallArgHasDirectCall(right)) return null;
-        return .{ .kind = .wrapping_add, .result_fact = result_fact, .left = left, .right = right };
+        return .{ .kind = .wrapping_add, .op = "add", .result_fact = result_fact, .left = left, .right = right };
     }
 
     fn simpleMirUncheckedBinaryReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
         if (!simpleMirNoTrap(fn_mir)) return null;
         const call_source = simpleMirReturnValueSource(block, value_id) orelse return null;
-        var has_unchecked_call = false;
+        var unchecked_op: ?[]const u8 = null;
         for (fn_mir.call_target_facts) |fact| {
-            if (fact.kind == .unchecked_add and sameMirSourceLocation(fact.source, call_source)) {
-                has_unchecked_call = true;
-                break;
+            if (mir.uncheckedCallFactInfo(fact.kind)) |op| {
+                if (!sameMirSourceLocation(fact.source, call_source)) continue;
+                if (unchecked_op != null) return null;
+                unchecked_op = op;
             }
         }
-        if (!has_unchecked_call) return null;
+        const op = unchecked_op orelse return null;
+        const expected_detail = if (std.mem.eql(u8, op, "add"))
+            "unchecked.add"
+        else if (std.mem.eql(u8, op, "sub"))
+            "unchecked.sub"
+        else if (std.mem.eql(u8, op, "mul"))
+            "unchecked.mul"
+        else
+            return null;
         for (block.instructions) |instruction| {
             if (instruction.kind == .unchecked_assume and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) {
-                if (!std.mem.eql(u8, instruction.detail, "unchecked.add")) return null;
+                if (!std.mem.eql(u8, instruction.detail, expected_detail)) return null;
                 break;
             }
         } else return null;
@@ -2076,13 +2086,13 @@ const LlvmEmitter = struct {
                 else => {},
             }
         }
-        const range_fact = simpleMirNoOverflowRangeFactAt(fn_mir, "value", "add", call_source);
+        const range_fact = simpleMirNoOverflowRangeFactAt(fn_mir, "value", op, call_source);
         const left_fact_value = left_fact orelse return null;
         const right_fact_value = right_fact orelse return null;
         const left = self.simpleMirCallArgAt(function, fn_mir, left_fact_value.source) orelse return null;
         const right = self.simpleMirCallArgAt(function, fn_mir, right_fact_value.source) orelse return null;
         if (simpleMirCallArgHasDirectCall(left) or simpleMirCallArgHasDirectCall(right)) return null;
-        return .{ .kind = .unchecked_add, .result_fact = result_fact, .range_fact = range_fact, .left = left, .right = right };
+        return .{ .kind = .unchecked, .op = op, .result_fact = result_fact, .range_fact = range_fact, .left = left, .right = right };
     }
 
     fn simpleMirStructLiteralReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirStructLiteralReturn {
@@ -3323,7 +3333,7 @@ const LlvmEmitter = struct {
         _ = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         switch (binary.kind) {
             .wrapping_add => {},
-            .unchecked_add => {
+            .unchecked => {
                 const fact = binary.range_fact orelse return error.UnsupportedLlvmEmission;
                 const function_name = self.current_function orelse return error.UnsupportedLlvmEmission;
                 try self.out.print(self.allocator, "  ; mir range_fact consumed fn={s} target={s} op={s} assumption=no_overflow source={d}:{d}\n", .{
@@ -3338,7 +3348,7 @@ const LlvmEmitter = struct {
         const llvm_ty = try self.llvmType(ty);
         const left = try self.simpleMirCallArgValue(binary.left, span);
         const right = try self.simpleMirCallArgValue(binary.right, span);
-        return self.emitPlainBinaryValues("add", llvm_ty, left, right);
+        return self.emitPlainBinaryValues(binary.op, llvm_ty, left, right);
     }
 
     fn emitSimpleMirCompareBinary(self: *LlvmEmitter, binary: SimpleMirCompareBinary, span: diagnostics.Span) ![]const u8 {
@@ -4072,12 +4082,16 @@ const LlvmEmitter = struct {
                 }
             }
         }
-        if (std.mem.eql(u8, value_id, "add")) {
+        if (std.mem.eql(u8, value_id, "add") or std.mem.eql(u8, value_id, "sub") or std.mem.eql(u8, value_id, "mul")) {
             for (fn_mir.call_target_facts) |fact| {
-                if ((fact.kind != .wrapping_add and fact.kind != .unchecked_add) or !sameMirSourceLocation(fact.source, source)) continue;
+                if ((fact.kind != .wrapping_add and mir.uncheckedCallFactInfo(fact.kind) == null) or !sameMirSourceLocation(fact.source, source)) continue;
+                if (fact.kind == .wrapping_add and !std.mem.eql(u8, value_id, "add")) continue;
+                if (mir.uncheckedCallFactInfo(fact.kind)) |op| {
+                    if (!std.mem.eql(u8, value_id, op)) continue;
+                }
                 for (block.instructions) |instruction| {
                     if (instruction.kind == .expr and
-                        std.mem.eql(u8, instruction.detail, "add") and
+                        std.mem.eql(u8, instruction.detail, value_id) and
                         sameMirSourceLocation(instructionSourcePoint(instruction), source))
                     {
                         return true;
@@ -4480,7 +4494,7 @@ const LlvmEmitter = struct {
             .call, .call_target => {},
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "char") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "struct_literal") or std.mem.eql(u8, instruction.detail, "array_literal")) continue;
-                if ((std.mem.eql(u8, instruction.detail, "add") or std.mem.eql(u8, instruction.detail, "wrapping") or std.mem.eql(u8, instruction.detail, "unchecked")) and simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
+                if ((std.mem.eql(u8, instruction.detail, "add") or std.mem.eql(u8, instruction.detail, "sub") or std.mem.eql(u8, instruction.detail, "mul") or std.mem.eql(u8, instruction.detail, "wrapping") or std.mem.eql(u8, instruction.detail, "unchecked")) and simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
                 if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
                 if (std.mem.eql(u8, instruction.detail, "null") and simpleMirNullLiteralAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
                 if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
@@ -4588,7 +4602,7 @@ const LlvmEmitter = struct {
 
     fn simpleMirArithmeticCallAtSource(fn_mir: mir.Function, source: mir.SourcePoint) bool {
         for (fn_mir.call_target_facts) |fact| {
-            if ((fact.kind == .wrapping_add or fact.kind == .unchecked_add) and sameMirSourceLocation(fact.source, source)) return true;
+            if ((fact.kind == .wrapping_add or mir.uncheckedCallFactInfo(fact.kind) != null) and sameMirSourceLocation(fact.source, source)) return true;
         }
         return false;
     }
