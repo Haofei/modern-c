@@ -2539,6 +2539,31 @@ test "lower-c local literal checked components return from MIR without body fall
     try expectContains(array_body, "return (mc_array_u32_2){ .elems = { mc_checked_add_u32(a, b), mc_checked_add_u32(b, c) } };");
 }
 
+test "lower-c assigned literal checked components return from MIR without body fallback" {
+    const source =
+        \\struct Pair { first: u32, second: u32 }
+        \\fn assigned_struct(a: u32, b: u32, c: u32) -> Pair {
+        \\    var p: Pair = .{ .first = a, .second = b };
+        \\    p = .{ .first = a + b, .second = b + c };
+        \\    return p;
+        \\}
+        \\fn assigned_array(a: u32, b: u32, c: u32) -> [2]u32 {
+        \\    var p: [2]u32 = .{ a, b };
+        \\    p = .{ a + b, b + c };
+        \\    return p;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_assigned_literal_checked_components.mc", source, &output);
+
+    const struct_body = try cFunctionBody(output.items, "static Pair assigned_struct(uint32_t a, uint32_t b, uint32_t c)");
+    try expectContains(struct_body, "return (Pair){ .first = mc_checked_add_u32(a, b), .second = mc_checked_add_u32(b, c) };");
+
+    const array_body = try cFunctionBody(output.items, "static mc_array_u32_2 assigned_array(uint32_t a, uint32_t b, uint32_t c)");
+    try expectContains(array_body, "return (mc_array_u32_2){ .elems = { mc_checked_add_u32(a, b), mc_checked_add_u32(b, c) } };");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;
