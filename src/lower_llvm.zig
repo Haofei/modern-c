@@ -1357,6 +1357,8 @@ const LlvmEmitter = struct {
     const SimpleMirGlobalStoreValue = union(enum) {
         arg: SimpleMirArg,
         global_load: []const u8,
+        compare_binary: SimpleMirCompareBinary,
+        logical_not: SimpleMirArg,
     };
 
     const SimpleMirCheckedBinary = struct {
@@ -1493,7 +1495,7 @@ const LlvmEmitter = struct {
                     const span = spanFromMirSourcePoint(store.source);
                     const global_ty = self.global_types.get(store.name) orelse return error.UnsupportedLlvmEmission;
                     const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{store.name});
-                    try self.emitOrdinaryStore(global_ty, try self.llvmType(global_ty), try self.simpleMirGlobalStoreValue(store.value, global_ty), ptr, true);
+                    try self.emitOrdinaryStore(global_ty, try self.llvmType(global_ty), try self.simpleMirGlobalStoreValue(store.value, global_ty, span), ptr, true);
                     try self.emitReturnVoid(span);
                 },
                 .direct_call => |call| {
@@ -1694,21 +1696,33 @@ const LlvmEmitter = struct {
         const name = target_name orelse return null;
         const source = target_source.?;
         const value_source = self.simpleMirAssignmentSourceInBlock(block, name) orelse return null;
-        const value: SimpleMirGlobalStoreValue = if (self.simpleMirArgAt(function, fn_mir, value_source)) |arg|
+        const value: SimpleMirGlobalStoreValue = if (self.simpleMirCompareBinaryAtSource(function, fn_mir, value_source)) |binary|
+            .{ .compare_binary = binary }
+        else if (self.simpleMirLogicalNotAtSource(function, fn_mir, value_source)) |arg|
+            .{ .logical_not = arg }
+        else if (self.simpleMirArgAt(function, fn_mir, value_source)) |arg|
             .{ .arg = arg }
         else if (self.simpleMirGlobalAtSource(function, fn_mir, value_source)) |source_name|
             .{ .global_load = source_name }
         else
             return null;
-        if (!self.blockOnlyContainsSimpleMirGlobalStoreInstructions(function, block, name)) return null;
+        if (!self.blockOnlyContainsSimpleMirGlobalStoreInstructions(function, fn_mir, block, name)) return null;
         return .{ .name = name, .value = value, .source = source };
     }
 
-    fn blockOnlyContainsSimpleMirGlobalStoreInstructions(self: *LlvmEmitter, function: anytype, block: mir.Block, target_name: []const u8) bool {
+    fn blockOnlyContainsSimpleMirGlobalStoreInstructions(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, target_name: []const u8) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
             .param, .target_type, .integer_literal_conversion => {},
             .assign => {
                 if (!std.mem.eql(u8, instruction.detail, target_name)) return false;
+            },
+            .binary => {
+                const source = instructionSourcePoint(instruction);
+                if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return false;
+            },
+            .unary => {
+                const source = instructionSourcePoint(instruction);
+                if (self.simpleMirLogicalNotAtSource(function, fn_mir, source) == null) return false;
             },
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, target_name) or
@@ -2122,10 +2136,12 @@ const LlvmEmitter = struct {
         };
     }
 
-    fn simpleMirGlobalStoreValue(self: *LlvmEmitter, value: SimpleMirGlobalStoreValue, expected_ty: anytype) ![]const u8 {
+    fn simpleMirGlobalStoreValue(self: *LlvmEmitter, value: SimpleMirGlobalStoreValue, expected_ty: anytype, span: diagnostics.Span) ![]const u8 {
         return switch (value) {
             .arg => |arg| try self.simpleMirArgValue(arg),
             .global_load => |name| try self.emitSimpleMirGlobalLoad(name, expected_ty),
+            .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary, spanFromMirSourcePoint(binary.operand_fact.source)),
+            .logical_not => |arg| try self.emitSimpleMirLogicalNot(arg, span),
         };
     }
 

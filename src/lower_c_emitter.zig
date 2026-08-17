@@ -1293,6 +1293,8 @@ pub const CEmitter = struct {
     const SimpleMirGlobalStoreValue = union(enum) {
         arg: SimpleMirArg,
         global_load: []const u8,
+        compare_binary: SimpleMirCompareBinary,
+        logical_not: SimpleMirArg,
     };
 
     const SimpleMirCheckedBinary = struct {
@@ -1610,21 +1612,33 @@ pub const CEmitter = struct {
         const name = target_name orelse return null;
         const source = target_source.?;
         const value_source = self.simpleMirAssignmentSourceInBlock(block, name) orelse return null;
-        const value: SimpleMirGlobalStoreValue = if (self.simpleMirArgAt(function, fn_mir, value_source)) |arg|
+        const value: SimpleMirGlobalStoreValue = if (self.simpleMirCompareBinaryAtSource(function, fn_mir, value_source)) |binary|
+            .{ .compare_binary = binary }
+        else if (self.simpleMirLogicalNotAtSource(function, fn_mir, value_source)) |arg|
+            .{ .logical_not = arg }
+        else if (self.simpleMirArgAt(function, fn_mir, value_source)) |arg|
             .{ .arg = arg }
         else if (self.simpleMirGlobalAtSource(function, fn_mir, value_source)) |source_name|
             .{ .global_load = source_name }
         else
             return null;
-        if (!self.blockOnlyContainsSimpleMirGlobalStoreInstructions(function, block, name)) return null;
+        if (!self.blockOnlyContainsSimpleMirGlobalStoreInstructions(function, fn_mir, block, name)) return null;
         return .{ .name = name, .value = value, .source = source };
     }
 
-    fn blockOnlyContainsSimpleMirGlobalStoreInstructions(self: *CEmitter, function: anytype, block: mir.Block, target_name: []const u8) bool {
+    fn blockOnlyContainsSimpleMirGlobalStoreInstructions(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, target_name: []const u8) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
             .param, .target_type, .integer_literal_conversion => {},
             .assign => {
                 if (!std.mem.eql(u8, instruction.detail, target_name)) return false;
+            },
+            .binary => {
+                const source = instructionSourcePoint(instruction);
+                if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return false;
+            },
+            .unary => {
+                const source = instructionSourcePoint(instruction);
+                if (self.simpleMirLogicalNotAtSource(function, fn_mir, source) == null) return false;
             },
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, target_name) or
@@ -1974,6 +1988,11 @@ pub const CEmitter = struct {
         switch (value) {
             .arg => |arg| try self.emitSimpleMirArg(arg),
             .global_load => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
+            .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
+            .logical_not => |arg| {
+                try self.out.appendSlice(self.allocator, "!");
+                try self.emitSimpleMirArg(arg);
+            },
         }
     }
 
