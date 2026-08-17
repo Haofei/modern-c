@@ -1293,6 +1293,7 @@ pub const CEmitter = struct {
     const SimpleMirGlobalStoreValue = union(enum) {
         arg: SimpleMirArg,
         global_load: []const u8,
+        direct_call: SimpleMirDirectCall,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
     };
@@ -1616,6 +1617,8 @@ pub const CEmitter = struct {
             .{ .compare_binary = binary }
         else if (self.simpleMirLogicalNotAtSource(function, fn_mir, value_source)) |arg|
             .{ .logical_not = arg }
+        else if (self.simpleMirDirectCallAtSource(function, fn_mir, value_source)) |call|
+            .{ .direct_call = call }
         else if (self.simpleMirArgAt(function, fn_mir, value_source)) |arg|
             .{ .arg = arg }
         else if (self.simpleMirGlobalAtSource(function, fn_mir, value_source)) |source_name|
@@ -1645,6 +1648,10 @@ pub const CEmitter = struct {
                 const source = instructionSourcePoint(instruction);
                 if (self.simpleMirLogicalNotAtSource(function, fn_mir, source) == null) return false;
             },
+            .call => {
+                const source = instructionSourcePoint(instruction);
+                if (self.simpleMirDirectCallAtSource(function, fn_mir, source) == null) return false;
+            },
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, target_name) or
                     std.mem.eql(u8, instruction.detail, "int") or
@@ -1654,6 +1661,7 @@ pub const CEmitter = struct {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {
                     if (mirBlockHasLocal(block, instruction.detail)) continue;
+                    if (mirBlockHasCall(block, instruction.detail)) continue;
                     if (self.globals.contains(instruction.detail)) continue;
                     return false;
                 }
@@ -1994,6 +2002,7 @@ pub const CEmitter = struct {
         switch (value) {
             .arg => |arg| try self.emitSimpleMirArg(arg),
             .global_load => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
+            .direct_call => |call| try self.emitSimpleMirDirectCall(call),
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
             .logical_not => |arg| {
                 try self.out.appendSlice(self.allocator, "!");

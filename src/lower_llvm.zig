@@ -1357,6 +1357,7 @@ const LlvmEmitter = struct {
     const SimpleMirGlobalStoreValue = union(enum) {
         arg: SimpleMirArg,
         global_load: []const u8,
+        direct_call: SimpleMirDirectCall,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
     };
@@ -1700,6 +1701,8 @@ const LlvmEmitter = struct {
             .{ .compare_binary = binary }
         else if (self.simpleMirLogicalNotAtSource(function, fn_mir, value_source)) |arg|
             .{ .logical_not = arg }
+        else if (self.simpleMirDirectCallAtSource(function, fn_mir, value_source)) |call|
+            .{ .direct_call = call }
         else if (self.simpleMirArgAt(function, fn_mir, value_source)) |arg|
             .{ .arg = arg }
         else if (self.simpleMirGlobalAtSource(function, fn_mir, value_source)) |source_name|
@@ -1729,6 +1732,10 @@ const LlvmEmitter = struct {
                 const source = instructionSourcePoint(instruction);
                 if (self.simpleMirLogicalNotAtSource(function, fn_mir, source) == null) return false;
             },
+            .call => {
+                const source = instructionSourcePoint(instruction);
+                if (self.simpleMirDirectCallAtSource(function, fn_mir, source) == null) return false;
+            },
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, target_name) or
                     std.mem.eql(u8, instruction.detail, "int") or
@@ -1738,6 +1745,7 @@ const LlvmEmitter = struct {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {
                     if (mirBlockHasLocal(block, instruction.detail)) continue;
+                    if (mirBlockHasCall(block, instruction.detail)) continue;
                     if (self.global_types.contains(instruction.detail)) continue;
                     return false;
                 }
@@ -2146,6 +2154,11 @@ const LlvmEmitter = struct {
         return switch (value) {
             .arg => |arg| try self.simpleMirArgValue(arg),
             .global_load => |name| try self.emitSimpleMirGlobalLoad(name, expected_ty),
+            .direct_call => |call| blk: {
+                const tmp = try self.nextTemp();
+                try self.emitSimpleMirDirectCall(call, tmp, span);
+                break :blk tmp;
+            },
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary, spanFromMirSourcePoint(binary.operand_fact.source)),
             .logical_not => |arg| try self.emitSimpleMirLogicalNot(arg, span),
         };
