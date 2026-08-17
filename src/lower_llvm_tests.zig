@@ -1182,6 +1182,34 @@ test "LLVM emits struct parameter field call arguments from MIR" {
     try expectNotContains(void_body, "store");
 }
 
+test "LLVM emits struct parameter field checked operands from MIR" {
+    const source =
+        \\struct Pair { a: u32, b: u32 }
+        \\fn add_left(p: Pair, x: u32) -> u32 {
+        \\    return p.a + x;
+        \\}
+        \\fn add_right(p: Pair, x: u32) -> u32 {
+        \\    return x + p.b;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_param_field_checked_operands.mc", source, &output);
+
+    const left_body = try llvmFunctionBody(output.items, "define internal i32 @add_left");
+    try expectContains(left_body, "extractvalue { i32, i32 } %p, 0");
+    try expectContains(left_body, "@llvm.uadd.with.overflow.i32(i32 %t");
+    try expectContains(left_body, ", i32 %x)");
+    try expectNotContains(left_body, "alloca");
+    try expectNotContains(left_body, "store");
+
+    const right_body = try llvmFunctionBody(output.items, "define internal i32 @add_right");
+    try expectContains(right_body, "extractvalue { i32, i32 } %p, 1");
+    try expectContains(right_body, "@llvm.uadd.with.overflow.i32(i32 %x, i32 %t");
+    try expectNotContains(right_body, "alloca");
+    try expectNotContains(right_body, "store");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

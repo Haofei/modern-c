@@ -1156,6 +1156,29 @@ test "lower-c emits struct parameter field call arguments from MIR" {
     try expectNotContains(void_body, "mc_tmp");
 }
 
+test "lower-c emits struct parameter field checked operands from MIR" {
+    const source =
+        \\struct Pair { a: u32, b: u32 }
+        \\fn add_left(p: Pair, x: u32) -> u32 {
+        \\    return p.a + x;
+        \\}
+        \\fn add_right(p: Pair, x: u32) -> u32 {
+        \\    return x + p.b;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_param_field_checked_operands.mc", source, &output);
+
+    const left_body = try cFunctionBody(output.items, "static uint32_t add_left(Pair p, uint32_t x)");
+    try expectContains(left_body, "return mc_checked_add_u32(p.a, x);");
+    try expectNotContains(left_body, "mc_tmp");
+
+    const right_body = try cFunctionBody(output.items, "static uint32_t add_right(Pair p, uint32_t x)");
+    try expectContains(right_body, "return mc_checked_add_u32(x, p.b);");
+    try expectNotContains(right_body, "mc_tmp");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
@@ -14762,8 +14785,7 @@ test "lower-c sanitizes C header names used as fields" {
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t offsetof_;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t uint32_t_;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, " = packet.offsetof_;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, " = packet.uint32_t_;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_add_u32(packet.offsetof_, packet.uint32_t_);") != null);
 }
 
 test "lower-c emits overlay unions as byte storage" {

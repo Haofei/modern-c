@@ -1318,6 +1318,7 @@ pub const CEmitter = struct {
 
     const SimpleMirArg = union(enum) {
         param: []const u8,
+        param_field: SimpleMirParamField,
         integer_literal: []const u8,
         bool_literal: bool,
     };
@@ -1402,7 +1403,7 @@ pub const CEmitter = struct {
         const simple_return = self.simpleMirReturn(function, fn_mir);
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
-                break :blk self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir, ret == .direct_call) orelse return false;
+                break :blk self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir, simpleMirReturnAllowsTrapBlocks(fn_mir, ret)) orelse return false;
             }
             break :blk null;
         } else null;
@@ -2182,6 +2183,7 @@ pub const CEmitter = struct {
         const initial_arg = self.simpleMirArgAt(function, fn_mir, initial_source) orelse return null;
         const initial_value: SimpleMirConditionalValue = switch (initial_arg) {
             .param => |name| .{ .param = name },
+            .param_field => |field| .{ .param_field = field },
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |bool_value| .{ .bool_literal = bool_value },
         };
@@ -2393,6 +2395,7 @@ pub const CEmitter = struct {
         if (literal_source) |source| {
             return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
                 .param => |name| .{ .param = name },
+                .param_field => |field| .{ .param_field = field },
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
             };
@@ -2430,6 +2433,7 @@ pub const CEmitter = struct {
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
+            .param_field => |field| .{ .param_field = field },
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
         };
@@ -2539,6 +2543,25 @@ pub const CEmitter = struct {
         };
     }
 
+    fn simpleMirReturnAllowsTrapBlocks(fn_mir: mir.Function, ret: SimpleMirReturn) bool {
+        return switch (ret) {
+            .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call),
+            .checked_binary => |binary| fn_mir.trap_edges.len == 1 and simpleMirCheckedBinaryUsesParamField(binary),
+            else => false,
+        };
+    }
+
+    fn simpleMirCheckedBinaryUsesParamField(binary: SimpleMirCheckedBinary) bool {
+        return simpleMirArgUsesParamField(binary.left) or simpleMirArgUsesParamField(binary.right);
+    }
+
+    fn simpleMirArgUsesParamField(arg: SimpleMirArg) bool {
+        return switch (arg) {
+            .param_field => true,
+            else => false,
+        };
+    }
+
     fn simpleMirCallArgTrapCount(arg: SimpleMirCallArg) usize {
         return switch (arg) {
             .direct_call => 0,
@@ -2570,6 +2593,7 @@ pub const CEmitter = struct {
     fn emitSimpleMirArg(self: *CEmitter, arg: SimpleMirArg) !void {
         switch (arg) {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
+            .param_field => |field| try self.out.print(self.allocator, "{s}.{s}", .{ try self.cIdent(field.param_name), try self.cIdent(field.field_name) }),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
         }
@@ -2672,6 +2696,7 @@ pub const CEmitter = struct {
         var operands: [2]SimpleMirArg = undefined;
         var count: usize = 0;
         var after_binary = false;
+        var last_operand_source: ?mir.SourcePoint = null;
         for (block.instructions) |instruction| {
             if (!after_binary) {
                 after_binary = instruction.kind == .binary and sameMirSourceLocation(instructionSourcePoint(instruction), source);
@@ -2679,9 +2704,14 @@ pub const CEmitter = struct {
             }
             if (instruction.kind == .return_value or instruction.kind == .local) break;
             if (instruction.kind != .expr) continue;
-            const arg = self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
+            const arg_source = instructionSourcePoint(instruction);
+            if (last_operand_source) |last| {
+                if (sameMirSourceLocation(last, arg_source)) continue;
+            }
+            const arg = self.simpleMirArgAt(function, fn_mir, arg_source) orelse return null;
             if (count >= operands.len) return null;
             operands[count] = arg;
+            last_operand_source = arg_source;
             count += 1;
             if (count == operands.len) break;
         }
@@ -2709,6 +2739,7 @@ pub const CEmitter = struct {
         var operands: [2]SimpleMirArg = undefined;
         var count: usize = 0;
         var after_binary = false;
+        var last_operand_source: ?mir.SourcePoint = null;
         for (block.instructions) |instruction| {
             if (!after_binary) {
                 after_binary = instruction.kind == .binary and sameMirSourceLocation(instructionSourcePoint(instruction), source);
@@ -2716,9 +2747,14 @@ pub const CEmitter = struct {
             }
             if (instruction.kind == .return_value or instruction.kind == .local) break;
             if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
-            const arg = self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
+            const arg_source = instructionSourcePoint(instruction);
+            if (last_operand_source) |last| {
+                if (sameMirSourceLocation(last, arg_source)) continue;
+            }
+            const arg = self.simpleMirArgAt(function, fn_mir, arg_source) orelse return null;
             if (count >= operands.len) return null;
             operands[count] = arg;
+            last_operand_source = arg_source;
             count += 1;
             if (count == operands.len) break;
         }
@@ -2870,6 +2906,7 @@ pub const CEmitter = struct {
         }
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
+            .param_field => |field| .{ .param_field = field },
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
         };
@@ -3191,6 +3228,7 @@ pub const CEmitter = struct {
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = name },
+                .param_field => |field| .{ .param_field = field },
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
             };
@@ -3220,6 +3258,7 @@ pub const CEmitter = struct {
         if (self.simpleMirArgAt(function, fn_mir, assigned_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = name },
+                .param_field => |field| .{ .param_field = field },
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
             };
@@ -3309,6 +3348,7 @@ pub const CEmitter = struct {
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = param.name.text };
                 }
+                if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
                 if (mirFunctionHasLocal(fn_mir, instruction.detail)) {
                     if (self.simpleMirLocalValueArg(function, fn_mir, block, instruction.detail, source)) |arg| return arg;
                 }
