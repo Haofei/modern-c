@@ -4043,6 +4043,10 @@ test "lower-c rejects prebuilt MIR with missing integer facts" {
     defer parsed.deinit();
     var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
     defer module_mir.deinit();
+    var complete_output: std.ArrayList(u8) = .empty;
+    defer complete_output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_integer_fact_gate.mc", source, &complete_output);
+
     try clearIntegerFactsForFunction(&module_mir, "integer_fact_gate");
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
