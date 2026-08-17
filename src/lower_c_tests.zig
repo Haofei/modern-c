@@ -1841,6 +1841,41 @@ test "lower-c emits local and assigned scalar returns from MIR without body fall
     try expectNotContains(assigned_bool_body, "mc_tmp");
 }
 
+test "lower-c emits nullable none returns from MIR without body fallback" {
+    const source =
+        \\fn direct_none() -> ?u32 {
+        \\    return null;
+        \\}
+        \\fn local_none() -> ?u32 {
+        \\    let x: ?u32 = null;
+        \\    return x;
+        \\}
+        \\fn assigned_none() -> ?u32 {
+        \\    var x: ?u32 = null;
+        \\    x = null;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_nullable_none_returns.mc", source, &output);
+
+    const direct_body = try cFunctionBody(output.items, "static mc_opt_u32 direct_none(void)");
+    try expectContains(direct_body, "return (mc_opt_u32){ .present = false };");
+    try expectNotContains(direct_body, "mc_tmp");
+
+    const local_body = try cFunctionBody(output.items, "static mc_opt_u32 local_none(void)");
+    try expectContains(local_body, "return (mc_opt_u32){ .present = false };");
+    try expectNotContains(local_body, "mc_opt_u32 x");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static mc_opt_u32 assigned_none(void)");
+    try expectContains(assigned_body, "return (mc_opt_u32){ .present = false };");
+    try expectNotContains(assigned_body, "mc_opt_u32 x");
+    try expectNotContains(assigned_body, "x =");
+    try expectNotContains(assigned_body, "mc_tmp");
+}
+
 test "lower-c emits enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {

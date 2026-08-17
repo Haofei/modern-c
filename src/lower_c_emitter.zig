@@ -1192,6 +1192,7 @@ pub const CEmitter = struct {
         integer_literal: []const u8,
         bool_literal: bool,
         enum_literal: SimpleMirEnumLiteral,
+        null_literal: SimpleMirNullLiteral,
         global_load: []const u8,
         nested_call: SimpleMirNestedCall,
         direct_call: SimpleMirDirectCall,
@@ -1216,6 +1217,10 @@ pub const CEmitter = struct {
     const SimpleMirEnumLiteral = struct {
         enum_name: []const u8,
         case_name: []const u8,
+    };
+
+    const SimpleMirNullLiteral = struct {
+        fact: mir.TargetTypeFact,
     };
 
     const SimpleMirTrapBody = struct {
@@ -1319,6 +1324,7 @@ pub const CEmitter = struct {
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
         enum_literal: SimpleMirEnumLiteral,
+        null_literal: SimpleMirNullLiteral,
         struct_literal: SimpleMirStructLiteralReturn,
         array_literal: SimpleMirArrayLiteralReturn,
     };
@@ -1474,6 +1480,7 @@ pub const CEmitter = struct {
                 .integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
                 .bool_literal => |value| try self.out.print(self.allocator, "return {s};\n", .{if (value) "true" else "false"}),
                 .enum_literal => |literal| try self.out.print(self.allocator, "return {s}_{s};\n", .{ literal.enum_name, literal.case_name }),
+                .null_literal => |literal| try self.emitSimpleMirNullReturn(literal),
                 .global_load => |name| {
                     try self.out.appendSlice(self.allocator, "return ");
                     try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission);
@@ -1742,6 +1749,9 @@ pub const CEmitter = struct {
         }
         if (self.simpleMirEnumLiteralAtSource(fn_mir, value_id, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| {
             return if (simpleMirNoTrap(fn_mir)) .{ .enum_literal = literal } else null;
+        }
+        if (self.simpleMirNullLiteralAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| {
+            return if (simpleMirNoTrap(fn_mir)) .{ .null_literal = literal } else null;
         }
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
             if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
@@ -2570,6 +2580,7 @@ pub const CEmitter = struct {
             };
         }
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| return .{ .enum_literal = literal };
+        if (self.simpleMirNullLiteralAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| return .{ .null_literal = literal };
         for (block.instructions) |instruction| {
             if (instruction.kind != .call or !std.mem.eql(u8, instruction.detail, value_id)) continue;
             const call = self.simpleMirDirectCallAtSource(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
@@ -2611,6 +2622,7 @@ pub const CEmitter = struct {
         if (self.simpleMirStructLiteralAtSource(function, fn_mir, source)) |literal| return .{ .struct_literal = literal };
         if (self.simpleMirArrayLiteralAtSource(function, fn_mir, source)) |literal| return .{ .array_literal = literal };
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal| return .{ .enum_literal = literal };
+        if (self.simpleMirNullLiteralAtSource(fn_mir, source)) |literal| return .{ .null_literal = literal };
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
@@ -2665,6 +2677,7 @@ pub const CEmitter = struct {
             },
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
             .enum_literal => |literal| try self.out.print(self.allocator, "{s}_{s}", .{ literal.enum_name, literal.case_name }),
+            .null_literal => |literal| try self.emitSimpleMirNullExpr(literal),
             .logical_not => |operand| {
                 try self.out.appendSlice(self.allocator, "!");
                 try self.emitSimpleMirArg(operand);
@@ -2691,6 +2704,16 @@ pub const CEmitter = struct {
             try self.emitSimpleMirArg(item);
         }
         try self.out.appendSlice(self.allocator, " } }");
+    }
+
+    fn emitSimpleMirNullReturn(self: *CEmitter, literal: SimpleMirNullLiteral) !void {
+        try self.out.appendSlice(self.allocator, "return ");
+        try self.emitSimpleMirNullExpr(literal);
+        try self.out.appendSlice(self.allocator, ";\n");
+    }
+
+    fn emitSimpleMirNullExpr(self: *CEmitter, literal: SimpleMirNullLiteral) !void {
+        try self.out.print(self.allocator, "({s}){{ .present = false }}", .{try self.cTypeFor(literal.fact.target_ty, .typedef_name)});
     }
 
     fn emitSimpleMirDirectCallStatements(self: *CEmitter, calls: SimpleMirDirectCalls) !void {
@@ -3458,6 +3481,7 @@ pub const CEmitter = struct {
         if (self.simpleMirGlobalAtSource(function, fn_mir, init_source)) |name| return .{ .global_load = name };
         if (self.simpleMirStructLiteralAtSource(function, fn_mir, init_source)) |literal| return .{ .struct_literal = literal };
         if (self.simpleMirArrayLiteralAtSource(function, fn_mir, init_source)) |literal| return .{ .array_literal = literal };
+        if (self.simpleMirNullLiteralAtSource(fn_mir, init_source)) |literal| return .{ .null_literal = literal };
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, init_source)) |field| return .{ .param_field = field };
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
@@ -3490,6 +3514,7 @@ pub const CEmitter = struct {
         if (self.simpleMirGlobalAtSource(function, fn_mir, assigned_source)) |name| return .{ .global_load = name };
         if (self.simpleMirStructLiteralAtSource(function, fn_mir, assigned_source)) |literal| return .{ .struct_literal = literal };
         if (self.simpleMirArrayLiteralAtSource(function, fn_mir, assigned_source)) |literal| return .{ .array_literal = literal };
+        if (self.simpleMirNullLiteralAtSource(fn_mir, assigned_source)) |literal| return .{ .null_literal = literal };
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, assigned_source)) |field| return .{ .param_field = field };
         if (self.simpleMirArgAt(function, fn_mir, assigned_source)) |arg| {
             return switch (arg) {
@@ -3624,6 +3649,12 @@ pub const CEmitter = struct {
         return null;
     }
 
+    fn simpleMirNullLiteralAtSource(self: *CEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirNullLiteral {
+        const fact = simpleMirTargetTypeFactKindAt(fn_mir, .null_literal, source) orelse return null;
+        _ = self;
+        return .{ .fact = fact };
+    }
+
     fn blockOnlyContainsSimpleMirReturnInstructions(self: *CEmitter, function: anytype, fn_mir: mir.Function) bool {
         return self.blockOnlyContainsSimpleMirReturnInstructionsInBlock(function, fn_mir, fn_mir.blocks[0]);
     }
@@ -3635,6 +3666,7 @@ pub const CEmitter = struct {
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "struct_literal") or std.mem.eql(u8, instruction.detail, "array_literal")) continue;
                 if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
+                if (std.mem.eql(u8, instruction.detail, "null") and self.simpleMirNullLiteralAtSource(fn_mir, instructionSourcePoint(instruction)) != null) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {

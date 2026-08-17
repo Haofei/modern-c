@@ -1986,6 +1986,41 @@ test "LLVM emits local and assigned scalar returns from MIR without body fallbac
     try expectNotContains(assigned_bool_body, "store");
 }
 
+test "LLVM emits nullable none returns from MIR without body fallback" {
+    const source =
+        \\fn direct_none() -> ?u32 {
+        \\    return null;
+        \\}
+        \\fn local_none() -> ?u32 {
+        \\    let x: ?u32 = null;
+        \\    return x;
+        \\}
+        \\fn assigned_none() -> ?u32 {
+        \\    var x: ?u32 = null;
+        \\    x = null;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_nullable_none_returns.mc", source, &output);
+
+    const direct_body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @direct_none");
+    try expectContains(direct_body, "ret { i1, i32 } zeroinitializer");
+    try expectNotContains(direct_body, "alloca");
+    try expectNotContains(direct_body, "store");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @local_none");
+    try expectContains(local_body, "ret { i1, i32 } zeroinitializer");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @assigned_none");
+    try expectContains(assigned_body, "ret { i1, i32 } zeroinitializer");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+}
+
 test "LLVM emits enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {
