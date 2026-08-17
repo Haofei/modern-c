@@ -2451,7 +2451,7 @@ test "lower-c synthesized function-pointer names encode pointer mutability" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCTest("c_fnptr_structural_names.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_fnptr_structural_names.mc", source, &output);
 
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "typedef void (*mc_fnptr"));
     try expectContains(output.items, "mc_type_ptr_c_2_u8");
