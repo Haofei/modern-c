@@ -1318,6 +1318,7 @@ pub const CEmitter = struct {
         checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
+        enum_literal: SimpleMirEnumLiteral,
         struct_literal: SimpleMirStructLiteralReturn,
         array_literal: SimpleMirArrayLiteralReturn,
     };
@@ -2568,6 +2569,7 @@ pub const CEmitter = struct {
                 .bool_literal => |value| .{ .bool_literal = value },
             };
         }
+        if (self.simpleMirEnumLiteralValueAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| return .{ .enum_literal = literal };
         for (block.instructions) |instruction| {
             if (instruction.kind != .call or !std.mem.eql(u8, instruction.detail, value_id)) continue;
             const call = self.simpleMirDirectCallAtSource(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
@@ -2608,6 +2610,7 @@ pub const CEmitter = struct {
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirStructLiteralAtSource(function, fn_mir, source)) |literal| return .{ .struct_literal = literal };
         if (self.simpleMirArrayLiteralAtSource(function, fn_mir, source)) |literal| return .{ .array_literal = literal };
+        if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal| return .{ .enum_literal = literal };
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
@@ -2661,6 +2664,7 @@ pub const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
+            .enum_literal => |literal| try self.out.print(self.allocator, "{s}_{s}", .{ literal.enum_name, literal.case_name }),
             .logical_not => |operand| {
                 try self.out.appendSlice(self.allocator, "!");
                 try self.emitSimpleMirArg(operand);
@@ -3605,6 +3609,17 @@ pub const CEmitter = struct {
         const enum_decl = self.enums.get(enum_name) orelse return null;
         for (enum_decl.cases) |case| {
             if (std.mem.eql(u8, case.name.text, case_name)) return .{ .enum_name = enum_name, .case_name = case_name };
+        }
+        return null;
+    }
+
+    fn simpleMirEnumLiteralValueAtSource(self: *CEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirEnumLiteral {
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .expr) continue;
+                if (!sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                return self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, source);
+            }
         }
         return null;
     }

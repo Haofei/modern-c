@@ -1812,6 +1812,31 @@ test "lower-c emits enum literal returns from MIR without body fallback" {
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c emits conditional enum literal returns from MIR without body fallback" {
+    const source =
+        \\enum Color {
+        \\    red,
+        \\    blue,
+        \\}
+        \\fn choose(flag: bool) -> Color {
+        \\    if (flag) {
+        \\        return .red;
+        \\    } else {
+        \\        return .blue;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_enum_literal_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static Color choose(bool flag)");
+    try expectContains(body, "if (flag) {");
+    try expectContains(body, "return Color_red;");
+    try expectContains(body, "return Color_blue;");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

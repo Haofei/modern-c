@@ -1380,6 +1380,7 @@ const LlvmEmitter = struct {
         checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
+        enum_literal: SimpleMirEnumLiteral,
         struct_literal: SimpleMirStructLiteralReturn,
         array_literal: SimpleMirArrayLiteralReturn,
     };
@@ -2646,6 +2647,7 @@ const LlvmEmitter = struct {
                 .bool_literal => |value| .{ .bool_literal = value },
             };
         }
+        if (self.simpleMirEnumLiteralValueAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| return .{ .enum_literal = literal };
         for (block.instructions) |instruction| {
             if (instruction.kind != .call or !std.mem.eql(u8, instruction.detail, value_id)) continue;
             const call = self.simpleMirDirectCallAtSource(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
@@ -2686,6 +2688,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirStructLiteralAtSource(function, fn_mir, source)) |literal| return .{ .struct_literal = literal };
         if (self.simpleMirArrayLiteralAtSource(function, fn_mir, source)) |literal| return .{ .array_literal = literal };
+        if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal| return .{ .enum_literal = literal };
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
@@ -2742,6 +2745,10 @@ const LlvmEmitter = struct {
             .compare_binary => |binary| {
                 const value_name = try self.emitSimpleMirCompareBinary(binary, span);
                 try self.emitReturnValue(ret_ty, value_name, span);
+            },
+            .enum_literal => |literal| {
+                const enum_decl = self.enum_types.get(literal.enum_name) orelse return error.UnsupportedLlvmEmission;
+                try self.emitReturnValue(ret_ty, try self.enumCaseValueByName(enum_decl, literal.case_name), span);
             },
             .logical_not => |arg| {
                 const value_name = try self.emitSimpleMirLogicalNot(arg, span);
@@ -3780,6 +3787,17 @@ const LlvmEmitter = struct {
         const enum_decl = self.enumDeclForType(fact.target_ty) orelse return null;
         for (enum_decl.cases) |case| {
             if (std.mem.eql(u8, case.name.text, case_name)) return .{ .enum_name = enum_decl.name.text, .case_name = case_name };
+        }
+        return null;
+    }
+
+    fn simpleMirEnumLiteralValueAtSource(self: *LlvmEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirEnumLiteral {
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .expr) continue;
+                if (!sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                return self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, source);
+            }
         }
         return null;
     }
