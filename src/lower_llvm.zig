@@ -1533,6 +1533,7 @@ const LlvmEmitter = struct {
         conversion: SimpleMirConversionReturn,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
+        enum_literal: SimpleMirEnumLiteral,
     };
 
     const SimpleMirCheckedBinary = struct {
@@ -2653,6 +2654,8 @@ const LlvmEmitter = struct {
             .{ .compare_binary = binary }
         else if (self.simpleMirLogicalNotAtSource(function, fn_mir, value_source)) |arg|
             .{ .logical_not = arg }
+        else if (self.simpleMirEnumLiteralValueAtSource(fn_mir, value_source)) |literal|
+            .{ .enum_literal = literal }
         else if (self.simpleMirDirectCallAtSource(function, fn_mir, value_source)) |call|
             .{ .direct_call = call }
         else if (self.simpleMirArgAt(function, fn_mir, value_source)) |arg|
@@ -2668,6 +2671,7 @@ const LlvmEmitter = struct {
             .checked_binary => |binary| simpleMirCheckedBinaryTrapCount(binary),
             .checked_unary => 1,
             .direct_call => |call| simpleMirDirectCallTrapCount(call),
+            .enum_literal => 1,
             else => 0,
         };
     }
@@ -2680,7 +2684,7 @@ const LlvmEmitter = struct {
 
     fn blockOnlyContainsSimpleMirVoidStatementInstructions(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .local, .target_type, .integer_literal_conversion, .add_overflow, .contract_begin, .contract_end, .unchecked_assume, .call_target, .return_value => {},
+            .param, .local, .target_type, .integer_literal_conversion, .add_overflow, .contract_begin, .contract_end, .unchecked_assume, .call_target, .typed_load, .representation_check, .representation_use, .return_value => {},
             .assign => {
                 if (mirFunctionHasLocal(fn_mir, instruction.detail)) {
                     const source = self.simpleMirAssignmentSourceInBlock(block, instruction.detail) orelse return false;
@@ -2717,6 +2721,7 @@ const LlvmEmitter = struct {
                     simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
                 if (std.mem.eql(u8, instruction.detail, "cast") and simpleMirTargetTypeFactKindAt(fn_mir, .explicit_cast_source, instructionSourcePoint(instruction)) != null) continue;
                 if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
+                if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {
@@ -3648,6 +3653,10 @@ const LlvmEmitter = struct {
             .conversion => |conversion| try self.emitSimpleMirConversionReturn(conversion, span),
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary, spanFromMirSourcePoint(binary.operand_fact.source)),
             .logical_not => |arg| try self.emitSimpleMirLogicalNot(arg, span),
+            .enum_literal => |literal| blk: {
+                const enum_decl = self.enum_types.get(literal.enum_name) orelse return error.UnsupportedLlvmEmission;
+                break :blk try self.enumCaseValueByName(enum_decl, literal.case_name);
+            },
         };
     }
 
@@ -4325,7 +4334,7 @@ const LlvmEmitter = struct {
         var calls: SimpleMirDirectCalls = .{};
         for (block.instructions) |instruction| {
             switch (instruction.kind) {
-                .param, .local, .target_type, .integer_literal_conversion, .add_overflow, .contract_begin, .contract_end, .unchecked_assume, .call_target => {},
+                .param, .local, .target_type, .integer_literal_conversion, .add_overflow, .contract_begin, .contract_end, .unchecked_assume, .call_target, .typed_load, .representation_check, .representation_use => {},
                 .assign => if (!mirFunctionHasLocal(fn_mir, instruction.detail)) return null,
                 .binary => {
                     if (std.mem.eql(u8, instruction.detail, "switch_subject")) continue;
@@ -4425,6 +4434,7 @@ const LlvmEmitter = struct {
                         simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
                     if (std.mem.eql(u8, instruction.detail, "cast") and simpleMirTargetTypeFactKindAt(fn_mir, .explicit_cast_source, instructionSourcePoint(instruction)) != null) continue;
                     if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
+                    if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
                     if (self.global_types.contains(instruction.detail)) continue;
                     if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                     if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;

@@ -870,12 +870,17 @@ test "lower-c emits pure local-only void functions from MIR" {
 
 test "lower-c emits simple global stores from MIR" {
     const source =
+        \\enum Color {
+        \\    red,
+        \\    blue,
+        \\}
         \\global g: u32 = 0;
         \\global h: u32 = 0;
         \\global flag: bool = false;
         \\global s: i32 = 0;
         \\global wide: u64 = 0;
         \\global byte: u8 = 0;
+        \\global current: Color = .red;
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
@@ -928,6 +933,9 @@ test "lower-c emits simple global stores from MIR" {
         \\}
         \\fn store_conversion(value: u64) {
         \\    byte = u8.wrap_from(value);
+        \\}
+        \\fn store_enum() {
+        \\    current = .blue;
         \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
@@ -1052,6 +1060,10 @@ test "lower-c emits simple global stores from MIR" {
     const conversion_body = try cFunctionBody(output.items, "static void store_conversion(uint64_t value)");
     try expectContains(conversion_body, "mc_race_store_u8(&byte, (uint8_t)((uint8_t)(value)));");
     try expectNotContains(conversion_body, "mc_tmp");
+
+    const enum_body = try cFunctionBody(output.items, "static void store_enum(void)");
+    try expectContains(enum_body, "mc_race_store_isize(&current, (intptr_t)Color_blue);");
+    try expectNotContains(enum_body, "mc_tmp");
 
     const neg_body = try cFunctionBody(output.items, "static void store_neg(int32_t a)");
     try expectContains(neg_body, "mc_race_store_i32(&s, (int32_t)mc_checked_neg_i32(a));");
