@@ -154,6 +154,16 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
         \\    }
         \\    return 0;
         \\}
+        \\fn choose_branch_local_return(flag: bool) -> i32 {
+        \\    if (flag) {
+        \\        let x: i32 = 1;
+        \\        return x;
+        \\    } else {
+        \\        var y: i32 = 0;
+        \\        y = 2;
+        \\        return y;
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -184,6 +194,15 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
     try expectContains(early_body, "return 1;");
     try expectContains(early_body, "return 0;");
     try expectNotContains(early_body, "switch");
+
+    const branch_local_body = try cFunctionBody(output.items, "static int32_t choose_branch_local_return(bool flag)");
+    try expectContains(branch_local_body, "if (flag)");
+    try expectContains(branch_local_body, "return 1;");
+    try expectContains(branch_local_body, "return 2;");
+    try expectNotContains(branch_local_body, "int32_t x");
+    try expectNotContains(branch_local_body, "int32_t y");
+    try expectNotContains(branch_local_body, "y =");
+    try expectNotContains(branch_local_body, "switch");
 }
 
 test "lower-c emits simple void conditional direct calls from MIR" {

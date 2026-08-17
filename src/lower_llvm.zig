@@ -1769,6 +1769,9 @@ const LlvmEmitter = struct {
         for (function.signature.params) |param| {
             if (std.mem.eql(u8, value_id, param.name.text)) return .{ .param = param.name.text };
         }
+        if (mirBlockHasLocal(block, value_id)) {
+            return self.simpleMirLocalValueInBlock(function, fn_mir, block, value_id);
+        }
         var literal_source: ?mir.SourcePoint = null;
         if (std.mem.eql(u8, value_id, "int") or std.mem.eql(u8, value_id, "bool")) {
             for (block.instructions) |instruction| {
@@ -1809,6 +1812,19 @@ const LlvmEmitter = struct {
             }
         }
         return null;
+    }
+
+    fn simpleMirConditionalValueAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirConditionalValue {
+        if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, source)) |binary| return .{ .checked_binary = binary };
+        if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, source)) |unary| return .{ .checked_unary = unary };
+        if (self.simpleMirDirectCallAtSource(function, fn_mir, source)) |call| return .{ .direct_call = call };
+        if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
+        if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
+        return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
+            .param => |name| .{ .param = name },
+            .integer_literal => |literal| .{ .integer_literal = literal },
+            .bool_literal => |value| .{ .bool_literal = value },
+        };
     }
 
     fn emitSimpleMirConditionalReturnValue(self: *LlvmEmitter, ret_ty: anytype, value: SimpleMirConditionalValue, span: diagnostics.Span) !void {
@@ -1856,14 +1872,15 @@ const LlvmEmitter = struct {
 
     fn simpleMirAssignedValueInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, local_name: []const u8) ?SimpleMirConditionalValue {
         const source = self.simpleMirAssignmentSourceInBlock(block, local_name) orelse return null;
-        if (self.simpleMirDirectCallAtSource(function, fn_mir, source)) |call| return .{ .direct_call = call };
-        if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
-        if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
-        return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
-            .param => |name| .{ .param = name },
-            .integer_literal => |literal| .{ .integer_literal = literal },
-            .bool_literal => |value| .{ .bool_literal = value },
-        };
+        return self.simpleMirConditionalValueAtSource(function, fn_mir, source);
+    }
+
+    fn simpleMirLocalValueInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, local_name: []const u8) ?SimpleMirConditionalValue {
+        if (self.simpleMirAssignmentSourceInBlock(block, local_name)) |assigned_source| {
+            return self.simpleMirConditionalValueAtSource(function, fn_mir, assigned_source);
+        }
+        const init_source = self.simpleMirLocalInitSourceInBlock(block, local_name) orelse return null;
+        return self.simpleMirConditionalValueAtSource(function, fn_mir, init_source);
     }
 
     fn emitSimpleMirCheckedBinary(self: *LlvmEmitter, binary: SimpleMirCheckedBinary, span: diagnostics.Span) ![]const u8 {
