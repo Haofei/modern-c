@@ -3320,7 +3320,7 @@ test "LLVM generated locals and blocks avoid source parameter names" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_local_name_collisions.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_name_collisions.mc", source, &output);
 
     const body = try llvmFunctionBody(output.items, "define internal i32 @collisions");
     try expectContains(body, "bb_entry_generated_0:");
