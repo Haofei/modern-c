@@ -2223,7 +2223,20 @@ const LlvmEmitter = struct {
         var calls: SimpleMirDirectCalls = .{};
         for (block.instructions) |instruction| {
             switch (instruction.kind) {
-                .expr, .target_type, .integer_literal_conversion => {},
+                .param, .local, .target_type, .integer_literal_conversion => {},
+                .assign => if (!mirFunctionHasLocal(fn_mir, instruction.detail)) return null,
+                .expr => {
+                    if (std.mem.eql(u8, instruction.detail, "int") or
+                        std.mem.eql(u8, instruction.detail, "bool") or
+                        std.mem.eql(u8, instruction.detail, "literal")) continue;
+                    if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
+                    for (function.signature.params) |param| {
+                        if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
+                    } else {
+                        if (mirBlockHasCall(block, instruction.detail)) continue;
+                        return null;
+                    }
+                },
                 .call => {
                     const source = instructionSourcePoint(instruction);
                     if (!simpleMirDirectCallResultVoid(fn_mir, source)) return null;
