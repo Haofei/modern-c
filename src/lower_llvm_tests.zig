@@ -202,6 +202,12 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
         \\    }
         \\    return x;
         \\}
+        \\fn loop_cmp_return(a: i32, b: i32, x: u32) -> u32 {
+        \\    while a < b {
+        \\        hit(x);
+        \\    }
+        \\    return x;
+        \\}
         \\fn choose_branch_effect_return(flag: bool, x: u32) -> u32 {
         \\    if (flag) {
         \\        hit(x);
@@ -342,6 +348,17 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     try std.testing.expect(loop_call_call < loop_call_return);
     try expectNotContains(loop_call_body, "switch");
     try expectNotContains(loop_call_body, "alloca");
+
+    const loop_cmp_return_body = try llvmFunctionBody(output.items, "define internal i32 @loop_cmp_return");
+    const loop_cmp_return_compare = std.mem.indexOf(u8, loop_cmp_return_body, "icmp slt i32 %a, %b") orelse return error.TestUnexpectedResult;
+    const loop_cmp_return_branch = std.mem.indexOf(u8, loop_cmp_return_body, "br i1 %t") orelse return error.TestUnexpectedResult;
+    const loop_cmp_return_call = std.mem.indexOf(u8, loop_cmp_return_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    const loop_cmp_return_stmt = std.mem.indexOf(u8, loop_cmp_return_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop_cmp_return_compare < loop_cmp_return_branch);
+    try std.testing.expect(loop_cmp_return_branch < loop_cmp_return_call);
+    try std.testing.expect(loop_cmp_return_call < loop_cmp_return_stmt);
+    try expectNotContains(loop_cmp_return_body, "switch");
+    try expectNotContains(loop_cmp_return_body, "alloca");
 
     const branch_effect_body = try llvmFunctionBody(output.items, "define internal i32 @choose_branch_effect_return");
     const branch_effect_branch = std.mem.indexOf(u8, branch_effect_body, "br i1 %flag") orelse return error.TestUnexpectedResult;

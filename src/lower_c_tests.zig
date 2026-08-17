@@ -222,6 +222,12 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
         \\    }
         \\    return x;
         \\}
+        \\fn loop_cmp_return(a: i32, b: i32, x: u32) -> u32 {
+        \\    while a < b {
+        \\        hit(x);
+        \\    }
+        \\    return x;
+        \\}
         \\fn choose_branch_effect_return(flag: bool, x: u32) -> u32 {
         \\    if (flag) {
         \\        hit(x);
@@ -359,6 +365,15 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
     try std.testing.expect(loop_call_call < loop_call_return);
     try expectNotContains(loop_call_body, "switch");
     try expectNotContains(loop_call_body, "mc_tmp");
+
+    const loop_cmp_return_body = try cFunctionBody(output.items, "static uint32_t loop_cmp_return(int32_t a, int32_t b, uint32_t x)");
+    const loop_cmp_return_while = std.mem.indexOf(u8, loop_cmp_return_body, "while ((a < b))") orelse return error.TestUnexpectedResult;
+    const loop_cmp_return_call = std.mem.indexOf(u8, loop_cmp_return_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    const loop_cmp_return_stmt = std.mem.indexOf(u8, loop_cmp_return_body, "return x;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop_cmp_return_while < loop_cmp_return_call);
+    try std.testing.expect(loop_cmp_return_call < loop_cmp_return_stmt);
+    try expectNotContains(loop_cmp_return_body, "switch");
+    try expectNotContains(loop_cmp_return_body, "mc_tmp");
 
     const branch_effect_body = try cFunctionBody(output.items, "static uint32_t choose_branch_effect_return(bool flag, uint32_t x)");
     const branch_effect_if = std.mem.indexOf(u8, branch_effect_body, "if (flag)") orelse return error.TestUnexpectedResult;
