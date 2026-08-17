@@ -337,6 +337,12 @@ test "LLVM emits simple sequential void direct calls from MIR" {
         \\    x = 1;
         \\    hit(x);
         \\}
+        \\fn call_checked_add_arg(a: i32, b: i32) -> void {
+        \\    hit(a + b);
+        \\}
+        \\fn call_checked_neg_arg(a: i32) -> void {
+        \\    hit(-a);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -367,6 +373,18 @@ test "LLVM emits simple sequential void direct calls from MIR" {
     try expectContains(assigned_arg_body, "call void @hit(i32 1)");
     try expectNotContains(assigned_arg_body, "alloca");
     try expectNotContains(assigned_arg_body, "store");
+
+    const checked_add_arg_body = try llvmFunctionBody(output.items, "define internal void @call_checked_add_arg");
+    try expectContains(checked_add_arg_body, "@llvm.sadd.with.overflow.i32");
+    try expectContains(checked_add_arg_body, "call void @hit(i32 %t");
+    try expectNotContains(checked_add_arg_body, "alloca");
+    try expectNotContains(checked_add_arg_body, "store");
+
+    const checked_neg_arg_body = try llvmFunctionBody(output.items, "define internal void @call_checked_neg_arg");
+    try expectContains(checked_neg_arg_body, "@llvm.ssub.with.overflow.i32");
+    try expectContains(checked_neg_arg_body, "call void @hit(i32 %t");
+    try expectNotContains(checked_neg_arg_body, "alloca");
+    try expectNotContains(checked_neg_arg_body, "store");
 }
 
 test "LLVM emits pure local-only void functions from MIR" {

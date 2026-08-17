@@ -350,6 +350,12 @@ test "lower-c emits simple sequential void direct calls from MIR" {
         \\    x = 1;
         \\    hit(x);
         \\}
+        \\fn call_checked_add_arg(a: i32, b: i32) -> void {
+        \\    hit(a + b);
+        \\}
+        \\fn call_checked_neg_arg(a: i32) -> void {
+        \\    hit(-a);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -380,6 +386,16 @@ test "lower-c emits simple sequential void direct calls from MIR" {
     try expectContains(assigned_arg_body, "hit(1);");
     try expectNotContains(assigned_arg_body, "int32_t x");
     try expectNotContains(assigned_arg_body, "x =");
+
+    const checked_add_arg_body = try cFunctionBody(output.items, "static void call_checked_add_arg(int32_t a, int32_t b)");
+    try expectContains(checked_add_arg_body, "hit(mc_checked_add_i32(a, b));");
+    try expectNotContains(checked_add_arg_body, "mc_tmp");
+    try expectNotContains(checked_add_arg_body, "switch");
+
+    const checked_neg_arg_body = try cFunctionBody(output.items, "static void call_checked_neg_arg(int32_t a)");
+    try expectContains(checked_neg_arg_body, "hit(mc_checked_neg_i32(a));");
+    try expectNotContains(checked_neg_arg_body, "mc_tmp");
+    try expectNotContains(checked_neg_arg_body, "switch");
 }
 
 test "lower-c emits pure local-only void functions from MIR" {

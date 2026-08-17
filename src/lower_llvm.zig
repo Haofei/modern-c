@@ -1323,6 +1323,8 @@ const LlvmEmitter = struct {
         param: []const u8,
         integer_literal: []const u8,
         bool_literal: bool,
+        checked_binary: SimpleMirCheckedBinary,
+        checked_unary: SimpleMirCheckedUnary,
         logical_not: SimpleMirArg,
         compare_binary: SimpleMirCompareBinary,
     };
@@ -1572,16 +1574,17 @@ const LlvmEmitter = struct {
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         if (self.simpleMirConditionalEmptyVoidBody(function, fn_mir)) return .empty;
         if (self.simpleMirConditionalVoidBody(function, fn_mir)) |conditional| return .{ .conditional_direct_calls = conditional };
-        if (!simpleMirNoTrap(fn_mir)) return null;
         const block = fn_mir.blocks[0];
         if (block.terminator != .fallthrough) return null;
         if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
         if (self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block, false)) |calls| {
+            if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(calls)) return null;
             if (calls.count > 1) return .{ .direct_calls = calls };
         }
         const call_source = self.simpleMirCallSource(fn_mir) orelse return if (simpleMirEmptyVoidBlock(function, fn_mir, block)) .empty else null;
         if (!simpleMirDirectCallResultVoid(fn_mir, call_source)) return null;
         const call = self.simpleMirDirectCallAtSource(function, fn_mir, call_source) orelse return null;
+        if (fn_mir.trap_edges.len != simpleMirDirectCallTrapCount(call)) return null;
         return .{ .direct_call = call };
     }
 
@@ -1887,6 +1890,25 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn simpleMirCallArgTrapCount(arg: SimpleMirCallArg) usize {
+        return switch (arg) {
+            .checked_binary, .checked_unary => 1,
+            else => 0,
+        };
+    }
+
+    fn simpleMirDirectCallTrapCount(call: SimpleMirDirectCall) usize {
+        var count: usize = 0;
+        for (call.args[0..call.arg_count]) |arg| count += simpleMirCallArgTrapCount(arg);
+        return count;
+    }
+
+    fn simpleMirDirectCallsTrapCount(calls: SimpleMirDirectCalls) usize {
+        var count: usize = 0;
+        for (calls.calls[0..calls.count]) |call| count += simpleMirDirectCallTrapCount(call);
+        return count;
+    }
+
     fn simpleMirAssignedValueInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, local_name: []const u8) ?SimpleMirConditionalValue {
         const source = self.simpleMirAssignmentSourceInBlock(block, local_name) orelse return null;
         return self.simpleMirConditionalValueAtSource(function, fn_mir, source);
@@ -1989,6 +2011,8 @@ const LlvmEmitter = struct {
             .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
             .integer_literal => |literal| literal,
             .bool_literal => |value| if (value) "1" else "0",
+            .checked_binary => |binary| try self.emitSimpleMirCheckedBinary(binary, span),
+            .checked_unary => |unary| try self.emitSimpleMirCheckedUnary(unary, span),
             .logical_not => |operand| try self.emitSimpleMirLogicalNot(operand, span),
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary, span),
         };
@@ -2221,6 +2245,8 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirCallArgAt(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirCallArg {
+        if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, source)) |binary| return .{ .checked_binary = binary };
+        if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
@@ -2281,8 +2307,19 @@ const LlvmEmitter = struct {
         var calls: SimpleMirDirectCalls = .{};
         for (block.instructions) |instruction| {
             switch (instruction.kind) {
-                .param, .local, .target_type, .integer_literal_conversion => {},
+                .param, .local, .target_type, .integer_literal_conversion, .add_overflow => {},
                 .assign => if (!mirFunctionHasLocal(fn_mir, instruction.detail)) return null,
+                .binary => {
+                    if (std.mem.eql(u8, instruction.detail, "switch_subject")) continue;
+                    const source = instructionSourcePoint(instruction);
+                    if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
+                        self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return null;
+                },
+                .unary => {
+                    const source = instructionSourcePoint(instruction);
+                    if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, source) == null and
+                        self.simpleMirLogicalNotAtSource(function, fn_mir, source) == null) return null;
+                },
                 .expr => {
                     if (std.mem.eql(u8, instruction.detail, "int") or
                         std.mem.eql(u8, instruction.detail, "bool") or

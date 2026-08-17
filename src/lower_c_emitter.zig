@@ -1261,6 +1261,8 @@ pub const CEmitter = struct {
         param: []const u8,
         integer_literal: []const u8,
         bool_literal: bool,
+        checked_binary: SimpleMirCheckedBinary,
+        checked_unary: SimpleMirCheckedUnary,
         logical_not: SimpleMirArg,
         compare_binary: SimpleMirCompareBinary,
     };
@@ -1484,16 +1486,17 @@ pub const CEmitter = struct {
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         if (self.simpleMirConditionalEmptyVoidBody(function, fn_mir)) return .empty;
         if (self.simpleMirConditionalVoidBody(function, fn_mir)) |conditional| return .{ .conditional_direct_calls = conditional };
-        if (!simpleMirNoTrap(fn_mir)) return null;
         const block = fn_mir.blocks[0];
         if (block.terminator != .fallthrough) return null;
         if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
         if (self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block, false)) |calls| {
+            if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(calls)) return null;
             if (calls.count > 1) return .{ .direct_calls = calls };
         }
         const call_source = self.simpleMirCallSource(fn_mir) orelse return if (simpleMirEmptyVoidBlock(function, fn_mir, block)) .empty else null;
         if (!simpleMirDirectCallResultVoid(fn_mir, call_source)) return null;
         const call = self.simpleMirDirectCallAtSource(function, fn_mir, call_source) orelse return null;
+        if (fn_mir.trap_edges.len != simpleMirDirectCallTrapCount(call)) return null;
         return .{ .direct_call = call };
     }
 
@@ -1816,6 +1819,25 @@ pub const CEmitter = struct {
         };
     }
 
+    fn simpleMirCallArgTrapCount(arg: SimpleMirCallArg) usize {
+        return switch (arg) {
+            .checked_binary, .checked_unary => 1,
+            else => 0,
+        };
+    }
+
+    fn simpleMirDirectCallTrapCount(call: SimpleMirDirectCall) usize {
+        var count: usize = 0;
+        for (call.args[0..call.arg_count]) |arg| count += simpleMirCallArgTrapCount(arg);
+        return count;
+    }
+
+    fn simpleMirDirectCallsTrapCount(calls: SimpleMirDirectCalls) usize {
+        var count: usize = 0;
+        for (calls.calls[0..calls.count]) |call| count += simpleMirDirectCallTrapCount(call);
+        return count;
+    }
+
     fn emitSimpleMirCompareBinary(self: *CEmitter, binary: SimpleMirCompareBinary) !void {
         try self.out.appendSlice(self.allocator, "(");
         try self.emitSimpleMirArg(binary.left);
@@ -1837,6 +1859,20 @@ pub const CEmitter = struct {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
+            .checked_binary => |binary| {
+                const helper = try self.checkedHelperName(binary.op, binary.type_name);
+                try self.out.print(self.allocator, "{s}(", .{helper});
+                try self.emitSimpleMirArg(binary.left);
+                try self.out.appendSlice(self.allocator, ", ");
+                try self.emitSimpleMirArg(binary.right);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .checked_unary => |unary| {
+                const helper = try self.checkedUnaryHelperName(unary.op, unary.type_name);
+                try self.out.print(self.allocator, "{s}(", .{helper});
+                try self.emitSimpleMirArg(unary.operand);
+                try self.out.appendSlice(self.allocator, ")");
+            },
             .logical_not => |operand| {
                 try self.out.appendSlice(self.allocator, "!");
                 try self.emitSimpleMirArg(operand);
@@ -2061,6 +2097,8 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirCallArgAt(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirCallArg {
+        if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, source)) |binary| return .{ .checked_binary = binary };
+        if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
@@ -2111,8 +2149,19 @@ pub const CEmitter = struct {
         var calls: SimpleMirDirectCalls = .{};
         for (block.instructions) |instruction| {
             switch (instruction.kind) {
-                .param, .local, .target_type, .integer_literal_conversion => {},
+                .param, .local, .target_type, .integer_literal_conversion, .add_overflow => {},
                 .assign => if (!mirFunctionHasLocal(fn_mir, instruction.detail)) return null,
+                .binary => {
+                    if (std.mem.eql(u8, instruction.detail, "switch_subject")) continue;
+                    const source = instructionSourcePoint(instruction);
+                    if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
+                        self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return null;
+                },
+                .unary => {
+                    const source = instructionSourcePoint(instruction);
+                    if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, source) == null and
+                        self.simpleMirLogicalNotAtSource(function, fn_mir, source) == null) return null;
+                },
                 .expr => {
                     if (std.mem.eql(u8, instruction.detail, "int") or
                         std.mem.eql(u8, instruction.detail, "bool") or
