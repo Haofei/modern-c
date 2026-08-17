@@ -887,6 +887,8 @@ test "lower-c emits simple global stores from MIR" {
         \\global s: i32 = 0;
         \\global wide: u64 = 0;
         \\global byte: u8 = 0;
+        \\global small_float: f32 = 0.0;
+        \\global wide_float: f64 = 0.0;
         \\global current: Color = .red;
         \\global maybe: ?u32 = null;
         \\global pair: Pair = .{ .a = 0, .b = 0 };
@@ -903,6 +905,12 @@ test "lower-c emits simple global stores from MIR" {
         \\}
         \\fn store_char() {
         \\    byte = 'A';
+        \\}
+        \\fn store_float() {
+        \\    small_float = 1.5;
+        \\}
+        \\fn store_double() {
+        \\    wide_float = 2.5;
         \\}
         \\fn store_bool_literal() {
         \\    flag = true;
@@ -1042,6 +1050,14 @@ test "lower-c emits simple global stores from MIR" {
     const char_body = try cFunctionBody(output.items, "static void store_char(void)");
     try expectContains(char_body, "mc_race_store_u8(&byte, (uint8_t)65);");
     try expectNotContains(char_body, "mc_tmp");
+
+    const float_body = try cFunctionBody(output.items, "static void store_float(void)");
+    try expectContains(float_body, "mc_race_store_f32(&small_float, (float)1.5f);");
+    try expectNotContains(float_body, "mc_tmp");
+
+    const double_body = try cFunctionBody(output.items, "static void store_double(void)");
+    try expectContains(double_body, "mc_race_store_f64(&wide_float, (double)2.5);");
+    try expectNotContains(double_body, "mc_tmp");
 
     const bool_literal_body = try cFunctionBody(output.items, "static void store_bool_literal(void)");
     try expectContains(bool_literal_body, "mc_race_store_bool(&flag, (bool)true);");
@@ -1868,6 +1884,28 @@ test "lower-c emits char literal return from MIR without body fallback" {
     const body = try cFunctionBody(output.items, "static uint16_t char_value(void)");
     try expectContains(body, "return 65;");
     try expectNotContains(body, "mc_tmp");
+}
+
+test "lower-c emits float literal returns from MIR without body fallback" {
+    const source =
+        \\fn small() -> f32 {
+        \\    return 1.5;
+        \\}
+        \\fn wide() -> f64 {
+        \\    return 2.5;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_float_literal_return.mc", source, &output);
+
+    const small_body = try cFunctionBody(output.items, "static float small(void)");
+    try expectContains(small_body, "return 1.5f;");
+    try expectNotContains(small_body, "mc_tmp");
+
+    const wide_body = try cFunctionBody(output.items, "static double wide(void)");
+    try expectContains(wide_body, "return 2.5;");
+    try expectNotContains(wide_body, "mc_tmp");
 }
 
 test "lower-c emits local and assigned char literal returns from MIR without body fallback" {

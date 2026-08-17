@@ -92,6 +92,7 @@ pub const BoundsFact = mir_model.BoundsFact;
 pub const BoundsFactKind = mir_model.BoundsFactKind;
 pub const IntegerFact = mir_model.IntegerFact;
 pub const BoolFact = mir_model.BoolFact;
+pub const FloatFact = mir_model.FloatFact;
 pub const CallTargetKind = mir_model.CallTargetKind;
 pub const CallTargetFact = mir_model.CallTargetFact;
 pub const BindThunkFact = mir_model.BindThunkFact;
@@ -986,6 +987,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         .bounds_facts = try allocator.alloc(BoundsFact, 0),
                         .integer_facts = try allocator.alloc(IntegerFact, 0),
                         .bool_facts = try allocator.alloc(BoolFact, 0),
+                        .float_facts = try allocator.alloc(FloatFact, 0),
                         .call_target_facts = try allocator.alloc(CallTargetFact, 0),
                         .bind_thunk_facts = try allocator.alloc(BindThunkFact, 0),
                         .body_type_artifact_facts = try allocator.alloc(BodyTypeArtifactFact, 0),
@@ -1258,8 +1260,8 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
     for (module_mir.functions) |function| {
         try out.print(
             allocator,
-            "mir function name={s} symbol_id={} return={s} no_lang_trap={} irq_context={} extern={} c_abi={} params={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} bool_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
-            .{ function.name, if (function.typed_symbol_id.isValid()) function.typed_symbol_id.index() else std.math.maxInt(usize), function.return_ty.name(), function.no_lang_trap, function.irq_context, function.is_extern, function.c_abi, function.param_count, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.bool_facts.len, function.const_get_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
+            "mir function name={s} symbol_id={} return={s} no_lang_trap={} irq_context={} extern={} c_abi={} params={} blocks={} trap_edges={} contract_regions={} range_facts={} bounds_facts={} integer_facts={} bool_facts={} float_facts={} const_get_facts={} call_target_facts={} target_type_facts={} pointer_provenance_facts={} representation_facts={} elided_bounds={}\n",
+            .{ function.name, if (function.typed_symbol_id.isValid()) function.typed_symbol_id.index() else std.math.maxInt(usize), function.return_ty.name(), function.no_lang_trap, function.irq_context, function.is_extern, function.c_abi, function.param_count, function.blocks.len, function.trap_edges.len, function.contract_regions.len, function.range_facts.len, function.bounds_facts.len, function.integer_facts.len, function.bool_facts.len, function.float_facts.len, function.const_get_facts.len, function.call_target_facts.len, function.target_type_facts.len, function.pointer_provenance_facts.len, function.representation_facts.len, function.elided_bounds.len },
         );
         for (function.type_identities) |identity| {
             try out.print(
@@ -1434,6 +1436,13 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                 allocator,
                 "mir bool_fact fn={s} value={} recorded=true line={} column={}\n",
                 .{ function.name, fact.value, fact.source.line, fact.source.column },
+            );
+        }
+        for (function.float_facts) |fact| {
+            try out.print(
+                allocator,
+                "mir float_fact fn={s} literal={s} target_type={s} recorded=true line={} column={}\n",
+                .{ function.name, fact.literal, fact.target_ty.name(), fact.source.line, fact.source.column },
             );
         }
         for (function.const_get_facts) |fact| {
@@ -2015,6 +2024,14 @@ pub fn validateBoolFactsForLowering(module: Module) error{InvalidMirBoolFacts}!v
     for (module.functions) |function| {
         for (function.bool_facts) |fact| {
             if (!functionHasMatchingBoolInstruction(function, fact)) return error.InvalidMirBoolFacts;
+        }
+    }
+}
+
+pub fn validateFloatFactsForLowering(module: Module) error{InvalidMirFloatFacts}!void {
+    for (module.functions) |function| {
+        for (function.float_facts) |fact| {
+            if (!functionHasMatchingFloatInstruction(function, fact)) return error.InvalidMirFloatFacts;
         }
     }
 }
@@ -2737,6 +2754,7 @@ pub const LoweringAdmissionError = error{
     InvalidMirOwnershipEvents,
     InvalidMirTargetTypeFacts,
     InvalidMirBoolFacts,
+    InvalidMirFloatFacts,
     StaleMirTargetTypeFacts,
     UnknownMirLoweringType,
 };
@@ -2748,6 +2766,7 @@ pub fn validateLoweringAdmission(module: Module) LoweringAdmissionError!void {
     try validateRepresentationFactsForLowering(module);
     try validateIntegerFactsForLowering(module);
     try validateBoolFactsForLowering(module);
+    try validateFloatFactsForLowering(module);
     try validateConstGetFactsForLowering(module);
     try validateCallTargetFactsForLowering(module);
     try validateDropGlueFactsForLowering(module);
@@ -3165,6 +3184,19 @@ fn functionHasMatchingBoolInstruction(function: Function, fact: BoolFact) bool {
             if (instruction.result_ty != .bool) continue;
             if (instruction.line != fact.source.line or instruction.column != fact.source.column) continue;
             if (!std.mem.eql(u8, instruction.detail, "bool")) continue;
+            return true;
+        }
+    }
+    return false;
+}
+
+fn functionHasMatchingFloatInstruction(function: Function, fact: FloatFact) bool {
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .expr) continue;
+            if (!sameRepresentationValueType(instruction.result_ty, .{ .float = "comptime_float" })) continue;
+            if (instruction.line != fact.source.line or instruction.column != fact.source.column) continue;
+            if (!std.mem.eql(u8, instruction.detail, "float")) continue;
             return true;
         }
     }
@@ -5243,6 +5275,7 @@ const FunctionBuilder = struct {
     bounds_facts: std.ArrayList(BoundsFact),
     integer_facts: std.ArrayList(IntegerFact),
     bool_facts: std.ArrayList(BoolFact),
+    float_facts: std.ArrayList(FloatFact),
     const_get_facts: std.ArrayList(ConstGetFact),
     call_target_facts: std.ArrayList(CallTargetFact),
     bind_thunk_facts: std.ArrayList(BindThunkFact),
@@ -5355,6 +5388,7 @@ const FunctionBuilder = struct {
             .bounds_facts = .empty,
             .integer_facts = .empty,
             .bool_facts = .empty,
+            .float_facts = .empty,
             .const_get_facts = .empty,
             .call_target_facts = .empty,
             .bind_thunk_facts = .empty,
@@ -5438,6 +5472,7 @@ const FunctionBuilder = struct {
             .bounds_facts = .empty,
             .integer_facts = .empty,
             .bool_facts = .empty,
+            .float_facts = .empty,
             .const_get_facts = .empty,
             .call_target_facts = .empty,
             .bind_thunk_facts = .empty,
@@ -5495,6 +5530,7 @@ const FunctionBuilder = struct {
         self.bounds_facts.deinit(self.allocator);
         self.integer_facts.deinit(self.allocator);
         self.bool_facts.deinit(self.allocator);
+        self.float_facts.deinit(self.allocator);
         self.const_get_facts.deinit(self.allocator);
         self.call_target_facts.deinit(self.allocator);
         self.bind_thunk_facts.deinit(self.allocator);
@@ -5577,6 +5613,8 @@ const FunctionBuilder = struct {
         errdefer self.allocator.free(integer_facts);
         const bool_facts = try self.bool_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(bool_facts);
+        const float_facts = try self.float_facts.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(float_facts);
         const const_get_facts = try self.const_get_facts.toOwnedSlice(self.allocator);
         errdefer self.allocator.free(const_get_facts);
         const call_target_facts = try self.call_target_facts.toOwnedSlice(self.allocator);
@@ -5681,6 +5719,7 @@ const FunctionBuilder = struct {
             .bounds_facts = bounds_facts,
             .integer_facts = integer_facts,
             .bool_facts = bool_facts,
+            .float_facts = float_facts,
             .const_get_facts = const_get_facts,
             .call_target_facts = call_target_facts,
             .bind_thunk_facts = bind_thunk_facts,
@@ -7164,7 +7203,13 @@ const FunctionBuilder = struct {
                 try self.addBoolLiteralFact(value, expr.span);
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
             },
-            .float_literal, .string_literal, .char_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal => {
+            .float_literal => {
+                if (self.assignment_target_ty != .unknown) {
+                    try self.addFloatLiteralFact(self.assignment_target_ty, expr, expr.span);
+                }
+                try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
+            },
+            .string_literal, .char_literal, .null_literal, .uninit_literal, .void_literal, .enum_literal => {
                 try self.addInstr(.expr, exprText(expr), self.exprType(expr), expr.span);
             },
             .array_literal => |items| {
@@ -9435,6 +9480,14 @@ const FunctionBuilder = struct {
     fn addBoolLiteralFact(self: *FunctionBuilder, value: bool, span: ast.Span) !void {
         try self.bool_facts.append(self.allocator, .{
             .value = value,
+            .source = .{ .line = span.line, .column = span.column },
+        });
+    }
+
+    fn addFloatLiteralFact(self: *FunctionBuilder, target_ty: ValueType, expr: ast.Expr, span: ast.Span) !void {
+        try self.float_facts.append(self.allocator, .{
+            .literal = floatFactLiteralText(expr),
+            .target_ty = target_ty,
             .source = .{ .line = span.line, .column = span.column },
         });
     }
@@ -11979,6 +12032,7 @@ fn freeFunction(allocator: std.mem.Allocator, function: Function) void {
     if (function.bounds_facts.len != 0) allocator.free(function.bounds_facts);
     if (function.integer_facts.len != 0) allocator.free(function.integer_facts);
     if (function.bool_facts.len != 0) allocator.free(function.bool_facts);
+    if (function.float_facts.len != 0) allocator.free(function.float_facts);
     if (function.const_get_facts.len != 0) allocator.free(function.const_get_facts);
     if (function.call_target_facts.len != 0) allocator.free(function.call_target_facts);
     if (function.bind_thunk_facts.len != 0) allocator.free(function.bind_thunk_facts);
@@ -12139,6 +12193,15 @@ fn integerFactLiteralText(expr: ast.Expr) []const u8 {
         .cast => |node| integerFactLiteralText(node.value.*),
         .int_literal => |text| text,
         .char_literal => |text| text,
+        else => exprText(expr),
+    };
+}
+
+fn floatFactLiteralText(expr: ast.Expr) []const u8 {
+    return switch (expr.kind) {
+        .grouped => |inner| floatFactLiteralText(inner.*),
+        .cast => |node| floatFactLiteralText(node.value.*),
+        .float_literal => |text| text,
         else => exprText(expr),
     };
 }
