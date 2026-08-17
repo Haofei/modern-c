@@ -6701,6 +6701,19 @@ test "LLVM literal inferred local lowers without function body fallback" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i32 7") != null);
 }
 
+test "LLVM checked-unary inferred local lowers without function body fallback" {
+    const source =
+        \\fn unary_local(value: i64) -> i64 {
+        \\    let negated = -value;
+        \\    return negated;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_checked_unary_return.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "llvm.ssub.with.overflow.i64") != null);
+}
+
 test "LLVM block expressions consume MIR result facts" {
     const source =
         \\fn block_result() -> u32 {
