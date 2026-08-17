@@ -4139,6 +4139,12 @@ pub const CEmitter = struct {
                 if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
                 return .{ .checked_binary = binary };
             }
+            if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| {
+                const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
+                const result = simpleMirTargetTypeFactKindAt(fn_mir, .expression_result, init_source) orelse return null;
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
+                return .{ .compare_binary = binary };
+            }
             if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, init_source)) |unary| {
                 const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
                 const result = simpleMirTargetTypeFactKindAt(fn_mir, .expression_result, init_source) orelse return null;

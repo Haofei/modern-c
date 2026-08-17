@@ -5403,6 +5403,19 @@ test "lower-c logical-not inferred local lowers without function body fallback" 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return !enabled;") != null);
 }
 
+test "lower-c compare inferred local lowers without function body fallback" {
+    const source =
+        \\fn compare_local(left: u64, right: u64) -> bool {
+        \\    let less = left < right;
+        \\    return less;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_compare_return.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return (left < right);") != null);
+}
+
 test "lower-c diagnoses source block expressions instead of inferring their result" {
     const source =
         \\fn block_result() -> u32 {
