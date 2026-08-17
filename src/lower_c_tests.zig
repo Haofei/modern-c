@@ -1934,6 +1934,12 @@ test "lower-c emits float literal returns from MIR without body fallback" {
         \\        return 2.5;
         \\    }
         \\}
+        \\fn choose_early(flag: bool) -> f32 {
+        \\    if (flag) {
+        \\        return 1.5;
+        \\    }
+        \\    return 2.5;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1968,6 +1974,12 @@ test "lower-c emits float literal returns from MIR without body fallback" {
     try expectContains(choose_body, "return 1.5f;");
     try expectContains(choose_body, "return 2.5f;");
     try expectNotContains(choose_body, "mc_tmp");
+
+    const choose_early_body = try cFunctionBody(output.items, "static float choose_early(bool flag)");
+    try expectContains(choose_early_body, "if (flag) {");
+    try expectContains(choose_early_body, "return 1.5f;");
+    try expectContains(choose_early_body, "return 2.5f;");
+    try expectNotContains(choose_early_body, "mc_tmp");
 }
 
 test "lower-c emits local and assigned char literal returns from MIR without body fallback" {
