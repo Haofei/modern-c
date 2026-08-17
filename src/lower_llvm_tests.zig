@@ -2021,6 +2021,27 @@ test "LLVM emits nullable none returns from MIR without body fallback" {
     try expectNotContains(assigned_body, "store");
 }
 
+test "LLVM emits conditional nullable none returns from MIR without body fallback" {
+    const source =
+        \\fn choose_none(flag: bool) -> ?u32 {
+        \\    if (flag) {
+        \\        return null;
+        \\    } else {
+        \\        return null;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_nullable_none_returns.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @choose_none");
+    try expectContains(body, "br i1 %flag");
+    try expectContains(body, "ret { i1, i32 } zeroinitializer");
+    try expectNotContains(body, "alloca");
+    try expectNotContains(body, "store");
+}
+
 test "LLVM emits enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {

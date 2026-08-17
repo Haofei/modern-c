@@ -1876,6 +1876,26 @@ test "lower-c emits nullable none returns from MIR without body fallback" {
     try expectNotContains(assigned_body, "mc_tmp");
 }
 
+test "lower-c emits conditional nullable none returns from MIR without body fallback" {
+    const source =
+        \\fn choose_none(flag: bool) -> ?u32 {
+        \\    if (flag) {
+        \\        return null;
+        \\    } else {
+        \\        return null;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_nullable_none_returns.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static mc_opt_u32 choose_none(bool flag)");
+    try expectContains(body, "if (flag) {");
+    try expectContains(body, "return (mc_opt_u32){ .present = false };");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c emits enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {
