@@ -2401,9 +2401,9 @@ pub const CEmitter = struct {
         const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
         if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .checked_binary = binary };
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, init_source)) |unary| return .{ .checked_unary = unary };
+        if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
         if (!simpleMirNoTrap(fn_mir)) return null;
         if (self.simpleMirNestedCallAtSource(function, fn_mir, init_source)) |call| return .{ .nested_call = call };
-        if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
@@ -2428,9 +2428,9 @@ pub const CEmitter = struct {
         const assigned_source = self.simpleMirAssignmentSource(fn_mir, local_name) orelse return null;
         if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, assigned_source)) |binary| return .{ .checked_binary = binary };
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, assigned_source)) |unary| return .{ .checked_unary = unary };
+        if (self.simpleMirDirectCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .direct_call = call };
         if (!simpleMirNoTrap(fn_mir)) return null;
         if (self.simpleMirNestedCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .nested_call = call };
-        if (self.simpleMirDirectCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .direct_call = call };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, assigned_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, assigned_source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirArgAt(function, fn_mir, assigned_source)) |arg| {

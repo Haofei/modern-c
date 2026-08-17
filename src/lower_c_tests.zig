@@ -570,6 +570,15 @@ test "lower-c preserves MIR void calls before direct-call returns" {
         \\    x = make(a);
         \\    return x;
         \\}
+        \\fn return_local_call_add(a: i32, b: i32) -> i32 {
+        \\    let x: i32 = make(a + b);
+        \\    return x;
+        \\}
+        \\fn return_assigned_call_neg(a: i32) -> i32 {
+        \\    var x: i32 = 0;
+        \\    x = make(-a);
+        \\    return x;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -599,6 +608,17 @@ test "lower-c preserves MIR void calls before direct-call returns" {
     try expectNotContains(assigned_call_body, "int32_t x");
     try expectNotContains(assigned_call_body, "x =");
     try expectNotContains(assigned_call_body, "mc_tmp");
+
+    const local_call_add_body = try cFunctionBody(output.items, "static int32_t return_local_call_add(int32_t a, int32_t b)");
+    try expectContains(local_call_add_body, "return make(mc_checked_add_i32(a, b));");
+    try expectNotContains(local_call_add_body, "int32_t x");
+    try expectNotContains(local_call_add_body, "mc_tmp");
+
+    const assigned_call_neg_body = try cFunctionBody(output.items, "static int32_t return_assigned_call_neg(int32_t a)");
+    try expectContains(assigned_call_neg_body, "return make(mc_checked_neg_i32(a));");
+    try expectNotContains(assigned_call_neg_body, "int32_t x");
+    try expectNotContains(assigned_call_neg_body, "x =");
+    try expectNotContains(assigned_call_neg_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before conditional returns" {
