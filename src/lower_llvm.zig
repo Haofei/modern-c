@@ -1335,6 +1335,17 @@ const LlvmEmitter = struct {
         suffix_block_index: usize = 0,
     };
 
+    const SimpleMirLoopCondition = struct {
+        name: []const u8,
+        inverted: bool = false,
+    };
+
+    const SimpleMirLoopReturn = struct {
+        condition: SimpleMirLoopCondition,
+        body_block_index: usize,
+        after_block_index: usize,
+    };
+
     const SimpleMirCondition = union(enum) {
         param: struct {
             name: []const u8,
@@ -1453,7 +1464,8 @@ const LlvmEmitter = struct {
         const simple_void_body = if (simple_trap == null and simple_return == null) self.simpleMirVoidBody(function, fn_mir) else null;
         const simple_conditional_statement_return = if (simple_trap == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalStatementReturn(function, fn_mir) else null;
         const simple_conditional_return = if (simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
-        if (simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) return false;
+        const simple_loop_return = if (simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
+        if (simple_trap == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_loop_return == null) return false;
 
         const sig_facts = function.signature;
         const ret_ty = sig_facts.return_type orelse simpleType(sig_facts.name.span, "void");
@@ -1665,6 +1677,16 @@ const LlvmEmitter = struct {
             try self.emitSimpleMirConditionalReturnValue(ret_ty, conditional.then_value, sig_facts.name.span);
             try self.out.print(self.allocator, "{s}:\n", .{else_label});
             try self.emitSimpleMirConditionalReturnValue(ret_ty, conditional.else_value, sig_facts.name.span);
+        } else if (simple_loop_return) |loop| {
+            const body_label = try self.nextLabel("while_body");
+            const after_label = try self.nextLabel("while_after");
+            const condition = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{loop.condition.name});
+            const body_target = if (loop.condition.inverted) after_label else body_label;
+            const after_target = if (loop.condition.inverted) body_label else after_label;
+            try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, body_target, after_target, try self.debugCallSuffix(), body_label });
+            _ = try self.emitSimpleMirVoidStatementSources(function, fn_mir, self.simpleMirVoidStatementSourcesInBlock(function, fn_mir, fn_mir.blocks[loop.body_block_index]).?, sig_facts.name.span);
+            try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, body_target, after_target, try self.debugCallSuffix(), after_label });
+            try self.emitSimpleMirConditionalReturnValue(ret_ty, self.simpleMirReturnValueInBlock(function, fn_mir, fn_mir.blocks[loop.after_block_index]).?, sig_facts.name.span);
         }
         try self.out.appendSlice(self.allocator, "}\n\n");
         return true;
@@ -2141,6 +2163,69 @@ const LlvmEmitter = struct {
         const then_value = self.simpleMirAssignedValueInBlock(function, fn_mir, then_block, local_name) orelse initial_value;
         const else_value = self.simpleMirAssignedValueInBlock(function, fn_mir, else_block, local_name) orelse initial_value;
         return .{ then_value, else_value };
+    }
+
+    fn simpleMirLoopReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirLoopReturn {
+        if (fn_mir.return_ty == .void) return null;
+        if (fn_mir.blocks.len != 3 or fn_mir.pointer_provenance_facts.len != 0) return null;
+        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
+        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+        const entry = fn_mir.blocks[0];
+        if (entry.terminator != .branch or entry.successors.len != 2) return null;
+        const condition = self.simpleMirLoopConditionParam(function, entry) orelse return null;
+        const body_index = entry.successors[0];
+        const after_index = entry.successors[1];
+        if (body_index >= fn_mir.blocks.len or after_index >= fn_mir.blocks.len) return null;
+        const body_block = fn_mir.blocks[body_index];
+        const after_block = fn_mir.blocks[after_index];
+        if (!std.mem.eql(u8, body_block.kind, "loop_body") or !std.mem.eql(u8, after_block.kind, "loop_after")) return null;
+        if (body_block.terminator != .jump) return null;
+        if (after_block.terminator != .return_) return null;
+        const body_sources = self.simpleMirVoidStatementSourcesInBlock(function, fn_mir, body_block) orelse return null;
+        if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, body_block)) return null;
+        if (!self.blockOnlyContainsSimpleMirReturnInstructionsInBlock(function, fn_mir, after_block)) return null;
+        const after_value = self.simpleMirReturnValueInBlock(function, fn_mir, after_block) orelse return null;
+        const body_traps = self.simpleMirVoidStatementSourcesTrapCount(function, fn_mir, body_sources) orelse return null;
+        if (fn_mir.trap_edges.len != body_traps + simpleMirConditionalTrapCount(after_value)) return null;
+        return .{ .condition = condition, .body_block_index = body_index, .after_block_index = after_index };
+    }
+
+    fn simpleMirLoopConditionParam(_: *LlvmEmitter, function: anytype, block: mir.Block) ?SimpleMirLoopCondition {
+        var saw_loop_marker = false;
+        var index: usize = 0;
+        while (index < block.instructions.len) : (index += 1) {
+            const instruction = block.instructions[index];
+            if (!saw_loop_marker) {
+                saw_loop_marker = instruction.kind == .binary and std.mem.eql(u8, instruction.detail, "while");
+                continue;
+            }
+            switch (instruction.kind) {
+                .target_type => continue,
+                .unary => {
+                    if (!std.mem.eql(u8, instruction.detail, "logical_not")) return null;
+                    var operand_index = index + 1;
+                    while (operand_index < block.instructions.len) : (operand_index += 1) {
+                        const operand = block.instructions[operand_index];
+                        if (operand.kind == .target_type) continue;
+                        if (operand.kind != .expr or operand.result_ty != .bool) return null;
+                        for (function.signature.params) |param| {
+                            if (std.mem.eql(u8, operand.detail, param.name.text)) return .{ .name = param.name.text, .inverted = true };
+                        }
+                        return null;
+                    }
+                    return null;
+                },
+                .expr => {
+                    if (instruction.result_ty != .bool) return null;
+                    for (function.signature.params) |param| {
+                        if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .name = param.name.text };
+                    }
+                    return null;
+                },
+                else => return null,
+            }
+        }
+        return null;
     }
 
     fn simpleMirSwitchConditionParam(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirCondition {
@@ -3269,7 +3354,11 @@ const LlvmEmitter = struct {
     }
 
     fn blockOnlyContainsSimpleMirReturnInstructions(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) bool {
-        const block = fn_mir.blocks[0];
+        return self.blockOnlyContainsSimpleMirReturnInstructionsInBlock(function, fn_mir, fn_mir.blocks[0]);
+    }
+
+    fn blockOnlyContainsSimpleMirReturnInstructionsInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
+        _ = fn_mir;
         for (block.instructions) |instruction| switch (instruction.kind) {
             .param, .local, .assign, .target_type, .integer_literal_conversion, .binary, .unary, .add_overflow, .return_value => {},
             .call => {},

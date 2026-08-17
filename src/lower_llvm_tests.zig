@@ -191,6 +191,17 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
         \\    }
         \\    return x;
         \\}
+        \\fn loop_empty_return(flag: bool, x: u32) -> u32 {
+        \\    while flag {
+        \\    }
+        \\    return x;
+        \\}
+        \\fn loop_call_return(flag: bool, x: u32) -> u32 {
+        \\    while flag {
+        \\        hit(x);
+        \\    }
+        \\    return x;
+        \\}
         \\fn choose_branch_effect_return(flag: bool, x: u32) -> u32 {
         \\    if (flag) {
         \\        hit(x);
@@ -315,6 +326,22 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     try std.testing.expect(empty_return_branch < empty_return_stmt);
     try expectNotContains(empty_return_body, "switch");
     try expectNotContains(empty_return_body, "alloca");
+
+    const loop_empty_body = try llvmFunctionBody(output.items, "define internal i32 @loop_empty_return");
+    const loop_empty_branch = std.mem.indexOf(u8, loop_empty_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const loop_empty_return = std.mem.indexOf(u8, loop_empty_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop_empty_branch < loop_empty_return);
+    try expectNotContains(loop_empty_body, "switch");
+    try expectNotContains(loop_empty_body, "alloca");
+
+    const loop_call_body = try llvmFunctionBody(output.items, "define internal i32 @loop_call_return");
+    const loop_call_branch = std.mem.indexOf(u8, loop_call_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const loop_call_call = std.mem.indexOf(u8, loop_call_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    const loop_call_return = std.mem.indexOf(u8, loop_call_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop_call_branch < loop_call_call);
+    try std.testing.expect(loop_call_call < loop_call_return);
+    try expectNotContains(loop_call_body, "switch");
+    try expectNotContains(loop_call_body, "alloca");
 
     const branch_effect_body = try llvmFunctionBody(output.items, "define internal i32 @choose_branch_effect_return");
     const branch_effect_branch = std.mem.indexOf(u8, branch_effect_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
