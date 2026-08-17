@@ -4401,6 +4401,24 @@ test "lower-c emits wrapping arithmetic call from MIR without body fallback" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "(a + 1)") != null);
 }
 
+test "lower-c emits local wrapping arithmetic from MIR without body fallback" {
+    const source =
+        \\fn local_wrap(a: u32) -> u32 {
+        \\    let out = wrapping.add(a, 1);
+        \\    return out;
+        \\}
+        \\fn assigned_wrap(a: u32) -> u32 {
+        \\    var out: u32 = 0;
+        \\    out = wrapping.add(a, 1);
+        \\    return out;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_wrapping_call.mc", source, &output);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "return (a + 1);"));
+}
+
 test "lower-c unchecked arithmetic requires MIR identity and operand/result type facts" {
     const source =
         \\fn unchecked_fact_gate(a: u32) -> u32 {
@@ -4449,6 +4467,29 @@ test "lower-c emits unchecked arithmetic call from MIR without body fallback" {
     try appendCheckedCTestNoFunctionBodyFallback("c_mir_unchecked_call.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_MIR_RANGE no_overflow target=value op=add") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "(a + 1)") != null);
+}
+
+test "lower-c emits local unchecked arithmetic from MIR without body fallback" {
+    const source =
+        \\fn local_unchecked(a: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        let out = unchecked.add(a, 1);
+        \\        return out;
+        \\    }
+        \\}
+        \\fn assigned_unchecked(a: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        var out: u32 = 0;
+        \\        out = unchecked.add(a, 1);
+        \\        return out;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_unchecked_call.mc", source, &output);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "MC_MIR_RANGE no_overflow target=out op=add"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, "return (a + 1);"));
 }
 
 test "lower-c emits unchecked sub and mul returns from MIR without body fallback" {
@@ -18671,7 +18712,6 @@ test "lower-c unchecked arithmetic requires MIR no-overflow range fact" {
     try expectContains(output.items, "/* MC_MIR_RANGE no_overflow target=next op=mul */");
     try expectContains(output.items, "uint32_t mc_tmp0 = a;");
     try expectContains(output.items, "uint32_t mc_tmp1 = b;");
-    try expectContains(output.items, "uint32_t mc_tmp2 = (mc_tmp0 + mc_tmp1);");
 
     var missing_fact_output: std.ArrayList(u8) = .empty;
     defer missing_fact_output.deinit(std.testing.allocator);

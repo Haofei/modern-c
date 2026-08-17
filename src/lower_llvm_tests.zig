@@ -5768,6 +5768,24 @@ test "LLVM emits wrapping arithmetic call from MIR without body fallback" {
     try expectContains(output.items, " = add i32 %a, 1");
 }
 
+test "LLVM emits local wrapping arithmetic from MIR without body fallback" {
+    const source =
+        \\fn local_wrap(a: u32) -> u32 {
+        \\    let out = wrapping.add(a, 1);
+        \\    return out;
+        \\}
+        \\fn assigned_wrap(a: u32) -> u32 {
+        \\    var out: u32 = 0;
+        \\    out = wrapping.add(a, 1);
+        \\    return out;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_wrapping_call.mc", source, &output);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, " = add i32 %a, 1"));
+}
+
 test "LLVM unchecked arithmetic requires MIR identity and operand/result type facts" {
     const source =
         \\fn unchecked_fact_gate(a: u32) -> u32 {
@@ -5816,6 +5834,30 @@ test "LLVM emits unchecked arithmetic call from MIR without body fallback" {
     try appendLlvmTestNoFunctionBodyFallback("llvm_mir_unchecked_call.mc", source, &output);
     try expectContains(output.items, "mir range_fact consumed fn=unchecked_fact_gate target=value op=add assumption=no_overflow");
     try expectContains(output.items, " = add i32 %a, 1");
+}
+
+test "LLVM emits local unchecked arithmetic from MIR without body fallback" {
+    const source =
+        \\fn local_unchecked(a: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        let out = unchecked.add(a, 1);
+        \\        return out;
+        \\    }
+        \\}
+        \\fn assigned_unchecked(a: u32) -> u32 {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        var out: u32 = 0;
+        \\        out = unchecked.add(a, 1);
+        \\        return out;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_unchecked_call.mc", source, &output);
+    try expectContains(output.items, "mir range_fact consumed fn=local_unchecked target=out op=add assumption=no_overflow");
+    try expectContains(output.items, "mir range_fact consumed fn=assigned_unchecked target=out op=add assumption=no_overflow");
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, output.items, " = add i32 %a, 1"));
 }
 
 test "LLVM emits unchecked sub and mul returns from MIR without body fallback" {

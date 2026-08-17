@@ -1994,8 +1994,14 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirWrappingBinaryReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
-        if (!simpleMirNoTrap(fn_mir)) return null;
         const call_source = simpleMirReturnValueSource(block, value_id) orelse return null;
+        const return_ty = function.signature.return_type orelse return null;
+        const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
+        return self.simpleMirWrappingBinaryAtSource(function, fn_mir, call_source, expected_type_name);
+    }
+
+    fn simpleMirWrappingBinaryAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint, expected_type_name: []const u8) ?SimpleMirWrappingBinary {
+        if (!simpleMirNoTrap(fn_mir)) return null;
         var has_wrapping_call = false;
         for (fn_mir.call_target_facts) |fact| {
             if (fact.kind == .wrapping_add and sameMirSourceLocation(fact.source, call_source)) {
@@ -2004,17 +2010,21 @@ pub const CEmitter = struct {
             }
         }
         if (!has_wrapping_call) return null;
-        for (block.instructions) |instruction| {
-            if (instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) {
-                if (!std.mem.eql(u8, instruction.detail, "wrapping.add")) return null;
-                break;
+        var saw_call = false;
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) {
+                    if (!std.mem.eql(u8, instruction.detail, "wrapping.add")) return null;
+                    saw_call = true;
+                    break;
+                }
             }
-        } else return null;
+        }
+        if (!saw_call) return null;
 
         const result_fact = simpleMirTargetTypeFactKindAt(fn_mir, .wrapping_result, call_source) orelse return null;
-        const return_ty = function.signature.return_type orelse return null;
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(result_fact.target_ty))) return null;
         const result_name = type_bridge.typeName(self.resolveAliasType(result_fact.target_ty)) orelse return null;
+        if (!std.mem.eql(u8, expected_type_name, result_name)) return null;
         if (unsignedTypeSuffix(result_name) == null) return null;
         var left_fact: ?mir.TargetTypeFact = null;
         var right_fact: ?mir.TargetTypeFact = null;
@@ -2040,8 +2050,14 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirUncheckedBinaryReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
-        if (!simpleMirNoTrap(fn_mir)) return null;
         const call_source = simpleMirReturnValueSource(block, value_id) orelse return null;
+        const return_ty = function.signature.return_type orelse return null;
+        const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
+        return self.simpleMirUncheckedBinaryAtSource(function, fn_mir, call_source, expected_type_name, "value");
+    }
+
+    fn simpleMirUncheckedBinaryAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint, expected_type_name: []const u8, range_target: []const u8) ?SimpleMirWrappingBinary {
+        if (!simpleMirNoTrap(fn_mir)) return null;
         var unchecked_op: ?[]const u8 = null;
         for (fn_mir.call_target_facts) |fact| {
             if (mir.uncheckedCallFactInfo(fact.kind)) |op| {
@@ -2059,17 +2075,21 @@ pub const CEmitter = struct {
             "unchecked.mul"
         else
             return null;
-        for (block.instructions) |instruction| {
-            if (instruction.kind == .unchecked_assume and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) {
-                if (!std.mem.eql(u8, instruction.detail, expected_detail)) return null;
-                break;
+        var saw_call = false;
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind == .unchecked_assume and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) {
+                    if (!std.mem.eql(u8, instruction.detail, expected_detail)) return null;
+                    saw_call = true;
+                    break;
+                }
             }
-        } else return null;
+        }
+        if (!saw_call) return null;
 
         const result_fact = simpleMirTargetTypeFactKindAt(fn_mir, .unchecked_result, call_source) orelse return null;
-        const return_ty = function.signature.return_type orelse return null;
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(result_fact.target_ty))) return null;
         const result_name = type_bridge.typeName(self.resolveAliasType(result_fact.target_ty)) orelse return null;
+        if (!std.mem.eql(u8, expected_type_name, result_name)) return null;
         if (unsignedTypeSuffix(result_name) == null) return null;
         var left_fact: ?mir.TargetTypeFact = null;
         var right_fact: ?mir.TargetTypeFact = null;
@@ -2086,7 +2106,7 @@ pub const CEmitter = struct {
                 else => {},
             }
         }
-        const range_fact = simpleMirNoOverflowRangeFactAt(fn_mir, "value", op, call_source);
+        const range_fact = simpleMirNoOverflowRangeFactAt(fn_mir, range_target, op, call_source);
         const left_fact_value = left_fact orelse return null;
         const right_fact_value = right_fact orelse return null;
         const left = self.simpleMirCallArgAt(function, fn_mir, left_fact_value.source) orelse return null;
@@ -4194,6 +4214,13 @@ pub const CEmitter = struct {
                 if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
                 return .{ .direct_call = call };
             }
+            if (simpleMirArithmeticCallAtSource(fn_mir, init_source)) {
+                if (simpleMirInferredLocalFactAt(fn_mir, local_name, init_source)) |inferred| {
+                    const expected_type_name = type_bridge.typeName(self.resolveAliasType(inferred.target_ty)) orelse return null;
+                    if (self.simpleMirWrappingBinaryAtSource(function, fn_mir, init_source, expected_type_name)) |binary| return .{ .wrapping_binary = binary };
+                    if (self.simpleMirUncheckedBinaryAtSource(function, fn_mir, init_source, expected_type_name, local_name)) |binary| return .{ .wrapping_binary = binary };
+                }
+            }
             if (self.simpleMirExplicitCastAtSource(function, fn_mir, init_source)) |cast| {
                 const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
                 if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(cast.target_fact.target_ty))) return null;
@@ -4226,6 +4253,13 @@ pub const CEmitter = struct {
         if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .checked_binary = binary };
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, init_source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
+        if (simpleMirArithmeticCallAtSource(fn_mir, init_source)) {
+            if (function.signature.return_type) |return_ty| {
+                const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
+                if (self.simpleMirWrappingBinaryAtSource(function, fn_mir, init_source, expected_type_name)) |binary| return .{ .wrapping_binary = binary };
+                if (self.simpleMirUncheckedBinaryAtSource(function, fn_mir, init_source, expected_type_name, local_name)) |binary| return .{ .wrapping_binary = binary };
+            }
+        }
         if (self.simpleMirExplicitCastAtSource(function, fn_mir, init_source)) |cast| return .{ .explicit_cast_return = cast };
         if (self.simpleMirConversionAtSource(function, fn_mir, init_source)) |conversion| return .{ .conversion_return = conversion };
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, init_source)) |literal| return .{ .enum_literal = literal };
@@ -4283,6 +4317,13 @@ pub const CEmitter = struct {
         if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, assigned_source)) |binary| return .{ .checked_binary = binary };
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, assigned_source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirDirectCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .direct_call = call };
+        if (simpleMirArithmeticCallAtSource(fn_mir, assigned_source)) {
+            if (function.signature.return_type) |return_ty| {
+                const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
+                if (self.simpleMirWrappingBinaryAtSource(function, fn_mir, assigned_source, expected_type_name)) |binary| return .{ .wrapping_binary = binary };
+                if (self.simpleMirUncheckedBinaryAtSource(function, fn_mir, assigned_source, expected_type_name, local_name)) |binary| return .{ .wrapping_binary = binary };
+            }
+        }
         if (self.simpleMirExplicitCastAtSource(function, fn_mir, assigned_source)) |cast| return .{ .explicit_cast_return = cast };
         if (self.simpleMirConversionAtSource(function, fn_mir, assigned_source)) |conversion| return .{ .conversion_return = conversion };
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, assigned_source)) |literal| return .{ .enum_literal = literal };
@@ -4332,7 +4373,7 @@ pub const CEmitter = struct {
                         source = instructionSourcePoint(next);
                         break;
                     },
-                    .integer_literal_conversion, .binary, .unary, .call => {
+                    .integer_literal_conversion, .binary, .unary, .call, .unchecked_assume => {
                         source = instructionSourcePoint(next);
                         break;
                     },
@@ -4370,7 +4411,7 @@ pub const CEmitter = struct {
             }
             switch (instruction.kind) {
                 .target_type, .representation_check, .representation_use => continue,
-                .integer_literal_conversion, .binary, .unary, .call => return instructionSourcePoint(instruction),
+                .integer_literal_conversion, .binary, .unary, .call, .unchecked_assume => return instructionSourcePoint(instruction),
                 .expr => if (!std.mem.eql(u8, instruction.detail, local_name)) return instructionSourcePoint(instruction),
                 .return_value => return null,
                 else => return null,
