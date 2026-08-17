@@ -3113,6 +3113,25 @@ test "LLVM emits local global returns from MIR" {
     try expectNotContains(assigned_body, "store");
 }
 
+test "LLVM inferred local global return lowers without function body fallback" {
+    const source =
+        \\global g: u32 = 0;
+        \\fn inferred_global_return() -> u32 {
+        \\    let x = g;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_global_return.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @inferred_global_return");
+    try expectContains(body, "load atomic i32, ptr @g unordered, align 4");
+    try expectContains(body, "ret i32 %t");
+    try expectNotContains(body, "alloca");
+    try expectNotContains(body, "store");
+}
+
 test "LLVM preserves MIR void calls before global returns" {
     const source =
         \\global g: u32 = 0;

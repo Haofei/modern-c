@@ -4446,6 +4446,12 @@ const LlvmEmitter = struct {
                 if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
                 return .{ .direct_call = call };
             }
+            if (self.simpleMirGlobalAtSource(function, fn_mir, init_source)) |name| {
+                const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
+                const result = simpleMirTargetTypeFactKindAt(fn_mir, .expression_result, init_source) orelse return null;
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
+                return .{ .global_load = name };
+            }
             const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
             const result = simpleMirTargetTypeFactKindAt(fn_mir, .expression_result, init_source) orelse return null;
             if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;

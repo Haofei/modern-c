@@ -2232,6 +2232,24 @@ test "lower-c emits local global returns from MIR" {
     try expectNotContains(assigned_body, "mc_tmp");
 }
 
+test "lower-c inferred local global return lowers without function body fallback" {
+    const source =
+        \\global g: u32 = 0;
+        \\fn inferred_global_return() -> u32 {
+        \\    let x = g;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_global_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint32_t inferred_global_return(void)");
+    try expectContains(body, "return ((uint32_t)mc_race_load_u32(&g));");
+    try expectNotContains(body, "uint32_t x");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c preserves MIR void calls before global returns" {
     const source =
         \\global g: u32 = 0;
