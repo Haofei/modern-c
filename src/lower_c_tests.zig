@@ -1315,6 +1315,14 @@ test "lower-c emits simple struct literal returns from MIR" {
         \\    }
         \\    return out;
         \\}
+        \\fn local_pair(a: i32, b: i32) -> Pair {
+        \\    var out: Pair = .{ .a = a, .b = b };
+        \\    return out;
+        \\}
+        \\fn local_field_pair(p: Pair) -> Pair {
+        \\    var out: Pair = .{ .a = p.a, .b = p.b };
+        \\    return out;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1357,6 +1365,14 @@ test "lower-c emits simple struct literal returns from MIR" {
     try expectContains(choose_assign_field_body, "return (Pair){ .a = p.a, .b = p.b };");
     try expectNotContains(choose_assign_field_body, "mc_tmp");
     try expectNotContains(choose_assign_field_body, "switch");
+
+    const local_body = try cFunctionBody(output.items, "static Pair local_pair(int32_t a, int32_t b)");
+    try expectContains(local_body, "return (Pair){ .a = a, .b = b };");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const local_field_body = try cFunctionBody(output.items, "static Pair local_field_pair(Pair p)");
+    try expectContains(local_field_body, "return (Pair){ .a = p.a, .b = p.b };");
+    try expectNotContains(local_field_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before direct-call returns" {

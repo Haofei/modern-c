@@ -1365,6 +1365,14 @@ test "LLVM emits simple struct literal returns from MIR" {
         \\    }
         \\    return out;
         \\}
+        \\fn local_pair(a: i32, b: i32) -> Pair {
+        \\    var out: Pair = .{ .a = a, .b = b };
+        \\    return out;
+        \\}
+        \\fn local_field_pair(p: Pair) -> Pair {
+        \\    var out: Pair = .{ .a = p.a, .b = p.b };
+        \\    return out;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1433,6 +1441,21 @@ test "LLVM emits simple struct literal returns from MIR" {
     try expectNotContains(choose_assign_field_body, "alloca");
     try expectNotContains(choose_assign_field_body, "store");
     try expectNotContains(choose_assign_field_body, "switch");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @local_pair");
+    try expectContains(local_body, "insertvalue { i32, i32 } zeroinitializer, i32 %a, 0");
+    try expectContains(local_body, "i32 %b, 1");
+    try expectContains(local_body, "ret { i32, i32 } %t");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const local_field_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @local_field_pair");
+    try expectContains(local_field_body, "extractvalue { i32, i32 } %p, 0");
+    try expectContains(local_field_body, "extractvalue { i32, i32 } %p, 1");
+    try expectContains(local_field_body, "insertvalue { i32, i32 } zeroinitializer, i32 %t");
+    try expectContains(local_field_body, "ret { i32, i32 } %t");
+    try expectNotContains(local_field_body, "alloca");
+    try expectNotContains(local_field_body, "store");
 }
 
 test "LLVM preserves MIR void calls before direct-call returns" {
