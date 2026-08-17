@@ -2414,6 +2414,24 @@ test "lower-c struct literal call fields lower from MIR in lexical order" {
     try expectContains(body, "return (Pair){ .first = mark(1), .second = mark(2) };");
 }
 
+test "lower-c array literal call elements lower from MIR in lexical order" {
+    const source =
+        \\extern fn mark(value: u32) -> u32;
+        \\fn ordered_literal() -> [2]u32 {
+        \\    return .{ mark(1), mark(2) };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_array_literal_call_elements.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static mc_array_u32_2 ordered_literal(void)");
+    const first = std.mem.indexOf(u8, body, "mark(1)") orelse return error.TestUnexpectedResult;
+    const second = std.mem.indexOfPos(u8, body, first + "mark(1)".len, "mark(2)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first < second);
+    try expectContains(body, "return (mc_array_u32_2){ .elems = { mark(1), mark(2) } };");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;

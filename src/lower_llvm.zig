@@ -1412,7 +1412,7 @@ const LlvmEmitter = struct {
     const SimpleMirArrayLiteralReturn = struct {
         llvm_ty: []const u8,
         element_ty: []const u8,
-        items: [max_simple_mir_array_items]SimpleMirArg = undefined,
+        items: [max_simple_mir_array_items]SimpleMirCallArg = undefined,
         item_count: usize = 0,
     };
 
@@ -1935,12 +1935,17 @@ const LlvmEmitter = struct {
                 const instruction = block.instructions[scan_index];
                 if (instruction.kind == .return_value) return null;
                 if (instruction.kind == .target_type or instruction.kind == .integer_literal_conversion) continue;
-                if (instruction.kind != .expr) return null;
+                if (instruction.kind != .expr and instruction.kind != .call) return null;
+                if (instruction.kind == .call and !self.noFunctionBodyFallbacksAvailable()) return null;
                 const value_source = instructionSourcePoint(instruction);
-                result.items[result.item_count] = self.simpleMirArgAt(function, fn_mir, value_source) orelse return null;
+                result.items[result.item_count] = self.simpleMirCallArgAt(function, fn_mir, value_source) orelse return null;
                 result.item_count += 1;
                 scan_index += 1;
-                while (scan_index < block.instructions.len and sameMirSourceLocation(instructionSourcePoint(block.instructions[scan_index]), value_source)) : (scan_index += 1) {}
+                if (instruction.kind == .call) {
+                    while (scan_index < block.instructions.len and block.instructions[scan_index].kind != .call and block.instructions[scan_index].kind != .return_value) : (scan_index += 1) {}
+                } else {
+                    while (scan_index < block.instructions.len and sameMirSourceLocation(instructionSourcePoint(block.instructions[scan_index]), value_source)) : (scan_index += 1) {}
+                }
                 break;
             } else return null;
         }
@@ -2992,7 +2997,7 @@ const LlvmEmitter = struct {
         var result: []const u8 = "zeroinitializer";
         for (literal.items[0..literal.item_count], 0..) |item, index| {
             const next = try self.nextTemp();
-            const value = try self.simpleMirArgValue(item, span);
+            const value = try self.simpleMirCallArgValue(item, span);
             try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, {d}{s}\n", .{ next, aggregate_ty, result, literal.element_ty, value, index, try self.debugCallSuffix() });
             result = next;
         }
@@ -3472,11 +3477,11 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirCallFeedsReturnValue(self: *LlvmEmitter, fn_mir: mir.Function, block: mir.Block, source: mir.SourcePoint, value_id: []const u8) bool {
-        if (std.mem.eql(u8, value_id, "struct_literal")) {
+        if (std.mem.eql(u8, value_id, "struct_literal") or std.mem.eql(u8, value_id, "array_literal")) {
             var after_literal = false;
             for (block.instructions) |instruction| {
                 if (instruction.kind == .return_value) break;
-                if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, "struct_literal")) {
+                if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, value_id)) {
                     after_literal = true;
                     continue;
                 }
