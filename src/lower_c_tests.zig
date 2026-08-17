@@ -2826,6 +2826,7 @@ test "lower-c conditional global and call returns lower from MIR without body fa
         \\}
         \\fn choose_call(flag: bool, value: u32) -> u32 {
         \\    if (flag) {
+        \\        hit(value);
         \\        return make(value);
         \\    } else {
         \\        return make(value);
@@ -2844,6 +2845,7 @@ test "lower-c conditional global and call returns lower from MIR without body fa
 
     const call_body = try cFunctionBody(output.items, "static uint32_t choose_call(bool flag, uint32_t value)");
     try expectContains(call_body, "if (flag)");
+    try expectContains(call_body, "hit(value);");
     try expectContains(call_body, "return make(value);");
     try expectNotContains(call_body, "mc_tmp");
 }

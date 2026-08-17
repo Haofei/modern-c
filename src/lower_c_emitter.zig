@@ -3425,6 +3425,11 @@ pub const CEmitter = struct {
                 .call => {
                     const source = instructionSourcePoint(instruction);
                     if (!simpleMirDirectCallResultVoid(fn_mir, source)) {
+                        if (simpleMirReturnInstruction(block)) |ret| {
+                            if (ret.value_id) |value_id| {
+                                if (self.simpleMirCallFeedsReturnValue(fn_mir, block, source, value_id)) continue;
+                            }
+                        }
                         if (self.simpleMirCallFeedsLaterDirectCallArg(function, fn_mir, block, source)) continue;
                         return null;
                     }
@@ -3488,6 +3493,11 @@ pub const CEmitter = struct {
                 .call => {
                     const source = instructionSourcePoint(instruction);
                     if (!simpleMirDirectCallResultVoid(fn_mir, source)) {
+                        if (simpleMirReturnInstruction(block)) |ret| {
+                            if (ret.value_id) |value_id| {
+                                if (self.simpleMirCallFeedsReturnValue(fn_mir, block, source, value_id)) continue;
+                            }
+                        }
                         if (self.simpleMirCallFeedsLaterDirectCallArg(function, fn_mir, block, source)) continue;
                         return null;
                     }

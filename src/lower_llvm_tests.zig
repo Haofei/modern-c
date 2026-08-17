@@ -569,6 +569,7 @@ test "LLVM conditional global and call returns lower from MIR without body fallb
         \\}
         \\fn choose_call(flag: bool, value: u32) -> u32 {
         \\    if (flag) {
+        \\        hit(value);
         \\        return make(value);
         \\    } else {
         \\        return make(value);
@@ -588,6 +589,7 @@ test "LLVM conditional global and call returns lower from MIR without body fallb
 
     const call_body = try llvmFunctionBody(output.items, "define internal i32 @choose_call");
     try expectContains(call_body, "br i1 %flag");
+    try expectContains(call_body, "call void @hit(i32 %value)");
     try expectContains(call_body, "call i32 @make(i32 %value)");
     try expectContains(call_body, "ret i32 %t");
     try expectNotContains(call_body, "alloca");
