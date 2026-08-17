@@ -1319,9 +1319,16 @@ const LlvmEmitter = struct {
         bool_literal: bool,
     };
 
+    const SimpleMirCallArg = union(enum) {
+        param: []const u8,
+        integer_literal: []const u8,
+        bool_literal: bool,
+        compare_binary: SimpleMirCompareBinary,
+    };
+
     const SimpleMirDirectCall = struct {
         callee: []const u8,
-        args: [max_simple_mir_call_args]SimpleMirArg = undefined,
+        args: [max_simple_mir_call_args]SimpleMirCallArg = undefined,
         arg_facts: [max_simple_mir_call_args]mir.TargetTypeFact = undefined,
         arg_count: usize = 0,
     };
@@ -1976,19 +1983,32 @@ const LlvmEmitter = struct {
         };
     }
 
+    fn simpleMirCallArgValue(self: *LlvmEmitter, arg: SimpleMirCallArg, span: diagnostics.Span) ![]const u8 {
+        return switch (arg) {
+            .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
+            .integer_literal => |literal| literal,
+            .bool_literal => |value| if (value) "1" else "0",
+            .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary, span),
+        };
+    }
+
     fn emitSimpleMirDirectCall(self: *LlvmEmitter, call: SimpleMirDirectCall, result: ?[]const u8, span: diagnostics.Span) !void {
         const callee_sig = self.fn_sigs.get(call.callee) orelse return error.UnsupportedLlvmEmission;
         const call_ret_ext = if (callee_sig.c_abi) self.cAbiExtension(callee_sig.ret) else "";
+        var arg_values: [max_simple_mir_call_args][]const u8 = undefined;
+        for (call.args[0..call.arg_count], 0..) |arg, i| {
+            arg_values[i] = try self.simpleMirCallArgValue(arg, span);
+        }
         if (result) |tmp| {
             try self.out.print(self.allocator, "  {s} = call {s}{s} @{s}(", .{ tmp, call_ret_ext, try self.llvmType(callee_sig.ret), call.callee });
         } else {
             try self.out.print(self.allocator, "  call {s}{s} @{s}(", .{ call_ret_ext, try self.llvmType(callee_sig.ret), call.callee });
         }
-        for (call.args[0..call.arg_count], 0..) |arg, i| {
+        for (call.args[0..call.arg_count], 0..) |_, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
             const arg_ty = call.arg_facts[i].target_ty;
             const param_ext = if (callee_sig.c_abi) self.cAbiExtension(arg_ty) else "";
-            const value = try self.simpleMirArgValue(arg);
+            const value = arg_values[i];
             try self.out.print(self.allocator, "{s} {s}{s}", .{ try self.llvmType(arg_ty), param_ext, value });
         }
         if (try self.debugLocation(span)) |dbg| {
@@ -2184,7 +2204,7 @@ const LlvmEmitter = struct {
             const fact = self.simpleMirDirectCallArgumentFactAt(fn_mir, callee, arg_source) orelse continue;
             const arg_index = fact.target_index orelse return null;
             if (arg_index >= max_simple_mir_call_args) return null;
-            call.args[arg_index] = self.simpleMirArgAt(function, fn_mir, arg_source) orelse return null;
+            call.args[arg_index] = self.simpleMirCallArgAt(function, fn_mir, arg_source) orelse return null;
             call.arg_facts[arg_index] = fact;
             seen_args[arg_index] = true;
             arg_count = @max(arg_count, arg_index + 1);
@@ -2196,6 +2216,15 @@ const LlvmEmitter = struct {
         for (seen_args[0..arg_count]) |seen| if (!seen) return null;
         call.arg_count = arg_count;
         return call;
+    }
+
+    fn simpleMirCallArgAt(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirCallArg {
+        if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
+        return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
+            .param => |name| .{ .param = name },
+            .integer_literal => |literal| .{ .integer_literal = literal },
+            .bool_literal => |value| .{ .bool_literal = value },
+        };
     }
 
     fn simpleMirDirectCallArgumentFactAt(self: *LlvmEmitter, fn_mir: mir.Function, callee: []const u8, source: mir.SourcePoint) ?mir.TargetTypeFact {

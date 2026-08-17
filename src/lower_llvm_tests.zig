@@ -248,6 +248,10 @@ test "LLVM emits simple void conditional direct calls from MIR" {
         \\        hit(y);
         \\    }
         \\}
+        \\extern fn hit_bool(value: bool) -> void;
+        \\fn call_compare_arg(a: i32, b: i32) -> void {
+        \\    hit_bool(a < b);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -288,6 +292,13 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try expectNotContains(local_args_body, "alloca");
     try expectNotContains(local_args_body, "store");
     try expectNotContains(local_args_body, "switch");
+
+    const compare_arg_body = try llvmFunctionBody(output.items, "define internal void @call_compare_arg");
+    try expectContains(compare_arg_body, "icmp slt i32 %a, %b");
+    try expectContains(compare_arg_body, "call void @hit_bool(i1 %t");
+    try expectNotContains(compare_arg_body, "alloca");
+    try expectNotContains(compare_arg_body, "store");
+    try expectNotContains(compare_arg_body, "switch");
 }
 
 test "LLVM emits simple sequential void direct calls from MIR" {

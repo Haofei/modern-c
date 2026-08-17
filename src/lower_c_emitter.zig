@@ -1257,9 +1257,16 @@ pub const CEmitter = struct {
         bool_literal: bool,
     };
 
+    const SimpleMirCallArg = union(enum) {
+        param: []const u8,
+        integer_literal: []const u8,
+        bool_literal: bool,
+        compare_binary: SimpleMirCompareBinary,
+    };
+
     const SimpleMirDirectCall = struct {
         callee: []const u8,
-        args: [max_simple_mir_call_args]SimpleMirArg = undefined,
+        args: [max_simple_mir_call_args]SimpleMirCallArg = undefined,
         arg_count: usize = 0,
     };
 
@@ -1824,11 +1831,20 @@ pub const CEmitter = struct {
         }
     }
 
+    fn emitSimpleMirCallArg(self: *CEmitter, arg: SimpleMirCallArg) !void {
+        switch (arg) {
+            .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
+            .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
+            .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
+            .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
+        }
+    }
+
     fn emitSimpleMirDirectCall(self: *CEmitter, call: SimpleMirDirectCall) !void {
         try self.out.print(self.allocator, "{s}(", .{try self.cIdent(call.callee)});
         for (call.args[0..call.arg_count], 0..) |arg, i| {
             if (i != 0) try self.out.appendSlice(self.allocator, ", ");
-            try self.emitSimpleMirArg(arg);
+            try self.emitSimpleMirCallArg(arg);
         }
         try self.out.appendSlice(self.allocator, ")");
     }
@@ -2018,7 +2034,7 @@ pub const CEmitter = struct {
             const fact = self.simpleMirDirectCallArgumentFactAt(fn_mir, callee, arg_source) orelse continue;
             const arg_index = fact.target_index orelse return null;
             if (arg_index >= max_simple_mir_call_args) return null;
-            call.args[arg_index] = self.simpleMirArgAt(function, fn_mir, arg_source) orelse return null;
+            call.args[arg_index] = self.simpleMirCallArgAt(function, fn_mir, arg_source) orelse return null;
             seen_args[arg_index] = true;
             arg_count = @max(arg_count, arg_index + 1);
         }
@@ -2037,6 +2053,15 @@ pub const CEmitter = struct {
             if (sameMirSourceLocation(fact.source, source)) return fact;
         }
         return null;
+    }
+
+    fn simpleMirCallArgAt(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirCallArg {
+        if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
+        return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
+            .param => |name| .{ .param = name },
+            .integer_literal => |literal| .{ .integer_literal = literal },
+            .bool_literal => |value| .{ .bool_literal = value },
+        };
     }
 
     fn simpleMirPrefixVoidCallsBeforeReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirDirectCalls {
