@@ -13,7 +13,11 @@ pub const FunctionParamFact = codegen_signature.FunctionParamFact;
 pub const FunctionSignatureFacts = struct {
     name: ast_bridge.Ident,
     params: []const FunctionParamFact,
-    return_type: ?ast_bridge.TypeExpr,
+    /// Transitional syntax-shaped return type retained until function
+    /// signatures are keyed by typed semantic IDs. Backends should access this
+    /// through `transitionalReturnType()` so the remaining syntax ingress has a
+    /// single replacement point.
+    transitional_ret_type: ?ast_bridge.TypeExpr,
     exported: bool,
     is_extern: bool,
     is_const: bool,
@@ -21,6 +25,10 @@ pub const FunctionSignatureFacts = struct {
     c_abi: bool,
     error_from: bool,
     backend_name: ?[]const u8,
+
+    pub fn transitionalReturnType(self: FunctionSignatureFacts) ?ast_bridge.TypeExpr {
+        return self.transitional_ret_type;
+    }
 };
 
 pub const FunctionBodyFacts = struct {

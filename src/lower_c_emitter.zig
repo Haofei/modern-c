@@ -499,7 +499,7 @@ pub const CEmitter = struct {
 
     fn collectFunctionArtifact(self: *CEmitter, function: declaration_artifacts.FunctionArtifact) !void {
         const sig = function.signature;
-        try self.functions.put(function.signature.name.text, .{ .params = sig.params, .return_type = sig.return_type, .is_extern = sig.is_extern, .is_variadic = sig.is_variadic, .error_from = sig.error_from });
+        try self.functions.put(function.signature.name.text, .{ .params = sig.params, .return_type = sig.transitionalReturnType(), .is_extern = sig.is_extern, .is_variadic = sig.is_variadic, .error_from = sig.error_from });
         if (!function.signature.is_extern) if (function.signature.backend_name) |name| try self.backend_names.put(function.signature.name.text, name);
         try self.collectFunctionArtifactSliceTypes(function);
     }
@@ -1169,7 +1169,7 @@ pub const CEmitter = struct {
 
         var locals = try self.functionParamLocals(sig.params);
         defer locals.deinit();
-        try self.emitIndentedFunctionBlock(body, &locals, sig.return_type);
+        try self.emitIndentedFunctionBlock(body, &locals, sig.transitionalReturnType());
         try self.out.appendSlice(self.allocator, "}\n\n");
     }
 
@@ -2014,7 +2014,7 @@ pub const CEmitter = struct {
 
     fn simpleMirWrappingBinaryReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
         const call_source = simpleMirReturnValueSource(block, value_id) orelse return null;
-        const return_ty = function.signature.return_type orelse return null;
+        const return_ty = function.signature.transitionalReturnType() orelse return null;
         const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
         return self.simpleMirWrappingBinaryAtSource(function, fn_mir, call_source, expected_type_name);
     }
@@ -2070,7 +2070,7 @@ pub const CEmitter = struct {
 
     fn simpleMirUncheckedBinaryReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
         const call_source = simpleMirReturnValueSource(block, value_id) orelse return null;
-        const return_ty = function.signature.return_type orelse return null;
+        const return_ty = function.signature.transitionalReturnType() orelse return null;
         const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
         return self.simpleMirUncheckedBinaryAtSource(function, fn_mir, call_source, expected_type_name, "value");
     }
@@ -2135,7 +2135,7 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirStructLiteralReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirStructLiteralReturn {
-        const ret_ty = function.signature.return_type orelse return null;
+        const ret_ty = function.signature.transitionalReturnType() orelse return null;
         var literal_source: ?mir.SourcePoint = null;
         var literal_index: usize = 0;
         for (block.instructions, 0..) |instruction, index| {
@@ -2205,7 +2205,7 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirArrayLiteralFromBlockAtIndex(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, literal_index: usize, source: mir.SourcePoint) ?SimpleMirArrayLiteralReturn {
-        const ret_ty = function.signature.return_type orelse return null;
+        const ret_ty = function.signature.transitionalReturnType() orelse return null;
         const resolved_ret_ty = self.resolveAliasType(ret_ty);
         const array_ty = switch (resolved_ret_ty.kind) {
             .array => |array| array,
@@ -3151,7 +3151,7 @@ pub const CEmitter = struct {
             for (block.instructions, 0..) |instruction, index| {
                 if (instruction.kind != .expr or !std.mem.eql(u8, instruction.detail, "struct_literal")) continue;
                 if (!sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
-                return self.simpleMirStructLiteralFromBlockAtIndex(function, fn_mir, block, index, source, function.signature.return_type orelse return null);
+                return self.simpleMirStructLiteralFromBlockAtIndex(function, fn_mir, block, index, source, function.signature.transitionalReturnType() orelse return null);
             }
         }
         return null;
@@ -3791,7 +3791,7 @@ pub const CEmitter = struct {
             }
             return null;
         };
-        const return_ty = function.signature.return_type orelse return null;
+        const return_ty = function.signature.transitionalReturnType() orelse return null;
         return self.simpleMirResultConstructorFromBlockAtSourceWithType(function, fn_mir, block, call_source, kind, return_ty);
     }
 
@@ -4434,7 +4434,7 @@ pub const CEmitter = struct {
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, init_source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
         if (simpleMirArithmeticCallAtSource(fn_mir, init_source)) {
-            if (function.signature.return_type) |return_ty| {
+            if (function.signature.transitionalReturnType()) |return_ty| {
                 const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
                 if (self.simpleMirWrappingBinaryAtSource(function, fn_mir, init_source, expected_type_name)) |binary| return .{ .wrapping_binary = binary };
                 if (self.simpleMirUncheckedBinaryAtSource(function, fn_mir, init_source, expected_type_name, local_name)) |binary| return .{ .wrapping_binary = binary };
@@ -4499,7 +4499,7 @@ pub const CEmitter = struct {
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, assigned_source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirDirectCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .direct_call = call };
         if (simpleMirArithmeticCallAtSource(fn_mir, assigned_source)) {
-            if (function.signature.return_type) |return_ty| {
+            if (function.signature.transitionalReturnType()) |return_ty| {
                 const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
                 if (self.simpleMirWrappingBinaryAtSource(function, fn_mir, assigned_source, expected_type_name)) |binary| return .{ .wrapping_binary = binary };
                 if (self.simpleMirUncheckedBinaryAtSource(function, fn_mir, assigned_source, expected_type_name, local_name)) |binary| return .{ .wrapping_binary = binary };
@@ -6346,7 +6346,7 @@ pub const CEmitter = struct {
         self.current_function = function.signature.name.text;
         defer self.current_function = previous_function;
         for (function.signature.params) |param| try self.collectTypeArtifacts(param.ty);
-        if (function.signature.return_type) |ret| try self.collectTypeArtifacts(ret);
+        if (function.signature.transitionalReturnType()) |ret| try self.collectTypeArtifacts(ret);
         if (self.mirFunctionNamed(function.signature.name.text)) |fn_mir| try self.collectMirFunctionBodyTypeArtifacts(fn_mir);
     }
 

@@ -622,7 +622,7 @@ pub const ComptimeFunction = struct {
         return .{
             .name = function.signature.name,
             .params = function.signature.params,
-            .return_type = function.signature.return_type,
+            .return_type = function.signature.transitionalReturnType(),
             .body = body,
             .owns_params = false,
         };

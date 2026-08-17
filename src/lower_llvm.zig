@@ -667,7 +667,7 @@ const LlvmEmitter = struct {
 
     fn collectFunctionArtifact(self: *LlvmEmitter, function: declaration_artifacts.FunctionArtifact) !void {
         const sig = function.signature;
-        const ret_ty = sig.return_type orelse simpleType(function.signature.name.span, "void");
+        const ret_ty = sig.transitionalReturnType() orelse simpleType(function.signature.name.span, "void");
         _ = try self.llvmType(ret_ty);
         for (sig.params) |param| _ = try self.llvmType(param.ty);
         const debug_id: ?usize = if (function.body_facts.has_definition) blk: {
@@ -1597,7 +1597,7 @@ const LlvmEmitter = struct {
         if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null) return false;
 
         const sig_facts = function.signature;
-        const ret_ty = sig_facts.return_type orelse simpleType(sig_facts.name.span, "void");
+        const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
         const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
         const ret_ext = if (fn_sig.c_abi) self.cAbiExtension(ret_ty) else "";
@@ -2057,7 +2057,7 @@ const LlvmEmitter = struct {
 
     fn simpleMirWrappingBinaryReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
         const call_source = simpleMirReturnValueSource(block, value_id) orelse return null;
-        const return_ty = function.signature.return_type orelse return null;
+        const return_ty = function.signature.transitionalReturnType() orelse return null;
         const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
         return self.simpleMirWrappingBinaryAtSource(function, fn_mir, call_source, expected_type_name);
     }
@@ -2113,7 +2113,7 @@ const LlvmEmitter = struct {
 
     fn simpleMirUncheckedBinaryReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
         const call_source = simpleMirReturnValueSource(block, value_id) orelse return null;
-        const return_ty = function.signature.return_type orelse return null;
+        const return_ty = function.signature.transitionalReturnType() orelse return null;
         const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
         return self.simpleMirUncheckedBinaryAtSource(function, fn_mir, call_source, expected_type_name, "value");
     }
@@ -2178,7 +2178,7 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirStructLiteralReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirStructLiteralReturn {
-        const ret_ty = function.signature.return_type orelse return null;
+        const ret_ty = function.signature.transitionalReturnType() orelse return null;
         var literal_source: ?mir.SourcePoint = null;
         var literal_index: usize = 0;
         for (block.instructions, 0..) |instruction, index| {
@@ -2248,7 +2248,7 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirArrayLiteralFromBlockAtIndex(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, literal_index: usize, source: mir.SourcePoint) ?SimpleMirArrayLiteralReturn {
-        const ret_ty = function.signature.return_type orelse return null;
+        const ret_ty = function.signature.transitionalReturnType() orelse return null;
         const resolved_ret_ty = self.resolveAliasType(ret_ty);
         const array_ty = switch (resolved_ret_ty.kind) {
             .array => |array| array,
@@ -3205,7 +3205,7 @@ const LlvmEmitter = struct {
             for (block.instructions, 0..) |instruction, index| {
                 if (instruction.kind != .expr or !std.mem.eql(u8, instruction.detail, "struct_literal")) continue;
                 if (!sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
-                return self.simpleMirStructLiteralFromBlockAtIndex(function, fn_mir, block, index, source, function.signature.return_type orelse return null);
+                return self.simpleMirStructLiteralFromBlockAtIndex(function, fn_mir, block, index, source, function.signature.transitionalReturnType() orelse return null);
             }
         }
         return null;
@@ -4045,7 +4045,7 @@ const LlvmEmitter = struct {
             }
             return null;
         };
-        const return_ty = function.signature.return_type orelse return null;
+        const return_ty = function.signature.transitionalReturnType() orelse return null;
         return self.simpleMirResultConstructorFromBlockAtSourceWithType(function, fn_mir, block, call_source, kind, return_ty);
     }
 
@@ -4683,7 +4683,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, init_source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
         if (simpleMirArithmeticCallAtSource(fn_mir, init_source)) {
-            if (function.signature.return_type) |return_ty| {
+            if (function.signature.transitionalReturnType()) |return_ty| {
                 const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
                 if (self.simpleMirWrappingBinaryAtSource(function, fn_mir, init_source, expected_type_name)) |binary| return .{ .wrapping_binary = binary };
                 if (self.simpleMirUncheckedBinaryAtSource(function, fn_mir, init_source, expected_type_name, local_name)) |binary| return .{ .wrapping_binary = binary };
@@ -4748,7 +4748,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, assigned_source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirDirectCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .direct_call = call };
         if (simpleMirArithmeticCallAtSource(fn_mir, assigned_source)) {
-            if (function.signature.return_type) |return_ty| {
+            if (function.signature.transitionalReturnType()) |return_ty| {
                 const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
                 if (self.simpleMirWrappingBinaryAtSource(function, fn_mir, assigned_source, expected_type_name)) |binary| return .{ .wrapping_binary = binary };
                 if (self.simpleMirUncheckedBinaryAtSource(function, fn_mir, assigned_source, expected_type_name, local_name)) |binary| return .{ .wrapping_binary = binary };
@@ -5315,7 +5315,7 @@ const LlvmEmitter = struct {
 
     fn emitFunction(self: *LlvmEmitter, function: anytype, body: ast_bridge.Block, attrs: codegen_attrs.FunctionRenderAttrs) !void {
         const sig_facts = function.signature;
-        const ret_ty = sig_facts.return_type orelse simpleType(sig_facts.name.span, "void");
+        const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
         const ret_llvm = try self.llvmType(ret_ty);
         const fn_sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
         const ret_ext = if (fn_sig.c_abi) self.cAbiExtension(ret_ty) else "";
@@ -5500,7 +5500,7 @@ const LlvmEmitter = struct {
         // The KASAN shadow hooks (D2.1) get weak no-op `define`s in emitTrapDecl so every
         // build links; skip the `declare` here to avoid an LLVM declare-vs-define clash.
         if (isKsanHook(sig_facts.name.text)) return;
-        const ret_ty = sig_facts.return_type orelse simpleType(sig_facts.name.span, "void");
+        const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
         const sig = self.fn_sigs.get(sig_facts.name.text) orelse return error.UnsupportedLlvmEmission;
         const ret_ext = if (sig.c_abi) self.cAbiExtension(ret_ty) else "";
         try self.out.print(self.allocator, "declare {s}{s} @{s}(", .{ ret_ext, try self.llvmType(ret_ty), sig_facts.name.text });
