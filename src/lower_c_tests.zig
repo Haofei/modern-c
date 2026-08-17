@@ -2811,6 +2811,40 @@ test "lower-c conditional grouped scalar returns lower from MIR without body fal
     try expectNotContains(call_body, "mc_tmp");
 }
 
+test "lower-c loop grouped scalar returns lower from MIR without body fallback" {
+    const source =
+        \\extern fn hit(value: u16) -> void;
+        \\extern fn make(value: u16) -> u16;
+        \\fn loop_grouped_param(flag: bool, value: u16) -> u16 {
+        \\    while flag {
+        \\        hit(value);
+        \\    }
+        \\    return (value);
+        \\}
+        \\fn loop_grouped_call(flag: bool, value: u16) -> u16 {
+        \\    while flag {
+        \\        hit(value);
+        \\    }
+        \\    let x: u16 = (make(value));
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_loop_grouped_scalar_returns.mc", source, &output);
+
+    const param_body = try cFunctionBody(output.items, "static uint16_t loop_grouped_param(bool flag, uint16_t value)");
+    try expectContains(param_body, "while (flag)");
+    try expectContains(param_body, "hit(value);");
+    try expectContains(param_body, "return value;");
+    try expectNotContains(param_body, "mc_tmp");
+
+    const call_body = try cFunctionBody(output.items, "static uint16_t loop_grouped_call(bool flag, uint16_t value)");
+    try expectContains(call_body, "while (flag)");
+    try expectContains(call_body, "return make(value);");
+    try expectNotContains(call_body, "uint16_t x");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;
