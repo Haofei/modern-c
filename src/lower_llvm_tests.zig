@@ -7279,7 +7279,7 @@ test "LLVM runtime asserts require MIR bool condition types" {
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_assert_condition_type_facts.mc", .{}, false, .riscv64, null);
+    try appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_assert_condition_type_facts.mc", .{}, false, .riscv64, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "br i1 %") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "call void @mc_trap_Assert()") != null);
 
@@ -7296,6 +7296,17 @@ test "LLVM runtime asserts require MIR bool condition types" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_assert_condition_type_facts.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM emits runtime assert from MIR without body fallback" {
+    const source =
+        \\fn require_flag(flag: bool) -> void { assert(flag); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_runtime_assert.mc", source, &output);
+    try expectContains(output.items, "br i1 %flag");
+    try expectContains(output.items, "call void @mc_trap_Assert()");
 }
 
 test "LLVM while loops require MIR bool condition types" {
