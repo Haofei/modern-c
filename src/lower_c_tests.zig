@@ -1793,6 +1793,54 @@ test "lower-c emits basic scalar returns from MIR without body fallback" {
     try expectNotContains(param_body, "mc_tmp");
 }
 
+test "lower-c emits local and assigned scalar returns from MIR without body fallback" {
+    const source =
+        \\fn local_int() -> u32 {
+        \\    let x: u32 = 42;
+        \\    return x;
+        \\}
+        \\fn assigned_int() -> u32 {
+        \\    var x: u32 = 0;
+        \\    x = 42;
+        \\    return x;
+        \\}
+        \\fn local_bool() -> bool {
+        \\    let b: bool = true;
+        \\    return b;
+        \\}
+        \\fn assigned_bool() -> bool {
+        \\    var b: bool = false;
+        \\    b = true;
+        \\    return b;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_scalar_returns.mc", source, &output);
+
+    const local_int_body = try cFunctionBody(output.items, "static uint32_t local_int(void)");
+    try expectContains(local_int_body, "return 42;");
+    try expectNotContains(local_int_body, "uint32_t x");
+    try expectNotContains(local_int_body, "mc_tmp");
+
+    const assigned_int_body = try cFunctionBody(output.items, "static uint32_t assigned_int(void)");
+    try expectContains(assigned_int_body, "return 42;");
+    try expectNotContains(assigned_int_body, "uint32_t x");
+    try expectNotContains(assigned_int_body, "x =");
+    try expectNotContains(assigned_int_body, "mc_tmp");
+
+    const local_bool_body = try cFunctionBody(output.items, "static bool local_bool(void)");
+    try expectContains(local_bool_body, "return true;");
+    try expectNotContains(local_bool_body, "bool b");
+    try expectNotContains(local_bool_body, "mc_tmp");
+
+    const assigned_bool_body = try cFunctionBody(output.items, "static bool assigned_bool(void)");
+    try expectContains(assigned_bool_body, "return true;");
+    try expectNotContains(assigned_bool_body, "bool b");
+    try expectNotContains(assigned_bool_body, "b =");
+    try expectNotContains(assigned_bool_body, "mc_tmp");
+}
+
 test "lower-c emits enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {

@@ -1940,6 +1940,52 @@ test "LLVM emits basic scalar returns from MIR without body fallback" {
     try expectNotContains(param_body, "store");
 }
 
+test "LLVM emits local and assigned scalar returns from MIR without body fallback" {
+    const source =
+        \\fn local_int() -> u32 {
+        \\    let x: u32 = 42;
+        \\    return x;
+        \\}
+        \\fn assigned_int() -> u32 {
+        \\    var x: u32 = 0;
+        \\    x = 42;
+        \\    return x;
+        \\}
+        \\fn local_bool() -> bool {
+        \\    let b: bool = true;
+        \\    return b;
+        \\}
+        \\fn assigned_bool() -> bool {
+        \\    var b: bool = false;
+        \\    b = true;
+        \\    return b;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_assigned_scalar_returns.mc", source, &output);
+
+    const local_int_body = try llvmFunctionBody(output.items, "define internal i32 @local_int");
+    try expectContains(local_int_body, "ret i32 42");
+    try expectNotContains(local_int_body, "alloca");
+    try expectNotContains(local_int_body, "store");
+
+    const assigned_int_body = try llvmFunctionBody(output.items, "define internal i32 @assigned_int");
+    try expectContains(assigned_int_body, "ret i32 42");
+    try expectNotContains(assigned_int_body, "alloca");
+    try expectNotContains(assigned_int_body, "store");
+
+    const local_bool_body = try llvmFunctionBody(output.items, "define internal i1 @local_bool");
+    try expectContains(local_bool_body, "ret i1 1");
+    try expectNotContains(local_bool_body, "alloca");
+    try expectNotContains(local_bool_body, "store");
+
+    const assigned_bool_body = try llvmFunctionBody(output.items, "define internal i1 @assigned_bool");
+    try expectContains(assigned_bool_body, "ret i1 1");
+    try expectNotContains(assigned_bool_body, "alloca");
+    try expectNotContains(assigned_bool_body, "store");
+}
+
 test "LLVM emits enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {
