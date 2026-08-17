@@ -1474,6 +1474,7 @@ pub const CEmitter = struct {
         enum_literal: SimpleMirEnumLiteral,
         null_literal: SimpleMirNullLiteral,
         struct_literal: SimpleMirStructLiteralReturn,
+        result_constructor: SimpleMirResultConstructorReturn,
     };
 
     const SimpleMirCheckedBinary = struct {
@@ -2605,6 +2606,8 @@ pub const CEmitter = struct {
             .{ .null_literal = literal }
         else if (if (global_info.source_ty) |target_ty| self.simpleMirStructLiteralAtSourceWithType(function, fn_mir, value_source, target_ty) else null) |literal|
             .{ .struct_literal = literal }
+        else if (if (global_info.source_ty) |target_ty| self.simpleMirResultConstructorAtSourceWithType(function, fn_mir, value_source, target_ty) else null) |constructor|
+            .{ .result_constructor = constructor }
         else if (self.simpleMirDirectCallAtSource(function, fn_mir, value_source)) |call|
             .{ .direct_call = call }
         else if (self.simpleMirArgAt(function, fn_mir, value_source)) |arg|
@@ -2622,6 +2625,7 @@ pub const CEmitter = struct {
             .direct_call => |call| simpleMirDirectCallTrapCount(call),
             .enum_literal => 1,
             .struct_literal => |literal| simpleMirStructLiteralTrapCount(literal),
+            .result_constructor => |constructor| simpleMirResultConstructorPayloadTrapCount(constructor.payload),
             else => 0,
         };
     }
@@ -2657,6 +2661,7 @@ pub const CEmitter = struct {
                 const source = instructionSourcePoint(instruction);
                 if (simpleMirArithmeticCallAtSource(fn_mir, source)) continue;
                 if (self.simpleMirConversionCallTargetKindAt(fn_mir, source) != null) continue;
+                if (simpleMirResultConstructorKindAtSource(fn_mir, source) != null) continue;
                 if (self.simpleMirDirectCallAtSource(function, fn_mir, source) == null) return false;
             },
             .expr => {
@@ -3405,7 +3410,15 @@ pub const CEmitter = struct {
             .enum_literal => |literal| try self.out.print(self.allocator, "{s}_{s}", .{ literal.enum_name, literal.case_name }),
             .null_literal => |literal| try self.emitSimpleMirNullExpr(literal),
             .struct_literal => |literal| try self.emitSimpleMirStructLiteral(literal),
+            .result_constructor => |constructor| try self.emitSimpleMirResultConstructorExpr(constructor),
         }
+    }
+
+    fn emitSimpleMirResultConstructorExpr(self: *CEmitter, constructor: SimpleMirResultConstructorReturn) !void {
+        try self.out.print(self.allocator, "(({s}){{ .is_ok = ", .{try self.cTypeFor(constructor.result_fact.target_ty, .typedef_name)});
+        try self.out.appendSlice(self.allocator, if (std.mem.eql(u8, constructor.tag, "ok")) "true, .payload.ok = " else "false, .payload.err = ");
+        try self.emitSimpleMirResultConstructorPayload(constructor.payload);
+        try self.out.appendSlice(self.allocator, " })");
     }
 
     fn emitSimpleMirUncheckedRangeCommentForGlobalStoreValue(self: *CEmitter, value: SimpleMirGlobalStoreValue) !void {
@@ -3738,10 +3751,26 @@ pub const CEmitter = struct {
             }
             return null;
         };
+        const return_ty = function.signature.return_type orelse return null;
+        return self.simpleMirResultConstructorFromBlockAtSourceWithType(function, fn_mir, block, call_source, kind, return_ty);
+    }
+
+    fn simpleMirResultConstructorAtSourceWithType(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint, target_ty: anytype) ?SimpleMirResultConstructorReturn {
+        const kind = simpleMirResultConstructorKindAtSource(fn_mir, source) orelse return null;
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .call) continue;
+                if (!sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                return self.simpleMirResultConstructorFromBlockAtSourceWithType(function, fn_mir, block, source, kind, target_ty);
+            }
+        }
+        return null;
+    }
+
+    fn simpleMirResultConstructorFromBlockAtSourceWithType(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, call_source: mir.SourcePoint, kind: mir.CallTargetKind, target_ty: anytype) ?SimpleMirResultConstructorReturn {
         const constructor = mir.resultConstructorFactInfo(kind) orelse return null;
         const target_fact = simpleMirTargetTypeFactKindAt(fn_mir, constructor.target_kind, call_source) orelse return null;
-        const return_ty = function.signature.return_type orelse return null;
-        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(target_fact.target_ty))) return null;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(target_ty), self.resolveAliasType(target_fact.target_ty))) return null;
 
         var payload: ?SimpleMirResultConstructorPayload = null;
         var after_call = false;
@@ -4472,7 +4501,7 @@ pub const CEmitter = struct {
             while (index < block.instructions.len) : (index += 1) {
                 const next = block.instructions[index];
                 switch (next.kind) {
-                    .target_type, .integer_literal_conversion, .typed_load, .representation_check, .representation_use => continue,
+                    .target_type, .integer_literal_conversion, .call_target, .typed_load, .representation_check, .representation_use => continue,
                     .expr => {
                         if (std.mem.eql(u8, next.detail, local_name)) continue;
                         source = instructionSourcePoint(next);
@@ -4710,6 +4739,21 @@ pub const CEmitter = struct {
             if (fact.kind == .direct_call_result and sameMirSourceLocation(fact.source, source)) return fact.result_ty == .void;
         }
         return false;
+    }
+
+    fn simpleMirResultConstructorKindAtSource(fn_mir: mir.Function, source: mir.SourcePoint) ?mir.CallTargetKind {
+        var found: ?mir.CallTargetKind = null;
+        for (fn_mir.call_target_facts) |fact| {
+            if (!sameMirSourceLocation(fact.source, source)) continue;
+            switch (fact.kind) {
+                .result_ok, .result_err => {
+                    if (found != null) return null;
+                    found = fact.kind;
+                },
+                else => {},
+            }
+        }
+        return found;
     }
 
     fn simpleMirArithmeticCallAtSource(fn_mir: mir.Function, source: mir.SourcePoint) bool {

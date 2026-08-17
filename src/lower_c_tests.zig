@@ -874,6 +874,9 @@ test "lower-c emits simple global stores from MIR" {
         \\    red,
         \\    blue,
         \\}
+        \\enum E {
+        \\    bad,
+        \\}
         \\struct Pair {
         \\    a: u32,
         \\    b: u32,
@@ -887,6 +890,7 @@ test "lower-c emits simple global stores from MIR" {
         \\global current: Color = .red;
         \\global maybe: ?u32 = null;
         \\global pair: Pair = .{ .a = 0, .b = 0 };
+        \\global result: Result<u32, E>;
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
@@ -948,6 +952,12 @@ test "lower-c emits simple global stores from MIR" {
         \\}
         \\fn store_pair(x: u32) {
         \\    pair = .{ .a = x, .b = 7 };
+        \\}
+        \\fn store_result_ok(x: u32) {
+        \\    result = ok(x);
+        \\}
+        \\fn store_result_err() {
+        \\    result = err(.bad);
         \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
@@ -1084,6 +1094,18 @@ test "lower-c emits simple global stores from MIR" {
     const pair_body = try cFunctionBody(output.items, "static void store_pair(uint32_t x)");
     try expectContains(pair_body, "pair = (Pair)((Pair){ .a = x, .b = 7 });");
     try expectNotContains(pair_body, "mc_tmp");
+
+    const result_ok_body = try cFunctionBody(output.items, "static void store_result_ok(uint32_t x)");
+    try expectContains(result_ok_body, "result = (");
+    try expectContains(result_ok_body, ".is_ok = true");
+    try expectContains(result_ok_body, ".payload.ok = x");
+    try expectNotContains(result_ok_body, "mc_tmp");
+
+    const result_err_body = try cFunctionBody(output.items, "static void store_result_err(void)");
+    try expectContains(result_err_body, "result = (");
+    try expectContains(result_err_body, ".is_ok = false");
+    try expectContains(result_err_body, ".payload.err = E_bad");
+    try expectNotContains(result_err_body, "mc_tmp");
 
     const neg_body = try cFunctionBody(output.items, "static void store_neg(int32_t a)");
     try expectContains(neg_body, "mc_race_store_i32(&s, (int32_t)mc_checked_neg_i32(a));");

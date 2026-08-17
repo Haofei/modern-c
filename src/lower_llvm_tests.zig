@@ -1595,6 +1595,9 @@ test "LLVM emits simple global stores from MIR" {
         \\    red,
         \\    blue,
         \\}
+        \\enum E {
+        \\    bad,
+        \\}
         \\struct Pair {
         \\    a: u32,
         \\    b: u32,
@@ -1608,6 +1611,7 @@ test "LLVM emits simple global stores from MIR" {
         \\global current: Color = .red;
         \\global maybe: ?u32 = null;
         \\global pair: Pair = .{ .a = 0, .b = 0 };
+        \\global result: Result<u32, E>;
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
@@ -1669,6 +1673,12 @@ test "LLVM emits simple global stores from MIR" {
         \\}
         \\fn store_pair(x: u32) {
         \\    pair = .{ .a = x, .b = 7 };
+        \\}
+        \\fn store_result_ok(x: u32) {
+        \\    result = ok(x);
+        \\}
+        \\fn store_result_err() {
+        \\    result = err(.bad);
         \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
@@ -1830,6 +1840,18 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(pair_body, "i32 7, 1");
     try expectContains(pair_body, "ptr @pair");
     try expectNotContains(pair_body, "alloca");
+
+    const result_ok_body = try llvmFunctionBody(output.items, "define internal void @store_result_ok");
+    try expectContains(result_ok_body, "insertvalue { i1, i32, i64 } zeroinitializer, i1 true, 0");
+    try expectContains(result_ok_body, "i32 %x, 1");
+    try expectContains(result_ok_body, "ptr @result");
+    try expectNotContains(result_ok_body, "alloca");
+
+    const result_err_body = try llvmFunctionBody(output.items, "define internal void @store_result_err");
+    try expectContains(result_err_body, "insertvalue { i1, i32, i64 } zeroinitializer, i1 false, 0");
+    try expectContains(result_err_body, "i64 0, 2");
+    try expectContains(result_err_body, "ptr @result");
+    try expectNotContains(result_err_body, "alloca");
 
     const neg_body = try llvmFunctionBody(output.items, "define internal void @store_neg");
     try expectContains(neg_body, "@llvm.ssub.with.overflow.i32");
