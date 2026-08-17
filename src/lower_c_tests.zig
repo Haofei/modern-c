@@ -5351,6 +5351,19 @@ test "lower-c direct-call inferred local lowers without function body fallback" 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return make_count();") != null);
 }
 
+test "lower-c literal inferred local lowers without function body fallback" {
+    const source =
+        \\fn literal_local() -> u32 {
+        \\    let count = 7;
+        \\    return count;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_literal_return.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return 7;") != null);
+}
+
 test "lower-c diagnoses source block expressions instead of inferring their result" {
     const source =
         \\fn block_result() -> u32 {

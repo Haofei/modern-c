@@ -4416,6 +4416,16 @@ const LlvmEmitter = struct {
                 if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
                 return .{ .direct_call = call };
             }
+            const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
+            const result = simpleMirTargetTypeFactKindAt(fn_mir, .expression_result, init_source) orelse return null;
+            if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
+            if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
+                return switch (arg) {
+                    .integer_literal => |literal| .{ .integer_literal = literal },
+                    .bool_literal => |value| .{ .bool_literal = value },
+                    else => null,
+                };
+            }
             return null;
         }
         if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .checked_binary = binary };
