@@ -364,6 +364,15 @@ test "lower-c emits simple sequential void direct calls from MIR" {
         \\    x = 1;
         \\    hit(x);
         \\}
+        \\fn call_local_checked_arg(a: i32, b: i32) -> void {
+        \\    let x: i32 = a + b;
+        \\    hit(x);
+        \\}
+        \\fn call_assigned_checked_arg(a: i32, b: i32) -> void {
+        \\    var x: i32 = 0;
+        \\    x = a + b;
+        \\    hit(x);
+        \\}
         \\fn call_checked_add_arg(a: i32, b: i32) -> void {
         \\    hit(a + b);
         \\}
@@ -400,6 +409,17 @@ test "lower-c emits simple sequential void direct calls from MIR" {
     try expectContains(assigned_arg_body, "hit(1);");
     try expectNotContains(assigned_arg_body, "int32_t x");
     try expectNotContains(assigned_arg_body, "x =");
+
+    const local_checked_arg_body = try cFunctionBody(output.items, "static void call_local_checked_arg(int32_t a, int32_t b)");
+    try expectContains(local_checked_arg_body, "hit(mc_checked_add_i32(a, b));");
+    try expectNotContains(local_checked_arg_body, "int32_t x");
+    try expectNotContains(local_checked_arg_body, "mc_tmp");
+
+    const assigned_checked_arg_body = try cFunctionBody(output.items, "static void call_assigned_checked_arg(int32_t a, int32_t b)");
+    try expectContains(assigned_checked_arg_body, "hit(mc_checked_add_i32(a, b));");
+    try expectNotContains(assigned_checked_arg_body, "int32_t x");
+    try expectNotContains(assigned_checked_arg_body, "x =");
+    try expectNotContains(assigned_checked_arg_body, "mc_tmp");
 
     const checked_add_arg_body = try cFunctionBody(output.items, "static void call_checked_add_arg(int32_t a, int32_t b)");
     try expectContains(checked_add_arg_body, "hit(mc_checked_add_i32(a, b));");

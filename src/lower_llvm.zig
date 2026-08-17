@@ -2267,11 +2267,26 @@ const LlvmEmitter = struct {
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, source)) |unary| return .{ .checked_unary = unary };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
+        if (self.simpleMirLocalCallArgAt(function, fn_mir, source)) |arg| return arg;
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
         };
+    }
+
+    fn simpleMirLocalCallArgAt(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirCallArg {
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .expr or !sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                if (!mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
+                const local_source = self.simpleMirAssignmentSourceInBlock(block, instruction.detail) orelse
+                    self.simpleMirLocalInitSourceInBlock(block, instruction.detail) orelse return null;
+                if (sameMirSourceLocation(local_source, source)) return null;
+                return self.simpleMirCallArgAt(function, fn_mir, local_source);
+            }
+        }
+        return null;
     }
 
     fn simpleMirDirectCallArgumentFactAt(self: *LlvmEmitter, fn_mir: mir.Function, callee: []const u8, source: mir.SourcePoint) ?mir.TargetTypeFact {

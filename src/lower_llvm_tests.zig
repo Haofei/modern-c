@@ -353,6 +353,15 @@ test "LLVM emits simple sequential void direct calls from MIR" {
         \\    x = 1;
         \\    hit(x);
         \\}
+        \\fn call_local_checked_arg(a: i32, b: i32) -> void {
+        \\    let x: i32 = a + b;
+        \\    hit(x);
+        \\}
+        \\fn call_assigned_checked_arg(a: i32, b: i32) -> void {
+        \\    var x: i32 = 0;
+        \\    x = a + b;
+        \\    hit(x);
+        \\}
         \\fn call_checked_add_arg(a: i32, b: i32) -> void {
         \\    hit(a + b);
         \\}
@@ -389,6 +398,18 @@ test "LLVM emits simple sequential void direct calls from MIR" {
     try expectContains(assigned_arg_body, "call void @hit(i32 1)");
     try expectNotContains(assigned_arg_body, "alloca");
     try expectNotContains(assigned_arg_body, "store");
+
+    const local_checked_arg_body = try llvmFunctionBody(output.items, "define internal void @call_local_checked_arg");
+    try expectContains(local_checked_arg_body, "@llvm.sadd.with.overflow.i32");
+    try expectContains(local_checked_arg_body, "call void @hit(i32 %t");
+    try expectNotContains(local_checked_arg_body, "alloca");
+    try expectNotContains(local_checked_arg_body, "store");
+
+    const assigned_checked_arg_body = try llvmFunctionBody(output.items, "define internal void @call_assigned_checked_arg");
+    try expectContains(assigned_checked_arg_body, "@llvm.sadd.with.overflow.i32");
+    try expectContains(assigned_checked_arg_body, "call void @hit(i32 %t");
+    try expectNotContains(assigned_checked_arg_body, "alloca");
+    try expectNotContains(assigned_checked_arg_body, "store");
 
     const checked_add_arg_body = try llvmFunctionBody(output.items, "define internal void @call_checked_add_arg");
     try expectContains(checked_add_arg_body, "@llvm.sadd.with.overflow.i32");
