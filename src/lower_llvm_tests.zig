@@ -1089,6 +1089,24 @@ test "LLVM preserves MIR void calls before simple returns" {
     try std.testing.expect(hit2 < ret);
 }
 
+test "LLVM emits direct struct parameter field returns from MIR" {
+    const source =
+        \\struct Pair { a: u32, b: u32 }
+        \\fn first(p: Pair) -> u32 {
+        \\    return p.a;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_param_field_return.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i32 @first");
+    try expectContains(body, "extractvalue { i32, i32 } %p, 0");
+    try expectContains(body, "ret i32 %t");
+    try expectNotContains(body, "alloca");
+    try expectNotContains(body, "store");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

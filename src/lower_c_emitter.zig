@@ -1188,6 +1188,7 @@ pub const CEmitter = struct {
     const SimpleMirReturn = union(enum) {
         void,
         param: []const u8,
+        param_field: SimpleMirParamField,
         integer_literal: []const u8,
         bool_literal: bool,
         global_load: []const u8,
@@ -1304,6 +1305,12 @@ pub const CEmitter = struct {
         checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
+    };
+
+    const SimpleMirParamField = struct {
+        param_name: []const u8,
+        field_name: []const u8,
+        field_index: usize,
     };
 
     const max_simple_mir_call_args = 8;
@@ -1426,6 +1433,7 @@ pub const CEmitter = struct {
             switch (ret) {
                 .void => try self.out.appendSlice(self.allocator, "return;\n"),
                 .param => |name| try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(name)}),
+                .param_field => |field| try self.out.print(self.allocator, "return {s}.{s};\n", .{ try self.cIdent(field.param_name), try self.cIdent(field.field_name) }),
                 .integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
                 .bool_literal => |value| try self.out.print(self.allocator, "return {s};\n", .{if (value) "true" else "false"}),
                 .global_load => |name| {
@@ -1671,6 +1679,7 @@ pub const CEmitter = struct {
         for (function.signature.params) |param| {
             if (std.mem.eql(u8, value_id, param.name.text)) return if (simpleMirNoTrap(fn_mir)) .{ .param = param.name.text } else null;
         }
+        if (self.simpleMirParamFieldReturn(function, fn_mir, block, ret, value_id)) |field| return if (simpleMirNoTrap(fn_mir)) .{ .param_field = field } else null;
         if (std.mem.eql(u8, value_id, "int")) {
             for (fn_mir.integer_facts) |fact| {
                 if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return if (simpleMirNoTrap(fn_mir)) .{ .integer_literal = fact.literal } else null;
@@ -1695,6 +1704,46 @@ pub const CEmitter = struct {
         if (self.simpleMirAssignmentReturn(function, fn_mir, value_id)) |assigned| return assigned;
         if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
         return null;
+    }
+
+    fn simpleMirParamFieldReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, ret: mir.Instruction, field_name: []const u8) ?SimpleMirParamField {
+        _ = fn_mir;
+        var field_source: ?mir.SourcePoint = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .return_value) break;
+            if (instruction.kind != .expr or !std.mem.eql(u8, instruction.detail, field_name)) continue;
+            const source = instructionSourcePoint(instruction);
+            field_source = source;
+        }
+        const source = field_source orelse return null;
+        for (function.signature.params) |param| {
+            if (!simpleMirBlockHasExprAt(block, param.name.text, source)) continue;
+            const struct_name = type_bridge.typeName(self.resolveAliasType(param.ty)) orelse continue;
+            const struct_decl = self.structs.get(struct_name) orelse continue;
+            for (struct_decl.fields, 0..) |field, index| {
+                if (!std.mem.eql(u8, field.name.text, field_name)) continue;
+                const field_type_name = type_bridge.typeName(self.resolveAliasType(field.ty)) orelse return null;
+                if (!std.mem.eql(u8, field_type_name, ret.result_ty.name())) return null;
+                return .{
+                    .param_name = param.name.text,
+                    .field_name = field.name.text,
+                    .field_index = index,
+                };
+            }
+        }
+        return null;
+    }
+
+    fn simpleMirExprCouldBeParamField(self: *CEmitter, function: anytype, block: mir.Block, field_name: []const u8, source: mir.SourcePoint) bool {
+        for (function.signature.params) |param| {
+            if (!simpleMirBlockHasExprAt(block, param.name.text, source)) continue;
+            const struct_name = type_bridge.typeName(self.resolveAliasType(param.ty)) orelse continue;
+            const struct_decl = self.structs.get(struct_name) orelse continue;
+            for (struct_decl.fields) |field| {
+                if (std.mem.eql(u8, field.name.text, field_name)) return true;
+            }
+        }
+        return false;
     }
 
     fn simpleMirNoTrap(fn_mir: mir.Function) bool {
@@ -1983,6 +2032,7 @@ pub const CEmitter = struct {
                 } else {
                     if (mirBlockHasLocal(block, instruction.detail)) continue;
                     if (mirBlockHasCall(block, instruction.detail)) continue;
+                    if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                     if (self.globals.contains(instruction.detail)) continue;
                     return false;
                 }
@@ -3276,6 +3326,7 @@ pub const CEmitter = struct {
                 } else {
                     if (mirBlockHasLocal(block, instruction.detail)) continue;
                     if (mirBlockHasCall(block, instruction.detail)) continue;
+                    if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                     if (self.globals.contains(instruction.detail)) continue;
                     return false;
                 }
@@ -3452,6 +3503,15 @@ pub const CEmitter = struct {
     fn simpleMirBlockAssignsLocal(block: mir.Block, name: []const u8) bool {
         for (block.instructions) |instruction| {
             if (instruction.kind == .assign and std.mem.eql(u8, instruction.detail, name)) return true;
+        }
+        return false;
+    }
+
+    fn simpleMirBlockHasExprAt(block: mir.Block, detail: []const u8, source: mir.SourcePoint) bool {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .return_value) return false;
+            if (instruction.kind != .expr) continue;
+            if (std.mem.eql(u8, instruction.detail, detail) and sameMirSourceLocation(instructionSourcePoint(instruction), source)) return true;
         }
         return false;
     }

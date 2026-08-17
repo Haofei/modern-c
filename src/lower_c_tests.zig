@@ -1071,6 +1071,23 @@ test "lower-c preserves MIR void calls before simple returns" {
     try std.testing.expect(hit2 < ret);
 }
 
+test "lower-c emits direct struct parameter field returns from MIR" {
+    const source =
+        \\struct Pair { a: u32, b: u32 }
+        \\fn first(p: Pair) -> u32 {
+        \\    return p.a;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_param_field_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint32_t first(Pair p)");
+    try expectContains(body, "return p.a;");
+    try expectNotContains(body, "mc_tmp");
+    try expectNotContains(body, "switch");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
