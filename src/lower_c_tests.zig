@@ -594,6 +594,14 @@ test "lower-c emits simple global stores from MIR" {
         \\        g = x;
         \\    }
         \\}
+        \\fn call_then_if_store(flag: bool, x: u32, y: u32) {
+        \\    hit(x);
+        \\    if (flag) {
+        \\        g = x;
+        \\    } else {
+        \\        g = y;
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -671,6 +679,15 @@ test "lower-c emits simple global stores from MIR" {
     try expectContains(no_else_body, "} else {");
     try expectNotContains(no_else_body, "switch");
     try expectNotContains(no_else_body, "mc_tmp");
+
+    const call_if_body = try cFunctionBody(output.items, "static void call_then_if_store(bool flag, uint32_t x, uint32_t y)");
+    const hit_index = std.mem.indexOf(u8, call_if_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    const if_index = std.mem.indexOf(u8, call_if_body, "if (flag) {") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hit_index < if_index);
+    try expectContains(call_if_body, "mc_race_store_u32(&g, (uint32_t)x);");
+    try expectContains(call_if_body, "mc_race_store_u32(&g, (uint32_t)y);");
+    try expectNotContains(call_if_body, "switch");
+    try expectNotContains(call_if_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before simple returns" {

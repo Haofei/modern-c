@@ -1291,6 +1291,7 @@ const LlvmEmitter = struct {
     };
 
     const SimpleMirConditionalVoidStatements = struct {
+        prefix_calls: SimpleMirDirectCalls,
         condition: SimpleMirCondition,
         then_statements: SimpleMirVoidStatements,
         else_statements: SimpleMirVoidStatements,
@@ -1523,6 +1524,7 @@ const LlvmEmitter = struct {
                     try self.emitReturnVoid(return_span);
                 },
                 .conditional_statements => |conditional| {
+                    try self.emitSimpleMirDirectCalls(conditional.prefix_calls, sig_facts.name.span);
                     const then_label = try self.nextLabel("if_then");
                     const else_label = try self.nextLabel("if_else");
                     const done_label = try self.nextLabel("if_done");
@@ -1701,10 +1703,10 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirConditionalVoidStatements(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalVoidStatements {
-        if (fn_mir.blocks.len != 4 or fn_mir.trap_edges.len != 0 or fn_mir.pointer_provenance_facts.len != 0) return null;
+        if (fn_mir.blocks.len != 4 or fn_mir.pointer_provenance_facts.len != 0) return null;
         const entry = fn_mir.blocks[0];
         if (entry.terminator != .switch_ or entry.successors.len != 2) return null;
-        if (!simpleMirEntrySwitchBlockIsPure(function, entry)) return null;
+        const prefix_calls = self.simpleMirPrefixVoidCallsBeforeSwitch(function, fn_mir, entry) orelse return null;
         const condition = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return null;
         const after_block = fn_mir.blocks[1];
         if (after_block.terminator != .fallthrough or !simpleMirEmptyVoidBlock(function, fn_mir, after_block)) return null;
@@ -1723,7 +1725,8 @@ const LlvmEmitter = struct {
         if (then_stores.count + else_stores.count == 0) return null;
         if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, then_block)) return null;
         if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, else_block)) return null;
-        return .{ .condition = condition, .then_statements = then_statements, .else_statements = else_statements };
+        if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(prefix_calls) + simpleMirVoidStatementsDirectCallTrapCount(then_statements) + simpleMirVoidStatementsDirectCallTrapCount(else_statements)) return null;
+        return .{ .prefix_calls = prefix_calls, .condition = condition, .then_statements = then_statements, .else_statements = else_statements };
     }
 
     fn simpleMirConditionalVoidBody(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalVoidBody {
