@@ -2728,6 +2728,45 @@ test "lower-c grouped scalar expressions return from MIR without body fallback" 
     try expectNotContains(call_body, "uint16_t x");
 }
 
+test "lower-c void calls before grouped scalar returns lower from MIR without body fallback" {
+    const source =
+        \\extern fn hit(value: u16) -> void;
+        \\extern fn make(value: u16) -> u16;
+        \\fn side_then_grouped_param(value: u16) -> u16 {
+        \\    hit(1);
+        \\    return (value);
+        \\}
+        \\fn side_then_grouped_binary(value: u16) -> u16 {
+        \\    hit(2);
+        \\    return (value) + 1;
+        \\}
+        \\fn side_then_grouped_call(value: u16) -> u16 {
+        \\    hit(3);
+        \\    let x: u16 = (make(value));
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_grouped_scalar_returns.mc", source, &output);
+
+    const param_body = try cFunctionBody(output.items, "static uint16_t side_then_grouped_param(uint16_t value)");
+    const param_hit = std.mem.indexOf(u8, param_body, "hit(1);") orelse return error.TestUnexpectedResult;
+    const param_ret = std.mem.indexOf(u8, param_body, "return value;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(param_hit < param_ret);
+
+    const binary_body = try cFunctionBody(output.items, "static uint16_t side_then_grouped_binary(uint16_t value)");
+    const binary_hit = std.mem.indexOf(u8, binary_body, "hit(2);") orelse return error.TestUnexpectedResult;
+    const binary_ret = std.mem.indexOf(u8, binary_body, "return mc_checked_add_u16(value, 1);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(binary_hit < binary_ret);
+
+    const call_body = try cFunctionBody(output.items, "static uint16_t side_then_grouped_call(uint16_t value)");
+    const call_hit = std.mem.indexOf(u8, call_body, "hit(3);") orelse return error.TestUnexpectedResult;
+    const call_ret = std.mem.indexOf(u8, call_body, "return make(value);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(call_hit < call_ret);
+    try expectNotContains(call_body, "uint16_t x");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;

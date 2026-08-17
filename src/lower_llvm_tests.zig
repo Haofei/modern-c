@@ -466,6 +466,49 @@ test "LLVM grouped scalar expressions return from MIR without body fallback" {
     try expectNotContains(call_body, "alloca");
 }
 
+test "LLVM void calls before grouped scalar returns lower from MIR without body fallback" {
+    const source =
+        \\extern fn hit(value: u16) -> void;
+        \\extern fn make(value: u16) -> u16;
+        \\fn side_then_grouped_param(value: u16) -> u16 {
+        \\    hit(1);
+        \\    return (value);
+        \\}
+        \\fn side_then_grouped_binary(value: u16) -> u16 {
+        \\    hit(2);
+        \\    return (value) + 1;
+        \\}
+        \\fn side_then_grouped_call(value: u16) -> u16 {
+        \\    hit(3);
+        \\    let x: u16 = (make(value));
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_grouped_scalar_returns.mc", source, &output);
+
+    const param_body = try llvmFunctionBody(output.items, "define internal i16 @side_then_grouped_param");
+    const param_hit = std.mem.indexOf(u8, param_body, "call void @hit(i16 1)") orelse return error.TestUnexpectedResult;
+    const param_ret = std.mem.indexOf(u8, param_body, "ret i16 %value") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(param_hit < param_ret);
+
+    const binary_body = try llvmFunctionBody(output.items, "define internal i16 @side_then_grouped_binary");
+    const binary_hit = std.mem.indexOf(u8, binary_body, "call void @hit(i16 2)") orelse return error.TestUnexpectedResult;
+    const binary_add = std.mem.indexOf(u8, binary_body, "@llvm.uadd.with.overflow.i16") orelse return error.TestUnexpectedResult;
+    const binary_ret = std.mem.indexOf(u8, binary_body, "ret i16 %t") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(binary_hit < binary_add);
+    try std.testing.expect(binary_add < binary_ret);
+
+    const call_body = try llvmFunctionBody(output.items, "define internal i16 @side_then_grouped_call");
+    const call_hit = std.mem.indexOf(u8, call_body, "call void @hit(i16 3)") orelse return error.TestUnexpectedResult;
+    const call_make = std.mem.indexOf(u8, call_body, "call i16 @make(i16 %value)") orelse return error.TestUnexpectedResult;
+    const call_ret = std.mem.indexOf(u8, call_body, "ret i16 %t") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(call_hit < call_make);
+    try std.testing.expect(call_make < call_ret);
+    try expectNotContains(call_body, "alloca");
+}
+
 test "LLVM MIR conditional fast path uses only the switch subject expression" {
     const source =
         \\global g: u32 = 0;
