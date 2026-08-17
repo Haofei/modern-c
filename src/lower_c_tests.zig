@@ -526,6 +526,29 @@ test "lower-c emits pure local-only void functions from MIR" {
     try expectNotContains(if_no_else_body, "uint32_t x");
 }
 
+test "lower-c emits simple global stores from MIR" {
+    const source =
+        \\global g: u32 = 0;
+        \\fn store_param(x: u32) {
+        \\    g = x;
+        \\}
+        \\fn store_literal() {
+        \\    g = 7;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_global_store.mc", source, &output);
+
+    const param_body = try cFunctionBody(output.items, "static void store_param(uint32_t x)");
+    try expectContains(param_body, "mc_race_store_u32(&g, (uint32_t)x);");
+    try expectNotContains(param_body, "mc_tmp");
+
+    const literal_body = try cFunctionBody(output.items, "static void store_literal(void)");
+    try expectContains(literal_body, "mc_race_store_u32(&g, (uint32_t)7);");
+    try expectNotContains(literal_body, "mc_tmp");
+}
+
 test "lower-c preserves MIR void calls before simple returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
@@ -8193,7 +8216,7 @@ test "lower-c emits simple functions and race-safe globals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t add(uint32_t a, uint32_t b)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_counter, (uint32_t)mc_tmp") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_counter, (uint32_t)x);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((uint32_t)mc_race_load_u32(&shared_counter));") != null);
 }
 

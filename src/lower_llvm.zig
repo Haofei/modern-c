@@ -1263,6 +1263,7 @@ const LlvmEmitter = struct {
 
     const SimpleMirVoidBody = union(enum) {
         empty,
+        global_store: SimpleMirGlobalStore,
         direct_call: SimpleMirDirectCall,
         direct_calls: SimpleMirDirectCalls,
         conditional_direct_calls: SimpleMirConditionalVoidBody,
@@ -1345,6 +1346,12 @@ const LlvmEmitter = struct {
         args: [max_simple_mir_call_args]SimpleMirCallArg = undefined,
         arg_facts: [max_simple_mir_call_args]mir.TargetTypeFact = undefined,
         arg_count: usize = 0,
+    };
+
+    const SimpleMirGlobalStore = struct {
+        name: []const u8,
+        value: SimpleMirArg,
+        source: mir.SourcePoint,
     };
 
     const SimpleMirCheckedBinary = struct {
@@ -1477,6 +1484,13 @@ const LlvmEmitter = struct {
         } else if (simple_void_body) |body| {
             switch (body) {
                 .empty => try self.emitReturnVoid(sig_facts.name.span),
+                .global_store => |store| {
+                    const span = spanFromMirSourcePoint(store.source);
+                    const global_ty = self.global_types.get(store.name) orelse return error.UnsupportedLlvmEmission;
+                    const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{store.name});
+                    try self.emitOrdinaryStore(global_ty, try self.llvmType(global_ty), try self.simpleMirArgValue(store.value), ptr, true);
+                    try self.emitReturnVoid(span);
+                },
                 .direct_call => |call| {
                     const span = if (self.simpleMirCallSource(fn_mir)) |source| spanFromMirSourcePoint(source) else sig_facts.name.span;
                     try self.emitSimpleMirDirectCall(call, null, span);
@@ -1604,6 +1618,7 @@ const LlvmEmitter = struct {
         const block = fn_mir.blocks[0];
         if (block.terminator != .fallthrough) return null;
         if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
+        if (self.simpleMirGlobalStore(function, fn_mir, block)) |store| return .{ .global_store = store };
         if (self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block, false)) |calls| {
             if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(calls)) return null;
             if (calls.count == 1) return .{ .direct_call = calls.calls[0] };
@@ -1654,6 +1669,49 @@ const LlvmEmitter = struct {
         const else_calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, else_block, true) orelse return null;
         if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(then_calls) + simpleMirDirectCallsTrapCount(else_calls)) return null;
         return .{ .prefix_calls = prefix_calls, .condition = condition, .then_calls = then_calls, .else_calls = else_calls };
+    }
+
+    fn simpleMirGlobalStore(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirGlobalStore {
+        if (!simpleMirNoTrap(fn_mir)) return null;
+        var target_name: ?[]const u8 = null;
+        var target_source: ?mir.SourcePoint = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind != .assign) continue;
+            if (mirFunctionHasLocal(fn_mir, instruction.detail)) return null;
+            for (function.signature.params) |param| {
+                if (std.mem.eql(u8, instruction.detail, param.name.text)) return null;
+            }
+            if (!self.global_types.contains(instruction.detail)) return null;
+            if (target_name != null) return null;
+            target_name = instruction.detail;
+            target_source = instructionSourcePoint(instruction);
+        }
+        const name = target_name orelse return null;
+        const source = target_source.?;
+        const value_source = self.simpleMirAssignmentSourceInBlock(block, name) orelse return null;
+        const value = self.simpleMirArgAt(function, fn_mir, value_source) orelse return null;
+        if (!self.blockOnlyContainsSimpleMirGlobalStoreInstructions(function, block, name)) return null;
+        return .{ .name = name, .value = value, .source = source };
+    }
+
+    fn blockOnlyContainsSimpleMirGlobalStoreInstructions(_: *LlvmEmitter, function: anytype, block: mir.Block, target_name: []const u8) bool {
+        for (block.instructions) |instruction| switch (instruction.kind) {
+            .param, .target_type, .integer_literal_conversion => {},
+            .assign => {
+                if (!std.mem.eql(u8, instruction.detail, target_name)) return false;
+            },
+            .expr => {
+                if (std.mem.eql(u8, instruction.detail, target_name) or
+                    std.mem.eql(u8, instruction.detail, "int") or
+                    std.mem.eql(u8, instruction.detail, "bool") or
+                    std.mem.eql(u8, instruction.detail, "literal")) continue;
+                for (function.signature.params) |param| {
+                    if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
+                } else return false;
+            },
+            else => return false,
+        };
+        return true;
     }
 
     fn simpleMirConditionalReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalReturn {
