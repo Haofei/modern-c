@@ -148,6 +148,12 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
         \\        return 0;
         \\    }
         \\}
+        \\fn choose_early(flag: bool) -> i32 {
+        \\    if (flag) {
+        \\        return 1;
+        \\    }
+        \\    return 0;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -172,6 +178,12 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
     try expectContains(reassign_body, "c = mc_tmp0;");
     try expectContains(reassign_body, "switch ((int)((c)))");
     try expectNotContains(reassign_body, "if ((a < b))");
+
+    const early_body = try cFunctionBody(output.items, "static int32_t choose_early(bool flag)");
+    try expectContains(early_body, "if (flag)");
+    try expectContains(early_body, "return 1;");
+    try expectContains(early_body, "return 0;");
+    try expectNotContains(early_body, "switch");
 }
 
 test "lower-c emits simple void conditional direct calls from MIR" {

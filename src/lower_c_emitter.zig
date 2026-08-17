@@ -1492,6 +1492,8 @@ pub const CEmitter = struct {
         const direct_else_value = self.simpleMirReturnValueInBlock(function, fn_mir, else_block);
         const then_value, const else_value = if (direct_then_value != null and direct_else_value != null)
             .{ direct_then_value.?, direct_else_value.? }
+        else if (self.simpleMirConditionalEarlyReturn(function, fn_mir, then_block, else_block)) |early|
+            early
         else
             self.simpleMirConditionalAssignedReturn(function, fn_mir, then_block, else_block) orelse return null;
         for (fn_mir.blocks, 0..) |block, index| {
@@ -1500,6 +1502,26 @@ pub const CEmitter = struct {
         }
         if (fn_mir.trap_edges.len != simpleMirConditionalTrapCount(then_value) + simpleMirConditionalTrapCount(else_value)) return null;
         return .{ .prefix_calls = prefix_calls, .condition = condition, .then_value = then_value, .else_value = else_value };
+    }
+
+    fn simpleMirConditionalEarlyReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, then_block: mir.Block, else_block: mir.Block) ?struct { SimpleMirConditionalValue, SimpleMirConditionalValue } {
+        if (fn_mir.trap_edges.len != 0) return null;
+        if (fn_mir.blocks.len != 4) return null;
+        const after_block = fn_mir.blocks[1];
+        if (after_block.terminator != .return_) return null;
+        const after_value = self.simpleMirReturnValueInBlock(function, fn_mir, after_block) orelse return null;
+        const then_value = self.simpleMirEarlyReturnValueInBlock(function, fn_mir, then_block, after_value) orelse return null;
+        const else_value = self.simpleMirEarlyReturnValueInBlock(function, fn_mir, else_block, after_value) orelse return null;
+        if (then_block.terminator == .jump and else_block.terminator == .jump) return null;
+        return .{ then_value, else_value };
+    }
+
+    fn simpleMirEarlyReturnValueInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, after_value: SimpleMirConditionalValue) ?SimpleMirConditionalValue {
+        return switch (block.terminator) {
+            .return_ => self.simpleMirReturnValueInBlock(function, fn_mir, block),
+            .jump => |target| if (target == 1) after_value else null,
+            else => null,
+        };
     }
 
     fn simpleMirConditionalAssignedReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, then_block: mir.Block, else_block: mir.Block) ?struct { SimpleMirConditionalValue, SimpleMirConditionalValue } {

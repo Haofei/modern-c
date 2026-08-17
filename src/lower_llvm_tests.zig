@@ -128,6 +128,12 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
         \\        return 0;
         \\    }
         \\}
+        \\fn choose_early(flag: bool) -> i32 {
+        \\    if (flag) {
+        \\        return 1;
+        \\    }
+        \\    return 0;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -154,6 +160,12 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     try expectContains(reassign_body, "store i1 0");
     try expectContains(reassign_body, "switch i1 %t2");
     try expectNotContains(reassign_body, "br i1 %t1");
+
+    const early_body = try llvmFunctionBody(output.items, "define internal i32 @choose_early");
+    try expectContains(early_body, "br i1 %flag, label %bb_if_then");
+    try expectContains(early_body, "ret i32 1");
+    try expectContains(early_body, "ret i32 0");
+    try expectNotContains(early_body, "switch");
 }
 
 test "LLVM emits simple void conditional direct calls from MIR" {
