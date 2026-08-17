@@ -2878,6 +2878,39 @@ test "lower-c loop derived scalar returns lower from MIR without body fallback" 
     try expectNotContains(not_body, "mc_tmp");
 }
 
+test "lower-c loop checked scalar returns lower from MIR without body fallback" {
+    const source =
+        \\extern fn hit(value: u16) -> void;
+        \\fn loop_checked_add(flag: bool, value: u16) -> u16 {
+        \\    while flag {
+        \\        hit(value);
+        \\    }
+        \\    return (value) + 1;
+        \\}
+        \\fn loop_checked_neg(flag: bool, value: i16) -> i16 {
+        \\    while flag {
+        \\        hit(1);
+        \\    }
+        \\    return -value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_loop_checked_scalar_returns.mc", source, &output);
+
+    const add_body = try cFunctionBody(output.items, "static uint16_t loop_checked_add(bool flag, uint16_t value)");
+    try expectContains(add_body, "while (flag)");
+    try expectContains(add_body, "hit(value);");
+    try expectContains(add_body, "return mc_checked_add_u16(value, 1);");
+    try expectNotContains(add_body, "mc_tmp");
+
+    const neg_body = try cFunctionBody(output.items, "static int16_t loop_checked_neg(bool flag, int16_t value)");
+    try expectContains(neg_body, "while (flag)");
+    try expectContains(neg_body, "hit(1);");
+    try expectContains(neg_body, "return mc_checked_neg_i16(value);");
+    try expectNotContains(neg_body, "mc_tmp");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;

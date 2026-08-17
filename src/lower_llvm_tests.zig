@@ -622,6 +622,41 @@ test "LLVM loop derived scalar returns lower from MIR without body fallback" {
     try expectNotContains(not_body, "alloca");
 }
 
+test "LLVM loop checked scalar returns lower from MIR without body fallback" {
+    const source =
+        \\extern fn hit(value: u16) -> void;
+        \\fn loop_checked_add(flag: bool, value: u16) -> u16 {
+        \\    while flag {
+        \\        hit(value);
+        \\    }
+        \\    return (value) + 1;
+        \\}
+        \\fn loop_checked_neg(flag: bool, value: i16) -> i16 {
+        \\    while flag {
+        \\        hit(1);
+        \\    }
+        \\    return -value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_loop_checked_scalar_returns.mc", source, &output);
+
+    const add_body = try llvmFunctionBody(output.items, "define internal i16 @loop_checked_add");
+    try expectContains(add_body, "br i1 %flag");
+    try expectContains(add_body, "call void @hit(i16 %value)");
+    try expectContains(add_body, "@llvm.uadd.with.overflow.i16");
+    try expectContains(add_body, "ret i16 %t");
+    try expectNotContains(add_body, "alloca");
+
+    const neg_body = try llvmFunctionBody(output.items, "define internal i16 @loop_checked_neg");
+    try expectContains(neg_body, "br i1 %flag");
+    try expectContains(neg_body, "call void @hit(i16 1)");
+    try expectContains(neg_body, "@llvm.ssub.with.overflow.i16");
+    try expectContains(neg_body, "ret i16 %t");
+    try expectNotContains(neg_body, "alloca");
+}
+
 test "LLVM MIR conditional fast path uses only the switch subject expression" {
     const source =
         \\global g: u32 = 0;

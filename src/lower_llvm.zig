@@ -2434,7 +2434,7 @@ const LlvmEmitter = struct {
 
     fn simpleMirLoopReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirLoopReturn {
         if (fn_mir.return_ty == .void) return null;
-        if (fn_mir.blocks.len != 3 or fn_mir.pointer_provenance_facts.len != 0) return null;
+        if (fn_mir.blocks.len < 3 or fn_mir.pointer_provenance_facts.len != 0) return null;
         if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         const entry = fn_mir.blocks[0];
@@ -2444,6 +2444,10 @@ const LlvmEmitter = struct {
         const body_index = entry.successors[0];
         const after_index = entry.successors[1];
         if (body_index >= fn_mir.blocks.len or after_index >= fn_mir.blocks.len) return null;
+        for (fn_mir.blocks, 0..) |block, index| {
+            if (index == 0 or index == body_index or index == after_index) continue;
+            if (!std.mem.eql(u8, block.kind, "trap") or block.terminator != .trap_) return null;
+        }
         const body_block = fn_mir.blocks[body_index];
         const after_block = fn_mir.blocks[after_index];
         if (!std.mem.eql(u8, body_block.kind, "loop_body") or !std.mem.eql(u8, after_block.kind, "loop_after")) return null;
