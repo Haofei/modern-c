@@ -2663,8 +2663,14 @@ test "LLVM emits checked arithmetic returns from MIR without body fallback" {
         \\fn add_u32(a: u32, b: u32) -> u32 {
         \\    return a + b;
         \\}
+        \\fn add_i32(a: i32, b: i32) -> i32 {
+        \\    return a + b;
+        \\}
         \\fn sub_i32(a: i32, b: i32) -> i32 {
         \\    return a - b;
+        \\}
+        \\fn mul_u64(a: u64, b: u64) -> u64 {
+        \\    return a * b;
         \\}
         \\fn local_add(a: u32, b: u32) -> u32 {
         \\    let out: u32 = a + b;
@@ -2693,11 +2699,23 @@ test "LLVM emits checked arithmetic returns from MIR without body fallback" {
     try expectNotContains(add_body, "alloca");
     try expectNotContains(add_body, "store");
 
+    const add_i32_body = try llvmFunctionBody(output.items, "define internal i32 @add_i32");
+    try expectContains(add_i32_body, "@llvm.sadd.with.overflow.i32");
+    try expectContains(add_i32_body, "ret i32 %t");
+    try expectNotContains(add_i32_body, "alloca");
+    try expectNotContains(add_i32_body, "store");
+
     const sub_body = try llvmFunctionBody(output.items, "define internal i32 @sub_i32");
     try expectContains(sub_body, "@llvm.ssub.with.overflow.i32");
     try expectContains(sub_body, "ret i32 %t");
     try expectNotContains(sub_body, "alloca");
     try expectNotContains(sub_body, "store");
+
+    const mul_u64_body = try llvmFunctionBody(output.items, "define internal i64 @mul_u64");
+    try expectContains(mul_u64_body, "@llvm.umul.with.overflow.i64");
+    try expectContains(mul_u64_body, "ret i64 %t");
+    try expectNotContains(mul_u64_body, "alloca");
+    try expectNotContains(mul_u64_body, "store");
 
     const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_add");
     try expectContains(local_body, "@llvm.uadd.with.overflow.i32");
