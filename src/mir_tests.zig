@@ -6607,7 +6607,7 @@ test "MIR dump emits target-typed integer literal facts" {
     var dump: std.ArrayList(u8) = .empty;
     defer dump.deinit(std.testing.allocator);
     try mir.appendDumpFromDecls(std.testing.allocator, module.decls, &dump);
-    try std.testing.expect(std.mem.indexOf(u8, dump.items, "integer_facts=3") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "integer_facts=6") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=255 target_type=u8 recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=0xff target_type=u8 recorded=true") != null);
     try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir integer_fact fn=integer_literals literal=7 target_type=u8 recorded=true") != null);
