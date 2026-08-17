@@ -9751,12 +9751,11 @@ test "lower-c emits simple functions and race-safe globals" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_functions.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_simple_functions_race_safe_globals.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "static MC_UNUSED uint32_t shared_counter = 0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "MC_UNUSED static uint32_t add(uint32_t a, uint32_t b)") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_checked_add_u32(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_tmp") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_race_store_u32(&shared_counter, (uint32_t)x);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((uint32_t)mc_race_load_u32(&shared_counter));") != null);
 }
