@@ -585,6 +585,18 @@ test "LLVM emits simple global stores from MIR" {
         \\    g = x;
         \\    hit(x);
         \\}
+        \\fn if_store(flag: bool, x: u32, y: u32) {
+        \\    if (flag) {
+        \\        g = x;
+        \\    } else {
+        \\        g = y;
+        \\    }
+        \\}
+        \\fn if_store_no_else(flag: bool, x: u32) {
+        \\    if (flag) {
+        \\        g = x;
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -661,6 +673,17 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(store_then_call_body, "store atomic i32 %x, ptr @g unordered, align 4");
     try expectContains(store_then_call_body, "call void @hit(i32 %x)");
     try expectNotContains(store_then_call_body, "alloca");
+
+    const if_body = try llvmFunctionBody(output.items, "define internal void @if_store");
+    try expectContains(if_body, "br i1 %flag");
+    try expectContains(if_body, "store atomic i32 %x, ptr @g unordered, align 4");
+    try expectContains(if_body, "store atomic i32 %y, ptr @g unordered, align 4");
+    try expectNotContains(if_body, "alloca");
+
+    const no_else_body = try llvmFunctionBody(output.items, "define internal void @if_store_no_else");
+    try expectContains(no_else_body, "br i1 %flag");
+    try expectContains(no_else_body, "store atomic i32 %x, ptr @g unordered, align 4");
+    try expectNotContains(no_else_body, "alloca");
 }
 
 test "LLVM preserves MIR void calls before simple returns" {

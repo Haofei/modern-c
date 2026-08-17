@@ -1202,6 +1202,7 @@ pub const CEmitter = struct {
     const SimpleMirVoidBody = union(enum) {
         empty,
         statements: SimpleMirVoidStatements,
+        conditional_statements: SimpleMirConditionalVoidStatements,
         direct_call: SimpleMirDirectCall,
         direct_calls: SimpleMirDirectCalls,
         conditional_direct_calls: SimpleMirConditionalVoidBody,
@@ -1225,6 +1226,12 @@ pub const CEmitter = struct {
         condition: SimpleMirCondition,
         then_calls: SimpleMirDirectCalls,
         else_calls: SimpleMirDirectCalls,
+    };
+
+    const SimpleMirConditionalVoidStatements = struct {
+        condition: SimpleMirCondition,
+        then_statements: SimpleMirVoidStatements,
+        else_statements: SimpleMirVoidStatements,
     };
 
     const SimpleMirConditionalReturn = struct {
@@ -1421,6 +1428,22 @@ pub const CEmitter = struct {
                 .statements => |statements| {
                     try self.emitSimpleMirVoidStatements(statements);
                 },
+                .conditional_statements => |conditional| {
+                    try self.writeIndent();
+                    try self.out.appendSlice(self.allocator, "if (");
+                    try self.emitSimpleMirCondition(conditional.condition);
+                    try self.out.appendSlice(self.allocator, ") {\n");
+                    self.indent += 1;
+                    try self.emitSimpleMirVoidStatements(conditional.then_statements);
+                    self.indent -= 1;
+                    try self.writeIndent();
+                    try self.out.appendSlice(self.allocator, "} else {\n");
+                    self.indent += 1;
+                    try self.emitSimpleMirVoidStatements(conditional.else_statements);
+                    self.indent -= 1;
+                    try self.writeIndent();
+                    try self.out.appendSlice(self.allocator, "}\n");
+                },
                 .direct_call => |call| {
                     if (self.simpleMirCallSource(fn_mir)) |source| try self.writeLineDirective(spanFromMirSourcePoint(source));
                     try self.writeIndent();
@@ -1549,6 +1572,7 @@ pub const CEmitter = struct {
         if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         if (self.simpleMirConditionalEmptyVoidBody(function, fn_mir)) return .empty;
+        if (self.simpleMirConditionalVoidStatements(function, fn_mir)) |conditional| return .{ .conditional_statements = conditional };
         if (self.simpleMirConditionalVoidBody(function, fn_mir)) |conditional| return .{ .conditional_direct_calls = conditional };
         const block = fn_mir.blocks[0];
         if (block.terminator != .fallthrough) return null;
@@ -1585,6 +1609,32 @@ pub const CEmitter = struct {
             simpleMirEmptyVoidBlock(function, fn_mir, else_block);
     }
 
+    fn simpleMirConditionalVoidStatements(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalVoidStatements {
+        if (fn_mir.blocks.len != 4 or fn_mir.trap_edges.len != 0 or fn_mir.pointer_provenance_facts.len != 0) return null;
+        const entry = fn_mir.blocks[0];
+        if (entry.terminator != .switch_ or entry.successors.len != 2) return null;
+        if (!simpleMirEntrySwitchBlockIsPure(function, entry)) return null;
+        const condition = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return null;
+        const after_block = fn_mir.blocks[1];
+        if (after_block.terminator != .fallthrough or !simpleMirEmptyVoidBlock(function, fn_mir, after_block)) return null;
+        const then_index = entry.successors[0];
+        const else_index = entry.successors[1];
+        if (then_index >= fn_mir.blocks.len or else_index >= fn_mir.blocks.len) return null;
+        const then_block = fn_mir.blocks[then_index];
+        const else_block = fn_mir.blocks[else_index];
+        if (!std.mem.eql(u8, then_block.kind, "switch_arm") or !std.mem.eql(u8, else_block.kind, "switch_arm")) return null;
+        if (then_block.terminator != .jump or else_block.terminator != .jump) return null;
+        if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
+        const then_statements = self.simpleMirVoidStatementsInBlock(function, fn_mir, then_block, true) orelse return null;
+        const else_statements = self.simpleMirVoidStatementsInBlock(function, fn_mir, else_block, false) orelse return null;
+        const then_stores = simpleMirVoidStatementsGlobalStores(then_statements);
+        const else_stores = simpleMirVoidStatementsGlobalStores(else_statements);
+        if (then_stores.count + else_stores.count == 0) return null;
+        if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, then_block)) return null;
+        if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, else_block)) return null;
+        return .{ .condition = condition, .then_statements = then_statements, .else_statements = else_statements };
+    }
+
     fn simpleMirConditionalVoidBody(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalVoidBody {
         if (fn_mir.blocks.len < 4 or fn_mir.pointer_provenance_facts.len != 0) return null;
         const entry = fn_mir.blocks[0];
@@ -1607,8 +1657,19 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirVoidStatements(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirVoidStatements {
+        const result = self.simpleMirVoidStatementsInBlock(function, fn_mir, block, true) orelse return null;
+        const stores = simpleMirVoidStatementsGlobalStores(result);
+        if (fn_mir.trap_edges.len != simpleMirGlobalStoresTrapCount(stores) + simpleMirVoidStatementsDirectCallTrapCount(result)) return null;
+        for (fn_mir.blocks, 0..) |mir_block, index| {
+            if (index == 0) continue;
+            if (!std.mem.eql(u8, mir_block.kind, "trap") or mir_block.terminator != .trap_) return null;
+        }
+        if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, block)) return null;
+        return result;
+    }
+
+    fn simpleMirVoidStatementsInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, require_global_store: bool) ?SimpleMirVoidStatements {
         var result: SimpleMirVoidStatements = .{};
-        var stores: SimpleMirGlobalStores = .{};
         var has_global_store = false;
         for (block.instructions) |instruction| {
             if (instruction.kind == .call) {
@@ -1622,29 +1683,34 @@ pub const CEmitter = struct {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) return null;
                 }
                 if (!self.globals.contains(instruction.detail)) return null;
-                if (stores.count >= max_simple_mir_global_stores or result.count >= max_simple_mir_void_statements) return null;
+                if (result.count >= max_simple_mir_void_statements) return null;
                 const name = instruction.detail;
                 const value_source = self.simpleMirAssignmentSourceInBlock(block, name) orelse return null;
-                const store: SimpleMirGlobalStore = .{
+                result.statements[result.count] = .{ .global_store = .{
                     .name = name,
                     .value = self.simpleMirGlobalStoreValue(function, fn_mir, value_source) orelse return null,
                     .source = instructionSourcePoint(instruction),
-                };
-                stores.stores[stores.count] = store;
-                stores.count += 1;
-                result.statements[result.count] = .{ .global_store = store };
+                } };
                 result.count += 1;
                 has_global_store = true;
             }
         }
-        if (!has_global_store) return null;
-        if (fn_mir.trap_edges.len != simpleMirGlobalStoresTrapCount(stores) + simpleMirVoidStatementsDirectCallTrapCount(result)) return null;
-        for (fn_mir.blocks, 0..) |mir_block, index| {
-            if (index == 0) continue;
-            if (!std.mem.eql(u8, mir_block.kind, "trap") or mir_block.terminator != .trap_) return null;
-        }
-        if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, block)) return null;
+        if (require_global_store and !has_global_store) return null;
         return result;
+    }
+
+    fn simpleMirVoidStatementsGlobalStores(statements: SimpleMirVoidStatements) SimpleMirGlobalStores {
+        var stores: SimpleMirGlobalStores = .{};
+        for (statements.statements[0..statements.count]) |statement| switch (statement) {
+            .global_store => |store| {
+                if (stores.count < max_simple_mir_global_stores) {
+                    stores.stores[stores.count] = store;
+                    stores.count += 1;
+                }
+            },
+            .direct_call => {},
+        };
+        return stores;
     }
 
     fn simpleMirVoidStatementsDirectCallTrapCount(statements: SimpleMirVoidStatements) usize {

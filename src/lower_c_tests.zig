@@ -582,6 +582,18 @@ test "lower-c emits simple global stores from MIR" {
         \\    g = x;
         \\    hit(x);
         \\}
+        \\fn if_store(flag: bool, x: u32, y: u32) {
+        \\    if (flag) {
+        \\        g = x;
+        \\    } else {
+        \\        g = y;
+        \\    }
+        \\}
+        \\fn if_store_no_else(flag: bool, x: u32) {
+        \\    if (flag) {
+        \\        g = x;
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -644,6 +656,21 @@ test "lower-c emits simple global stores from MIR" {
     try expectContains(store_then_call_body, "mc_race_store_u32(&g, (uint32_t)x);");
     try expectContains(store_then_call_body, "hit(x);");
     try expectNotContains(store_then_call_body, "mc_tmp");
+
+    const if_body = try cFunctionBody(output.items, "static void if_store(bool flag, uint32_t x, uint32_t y)");
+    try expectContains(if_body, "if (flag) {");
+    try expectContains(if_body, "mc_race_store_u32(&g, (uint32_t)x);");
+    try expectContains(if_body, "} else {");
+    try expectContains(if_body, "mc_race_store_u32(&g, (uint32_t)y);");
+    try expectNotContains(if_body, "switch");
+    try expectNotContains(if_body, "mc_tmp");
+
+    const no_else_body = try cFunctionBody(output.items, "static void if_store_no_else(bool flag, uint32_t x)");
+    try expectContains(no_else_body, "if (flag) {");
+    try expectContains(no_else_body, "mc_race_store_u32(&g, (uint32_t)x);");
+    try expectContains(no_else_body, "} else {");
+    try expectNotContains(no_else_body, "switch");
+    try expectNotContains(no_else_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before simple returns" {
