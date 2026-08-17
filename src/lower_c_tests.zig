@@ -498,6 +498,11 @@ test "lower-c emits simple void conditional direct calls from MIR" {
         \\        hit(8);
         \\    }
         \\}
+        \\fn loop_void_cmp(a: i32, b: i32) -> void {
+        \\    while a < b {
+        \\        hit(a);
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -624,6 +629,13 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try std.testing.expect(loop_void_not_while < loop_void_not_call);
     try expectNotContains(loop_void_not_body, "switch");
     try expectNotContains(loop_void_not_body, "mc_tmp");
+
+    const loop_void_cmp_body = try cFunctionBody(output.items, "static void loop_void_cmp(int32_t a, int32_t b)");
+    const loop_void_cmp_while = std.mem.indexOf(u8, loop_void_cmp_body, "while ((a < b))") orelse return error.TestUnexpectedResult;
+    const loop_void_cmp_call = std.mem.indexOf(u8, loop_void_cmp_body, "hit(a);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop_void_cmp_while < loop_void_cmp_call);
+    try expectNotContains(loop_void_cmp_body, "switch");
+    try expectNotContains(loop_void_cmp_body, "mc_tmp");
 }
 
 test "lower-c emits simple sequential void direct calls from MIR" {

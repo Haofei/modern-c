@@ -481,6 +481,11 @@ test "LLVM emits simple void conditional direct calls from MIR" {
         \\        hit(8);
         \\    }
         \\}
+        \\fn loop_void_cmp(a: i32, b: i32) -> void {
+        \\    while a < b {
+        \\        hit(a);
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -620,6 +625,15 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try std.testing.expect(loop_void_not_call < loop_void_not_ret);
     try expectNotContains(loop_void_not_body, "switch");
     try expectNotContains(loop_void_not_body, "alloca");
+
+    const loop_void_cmp_body = try llvmFunctionBody(output.items, "define internal void @loop_void_cmp");
+    const loop_void_cmp_compare = std.mem.indexOf(u8, loop_void_cmp_body, "icmp slt i32 %a, %b") orelse return error.TestUnexpectedResult;
+    const loop_void_cmp_branch = std.mem.indexOf(u8, loop_void_cmp_body, "br i1 %t") orelse return error.TestUnexpectedResult;
+    const loop_void_cmp_call = std.mem.indexOf(u8, loop_void_cmp_body, "call void @hit(i32 %a)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop_void_cmp_compare < loop_void_cmp_branch);
+    try std.testing.expect(loop_void_cmp_branch < loop_void_cmp_call);
+    try expectNotContains(loop_void_cmp_body, "switch");
+    try expectNotContains(loop_void_cmp_body, "alloca");
 }
 
 test "LLVM emits simple sequential void direct calls from MIR" {

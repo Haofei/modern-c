@@ -1274,19 +1274,14 @@ pub const CEmitter = struct {
         suffix_block_index: usize = 0,
     };
 
-    const SimpleMirLoopCondition = struct {
-        name: []const u8,
-        inverted: bool = false,
-    };
-
     const SimpleMirLoopReturn = struct {
-        condition: SimpleMirLoopCondition,
+        condition: SimpleMirCondition,
         body_block_index: usize,
         after_block_index: usize,
     };
 
     const SimpleMirLoopVoidBody = struct {
-        condition: SimpleMirLoopCondition,
+        condition: SimpleMirCondition,
         body_block_index: usize,
     };
 
@@ -1500,8 +1495,7 @@ pub const CEmitter = struct {
                 .loop_statements => |loop| {
                     try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "while (");
-                    if (loop.condition.inverted) try self.out.appendSlice(self.allocator, "!");
-                    try self.out.appendSlice(self.allocator, try self.cIdent(loop.condition.name));
+                    try self.emitSimpleMirCondition(loop.condition);
                     try self.out.appendSlice(self.allocator, ") {\n");
                     self.indent += 1;
                     try self.emitSimpleMirVoidStatementSources(function, fn_mir, self.simpleMirVoidStatementSourcesInBlock(function, fn_mir, fn_mir.blocks[loop.body_block_index]).?);
@@ -1622,8 +1616,7 @@ pub const CEmitter = struct {
         } else if (simple_loop_return) |loop| {
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "while (");
-            if (loop.condition.inverted) try self.out.appendSlice(self.allocator, "!");
-            try self.out.appendSlice(self.allocator, try self.cIdent(loop.condition.name));
+            try self.emitSimpleMirCondition(loop.condition);
             try self.out.appendSlice(self.allocator, ") {\n");
             self.indent += 1;
             try self.emitSimpleMirVoidStatementSources(function, fn_mir, self.simpleMirVoidStatementSourcesInBlock(function, fn_mir, fn_mir.blocks[loop.body_block_index]).?);
@@ -1762,7 +1755,8 @@ pub const CEmitter = struct {
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         const entry = fn_mir.blocks[0];
         if (entry.terminator != .branch or entry.successors.len != 2) return null;
-        const condition = self.simpleMirLoopConditionParam(function, entry) orelse return null;
+        if (simpleMirBlockHasCall(entry)) return null;
+        const condition = self.simpleMirLoopCondition(function, fn_mir, entry) orelse return null;
         const body_index = entry.successors[0];
         const after_index = entry.successors[1];
         if (body_index >= fn_mir.blocks.len or after_index >= fn_mir.blocks.len) return null;
@@ -2143,7 +2137,8 @@ pub const CEmitter = struct {
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         const entry = fn_mir.blocks[0];
         if (entry.terminator != .branch or entry.successors.len != 2) return null;
-        const condition = self.simpleMirLoopConditionParam(function, entry) orelse return null;
+        if (simpleMirBlockHasCall(entry)) return null;
+        const condition = self.simpleMirLoopCondition(function, fn_mir, entry) orelse return null;
         const body_index = entry.successors[0];
         const after_index = entry.successors[1];
         if (body_index >= fn_mir.blocks.len or after_index >= fn_mir.blocks.len) return null;
@@ -2161,7 +2156,7 @@ pub const CEmitter = struct {
         return .{ .condition = condition, .body_block_index = body_index, .after_block_index = after_index };
     }
 
-    fn simpleMirLoopConditionParam(_: *CEmitter, function: anytype, block: mir.Block) ?SimpleMirLoopCondition {
+    fn simpleMirLoopCondition(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirCondition {
         var saw_loop_marker = false;
         var index: usize = 0;
         while (index < block.instructions.len) : (index += 1) {
@@ -2180,16 +2175,35 @@ pub const CEmitter = struct {
                         if (operand.kind == .target_type) continue;
                         if (operand.kind != .expr or operand.result_ty != .bool) return null;
                         for (function.signature.params) |param| {
-                            if (std.mem.eql(u8, operand.detail, param.name.text)) return .{ .name = param.name.text, .inverted = true };
+                            if (std.mem.eql(u8, operand.detail, param.name.text)) return .{ .param = .{ .name = param.name.text, .inverted = true } };
                         }
                         return null;
+                    }
+                    return null;
+                },
+                .binary => {
+                    if (self.simpleMirCompareBinaryAtSource(function, fn_mir, instructionSourcePoint(instruction))) |binary| return .{ .compare_binary = binary };
+                    return null;
+                },
+                .call => {
+                    if (self.simpleMirNestedCallAtSource(function, fn_mir, instructionSourcePoint(instruction))) |call| {
+                        if (self.simpleMirNestedCallReturnsBool(call)) return .{ .direct_call = call };
                     }
                     return null;
                 },
                 .expr => {
                     if (instruction.result_ty != .bool) return null;
                     for (function.signature.params) |param| {
-                        if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .name = param.name.text };
+                        if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = .{ .name = param.name.text } };
+                    }
+                    if (mirBlockHasLocal(block, instruction.detail)) {
+                        return self.simpleMirLocalCondition(function, fn_mir, instruction.detail);
+                    }
+                    if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction))) |arg| {
+                        return switch (arg) {
+                            .bool_literal => |value| .{ .bool_literal = value },
+                            else => null,
+                        };
                     }
                     return null;
                 },
@@ -3298,6 +3312,13 @@ pub const CEmitter = struct {
             else => return false,
         };
         return true;
+    }
+
+    fn simpleMirBlockHasCall(block: mir.Block) bool {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .call) return true;
+        }
+        return false;
     }
 
     fn simpleMirEntrySwitchBlockIsPure(function: anytype, block: mir.Block) bool {
