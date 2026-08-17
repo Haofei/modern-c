@@ -158,6 +158,35 @@ test "LLVM literal unary components lower from MIR without body fallback" {
     try expectNotContains(array_body, "store");
 }
 
+test "LLVM literal compare components lower from MIR without body fallback" {
+    const source =
+        \\struct Flags { first: bool, second: bool }
+        \\fn struct_ops(flag: bool, other: bool) -> Flags {
+        \\    return .{ .first = flag == other, .second = flag != other };
+        \\}
+        \\fn array_ops(flag: bool, other: bool) -> [2]bool {
+        \\    return .{ flag == other, flag != other };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_literal_compare_components.mc", source, &output);
+
+    const struct_body = try llvmFunctionBody(output.items, "define internal { i1, i1 } @struct_ops");
+    try expectContains(struct_body, "icmp eq i1");
+    try expectContains(struct_body, "icmp ne i1");
+    try expectContains(struct_body, "ret { i1, i1 } %t");
+    try expectNotContains(struct_body, "alloca");
+    try expectNotContains(struct_body, "store");
+
+    const array_body = try llvmFunctionBody(output.items, "define internal [2 x i1] @array_ops");
+    try expectContains(array_body, "icmp eq i1");
+    try expectContains(array_body, "icmp ne i1");
+    try expectContains(array_body, "ret [2 x i1] %t");
+    try expectNotContains(array_body, "alloca");
+    try expectNotContains(array_body, "store");
+}
+
 test "LLVM MIR conditional fast path uses only the switch subject expression" {
     const source =
         \\global g: u32 = 0;

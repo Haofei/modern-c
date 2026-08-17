@@ -2453,6 +2453,27 @@ test "lower-c literal unary components lower from MIR without body fallback" {
     try expectContains(array_body, "return (mc_array_bool_2){ .elems = { !flag, !other } };");
 }
 
+test "lower-c literal compare components lower from MIR without body fallback" {
+    const source =
+        \\struct Flags { first: bool, second: bool }
+        \\fn struct_ops(flag: bool, other: bool) -> Flags {
+        \\    return .{ .first = flag == other, .second = flag != other };
+        \\}
+        \\fn array_ops(flag: bool, other: bool) -> [2]bool {
+        \\    return .{ flag == other, flag != other };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_literal_compare_components.mc", source, &output);
+
+    const struct_body = try cFunctionBody(output.items, "static Flags struct_ops(bool flag, bool other)");
+    try expectContains(struct_body, "return (Flags){ .first = (flag == other), .second = (flag != other) };");
+
+    const array_body = try cFunctionBody(output.items, "static mc_array_bool_2 array_ops(bool flag, bool other)");
+    try expectContains(array_body, "return (mc_array_bool_2){ .elems = { (flag == other), (flag != other) } };");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;

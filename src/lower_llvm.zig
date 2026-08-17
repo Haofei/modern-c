@@ -1876,8 +1876,8 @@ const LlvmEmitter = struct {
                 const instruction = block.instructions[scan_index];
                 if (instruction.kind == .return_value) return null;
                 if (instruction.kind == .target_type or instruction.kind == .integer_literal_conversion) continue;
-                if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .unary) return null;
-                if ((instruction.kind == .call or instruction.kind == .unary) and !self.noFunctionBodyFallbacksAvailable()) return null;
+                if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .binary and instruction.kind != .unary) return null;
+                if ((instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary) and !self.noFunctionBodyFallbacksAvailable()) return null;
                 const value_source = instructionSourcePoint(instruction);
                 const arg = self.simpleMirCallArgAt(function, fn_mir, value_source) orelse return null;
                 result.fields[result.field_count] = .{
@@ -1886,7 +1886,7 @@ const LlvmEmitter = struct {
                 };
                 result.field_count += 1;
                 scan_index += 1;
-                if (instruction.kind == .call or instruction.kind == .unary) {
+                if (instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary) {
                     while (scan_index < block.instructions.len and !simpleMirLiteralBoundaryInstruction(block.instructions[scan_index])) : (scan_index += 1) {}
                 } else {
                     while (scan_index < block.instructions.len and sameMirSourceLocation(instructionSourcePoint(block.instructions[scan_index]), value_source)) : (scan_index += 1) {}
@@ -1935,13 +1935,13 @@ const LlvmEmitter = struct {
                 const instruction = block.instructions[scan_index];
                 if (instruction.kind == .return_value) return null;
                 if (instruction.kind == .target_type or instruction.kind == .integer_literal_conversion) continue;
-                if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .unary) return null;
-                if ((instruction.kind == .call or instruction.kind == .unary) and !self.noFunctionBodyFallbacksAvailable()) return null;
+                if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .binary and instruction.kind != .unary) return null;
+                if ((instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary) and !self.noFunctionBodyFallbacksAvailable()) return null;
                 const value_source = instructionSourcePoint(instruction);
                 result.items[result.item_count] = self.simpleMirCallArgAt(function, fn_mir, value_source) orelse return null;
                 result.item_count += 1;
                 scan_index += 1;
-                if (instruction.kind == .call or instruction.kind == .unary) {
+                if (instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary) {
                     while (scan_index < block.instructions.len and !simpleMirLiteralBoundaryInstruction(block.instructions[scan_index])) : (scan_index += 1) {}
                 } else {
                     while (scan_index < block.instructions.len and sameMirSourceLocation(instructionSourcePoint(block.instructions[scan_index]), value_source)) : (scan_index += 1) {}
@@ -2851,7 +2851,7 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirLiteralBoundaryInstruction(instruction: mir.Instruction) bool {
-        return instruction.kind == .call or instruction.kind == .unary or instruction.kind == .return_value;
+        return instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary or instruction.kind == .return_value;
     }
 
     fn simpleMirCheckedBinaryUsesParamField(binary: SimpleMirCheckedBinary) bool {
@@ -2950,7 +2950,7 @@ const LlvmEmitter = struct {
     fn emitSimpleMirCompareBinary(self: *LlvmEmitter, binary: SimpleMirCompareBinary, span: diagnostics.Span) ![]const u8 {
         const ty = binary.operand_fact.target_ty;
         const llvm_ty = try self.llvmType(ty);
-        _ = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+        if (!self.isBoolType(ty)) _ = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         const predicate = try self.simpleMirComparePredicate(binary.op, self.isSignedIntegerType(ty));
         const left = try self.simpleMirArgValue(binary.left, span);
         const right = try self.simpleMirArgValue(binary.right, span);
@@ -4026,11 +4026,13 @@ const LlvmEmitter = struct {
 
     fn simpleMirOperandTargetTypeFactAt(self: *LlvmEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?mir.TargetTypeFact {
         _ = self;
+        var bool_fact: ?mir.TargetTypeFact = null;
         for (fn_mir.target_type_facts) |fact| {
             if (fact.kind != .expression_result or !sameMirSourceLocation(fact.source, source)) continue;
             if (fact.result_ty != .bool) return fact;
+            bool_fact = bool_fact orelse fact;
         }
-        return null;
+        return bool_fact;
     }
 
     fn mirBlockHasLocal(block: mir.Block, name: []const u8) bool {
@@ -13364,6 +13366,13 @@ const LlvmEmitter = struct {
         if (self.packedBitsInfoForType(ty)) |info| return self.isSignedIntegerType(info.repr);
         if (lower_llvm_shape.domainPayloadType(&self.type_aliases, ty)) |payload_ty| return self.isSignedIntegerType(payload_ty);
         return isSignedInteger(self.resolveAliasType(ty));
+    }
+
+    fn isBoolType(self: *LlvmEmitter, ty: anytype) bool {
+        return switch (self.resolveAliasType(ty).kind) {
+            .name => |name| std.mem.eql(u8, name.text, "bool"),
+            else => false,
+        };
     }
 
     fn fixedLayoutBitsOf(self: *LlvmEmitter, ty: ast_bridge.TypeExpr) ?u16 {

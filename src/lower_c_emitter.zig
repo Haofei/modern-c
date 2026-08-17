@@ -1812,8 +1812,8 @@ pub const CEmitter = struct {
                 const instruction = block.instructions[scan_index];
                 if (instruction.kind == .return_value) return null;
                 if (instruction.kind == .target_type or instruction.kind == .integer_literal_conversion) continue;
-                if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .unary) return null;
-                if ((instruction.kind == .call or instruction.kind == .unary) and !self.noFunctionBodyFallbacksAvailable()) return null;
+                if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .binary and instruction.kind != .unary) return null;
+                if ((instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary) and !self.noFunctionBodyFallbacksAvailable()) return null;
                 const value_source = instructionSourcePoint(instruction);
                 const arg = self.simpleMirCallArgAt(function, fn_mir, value_source) orelse return null;
                 result.fields[result.field_count] = .{
@@ -1822,7 +1822,7 @@ pub const CEmitter = struct {
                 };
                 result.field_count += 1;
                 scan_index += 1;
-                if (instruction.kind == .call or instruction.kind == .unary) {
+                if (instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary) {
                     while (scan_index < block.instructions.len and !simpleMirLiteralBoundaryInstruction(block.instructions[scan_index])) : (scan_index += 1) {}
                 } else {
                     while (scan_index < block.instructions.len and sameMirSourceLocation(instructionSourcePoint(block.instructions[scan_index]), value_source)) : (scan_index += 1) {}
@@ -1868,13 +1868,13 @@ pub const CEmitter = struct {
                 const instruction = block.instructions[scan_index];
                 if (instruction.kind == .return_value) return null;
                 if (instruction.kind == .target_type or instruction.kind == .integer_literal_conversion) continue;
-                if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .unary) return null;
-                if ((instruction.kind == .call or instruction.kind == .unary) and !self.noFunctionBodyFallbacksAvailable()) return null;
+                if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .binary and instruction.kind != .unary) return null;
+                if ((instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary) and !self.noFunctionBodyFallbacksAvailable()) return null;
                 const value_source = instructionSourcePoint(instruction);
                 result.items[result.item_count] = self.simpleMirCallArgAt(function, fn_mir, value_source) orelse return null;
                 result.item_count += 1;
                 scan_index += 1;
-                if (instruction.kind == .call or instruction.kind == .unary) {
+                if (instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary) {
                     while (scan_index < block.instructions.len and !simpleMirLiteralBoundaryInstruction(block.instructions[scan_index])) : (scan_index += 1) {}
                 } else {
                     while (scan_index < block.instructions.len and sameMirSourceLocation(instructionSourcePoint(block.instructions[scan_index]), value_source)) : (scan_index += 1) {}
@@ -2817,7 +2817,7 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirLiteralBoundaryInstruction(instruction: mir.Instruction) bool {
-        return instruction.kind == .call or instruction.kind == .unary or instruction.kind == .return_value;
+        return instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary or instruction.kind == .return_value;
     }
 
     fn simpleMirCheckedBinaryUsesParamField(binary: SimpleMirCheckedBinary) bool {
