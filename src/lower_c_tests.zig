@@ -184,10 +184,12 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
     try expectNotContains(local_not_body, "bool c = !flag;");
 
     const reassign_body = try cFunctionBody(output.items, "static int32_t choose_reassign(int32_t a, int32_t b)");
-    try expectContains(reassign_body, "bool c = (a < b);");
-    try expectContains(reassign_body, "c = mc_tmp0;");
-    try expectContains(reassign_body, "switch ((int)((c)))");
-    try expectNotContains(reassign_body, "if ((a < b))");
+    try expectContains(reassign_body, "if (false)");
+    try expectContains(reassign_body, "return 1;");
+    try expectContains(reassign_body, "return 0;");
+    try expectNotContains(reassign_body, "bool c =");
+    try expectNotContains(reassign_body, "c =");
+    try expectNotContains(reassign_body, "switch");
 
     const early_body = try cFunctionBody(output.items, "static int32_t choose_early(bool flag)");
     try expectContains(early_body, "if (flag)");

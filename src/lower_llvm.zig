@@ -1296,6 +1296,7 @@ const LlvmEmitter = struct {
             name: []const u8,
             inverted: bool = false,
         },
+        bool_literal: bool,
         compare_binary: SimpleMirCompareBinary,
     };
 
@@ -1458,7 +1459,7 @@ const LlvmEmitter = struct {
                     const condition = try self.emitSimpleMirCondition(conditional.condition, sig_facts.name.span);
                     const inverted = switch (conditional.condition) {
                         .param => |param| param.inverted,
-                        .compare_binary => false,
+                        .bool_literal, .compare_binary => false,
                     };
                     const true_label = if (inverted) else_label else then_label;
                     const false_label = if (inverted) then_label else else_label;
@@ -1477,7 +1478,7 @@ const LlvmEmitter = struct {
             const condition = try self.emitSimpleMirCondition(conditional.condition, sig_facts.name.span);
             const inverted = switch (conditional.condition) {
                 .param => |param| param.inverted,
-                .compare_binary => false,
+                .bool_literal, .compare_binary => false,
             };
             const true_label = if (inverted) else_label else then_label;
             const false_label = if (inverted) then_label else else_label;
@@ -1730,8 +1731,8 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirLocalCondition(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirCondition {
-        if (simpleMirBlockAssignsLocal(fn_mir.blocks[0], local_name)) return null;
-        const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
+        const init_source = self.simpleMirAssignmentSource(fn_mir, local_name) orelse
+            self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
@@ -1742,6 +1743,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = .{ .name = name } },
+                .bool_literal => |value| .{ .bool_literal = value },
                 else => null,
             };
         }
@@ -1758,6 +1760,7 @@ const LlvmEmitter = struct {
     fn emitSimpleMirCondition(self: *LlvmEmitter, condition: SimpleMirCondition, span: diagnostics.Span) ![]const u8 {
         return switch (condition) {
             .param => |param| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{param.name}),
+            .bool_literal => |value| if (value) "1" else "0",
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary, span),
         };
     }

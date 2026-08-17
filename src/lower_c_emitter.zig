@@ -1234,6 +1234,7 @@ pub const CEmitter = struct {
             name: []const u8,
             inverted: bool = false,
         },
+        bool_literal: bool,
         compare_binary: SimpleMirCompareBinary,
     };
 
@@ -1642,8 +1643,8 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirLocalCondition(self: *CEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirCondition {
-        if (simpleMirBlockAssignsLocal(fn_mir.blocks[0], local_name)) return null;
-        const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
+        const init_source = self.simpleMirAssignmentSource(fn_mir, local_name) orelse
+            self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
@@ -1654,6 +1655,7 @@ pub const CEmitter = struct {
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = .{ .name = name } },
+                .bool_literal => |value| .{ .bool_literal = value },
                 else => null,
             };
         }
@@ -1673,6 +1675,7 @@ pub const CEmitter = struct {
                 if (param.inverted) try self.out.appendSlice(self.allocator, "!");
                 try self.out.appendSlice(self.allocator, try self.cIdent(param.name));
             },
+            .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
         }
     }

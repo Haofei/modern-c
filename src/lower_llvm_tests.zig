@@ -167,10 +167,12 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     try expectNotContains(local_not_body, "alloca i1");
 
     const reassign_body = try llvmFunctionBody(output.items, "define internal i32 @choose_reassign");
-    try expectContains(reassign_body, "icmp slt i32 %a, %b");
-    try expectContains(reassign_body, "store i1 0");
-    try expectContains(reassign_body, "switch i1 %t2");
-    try expectNotContains(reassign_body, "br i1 %t1");
+    try expectContains(reassign_body, "br i1 0, label %bb_if_then");
+    try expectContains(reassign_body, "ret i32 1");
+    try expectContains(reassign_body, "ret i32 0");
+    try expectNotContains(reassign_body, "alloca");
+    try expectNotContains(reassign_body, "store");
+    try expectNotContains(reassign_body, "switch");
 
     const early_body = try llvmFunctionBody(output.items, "define internal i32 @choose_early");
     try expectContains(early_body, "br i1 %flag, label %bb_if_then");
