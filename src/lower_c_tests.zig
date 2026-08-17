@@ -269,6 +269,15 @@ test "lower-c emits simple sequential void direct calls from MIR" {
         \\    x = 1;
         \\    hit(2);
         \\}
+        \\fn call_local_arg() -> void {
+        \\    let x: i32 = 1;
+        \\    hit(x);
+        \\}
+        \\fn call_assigned_arg() -> void {
+        \\    var x: i32 = 0;
+        \\    x = 1;
+        \\    hit(x);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -289,6 +298,16 @@ test "lower-c emits simple sequential void direct calls from MIR" {
     try expectContains(assign_body, "hit(2);");
     try expectNotContains(assign_body, "uint32_t x");
     try expectNotContains(assign_body, "x =");
+
+    const local_arg_body = try cFunctionBody(output.items, "static void call_local_arg(void)");
+    try expectContains(local_arg_body, "hit(1);");
+    try expectNotContains(local_arg_body, "int32_t x");
+    try expectNotContains(local_arg_body, "x =");
+
+    const assigned_arg_body = try cFunctionBody(output.items, "static void call_assigned_arg(void)");
+    try expectContains(assigned_arg_body, "hit(1);");
+    try expectNotContains(assigned_arg_body, "int32_t x");
+    try expectNotContains(assigned_arg_body, "x =");
 }
 
 test "lower-c emits pure local-only void functions from MIR" {

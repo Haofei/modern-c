@@ -253,6 +253,15 @@ test "LLVM emits simple sequential void direct calls from MIR" {
         \\    x = 1;
         \\    hit(2);
         \\}
+        \\fn call_local_arg() -> void {
+        \\    let x: i32 = 1;
+        \\    hit(x);
+        \\}
+        \\fn call_assigned_arg() -> void {
+        \\    var x: i32 = 0;
+        \\    x = 1;
+        \\    hit(x);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -273,6 +282,16 @@ test "LLVM emits simple sequential void direct calls from MIR" {
     try expectContains(assign_body, "call void @hit(i32 2)");
     try expectNotContains(assign_body, "alloca");
     try expectNotContains(assign_body, "store");
+
+    const local_arg_body = try llvmFunctionBody(output.items, "define internal void @call_local_arg");
+    try expectContains(local_arg_body, "call void @hit(i32 1)");
+    try expectNotContains(local_arg_body, "alloca");
+    try expectNotContains(local_arg_body, "store");
+
+    const assigned_arg_body = try llvmFunctionBody(output.items, "define internal void @call_assigned_arg");
+    try expectContains(assigned_arg_body, "call void @hit(i32 1)");
+    try expectNotContains(assigned_arg_body, "alloca");
+    try expectNotContains(assigned_arg_body, "store");
 }
 
 test "LLVM emits pure local-only void functions from MIR" {

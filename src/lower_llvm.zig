@@ -2343,7 +2343,6 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirArgAt(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirArg {
-        _ = self;
         for (fn_mir.integer_facts) |fact| {
             if (sameMirSourceLocation(fact.source, source)) return .{ .integer_literal = fact.literal };
         }
@@ -2356,9 +2355,22 @@ const LlvmEmitter = struct {
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) return .{ .param = param.name.text };
                 }
+                if (mirFunctionHasLocal(fn_mir, instruction.detail)) {
+                    if (self.simpleMirLocalValueArg(function, fn_mir, instruction.detail, source)) |arg| return arg;
+                }
             }
         }
         return null;
+    }
+
+    fn simpleMirLocalValueArg(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8, use_source: mir.SourcePoint) ?SimpleMirArg {
+        if (self.simpleMirAssignmentSource(fn_mir, local_name)) |assigned_source| {
+            if (sameMirSourceLocation(assigned_source, use_source)) return null;
+            return self.simpleMirArgAt(function, fn_mir, assigned_source);
+        }
+        const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
+        if (sameMirSourceLocation(init_source, use_source)) return null;
+        return self.simpleMirArgAt(function, fn_mir, init_source);
     }
 
     fn blockOnlyContainsSimpleMirReturnInstructions(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) bool {
