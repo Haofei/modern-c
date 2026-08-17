@@ -1190,6 +1190,7 @@ pub const CEmitter = struct {
         param: []const u8,
         integer_literal: []const u8,
         bool_literal: bool,
+        nested_call: SimpleMirNestedCall,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -1341,6 +1342,11 @@ pub const CEmitter = struct {
                 .param => |name| try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(name)}),
                 .integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
                 .bool_literal => |value| try self.out.print(self.allocator, "return {s};\n", .{if (value) "true" else "false"}),
+                .nested_call => |call| {
+                    try self.out.appendSlice(self.allocator, "return ");
+                    try self.emitSimpleMirNestedCall(call);
+                    try self.out.appendSlice(self.allocator, ";\n");
+                },
                 .checked_binary => |binary| {
                     const helper = try self.checkedHelperName(binary.op, binary.type_name);
                     try self.out.print(self.allocator, "return {s}(", .{helper});
@@ -2245,16 +2251,21 @@ pub const CEmitter = struct {
         const block = fn_mir.blocks[0];
         const ret = simpleMirReturnInstruction(block) orelse return null;
         const return_value_id = ret.value_id;
+        var saw_return_value_call = false;
         for (block.instructions) |instruction| {
             if (instruction.kind == .return_value) return calls;
             if (instruction.kind != .call) continue;
             const source = instructionSourcePoint(instruction);
             if (!simpleMirDirectCallResultVoid(fn_mir, source)) {
                 if (return_value_id) |value_id| {
-                    if (std.mem.eql(u8, instruction.detail, value_id)) return calls;
+                    if (self.simpleMirCallFeedsReturnValue(fn_mir, block, source, value_id)) {
+                        saw_return_value_call = true;
+                        continue;
+                    }
                 }
                 return null;
             }
+            if (saw_return_value_call) return null;
             if (calls.count >= max_simple_mir_void_calls) return null;
             calls.calls[calls.count] = self.simpleMirDirectCallAtSource(function, fn_mir, source) orelse return null;
             calls.count += 1;
@@ -2296,6 +2307,20 @@ pub const CEmitter = struct {
             return sameMirSourceLocation(local_source, source);
         }
         return false;
+    }
+
+    fn simpleMirCallFeedsReturnValue(self: *CEmitter, fn_mir: mir.Function, block: mir.Block, source: mir.SourcePoint, value_id: []const u8) bool {
+        if (mirBlockHasCall(block, value_id)) {
+            for (block.instructions) |instruction| {
+                if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, value_id)) {
+                    return sameMirSourceLocation(instructionSourcePoint(instruction), source);
+                }
+            }
+        }
+        if (!mirFunctionHasLocal(fn_mir, value_id)) return false;
+        const local_source = self.simpleMirAssignmentSourceInBlock(block, value_id) orelse
+            self.simpleMirLocalInitSourceInBlock(block, value_id) orelse return false;
+        return sameMirSourceLocation(local_source, source);
     }
 
     fn simpleMirDirectVoidCallsInBlock(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, allow_empty: bool) ?SimpleMirDirectCalls {
@@ -2372,10 +2397,12 @@ pub const CEmitter = struct {
 
     fn simpleMirLocalInitReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {
         if (!mirBlockHasLocal(fn_mir.blocks[0], local_name)) return null;
+        if (simpleMirLocalHasInferredTypeFact(fn_mir, local_name)) return null;
         const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
         if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .checked_binary = binary };
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, init_source)) |unary| return .{ .checked_unary = unary };
         if (!simpleMirNoTrap(fn_mir)) return null;
+        if (self.simpleMirNestedCallAtSource(function, fn_mir, init_source)) |call| return .{ .nested_call = call };
         if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| return .{ .direct_call = call };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| return .{ .logical_not = arg };
@@ -2389,12 +2416,20 @@ pub const CEmitter = struct {
         return null;
     }
 
+    fn simpleMirLocalHasInferredTypeFact(fn_mir: mir.Function, local_name: []const u8) bool {
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind == .inferred_local and std.mem.eql(u8, fact.target_owner orelse "", local_name)) return true;
+        }
+        return false;
+    }
+
     fn simpleMirAssignmentReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {
         if (fn_mir.pointer_provenance_facts.len != 0) return null;
         const assigned_source = self.simpleMirAssignmentSource(fn_mir, local_name) orelse return null;
         if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, assigned_source)) |binary| return .{ .checked_binary = binary };
         if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, assigned_source)) |unary| return .{ .checked_unary = unary };
         if (!simpleMirNoTrap(fn_mir)) return null;
+        if (self.simpleMirNestedCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .nested_call = call };
         if (self.simpleMirDirectCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .direct_call = call };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, assigned_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, assigned_source)) |arg| return .{ .logical_not = arg };

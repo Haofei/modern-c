@@ -564,6 +564,15 @@ test "LLVM preserves MIR void calls before direct-call returns" {
         \\fn return_call_neg(a: i32) -> i32 {
         \\    return make(-a);
         \\}
+        \\fn return_local_call(a: i32) -> i32 {
+        \\    let x: i32 = make(a);
+        \\    return x;
+        \\}
+        \\fn return_assigned_call(a: i32) -> i32 {
+        \\    var x: i32 = 0;
+        \\    x = make(a);
+        \\    return x;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -589,6 +598,18 @@ test "LLVM preserves MIR void calls before direct-call returns" {
     try expectContains(neg_body, "ret i32 %t");
     try expectNotContains(neg_body, "alloca");
     try expectNotContains(neg_body, "store");
+
+    const local_call_body = try llvmFunctionBody(output.items, "define internal i32 @return_local_call");
+    try expectContains(local_call_body, "call i32 @make(i32 %a)");
+    try expectContains(local_call_body, "ret i32 %t");
+    try expectNotContains(local_call_body, "alloca");
+    try expectNotContains(local_call_body, "store");
+
+    const assigned_call_body = try llvmFunctionBody(output.items, "define internal i32 @return_assigned_call");
+    try expectContains(assigned_call_body, "call i32 @make(i32 %a)");
+    try expectContains(assigned_call_body, "ret i32 %t");
+    try expectNotContains(assigned_call_body, "alloca");
+    try expectNotContains(assigned_call_body, "store");
 }
 
 test "LLVM preserves MIR void calls before conditional returns" {
