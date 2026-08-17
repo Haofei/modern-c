@@ -4131,8 +4131,14 @@ pub const CEmitter = struct {
     fn simpleMirLocalInitReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {
         if (!mirBlockHasLocal(fn_mir.blocks[0], local_name)) return null;
         const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
-        if (simpleMirLocalHasInferredTypeFact(fn_mir, local_name)) {
+        if (simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) != null) {
             if (self.simpleMirEnumLiteralValueAtSource(fn_mir, init_source)) |literal| return .{ .enum_literal = literal };
+            if (self.simpleMirDirectCallAtSource(function, fn_mir, init_source)) |call| {
+                const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
+                const result = simpleMirTargetTypeFactKindAt(fn_mir, .direct_call_result, init_source) orelse return null;
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
+                return .{ .direct_call = call };
+            }
             return null;
         }
         if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .checked_binary = binary };
@@ -4163,11 +4169,13 @@ pub const CEmitter = struct {
         return null;
     }
 
-    fn simpleMirLocalHasInferredTypeFact(fn_mir: mir.Function, local_name: []const u8) bool {
+    fn simpleMirInferredLocalFactAt(fn_mir: mir.Function, local_name: []const u8, source: mir.SourcePoint) ?mir.TargetTypeFact {
         for (fn_mir.target_type_facts) |fact| {
-            if (fact.kind == .inferred_local and std.mem.eql(u8, fact.target_owner orelse "", local_name)) return true;
+            if (fact.kind == .inferred_local and
+                std.mem.eql(u8, fact.target_owner orelse "", local_name) and
+                sameMirSourceLocation(fact.source, source)) return fact;
         }
-        return false;
+        return null;
     }
 
     fn simpleMirAssignmentReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {

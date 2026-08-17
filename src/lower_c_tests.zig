@@ -5318,11 +5318,9 @@ test "lower-c grouped direct calls consume the outer MIR result fact" {
     var parsed = try test_support.parseCheckedModule("c_grouped_call_result.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_grouped_call_result.mc", .{}, false, null);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_grouped_call_result_fact_gate.mc", source, &complete_output);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -6699,9 +6697,9 @@ test "lower-c inferred local direct calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_call_types.mc", .{}, false, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint64_t count = make_count()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "return make_count();") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = mc_tmp") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "uint32_t * pointer = maybe_pointer()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "return maybe_pointer();") != null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "mc_trap_InvalidRepresentation()") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -6873,7 +6871,7 @@ test "lower-c inferred local enum and tagged-union calls require MIR types" {
     defer complete_output.deinit(std.testing.allocator);
     try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_inferred_local_enum_union_call_types.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "Mode mode = make_mode()") != null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "Token token = make_token()") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "return make_token();") != null);
 
     var missing_enum_result = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing_enum_result.deinit();

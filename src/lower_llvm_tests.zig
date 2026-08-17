@@ -6669,11 +6669,9 @@ test "LLVM grouped direct calls consume the outer MIR result fact" {
     var parsed = try test_support.parseCheckedModule("llvm_grouped_call_result.mc", source);
     defer parsed.deinit();
 
-    var complete = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
-    defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_grouped_call_result.mc", .{}, false, .riscv64, null);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_grouped_call_result_fact_gate.mc", source, &complete_output);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
@@ -7940,7 +7938,7 @@ test "LLVM inferred local direct calls require MIR types" {
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
     try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_inferred_local_call_types.mc", .{}, false, .riscv64, null);
-    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "%count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "@make_count") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
     defer missing.deinit();
