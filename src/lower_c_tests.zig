@@ -209,6 +209,14 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
         \\        return 2;
         \\    }
         \\}
+        \\fn choose_mixed_branch_effect_return(flag: bool, x: u32) -> u32 {
+        \\    if (flag) {
+        \\        hit(x);
+        \\        return 1;
+        \\    }
+        \\    g = x;
+        \\    return 2;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -310,6 +318,19 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
     try std.testing.expect(branch_effect_store < branch_effect_return2);
     try expectNotContains(branch_effect_body, "switch");
     try expectNotContains(branch_effect_body, "mc_tmp");
+
+    const mixed_branch_effect_body = try cFunctionBody(output.items, "static uint32_t choose_mixed_branch_effect_return(bool flag, uint32_t x)");
+    const mixed_branch_effect_if = std.mem.indexOf(u8, mixed_branch_effect_body, "if (flag)") orelse return error.TestUnexpectedResult;
+    const mixed_branch_effect_call = std.mem.indexOf(u8, mixed_branch_effect_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    const mixed_branch_effect_return1 = std.mem.indexOf(u8, mixed_branch_effect_body, "return 1;") orelse return error.TestUnexpectedResult;
+    const mixed_branch_effect_store = std.mem.indexOf(u8, mixed_branch_effect_body, "mc_race_store_u32(&g, (uint32_t)x);") orelse return error.TestUnexpectedResult;
+    const mixed_branch_effect_return2 = std.mem.indexOf(u8, mixed_branch_effect_body, "return 2;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(mixed_branch_effect_if < mixed_branch_effect_call);
+    try std.testing.expect(mixed_branch_effect_call < mixed_branch_effect_return1);
+    try std.testing.expect(mixed_branch_effect_return1 < mixed_branch_effect_store);
+    try std.testing.expect(mixed_branch_effect_store < mixed_branch_effect_return2);
+    try expectNotContains(mixed_branch_effect_body, "switch");
+    try expectNotContains(mixed_branch_effect_body, "mc_tmp");
 }
 
 test "lower-c emits simple void conditional direct calls from MIR" {
