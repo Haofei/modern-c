@@ -595,6 +595,61 @@ test "LLVM conditional global and call returns lower from MIR without body fallb
     try expectNotContains(call_body, "alloca");
 }
 
+test "LLVM conditional statement returns prefer MIR when fallback body exists" {
+    const source =
+        \\extern fn hit(value: u32) -> void;
+        \\extern fn make(value: u32) -> u32;
+        \\fn choose_call(flag: bool, value: u32) -> u32 {
+        \\    if (flag) {
+        \\        hit(value);
+        \\        return make(value);
+        \\    } else {
+        \\        return make(value);
+        \\    }
+        \\}
+    ;
+    const poison_source =
+        \\fn choose_call(flag: bool, value: u32) -> u32 {
+        \\    return 99;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("llvm_mir_fallback_poison.mc", source);
+    defer parsed.deinit();
+    var poison = try test_support.parseModule("llvm_mir_fallback_poison_body.mc", poison_source);
+    defer poison.deinit();
+
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls());
+    defer artifacts.deinit(std.testing.allocator);
+
+    const poison_body = poison.decls()[0].kind.fn_decl.body.?;
+    var fallback = [_]declaration_artifacts.FunctionBodyFallbackArtifact{.{
+        .name = "choose_call",
+        .syntax = poison_body,
+    }};
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        .{ .function_body_fallbacks = fallback[0..] },
+        &module_mir,
+        &output,
+        "llvm_mir_fallback_poison.mc",
+        .{},
+        false,
+        .riscv64,
+        false,
+        null,
+    );
+
+    const call_body = try llvmFunctionBody(output.items, "define internal i32 @choose_call");
+    try expectContains(call_body, "call void @hit(i32 %value)");
+    try expectContains(call_body, "call i32 @make(i32 %value)");
+    try expectNotContains(call_body, "ret i32 99");
+}
+
 test "LLVM loop grouped scalar returns lower from MIR without body fallback" {
     const source =
         \\extern fn hit(value: u16) -> void;

@@ -2850,6 +2850,60 @@ test "lower-c conditional global and call returns lower from MIR without body fa
     try expectNotContains(call_body, "mc_tmp");
 }
 
+test "lower-c conditional statement returns prefer MIR when fallback body exists" {
+    const source =
+        \\extern fn hit(value: u32) -> void;
+        \\extern fn make(value: u32) -> u32;
+        \\fn choose_call(flag: bool, value: u32) -> u32 {
+        \\    if (flag) {
+        \\        hit(value);
+        \\        return make(value);
+        \\    } else {
+        \\        return make(value);
+        \\    }
+        \\}
+    ;
+    const poison_source =
+        \\fn choose_call(flag: bool, value: u32) -> u32 {
+        \\    return 99;
+        \\}
+    ;
+    var parsed = try test_support.parseModule("c_mir_fallback_poison.mc", source);
+    defer parsed.deinit();
+    var poison = try test_support.parseModule("c_mir_fallback_poison_body.mc", poison_source);
+    defer poison.deinit();
+
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(std.testing.allocator, parsed.decls());
+    defer artifacts.deinit(std.testing.allocator);
+
+    const poison_body = poison.decls()[0].kind.fn_decl.body.?;
+    var fallback = [_]declaration_artifacts.FunctionBodyFallbackArtifact{.{
+        .name = "choose_call",
+        .syntax = poison_body,
+    }};
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try lower_c.appendCProfileWithMirArtifacts(
+        std.testing.allocator,
+        artifacts.codegen(),
+        .{ .function_body_fallbacks = fallback[0..] },
+        &module_mir,
+        &output,
+        .kernel,
+        "c_mir_fallback_poison.mc",
+        .{},
+        false,
+        null,
+    );
+
+    const call_body = try cFunctionBody(output.items, "static uint32_t choose_call(bool flag, uint32_t value)");
+    try expectContains(call_body, "hit(value);");
+    try expectContains(call_body, "return make(value);");
+    try expectNotContains(call_body, "99");
+}
+
 test "lower-c loop grouped scalar returns lower from MIR without body fallback" {
     const source =
         \\extern fn hit(value: u16) -> void;
