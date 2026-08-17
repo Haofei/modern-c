@@ -1323,6 +1323,16 @@ test "lower-c emits simple struct literal returns from MIR" {
         \\    var out: Pair = .{ .a = p.a, .b = p.b };
         \\    return out;
         \\}
+        \\fn assigned_pair(a: i32, b: i32) -> Pair {
+        \\    var out: Pair = .{ .a = a, .b = b };
+        \\    out = .{ .a = b, .b = a };
+        \\    return out;
+        \\}
+        \\fn assigned_field_pair(p: Pair) -> Pair {
+        \\    var out: Pair = .{ .a = p.a, .b = p.b };
+        \\    out = .{ .a = p.b, .b = p.a };
+        \\    return out;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1373,6 +1383,16 @@ test "lower-c emits simple struct literal returns from MIR" {
     const local_field_body = try cFunctionBody(output.items, "static Pair local_field_pair(Pair p)");
     try expectContains(local_field_body, "return (Pair){ .a = p.a, .b = p.b };");
     try expectNotContains(local_field_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static Pair assigned_pair(int32_t a, int32_t b)");
+    try expectContains(assigned_body, "return (Pair){ .a = b, .b = a };");
+    try expectNotContains(assigned_body, "return (Pair){ .a = a, .b = b };");
+    try expectNotContains(assigned_body, "mc_tmp");
+
+    const assigned_field_body = try cFunctionBody(output.items, "static Pair assigned_field_pair(Pair p)");
+    try expectContains(assigned_field_body, "return (Pair){ .a = p.b, .b = p.a };");
+    try expectNotContains(assigned_field_body, "return (Pair){ .a = p.a, .b = p.b };");
+    try expectNotContains(assigned_field_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before direct-call returns" {

@@ -1373,6 +1373,16 @@ test "LLVM emits simple struct literal returns from MIR" {
         \\    var out: Pair = .{ .a = p.a, .b = p.b };
         \\    return out;
         \\}
+        \\fn assigned_pair(a: i32, b: i32) -> Pair {
+        \\    var out: Pair = .{ .a = a, .b = b };
+        \\    out = .{ .a = b, .b = a };
+        \\    return out;
+        \\}
+        \\fn assigned_field_pair(p: Pair) -> Pair {
+        \\    var out: Pair = .{ .a = p.a, .b = p.b };
+        \\    out = .{ .a = p.b, .b = p.a };
+        \\    return out;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -1456,6 +1466,22 @@ test "LLVM emits simple struct literal returns from MIR" {
     try expectContains(local_field_body, "ret { i32, i32 } %t");
     try expectNotContains(local_field_body, "alloca");
     try expectNotContains(local_field_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @assigned_pair");
+    try expectContains(assigned_body, "insertvalue { i32, i32 } zeroinitializer, i32 %b, 0");
+    try expectContains(assigned_body, "i32 %a, 1");
+    try expectContains(assigned_body, "ret { i32, i32 } %t");
+    try expectNotContains(assigned_body, "insertvalue { i32, i32 } zeroinitializer, i32 %a, 0");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+
+    const assigned_field_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @assigned_field_pair");
+    try expectContains(assigned_field_body, "extractvalue { i32, i32 } %p, 1");
+    try expectContains(assigned_field_body, "extractvalue { i32, i32 } %p, 0");
+    try expectContains(assigned_field_body, "insertvalue { i32, i32 } zeroinitializer, i32 %t");
+    try expectContains(assigned_field_body, "ret { i32, i32 } %t");
+    try expectNotContains(assigned_field_body, "alloca");
+    try expectNotContains(assigned_field_body, "store");
 }
 
 test "LLVM preserves MIR void calls before direct-call returns" {
