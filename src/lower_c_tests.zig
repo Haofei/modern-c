@@ -488,6 +488,16 @@ test "lower-c emits simple void conditional direct calls from MIR" {
         \\fn call_not_arg(flag: bool) -> void {
         \\    hit_bool(!flag);
         \\}
+        \\fn loop_void(flag: bool) -> void {
+        \\    while flag {
+        \\        hit(7);
+        \\    }
+        \\}
+        \\fn loop_void_not(flag: bool) -> void {
+        \\    while !flag {
+        \\        hit(8);
+        \\    }
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -600,6 +610,20 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectContains(not_arg_body, "hit_bool(!flag);");
     try expectNotContains(not_arg_body, "bool c");
     try expectNotContains(not_arg_body, "switch");
+
+    const loop_void_body = try cFunctionBody(output.items, "static void loop_void(bool flag)");
+    const loop_void_while = std.mem.indexOf(u8, loop_void_body, "while (flag)") orelse return error.TestUnexpectedResult;
+    const loop_void_call = std.mem.indexOf(u8, loop_void_body, "hit(7);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop_void_while < loop_void_call);
+    try expectNotContains(loop_void_body, "switch");
+    try expectNotContains(loop_void_body, "mc_tmp");
+
+    const loop_void_not_body = try cFunctionBody(output.items, "static void loop_void_not(bool flag)");
+    const loop_void_not_while = std.mem.indexOf(u8, loop_void_not_body, "while (!flag)") orelse return error.TestUnexpectedResult;
+    const loop_void_not_call = std.mem.indexOf(u8, loop_void_not_body, "hit(8);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop_void_not_while < loop_void_not_call);
+    try expectNotContains(loop_void_not_body, "switch");
+    try expectNotContains(loop_void_not_body, "mc_tmp");
 }
 
 test "lower-c emits simple sequential void direct calls from MIR" {

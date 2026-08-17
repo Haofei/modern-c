@@ -1265,6 +1265,7 @@ const LlvmEmitter = struct {
         empty,
         statements: SimpleMirVoidStatements,
         conditional_statements: SimpleMirConditionalVoidStatements,
+        loop_statements: SimpleMirLoopVoidBody,
         direct_call: SimpleMirDirectCall,
         direct_calls: SimpleMirDirectCalls,
         conditional_direct_calls: SimpleMirConditionalVoidBody,
@@ -1344,6 +1345,11 @@ const LlvmEmitter = struct {
         condition: SimpleMirLoopCondition,
         body_block_index: usize,
         after_block_index: usize,
+    };
+
+    const SimpleMirLoopVoidBody = struct {
+        condition: SimpleMirLoopCondition,
+        body_block_index: usize,
     };
 
     const SimpleMirCondition = union(enum) {
@@ -1587,6 +1593,17 @@ const LlvmEmitter = struct {
                     _ = try self.emitSimpleMirVoidStatementSources(function, fn_mir, conditional.suffix_statements, sig_facts.name.span);
                     try self.emitReturnVoid(sig_facts.name.span);
                 },
+                .loop_statements => |loop| {
+                    const body_label = try self.nextLabel("while_body");
+                    const after_label = try self.nextLabel("while_after");
+                    const condition = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{loop.condition.name});
+                    const body_target = if (loop.condition.inverted) after_label else body_label;
+                    const after_target = if (loop.condition.inverted) body_label else after_label;
+                    try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, body_target, after_target, try self.debugCallSuffix(), body_label });
+                    _ = try self.emitSimpleMirVoidStatementSources(function, fn_mir, self.simpleMirVoidStatementSourcesInBlock(function, fn_mir, fn_mir.blocks[loop.body_block_index]).?, sig_facts.name.span);
+                    try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, body_target, after_target, try self.debugCallSuffix(), after_label });
+                    try self.emitReturnVoid(sig_facts.name.span);
+                },
                 .direct_call => |call| {
                     const span = if (self.simpleMirCallSource(fn_mir)) |source| spanFromMirSourcePoint(source) else sig_facts.name.span;
                     try self.emitSimpleMirDirectCall(call, null, span);
@@ -1772,6 +1789,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirConditionalEmptyVoidBody(function, fn_mir)) return .empty;
         if (self.simpleMirConditionalVoidStatements(function, fn_mir)) |conditional| return .{ .conditional_statements = conditional };
         if (self.simpleMirConditionalVoidBody(function, fn_mir)) |conditional| return .{ .conditional_direct_calls = conditional };
+        if (self.simpleMirLoopVoidBody(function, fn_mir)) |loop| return .{ .loop_statements = loop };
         const block = fn_mir.blocks[0];
         if (block.terminator != .fallthrough) return null;
         if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
@@ -1805,6 +1823,29 @@ const LlvmEmitter = struct {
         return simpleMirEntrySwitchBlockIsPure(function, entry) and
             simpleMirEmptyVoidBlock(function, fn_mir, then_block) and
             simpleMirEmptyVoidBlock(function, fn_mir, else_block);
+    }
+
+    fn simpleMirLoopVoidBody(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirLoopVoidBody {
+        if (fn_mir.return_ty != .void) return null;
+        if (fn_mir.blocks.len != 3 or fn_mir.pointer_provenance_facts.len != 0) return null;
+        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
+        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+        const entry = fn_mir.blocks[0];
+        if (entry.terminator != .branch or entry.successors.len != 2) return null;
+        const condition = self.simpleMirLoopConditionParam(function, entry) orelse return null;
+        const body_index = entry.successors[0];
+        const after_index = entry.successors[1];
+        if (body_index >= fn_mir.blocks.len or after_index >= fn_mir.blocks.len) return null;
+        const body_block = fn_mir.blocks[body_index];
+        const after_block = fn_mir.blocks[after_index];
+        if (!std.mem.eql(u8, body_block.kind, "loop_body") or !std.mem.eql(u8, after_block.kind, "loop_after")) return null;
+        if (body_block.terminator != .jump or body_block.terminator.jump != body_index) return null;
+        if (after_block.terminator != .fallthrough or !simpleMirEmptyVoidBlock(function, fn_mir, after_block)) return null;
+        const body_sources = self.simpleMirVoidStatementSourcesInBlock(function, fn_mir, body_block) orelse return null;
+        if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, body_block)) return null;
+        const body_traps = self.simpleMirVoidStatementSourcesTrapCount(function, fn_mir, body_sources) orelse return null;
+        if (fn_mir.trap_edges.len != body_traps) return null;
+        return .{ .condition = condition, .body_block_index = body_index };
     }
 
     fn simpleMirConditionalEmptyVoidCalls(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirDirectCalls {
@@ -2179,7 +2220,7 @@ const LlvmEmitter = struct {
         const body_block = fn_mir.blocks[body_index];
         const after_block = fn_mir.blocks[after_index];
         if (!std.mem.eql(u8, body_block.kind, "loop_body") or !std.mem.eql(u8, after_block.kind, "loop_after")) return null;
-        if (body_block.terminator != .jump) return null;
+        if (body_block.terminator != .jump or body_block.terminator.jump != body_index) return null;
         if (after_block.terminator != .return_) return null;
         const body_sources = self.simpleMirVoidStatementSourcesInBlock(function, fn_mir, body_block) orelse return null;
         if (!self.blockOnlyContainsSimpleMirVoidStatementInstructions(function, fn_mir, body_block)) return null;
