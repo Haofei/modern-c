@@ -651,6 +651,36 @@ test "LLVM preserves MIR void calls before direct-call returns" {
     try expectNotContains(side_then_local_call_add_body, "store");
 }
 
+test "LLVM emits local global returns from MIR" {
+    const source =
+        \\global g: u32 = 0;
+        \\fn local_global_return() -> u32 {
+        \\    let x: u32 = g;
+        \\    return x;
+        \\}
+        \\fn assigned_global_return() -> u32 {
+        \\    var x: u32 = 0;
+        \\    x = g;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_local_global_return.mc", source, &output);
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_global_return");
+    try expectContains(local_body, "load atomic i32, ptr @g unordered, align 4");
+    try expectContains(local_body, "ret i32 %t");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i32 @assigned_global_return");
+    try expectContains(assigned_body, "load atomic i32, ptr @g unordered, align 4");
+    try expectContains(assigned_body, "ret i32 %t");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+}
+
 test "LLVM preserves MIR void calls before conditional returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

@@ -1190,6 +1190,7 @@ pub const CEmitter = struct {
         param: []const u8,
         integer_literal: []const u8,
         bool_literal: bool,
+        global_load: []const u8,
         nested_call: SimpleMirNestedCall,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
@@ -1340,6 +1341,11 @@ pub const CEmitter = struct {
                 .param => |name| try self.out.print(self.allocator, "return {s};\n", .{try self.cIdent(name)}),
                 .integer_literal => |literal| try self.out.print(self.allocator, "return {s};\n", .{literal}),
                 .bool_literal => |value| try self.out.print(self.allocator, "return {s};\n", .{if (value) "true" else "false"}),
+                .global_load => |name| {
+                    try self.out.appendSlice(self.allocator, "return ");
+                    try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission);
+                    try self.out.appendSlice(self.allocator, ";\n");
+                },
                 .nested_call => |call| {
                     try self.out.appendSlice(self.allocator, "return ");
                     try self.emitSimpleMirNestedCall(call);
@@ -2398,6 +2404,7 @@ pub const CEmitter = struct {
         if (self.simpleMirNestedCallAtSource(function, fn_mir, init_source)) |call| return .{ .nested_call = call };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, init_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| return .{ .logical_not = arg };
+        if (self.simpleMirGlobalAtSource(function, fn_mir, init_source)) |name| return .{ .global_load = name };
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = name },
@@ -2425,6 +2432,7 @@ pub const CEmitter = struct {
         if (self.simpleMirNestedCallAtSource(function, fn_mir, assigned_source)) |call| return .{ .nested_call = call };
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, assigned_source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, assigned_source)) |arg| return .{ .logical_not = arg };
+        if (self.simpleMirGlobalAtSource(function, fn_mir, assigned_source)) |name| return .{ .global_load = name };
         if (self.simpleMirArgAt(function, fn_mir, assigned_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = name },
@@ -2466,6 +2474,20 @@ pub const CEmitter = struct {
             }
         }
         return source;
+    }
+
+    fn simpleMirGlobalAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?[]const u8 {
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .expr or !sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                for (function.signature.params) |param| {
+                    if (std.mem.eql(u8, instruction.detail, param.name.text)) return null;
+                }
+                if (mirFunctionHasLocal(fn_mir, instruction.detail)) return null;
+                if (self.globals.contains(instruction.detail)) return instruction.detail;
+            }
+        }
+        return null;
     }
 
     fn simpleMirLocalInitSource(self: *CEmitter, fn_mir: mir.Function, local_name: []const u8) ?mir.SourcePoint {
@@ -2522,7 +2544,6 @@ pub const CEmitter = struct {
     }
 
     fn blockOnlyContainsSimpleMirReturnInstructions(self: *CEmitter, function: anytype, fn_mir: mir.Function) bool {
-        _ = self;
         const block = fn_mir.blocks[0];
         for (block.instructions) |instruction| switch (instruction.kind) {
             .param, .local, .assign, .target_type, .integer_literal_conversion, .binary, .unary, .add_overflow, .return_value => {},
@@ -2534,6 +2555,7 @@ pub const CEmitter = struct {
                 } else {
                     if (mirBlockHasLocal(block, instruction.detail)) continue;
                     if (mirBlockHasCall(block, instruction.detail)) continue;
+                    if (self.globals.contains(instruction.detail)) continue;
                     return false;
                 }
             },

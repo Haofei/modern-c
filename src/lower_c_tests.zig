@@ -633,6 +633,35 @@ test "lower-c preserves MIR void calls before direct-call returns" {
     try expectNotContains(side_then_local_call_add_body, "mc_tmp");
 }
 
+test "lower-c emits local global returns from MIR" {
+    const source =
+        \\global g: u32 = 0;
+        \\fn local_global_return() -> u32 {
+        \\    let x: u32 = g;
+        \\    return x;
+        \\}
+        \\fn assigned_global_return() -> u32 {
+        \\    var x: u32 = 0;
+        \\    x = g;
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_local_global_return.mc", source, &output);
+
+    const local_body = try cFunctionBody(output.items, "static uint32_t local_global_return(void)");
+    try expectContains(local_body, "return ((uint32_t)mc_race_load_u32(&g));");
+    try expectNotContains(local_body, "uint32_t x");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static uint32_t assigned_global_return(void)");
+    try expectContains(assigned_body, "return ((uint32_t)mc_race_load_u32(&g));");
+    try expectNotContains(assigned_body, "uint32_t x");
+    try expectNotContains(assigned_body, "x =");
+    try expectNotContains(assigned_body, "mc_tmp");
+}
+
 test "lower-c preserves MIR void calls before conditional returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
