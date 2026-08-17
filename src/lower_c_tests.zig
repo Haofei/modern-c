@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_c = @import("lower_c.zig");
 const lower_c_expr = @import("lower_c_expr.zig");
@@ -37,6 +38,12 @@ fn appendCProfileWithMirDeclsTest(allocator: std.mem.Allocator, decls: []ast.Dec
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
     try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), artifacts.codegenFunctionBodies(), module_mir, out, profile, source_path, checks, stub_asm, reporter);
+}
+
+fn appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: ?[]const u8, checks: backend_mod.Checks, stub_asm: bool, reporter: ?*diagnostics.Reporter) !void {
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
+    defer artifacts.deinit(allocator);
+    try lower_c.appendCProfileWithMirArtifacts(allocator, artifacts.codegen(), declaration_artifacts.CodegenFunctionBodyArtifacts.empty, module_mir, out, profile, source_path, checks, stub_asm, reporter);
 }
 
 fn appendCSourceMapDeclsTest(allocator: std.mem.Allocator, decls: []ast.Decl, out: *std.ArrayList(u8), profile: lower_c.Profile, source_path: []const u8, generated_c_path: ?[]const u8) !void {
@@ -1363,7 +1370,7 @@ test "lower-c emits simple struct literal returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_mir_struct_literal_returns.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_struct_literal_returns.mc", source, &output);
 
     const make_body = try cFunctionBody(output.items, "static Pair make_pair(int32_t a, int32_t b)");
     try expectContains(make_body, "return (Pair){ .a = a, .b = b };");
@@ -1673,6 +1680,15 @@ fn appendCheckedCTest(source_name: []const u8, source: []const u8, output: *std.
     defer parsed.deinit();
 
     try appendCDeclsTest(std.testing.allocator, parsed.decls(), output);
+}
+
+fn appendCheckedCTestNoFunctionBodyFallback(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
+    var parsed = try test_support.parseCheckedModule(source_name, source);
+    defer parsed.deinit();
+
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, output, .kernel, source_name, .{}, false, null);
 }
 
 test "lower-c synthesized function-pointer names encode pointer mutability" {

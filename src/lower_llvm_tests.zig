@@ -2,6 +2,7 @@ const std = @import("std");
 
 const ast = @import("ast.zig");
 const backend_mod = @import("backend.zig");
+const declaration_artifacts = @import("declaration_artifacts.zig");
 const diagnostics = @import("diagnostics.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const lower_llvm_prelude = @import("lower_llvm_prelude.zig");
@@ -1413,7 +1414,7 @@ test "LLVM emits simple struct literal returns from MIR" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_mir_struct_literal_returns.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_struct_literal_returns.mc", source, &output);
 
     const make_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @make_pair");
     try expectContains(make_body, "insertvalue { i32, i32 } zeroinitializer, i32 %a, 0");
@@ -1759,6 +1760,20 @@ fn appendLlvmCheckedMirProfileDeclsTest(allocator: std.mem.Allocator, decls: []a
     var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
     defer artifacts.deinit(allocator);
     try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), artifacts.codegenFunctionBodies(), module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
+}
+
+fn appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(allocator: std.mem.Allocator, decls: []ast.Decl, module_mir: *const mir.Module, output: *std.ArrayList(u8), source_path: []const u8, checks: backend_mod.Checks, stub_asm: bool, target: backend_mod.TargetArch, linux_kernel: bool, reporter: ?*diagnostics.Reporter) !void {
+    var artifacts = try test_artifact_support.collectArtifactsFromDecls(allocator, decls);
+    defer artifacts.deinit(allocator);
+    try lower_llvm.appendLlvmCheckedMirArtifacts(allocator, artifacts.codegen(), declaration_artifacts.CodegenFunctionBodyArtifacts.empty, module_mir, output, source_path, checks, stub_asm, target, linux_kernel, reporter);
+}
+
+fn appendLlvmTestNoFunctionBodyFallback(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
+    var parsed = try test_support.parseModule(source_name, source);
+    defer parsed.deinit();
+    var module_mir = try mir.buildOptFromDecls(std.testing.allocator, parsed.decls(), .{});
+    defer module_mir.deinit();
+    try appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &module_mir, output, source_name, .{}, false, .riscv64, false, null);
 }
 
 fn appendLlvmTargetTest(source_name: []const u8, source: []const u8, target: @import("backend.zig").TargetArch, output: *std.ArrayList(u8)) !void {
