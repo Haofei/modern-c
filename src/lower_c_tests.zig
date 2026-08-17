@@ -265,6 +265,13 @@ test "lower-c emits simple void conditional direct calls from MIR" {
         \\        hit(y);
         \\    }
         \\}
+        \\fn choose_void_checked_args(flag: bool, a: i32, b: i32) -> void {
+        \\    if (flag) {
+        \\        hit(a + b);
+        \\    } else {
+        \\        hit(a - b);
+        \\    }
+        \\}
         \\extern fn hit_bool(value: bool) -> void;
         \\fn call_compare_arg(a: i32, b: i32) -> void {
         \\    hit_bool(a < b);
@@ -312,6 +319,13 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectNotContains(local_args_body, "int32_t y");
     try expectNotContains(local_args_body, "y =");
     try expectNotContains(local_args_body, "switch");
+
+    const checked_args_body = try cFunctionBody(output.items, "static void choose_void_checked_args(bool flag, int32_t a, int32_t b)");
+    try expectContains(checked_args_body, "if (flag)");
+    try expectContains(checked_args_body, "hit(mc_checked_add_i32(a, b));");
+    try expectContains(checked_args_body, "hit(mc_checked_sub_i32(a, b));");
+    try expectNotContains(checked_args_body, "mc_tmp");
+    try expectNotContains(checked_args_body, "switch");
 
     const compare_arg_body = try cFunctionBody(output.items, "static void call_compare_arg(int32_t a, int32_t b)");
     try expectContains(compare_arg_body, "hit_bool((a < b));");

@@ -248,6 +248,13 @@ test "LLVM emits simple void conditional direct calls from MIR" {
         \\        hit(y);
         \\    }
         \\}
+        \\fn choose_void_checked_args(flag: bool, a: i32, b: i32) -> void {
+        \\    if (flag) {
+        \\        hit(a + b);
+        \\    } else {
+        \\        hit(a - b);
+        \\    }
+        \\}
         \\extern fn hit_bool(value: bool) -> void;
         \\fn call_compare_arg(a: i32, b: i32) -> void {
         \\    hit_bool(a < b);
@@ -295,6 +302,15 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try expectNotContains(local_args_body, "alloca");
     try expectNotContains(local_args_body, "store");
     try expectNotContains(local_args_body, "switch");
+
+    const checked_args_body = try llvmFunctionBody(output.items, "define internal void @choose_void_checked_args");
+    try expectContains(checked_args_body, "br i1 %flag, label %bb_if_then");
+    try expectContains(checked_args_body, "@llvm.sadd.with.overflow.i32");
+    try expectContains(checked_args_body, "@llvm.ssub.with.overflow.i32");
+    try expectContains(checked_args_body, "call void @hit(i32 %t");
+    try expectNotContains(checked_args_body, "alloca");
+    try expectNotContains(checked_args_body, "store");
+    try expectNotContains(checked_args_body, "switch");
 
     const compare_arg_body = try llvmFunctionBody(output.items, "define internal void @call_compare_arg");
     try expectContains(compare_arg_body, "icmp slt i32 %a, %b");

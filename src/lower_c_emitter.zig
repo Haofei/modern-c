@@ -1529,7 +1529,7 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirConditionalVoidBody(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalVoidBody {
-        if (fn_mir.blocks.len != 4 or fn_mir.trap_edges.len != 0 or fn_mir.pointer_provenance_facts.len != 0) return null;
+        if (fn_mir.blocks.len < 4 or fn_mir.pointer_provenance_facts.len != 0) return null;
         const entry = fn_mir.blocks[0];
         if (entry.terminator != .switch_ or entry.successors.len != 2) return null;
         const prefix_calls = self.simpleMirPrefixVoidCallsBeforeSwitch(function, fn_mir, entry) orelse return null;
@@ -1545,6 +1545,7 @@ pub const CEmitter = struct {
         if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
         const then_calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, then_block, true) orelse return null;
         const else_calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, else_block, true) orelse return null;
+        if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(then_calls) + simpleMirDirectCallsTrapCount(else_calls)) return null;
         return .{ .prefix_calls = prefix_calls, .condition = condition, .then_calls = then_calls, .else_calls = else_calls };
     }
 
