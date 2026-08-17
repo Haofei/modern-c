@@ -1738,6 +1738,69 @@ test "LLVM emits scalar comparison returns from MIR" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "LLVM emits checked arithmetic returns from MIR without body fallback" {
+    const source =
+        \\fn add_u32(a: u32, b: u32) -> u32 {
+        \\    return a + b;
+        \\}
+        \\fn sub_i32(a: i32, b: i32) -> i32 {
+        \\    return a - b;
+        \\}
+        \\fn local_add(a: u32, b: u32) -> u32 {
+        \\    let out: u32 = a + b;
+        \\    return out;
+        \\}
+        \\fn assigned_sub(a: i32, b: i32) -> i32 {
+        \\    var out: i32 = a;
+        \\    out = a - b;
+        \\    return out;
+        \\}
+        \\fn choose_add(flag: bool, a: u32, b: u32) -> u32 {
+        \\    if (flag) {
+        \\        return a + b;
+        \\    } else {
+        \\        return a - b;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_checked_arithmetic_returns.mc", source, &output);
+
+    const add_body = try llvmFunctionBody(output.items, "define internal i32 @add_u32");
+    try expectContains(add_body, "@llvm.uadd.with.overflow.i32");
+    try expectContains(add_body, "ret i32 %t");
+    try expectNotContains(add_body, "alloca");
+    try expectNotContains(add_body, "store");
+
+    const sub_body = try llvmFunctionBody(output.items, "define internal i32 @sub_i32");
+    try expectContains(sub_body, "@llvm.ssub.with.overflow.i32");
+    try expectContains(sub_body, "ret i32 %t");
+    try expectNotContains(sub_body, "alloca");
+    try expectNotContains(sub_body, "store");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i32 @local_add");
+    try expectContains(local_body, "@llvm.uadd.with.overflow.i32");
+    try expectContains(local_body, "ret i32 %t");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i32 @assigned_sub");
+    try expectContains(assigned_body, "@llvm.ssub.with.overflow.i32");
+    try expectContains(assigned_body, "ret i32 %t");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+
+    const choose_body = try llvmFunctionBody(output.items, "define internal i32 @choose_add");
+    try expectContains(choose_body, "br i1 %flag");
+    try expectContains(choose_body, "@llvm.uadd.with.overflow.i32");
+    try expectContains(choose_body, "@llvm.usub.with.overflow.i32");
+    try expectContains(choose_body, "ret i32 %t");
+    try expectNotContains(choose_body, "alloca");
+    try expectNotContains(choose_body, "store");
+    try expectNotContains(choose_body, "switch");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

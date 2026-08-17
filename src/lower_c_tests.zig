@@ -1610,6 +1610,62 @@ test "lower-c emits scalar comparison returns from MIR" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "lower-c emits checked arithmetic returns from MIR without body fallback" {
+    const source =
+        \\fn add_u32(a: u32, b: u32) -> u32 {
+        \\    return a + b;
+        \\}
+        \\fn sub_i32(a: i32, b: i32) -> i32 {
+        \\    return a - b;
+        \\}
+        \\fn local_add(a: u32, b: u32) -> u32 {
+        \\    let out: u32 = a + b;
+        \\    return out;
+        \\}
+        \\fn assigned_sub(a: i32, b: i32) -> i32 {
+        \\    var out: i32 = a;
+        \\    out = a - b;
+        \\    return out;
+        \\}
+        \\fn choose_add(flag: bool, a: u32, b: u32) -> u32 {
+        \\    if (flag) {
+        \\        return a + b;
+        \\    } else {
+        \\        return a - b;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_checked_arithmetic_returns.mc", source, &output);
+
+    const add_body = try cFunctionBody(output.items, "static uint32_t add_u32(uint32_t a, uint32_t b)");
+    try expectContains(add_body, "return mc_checked_add_u32(a, b);");
+    try expectNotContains(add_body, "mc_tmp");
+
+    const sub_body = try cFunctionBody(output.items, "static int32_t sub_i32(int32_t a, int32_t b)");
+    try expectContains(sub_body, "return mc_checked_sub_i32(a, b);");
+    try expectNotContains(sub_body, "mc_tmp");
+
+    const local_body = try cFunctionBody(output.items, "static uint32_t local_add(uint32_t a, uint32_t b)");
+    try expectContains(local_body, "return mc_checked_add_u32(a, b);");
+    try expectNotContains(local_body, "uint32_t out");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static int32_t assigned_sub(int32_t a, int32_t b)");
+    try expectContains(assigned_body, "return mc_checked_sub_i32(a, b);");
+    try expectNotContains(assigned_body, "int32_t out");
+    try expectNotContains(assigned_body, "out =");
+    try expectNotContains(assigned_body, "mc_tmp");
+
+    const choose_body = try cFunctionBody(output.items, "static uint32_t choose_add(bool flag, uint32_t a, uint32_t b)");
+    try expectContains(choose_body, "if (flag) {");
+    try expectContains(choose_body, "return mc_checked_add_u32(a, b);");
+    try expectContains(choose_body, "return mc_checked_sub_u32(a, b);");
+    try expectNotContains(choose_body, "mc_tmp");
+    try expectNotContains(choose_body, "switch");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

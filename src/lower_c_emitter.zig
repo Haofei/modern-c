@@ -1430,7 +1430,7 @@ pub const CEmitter = struct {
         const simple_return = self.simpleMirReturn(function, fn_mir);
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
-                break :blk self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir, simpleMirReturnAllowsTrapBlocks(fn_mir, ret)) orelse return false;
+                break :blk self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir, self.simpleMirReturnAllowsTrapBlocks(fn_mir, ret)) orelse return false;
             }
             break :blk null;
         } else null;
@@ -2752,12 +2752,16 @@ pub const CEmitter = struct {
         };
     }
 
-    fn simpleMirReturnAllowsTrapBlocks(fn_mir: mir.Function, ret: SimpleMirReturn) bool {
+    fn simpleMirReturnAllowsTrapBlocks(self: *const CEmitter, fn_mir: mir.Function, ret: SimpleMirReturn) bool {
         return switch (ret) {
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call),
-            .checked_binary => |binary| fn_mir.trap_edges.len == 1 and simpleMirCheckedBinaryUsesParamField(binary),
+            .checked_binary => |binary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
             else => false,
         };
+    }
+
+    fn noFunctionBodyFallbacksAvailable(self: *const CEmitter) bool {
+        return self.function_bodies.function_body_fallbacks.len == 0;
     }
 
     fn simpleMirCheckedBinaryUsesParamField(binary: SimpleMirCheckedBinary) bool {
