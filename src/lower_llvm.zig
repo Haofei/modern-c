@@ -1876,8 +1876,8 @@ const LlvmEmitter = struct {
                 const instruction = block.instructions[scan_index];
                 if (instruction.kind == .return_value) return null;
                 if (instruction.kind == .target_type or instruction.kind == .integer_literal_conversion) continue;
-                if (instruction.kind != .expr and instruction.kind != .call) return null;
-                if (instruction.kind == .call and !self.noFunctionBodyFallbacksAvailable()) return null;
+                if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .unary) return null;
+                if ((instruction.kind == .call or instruction.kind == .unary) and !self.noFunctionBodyFallbacksAvailable()) return null;
                 const value_source = instructionSourcePoint(instruction);
                 const arg = self.simpleMirCallArgAt(function, fn_mir, value_source) orelse return null;
                 result.fields[result.field_count] = .{
@@ -1935,8 +1935,8 @@ const LlvmEmitter = struct {
                 const instruction = block.instructions[scan_index];
                 if (instruction.kind == .return_value) return null;
                 if (instruction.kind == .target_type or instruction.kind == .integer_literal_conversion) continue;
-                if (instruction.kind != .expr and instruction.kind != .call) return null;
-                if (instruction.kind == .call and !self.noFunctionBodyFallbacksAvailable()) return null;
+                if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .unary) return null;
+                if ((instruction.kind == .call or instruction.kind == .unary) and !self.noFunctionBodyFallbacksAvailable()) return null;
                 const value_source = instructionSourcePoint(instruction);
                 result.items[result.item_count] = self.simpleMirCallArgAt(function, fn_mir, value_source) orelse return null;
                 result.item_count += 1;

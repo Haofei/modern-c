@@ -2432,6 +2432,27 @@ test "lower-c array literal call elements lower from MIR in lexical order" {
     try expectContains(body, "return (mc_array_u32_2){ .elems = { mark(1), mark(2) } };");
 }
 
+test "lower-c literal unary components lower from MIR without body fallback" {
+    const source =
+        \\struct Flag { value: bool }
+        \\fn struct_ops(flag: bool) -> Flag {
+        \\    return .{ .value = !flag };
+        \\}
+        \\fn array_ops(flag: bool) -> [1]bool {
+        \\    return .{ !flag };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_literal_unary_components.mc", source, &output);
+
+    const struct_body = try cFunctionBody(output.items, "static Flag struct_ops(bool flag)");
+    try expectContains(struct_body, "return (Flag){ .value = !flag };");
+
+    const array_body = try cFunctionBody(output.items, "static mc_array_bool_1 array_ops(bool flag)");
+    try expectContains(array_body, "return (mc_array_bool_1){ .elems = { !flag } };");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;
