@@ -3783,6 +3783,34 @@ test "lower-c local and assigned explicit casts lower from MIR without body fall
     try expectNotContains(assigned_body, "mc_tmp");
 }
 
+test "lower-c local and assigned conversion calls lower from MIR without body fallback" {
+    const source =
+        \\fn local_conversion(value: u64) -> u8 {
+        \\    let narrowed = u8.wrap_from(value);
+        \\    return narrowed;
+        \\}
+        \\fn assigned_conversion(value: u64) -> u8 {
+        \\    var narrowed: u8 = 0;
+        \\    narrowed = u8.wrap_from(value);
+        \\    return narrowed;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_conversion_return.mc", source, &output);
+
+    const local_body = try cFunctionBody(output.items, "static uint8_t local_conversion(uint64_t value)");
+    try expectContains(local_body, "return ((uint8_t)(value));");
+    try expectNotContains(local_body, "uint8_t narrowed");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static uint8_t assigned_conversion(uint64_t value)");
+    try expectContains(assigned_body, "return ((uint8_t)(value));");
+    try expectNotContains(assigned_body, "uint8_t narrowed");
+    try expectNotContains(assigned_body, "narrowed =");
+    try expectNotContains(assigned_body, "mc_tmp");
+}
+
 test "lower-c cast deref pointee requires MIR expression result" {
     const source =
         \\fn read(p: *mut u32) -> u32 {

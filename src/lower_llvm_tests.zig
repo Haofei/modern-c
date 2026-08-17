@@ -4067,6 +4067,35 @@ test "LLVM local and assigned explicit casts lower from MIR without body fallbac
     try expectNotContains(assigned_body, "store");
 }
 
+test "LLVM local and assigned conversion calls lower from MIR without body fallback" {
+    const source =
+        \\fn local_conversion(value: u64) -> u8 {
+        \\    let narrowed = u8.wrap_from(value);
+        \\    return narrowed;
+        \\}
+        \\fn assigned_conversion(value: u64) -> u8 {
+        \\    var narrowed: u8 = 0;
+        \\    narrowed = u8.wrap_from(value);
+        \\    return narrowed;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_assigned_conversion_return.mc", source, &output);
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i8 @local_conversion");
+    try expectContains(local_body, "trunc i64 %value to i8");
+    try expectContains(local_body, "ret i8 %t");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i8 @assigned_conversion");
+    try expectContains(assigned_body, "trunc i64 %value to i8");
+    try expectContains(assigned_body, "ret i8 %t");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+}
+
 test "LLVM implicit view const narrowing requires MIR source and target type facts" {
     const source =
         \\fn narrow(xs: []mut u8) -> []const u8 { return xs; }
