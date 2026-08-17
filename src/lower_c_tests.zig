@@ -16452,7 +16452,7 @@ test "lower-c sanitizes C header names used as fields" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_field_reserved_names.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_field_reserved_names.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t offsetof_;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t uint32_t_;") != null);
