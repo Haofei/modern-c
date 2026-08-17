@@ -2719,6 +2719,7 @@ const LlvmEmitter = struct {
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or
                     std.mem.eql(u8, instruction.detail, "bool") or
+                    std.mem.eql(u8, instruction.detail, "char") or
                     std.mem.eql(u8, instruction.detail, "literal")) continue;
                 if ((std.mem.eql(u8, instruction.detail, "add") or
                     std.mem.eql(u8, instruction.detail, "sub") or

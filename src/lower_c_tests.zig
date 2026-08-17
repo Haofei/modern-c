@@ -901,6 +901,15 @@ test "lower-c emits simple global stores from MIR" {
         \\fn store_literal() {
         \\    g = 7;
         \\}
+        \\fn store_char() {
+        \\    byte = 'A';
+        \\}
+        \\fn store_bool_literal() {
+        \\    flag = true;
+        \\}
+        \\fn store_field(p: Pair) {
+        \\    g = p.a;
+        \\}
         \\fn store_global() {
         \\    h = g;
         \\}
@@ -1029,6 +1038,18 @@ test "lower-c emits simple global stores from MIR" {
     const literal_body = try cFunctionBody(output.items, "static void store_literal(void)");
     try expectContains(literal_body, "mc_race_store_u32(&g, (uint32_t)7);");
     try expectNotContains(literal_body, "mc_tmp");
+
+    const char_body = try cFunctionBody(output.items, "static void store_char(void)");
+    try expectContains(char_body, "mc_race_store_u8(&byte, (uint8_t)65);");
+    try expectNotContains(char_body, "mc_tmp");
+
+    const bool_literal_body = try cFunctionBody(output.items, "static void store_bool_literal(void)");
+    try expectContains(bool_literal_body, "mc_race_store_bool(&flag, (bool)true);");
+    try expectNotContains(bool_literal_body, "mc_tmp");
+
+    const field_body = try cFunctionBody(output.items, "static void store_field(Pair p)");
+    try expectContains(field_body, "mc_race_store_u32(&g, (uint32_t)p.a);");
+    try expectNotContains(field_body, "mc_tmp");
 
     const global_body = try cFunctionBody(output.items, "static void store_global(void)");
     try expectContains(global_body, "mc_race_store_u32(&h, (uint32_t)((uint32_t)mc_race_load_u32(&g)));");

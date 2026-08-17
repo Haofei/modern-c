@@ -1622,6 +1622,15 @@ test "LLVM emits simple global stores from MIR" {
         \\fn store_literal() {
         \\    g = 7;
         \\}
+        \\fn store_char() {
+        \\    byte = 'A';
+        \\}
+        \\fn store_bool_literal() {
+        \\    flag = true;
+        \\}
+        \\fn store_field(p: Pair) {
+        \\    g = p.a;
+        \\}
         \\fn store_global() {
         \\    h = g;
         \\}
@@ -1750,6 +1759,22 @@ test "LLVM emits simple global stores from MIR" {
     const literal_body = try llvmFunctionBody(output.items, "define internal void @store_literal");
     try expectContains(literal_body, "store atomic i32 7, ptr @g unordered, align 4");
     try expectNotContains(literal_body, "alloca");
+
+    const char_body = try llvmFunctionBody(output.items, "define internal void @store_char");
+    try expectContains(char_body, "store atomic i8 65, ptr @byte unordered, align 1");
+    try expectNotContains(char_body, "alloca");
+
+    const bool_literal_body = try llvmFunctionBody(output.items, "define internal void @store_bool_literal");
+    try expectContains(bool_literal_body, "zext i1 1 to i8");
+    try expectContains(bool_literal_body, "store atomic i8 %t");
+    try expectContains(bool_literal_body, "ptr @flag unordered, align 1");
+    try expectNotContains(bool_literal_body, "alloca");
+
+    const field_body = try llvmFunctionBody(output.items, "define internal void @store_field");
+    try expectContains(field_body, "extractvalue { i32, i32 } %p, 0");
+    try expectContains(field_body, "store atomic i32 %t");
+    try expectContains(field_body, "ptr @g unordered, align 4");
+    try expectNotContains(field_body, "alloca");
 
     const global_body = try llvmFunctionBody(output.items, "define internal void @store_global");
     try expectContains(global_body, "load atomic i32, ptr @g unordered, align 4");
