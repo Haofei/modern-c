@@ -1328,6 +1328,7 @@ test "LLVM emits simple struct literal returns from MIR" {
     const source =
         \\struct Pair { a: i32, b: i32 }
         \\struct Flags { ok: bool }
+        \\extern fn hit(value: i32) -> void;
         \\fn make_pair(a: i32, b: i32) -> Pair {
         \\    return .{ .a = a, .b = b };
         \\}
@@ -1382,6 +1383,32 @@ test "LLVM emits simple struct literal returns from MIR" {
         \\    var out: Pair = .{ .a = p.a, .b = p.b };
         \\    out = .{ .a = p.b, .b = p.a };
         \\    return out;
+        \\}
+        \\fn loop_pair(flag: bool, a: i32, b: i32) -> Pair {
+        \\    while (flag) {
+        \\    }
+        \\    return .{ .a = a, .b = b };
+        \\}
+        \\fn loop_local_pair(flag: bool, a: i32, b: i32) -> Pair {
+        \\    while (flag) {
+        \\    }
+        \\    var out: Pair = .{ .a = a, .b = b };
+        \\    return out;
+        \\}
+        \\fn side_then_pair(a: i32, b: i32) -> Pair {
+        \\    hit(a);
+        \\    return .{ .a = a, .b = b };
+        \\}
+        \\fn side_then_local_pair(a: i32, b: i32) -> Pair {
+        \\    hit(a);
+        \\    var out: Pair = .{ .a = a, .b = b };
+        \\    return out;
+        \\}
+        \\fn early_pair(flag: bool, a: i32, b: i32) -> Pair {
+        \\    if (flag) {
+        \\        return .{ .a = b, .b = a };
+        \\    }
+        \\    return .{ .a = a, .b = b };
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -1482,6 +1509,53 @@ test "LLVM emits simple struct literal returns from MIR" {
     try expectContains(assigned_field_body, "ret { i32, i32 } %t");
     try expectNotContains(assigned_field_body, "alloca");
     try expectNotContains(assigned_field_body, "store");
+
+    const loop_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @loop_pair");
+    try expectContains(loop_body, "br i1 %flag");
+    try expectContains(loop_body, "insertvalue { i32, i32 } zeroinitializer, i32 %a, 0");
+    try expectContains(loop_body, "i32 %b, 1");
+    try expectContains(loop_body, "ret { i32, i32 } %t");
+    try expectNotContains(loop_body, "alloca");
+    try expectNotContains(loop_body, "store");
+    try expectNotContains(loop_body, "switch");
+
+    const loop_local_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @loop_local_pair");
+    try expectContains(loop_local_body, "br i1 %flag");
+    try expectContains(loop_local_body, "insertvalue { i32, i32 } zeroinitializer, i32 %a, 0");
+    try expectContains(loop_local_body, "i32 %b, 1");
+    try expectContains(loop_local_body, "ret { i32, i32 } %t");
+    try expectNotContains(loop_local_body, "alloca");
+    try expectNotContains(loop_local_body, "store");
+    try expectNotContains(loop_local_body, "switch");
+
+    const side_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @side_then_pair");
+    const side_call = std.mem.indexOf(u8, side_body, "call void @hit(i32 %a)") orelse return error.TestUnexpectedResult;
+    const side_ret = std.mem.indexOf(u8, side_body, "ret { i32, i32 } %t") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side_call < side_ret);
+    try expectContains(side_body, "insertvalue { i32, i32 } zeroinitializer, i32 %a, 0");
+    try expectContains(side_body, "i32 %b, 1");
+    try expectNotContains(side_body, "alloca");
+    try expectNotContains(side_body, "store");
+
+    const side_local_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @side_then_local_pair");
+    const side_local_call = std.mem.indexOf(u8, side_local_body, "call void @hit(i32 %a)") orelse return error.TestUnexpectedResult;
+    const side_local_ret = std.mem.indexOf(u8, side_local_body, "ret { i32, i32 } %t") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side_local_call < side_local_ret);
+    try expectContains(side_local_body, "insertvalue { i32, i32 } zeroinitializer, i32 %a, 0");
+    try expectContains(side_local_body, "i32 %b, 1");
+    try expectNotContains(side_local_body, "alloca");
+    try expectNotContains(side_local_body, "store");
+
+    const early_body = try llvmFunctionBody(output.items, "define internal { i32, i32 } @early_pair");
+    try expectContains(early_body, "br i1 %flag");
+    try expectContains(early_body, "insertvalue { i32, i32 } zeroinitializer, i32 %b, 0");
+    try expectContains(early_body, "i32 %a, 1");
+    try expectContains(early_body, "insertvalue { i32, i32 } zeroinitializer, i32 %a, 0");
+    try expectContains(early_body, "i32 %b, 1");
+    try expectContains(early_body, "ret { i32, i32 } %t");
+    try expectNotContains(early_body, "alloca");
+    try expectNotContains(early_body, "store");
+    try expectNotContains(early_body, "switch");
 }
 
 test "LLVM preserves MIR void calls before direct-call returns" {

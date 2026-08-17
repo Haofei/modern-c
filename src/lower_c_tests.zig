@@ -1278,6 +1278,7 @@ test "lower-c emits simple struct literal returns from MIR" {
     const source =
         \\struct Pair { a: i32, b: i32 }
         \\struct Flags { ok: bool }
+        \\extern fn hit(value: i32) -> void;
         \\fn make_pair(a: i32, b: i32) -> Pair {
         \\    return .{ .a = a, .b = b };
         \\}
@@ -1332,6 +1333,32 @@ test "lower-c emits simple struct literal returns from MIR" {
         \\    var out: Pair = .{ .a = p.a, .b = p.b };
         \\    out = .{ .a = p.b, .b = p.a };
         \\    return out;
+        \\}
+        \\fn loop_pair(flag: bool, a: i32, b: i32) -> Pair {
+        \\    while (flag) {
+        \\    }
+        \\    return .{ .a = a, .b = b };
+        \\}
+        \\fn loop_local_pair(flag: bool, a: i32, b: i32) -> Pair {
+        \\    while (flag) {
+        \\    }
+        \\    var out: Pair = .{ .a = a, .b = b };
+        \\    return out;
+        \\}
+        \\fn side_then_pair(a: i32, b: i32) -> Pair {
+        \\    hit(a);
+        \\    return .{ .a = a, .b = b };
+        \\}
+        \\fn side_then_local_pair(a: i32, b: i32) -> Pair {
+        \\    hit(a);
+        \\    var out: Pair = .{ .a = a, .b = b };
+        \\    return out;
+        \\}
+        \\fn early_pair(flag: bool, a: i32, b: i32) -> Pair {
+        \\    if (flag) {
+        \\        return .{ .a = b, .b = a };
+        \\    }
+        \\    return .{ .a = a, .b = b };
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -1393,6 +1420,37 @@ test "lower-c emits simple struct literal returns from MIR" {
     try expectContains(assigned_field_body, "return (Pair){ .a = p.b, .b = p.a };");
     try expectNotContains(assigned_field_body, "return (Pair){ .a = p.a, .b = p.b };");
     try expectNotContains(assigned_field_body, "mc_tmp");
+
+    const loop_body = try cFunctionBody(output.items, "static Pair loop_pair(bool flag, int32_t a, int32_t b)");
+    try expectContains(loop_body, "while (flag) {");
+    try expectContains(loop_body, "return (Pair){ .a = a, .b = b };");
+    try expectNotContains(loop_body, "mc_tmp");
+    try expectNotContains(loop_body, "switch");
+
+    const loop_local_body = try cFunctionBody(output.items, "static Pair loop_local_pair(bool flag, int32_t a, int32_t b)");
+    try expectContains(loop_local_body, "while (flag) {");
+    try expectContains(loop_local_body, "return (Pair){ .a = a, .b = b };");
+    try expectNotContains(loop_local_body, "mc_tmp");
+    try expectNotContains(loop_local_body, "switch");
+
+    const side_body = try cFunctionBody(output.items, "static Pair side_then_pair(int32_t a, int32_t b)");
+    const side_call = std.mem.indexOf(u8, side_body, "hit(a);") orelse return error.TestUnexpectedResult;
+    const side_ret = std.mem.indexOf(u8, side_body, "return (Pair){ .a = a, .b = b };") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side_call < side_ret);
+    try expectNotContains(side_body, "mc_tmp");
+
+    const side_local_body = try cFunctionBody(output.items, "static Pair side_then_local_pair(int32_t a, int32_t b)");
+    const side_local_call = std.mem.indexOf(u8, side_local_body, "hit(a);") orelse return error.TestUnexpectedResult;
+    const side_local_ret = std.mem.indexOf(u8, side_local_body, "return (Pair){ .a = a, .b = b };") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side_local_call < side_local_ret);
+    try expectNotContains(side_local_body, "mc_tmp");
+
+    const early_body = try cFunctionBody(output.items, "static Pair early_pair(bool flag, int32_t a, int32_t b)");
+    try expectContains(early_body, "if (flag) {");
+    try expectContains(early_body, "return (Pair){ .a = b, .b = a };");
+    try expectContains(early_body, "return (Pair){ .a = a, .b = b };");
+    try expectNotContains(early_body, "mc_tmp");
+    try expectNotContains(early_body, "switch");
 }
 
 test "lower-c preserves MIR void calls before direct-call returns" {
