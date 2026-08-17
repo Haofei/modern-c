@@ -2530,6 +2530,40 @@ test "LLVM emits checked division returns from MIR without body fallback" {
     try expectNotContains(unsigned_body, "alloca");
 }
 
+test "LLVM emits checked mod and shift returns from MIR without body fallback" {
+    const source =
+        \\fn mod_u32(a: u32, b: u32) -> u32 {
+        \\    return a % b;
+        \\}
+        \\fn shl_u32(a: u32, n: u32) -> u32 {
+        \\    return a << n;
+        \\}
+        \\fn shr_u32(a: u32, n: u32) -> u32 {
+        \\    return a >> n;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_checked_mod_shift_returns.mc", source, &output);
+
+    const mod_body = try llvmFunctionBody(output.items, "define internal i32 @mod_u32");
+    try expectContains(mod_body, "call void @mc_trap_DivideByZero()");
+    try expectContains(mod_body, "urem i32 %a, %b");
+    try expectNotContains(mod_body, "alloca");
+
+    const shl_body = try llvmFunctionBody(output.items, "define internal i32 @shl_u32");
+    try expectContains(shl_body, "call void @mc_trap_InvalidShift()");
+    try expectContains(shl_body, "call void @mc_trap_IntegerOverflow()");
+    try expectContains(shl_body, "shl i32 %a, %n");
+    try expectNotContains(shl_body, "alloca");
+
+    const shr_body = try llvmFunctionBody(output.items, "define internal i32 @shr_u32");
+    try expectContains(shr_body, "call void @mc_trap_InvalidShift()");
+    try expectContains(shr_body, "lshr i32 %a, %n");
+    try expectNotContains(shr_body, "call void @mc_trap_IntegerOverflow()");
+    try expectNotContains(shr_body, "alloca");
+}
+
 test "LLVM emits checked unary returns from MIR without body fallback" {
     const source =
         \\fn neg_i32(a: i32) -> i32 {

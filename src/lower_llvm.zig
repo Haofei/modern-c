@@ -2953,8 +2953,11 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirCheckedBinaryTrapCount(binary: SimpleMirCheckedBinary) usize {
-        if (!std.mem.eql(u8, binary.op, "div")) return 1;
-        return if (simpleMirSignedIntegerTypeName(typeName(binary.target_fact.target_ty) orelse "")) 2 else 1;
+        if (std.mem.eql(u8, binary.op, "div") or std.mem.eql(u8, binary.op, "mod")) {
+            return if (simpleMirSignedIntegerTypeName(typeName(binary.target_fact.target_ty) orelse "")) 2 else 1;
+        }
+        if (std.mem.eql(u8, binary.op, "shl")) return 2;
+        return 1;
     }
 
     fn simpleMirStructLiteralTrapCount(literal: SimpleMirStructLiteralReturn) usize {
@@ -2997,7 +3000,8 @@ const LlvmEmitter = struct {
     fn emitSimpleMirCheckedBinary(self: *LlvmEmitter, binary: SimpleMirCheckedBinary, span: diagnostics.Span) ![]const u8 {
         const ty = binary.target_fact.target_ty;
         const llvm_ty = try self.llvmType(ty);
-        if (std.mem.eql(u8, binary.op, "div")) return self.emitSimpleMirCheckedDiv(binary, llvm_ty, span);
+        if (std.mem.eql(u8, binary.op, "div") or std.mem.eql(u8, binary.op, "mod")) return self.emitSimpleMirCheckedDivRem(binary, llvm_ty, span);
+        if (std.mem.eql(u8, binary.op, "shl") or std.mem.eql(u8, binary.op, "shr")) return self.emitSimpleMirCheckedShift(binary, llvm_ty, span);
         const bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         const intrinsic = try self.simpleMirOverflowIntrinsic(binary.op, self.isSignedIntegerType(ty), bits);
         const pair_ty = try std.fmt.allocPrint(self.scratch.allocator(), "{{ {s}, i1 }}", .{llvm_ty});
@@ -3019,7 +3023,7 @@ const LlvmEmitter = struct {
         return value;
     }
 
-    fn emitSimpleMirCheckedDiv(self: *LlvmEmitter, binary: SimpleMirCheckedBinary, llvm_ty: []const u8, span: diagnostics.Span) ![]const u8 {
+    fn emitSimpleMirCheckedDivRem(self: *LlvmEmitter, binary: SimpleMirCheckedBinary, llvm_ty: []const u8, span: diagnostics.Span) ![]const u8 {
         const ty = binary.target_fact.target_ty;
         _ = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         const left = try self.simpleMirArgValue(binary.left, span);
@@ -3049,9 +3053,54 @@ const LlvmEmitter = struct {
         }
 
         const value = try self.nextTemp();
-        const op: []const u8 = if (self.isSignedIntegerType(ty)) "sdiv" else "udiv";
+        const op: []const u8 = if (std.mem.eql(u8, binary.op, "mod"))
+            if (self.isSignedIntegerType(ty)) "srem" else "urem"
+        else if (self.isSignedIntegerType(ty))
+            "sdiv"
+        else
+            "udiv";
         try self.out.print(self.allocator, "  {s} = {s} {s} {s}, {s}{s}\n", .{ value, op, llvm_ty, left, right, dbg_suffix });
         return value;
+    }
+
+    fn emitSimpleMirCheckedShift(self: *LlvmEmitter, binary: SimpleMirCheckedBinary, llvm_ty: []const u8, span: diagnostics.Span) ![]const u8 {
+        const ty = binary.target_fact.target_ty;
+        const shifted_bits = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+        const left = try self.simpleMirArgValue(binary.left, span);
+        const amount = try self.simpleMirArgValue(binary.right, span);
+        const dbg_suffix = if (try self.debugLocation(span)) |dbg|
+            try std.fmt.allocPrint(self.scratch.allocator(), ", !dbg !{d}", .{dbg})
+        else
+            "";
+
+        const too_large = try self.nextTemp();
+        const invalid = try self.nextLabel("trap_shift_count");
+        const valid = try self.nextLabel("shift_count_ok");
+        const pred: []const u8 = if (self.isSignedIntegerType(ty)) "sge" else "uge";
+        try self.out.print(self.allocator, "  {s} = icmp {s} {s} {s}, {d}{s}\n", .{ too_large, pred, llvm_ty, amount, shifted_bits, dbg_suffix });
+        try self.emitTrapBranch(too_large, invalid, valid, invalid, valid, "InvalidShift");
+
+        const op: []const u8 = if (std.mem.eql(u8, binary.op, "shl"))
+            "shl"
+        else if (self.isSignedIntegerType(ty))
+            "ashr"
+        else
+            "lshr";
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = {s} {s} {s}, {s}{s}\n", .{ result, op, llvm_ty, left, amount, dbg_suffix });
+
+        if (std.mem.eql(u8, binary.op, "shl")) {
+            const reverse_op: []const u8 = if (self.isSignedIntegerType(ty)) "ashr" else "lshr";
+            const reversed = try self.nextTemp();
+            const overflow = try self.nextTemp();
+            const overflow_trap = try self.nextLabel("trap_shift_overflow");
+            const ok = try self.nextLabel("shift_overflow_ok");
+            try self.out.print(self.allocator, "  {s} = {s} {s} {s}, {s}{s}\n", .{ reversed, reverse_op, llvm_ty, result, amount, dbg_suffix });
+            try self.out.print(self.allocator, "  {s} = icmp ne {s} {s}, {s}{s}\n", .{ overflow, llvm_ty, reversed, left, dbg_suffix });
+            try self.emitTrapBranch(overflow, overflow_trap, ok, overflow_trap, ok, "IntegerOverflow");
+        }
+
+        return result;
     }
 
     fn emitSimpleMirCheckedUnary(self: *LlvmEmitter, unary: SimpleMirCheckedUnary, span: diagnostics.Span) ![]const u8 {
@@ -4311,7 +4360,13 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirBinaryOpSupported(op: []const u8) bool {
-        return std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul") or std.mem.eql(u8, op, "div");
+        return std.mem.eql(u8, op, "add") or
+            std.mem.eql(u8, op, "sub") or
+            std.mem.eql(u8, op, "mul") or
+            std.mem.eql(u8, op, "div") or
+            std.mem.eql(u8, op, "mod") or
+            std.mem.eql(u8, op, "shl") or
+            std.mem.eql(u8, op, "shr");
     }
 
     fn simpleMirSignedIntegerTypeName(type_name: []const u8) bool {
@@ -4352,11 +4407,26 @@ const LlvmEmitter = struct {
         return false;
     }
 
+    fn mirHasInvalidShiftTrapAt(fn_mir: mir.Function, source: mir.SourcePoint) bool {
+        for (fn_mir.trap_edges) |edge| {
+            if (edge.kind == .InvalidShift and edge.source == .checked_shift and edge.line == source.line and edge.column == source.column) return true;
+        }
+        return false;
+    }
+
     fn mirHasCheckedBinaryTrapsAt(fn_mir: mir.Function, source: mir.SourcePoint, op: []const u8, target_ty: anytype) bool {
-        if (!std.mem.eql(u8, op, "div")) return mirHasIntegerOverflowTrapAt(fn_mir, source);
-        if (!mirHasDivideByZeroTrapAt(fn_mir, source)) return false;
         const type_name = typeName(target_ty) orelse return false;
-        return !simpleMirSignedIntegerTypeName(type_name) or mirHasIntegerOverflowTrapAt(fn_mir, source);
+        if (std.mem.eql(u8, op, "div") or std.mem.eql(u8, op, "mod")) {
+            if (!mirHasDivideByZeroTrapAt(fn_mir, source)) return false;
+            return !simpleMirSignedIntegerTypeName(type_name) or mirHasIntegerOverflowTrapAt(fn_mir, source);
+        }
+        if (std.mem.eql(u8, op, "shl")) {
+            return mirHasInvalidShiftTrapAt(fn_mir, source) and mirHasIntegerOverflowTrapAt(fn_mir, source);
+        }
+        if (std.mem.eql(u8, op, "shr")) {
+            return mirHasInvalidShiftTrapAt(fn_mir, source);
+        }
+        return mirHasIntegerOverflowTrapAt(fn_mir, source);
     }
 
     fn simpleMirOverflowIntrinsic(self: *LlvmEmitter, op: []const u8, signed: bool, bits: u16) ![]const u8 {
