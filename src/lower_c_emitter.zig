@@ -4133,6 +4133,11 @@ pub const CEmitter = struct {
         const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
         if (simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) != null) {
             if (self.simpleMirEnumLiteralValueAtSource(fn_mir, init_source)) |literal| return .{ .enum_literal = literal };
+            if (self.simpleMirNullLiteralAtSource(fn_mir, init_source)) |literal| {
+                const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(literal.fact.target_ty))) return null;
+                return .{ .null_literal = literal };
+            }
             if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, init_source)) |binary| {
                 const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
                 const result = simpleMirTargetTypeFactKindAt(fn_mir, .expression_result, init_source) orelse return null;

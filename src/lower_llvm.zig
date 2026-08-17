@@ -4410,6 +4410,12 @@ const LlvmEmitter = struct {
         const init_source = self.simpleMirLocalInitSource(fn_mir, local_name) orelse return null;
         if (simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) != null) {
             if (self.simpleMirEnumLiteralValueAtSource(fn_mir, init_source)) |literal| return .{ .enum_literal = literal };
+            if (simpleMirNullLiteralAtSource(fn_mir, init_source)) {
+                const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
+                const result = simpleMirTargetTypeFactKindAt(fn_mir, .null_literal, init_source) orelse return null;
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
+                return .null_literal;
+            }
             if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, init_source)) |binary| {
                 const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
                 const result = simpleMirTargetTypeFactKindAt(fn_mir, .expression_result, init_source) orelse return null;

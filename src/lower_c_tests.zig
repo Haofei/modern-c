@@ -5443,6 +5443,21 @@ test "lower-c param-field copied inferred local lowers without function body fal
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return box.value;") != null);
 }
 
+test "lower-c null inferred local lowers without function body fallback" {
+    const source =
+        \\fn null_local() -> ?u32 {
+        \\    let none: ?u32 = null;
+        \\    return none;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_inferred_local_null_return.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static mc_opt_u32 null_local(void)");
+    try expectContains(body, "return (mc_opt_u32){ .present = false };");
+    try expectNotContains(body, "mc_opt_u32 none");
+}
+
 test "lower-c diagnoses source block expressions instead of inferring their result" {
     const source =
         \\fn block_result() -> u32 {

@@ -6780,6 +6780,21 @@ test "LLVM param-field copied inferred local lowers without function body fallba
     try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i64") != null);
 }
 
+test "LLVM null inferred local lowers without function body fallback" {
+    const source =
+        \\fn null_local() -> ?u32 {
+        \\    let none: ?u32 = null;
+        \\    return none;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_null_return.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @null_local");
+    try expectContains(body, "ret { i1, i32 } zeroinitializer");
+    try expectNotContains(body, "alloca");
+}
+
 test "LLVM block expressions consume MIR result facts" {
     const source =
         \\fn block_result() -> u32 {
