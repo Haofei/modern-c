@@ -2566,7 +2566,26 @@ test "LLVM emits scalar comparison returns from MIR" {
         \\    out = a != b;
         \\    return out;
         \\}
+        \\fn lt_f32(a: f32, b: f32) -> bool {
+        \\    return a < b;
+        \\}
+        \\fn local_float_compare(a: f32, b: f32) -> bool {
+        \\    let out: bool = a >= b;
+        \\    return out;
+        \\}
+        \\fn assigned_float_compare(a: f32, b: f32) -> bool {
+        \\    var out: bool = false;
+        \\    out = a != b;
+        \\    return out;
+        \\}
         \\fn choose_compare(flag: bool, a: u32, b: u32) -> bool {
+        \\    if (flag) {
+        \\        return a < b;
+        \\    } else {
+        \\        return a > b;
+        \\    }
+        \\}
+        \\fn choose_float_compare(flag: bool, a: f32, b: f32) -> bool {
         \\    if (flag) {
         \\        return a < b;
         \\    } else {
@@ -2602,6 +2621,24 @@ test "LLVM emits scalar comparison returns from MIR" {
     try expectNotContains(assigned_body, "alloca");
     try expectNotContains(assigned_body, "store");
 
+    const lt_f32_body = try llvmFunctionBody(output.items, "define internal i1 @lt_f32");
+    try expectContains(lt_f32_body, "fcmp olt float %a, %b");
+    try expectContains(lt_f32_body, "ret i1 %t");
+    try expectNotContains(lt_f32_body, "alloca");
+    try expectNotContains(lt_f32_body, "store");
+
+    const local_float_body = try llvmFunctionBody(output.items, "define internal i1 @local_float_compare");
+    try expectContains(local_float_body, "fcmp oge float %a, %b");
+    try expectContains(local_float_body, "ret i1 %t");
+    try expectNotContains(local_float_body, "alloca");
+    try expectNotContains(local_float_body, "store");
+
+    const assigned_float_body = try llvmFunctionBody(output.items, "define internal i1 @assigned_float_compare");
+    try expectContains(assigned_float_body, "fcmp une float %a, %b");
+    try expectContains(assigned_float_body, "ret i1 %t");
+    try expectNotContains(assigned_float_body, "alloca");
+    try expectNotContains(assigned_float_body, "store");
+
     const choose_body = try llvmFunctionBody(output.items, "define internal i1 @choose_compare");
     try expectContains(choose_body, "br i1 %flag");
     try expectContains(choose_body, "icmp ult i32 %a, %b");
@@ -2610,6 +2647,15 @@ test "LLVM emits scalar comparison returns from MIR" {
     try expectNotContains(choose_body, "alloca");
     try expectNotContains(choose_body, "store");
     try expectNotContains(choose_body, "switch");
+
+    const choose_float_body = try llvmFunctionBody(output.items, "define internal i1 @choose_float_compare");
+    try expectContains(choose_float_body, "br i1 %flag");
+    try expectContains(choose_float_body, "fcmp olt float %a, %b");
+    try expectContains(choose_float_body, "fcmp ogt float %a, %b");
+    try expectContains(choose_float_body, "ret i1 %t");
+    try expectNotContains(choose_float_body, "alloca");
+    try expectNotContains(choose_float_body, "store");
+    try expectNotContains(choose_float_body, "switch");
 }
 
 test "LLVM emits checked arithmetic returns from MIR without body fallback" {

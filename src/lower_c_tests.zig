@@ -1730,7 +1730,26 @@ test "lower-c emits scalar comparison returns from MIR" {
         \\    out = a != b;
         \\    return out;
         \\}
+        \\fn lt_f32(a: f32, b: f32) -> bool {
+        \\    return a < b;
+        \\}
+        \\fn local_float_compare(a: f32, b: f32) -> bool {
+        \\    let out: bool = a >= b;
+        \\    return out;
+        \\}
+        \\fn assigned_float_compare(a: f32, b: f32) -> bool {
+        \\    var out: bool = false;
+        \\    out = a != b;
+        \\    return out;
+        \\}
         \\fn choose_compare(flag: bool, a: u32, b: u32) -> bool {
+        \\    if (flag) {
+        \\        return a < b;
+        \\    } else {
+        \\        return a > b;
+        \\    }
+        \\}
+        \\fn choose_float_compare(flag: bool, a: f32, b: f32) -> bool {
         \\    if (flag) {
         \\        return a < b;
         \\    } else {
@@ -1761,12 +1780,34 @@ test "lower-c emits scalar comparison returns from MIR" {
     try expectNotContains(assigned_body, "out =");
     try expectNotContains(assigned_body, "mc_tmp");
 
+    const lt_f32_body = try cFunctionBody(output.items, "static bool lt_f32(float a, float b)");
+    try expectContains(lt_f32_body, "return (a < b);");
+    try expectNotContains(lt_f32_body, "mc_tmp");
+
+    const local_float_body = try cFunctionBody(output.items, "static bool local_float_compare(float a, float b)");
+    try expectContains(local_float_body, "return (a >= b);");
+    try expectNotContains(local_float_body, "bool out");
+    try expectNotContains(local_float_body, "mc_tmp");
+
+    const assigned_float_body = try cFunctionBody(output.items, "static bool assigned_float_compare(float a, float b)");
+    try expectContains(assigned_float_body, "return (a != b);");
+    try expectNotContains(assigned_float_body, "bool out");
+    try expectNotContains(assigned_float_body, "out =");
+    try expectNotContains(assigned_float_body, "mc_tmp");
+
     const choose_body = try cFunctionBody(output.items, "static bool choose_compare(bool flag, uint32_t a, uint32_t b)");
     try expectContains(choose_body, "if (flag) {");
     try expectContains(choose_body, "return (a < b);");
     try expectContains(choose_body, "return (a > b);");
     try expectNotContains(choose_body, "mc_tmp");
     try expectNotContains(choose_body, "switch");
+
+    const choose_float_body = try cFunctionBody(output.items, "static bool choose_float_compare(bool flag, float a, float b)");
+    try expectContains(choose_float_body, "if (flag) {");
+    try expectContains(choose_float_body, "return (a < b);");
+    try expectContains(choose_float_body, "return (a > b);");
+    try expectNotContains(choose_float_body, "mc_tmp");
+    try expectNotContains(choose_float_body, "switch");
 }
 
 test "lower-c emits checked arithmetic returns from MIR without body fallback" {
