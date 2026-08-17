@@ -200,6 +200,12 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
         \\    g = x;
         \\    return x;
         \\}
+        \\fn choose_empty_suffix_return(flag: bool, x: u32) -> u32 {
+        \\    if (flag) {
+        \\    }
+        \\    g = x;
+        \\    return x;
+        \\}
         \\fn choose_branch_effect_return(flag: bool, x: u32) -> u32 {
         \\    if (flag) {
         \\        hit(x);
@@ -305,6 +311,15 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
     try std.testing.expect(call_suffix_store < call_suffix_return);
     try expectNotContains(call_suffix_return_body, "switch");
     try expectNotContains(call_suffix_return_body, "mc_tmp");
+
+    const empty_suffix_return_body = try cFunctionBody(output.items, "static uint32_t choose_empty_suffix_return(bool flag, uint32_t x)");
+    const empty_suffix_if = std.mem.indexOf(u8, empty_suffix_return_body, "if (flag)") orelse return error.TestUnexpectedResult;
+    const empty_suffix_store = std.mem.indexOf(u8, empty_suffix_return_body, "mc_race_store_u32(&g, (uint32_t)x);") orelse return error.TestUnexpectedResult;
+    const empty_suffix_return = std.mem.indexOf(u8, empty_suffix_return_body, "return x;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(empty_suffix_if < empty_suffix_store);
+    try std.testing.expect(empty_suffix_store < empty_suffix_return);
+    try expectNotContains(empty_suffix_return_body, "switch");
+    try expectNotContains(empty_suffix_return_body, "mc_tmp");
 
     const branch_effect_body = try cFunctionBody(output.items, "static uint32_t choose_branch_effect_return(bool flag, uint32_t x)");
     const branch_effect_if = std.mem.indexOf(u8, branch_effect_body, "if (flag)") orelse return error.TestUnexpectedResult;
