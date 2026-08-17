@@ -9616,20 +9616,9 @@ test "lower-c backend_name attribute emits asm label" {
         \\export fn harness() -> u64 { return helper(7); }
     ;
 
-    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bn.mc", source);
-    defer reporter.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    var p = parser.Parser.init(source, &reporter);
-    const module = try p.parseModule(arena.allocator());
-    defer module.deinit(arena.allocator());
-    try std.testing.expect(!reporter.has_errors);
-
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_backend_name_alias.mc", source, &output);
 
     try std.testing.expect(std.mem.count(u8, output.items, "__asm__(\"rss_helper_x\")") == 1);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "helper(uint64_t x) __asm__(\"rss_helper_x\");") != null);
