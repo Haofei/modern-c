@@ -4168,9 +4168,10 @@ pub const CEmitter = struct {
             if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
             if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
                 return switch (arg) {
+                    .param => |name| if (simpleMirPlainExprAtSource(fn_mir, init_source)) .{ .param = name } else null,
+                    .param_field => |field| if (simpleMirPlainExprAtSource(fn_mir, init_source)) .{ .param_field = field } else null,
                     .integer_literal => |literal| .{ .integer_literal = literal },
                     .bool_literal => |value| .{ .bool_literal = value },
-                    else => null,
                 };
             }
             return null;
@@ -4210,6 +4211,21 @@ pub const CEmitter = struct {
                 sameMirSourceLocation(fact.source, source)) return fact;
         }
         return null;
+    }
+
+    fn simpleMirPlainExprAtSource(fn_mir: mir.Function, source: mir.SourcePoint) bool {
+        var saw_expr = false;
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (!sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                switch (instruction.kind) {
+                    .call, .binary, .unary => return false,
+                    .expr => saw_expr = true,
+                    else => {},
+                }
+            }
+        }
+        return saw_expr;
     }
 
     fn simpleMirAssignmentReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {

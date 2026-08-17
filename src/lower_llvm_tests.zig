@@ -6753,6 +6753,19 @@ test "LLVM compare inferred local lowers without function body fallback" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "icmp ult i64 %left, %right") != null);
 }
 
+test "LLVM copied inferred local lowers without function body fallback" {
+    const source =
+        \\fn copy_local(value: u64) -> u64 {
+        \\    let copy = value;
+        \\    return copy;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_copy_return.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i64 %value") != null);
+}
+
 test "LLVM block expressions consume MIR result facts" {
     const source =
         \\fn block_result() -> u32 {
