@@ -7451,6 +7451,26 @@ test "LLVM switches require MIR subject types" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &unknown_subject_repr, &unknown_subject_repr_output, "llvm_switch_subject_type_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM emits enum switch returns from MIR without body fallback" {
+    const source =
+        \\enum Choice { left, right }
+        \\fn choose(value: Choice) -> u32 {
+        \\    switch value {
+        \\        .left => { return 1; },
+        \\        .right => { return 2; },
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_switch_returns.mc", source, &output);
+    try expectContains(output.items, "switch ");
+    try expectContains(output.items, "label %bb_switch_arm");
+    try expectContains(output.items, "ret i32 1");
+    try expectContains(output.items, "ret i32 2");
+    try expectContains(output.items, "call void @mc_trap_InvalidRepresentation()");
+}
+
 test "LLVM if-let statements require MIR subject types" {
     const source =
         \\extern fn make_result() -> Result<u32, u32>;

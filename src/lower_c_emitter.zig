@@ -1304,6 +1304,21 @@ pub const CEmitter = struct {
         after_block_index: usize,
     };
 
+    const max_simple_mir_switch_arms = 8;
+
+    const SimpleMirEnumSwitchArmReturn = struct {
+        case_name: []const u8,
+        value: SimpleMirConditionalValue,
+        span: diagnostics.Span,
+    };
+
+    const SimpleMirEnumSwitchReturn = struct {
+        subject_name: []const u8,
+        enum_name: []const u8,
+        arms: [max_simple_mir_switch_arms]SimpleMirEnumSwitchArmReturn = undefined,
+        arm_count: usize = 0,
+    };
+
     const SimpleMirLoopVoidBody = struct {
         condition: SimpleMirCondition,
         body_block_index: usize,
@@ -1497,8 +1512,9 @@ pub const CEmitter = struct {
         const simple_void_body = if (simple_trap == null and simple_assert == null and simple_return == null) self.simpleMirVoidBody(function, fn_mir) else null;
         const simple_conditional_statement_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null) self.simpleMirConditionalStatementReturn(function, fn_mir) else null;
         const simple_conditional_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
-        const simple_loop_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_loop_return == null) return false;
+        const simple_enum_switch_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
+        const simple_loop_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
+        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1775,6 +1791,30 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "return ");
             try self.emitSimpleMirConditionalValue(conditional.else_value);
             try self.out.appendSlice(self.allocator, ";\n");
+            self.indent -= 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "}\n");
+        } else if (simple_enum_switch_return) |switch_return| {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "switch ({s}) {{\n", .{try self.cIdent(switch_return.subject_name)});
+            self.indent += 1;
+            for (switch_return.arms[0..switch_return.arm_count]) |arm| {
+                try self.writeIndent();
+                try self.out.print(self.allocator, "case {s}_{s}:\n", .{ switch_return.enum_name, arm.case_name });
+                self.indent += 1;
+                try self.writeLineDirective(arm.span);
+                try self.writeIndent();
+                try self.out.appendSlice(self.allocator, "return ");
+                try self.emitSimpleMirConditionalValue(arm.value);
+                try self.out.appendSlice(self.allocator, ";\n");
+                self.indent -= 1;
+            }
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "default:\n");
+            self.indent += 1;
+            try self.writeIndent();
+            try self.out.appendSlice(self.allocator, "mc_trap_InvalidRepresentation();\n");
+            self.indent -= 1;
             self.indent -= 1;
             try self.writeIndent();
             try self.out.appendSlice(self.allocator, "}\n");
@@ -2372,6 +2412,98 @@ pub const CEmitter = struct {
         const suffix_traps = self.simpleMirVoidStatementSourcesTrapCount(function, fn_mir, suffix_statements) orelse return null;
         if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(prefix_calls) + simpleMirDirectCallsTrapCount(then_calls) + simpleMirDirectCallsTrapCount(else_calls) + suffix_traps) return null;
         return .{ .prefix_calls = prefix_calls, .condition = condition, .then_calls = then_calls, .else_calls = else_calls, .suffix_statements = suffix_statements };
+    }
+
+    fn simpleMirEnumSwitchReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirEnumSwitchReturn {
+        if (fn_mir.return_ty == .void) return null;
+        if (fn_mir.blocks.len < 4 or fn_mir.pointer_provenance_facts.len != 0) return null;
+        if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
+        for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+        const entry = fn_mir.blocks[0];
+        if (entry.terminator != .switch_) return null;
+        const subject_index = simpleMirSwitchSubjectIndex(entry) orelse return null;
+        const subject_source = simpleMirSwitchSubjectExprSource(entry, subject_index) orelse return null;
+        const fact = simpleMirTargetTypeFactKindAt(fn_mir, .switch_subject, subject_source) orelse return null;
+        const enum_name = self.enumNameForType(fact.target_ty) orelse return null;
+        const enum_decl = self.enums.get(enum_name) orelse return null;
+        const subject_name = simpleMirSwitchSubjectParam(function, entry, subject_index, enum_name) orelse return null;
+        var result: SimpleMirEnumSwitchReturn = .{ .subject_name = subject_name, .enum_name = enum_name };
+        var trap_successors: usize = 0;
+        for (entry.successors) |successor| {
+            if (successor >= fn_mir.blocks.len) return null;
+            const arm_block = fn_mir.blocks[successor];
+            if (std.mem.eql(u8, arm_block.kind, "trap")) {
+                if (arm_block.terminator != .trap_) return null;
+                trap_successors += 1;
+                continue;
+            }
+            if (std.mem.eql(u8, arm_block.kind, "switch_after")) {
+                if (arm_block.terminator != .fallthrough or !simpleMirEmptyVoidBlock(function, fn_mir, arm_block)) return null;
+                continue;
+            }
+            if (!std.mem.eql(u8, arm_block.kind, "switch_arm") or arm_block.terminator != .return_) return null;
+            if (result.arm_count >= max_simple_mir_switch_arms) return null;
+            const case_name = simpleMirSwitchArmCaseName(arm_block) orelse return null;
+            var known_case = false;
+            for (enum_decl.cases) |case| {
+                if (std.mem.eql(u8, case.name.text, case_name)) {
+                    known_case = true;
+                    break;
+                }
+            }
+            if (!known_case) return null;
+            const value = self.simpleMirReturnValueInBlock(function, fn_mir, arm_block) orelse return null;
+            result.arms[result.arm_count] = .{
+                .case_name = case_name,
+                .value = value,
+                .span = spanFromMirSourcePoint(instructionSourcePoint(simpleMirReturnInstruction(arm_block) orelse return null)),
+            };
+            result.arm_count += 1;
+        }
+        if (result.arm_count < 2) return null;
+        var expected_traps = trap_successors;
+        for (result.arms[0..result.arm_count]) |arm| expected_traps += simpleMirConditionalTrapCount(arm.value);
+        if (fn_mir.trap_edges.len != expected_traps) return null;
+        return result;
+    }
+
+    fn simpleMirSwitchSubjectExprSource(block: mir.Block, subject_index: usize) ?mir.SourcePoint {
+        var index = subject_index + 1;
+        while (index < block.instructions.len) : (index += 1) {
+            const instruction = block.instructions[index];
+            switch (instruction.kind) {
+                .target_type, .typed_load, .representation_check, .representation_use => continue,
+                .expr => return instructionSourcePoint(instruction),
+                else => return null,
+            }
+        }
+        return null;
+    }
+
+    fn simpleMirSwitchSubjectParam(function: anytype, block: mir.Block, subject_index: usize, enum_name: []const u8) ?[]const u8 {
+        var index = subject_index + 1;
+        while (index < block.instructions.len) : (index += 1) {
+            const instruction = block.instructions[index];
+            switch (instruction.kind) {
+                .target_type, .typed_load, .representation_check, .representation_use => continue,
+                .expr => {
+                    if (!std.mem.eql(u8, instruction.result_ty.name(), enum_name)) return null;
+                    for (function.signature.params) |param| {
+                        if (std.mem.eql(u8, instruction.detail, param.name.text)) return param.name.text;
+                    }
+                    return null;
+                },
+                else => return null,
+            }
+        }
+        return null;
+    }
+
+    fn simpleMirSwitchArmCaseName(block: mir.Block) ?[]const u8 {
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .expr and instruction.result_ty == .branch) return instruction.detail;
+        }
+        return null;
     }
 
     fn simpleMirVoidStatements(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirVoidStatements {
