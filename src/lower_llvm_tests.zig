@@ -589,6 +589,39 @@ test "LLVM loop grouped scalar returns lower from MIR without body fallback" {
     try expectNotContains(call_body, "alloca");
 }
 
+test "LLVM loop derived scalar returns lower from MIR without body fallback" {
+    const source =
+        \\extern fn hit(value: u16) -> void;
+        \\fn loop_compare(flag: bool, value: u16) -> bool {
+        \\    while flag {
+        \\        hit(value);
+        \\    }
+        \\    return value == 0;
+        \\}
+        \\fn loop_not(flag: bool, value: u16, other: bool) -> bool {
+        \\    while flag {
+        \\        hit(value);
+        \\    }
+        \\    return !other;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_loop_derived_scalar_returns.mc", source, &output);
+
+    const compare_body = try llvmFunctionBody(output.items, "define internal i1 @loop_compare");
+    try expectContains(compare_body, "br i1 %flag");
+    try expectContains(compare_body, "call void @hit(i16 %value)");
+    try expectContains(compare_body, "icmp eq i16 %value, 0");
+    try expectNotContains(compare_body, "alloca");
+
+    const not_body = try llvmFunctionBody(output.items, "define internal i1 @loop_not");
+    try expectContains(not_body, "br i1 %flag");
+    try expectContains(not_body, "call void @hit(i16 %value)");
+    try expectContains(not_body, "xor i1 %other, true");
+    try expectNotContains(not_body, "alloca");
+}
+
 test "LLVM MIR conditional fast path uses only the switch subject expression" {
     const source =
         \\global g: u32 = 0;

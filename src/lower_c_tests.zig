@@ -2845,6 +2845,39 @@ test "lower-c loop grouped scalar returns lower from MIR without body fallback" 
     try expectNotContains(call_body, "uint16_t x");
 }
 
+test "lower-c loop derived scalar returns lower from MIR without body fallback" {
+    const source =
+        \\extern fn hit(value: u16) -> void;
+        \\fn loop_compare(flag: bool, value: u16) -> bool {
+        \\    while flag {
+        \\        hit(value);
+        \\    }
+        \\    return value == 0;
+        \\}
+        \\fn loop_not(flag: bool, value: u16, other: bool) -> bool {
+        \\    while flag {
+        \\        hit(value);
+        \\    }
+        \\    return !other;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_loop_derived_scalar_returns.mc", source, &output);
+
+    const compare_body = try cFunctionBody(output.items, "static bool loop_compare(bool flag, uint16_t value)");
+    try expectContains(compare_body, "while (flag)");
+    try expectContains(compare_body, "hit(value);");
+    try expectContains(compare_body, "return (value == 0);");
+    try expectNotContains(compare_body, "mc_tmp");
+
+    const not_body = try cFunctionBody(output.items, "static bool loop_not(bool flag, uint16_t value, bool other)");
+    try expectContains(not_body, "while (flag)");
+    try expectContains(not_body, "hit(value);");
+    try expectContains(not_body, "return !other;");
+    try expectNotContains(not_body, "mc_tmp");
+}
+
 test "lower-c sequences C variadic arguments through typed temporaries" {
     const source =
         \\extern "C" fn c_log(format: cstr, ...) -> i32;
