@@ -534,6 +534,7 @@ test "LLVM emits simple global stores from MIR" {
         \\global g: u32 = 0;
         \\global h: u32 = 0;
         \\global flag: bool = false;
+        \\global s: i32 = 0;
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
@@ -568,6 +569,12 @@ test "LLVM emits simple global stores from MIR" {
         \\    g = x;
         \\    h = g;
         \\    flag = !input;
+        \\}
+        \\fn store_add(a: i32, b: i32) {
+        \\    s = a + b;
+        \\}
+        \\fn store_neg(a: i32) {
+        \\    s = -a;
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -623,6 +630,18 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(many_body, "xor i1 %input, true");
     try expectContains(many_body, "ptr @flag unordered, align 1");
     try expectNotContains(many_body, "alloca");
+
+    const add_body = try llvmFunctionBody(output.items, "define internal void @store_add");
+    try expectContains(add_body, "@llvm.sadd.with.overflow.i32");
+    try expectContains(add_body, "store atomic i32 %t");
+    try expectContains(add_body, "ptr @s unordered, align 4");
+    try expectNotContains(add_body, "alloca");
+
+    const neg_body = try llvmFunctionBody(output.items, "define internal void @store_neg");
+    try expectContains(neg_body, "@llvm.ssub.with.overflow.i32");
+    try expectContains(neg_body, "store atomic i32 %t");
+    try expectContains(neg_body, "ptr @s unordered, align 4");
+    try expectNotContains(neg_body, "alloca");
 }
 
 test "LLVM preserves MIR void calls before simple returns" {

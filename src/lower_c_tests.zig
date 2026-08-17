@@ -531,6 +531,7 @@ test "lower-c emits simple global stores from MIR" {
         \\global g: u32 = 0;
         \\global h: u32 = 0;
         \\global flag: bool = false;
+        \\global s: i32 = 0;
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
@@ -565,6 +566,12 @@ test "lower-c emits simple global stores from MIR" {
         \\    g = x;
         \\    h = g;
         \\    flag = !input;
+        \\}
+        \\fn store_add(a: i32, b: i32) {
+        \\    s = a + b;
+        \\}
+        \\fn store_neg(a: i32) {
+        \\    s = -a;
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -610,6 +617,14 @@ test "lower-c emits simple global stores from MIR" {
     try expectContains(many_body, "mc_race_store_u32(&h, (uint32_t)((uint32_t)mc_race_load_u32(&g)));");
     try expectContains(many_body, "mc_race_store_bool(&flag, (bool)!input);");
     try expectNotContains(many_body, "mc_tmp");
+
+    const add_body = try cFunctionBody(output.items, "static void store_add(int32_t a, int32_t b)");
+    try expectContains(add_body, "mc_race_store_i32(&s, (int32_t)mc_checked_add_i32(a, b));");
+    try expectNotContains(add_body, "mc_tmp");
+
+    const neg_body = try cFunctionBody(output.items, "static void store_neg(int32_t a)");
+    try expectContains(neg_body, "mc_race_store_i32(&s, (int32_t)mc_checked_neg_i32(a));");
+    try expectNotContains(neg_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before simple returns" {

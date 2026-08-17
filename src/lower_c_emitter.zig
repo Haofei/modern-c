@@ -1300,6 +1300,8 @@ pub const CEmitter = struct {
         arg: SimpleMirArg,
         global_load: []const u8,
         direct_call: SimpleMirDirectCall,
+        checked_binary: SimpleMirCheckedBinary,
+        checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
     };
@@ -1604,7 +1606,6 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirGlobalStores(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirGlobalStores {
-        if (!simpleMirNoTrap(fn_mir)) return null;
         var stores: SimpleMirGlobalStores = .{};
         for (block.instructions) |instruction| {
             if (instruction.kind != .assign) continue;
@@ -1624,12 +1625,21 @@ pub const CEmitter = struct {
             stores.count += 1;
         }
         if (stores.count == 0) return null;
+        if (fn_mir.trap_edges.len != simpleMirGlobalStoresTrapCount(stores)) return null;
+        for (fn_mir.blocks, 0..) |mir_block, index| {
+            if (index == 0) continue;
+            if (!std.mem.eql(u8, mir_block.kind, "trap") or mir_block.terminator != .trap_) return null;
+        }
         if (!self.blockOnlyContainsSimpleMirGlobalStoreInstructions(function, fn_mir, block)) return null;
         return stores;
     }
 
     fn simpleMirGlobalStoreValue(self: *CEmitter, function: anytype, fn_mir: mir.Function, value_source: mir.SourcePoint) ?SimpleMirGlobalStoreValue {
-        return if (self.simpleMirCompareBinaryAtSource(function, fn_mir, value_source)) |binary|
+        return if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, value_source)) |binary|
+            .{ .checked_binary = binary }
+        else if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, value_source)) |unary|
+            .{ .checked_unary = unary }
+        else if (self.simpleMirCompareBinaryAtSource(function, fn_mir, value_source)) |binary|
             .{ .compare_binary = binary }
         else if (self.simpleMirLogicalNotAtSource(function, fn_mir, value_source)) |arg|
             .{ .logical_not = arg }
@@ -1643,9 +1653,23 @@ pub const CEmitter = struct {
             return null;
     }
 
+    fn simpleMirGlobalStoreValueTrapCount(value: SimpleMirGlobalStoreValue) usize {
+        return switch (value) {
+            .checked_binary, .checked_unary => 1,
+            .direct_call => |call| simpleMirDirectCallTrapCount(call),
+            else => 0,
+        };
+    }
+
+    fn simpleMirGlobalStoresTrapCount(stores: SimpleMirGlobalStores) usize {
+        var count: usize = 0;
+        for (stores.stores[0..stores.count]) |store| count += simpleMirGlobalStoreValueTrapCount(store.value);
+        return count;
+    }
+
     fn blockOnlyContainsSimpleMirGlobalStoreInstructions(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .local, .target_type, .integer_literal_conversion => {},
+            .param, .local, .target_type, .integer_literal_conversion, .add_overflow => {},
             .assign => {
                 if (mirFunctionHasLocal(fn_mir, instruction.detail)) {
                     const source = self.simpleMirAssignmentSourceInBlock(block, instruction.detail) orelse return false;
@@ -1656,11 +1680,13 @@ pub const CEmitter = struct {
             },
             .binary => {
                 const source = instructionSourcePoint(instruction);
-                if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return false;
+                if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
+                    self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return false;
             },
             .unary => {
                 const source = instructionSourcePoint(instruction);
-                if (self.simpleMirLogicalNotAtSource(function, fn_mir, source) == null) return false;
+                if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, source) == null and
+                    self.simpleMirLogicalNotAtSource(function, fn_mir, source) == null) return false;
             },
             .call => {
                 const source = instructionSourcePoint(instruction);
@@ -2016,6 +2042,20 @@ pub const CEmitter = struct {
             .arg => |arg| try self.emitSimpleMirArg(arg),
             .global_load => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
             .direct_call => |call| try self.emitSimpleMirDirectCall(call),
+            .checked_binary => |binary| {
+                const helper = try self.checkedHelperName(binary.op, binary.type_name);
+                try self.out.print(self.allocator, "{s}(", .{helper});
+                try self.emitSimpleMirArg(binary.left);
+                try self.out.appendSlice(self.allocator, ", ");
+                try self.emitSimpleMirArg(binary.right);
+                try self.out.appendSlice(self.allocator, ")");
+            },
+            .checked_unary => |unary| {
+                const helper = try self.checkedUnaryHelperName(unary.op, unary.type_name);
+                try self.out.print(self.allocator, "{s}(", .{helper});
+                try self.emitSimpleMirArg(unary.operand);
+                try self.out.appendSlice(self.allocator, ")");
+            },
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
             .logical_not => |arg| {
                 try self.out.appendSlice(self.allocator, "!");
