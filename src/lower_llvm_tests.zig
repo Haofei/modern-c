@@ -207,6 +207,7 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
 
 test "LLVM emits simple void conditional direct calls from MIR" {
     const source =
+        \\global cg: i32 = 0;
         \\extern fn hit(value: i32) -> void;
         \\fn choose_void(flag: bool) -> void {
         \\    if (flag) {
@@ -248,6 +249,15 @@ test "LLVM emits simple void conditional direct calls from MIR" {
         \\        hit(0);
         \\    }
         \\    hit(x);
+        \\    hit(x);
+        \\}
+        \\fn choose_void_suffix_store(flag: bool, x: i32) -> void {
+        \\    if (flag) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\    cg = x;
         \\    hit(x);
         \\}
         \\fn choose_void_no_else(flag: bool) -> void {
@@ -348,6 +358,19 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try std.testing.expect(two_suffix_first < two_suffix_second);
     try expectNotContains(two_suffix_body, "switch");
     try expectNotContains(two_suffix_body, "alloca");
+
+    const suffix_store_body = try llvmFunctionBody(output.items, "define internal void @choose_void_suffix_store");
+    const suffix_store_branch = std.mem.indexOf(u8, suffix_store_body, "br i1 %flag, label %bb_if_then") orelse return error.TestUnexpectedResult;
+    const suffix_store_then = std.mem.indexOf(u8, suffix_store_body, "call void @hit(i32 1)") orelse return error.TestUnexpectedResult;
+    const suffix_store_else = std.mem.indexOf(u8, suffix_store_body, "call void @hit(i32 0)") orelse return error.TestUnexpectedResult;
+    const suffix_store = std.mem.indexOf(u8, suffix_store_body, "store atomic i32 %x, ptr @cg unordered, align 4") orelse return error.TestUnexpectedResult;
+    const suffix_store_call = std.mem.indexOf(u8, suffix_store_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(suffix_store_branch < suffix_store_then);
+    try std.testing.expect(suffix_store_then < suffix_store);
+    try std.testing.expect(suffix_store_else < suffix_store);
+    try std.testing.expect(suffix_store < suffix_store_call);
+    try expectNotContains(suffix_store_body, "switch");
+    try expectNotContains(suffix_store_body, "alloca");
 
     const no_else_body = try llvmFunctionBody(output.items, "define internal void @choose_void_no_else");
     try expectContains(no_else_body, "br i1 %flag, label %bb_if_then");
@@ -679,6 +702,13 @@ test "LLVM emits simple global stores from MIR" {
         \\    hit(x);
         \\    hit(x);
         \\}
+        \\fn if_store_suffix_store_call(flag: bool, x: u32) {
+        \\    if (flag) {
+        \\        g = x;
+        \\    }
+        \\    h = x;
+        \\    hit(x);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -801,6 +831,17 @@ test "LLVM emits simple global stores from MIR" {
     try std.testing.expect(two_suffix_first < two_suffix_second);
     try expectNotContains(two_suffix_store_body, "switch");
     try expectNotContains(two_suffix_store_body, "alloca");
+
+    const suffix_store_call_body = try llvmFunctionBody(output.items, "define internal void @if_store_suffix_store_call");
+    const suffix_store_call_branch = std.mem.indexOf(u8, suffix_store_call_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const suffix_store_call_first_store = std.mem.indexOf(u8, suffix_store_call_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const suffix_store_call_second_store = std.mem.indexOf(u8, suffix_store_call_body, "store atomic i32 %x, ptr @h unordered, align 4") orelse return error.TestUnexpectedResult;
+    const suffix_store_call_hit = std.mem.indexOf(u8, suffix_store_call_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(suffix_store_call_branch < suffix_store_call_first_store);
+    try std.testing.expect(suffix_store_call_first_store < suffix_store_call_second_store);
+    try std.testing.expect(suffix_store_call_second_store < suffix_store_call_hit);
+    try expectNotContains(suffix_store_call_body, "switch");
+    try expectNotContains(suffix_store_call_body, "alloca");
 }
 
 test "LLVM preserves MIR void calls before simple returns" {

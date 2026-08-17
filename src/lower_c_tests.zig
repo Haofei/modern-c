@@ -224,6 +224,7 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
 
 test "lower-c emits simple void conditional direct calls from MIR" {
     const source =
+        \\global cg: i32 = 0;
         \\extern fn hit(value: i32) -> void;
         \\fn choose_void(flag: bool) -> void {
         \\    if (flag) {
@@ -265,6 +266,15 @@ test "lower-c emits simple void conditional direct calls from MIR" {
         \\        hit(0);
         \\    }
         \\    hit(x);
+        \\    hit(x);
+        \\}
+        \\fn choose_void_suffix_store(flag: bool, x: i32) -> void {
+        \\    if (flag) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\    cg = x;
         \\    hit(x);
         \\}
         \\fn choose_void_no_else(flag: bool) -> void {
@@ -364,6 +374,19 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try std.testing.expect(two_suffix_first < two_suffix_second);
     try expectNotContains(two_suffix_body, "switch");
     try expectNotContains(two_suffix_body, "mc_tmp");
+
+    const suffix_store_body = try cFunctionBody(output.items, "static void choose_void_suffix_store(bool flag, int32_t x)");
+    const suffix_store_if = std.mem.indexOf(u8, suffix_store_body, "if (flag)") orelse return error.TestUnexpectedResult;
+    const suffix_store_then = std.mem.indexOf(u8, suffix_store_body, "hit(1);") orelse return error.TestUnexpectedResult;
+    const suffix_store_else = std.mem.indexOf(u8, suffix_store_body, "hit(0);") orelse return error.TestUnexpectedResult;
+    const suffix_store = std.mem.indexOf(u8, suffix_store_body, "mc_race_store_i32(&cg, (int32_t)x);") orelse return error.TestUnexpectedResult;
+    const suffix_store_call = std.mem.indexOf(u8, suffix_store_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(suffix_store_if < suffix_store_then);
+    try std.testing.expect(suffix_store_then < suffix_store);
+    try std.testing.expect(suffix_store_else < suffix_store);
+    try std.testing.expect(suffix_store < suffix_store_call);
+    try expectNotContains(suffix_store_body, "switch");
+    try expectNotContains(suffix_store_body, "mc_tmp");
 
     const no_else_body = try cFunctionBody(output.items, "static void choose_void_no_else(bool flag)");
     try expectContains(no_else_body, "if (flag)");
@@ -676,6 +699,13 @@ test "lower-c emits simple global stores from MIR" {
         \\    hit(x);
         \\    hit(x);
         \\}
+        \\fn if_store_suffix_store_call(flag: bool, x: u32) {
+        \\    if (flag) {
+        \\        g = x;
+        \\    }
+        \\    h = x;
+        \\    hit(x);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -791,6 +821,17 @@ test "lower-c emits simple global stores from MIR" {
     try std.testing.expect(two_suffix_first < two_suffix_second);
     try expectNotContains(two_suffix_store_body, "switch");
     try expectNotContains(two_suffix_store_body, "mc_tmp");
+
+    const suffix_store_call_body = try cFunctionBody(output.items, "static void if_store_suffix_store_call(bool flag, uint32_t x)");
+    const suffix_store_call_if = std.mem.indexOf(u8, suffix_store_call_body, "if (flag) {") orelse return error.TestUnexpectedResult;
+    const suffix_store_call_first_store = std.mem.indexOf(u8, suffix_store_call_body, "mc_race_store_u32(&g, (uint32_t)x);") orelse return error.TestUnexpectedResult;
+    const suffix_store_call_second_store = std.mem.indexOf(u8, suffix_store_call_body, "mc_race_store_u32(&h, (uint32_t)x);") orelse return error.TestUnexpectedResult;
+    const suffix_store_call_hit = std.mem.indexOf(u8, suffix_store_call_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(suffix_store_call_if < suffix_store_call_first_store);
+    try std.testing.expect(suffix_store_call_first_store < suffix_store_call_second_store);
+    try std.testing.expect(suffix_store_call_second_store < suffix_store_call_hit);
+    try expectNotContains(suffix_store_call_body, "switch");
+    try expectNotContains(suffix_store_call_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before simple returns" {
