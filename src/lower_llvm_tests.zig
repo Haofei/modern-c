@@ -186,6 +186,11 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
         \\    g = x;
         \\    return x;
         \\}
+        \\fn choose_empty_return(flag: bool, x: u32) -> u32 {
+        \\    if (flag) {
+        \\    }
+        \\    return x;
+        \\}
         \\fn choose_branch_effect_return(flag: bool, x: u32) -> u32 {
         \\    if (flag) {
         \\        hit(x);
@@ -303,6 +308,13 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     try std.testing.expect(empty_suffix_store < empty_suffix_return);
     try expectNotContains(empty_suffix_return_body, "switch");
     try expectNotContains(empty_suffix_return_body, "alloca");
+
+    const empty_return_body = try llvmFunctionBody(output.items, "define internal i32 @choose_empty_return");
+    const empty_return_branch = std.mem.indexOf(u8, empty_return_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const empty_return_stmt = std.mem.indexOf(u8, empty_return_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(empty_return_branch < empty_return_stmt);
+    try expectNotContains(empty_return_body, "switch");
+    try expectNotContains(empty_return_body, "alloca");
 
     const branch_effect_body = try llvmFunctionBody(output.items, "define internal i32 @choose_branch_effect_return");
     const branch_effect_branch = std.mem.indexOf(u8, branch_effect_body, "br i1 %flag") orelse return error.TestUnexpectedResult;

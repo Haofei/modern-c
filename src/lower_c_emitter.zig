@@ -2019,7 +2019,6 @@ pub const CEmitter = struct {
         if (then_block.terminator != .jump or else_block.terminator != .jump) return null;
         if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
         const value = self.simpleMirReturnValueInBlock(function, fn_mir, after_block) orelse return null;
-        if (then_statement_sources.count + else_statement_sources.count + suffix_statement_sources.count == 0) return null;
         if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
         const suffix_traps = self.simpleMirVoidStatementSourcesTrapCount(function, fn_mir, suffix_statement_sources) orelse return null;
         if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(prefix_calls) + then_traps + else_traps + suffix_traps + simpleMirConditionalTrapCount(value)) return null;
