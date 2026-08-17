@@ -6714,6 +6714,19 @@ test "LLVM checked-unary inferred local lowers without function body fallback" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "llvm.ssub.with.overflow.i64") != null);
 }
 
+test "LLVM checked-binary inferred local lowers without function body fallback" {
+    const source =
+        \\fn binary_local(left: u64, right: u64) -> u64 {
+        \\    let sum = left + right;
+        \\    return sum;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_inferred_local_checked_binary_return.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "llvm.uadd.with.overflow.i64") != null);
+}
+
 test "LLVM block expressions consume MIR result facts" {
     const source =
         \\fn block_result() -> u32 {
