@@ -2245,6 +2245,42 @@ test "lower-c scalar global reads lower from MIR without body fallback" {
     try expectContains(const_body, "LIMIT");
 }
 
+test "lower-c ordinary bool global accesses lower from MIR without body fallback" {
+    const source =
+        \\global flag: bool = false;
+        \\fn read_flag() -> bool {
+        \\    return flag;
+        \\}
+        \\fn write_flag(value: bool) -> void {
+        \\    flag = value;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_ordinary_bool_global.mc", source, &output);
+
+    const load_body = try cFunctionBody(output.items, "static bool read_flag(void)");
+    try expectContains(load_body, "return ((bool)mc_race_load_bool(&flag));");
+
+    const store_body = try cFunctionBody(output.items, "static void write_flag(bool value)");
+    try expectContains(store_body, "mc_race_store_bool(&flag, (bool)value);");
+}
+
+test "lower-c immutable scalar global reads lower from MIR without body fallback" {
+    const source =
+        \\const LIMIT: u32 = 7;
+        \\fn read_limit() -> u32 {
+        \\    return LIMIT;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_immutable_scalar_global.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static uint32_t read_limit(void)");
+    try expectContains(body, "return ((uint32_t)mc_race_load_u32(&LIMIT));");
+}
+
 test "lower-c preserves MIR void calls before conditional returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

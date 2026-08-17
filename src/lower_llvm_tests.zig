@@ -15122,6 +15122,65 @@ test "LLVM immutable scalar global value reads avoid atomic traffic" {
     try expectNotContains(body, "load atomic");
 }
 
+test "LLVM scalar global reads lower from MIR without body fallback" {
+    const source =
+        \\global flag: bool = false;
+        \\const LIMIT: u32 = 7;
+        \\fn read_flag() -> bool {
+        \\    return flag;
+        \\}
+        \\fn write_flag(value: bool) -> void {
+        \\    flag = value;
+        \\}
+        \\fn read_limit() -> u32 {
+        \\    return LIMIT;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_scalar_global_reads.mc", source, &output);
+
+    const load_body = try llvmFunctionBody(output.items, "define internal i1 @read_flag");
+    try expectContains(load_body, "load atomic i8, ptr @flag unordered, align 1");
+
+    const store_body = try llvmFunctionBody(output.items, "define internal void @write_flag");
+    try expectContains(store_body, "store atomic i8 ");
+    try expectContains(store_body, "ptr @flag unordered, align 1");
+
+    const const_body = try llvmFunctionBody(output.items, "define internal i32 @read_limit");
+    try expectContains(const_body, "load i32, ptr @LIMIT");
+    try expectNotContains(const_body, "load atomic");
+}
+
+test "LLVM simple functions and race-safe globals lower from MIR without body fallback" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\fn add(a: u32, b: u32) -> u32 {
+        \\    return a + b;
+        \\}
+        \\fn store(x: u32) -> void {
+        \\    shared_counter = x;
+        \\}
+        \\fn load() -> u32 {
+        \\    return shared_counter;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_simple_functions_race_safe_globals.mc", source, &output);
+
+    const add_body = try llvmFunctionBody(output.items, "define internal i32 @add");
+    try expectContains(add_body, "@llvm.uadd.with.overflow.i32");
+    try expectContains(add_body, "ret i32 %t");
+
+    const store_body = try llvmFunctionBody(output.items, "define internal void @store");
+    try expectContains(store_body, "store atomic i32 %x, ptr @shared_counter unordered, align 4");
+
+    const load_body = try llvmFunctionBody(output.items, "define internal i32 @load");
+    try expectContains(load_body, "load atomic i32, ptr @shared_counter unordered, align 4");
+}
+
 test "LLVM wide-scalar global race lowering fails closed" {
     // A u128 global scalar access would need `load atomic i128`, which lowers to an
     // `__atomic_load_16` libcall the freestanding kernel cannot link. Spec §I.13:
