@@ -1940,6 +1940,26 @@ test "LLVM emits basic scalar returns from MIR without body fallback" {
     try expectNotContains(param_body, "store");
 }
 
+test "LLVM emits enum literal returns from MIR without body fallback" {
+    const source =
+        \\enum Color {
+        \\    red,
+        \\    blue,
+        \\}
+        \\fn color() -> Color {
+        \\    return .blue;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_literal_return.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i64 @color");
+    try expectContains(body, "ret i64 1");
+    try expectNotContains(body, "alloca");
+    try expectNotContains(body, "store");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

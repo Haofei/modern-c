@@ -1253,6 +1253,7 @@ const LlvmEmitter = struct {
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
         bool_literal: bool,
+        enum_literal: SimpleMirEnumLiteral,
         global_load: []const u8,
         nested_call: SimpleMirNestedCall,
         direct_call: SimpleMirDirectCall,
@@ -1272,6 +1273,11 @@ const LlvmEmitter = struct {
         direct_call: SimpleMirDirectCall,
         direct_calls: SimpleMirDirectCalls,
         conditional_direct_calls: SimpleMirConditionalVoidBody,
+    };
+
+    const SimpleMirEnumLiteral = struct {
+        enum_name: []const u8,
+        case_name: []const u8,
     };
 
     const SimpleMirTrapBody = struct {
@@ -1573,6 +1579,10 @@ const LlvmEmitter = struct {
                 },
                 .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, return_span),
                 .bool_literal => |value| try self.emitReturnValue(ret_ty, if (value) "1" else "0", return_span),
+                .enum_literal => |literal| {
+                    const enum_decl = self.enum_types.get(literal.enum_name) orelse return error.UnsupportedLlvmEmission;
+                    try self.emitReturnValue(ret_ty, try self.enumCaseValueByName(enum_decl, literal.case_name), return_span);
+                },
                 .global_load => |name| {
                     const value = try self.emitSimpleMirGlobalLoad(name, ret_ty);
                     try self.emitReturnValue(ret_ty, value, return_span);
@@ -1796,6 +1806,9 @@ const LlvmEmitter = struct {
             for (fn_mir.bool_facts) |fact| {
                 if (sameMirSourceLocation(fact.source, source)) return if (simpleMirNoTrap(fn_mir)) .{ .bool_literal = fact.value } else null;
             }
+        }
+        if (self.simpleMirEnumLiteralAtSource(fn_mir, value_id, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| {
+            return if (simpleMirNoTrap(fn_mir)) .{ .enum_literal = literal } else null;
         }
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
             if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
@@ -3762,17 +3775,26 @@ const LlvmEmitter = struct {
         return self.simpleMirArgAt(function, fn_mir, init_source);
     }
 
+    fn simpleMirEnumLiteralAtSource(self: *LlvmEmitter, fn_mir: mir.Function, case_name: []const u8, source: mir.SourcePoint) ?SimpleMirEnumLiteral {
+        const fact = simpleMirTargetTypeFactKindAt(fn_mir, .enum_literal, source) orelse return null;
+        const enum_decl = self.enumDeclForType(fact.target_ty) orelse return null;
+        for (enum_decl.cases) |case| {
+            if (std.mem.eql(u8, case.name.text, case_name)) return .{ .enum_name = enum_decl.name.text, .case_name = case_name };
+        }
+        return null;
+    }
+
     fn blockOnlyContainsSimpleMirReturnInstructions(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) bool {
         return self.blockOnlyContainsSimpleMirReturnInstructionsInBlock(function, fn_mir, fn_mir.blocks[0]);
     }
 
     fn blockOnlyContainsSimpleMirReturnInstructionsInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
-        _ = fn_mir;
         for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .local, .assign, .target_type, .integer_literal_conversion, .binary, .unary, .add_overflow, .return_value => {},
+            .param, .local, .assign, .target_type, .integer_literal_conversion, .representation_check, .binary, .unary, .add_overflow, .return_value => {},
             .call => {},
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "struct_literal") or std.mem.eql(u8, instruction.detail, "array_literal")) continue;
+                if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {

@@ -1793,6 +1793,25 @@ test "lower-c emits basic scalar returns from MIR without body fallback" {
     try expectNotContains(param_body, "mc_tmp");
 }
 
+test "lower-c emits enum literal returns from MIR without body fallback" {
+    const source =
+        \\enum Color {
+        \\    red,
+        \\    blue,
+        \\}
+        \\fn color() -> Color {
+        \\    return .blue;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_literal_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static Color color(void)");
+    try expectContains(body, "return Color_blue;");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
