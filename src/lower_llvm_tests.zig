@@ -7232,7 +7232,7 @@ test "LLVM explicit traps require exact MIR reason identities" {
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_explicit_trap_target_facts.mc", .{}, false, .riscv64, null);
+    try appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_explicit_trap_target_facts.mc", .{}, false, .riscv64, false, null);
     for ([_][]const u8{ "Bounds", "NullUnwrap", "IntegerOverflow", "DivideByZero", "InvalidShift", "InvalidRepresentation", "Assert", "Unreachable" }) |reason| {
         const helper = try std.fmt.allocPrint(std.testing.allocator, "call void @mc_trap_{s}()", .{reason});
         defer std.testing.allocator.free(helper);
@@ -7252,6 +7252,20 @@ test "LLVM explicit traps require exact MIR reason identities" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.InvalidMirCallTargetFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, "llvm_explicit_trap_target_facts.mc", .{}, false, .riscv64, null));
+}
+
+test "LLVM emits explicit traps from MIR without body fallback" {
+    const source =
+        \\fn trap_bounds() -> never { return trap(.Bounds); }
+        \\fn trap_assert() -> never { return trap(.Assert); }
+        \\fn trap_unreachable() -> never { return trap(.Unreachable); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_explicit_traps.mc", source, &output);
+    try expectContains(output.items, "call void @mc_trap_Bounds()");
+    try expectContains(output.items, "call void @mc_trap_Assert()");
+    try expectContains(output.items, "call void @mc_trap_Unreachable()");
 }
 
 test "LLVM runtime asserts require MIR bool condition types" {
