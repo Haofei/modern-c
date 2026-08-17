@@ -1602,6 +1602,7 @@ test "LLVM emits simple global stores from MIR" {
         \\global wide: u64 = 0;
         \\global byte: u8 = 0;
         \\global current: Color = .red;
+        \\global maybe: ?u32 = null;
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
@@ -1657,6 +1658,9 @@ test "LLVM emits simple global stores from MIR" {
         \\}
         \\fn store_enum() {
         \\    current = .blue;
+        \\}
+        \\fn store_none() {
+        \\    maybe = null;
         \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
@@ -1805,6 +1809,12 @@ test "LLVM emits simple global stores from MIR" {
     const enum_body = try llvmFunctionBody(output.items, "define internal void @store_enum");
     try expectContains(enum_body, "store atomic i64 1, ptr @current unordered, align 8");
     try expectNotContains(enum_body, "alloca");
+
+    const none_body = try llvmFunctionBody(output.items, "define internal void @store_none");
+    try expectContains(none_body, "call void @llvm.memset.p0.i64(ptr align 4 @maybe, i8 0, i64 8, i1 false)");
+    try expectContains(none_body, "extractvalue { i1, i32 } zeroinitializer, 0");
+    try expectContains(none_body, "extractvalue { i1, i32 } zeroinitializer, 1");
+    try expectNotContains(none_body, "alloca");
 
     const neg_body = try llvmFunctionBody(output.items, "define internal void @store_neg");
     try expectContains(neg_body, "@llvm.ssub.with.overflow.i32");

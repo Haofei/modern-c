@@ -881,6 +881,7 @@ test "lower-c emits simple global stores from MIR" {
         \\global wide: u64 = 0;
         \\global byte: u8 = 0;
         \\global current: Color = .red;
+        \\global maybe: ?u32 = null;
         \\fn id(x: u32) -> u32 {
         \\    return x;
         \\}
@@ -936,6 +937,9 @@ test "lower-c emits simple global stores from MIR" {
         \\}
         \\fn store_enum() {
         \\    current = .blue;
+        \\}
+        \\fn store_none() {
+        \\    maybe = null;
         \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
@@ -1064,6 +1068,10 @@ test "lower-c emits simple global stores from MIR" {
     const enum_body = try cFunctionBody(output.items, "static void store_enum(void)");
     try expectContains(enum_body, "mc_race_store_isize(&current, (intptr_t)Color_blue);");
     try expectNotContains(enum_body, "mc_tmp");
+
+    const none_body = try cFunctionBody(output.items, "static void store_none(void)");
+    try expectContains(none_body, "maybe = (mc_opt_u32)((mc_opt_u32){ .present = false });");
+    try expectNotContains(none_body, "mc_tmp");
 
     const neg_body = try cFunctionBody(output.items, "static void store_neg(int32_t a)");
     try expectContains(neg_body, "mc_race_store_i32(&s, (int32_t)mc_checked_neg_i32(a));");
