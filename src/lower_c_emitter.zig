@@ -1261,6 +1261,7 @@ pub const CEmitter = struct {
         param: []const u8,
         integer_literal: []const u8,
         bool_literal: bool,
+        logical_not: SimpleMirArg,
         compare_binary: SimpleMirCompareBinary,
     };
 
@@ -1779,9 +1780,9 @@ pub const CEmitter = struct {
                 try self.out.appendSlice(self.allocator, ")");
             },
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
-            .logical_not => |arg| {
+            .logical_not => |operand| {
                 try self.out.appendSlice(self.allocator, "!");
-                try self.emitSimpleMirArg(arg);
+                try self.emitSimpleMirArg(operand);
             },
         }
     }
@@ -1836,6 +1837,10 @@ pub const CEmitter = struct {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
+            .logical_not => |operand| {
+                try self.out.appendSlice(self.allocator, "!");
+                try self.emitSimpleMirArg(operand);
+            },
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
         }
     }
@@ -1915,7 +1920,7 @@ pub const CEmitter = struct {
                 continue;
             }
             if (instruction.kind == .return_value or instruction.kind == .local) break;
-            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion) continue;
+            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
             const arg = self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
             if (count >= operands.len) return null;
             operands[count] = arg;
@@ -1984,7 +1989,7 @@ pub const CEmitter = struct {
                 continue;
             }
             if (instruction.kind == .return_value or instruction.kind == .local) break;
-            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion) continue;
+            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
             const operand = self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
             return .{ .op = unary_instr.detail, .type_name = target_name, .operand = operand };
         }
@@ -2029,7 +2034,7 @@ pub const CEmitter = struct {
             }
             if (instruction.kind == .return_value) break;
             if (instruction.kind == .call) break;
-            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion) continue;
+            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
             const arg_source = instructionSourcePoint(instruction);
             const fact = self.simpleMirDirectCallArgumentFactAt(fn_mir, callee, arg_source) orelse continue;
             const arg_index = fact.target_index orelse return null;
@@ -2057,6 +2062,7 @@ pub const CEmitter = struct {
 
     fn simpleMirCallArgAt(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirCallArg {
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
+        if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
             .integer_literal => |literal| .{ .integer_literal = literal },
