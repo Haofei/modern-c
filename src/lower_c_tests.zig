@@ -1495,6 +1495,65 @@ test "lower-c emits simple array literal returns from MIR" {
     try expectNotContains(assigned_body, "out =");
 }
 
+test "lower-c emits array control-flow returns from MIR" {
+    const source =
+        \\extern fn hit(value: u32) -> void;
+        \\fn choose_array(flag: bool, a: u32, b: u32) -> [2]u32 {
+        \\    if (flag) {
+        \\        return .{ a, b };
+        \\    } else {
+        \\        return .{ b, a };
+        \\    }
+        \\}
+        \\fn choose_assign_array(flag: bool, a: u32, b: u32) -> [2]u32 {
+        \\    var out: [2]u32 = .{ a, b };
+        \\    if (flag) {
+        \\        out = .{ b, a };
+        \\    }
+        \\    return out;
+        \\}
+        \\fn loop_array(flag: bool, a: u32, b: u32) -> [2]u32 {
+        \\    while (flag) {
+        \\    }
+        \\    return .{ a, b };
+        \\}
+        \\fn side_then_array(a: u32, b: u32) -> [2]u32 {
+        \\    hit(a);
+        \\    return .{ a, b };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_array_control_returns.mc", source, &output);
+
+    const choose_body = try cFunctionBody(output.items, "static mc_array_u32_2 choose_array(bool flag, uint32_t a, uint32_t b)");
+    try expectContains(choose_body, "if (flag) {");
+    try expectContains(choose_body, "return (mc_array_u32_2){ .elems = { a, b } };");
+    try expectContains(choose_body, "return (mc_array_u32_2){ .elems = { b, a } };");
+    try expectNotContains(choose_body, "mc_tmp");
+    try expectNotContains(choose_body, "switch");
+
+    const choose_assign_body = try cFunctionBody(output.items, "static mc_array_u32_2 choose_assign_array(bool flag, uint32_t a, uint32_t b)");
+    try expectContains(choose_assign_body, "if (flag) {");
+    try expectContains(choose_assign_body, "return (mc_array_u32_2){ .elems = { b, a } };");
+    try expectContains(choose_assign_body, "return (mc_array_u32_2){ .elems = { a, b } };");
+    try expectNotContains(choose_assign_body, "mc_tmp");
+    try expectNotContains(choose_assign_body, "out =");
+    try expectNotContains(choose_assign_body, "switch");
+
+    const loop_body = try cFunctionBody(output.items, "static mc_array_u32_2 loop_array(bool flag, uint32_t a, uint32_t b)");
+    try expectContains(loop_body, "while (flag) {");
+    try expectContains(loop_body, "return (mc_array_u32_2){ .elems = { a, b } };");
+    try expectNotContains(loop_body, "mc_tmp");
+    try expectNotContains(loop_body, "switch");
+
+    const side_body = try cFunctionBody(output.items, "static mc_array_u32_2 side_then_array(uint32_t a, uint32_t b)");
+    const side_call = std.mem.indexOf(u8, side_body, "hit(a);") orelse return error.TestUnexpectedResult;
+    const side_ret = std.mem.indexOf(u8, side_body, "return (mc_array_u32_2){ .elems = { a, b } };") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side_call < side_ret);
+    try expectNotContains(side_body, "mc_tmp");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

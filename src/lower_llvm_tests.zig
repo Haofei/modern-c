@@ -1602,6 +1602,79 @@ test "LLVM emits simple array literal returns from MIR" {
     try expectNotContains(assigned_body, "store");
 }
 
+test "LLVM emits array control-flow returns from MIR" {
+    const source =
+        \\extern fn hit(value: u32) -> void;
+        \\fn choose_array(flag: bool, a: u32, b: u32) -> [2]u32 {
+        \\    if (flag) {
+        \\        return .{ a, b };
+        \\    } else {
+        \\        return .{ b, a };
+        \\    }
+        \\}
+        \\fn choose_assign_array(flag: bool, a: u32, b: u32) -> [2]u32 {
+        \\    var out: [2]u32 = .{ a, b };
+        \\    if (flag) {
+        \\        out = .{ b, a };
+        \\    }
+        \\    return out;
+        \\}
+        \\fn loop_array(flag: bool, a: u32, b: u32) -> [2]u32 {
+        \\    while (flag) {
+        \\    }
+        \\    return .{ a, b };
+        \\}
+        \\fn side_then_array(a: u32, b: u32) -> [2]u32 {
+        \\    hit(a);
+        \\    return .{ a, b };
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_array_control_returns.mc", source, &output);
+
+    const choose_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @choose_array");
+    try expectContains(choose_body, "br i1 %flag");
+    try expectContains(choose_body, "insertvalue [2 x i32] zeroinitializer, i32 %a, 0");
+    try expectContains(choose_body, "insertvalue [2 x i32] %t");
+    try expectContains(choose_body, "i32 %b, 1");
+    try expectContains(choose_body, "insertvalue [2 x i32] zeroinitializer, i32 %b, 0");
+    try expectContains(choose_body, "i32 %a, 1");
+    try expectContains(choose_body, "ret [2 x i32] %t");
+    try expectNotContains(choose_body, "alloca");
+    try expectNotContains(choose_body, "store");
+    try expectNotContains(choose_body, "switch");
+
+    const choose_assign_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @choose_assign_array");
+    try expectContains(choose_assign_body, "br i1 %flag");
+    try expectContains(choose_assign_body, "insertvalue [2 x i32] zeroinitializer, i32 %b, 0");
+    try expectContains(choose_assign_body, "i32 %a, 1");
+    try expectContains(choose_assign_body, "insertvalue [2 x i32] zeroinitializer, i32 %a, 0");
+    try expectContains(choose_assign_body, "i32 %b, 1");
+    try expectContains(choose_assign_body, "ret [2 x i32] %t");
+    try expectNotContains(choose_assign_body, "alloca");
+    try expectNotContains(choose_assign_body, "store");
+    try expectNotContains(choose_assign_body, "switch");
+
+    const loop_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @loop_array");
+    try expectContains(loop_body, "br i1 %flag");
+    try expectContains(loop_body, "insertvalue [2 x i32] zeroinitializer, i32 %a, 0");
+    try expectContains(loop_body, "i32 %b, 1");
+    try expectContains(loop_body, "ret [2 x i32] %t");
+    try expectNotContains(loop_body, "alloca");
+    try expectNotContains(loop_body, "store");
+    try expectNotContains(loop_body, "switch");
+
+    const side_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @side_then_array");
+    const side_call = std.mem.indexOf(u8, side_body, "call void @hit(i32 %a)") orelse return error.TestUnexpectedResult;
+    const side_ret = std.mem.indexOf(u8, side_body, "ret [2 x i32] %t") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(side_call < side_ret);
+    try expectContains(side_body, "insertvalue [2 x i32] zeroinitializer, i32 %a, 0");
+    try expectContains(side_body, "i32 %b, 1");
+    try expectNotContains(side_body, "alloca");
+    try expectNotContains(side_body, "store");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
