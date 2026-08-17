@@ -1841,7 +1841,6 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirStructLiteralReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirStructLiteralReturn {
-        if (fn_mir.trap_edges.len != 0) return null;
         const ret_ty = function.signature.return_type orelse return null;
         const type_name = type_bridge.typeName(self.resolveAliasType(ret_ty)) orelse return null;
         const struct_decl = self.struct_types.get(type_name) orelse return null;
@@ -1858,7 +1857,9 @@ const LlvmEmitter = struct {
             }
         }
         const source = literal_source orelse return null;
-        return self.simpleMirStructLiteralFromBlockAtIndex(function, fn_mir, block, literal_index, source);
+        const literal = self.simpleMirStructLiteralFromBlockAtIndex(function, fn_mir, block, literal_index, source) orelse return null;
+        if (fn_mir.trap_edges.len != simpleMirStructLiteralTrapCount(literal)) return null;
+        return literal;
     }
 
     fn simpleMirStructLiteralFromBlockAtIndex(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, literal_index: usize, source: mir.SourcePoint) ?SimpleMirStructLiteralReturn {
@@ -1898,7 +1899,6 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirArrayLiteralReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirArrayLiteralReturn {
-        if (fn_mir.trap_edges.len != 0) return null;
         var literal_source: ?mir.SourcePoint = null;
         var literal_index: usize = 0;
         for (block.instructions, 0..) |instruction, index| {
@@ -1910,7 +1910,9 @@ const LlvmEmitter = struct {
             }
         }
         const source = literal_source orelse return null;
-        return self.simpleMirArrayLiteralFromBlockAtIndex(function, fn_mir, block, literal_index, source);
+        const literal = self.simpleMirArrayLiteralFromBlockAtIndex(function, fn_mir, block, literal_index, source) orelse return null;
+        if (fn_mir.trap_edges.len != simpleMirArrayLiteralTrapCount(literal)) return null;
+        return literal;
     }
 
     fn simpleMirArrayLiteralFromBlockAtIndex(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, literal_index: usize, source: mir.SourcePoint) ?SimpleMirArrayLiteralReturn {
@@ -2841,6 +2843,8 @@ const LlvmEmitter = struct {
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call),
             .checked_binary => |binary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
             .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirArgUsesParamField(unary.operand)),
+            .struct_literal => |literal| fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal),
+            .array_literal => |literal| fn_mir.trap_edges.len == simpleMirArrayLiteralTrapCount(literal),
             .enum_literal => fn_mir.trap_edges.len >= 1 and self.noFunctionBodyFallbacksAvailable(),
             else => false,
         };
@@ -2871,6 +2875,18 @@ const LlvmEmitter = struct {
             .checked_binary, .checked_unary => 1,
             else => 0,
         };
+    }
+
+    fn simpleMirStructLiteralTrapCount(literal: SimpleMirStructLiteralReturn) usize {
+        var count: usize = 0;
+        for (literal.fields[0..literal.field_count]) |field| count += simpleMirCallArgTrapCount(field.value);
+        return count;
+    }
+
+    fn simpleMirArrayLiteralTrapCount(literal: SimpleMirArrayLiteralReturn) usize {
+        var count: usize = 0;
+        for (literal.items[0..literal.item_count]) |item| count += simpleMirCallArgTrapCount(item);
+        return count;
     }
 
     fn simpleMirDirectCallTrapCount(call: SimpleMirDirectCall) usize {
