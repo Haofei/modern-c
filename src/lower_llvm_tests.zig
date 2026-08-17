@@ -4038,6 +4038,35 @@ test "LLVM explicit casts require MIR source and target type facts" {
     try std.testing.expectError(error.UnsupportedLlvmEmission, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &stale_result, &stale_result_output, "llvm_explicit_cast_type_facts.mc", .{}, false, .riscv64, null));
 }
 
+test "LLVM local and assigned explicit casts lower from MIR without body fallback" {
+    const source =
+        \\fn local_cast(value: u32) -> u64 {
+        \\    let widened = value as u64;
+        \\    return widened;
+        \\}
+        \\fn assigned_cast(value: u32) -> u64 {
+        \\    var widened: u64 = 0;
+        \\    widened = value as u64;
+        \\    return widened;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_assigned_explicit_cast_return.mc", source, &output);
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i64 @local_cast");
+    try expectContains(local_body, "zext i32 %value to i64");
+    try expectContains(local_body, "ret i64 %t");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i64 @assigned_cast");
+    try expectContains(assigned_body, "zext i32 %value to i64");
+    try expectContains(assigned_body, "ret i64 %t");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+}
+
 test "LLVM implicit view const narrowing requires MIR source and target type facts" {
     const source =
         \\fn narrow(xs: []mut u8) -> []const u8 { return xs; }

@@ -3755,6 +3755,34 @@ test "lower-c explicit casts require MIR source and target type facts" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &module_mir, &output, .kernel, "c_explicit_cast_type_facts.mc", .{}, false, null));
 }
 
+test "lower-c local and assigned explicit casts lower from MIR without body fallback" {
+    const source =
+        \\fn local_cast(value: u32) -> u64 {
+        \\    let widened = value as u64;
+        \\    return widened;
+        \\}
+        \\fn assigned_cast(value: u32) -> u64 {
+        \\    var widened: u64 = 0;
+        \\    widened = value as u64;
+        \\    return widened;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_explicit_cast_return.mc", source, &output);
+
+    const local_body = try cFunctionBody(output.items, "static uint64_t local_cast(uint32_t value)");
+    try expectContains(local_body, "return ((uint64_t)(value));");
+    try expectNotContains(local_body, "uint64_t widened");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static uint64_t assigned_cast(uint32_t value)");
+    try expectContains(assigned_body, "return ((uint64_t)(value));");
+    try expectNotContains(assigned_body, "uint64_t widened");
+    try expectNotContains(assigned_body, "widened =");
+    try expectNotContains(assigned_body, "mc_tmp");
+}
+
 test "lower-c cast deref pointee requires MIR expression result" {
     const source =
         \\fn read(p: *mut u32) -> u32 {
