@@ -1896,6 +1896,25 @@ test "lower-c emits conditional nullable none returns from MIR without body fall
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c preserves MIR void calls before nullable none returns" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\fn side_then_none() -> ?u32 {
+        \\    hit(7);
+        \\    return null;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_calls_before_nullable_none_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static mc_opt_u32 side_then_none(void)");
+    const hit = std.mem.indexOf(u8, body, "hit(7);") orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, body, "return (mc_opt_u32){ .present = false };") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hit < ret);
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c emits enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {

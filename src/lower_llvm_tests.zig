@@ -2042,6 +2042,26 @@ test "LLVM emits conditional nullable none returns from MIR without body fallbac
     try expectNotContains(body, "store");
 }
 
+test "LLVM preserves MIR void calls before nullable none returns" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\fn side_then_none() -> ?u32 {
+        \\    hit(7);
+        \\    return null;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_void_calls_before_nullable_none_return.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal { i1, i32 } @side_then_none");
+    const hit = std.mem.indexOf(u8, body, "call void @hit(i32 7)") orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, body, "ret { i1, i32 } zeroinitializer") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hit < ret);
+    try expectNotContains(body, "alloca");
+    try expectNotContains(body, "store");
+}
+
 test "LLVM emits enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {
