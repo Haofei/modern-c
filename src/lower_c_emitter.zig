@@ -1466,6 +1466,7 @@ pub const CEmitter = struct {
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
+        wrapping_binary: SimpleMirWrappingBinary,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
     };
@@ -1610,15 +1611,6 @@ pub const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, "));\n");
                 },
                 .wrapping_binary => |binary| {
-                    _ = binary.result_fact;
-                    const op = if (std.mem.eql(u8, binary.op, "add"))
-                        "+"
-                    else if (std.mem.eql(u8, binary.op, "sub"))
-                        "-"
-                    else if (std.mem.eql(u8, binary.op, "mul"))
-                        "*"
-                    else
-                        return error.UnsupportedCEmission;
                     switch (binary.kind) {
                         .wrapping_add => {},
                         .unchecked => {
@@ -1627,11 +1619,9 @@ pub const CEmitter = struct {
                             try self.writeIndent();
                         },
                     }
-                    try self.out.appendSlice(self.allocator, "return (");
-                    try self.emitSimpleMirCallArg(binary.left);
-                    try self.out.print(self.allocator, " {s} ", .{op});
-                    try self.emitSimpleMirCallArg(binary.right);
-                    try self.out.appendSlice(self.allocator, ");\n");
+                    try self.out.appendSlice(self.allocator, "return ");
+                    try self.emitSimpleMirWrappingBinaryExpr(binary);
+                    try self.out.appendSlice(self.allocator, ";\n");
                 },
                 .struct_literal => |literal| {
                     try self.out.appendSlice(self.allocator, "return ");
@@ -2024,7 +2014,7 @@ pub const CEmitter = struct {
 
         const result_fact = simpleMirTargetTypeFactKindAt(fn_mir, .wrapping_result, call_source) orelse return null;
         const result_name = type_bridge.typeName(self.resolveAliasType(result_fact.target_ty)) orelse return null;
-        if (!std.mem.eql(u8, expected_type_name, result_name)) return null;
+        if (!std.mem.eql(u8, expected_type_name, result_name) and !std.mem.eql(u8, expected_type_name, self.cTypeFor(result_fact.target_ty, .typedef_name) catch return null)) return null;
         if (unsignedTypeSuffix(result_name) == null) return null;
         var left_fact: ?mir.TargetTypeFact = null;
         var right_fact: ?mir.TargetTypeFact = null;
@@ -2089,7 +2079,7 @@ pub const CEmitter = struct {
 
         const result_fact = simpleMirTargetTypeFactKindAt(fn_mir, .unchecked_result, call_source) orelse return null;
         const result_name = type_bridge.typeName(self.resolveAliasType(result_fact.target_ty)) orelse return null;
-        if (!std.mem.eql(u8, expected_type_name, result_name)) return null;
+        if (!std.mem.eql(u8, expected_type_name, result_name) and !std.mem.eql(u8, expected_type_name, self.cTypeFor(result_fact.target_ty, .typedef_name) catch return null)) return null;
         if (unsignedTypeSuffix(result_name) == null) return null;
         var left_fact: ?mir.TargetTypeFact = null;
         var right_fact: ?mir.TargetTypeFact = null;
@@ -2292,7 +2282,6 @@ pub const CEmitter = struct {
         if (self.simpleMirLoopVoidBody(function, fn_mir)) |loop| return .{ .loop_statements = loop };
         const block = fn_mir.blocks[0];
         if (block.terminator != .fallthrough) return null;
-        if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
         if (self.simpleMirVoidStatements(function, fn_mir, block)) |statements| return .{ .statements = statements };
         if (self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block, false)) |calls| {
             if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(calls)) return null;
@@ -2558,7 +2547,7 @@ pub const CEmitter = struct {
                 const value_source = self.simpleMirAssignmentSourceInBlock(block, name) orelse return null;
                 result.statements[result.count] = .{ .global_store = .{
                     .name = name,
-                    .value = self.simpleMirGlobalStoreValue(function, fn_mir, value_source) orelse return null,
+                    .value = self.simpleMirGlobalStoreValue(function, fn_mir, name, value_source) orelse return null,
                     .source = instructionSourcePoint(instruction),
                 } };
                 result.count += 1;
@@ -2592,11 +2581,16 @@ pub const CEmitter = struct {
         return count;
     }
 
-    fn simpleMirGlobalStoreValue(self: *CEmitter, function: anytype, fn_mir: mir.Function, value_source: mir.SourcePoint) ?SimpleMirGlobalStoreValue {
+    fn simpleMirGlobalStoreValue(self: *CEmitter, function: anytype, fn_mir: mir.Function, store_name: []const u8, value_source: mir.SourcePoint) ?SimpleMirGlobalStoreValue {
+        const global_info = self.globals.get(store_name) orelse return null;
         return if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, value_source)) |binary|
             .{ .checked_binary = binary }
         else if (self.simpleMirCheckedUnaryAtSource(function, fn_mir, value_source)) |unary|
             .{ .checked_unary = unary }
+        else if (self.simpleMirWrappingBinaryAtSource(function, fn_mir, value_source, global_info.type_name)) |binary|
+            .{ .wrapping_binary = binary }
+        else if (self.simpleMirUncheckedBinaryAtSource(function, fn_mir, value_source, global_info.type_name, store_name)) |binary|
+            .{ .wrapping_binary = binary }
         else if (self.simpleMirCompareBinaryAtSource(function, fn_mir, value_source)) |binary|
             .{ .compare_binary = binary }
         else if (self.simpleMirLogicalNotAtSource(function, fn_mir, value_source)) |arg|
@@ -2628,7 +2622,7 @@ pub const CEmitter = struct {
 
     fn blockOnlyContainsSimpleMirVoidStatementInstructions(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
-            .param, .local, .target_type, .integer_literal_conversion, .add_overflow, .return_value => {},
+            .param, .local, .target_type, .integer_literal_conversion, .add_overflow, .contract_begin, .contract_end, .unchecked_assume, .call_target, .return_value => {},
             .assign => {
                 if (mirFunctionHasLocal(fn_mir, instruction.detail)) {
                     const source = self.simpleMirAssignmentSourceInBlock(block, instruction.detail) orelse return false;
@@ -2649,12 +2643,19 @@ pub const CEmitter = struct {
             },
             .call => {
                 const source = instructionSourcePoint(instruction);
+                if (simpleMirArithmeticCallAtSource(fn_mir, source)) continue;
                 if (self.simpleMirDirectCallAtSource(function, fn_mir, source) == null) return false;
             },
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or
                     std.mem.eql(u8, instruction.detail, "bool") or
                     std.mem.eql(u8, instruction.detail, "literal")) continue;
+                if ((std.mem.eql(u8, instruction.detail, "add") or
+                    std.mem.eql(u8, instruction.detail, "sub") or
+                    std.mem.eql(u8, instruction.detail, "mul") or
+                    std.mem.eql(u8, instruction.detail, "wrapping") or
+                    std.mem.eql(u8, instruction.detail, "unchecked")) and
+                    simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
                 } else {
@@ -3198,6 +3199,7 @@ pub const CEmitter = struct {
                         .name = store.name,
                         .info = self.globals.get(store.name) orelse return error.UnsupportedCEmission,
                     };
+                    try self.emitSimpleMirUncheckedRangeCommentForGlobalStoreValue(store.value);
                     try appendGlobalStorePrefix(self.allocator, self.out, target);
                     try self.emitSimpleMirGlobalStoreValue(store.value);
                     try appendGlobalStoreSuffix(self.allocator, self.out, target);
@@ -3221,8 +3223,10 @@ pub const CEmitter = struct {
                     .name = store.name,
                     .info = self.globals.get(store.name) orelse return error.UnsupportedCEmission,
                 };
+                const value = self.simpleMirGlobalStoreValue(function, fn_mir, store.name, store.value_source) orelse return error.UnsupportedCEmission;
+                try self.emitSimpleMirUncheckedRangeCommentForGlobalStoreValue(value);
                 try appendGlobalStorePrefix(self.allocator, self.out, target);
-                try self.emitSimpleMirGlobalStoreValue(self.simpleMirGlobalStoreValue(function, fn_mir, store.value_source) orelse return error.UnsupportedCEmission);
+                try self.emitSimpleMirGlobalStoreValue(value);
                 try appendGlobalStoreSuffix(self.allocator, self.out, target);
             },
         };
@@ -3361,12 +3365,44 @@ pub const CEmitter = struct {
                 try self.emitSimpleMirArg(unary.operand);
                 try self.out.appendSlice(self.allocator, ")");
             },
+            .wrapping_binary => |binary| try self.emitSimpleMirWrappingBinaryExpr(binary),
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
             .logical_not => |arg| {
                 try self.out.appendSlice(self.allocator, "!");
                 try self.emitSimpleMirArg(arg);
             },
         }
+    }
+
+    fn emitSimpleMirUncheckedRangeCommentForGlobalStoreValue(self: *CEmitter, value: SimpleMirGlobalStoreValue) !void {
+        switch (value) {
+            .wrapping_binary => |binary| switch (binary.kind) {
+                .wrapping_add => {},
+                .unchecked => {
+                    const fact = binary.range_fact orelse return error.UnsupportedCEmission;
+                    try self.out.print(self.allocator, "/* MC_MIR_RANGE no_overflow target={s} op={s} */\n", .{ fact.target, fact.op });
+                    try self.writeIndent();
+                },
+            },
+            else => {},
+        }
+    }
+
+    fn emitSimpleMirWrappingBinaryExpr(self: *CEmitter, binary: SimpleMirWrappingBinary) !void {
+        _ = binary.result_fact;
+        const op = if (std.mem.eql(u8, binary.op, "add"))
+            "+"
+        else if (std.mem.eql(u8, binary.op, "sub"))
+            "-"
+        else if (std.mem.eql(u8, binary.op, "mul"))
+            "*"
+        else
+            return error.UnsupportedCEmission;
+        try self.out.appendSlice(self.allocator, "(");
+        try self.emitSimpleMirCallArg(binary.left);
+        try self.out.print(self.allocator, " {s} ", .{op});
+        try self.emitSimpleMirCallArg(binary.right);
+        try self.out.appendSlice(self.allocator, ")");
     }
 
     fn emitSimpleMirCallArg(self: *CEmitter, arg: SimpleMirCallArg) !void {
@@ -4021,7 +4057,7 @@ pub const CEmitter = struct {
         var calls: SimpleMirDirectCalls = .{};
         for (block.instructions) |instruction| {
             switch (instruction.kind) {
-                .param, .local, .target_type, .integer_literal_conversion, .add_overflow => {},
+                .param, .local, .target_type, .integer_literal_conversion, .add_overflow, .contract_begin, .contract_end, .unchecked_assume, .call_target => {},
                 .assign => if (!mirFunctionHasLocal(fn_mir, instruction.detail)) return null,
                 .binary => {
                     if (std.mem.eql(u8, instruction.detail, "switch_subject")) continue;
@@ -4038,6 +4074,12 @@ pub const CEmitter = struct {
                     if (std.mem.eql(u8, instruction.detail, "int") or
                         std.mem.eql(u8, instruction.detail, "bool") or
                         std.mem.eql(u8, instruction.detail, "literal")) continue;
+                    if ((std.mem.eql(u8, instruction.detail, "add") or
+                        std.mem.eql(u8, instruction.detail, "sub") or
+                        std.mem.eql(u8, instruction.detail, "mul") or
+                        std.mem.eql(u8, instruction.detail, "wrapping") or
+                        std.mem.eql(u8, instruction.detail, "unchecked")) and
+                        simpleMirArithmeticCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
                     if (self.globals.contains(instruction.detail)) continue;
                     if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                     if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
@@ -4050,6 +4092,7 @@ pub const CEmitter = struct {
                 },
                 .call => {
                     const source = instructionSourcePoint(instruction);
+                    if (simpleMirArithmeticCallAtSource(fn_mir, source)) continue;
                     if (!simpleMirDirectCallResultVoid(fn_mir, source)) {
                         if (simpleMirReturnInstruction(block)) |ret| {
                             if (ret.value_id) |value_id| {
@@ -4142,7 +4185,7 @@ pub const CEmitter = struct {
         for (sources.sources[0..sources.count]) |source| {
             count += switch (source) {
                 .direct_call => |call_source| simpleMirDirectCallTrapCount(self.simpleMirDirectCallAtSource(function, fn_mir, call_source) orelse return null),
-                .global_store => |store| simpleMirGlobalStoreValueTrapCount(self.simpleMirGlobalStoreValue(function, fn_mir, store.value_source) orelse return null),
+                .global_store => |store| simpleMirGlobalStoreValueTrapCount(self.simpleMirGlobalStoreValue(function, fn_mir, store.name, store.value_source) orelse return null),
             };
         }
         return count;

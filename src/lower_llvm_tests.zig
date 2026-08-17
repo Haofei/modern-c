@@ -1634,6 +1634,14 @@ test "LLVM emits simple global stores from MIR" {
         \\fn store_add(a: i32, b: i32) {
         \\    s = a + b;
         \\}
+        \\fn store_wrap(a: u32) {
+        \\    g = wrapping.add(a, 1);
+        \\}
+        \\fn store_unchecked(a: u32) {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        g = unchecked.add(a, 1);
+        \\    }
+        \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
         \\}
@@ -1752,6 +1760,19 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(add_body, "store atomic i32 %t");
     try expectContains(add_body, "ptr @s unordered, align 4");
     try expectNotContains(add_body, "alloca");
+
+    const wrap_body = try llvmFunctionBody(output.items, "define internal void @store_wrap");
+    try expectContains(wrap_body, " = add i32 %a, 1");
+    try expectContains(wrap_body, "store atomic i32 %t");
+    try expectContains(wrap_body, "ptr @g unordered, align 4");
+    try expectNotContains(wrap_body, "alloca");
+
+    const unchecked_body = try llvmFunctionBody(output.items, "define internal void @store_unchecked");
+    try expectContains(unchecked_body, "mir range_fact consumed fn=store_unchecked target=g op=add assumption=no_overflow");
+    try expectContains(unchecked_body, " = add i32 %a, 1");
+    try expectContains(unchecked_body, "store atomic i32 %t");
+    try expectContains(unchecked_body, "ptr @g unordered, align 4");
+    try expectNotContains(unchecked_body, "alloca");
 
     const neg_body = try llvmFunctionBody(output.items, "define internal void @store_neg");
     try expectContains(neg_body, "@llvm.ssub.with.overflow.i32");

@@ -913,6 +913,14 @@ test "lower-c emits simple global stores from MIR" {
         \\fn store_add(a: i32, b: i32) {
         \\    s = a + b;
         \\}
+        \\fn store_wrap(a: u32) {
+        \\    g = wrapping.add(a, 1);
+        \\}
+        \\fn store_unchecked(a: u32) {
+        \\    #[unsafe_contract(no_overflow)] {
+        \\        g = unchecked.add(a, 1);
+        \\    }
+        \\}
         \\fn store_neg(a: i32) {
         \\    s = -a;
         \\}
@@ -1019,6 +1027,15 @@ test "lower-c emits simple global stores from MIR" {
     const add_body = try cFunctionBody(output.items, "static void store_add(int32_t a, int32_t b)");
     try expectContains(add_body, "mc_race_store_i32(&s, (int32_t)mc_checked_add_i32(a, b));");
     try expectNotContains(add_body, "mc_tmp");
+
+    const wrap_body = try cFunctionBody(output.items, "static void store_wrap(uint32_t a)");
+    try expectContains(wrap_body, "mc_race_store_u32(&g, (uint32_t)(a + 1));");
+    try expectNotContains(wrap_body, "mc_tmp");
+
+    const unchecked_body = try cFunctionBody(output.items, "static void store_unchecked(uint32_t a)");
+    try expectContains(unchecked_body, "/* MC_MIR_RANGE no_overflow target=g op=add */");
+    try expectContains(unchecked_body, "mc_race_store_u32(&g, (uint32_t)(a + 1));");
+    try expectNotContains(unchecked_body, "mc_tmp");
 
     const neg_body = try cFunctionBody(output.items, "static void store_neg(int32_t a)");
     try expectContains(neg_body, "mc_race_store_i32(&s, (int32_t)mc_checked_neg_i32(a));");
