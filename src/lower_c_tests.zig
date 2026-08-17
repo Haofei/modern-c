@@ -1908,6 +1908,7 @@ test "lower-c emits char literal return from MIR without body fallback" {
 
 test "lower-c emits float literal returns from MIR without body fallback" {
     const source =
+        \\extern fn mark_float(value: f32) -> f32;
         \\fn small() -> f32 {
         \\    return 1.5;
         \\}
@@ -1922,6 +1923,9 @@ test "lower-c emits float literal returns from MIR without body fallback" {
         \\    var x: f32 = 0.0;
         \\    x = 1.5;
         \\    return x;
+        \\}
+        \\fn direct_call_small() -> f32 {
+        \\    return mark_float(1.5);
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -1946,6 +1950,11 @@ test "lower-c emits float literal returns from MIR without body fallback" {
     try expectNotContains(assigned_body, "float x");
     try expectNotContains(assigned_body, "x =");
     try expectNotContains(assigned_body, "mc_tmp");
+
+    const call_body = try cFunctionBody(output.items, "static float direct_call_small(void)");
+    try expectContains(call_body, "return mark_float(1.5f);");
+    try expectNotContains(call_body, "float x");
+    try expectNotContains(call_body, "mc_tmp");
 }
 
 test "lower-c emits local and assigned char literal returns from MIR without body fallback" {

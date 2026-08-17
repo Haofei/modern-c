@@ -1448,6 +1448,7 @@ const LlvmEmitter = struct {
         param: []const u8,
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
+        float_literal: SimpleMirFloatLiteral,
         bool_literal: bool,
     };
 
@@ -1455,6 +1456,7 @@ const LlvmEmitter = struct {
         param: []const u8,
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
+        float_literal: SimpleMirFloatLiteral,
         bool_literal: bool,
         global_load: []const u8,
         direct_call: SimpleMirNestedCall,
@@ -3139,6 +3141,7 @@ const LlvmEmitter = struct {
                 .param_field => |field| .{ .param_field = field },
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
+                .float_literal => null,
             };
         }
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| return .{ .enum_literal = literal };
@@ -3192,6 +3195,7 @@ const LlvmEmitter = struct {
             .param_field => |field| .{ .param_field = field },
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
+            .float_literal => null,
         };
     }
 
@@ -3651,6 +3655,7 @@ const LlvmEmitter = struct {
             .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
             .param_field => |field| try self.emitSimpleMirParamFieldValue(field, span),
             .integer_literal => |literal| literal,
+            .float_literal => |literal| try self.simpleMirFloatLiteralValue(literal),
             .bool_literal => |value| if (value) "1" else "0",
         };
     }
@@ -3716,6 +3721,7 @@ const LlvmEmitter = struct {
             .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
             .param_field => |field| try self.emitSimpleMirParamFieldValue(field, span),
             .integer_literal => |literal| literal,
+            .float_literal => |literal| try self.simpleMirFloatLiteralValue(literal),
             .bool_literal => |value| if (value) "1" else "0",
             .global_load => |name| try self.emitSimpleMirGlobalLoad(name, self.global_types.get(name) orelse return error.UnsupportedLlvmEmission),
             .direct_call => |call| blk: {
@@ -4182,6 +4188,7 @@ const LlvmEmitter = struct {
             .param => |name| .{ .param = name },
             .param_field => |field| .{ .param_field = field },
             .integer_literal => |literal| .{ .integer_literal = literal },
+            .float_literal => |literal| .{ .float_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
         };
     }
@@ -4646,6 +4653,7 @@ const LlvmEmitter = struct {
                     .param => |name| if (simpleMirPlainExprAtSource(fn_mir, init_source)) .{ .param = name } else null,
                     .param_field => |field| if (simpleMirPlainExprAtSource(fn_mir, init_source)) .{ .param_field = field } else null,
                     .integer_literal => |literal| .{ .integer_literal = literal },
+                    .float_literal => |literal| .{ .float_literal = literal },
                     .bool_literal => |value| .{ .bool_literal = value },
                 };
             }
@@ -4682,6 +4690,7 @@ const LlvmEmitter = struct {
                 .param => |name| .{ .param = name },
                 .param_field => |field| .{ .param_field = field },
                 .integer_literal => |literal| .{ .integer_literal = literal },
+                .float_literal => |literal| .{ .float_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
             };
         }
@@ -4746,6 +4755,7 @@ const LlvmEmitter = struct {
                 .param => |name| .{ .param = name },
                 .param_field => |field| .{ .param_field = field },
                 .integer_literal => |literal| .{ .integer_literal = literal },
+                .float_literal => |literal| .{ .float_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
             };
         }
@@ -4830,6 +4840,7 @@ const LlvmEmitter = struct {
 
     fn simpleMirArgAt(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirArg {
         if (self.simpleMirCharIntegerLiteralAtSource(fn_mir, source)) |literal| return .{ .integer_literal = literal };
+        if (self.simpleMirFloatLiteralAtSource(fn_mir, source)) |literal| return .{ .float_literal = literal };
         for (fn_mir.integer_facts) |fact| {
             if (sameMirSourceLocation(fact.source, source)) return .{ .integer_literal = fact.literal };
         }

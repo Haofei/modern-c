@@ -1388,6 +1388,7 @@ pub const CEmitter = struct {
         param: []const u8,
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
+        float_literal: SimpleMirFloatLiteral,
         bool_literal: bool,
     };
 
@@ -1395,6 +1396,7 @@ pub const CEmitter = struct {
         param: []const u8,
         param_field: SimpleMirParamField,
         integer_literal: []const u8,
+        float_literal: SimpleMirFloatLiteral,
         bool_literal: bool,
         global_load: []const u8,
         direct_call: SimpleMirNestedCall,
@@ -3085,6 +3087,7 @@ pub const CEmitter = struct {
                 .param_field => |field| .{ .param_field = field },
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
+                .float_literal => null,
             };
         }
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| return .{ .enum_literal = literal };
@@ -3138,6 +3141,7 @@ pub const CEmitter = struct {
             .param_field => |field| .{ .param_field = field },
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
+            .float_literal => null,
         };
     }
 
@@ -3403,6 +3407,7 @@ pub const CEmitter = struct {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
             .param_field => |field| try self.out.print(self.allocator, "{s}.{s}", .{ try self.cIdent(field.param_name), try self.cIdent(field.field_name) }),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
+            .float_literal => |literal| try self.emitSimpleMirFloatLiteral(literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
         }
     }
@@ -3504,6 +3509,7 @@ pub const CEmitter = struct {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
             .param_field => |field| try self.out.print(self.allocator, "{s}.{s}", .{ try self.cIdent(field.param_name), try self.cIdent(field.field_name) }),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
+            .float_literal => |literal| try self.emitSimpleMirFloatLiteral(literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
             .global_load => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
             .direct_call => |call| try self.emitSimpleMirNestedCall(call),
@@ -3959,6 +3965,7 @@ pub const CEmitter = struct {
             .param => |name| .{ .param = name },
             .param_field => |field| .{ .param_field = field },
             .integer_literal => |literal| .{ .integer_literal = literal },
+            .float_literal => |literal| .{ .float_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
         };
     }
@@ -4411,6 +4418,7 @@ pub const CEmitter = struct {
                     .param => |name| if (simpleMirPlainExprAtSource(fn_mir, init_source)) .{ .param = name } else null,
                     .param_field => |field| if (simpleMirPlainExprAtSource(fn_mir, init_source)) .{ .param_field = field } else null,
                     .integer_literal => |literal| .{ .integer_literal = literal },
+                    .float_literal => |literal| .{ .float_literal = literal },
                     .bool_literal => |value| .{ .bool_literal = value },
                 };
             }
@@ -4447,6 +4455,7 @@ pub const CEmitter = struct {
                 .param => |name| .{ .param = name },
                 .param_field => |field| .{ .param_field = field },
                 .integer_literal => |literal| .{ .integer_literal = literal },
+                .float_literal => |literal| .{ .float_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
             };
         }
@@ -4511,6 +4520,7 @@ pub const CEmitter = struct {
                 .param => |name| .{ .param = name },
                 .param_field => |field| .{ .param_field = field },
                 .integer_literal => |literal| .{ .integer_literal = literal },
+                .float_literal => |literal| .{ .float_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
             };
         }
@@ -4588,6 +4598,7 @@ pub const CEmitter = struct {
 
     fn simpleMirArgAt(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirArg {
         if (self.simpleMirCharIntegerLiteralAtSource(fn_mir, source)) |literal| return .{ .integer_literal = literal };
+        if (self.simpleMirFloatLiteralAtSource(fn_mir, source)) |literal| return .{ .float_literal = literal };
         for (fn_mir.integer_facts) |fact| {
             if (sameMirSourceLocation(fact.source, source)) return .{ .integer_literal = fact.literal };
         }
