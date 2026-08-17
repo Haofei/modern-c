@@ -3338,7 +3338,7 @@ test "LLVM nominal declarations shadow same-named library scalars" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_shadowed_library_scalar.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_shadowed_library_scalar.mc", source, &output);
     try expectContains(output.items, "define internal { i32 } @identity({ i32 } %value)");
     try expectNotContains(output.items, "define internal i8 @identity(i8 %value)");
 }
