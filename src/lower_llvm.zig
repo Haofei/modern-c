@@ -1323,10 +1323,18 @@ const LlvmEmitter = struct {
         param: []const u8,
         integer_literal: []const u8,
         bool_literal: bool,
+        direct_call: SimpleMirNestedCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
         logical_not: SimpleMirArg,
         compare_binary: SimpleMirCompareBinary,
+    };
+
+    const SimpleMirNestedCall = struct {
+        callee: []const u8,
+        args: [max_simple_mir_call_args]SimpleMirArg = undefined,
+        arg_facts: [max_simple_mir_call_args]mir.TargetTypeFact = undefined,
+        arg_count: usize = 0,
     };
 
     const SimpleMirDirectCall = struct {
@@ -1588,6 +1596,7 @@ const LlvmEmitter = struct {
         if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
         if (self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block, false)) |calls| {
             if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(calls)) return null;
+            if (calls.count == 1) return .{ .direct_call = calls.calls[0] };
             if (calls.count > 1) return .{ .direct_calls = calls };
         }
         const call_source = self.simpleMirCallSource(fn_mir) orelse return if (simpleMirEmptyVoidBlock(function, fn_mir, block)) .empty else null;
@@ -1910,6 +1919,7 @@ const LlvmEmitter = struct {
 
     fn simpleMirCallArgTrapCount(arg: SimpleMirCallArg) usize {
         return switch (arg) {
+            .direct_call => 0,
             .checked_binary, .checked_unary => 1,
             else => 0,
         };
@@ -2029,6 +2039,11 @@ const LlvmEmitter = struct {
             .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
             .integer_literal => |literal| literal,
             .bool_literal => |value| if (value) "1" else "0",
+            .direct_call => |call| blk: {
+                const tmp = try self.nextTemp();
+                try self.emitSimpleMirNestedCall(call, tmp, span);
+                break :blk tmp;
+            },
             .checked_binary => |binary| try self.emitSimpleMirCheckedBinary(binary, span),
             .checked_unary => |unary| try self.emitSimpleMirCheckedUnary(unary, span),
             .logical_not => |operand| try self.emitSimpleMirLogicalNot(operand, span),
@@ -2054,6 +2069,27 @@ const LlvmEmitter = struct {
             const param_ext = if (callee_sig.c_abi) self.cAbiExtension(arg_ty) else "";
             const value = arg_values[i];
             try self.out.print(self.allocator, "{s} {s}{s}", .{ try self.llvmType(arg_ty), param_ext, value });
+        }
+        if (try self.debugLocation(span)) |dbg| {
+            try self.out.print(self.allocator, "), !dbg !{d}\n", .{dbg});
+        } else {
+            try self.out.appendSlice(self.allocator, ")\n");
+        }
+    }
+
+    fn emitSimpleMirNestedCall(self: *LlvmEmitter, call: SimpleMirNestedCall, result: []const u8, span: diagnostics.Span) !void {
+        const callee_sig = self.fn_sigs.get(call.callee) orelse return error.UnsupportedLlvmEmission;
+        const call_ret_ext = if (callee_sig.c_abi) self.cAbiExtension(callee_sig.ret) else "";
+        var arg_values: [max_simple_mir_call_args][]const u8 = undefined;
+        for (call.args[0..call.arg_count], 0..) |arg, i| {
+            arg_values[i] = try self.simpleMirArgValue(arg);
+        }
+        try self.out.print(self.allocator, "  {s} = call {s}{s} @{s}(", .{ result, call_ret_ext, try self.llvmType(callee_sig.ret), call.callee });
+        for (call.args[0..call.arg_count], 0..) |_, i| {
+            if (i != 0) try self.out.appendSlice(self.allocator, ", ");
+            const arg_ty = call.arg_facts[i].target_ty;
+            const param_ext = if (callee_sig.c_abi) self.cAbiExtension(arg_ty) else "";
+            try self.out.print(self.allocator, "{s} {s}{s}", .{ try self.llvmType(arg_ty), param_ext, arg_values[i] });
         }
         if (try self.debugLocation(span)) |dbg| {
             try self.out.print(self.allocator, "), !dbg !{d}\n", .{dbg});
@@ -2259,6 +2295,9 @@ const LlvmEmitter = struct {
         } else if (arg_count != fn_sig.params.len) return null;
         for (seen_args[0..arg_count]) |seen| if (!seen) return null;
         call.arg_count = arg_count;
+        if (arg_count > 1) {
+            for (call.args[0..arg_count]) |arg| if (simpleMirCallArgHasDirectCall(arg)) return null;
+        }
         return call;
     }
 
@@ -2268,11 +2307,72 @@ const LlvmEmitter = struct {
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirLocalCallArgAt(function, fn_mir, source)) |arg| return arg;
+        if (self.simpleMirNestedCallAtSource(function, fn_mir, source)) |call| {
+            if (self.simpleMirNestedCallReturnsValue(call)) return .{ .direct_call = call };
+        }
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
         };
+    }
+
+    fn simpleMirCallArgHasDirectCall(arg: SimpleMirCallArg) bool {
+        return switch (arg) {
+            .direct_call => true,
+            else => false,
+        };
+    }
+
+    fn simpleMirNestedCallReturnsValue(self: *LlvmEmitter, call: SimpleMirNestedCall) bool {
+        const fn_sig = self.fn_sigs.get(call.callee) orelse return false;
+        return !typeNameEql(fn_sig.ret, "void") and !typeNameEql(fn_sig.ret, "never");
+    }
+
+    fn simpleMirNestedCallAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint) ?SimpleMirNestedCall {
+        const call_block, const callee = blk: {
+            for (fn_mir.blocks) |block| {
+                for (block.instructions) |instruction| {
+                    if (instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) break :blk .{ block, instruction.detail };
+                }
+            }
+            return null;
+        };
+        var arg_count: usize = 0;
+        var call: SimpleMirNestedCall = .{ .callee = callee };
+        var seen_args = [_]bool{false} ** max_simple_mir_call_args;
+        var saw_result = false;
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind == .direct_call_result and std.mem.eql(u8, fact.target_owner orelse "", callee) and sameMirSourceLocation(fact.source, call_source)) {
+                saw_result = true;
+            }
+        }
+        if (!saw_result) return null;
+        var after_call = false;
+        for (call_block.instructions) |instruction| {
+            if (!after_call) {
+                after_call = instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source);
+                continue;
+            }
+            if (instruction.kind == .return_value) break;
+            if (instruction.kind == .call) break;
+            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion) continue;
+            const arg_source = instructionSourcePoint(instruction);
+            const fact = self.simpleMirDirectCallArgumentFactAt(fn_mir, callee, arg_source) orelse continue;
+            const arg_index = fact.target_index orelse return null;
+            if (arg_index >= max_simple_mir_call_args) return null;
+            call.args[arg_index] = self.simpleMirArgAt(function, fn_mir, arg_source) orelse return null;
+            call.arg_facts[arg_index] = fact;
+            seen_args[arg_index] = true;
+            arg_count = @max(arg_count, arg_index + 1);
+        }
+        const fn_sig = self.fn_sigs.get(callee) orelse return null;
+        if (fn_sig.is_variadic) {
+            if (arg_count < fn_sig.params.len) return null;
+        } else if (arg_count != fn_sig.params.len) return null;
+        for (seen_args[0..arg_count]) |seen| if (!seen) return null;
+        call.arg_count = arg_count;
+        return call;
     }
 
     fn simpleMirLocalCallArgAt(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirCallArg {
@@ -2367,7 +2467,10 @@ const LlvmEmitter = struct {
                 },
                 .call => {
                     const source = instructionSourcePoint(instruction);
-                    if (!simpleMirDirectCallResultVoid(fn_mir, source)) return null;
+                    if (!simpleMirDirectCallResultVoid(fn_mir, source)) {
+                        if (self.simpleMirCallFeedsLaterDirectCallArg(function, fn_mir, block, source)) continue;
+                        return null;
+                    }
                     if (calls.count >= max_simple_mir_void_calls) return null;
                     calls.calls[calls.count] = self.simpleMirDirectCallAtSource(function, fn_mir, source) orelse return null;
                     calls.count += 1;
@@ -2377,6 +2480,32 @@ const LlvmEmitter = struct {
         }
         if (!allow_empty and calls.count == 0) return null;
         return calls;
+    }
+
+    fn simpleMirCallFeedsLaterDirectCallArg(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, source: mir.SourcePoint) bool {
+        _ = function;
+        var after_source_call = false;
+        var active_callee: ?[]const u8 = null;
+        for (block.instructions) |instruction| {
+            if (!after_source_call) {
+                after_source_call = instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), source);
+                continue;
+            }
+            if (instruction.kind == .call) {
+                active_callee = instruction.detail;
+                continue;
+            }
+            if (instruction.kind != .expr) continue;
+            const callee = active_callee orelse continue;
+            const arg_source = instructionSourcePoint(instruction);
+            if (self.simpleMirDirectCallArgumentFactAt(fn_mir, callee, arg_source) == null) continue;
+            if (sameMirSourceLocation(arg_source, source)) return true;
+            if (!mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
+            const local_source = self.simpleMirAssignmentSourceInBlock(block, instruction.detail) orelse
+                self.simpleMirLocalInitSourceInBlock(block, instruction.detail) orelse continue;
+            if (sameMirSourceLocation(local_source, source)) return true;
+        }
+        return false;
     }
 
     fn simpleMirLocalInitReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, local_name: []const u8) ?SimpleMirReturn {

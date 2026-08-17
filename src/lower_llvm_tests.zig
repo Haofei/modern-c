@@ -330,6 +330,9 @@ test "LLVM emits simple void conditional direct calls from MIR" {
 test "LLVM emits simple sequential void direct calls from MIR" {
     const source =
         \\extern fn hit(value: i32) -> void;
+        \\fn id(value: i32) -> i32 {
+        \\    return value;
+        \\}
         \\fn sequence() -> void {
         \\    hit(1);
         \\    hit(2);
@@ -360,6 +363,15 @@ test "LLVM emits simple sequential void direct calls from MIR" {
         \\fn call_assigned_checked_arg(a: i32, b: i32) -> void {
         \\    var x: i32 = 0;
         \\    x = a + b;
+        \\    hit(x);
+        \\}
+        \\fn call_local_call_arg(a: i32) -> void {
+        \\    let x: i32 = id(a);
+        \\    hit(x);
+        \\}
+        \\fn call_assigned_call_arg(a: i32) -> void {
+        \\    var x: i32 = 0;
+        \\    x = id(a);
         \\    hit(x);
         \\}
         \\fn call_checked_add_arg(a: i32, b: i32) -> void {
@@ -410,6 +422,18 @@ test "LLVM emits simple sequential void direct calls from MIR" {
     try expectContains(assigned_checked_arg_body, "call void @hit(i32 %t");
     try expectNotContains(assigned_checked_arg_body, "alloca");
     try expectNotContains(assigned_checked_arg_body, "store");
+
+    const local_call_arg_body = try llvmFunctionBody(output.items, "define internal void @call_local_call_arg");
+    try expectContains(local_call_arg_body, "call i32 @id(i32 %a)");
+    try expectContains(local_call_arg_body, "call void @hit(i32 %t");
+    try expectNotContains(local_call_arg_body, "alloca");
+    try expectNotContains(local_call_arg_body, "store");
+
+    const assigned_call_arg_body = try llvmFunctionBody(output.items, "define internal void @call_assigned_call_arg");
+    try expectContains(assigned_call_arg_body, "call i32 @id(i32 %a)");
+    try expectContains(assigned_call_arg_body, "call void @hit(i32 %t");
+    try expectNotContains(assigned_call_arg_body, "alloca");
+    try expectNotContains(assigned_call_arg_body, "store");
 
     const checked_add_arg_body = try llvmFunctionBody(output.items, "define internal void @call_checked_add_arg");
     try expectContains(checked_add_arg_body, "@llvm.sadd.with.overflow.i32");

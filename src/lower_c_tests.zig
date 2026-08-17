@@ -341,6 +341,9 @@ test "lower-c emits simple void conditional direct calls from MIR" {
 test "lower-c emits simple sequential void direct calls from MIR" {
     const source =
         \\extern fn hit(value: i32) -> void;
+        \\fn id(value: i32) -> i32 {
+        \\    return value;
+        \\}
         \\fn sequence() -> void {
         \\    hit(1);
         \\    hit(2);
@@ -371,6 +374,15 @@ test "lower-c emits simple sequential void direct calls from MIR" {
         \\fn call_assigned_checked_arg(a: i32, b: i32) -> void {
         \\    var x: i32 = 0;
         \\    x = a + b;
+        \\    hit(x);
+        \\}
+        \\fn call_local_call_arg(a: i32) -> void {
+        \\    let x: i32 = id(a);
+        \\    hit(x);
+        \\}
+        \\fn call_assigned_call_arg(a: i32) -> void {
+        \\    var x: i32 = 0;
+        \\    x = id(a);
         \\    hit(x);
         \\}
         \\fn call_checked_add_arg(a: i32, b: i32) -> void {
@@ -420,6 +432,17 @@ test "lower-c emits simple sequential void direct calls from MIR" {
     try expectNotContains(assigned_checked_arg_body, "int32_t x");
     try expectNotContains(assigned_checked_arg_body, "x =");
     try expectNotContains(assigned_checked_arg_body, "mc_tmp");
+
+    const local_call_arg_body = try cFunctionBody(output.items, "static void call_local_call_arg(int32_t a)");
+    try expectContains(local_call_arg_body, "hit(id(a));");
+    try expectNotContains(local_call_arg_body, "int32_t x");
+    try expectNotContains(local_call_arg_body, "mc_tmp");
+
+    const assigned_call_arg_body = try cFunctionBody(output.items, "static void call_assigned_call_arg(int32_t a)");
+    try expectContains(assigned_call_arg_body, "hit(id(a));");
+    try expectNotContains(assigned_call_arg_body, "int32_t x");
+    try expectNotContains(assigned_call_arg_body, "x =");
+    try expectNotContains(assigned_call_arg_body, "mc_tmp");
 
     const checked_add_arg_body = try cFunctionBody(output.items, "static void call_checked_add_arg(int32_t a, int32_t b)");
     try expectContains(checked_add_arg_body, "hit(mc_checked_add_i32(a, b));");
