@@ -1533,10 +1533,10 @@ const LlvmEmitter = struct {
         const block = fn_mir.blocks[0];
         if (block.terminator != .fallthrough) return null;
         if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
-        if (self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block)) |calls| {
+        if (self.simpleMirDirectVoidCallsInBlock(function, fn_mir, block, false)) |calls| {
             if (calls.count > 1) return .{ .direct_calls = calls };
         }
-        const call_source = self.simpleMirCallSource(fn_mir) orelse return .empty;
+        const call_source = self.simpleMirCallSource(fn_mir) orelse return if (simpleMirEmptyVoidBlock(block)) .empty else null;
         if (!simpleMirDirectCallResultVoid(fn_mir, call_source)) return null;
         const call = self.simpleMirDirectCallAtSource(function, fn_mir, call_source) orelse return null;
         return .{ .direct_call = call };
@@ -1557,8 +1557,8 @@ const LlvmEmitter = struct {
         const else_block = fn_mir.blocks[else_index];
         if (then_block.terminator != .jump or else_block.terminator != .jump) return null;
         if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
-        const then_calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, then_block) orelse return null;
-        const else_calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, else_block) orelse return null;
+        const then_calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, then_block, true) orelse return null;
+        const else_calls = self.simpleMirDirectVoidCallsInBlock(function, fn_mir, else_block, true) orelse return null;
         return .{ .prefix_calls = prefix_calls, .condition = condition, .then_calls = then_calls, .else_calls = else_calls };
     }
 
@@ -2084,6 +2084,7 @@ const LlvmEmitter = struct {
         };
         var arg_count: usize = 0;
         var call: SimpleMirDirectCall = .{ .callee = callee };
+        var seen_args = [_]bool{false} ** max_simple_mir_call_args;
         var saw_result = false;
         for (fn_mir.target_type_facts) |fact| {
             if (fact.kind == .direct_call_result and std.mem.eql(u8, fact.target_owner orelse "", callee) and sameMirSourceLocation(fact.source, call_source)) {
@@ -2106,8 +2107,14 @@ const LlvmEmitter = struct {
             if (arg_index >= max_simple_mir_call_args) return null;
             call.args[arg_index] = self.simpleMirArgAt(function, fn_mir, arg_source) orelse return null;
             call.arg_facts[arg_index] = fact;
+            seen_args[arg_index] = true;
             arg_count = @max(arg_count, arg_index + 1);
         }
+        const fn_sig = self.fn_sigs.get(callee) orelse return null;
+        if (fn_sig.is_variadic) {
+            if (arg_count < fn_sig.params.len) return null;
+        } else if (arg_count != fn_sig.params.len) return null;
+        for (seen_args[0..arg_count]) |seen| if (!seen) return null;
         call.arg_count = arg_count;
         return call;
     }
@@ -2159,7 +2166,7 @@ const LlvmEmitter = struct {
         return null;
     }
 
-    fn simpleMirDirectVoidCallsInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirDirectCalls {
+    fn simpleMirDirectVoidCallsInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, allow_empty: bool) ?SimpleMirDirectCalls {
         var calls: SimpleMirDirectCalls = .{};
         for (block.instructions) |instruction| {
             switch (instruction.kind) {
@@ -2174,6 +2181,7 @@ const LlvmEmitter = struct {
                 else => return null,
             }
         }
+        if (!allow_empty and calls.count == 0) return null;
         return calls;
     }
 
@@ -2317,6 +2325,14 @@ const LlvmEmitter = struct {
             source = instructionSourcePoint(instruction);
         }
         return source;
+    }
+
+    fn simpleMirEmptyVoidBlock(block: mir.Block) bool {
+        for (block.instructions) |instruction| switch (instruction.kind) {
+            .param, .target_type => {},
+            else => return false,
+        };
+        return true;
     }
 
     fn simpleMirDirectCallResultVoid(fn_mir: mir.Function, source: mir.SourcePoint) bool {
