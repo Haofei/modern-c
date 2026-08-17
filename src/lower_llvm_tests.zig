@@ -391,6 +391,8 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     const source =
         \\global cg: i32 = 0;
         \\extern fn hit(value: i32) -> void;
+        \\struct Flags { ok: bool }
+        \\struct SignedPair { a: i32, b: i32 }
         \\fn choose_void(flag: bool) -> void {
         \\    if (flag) {
         \\        hit(1);
@@ -465,6 +467,20 @@ test "LLVM emits simple void conditional direct calls from MIR" {
         \\        hit(a - b);
         \\    }
         \\}
+        \\fn choose_void_field_cond(f: Flags, p: SignedPair) -> void {
+        \\    if f.ok {
+        \\        hit(p.a);
+        \\    } else {
+        \\        hit(p.b);
+        \\    }
+        \\}
+        \\fn choose_void_field_cond_not(f: Flags, p: SignedPair) -> void {
+        \\    if !f.ok {
+        \\        hit(p.a);
+        \\    } else {
+        \\        hit(p.b);
+        \\    }
+        \\}
         \\extern fn pred(value: i32) -> bool;
         \\fn choose_void_call_cond(a: i32) -> void {
         \\    if pred(a) {
@@ -501,6 +517,11 @@ test "LLVM emits simple void conditional direct calls from MIR" {
         \\fn loop_void_cmp(a: i32, b: i32) -> void {
         \\    while a < b {
         \\        hit(a);
+        \\    }
+        \\}
+        \\fn loop_void_field(f: Flags, p: SignedPair) -> void {
+        \\    while f.ok {
+        \\        hit(p.a);
         \\    }
         \\}
     ;
@@ -593,6 +614,29 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try expectNotContains(checked_args_body, "store");
     try expectNotContains(checked_args_body, "switch");
 
+    const field_cond_body = try llvmFunctionBody(output.items, "define internal void @choose_void_field_cond");
+    const field_cond = std.mem.indexOf(u8, field_cond_body, "extractvalue { i1 } %f, 0") orelse return error.TestUnexpectedResult;
+    const field_branch = std.mem.indexOf(u8, field_cond_body, "br i1 %t") orelse return error.TestUnexpectedResult;
+    const field_then = std.mem.indexOf(u8, field_cond_body, "extractvalue { i32, i32 } %p, 0") orelse return error.TestUnexpectedResult;
+    const field_else = std.mem.indexOf(u8, field_cond_body, "extractvalue { i32, i32 } %p, 1") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(field_cond < field_branch);
+    try std.testing.expect(field_branch < field_then);
+    try std.testing.expect(field_branch < field_else);
+    try expectContains(field_cond_body, "call void @hit(i32 %t");
+    try expectNotContains(field_cond_body, "alloca");
+    try expectNotContains(field_cond_body, "store");
+    try expectNotContains(field_cond_body, "switch");
+
+    const field_cond_not_body = try llvmFunctionBody(output.items, "define internal void @choose_void_field_cond_not");
+    try expectContains(field_cond_not_body, "extractvalue { i1 } %f, 0");
+    try expectContains(field_cond_not_body, "br i1 %t");
+    try expectContains(field_cond_not_body, "extractvalue { i32, i32 } %p, 0");
+    try expectContains(field_cond_not_body, "extractvalue { i32, i32 } %p, 1");
+    try expectNotContains(field_cond_not_body, "xor");
+    try expectNotContains(field_cond_not_body, "alloca");
+    try expectNotContains(field_cond_not_body, "store");
+    try expectNotContains(field_cond_not_body, "switch");
+
     const call_cond_body = try llvmFunctionBody(output.items, "define internal void @choose_void_call_cond");
     try expectContains(call_cond_body, "call i1 @pred(i32 %a)");
     try expectContains(call_cond_body, "br i1 %t");
@@ -651,6 +695,17 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try std.testing.expect(loop_void_cmp_branch < loop_void_cmp_call);
     try expectNotContains(loop_void_cmp_body, "switch");
     try expectNotContains(loop_void_cmp_body, "alloca");
+
+    const loop_void_field_body = try llvmFunctionBody(output.items, "define internal void @loop_void_field");
+    const loop_void_field_cond = std.mem.indexOf(u8, loop_void_field_body, "extractvalue { i1 } %f, 0") orelse return error.TestUnexpectedResult;
+    const loop_void_field_branch = std.mem.indexOf(u8, loop_void_field_body, "br i1 %t") orelse return error.TestUnexpectedResult;
+    const loop_void_field_arg = std.mem.indexOf(u8, loop_void_field_body, "extractvalue { i32, i32 } %p, 0") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop_void_field_cond < loop_void_field_branch);
+    try std.testing.expect(loop_void_field_branch < loop_void_field_arg);
+    try expectContains(loop_void_field_body, "call void @hit(i32 %t");
+    try expectNotContains(loop_void_field_body, "switch");
+    try expectNotContains(loop_void_field_body, "alloca");
+    try expectNotContains(loop_void_field_body, "store");
 }
 
 test "LLVM emits simple sequential void direct calls from MIR" {

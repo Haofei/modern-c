@@ -1807,7 +1807,7 @@ pub const CEmitter = struct {
         const else_block = fn_mir.blocks[else_index];
         if (then_block.terminator != .jump or else_block.terminator != .jump) return false;
         if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return false;
-        return simpleMirEntrySwitchBlockIsPure(function, entry) and
+        return self.simpleMirEntrySwitchBlockIsPure(function, entry) and
             simpleMirEmptyVoidBlock(function, fn_mir, then_block) and
             simpleMirEmptyVoidBlock(function, fn_mir, else_block);
     }
@@ -3113,6 +3113,7 @@ pub const CEmitter = struct {
                         std.mem.eql(u8, instruction.detail, "bool") or
                         std.mem.eql(u8, instruction.detail, "literal")) continue;
                     if (self.globals.contains(instruction.detail)) continue;
+                    if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                     if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
                     for (function.signature.params) |param| {
                         if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
@@ -3175,6 +3176,7 @@ pub const CEmitter = struct {
                         std.mem.eql(u8, instruction.detail, "bool") or
                         std.mem.eql(u8, instruction.detail, "literal")) continue;
                     if (self.globals.contains(instruction.detail)) continue;
+                    if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                     if (mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
                     for (function.signature.params) |param| {
                         if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
@@ -3453,13 +3455,14 @@ pub const CEmitter = struct {
         return false;
     }
 
-    fn simpleMirEntrySwitchBlockIsPure(function: anytype, block: mir.Block) bool {
+    fn simpleMirEntrySwitchBlockIsPure(self: *CEmitter, function: anytype, block: mir.Block) bool {
         for (block.instructions) |instruction| switch (instruction.kind) {
             .param, .local, .target_type, .integer_literal_conversion => {},
             .assign => if (!mirBlockHasLocal(block, instruction.detail)) return false,
             .binary => if (!std.mem.eql(u8, instruction.detail, "switch_subject")) return false,
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool")) continue;
+                if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                 if (mirBlockHasLocal(block, instruction.detail)) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
@@ -3484,6 +3487,7 @@ pub const CEmitter = struct {
             },
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool")) continue;
+                if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                 if (index < subject_index and mirBlockHasCall(block, instruction.detail)) continue;
                 if (mirBlockHasLocal(block, instruction.detail)) continue;
                 for (function.signature.params) |param| {

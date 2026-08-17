@@ -406,6 +406,8 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     const source =
         \\global cg: i32 = 0;
         \\extern fn hit(value: i32) -> void;
+        \\struct Flags { ok: bool }
+        \\struct SignedPair { a: i32, b: i32 }
         \\fn choose_void(flag: bool) -> void {
         \\    if (flag) {
         \\        hit(1);
@@ -480,6 +482,20 @@ test "lower-c emits simple void conditional direct calls from MIR" {
         \\        hit(a - b);
         \\    }
         \\}
+        \\fn choose_void_field_cond(f: Flags, p: SignedPair) -> void {
+        \\    if f.ok {
+        \\        hit(p.a);
+        \\    } else {
+        \\        hit(p.b);
+        \\    }
+        \\}
+        \\fn choose_void_field_cond_not(f: Flags, p: SignedPair) -> void {
+        \\    if !f.ok {
+        \\        hit(p.a);
+        \\    } else {
+        \\        hit(p.b);
+        \\    }
+        \\}
         \\extern fn pred(value: i32) -> bool;
         \\fn choose_void_call_cond(a: i32) -> void {
         \\    if pred(a) {
@@ -516,6 +532,11 @@ test "lower-c emits simple void conditional direct calls from MIR" {
         \\fn loop_void_cmp(a: i32, b: i32) -> void {
         \\    while a < b {
         \\        hit(a);
+        \\    }
+        \\}
+        \\fn loop_void_field(f: Flags, p: SignedPair) -> void {
+        \\    while f.ok {
+        \\        hit(p.a);
         \\    }
         \\}
     ;
@@ -606,6 +627,20 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try expectNotContains(checked_args_body, "mc_tmp");
     try expectNotContains(checked_args_body, "switch");
 
+    const field_cond_body = try cFunctionBody(output.items, "static void choose_void_field_cond(Flags f, SignedPair p)");
+    try expectContains(field_cond_body, "if (f.ok)");
+    try expectContains(field_cond_body, "hit(p.a);");
+    try expectContains(field_cond_body, "hit(p.b);");
+    try expectNotContains(field_cond_body, "switch");
+    try expectNotContains(field_cond_body, "mc_tmp");
+
+    const field_cond_not_body = try cFunctionBody(output.items, "static void choose_void_field_cond_not(Flags f, SignedPair p)");
+    try expectContains(field_cond_not_body, "if (!f.ok)");
+    try expectContains(field_cond_not_body, "hit(p.a);");
+    try expectContains(field_cond_not_body, "hit(p.b);");
+    try expectNotContains(field_cond_not_body, "switch");
+    try expectNotContains(field_cond_not_body, "mc_tmp");
+
     const call_cond_body = try cFunctionBody(output.items, "static void choose_void_call_cond(int32_t a)");
     try expectContains(call_cond_body, "if (pred(a))");
     try expectContains(call_cond_body, "hit(1);");
@@ -651,6 +686,13 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try std.testing.expect(loop_void_cmp_while < loop_void_cmp_call);
     try expectNotContains(loop_void_cmp_body, "switch");
     try expectNotContains(loop_void_cmp_body, "mc_tmp");
+
+    const loop_void_field_body = try cFunctionBody(output.items, "static void loop_void_field(Flags f, SignedPair p)");
+    const loop_void_field_while = std.mem.indexOf(u8, loop_void_field_body, "while (f.ok)") orelse return error.TestUnexpectedResult;
+    const loop_void_field_call = std.mem.indexOf(u8, loop_void_field_body, "hit(p.a);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop_void_field_while < loop_void_field_call);
+    try expectNotContains(loop_void_field_body, "switch");
+    try expectNotContains(loop_void_field_body, "mc_tmp");
 }
 
 test "lower-c emits simple sequential void direct calls from MIR" {
