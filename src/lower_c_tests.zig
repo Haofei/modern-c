@@ -1460,6 +1460,41 @@ test "lower-c emits simple struct literal returns from MIR" {
     try expectNotContains(early_body, "switch");
 }
 
+test "lower-c emits simple array literal returns from MIR" {
+    const source =
+        \\fn array_direct(a: u32, b: u32) -> [2]u32 {
+        \\    return .{ a, b };
+        \\}
+        \\fn array_local(a: u32, b: u32) -> [2]u32 {
+        \\    var out: [2]u32 = .{ a, b };
+        \\    return out;
+        \\}
+        \\fn array_assigned(a: u32, b: u32) -> [2]u32 {
+        \\    var out: [2]u32 = .{ a, b };
+        \\    out = .{ b, a };
+        \\    return out;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_array_literal_returns.mc", source, &output);
+
+    const direct_body = try cFunctionBody(output.items, "static mc_array_u32_2 array_direct(uint32_t a, uint32_t b)");
+    try expectContains(direct_body, "return (mc_array_u32_2){ .elems = { a, b } };");
+    try expectNotContains(direct_body, "mc_tmp");
+
+    const local_body = try cFunctionBody(output.items, "static mc_array_u32_2 array_local(uint32_t a, uint32_t b)");
+    try expectContains(local_body, "return (mc_array_u32_2){ .elems = { a, b } };");
+    try expectNotContains(local_body, "mc_tmp");
+    try expectNotContains(local_body, "out =");
+
+    const assigned_body = try cFunctionBody(output.items, "static mc_array_u32_2 array_assigned(uint32_t a, uint32_t b)");
+    try expectContains(assigned_body, "return (mc_array_u32_2){ .elems = { b, a } };");
+    try expectNotContains(assigned_body, "return (mc_array_u32_2){ .elems = { a, b } };");
+    try expectNotContains(assigned_body, "mc_tmp");
+    try expectNotContains(assigned_body, "out =");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

@@ -1559,6 +1559,49 @@ test "LLVM emits simple struct literal returns from MIR" {
     try expectNotContains(early_body, "switch");
 }
 
+test "LLVM emits simple array literal returns from MIR" {
+    const source =
+        \\fn array_direct(a: u32, b: u32) -> [2]u32 {
+        \\    return .{ a, b };
+        \\}
+        \\fn array_local(a: u32, b: u32) -> [2]u32 {
+        \\    var out: [2]u32 = .{ a, b };
+        \\    return out;
+        \\}
+        \\fn array_assigned(a: u32, b: u32) -> [2]u32 {
+        \\    var out: [2]u32 = .{ a, b };
+        \\    out = .{ b, a };
+        \\    return out;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_array_literal_returns.mc", source, &output);
+
+    const direct_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @array_direct");
+    try expectContains(direct_body, "insertvalue [2 x i32] zeroinitializer, i32 %a, 0");
+    try expectContains(direct_body, "insertvalue [2 x i32] %t");
+    try expectContains(direct_body, "i32 %b, 1");
+    try expectContains(direct_body, "ret [2 x i32] %t");
+    try expectNotContains(direct_body, "alloca");
+    try expectNotContains(direct_body, "store");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @array_local");
+    try expectContains(local_body, "insertvalue [2 x i32] zeroinitializer, i32 %a, 0");
+    try expectContains(local_body, "i32 %b, 1");
+    try expectContains(local_body, "ret [2 x i32] %t");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal [2 x i32] @array_assigned");
+    try expectContains(assigned_body, "insertvalue [2 x i32] zeroinitializer, i32 %b, 0");
+    try expectContains(assigned_body, "i32 %a, 1");
+    try expectContains(assigned_body, "ret [2 x i32] %t");
+    try expectNotContains(assigned_body, "insertvalue [2 x i32] zeroinitializer, i32 %a, 0");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
