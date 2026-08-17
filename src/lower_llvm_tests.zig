@@ -5632,7 +5632,7 @@ test "LLVM wrapping arithmetic requires MIR identity and operand/result type fac
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_wrapping_call_facts.mc", .{}, false, .riscv64, null);
+    try appendLlvmCheckedMirProfileDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, "llvm_mir_wrapping_call_facts.mc", .{}, false, .riscv64, false, null);
     try expectContains(complete_output.items, " = add i32 %a, 1");
 
     var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -5650,6 +5650,18 @@ test "LLVM wrapping arithmetic requires MIR identity and operand/result type fac
         defer type_output.deinit(std.testing.allocator);
         try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendLlvmCheckedMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_type, &type_output, "llvm_wrapping_call_facts.mc", .{}, false, .riscv64, null));
     }
+}
+
+test "LLVM emits wrapping arithmetic call from MIR without body fallback" {
+    const source =
+        \\fn wrapping_fact_gate(a: u32) -> u32 {
+        \\    return wrapping.add(a, 1);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_wrapping_call.mc", source, &output);
+    try expectContains(output.items, " = add i32 %a, 1");
 }
 
 test "LLVM unchecked arithmetic requires MIR identity and operand/result type facts" {

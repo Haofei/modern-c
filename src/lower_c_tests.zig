@@ -4267,7 +4267,7 @@ test "lower-c wrapping arithmetic requires MIR identity and operand/result type 
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_wrapping_call_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_wrapping_call_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "(a + 1)") != null);
 
     var missing_identity = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -4285,6 +4285,18 @@ test "lower-c wrapping arithmetic requires MIR identity and operand/result type 
         defer type_output.deinit(std.testing.allocator);
         try std.testing.expectError(error.InvalidMirTargetTypeFacts, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &missing_type, &type_output, .kernel, "c_wrapping_call_facts.mc", .{}, false, null));
     }
+}
+
+test "lower-c emits wrapping arithmetic call from MIR without body fallback" {
+    const source =
+        \\fn wrapping_fact_gate(a: u32) -> u32 {
+        \\    return wrapping.add(a, 1);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_wrapping_call.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "(a + 1)") != null);
 }
 
 test "lower-c unchecked arithmetic requires MIR identity and operand/result type facts" {

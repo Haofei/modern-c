@@ -1262,6 +1262,7 @@ const LlvmEmitter = struct {
         result_constructor: SimpleMirResultConstructorReturn,
         explicit_cast_return: SimpleMirExplicitCastReturn,
         conversion_return: SimpleMirConversionReturn,
+        wrapping_binary: SimpleMirWrappingBinary,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
@@ -1536,6 +1537,12 @@ const LlvmEmitter = struct {
         right: SimpleMirArg,
     };
 
+    const SimpleMirWrappingBinary = struct {
+        result_fact: mir.TargetTypeFact,
+        left: SimpleMirCallArg,
+        right: SimpleMirCallArg,
+    };
+
     fn emitSimpleMirFunction(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, render_attrs: anytype) !bool {
         if (!plainFunctionRenderAttrs(render_attrs) or function.signature.is_variadic) return false;
         const simple_trap = self.simpleMirTrapBody(fn_mir);
@@ -1677,6 +1684,10 @@ const LlvmEmitter = struct {
                 },
                 .conversion_return => |conversion| {
                     const value = try self.emitSimpleMirConversionReturn(conversion, return_span);
+                    try self.emitReturnValue(ret_ty, value, return_span);
+                },
+                .wrapping_binary => |binary| {
+                    const value = try self.emitSimpleMirWrappingBinary(binary, return_span);
                     try self.emitReturnValue(ret_ty, value, return_span);
                 },
                 .struct_literal => |literal| {
@@ -1947,6 +1958,7 @@ const LlvmEmitter = struct {
         if (simpleMirNullLiteralAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) {
             return if (simpleMirNoTrap(fn_mir)) .null_literal else null;
         }
+        if (self.simpleMirWrappingBinaryReturn(function, fn_mir, block, value_id)) |binary| return .{ .wrapping_binary = binary };
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
             if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
         }
@@ -1977,6 +1989,51 @@ const LlvmEmitter = struct {
         if (self.simpleMirAssignmentReturn(function, fn_mir, value_id)) |assigned| return assigned;
         if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
         return null;
+    }
+
+    fn simpleMirWrappingBinaryReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirWrappingBinary {
+        if (!simpleMirNoTrap(fn_mir)) return null;
+        const call_source = simpleMirReturnValueSource(block, value_id) orelse return null;
+        var has_wrapping_call = false;
+        for (fn_mir.call_target_facts) |fact| {
+            if (fact.kind == .wrapping_add and sameMirSourceLocation(fact.source, call_source)) {
+                has_wrapping_call = true;
+                break;
+            }
+        }
+        if (!has_wrapping_call) return null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source)) {
+                if (!std.mem.eql(u8, instruction.detail, "wrapping.add")) return null;
+                break;
+            }
+        } else return null;
+
+        const result_fact = simpleMirTargetTypeFactKindAt(fn_mir, .wrapping_result, call_source) orelse return null;
+        const return_ty = function.signature.return_type orelse return null;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(result_fact.target_ty))) return null;
+        if (self.integerBitsOf(result_fact.target_ty) == null) return null;
+        var left_fact: ?mir.TargetTypeFact = null;
+        var right_fact: ?mir.TargetTypeFact = null;
+        for (fn_mir.target_type_facts) |fact| {
+            switch (fact.kind) {
+                .wrapping_left => {
+                    if (left_fact != null) return null;
+                    left_fact = fact;
+                },
+                .wrapping_right => {
+                    if (right_fact != null) return null;
+                    right_fact = fact;
+                },
+                else => {},
+            }
+        }
+        const left_fact_value = left_fact orelse return null;
+        const right_fact_value = right_fact orelse return null;
+        const left = self.simpleMirCallArgAt(function, fn_mir, left_fact_value.source) orelse return null;
+        const right = self.simpleMirCallArgAt(function, fn_mir, right_fact_value.source) orelse return null;
+        if (simpleMirCallArgHasDirectCall(left) or simpleMirCallArgHasDirectCall(right)) return null;
+        return .{ .result_fact = result_fact, .left = left, .right = right };
     }
 
     fn simpleMirStructLiteralReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) ?SimpleMirStructLiteralReturn {
@@ -3212,6 +3269,15 @@ const LlvmEmitter = struct {
         return value;
     }
 
+    fn emitSimpleMirWrappingBinary(self: *LlvmEmitter, binary: SimpleMirWrappingBinary, span: diagnostics.Span) ![]const u8 {
+        const ty = binary.result_fact.target_ty;
+        _ = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+        const llvm_ty = try self.llvmType(ty);
+        const left = try self.simpleMirCallArgValue(binary.left, span);
+        const right = try self.simpleMirCallArgValue(binary.right, span);
+        return self.emitPlainBinaryValues("add", llvm_ty, left, right);
+    }
+
     fn emitSimpleMirCompareBinary(self: *LlvmEmitter, binary: SimpleMirCompareBinary, span: diagnostics.Span) ![]const u8 {
         const ty = binary.operand_fact.target_ty;
         const llvm_ty = try self.llvmType(ty);
@@ -3943,6 +4009,19 @@ const LlvmEmitter = struct {
                 }
             }
         }
+        if (std.mem.eql(u8, value_id, "add")) {
+            for (fn_mir.call_target_facts) |fact| {
+                if (fact.kind != .wrapping_add or !sameMirSourceLocation(fact.source, source)) continue;
+                for (block.instructions) |instruction| {
+                    if (instruction.kind == .expr and
+                        std.mem.eql(u8, instruction.detail, "add") and
+                        sameMirSourceLocation(instructionSourcePoint(instruction), source))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
         if (!mirFunctionHasLocal(fn_mir, value_id)) return false;
         const local_source = self.simpleMirAssignmentSourceInBlock(block, value_id) orelse
             self.simpleMirLocalInitSourceInBlock(block, value_id) orelse return false;
@@ -4338,6 +4417,7 @@ const LlvmEmitter = struct {
             .call, .call_target => {},
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "char") or std.mem.eql(u8, instruction.detail, "bool") or std.mem.eql(u8, instruction.detail, "struct_literal") or std.mem.eql(u8, instruction.detail, "array_literal")) continue;
+                if ((std.mem.eql(u8, instruction.detail, "add") or std.mem.eql(u8, instruction.detail, "wrapping")) and simpleMirWrappingCallAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
                 if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, instructionSourcePoint(instruction)) != null) continue;
                 if (std.mem.eql(u8, instruction.detail, "null") and simpleMirNullLiteralAtSource(fn_mir, instructionSourcePoint(instruction))) continue;
                 if (self.simpleMirConversionCallTargetKindAt(fn_mir, instructionSourcePoint(instruction)) != null) continue;
@@ -4439,6 +4519,13 @@ const LlvmEmitter = struct {
     fn simpleMirDirectCallResultVoid(fn_mir: mir.Function, source: mir.SourcePoint) bool {
         for (fn_mir.target_type_facts) |fact| {
             if (fact.kind == .direct_call_result and sameMirSourceLocation(fact.source, source)) return fact.result_ty == .void;
+        }
+        return false;
+    }
+
+    fn simpleMirWrappingCallAtSource(fn_mir: mir.Function, source: mir.SourcePoint) bool {
+        for (fn_mir.call_target_facts) |fact| {
+            if (fact.kind == .wrapping_add and sameMirSourceLocation(fact.source, source)) return true;
         }
         return false;
     }
