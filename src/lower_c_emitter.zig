@@ -1721,13 +1721,15 @@ pub const CEmitter = struct {
         }
         if (self.simpleMirParamFieldReturn(function, block, ret, value_id)) |field| return if (simpleMirNoTrap(fn_mir)) .{ .param_field = field } else null;
         if (std.mem.eql(u8, value_id, "int")) {
+            const source = simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret);
             for (fn_mir.integer_facts) |fact| {
-                if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return if (simpleMirNoTrap(fn_mir)) .{ .integer_literal = fact.literal } else null;
+                if (sameMirSourceLocation(fact.source, source)) return if (simpleMirNoTrap(fn_mir)) .{ .integer_literal = fact.literal } else null;
             }
         }
         if (std.mem.eql(u8, value_id, "bool")) {
+            const source = simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret);
             for (fn_mir.bool_facts) |fact| {
-                if (sameMirSourceLocation(fact.source, instructionSourcePoint(ret))) return if (simpleMirNoTrap(fn_mir)) .{ .bool_literal = fact.value } else null;
+                if (sameMirSourceLocation(fact.source, source)) return if (simpleMirNoTrap(fn_mir)) .{ .bool_literal = fact.value } else null;
             }
         }
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
@@ -3814,6 +3816,17 @@ pub const CEmitter = struct {
             if (instruction.kind == .return_value) return instruction;
         }
         return null;
+    }
+
+    fn simpleMirReturnValueSource(block: mir.Block, value_id: []const u8) ?mir.SourcePoint {
+        var source: ?mir.SourcePoint = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .return_value) break;
+            if (instruction.kind != .expr) continue;
+            if (!std.mem.eql(u8, instruction.detail, value_id)) continue;
+            source = instructionSourcePoint(instruction);
+        }
+        return source;
     }
 
     fn plainFunctionRenderAttrs(render: anytype) bool {

@@ -1764,6 +1764,35 @@ test "lower-c emits logical-not returns from MIR without body fallback" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "lower-c emits basic scalar returns from MIR without body fallback" {
+    const source =
+        \\fn int_literal() -> u32 {
+        \\    return 42;
+        \\}
+        \\fn bool_literal() -> bool {
+        \\    return true;
+        \\}
+        \\fn param_return(a: u32) -> u32 {
+        \\    return a;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_basic_scalar_returns.mc", source, &output);
+
+    const int_body = try cFunctionBody(output.items, "static uint32_t int_literal(void)");
+    try expectContains(int_body, "return 42;");
+    try expectNotContains(int_body, "mc_tmp");
+
+    const bool_body = try cFunctionBody(output.items, "static bool bool_literal(void)");
+    try expectContains(bool_body, "return true;");
+    try expectNotContains(bool_body, "mc_tmp");
+
+    const param_body = try cFunctionBody(output.items, "static uint32_t param_return(uint32_t a)");
+    try expectContains(param_body, "return a;");
+    try expectNotContains(param_body, "mc_tmp");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

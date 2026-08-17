@@ -1908,6 +1908,38 @@ test "LLVM emits logical-not returns from MIR without body fallback" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "LLVM emits basic scalar returns from MIR without body fallback" {
+    const source =
+        \\fn int_literal() -> u32 {
+        \\    return 42;
+        \\}
+        \\fn bool_literal() -> bool {
+        \\    return true;
+        \\}
+        \\fn param_return(a: u32) -> u32 {
+        \\    return a;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_basic_scalar_returns.mc", source, &output);
+
+    const int_body = try llvmFunctionBody(output.items, "define internal i32 @int_literal");
+    try expectContains(int_body, "ret i32 42");
+    try expectNotContains(int_body, "alloca");
+    try expectNotContains(int_body, "store");
+
+    const bool_body = try llvmFunctionBody(output.items, "define internal i1 @bool_literal");
+    try expectContains(bool_body, "ret i1 1");
+    try expectNotContains(bool_body, "alloca");
+    try expectNotContains(bool_body, "store");
+
+    const param_body = try llvmFunctionBody(output.items, "define internal i32 @param_return");
+    try expectContains(param_body, "ret i32 %a");
+    try expectNotContains(param_body, "alloca");
+    try expectNotContains(param_body, "store");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
