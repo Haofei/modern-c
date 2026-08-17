@@ -554,6 +554,45 @@ test "LLVM conditional grouped scalar returns lower from MIR without body fallba
     try expectNotContains(call_body, "alloca");
 }
 
+test "LLVM conditional global and call returns lower from MIR without body fallback" {
+    const source =
+        \\global g: u32 = 0;
+        \\extern fn hit(value: u32) -> void;
+        \\extern fn make(value: u32) -> u32;
+        \\fn choose_global(flag: bool) -> u32 {
+        \\    if (flag) {
+        \\        hit(g);
+        \\        return g;
+        \\    } else {
+        \\        return g;
+        \\    }
+        \\}
+        \\fn choose_call(flag: bool, value: u32) -> u32 {
+        \\    if (flag) {
+        \\        return make(value);
+        \\    } else {
+        \\        return make(value);
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_global_call_returns.mc", source, &output);
+
+    const global_body = try llvmFunctionBody(output.items, "define internal i32 @choose_global");
+    try expectContains(global_body, "br i1 %flag");
+    try expectContains(global_body, "load atomic i32, ptr @g unordered, align 4");
+    try expectContains(global_body, "call void @hit(i32 %t");
+    try expectContains(global_body, "ret i32 %t");
+    try expectNotContains(global_body, "alloca");
+
+    const call_body = try llvmFunctionBody(output.items, "define internal i32 @choose_call");
+    try expectContains(call_body, "br i1 %flag");
+    try expectContains(call_body, "call i32 @make(i32 %value)");
+    try expectContains(call_body, "ret i32 %t");
+    try expectNotContains(call_body, "alloca");
+}
+
 test "LLVM loop grouped scalar returns lower from MIR without body fallback" {
     const source =
         \\extern fn hit(value: u16) -> void;

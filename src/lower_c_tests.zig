@@ -2811,6 +2811,43 @@ test "lower-c conditional grouped scalar returns lower from MIR without body fal
     try expectNotContains(call_body, "mc_tmp");
 }
 
+test "lower-c conditional global and call returns lower from MIR without body fallback" {
+    const source =
+        \\global g: u32 = 0;
+        \\extern fn hit(value: u32) -> void;
+        \\extern fn make(value: u32) -> u32;
+        \\fn choose_global(flag: bool) -> u32 {
+        \\    if (flag) {
+        \\        hit(g);
+        \\        return g;
+        \\    } else {
+        \\        return g;
+        \\    }
+        \\}
+        \\fn choose_call(flag: bool, value: u32) -> u32 {
+        \\    if (flag) {
+        \\        return make(value);
+        \\    } else {
+        \\        return make(value);
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_global_call_returns.mc", source, &output);
+
+    const global_body = try cFunctionBody(output.items, "static uint32_t choose_global(bool flag)");
+    try expectContains(global_body, "if (flag)");
+    try expectContains(global_body, "hit(((uint32_t)mc_race_load_u32(&g)));");
+    try expectContains(global_body, "return ((uint32_t)mc_race_load_u32(&g));");
+    try expectNotContains(global_body, "mc_tmp");
+
+    const call_body = try cFunctionBody(output.items, "static uint32_t choose_call(bool flag, uint32_t value)");
+    try expectContains(call_body, "if (flag)");
+    try expectContains(call_body, "return make(value);");
+    try expectNotContains(call_body, "mc_tmp");
+}
+
 test "lower-c loop grouped scalar returns lower from MIR without body fallback" {
     const source =
         \\extern fn hit(value: u16) -> void;
