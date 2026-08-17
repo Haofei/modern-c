@@ -1633,6 +1633,15 @@ test "LLVM emits simple global stores from MIR" {
         \\fn store_double() {
         \\    wide_float = 2.5;
         \\}
+        \\fn store_local_float() {
+        \\    let x: f32 = 1.5;
+        \\    small_float = x;
+        \\}
+        \\fn store_assigned_float() {
+        \\    var x: f32 = 0.0;
+        \\    x = 1.5;
+        \\    small_float = x;
+        \\}
         \\fn store_bool_literal() {
         \\    flag = true;
         \\}
@@ -1780,6 +1789,14 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(double_body, "store atomic double 2.5, ptr @wide_float unordered, align 8");
     try expectNotContains(double_body, "alloca");
 
+    const local_float_body = try llvmFunctionBody(output.items, "define internal void @store_local_float");
+    try expectContains(local_float_body, "store atomic float 0x3FF8000000000000, ptr @small_float unordered, align 4");
+    try expectNotContains(local_float_body, "alloca");
+
+    const assigned_float_body = try llvmFunctionBody(output.items, "define internal void @store_assigned_float");
+    try expectContains(assigned_float_body, "store atomic float 0x3FF8000000000000, ptr @small_float unordered, align 4");
+    try expectNotContains(assigned_float_body, "alloca");
+
     const bool_literal_body = try llvmFunctionBody(output.items, "define internal void @store_bool_literal");
     try expectContains(bool_literal_body, "zext i1 1 to i8");
     try expectContains(bool_literal_body, "store atomic i8 %t");
@@ -1810,7 +1827,7 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(not_body, "ptr @flag unordered, align 1");
     try expectNotContains(not_body, "alloca");
 
-    const local_body = try llvmFunctionBody(output.items, "define internal void @store_local");
+    const local_body = try llvmFunctionBody(output.items, "define internal void @store_local(");
     try expectContains(local_body, "store atomic i32 %x, ptr @g unordered, align 4");
     try expectNotContains(local_body, "alloca");
     try expectNotContains(local_body, "load i32");
@@ -3629,6 +3646,15 @@ test "LLVM float literal returns lower without body fallback" {
         \\fn wide() -> f64 {
         \\    return 2.5;
         \\}
+        \\fn local_small() -> f32 {
+        \\    let x: f32 = 1.5;
+        \\    return x;
+        \\}
+        \\fn assigned_small() -> f32 {
+        \\    var x: f32 = 0.0;
+        \\    x = 1.5;
+        \\    return x;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -3641,6 +3667,14 @@ test "LLVM float literal returns lower without body fallback" {
     const wide_body = try llvmFunctionBody(output.items, "define internal double @wide");
     try expectContains(wide_body, "ret double 2.5");
     try expectNotContains(wide_body, "alloca");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal float @local_small");
+    try expectContains(local_body, "ret float 0x3FF8000000000000");
+    try expectNotContains(local_body, "alloca");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal float @assigned_small");
+    try expectContains(assigned_body, "ret float 0x3FF8000000000000");
+    try expectNotContains(assigned_body, "alloca");
 }
 
 fn clearPointerProvenanceFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {

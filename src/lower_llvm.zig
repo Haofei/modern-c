@@ -2008,6 +2008,10 @@ const LlvmEmitter = struct {
             const source = simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret);
             if (self.simpleMirFloatLiteralAtSource(fn_mir, source)) |literal| return if (simpleMirNoTrap(fn_mir)) .{ .float_literal = literal } else null;
         }
+        if (mirFunctionHasLocal(fn_mir, value_id)) {
+            const source = simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret);
+            if (self.simpleMirLocalFloatLiteral(function, fn_mir, block, value_id, source)) |literal| return if (simpleMirNoTrap(fn_mir)) .{ .float_literal = literal } else null;
+        }
         if (self.simpleMirEnumLiteralAtSource(fn_mir, value_id, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| {
             return if (simpleMirNoTrap(fn_mir)) .{ .enum_literal = literal } else null;
         }
@@ -2664,6 +2668,8 @@ const LlvmEmitter = struct {
             .{ .compare_binary = binary }
         else if (self.simpleMirLogicalNotAtSource(function, fn_mir, value_source)) |arg|
             .{ .logical_not = arg }
+        else if (self.simpleMirLocalFloatLiteralValueAtSource(function, fn_mir, value_source)) |literal|
+            .{ .float_literal = literal }
         else if (self.simpleMirFloatLiteralAtSource(fn_mir, value_source)) |literal|
             .{ .float_literal = literal }
         else if (self.simpleMirEnumLiteralValueAtSource(fn_mir, value_source)) |literal|
@@ -2708,7 +2714,8 @@ const LlvmEmitter = struct {
             .assign => {
                 if (mirFunctionHasLocal(fn_mir, instruction.detail)) {
                     const source = self.simpleMirAssignmentSourceInBlock(block, instruction.detail) orelse return false;
-                    if (self.simpleMirArgAt(function, fn_mir, source) == null) return false;
+                    if (self.simpleMirArgAt(function, fn_mir, source) == null and
+                        self.simpleMirFloatLiteralAtSource(fn_mir, source) == null) return false;
                     continue;
                 }
                 if (!self.global_types.contains(instruction.detail)) return false;
@@ -4852,6 +4859,28 @@ const LlvmEmitter = struct {
             return .{ .literal = fact.literal, .target_type_name = target_type_name };
         }
         return null;
+    }
+
+    fn simpleMirLocalFloatLiteralValueAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirFloatLiteral {
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .expr or !sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                if (!mirFunctionHasLocal(fn_mir, instruction.detail)) continue;
+                return self.simpleMirLocalFloatLiteral(function, fn_mir, block, instruction.detail, source);
+            }
+        }
+        return null;
+    }
+
+    fn simpleMirLocalFloatLiteral(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, local_name: []const u8, use_source: mir.SourcePoint) ?SimpleMirFloatLiteral {
+        _ = function;
+        if (self.simpleMirAssignmentSourceInBlock(block, local_name)) |assigned_source| {
+            if (sameMirSourceLocation(assigned_source, use_source)) return null;
+            return self.simpleMirFloatLiteralAtSource(fn_mir, assigned_source);
+        }
+        const init_source = self.simpleMirLocalInitSourceInBlock(block, local_name) orelse return null;
+        if (sameMirSourceLocation(init_source, use_source)) return null;
+        return self.simpleMirFloatLiteralAtSource(fn_mir, init_source);
     }
 
     fn simpleMirCharIntegerLiteralAtSource(self: *LlvmEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?[]const u8 {
