@@ -6015,7 +6015,7 @@ test "lower-c while loops require MIR bool condition types" {
     defer complete.deinit();
     var complete_output: std.ArrayList(u8) = .empty;
     defer complete_output.deinit(std.testing.allocator);
-    try appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_loop_condition_type_facts.mc", .{}, false, null);
+    try appendCProfileWithMirDeclsNoFunctionBodyFallbackTest(std.testing.allocator, parsed.decls(), &complete, &complete_output, .kernel, "c_mir_loop_condition_type_facts.mc", .{}, false, null);
     try std.testing.expect(std.mem.indexOf(u8, complete_output.items, "while (flag)") != null);
 
     var missing = try mir.buildFromDecls(std.testing.allocator, parsed.decls());
@@ -6031,6 +6031,17 @@ test "lower-c while loops require MIR bool condition types" {
     var stale_output: std.ArrayList(u8) = .empty;
     defer stale_output.deinit(std.testing.allocator);
     try std.testing.expectError(error.UnsupportedCEmission, appendCProfileWithMirDeclsTest(std.testing.allocator, parsed.decls(), &stale, &stale_output, .kernel, "c_loop_condition_type_facts.mc", .{}, false, null));
+}
+
+test "lower-c emits void-returning while loop from MIR without body fallback" {
+    const source =
+        \\fn wait_for_flag(flag: bool) -> void { while flag { return; } }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_void_returning_while_loop.mc", source, &output);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "while (flag)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return;") != null);
 }
 
 test "lower-c switches require MIR subject types" {
