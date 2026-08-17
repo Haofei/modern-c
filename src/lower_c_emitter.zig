@@ -1396,7 +1396,12 @@ pub const CEmitter = struct {
     const SimpleMirResultConstructorReturn = struct {
         tag: []const u8,
         result_fact: mir.TargetTypeFact,
-        payload: SimpleMirCallArg,
+        payload: SimpleMirResultConstructorPayload,
+    };
+
+    const SimpleMirResultConstructorPayload = union(enum) {
+        arg: SimpleMirCallArg,
+        enum_literal: SimpleMirEnumLiteral,
     };
 
     const SimpleMirConversionReturn = struct {
@@ -1549,7 +1554,7 @@ pub const CEmitter = struct {
                 .result_constructor => |constructor| {
                     try self.out.print(self.allocator, "return (({s}){{ .is_ok = ", .{try self.cTypeFor(constructor.result_fact.target_ty, .typedef_name)});
                     try self.out.appendSlice(self.allocator, if (std.mem.eql(u8, constructor.tag, "ok")) "true, .payload.ok = " else "false, .payload.err = ");
-                    try self.emitSimpleMirCallArg(constructor.payload);
+                    try self.emitSimpleMirResultConstructorPayload(constructor.payload);
                     try self.out.appendSlice(self.allocator, " });\n");
                 },
                 .explicit_cast_return => |cast| {
@@ -1813,7 +1818,7 @@ pub const CEmitter = struct {
             if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
         }
         if (self.simpleMirResultConstructorReturn(function, fn_mir, block, value_id)) |constructor| {
-            if (fn_mir.trap_edges.len == simpleMirCallArgTrapCount(constructor.payload)) return .{ .result_constructor = constructor };
+            if (fn_mir.trap_edges.len == simpleMirResultConstructorPayloadTrapCount(constructor.payload)) return .{ .result_constructor = constructor };
         }
         if (std.mem.eql(u8, value_id, "cast")) {
             if (self.simpleMirExplicitCastReturn(function, fn_mir)) |cast| return .{ .explicit_cast_return = cast };
@@ -3273,7 +3278,7 @@ pub const CEmitter = struct {
         const return_ty = function.signature.return_type orelse return null;
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(target_fact.target_ty))) return null;
 
-        var payload: ?SimpleMirCallArg = null;
+        var payload: ?SimpleMirResultConstructorPayload = null;
         var after_call = false;
         for (block.instructions) |instruction| {
             if (!after_call) {
@@ -3285,7 +3290,12 @@ pub const CEmitter = struct {
             if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .binary and instruction.kind != .unary) continue;
             const source = instructionSourcePoint(instruction);
             if (sameMirSourceLocation(source, call_source)) continue;
-            const arg = self.simpleMirCallArgAt(function, fn_mir, source) orelse continue;
+            const arg: SimpleMirResultConstructorPayload = if (self.simpleMirCallArgAt(function, fn_mir, source)) |call_arg|
+                .{ .arg = call_arg }
+            else if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal|
+                .{ .enum_literal = literal }
+            else
+                continue;
             if (payload != null) return null;
             payload = arg;
         }
@@ -3294,6 +3304,20 @@ pub const CEmitter = struct {
             .result_fact = target_fact,
             .payload = payload orelse return null,
         };
+    }
+
+    fn simpleMirResultConstructorPayloadTrapCount(payload: SimpleMirResultConstructorPayload) usize {
+        return switch (payload) {
+            .arg => |arg| simpleMirCallArgTrapCount(arg),
+            .enum_literal => 0,
+        };
+    }
+
+    fn emitSimpleMirResultConstructorPayload(self: *CEmitter, payload: SimpleMirResultConstructorPayload) !void {
+        switch (payload) {
+            .arg => |arg| try self.emitSimpleMirCallArg(arg),
+            .enum_literal => |literal| try self.out.print(self.allocator, "{s}_{s}", .{ literal.enum_name, literal.case_name }),
+        }
     }
 
     fn simpleMirDirectCallArgumentFactAt(self: *CEmitter, fn_mir: mir.Function, callee: []const u8, source: mir.SourcePoint) ?mir.TargetTypeFact {

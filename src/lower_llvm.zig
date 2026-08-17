@@ -1458,7 +1458,12 @@ const LlvmEmitter = struct {
     const SimpleMirResultConstructorReturn = struct {
         tag: []const u8,
         result_fact: mir.TargetTypeFact,
-        payload: SimpleMirCallArg,
+        payload: SimpleMirResultConstructorPayload,
+    };
+
+    const SimpleMirResultConstructorPayload = union(enum) {
+        arg: SimpleMirCallArg,
+        enum_literal: SimpleMirEnumLiteral,
     };
 
     const SimpleMirConversionReturn = struct {
@@ -1869,7 +1874,7 @@ const LlvmEmitter = struct {
             if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
         }
         if (self.simpleMirResultConstructorReturn(function, fn_mir, block, value_id)) |constructor| {
-            if (fn_mir.trap_edges.len == simpleMirCallArgTrapCount(constructor.payload)) return .{ .result_constructor = constructor };
+            if (fn_mir.trap_edges.len == simpleMirResultConstructorPayloadTrapCount(constructor.payload)) return .{ .result_constructor = constructor };
         }
         if (std.mem.eql(u8, value_id, "cast")) {
             if (self.simpleMirExplicitCastReturn(function, fn_mir)) |cast| return .{ .explicit_cast_return = cast };
@@ -3081,7 +3086,7 @@ const LlvmEmitter = struct {
         try self.out.print(self.allocator, "  {s} = insertvalue {s} zeroinitializer, i1 {s}, 0\n", .{ tagged, result_ty, if (is_ok) "true" else "false" });
 
         const ok_value = if (is_ok)
-            try self.simpleMirCallArgValue(constructor.payload, span)
+            try self.simpleMirResultConstructorPayloadValue(constructor.payload, span)
         else
             try self.resultPayloadZero(info.ok_ty);
         const with_ok = try self.nextTemp();
@@ -3090,10 +3095,20 @@ const LlvmEmitter = struct {
         const err_value = if (is_ok)
             try self.resultPayloadZero(info.err_ty)
         else
-            try self.simpleMirCallArgValue(constructor.payload, span);
+            try self.simpleMirResultConstructorPayloadValue(constructor.payload, span);
         const with_err = try self.nextTemp();
         try self.out.print(self.allocator, "  {s} = insertvalue {s} {s}, {s} {s}, 2\n", .{ with_err, result_ty, with_ok, try self.resultPayloadLlvmType(info.err_ty), err_value });
         return with_err;
+    }
+
+    fn simpleMirResultConstructorPayloadValue(self: *LlvmEmitter, payload: SimpleMirResultConstructorPayload, span: diagnostics.Span) ![]const u8 {
+        return switch (payload) {
+            .arg => |arg| try self.simpleMirCallArgValue(arg, span),
+            .enum_literal => |literal| blk: {
+                const enum_decl = self.enum_types.get(literal.enum_name) orelse return error.UnsupportedLlvmEmission;
+                break :blk try self.enumCaseValueByName(enum_decl, literal.case_name);
+            },
+        };
     }
 
     fn simpleMirArgValue(self: *LlvmEmitter, arg: SimpleMirArg, span: diagnostics.Span) ![]const u8 {
@@ -3463,7 +3478,7 @@ const LlvmEmitter = struct {
         const return_ty = function.signature.return_type orelse return null;
         if (!type_bridge.sameTypeSyntax(self.resolveAliasType(return_ty), self.resolveAliasType(target_fact.target_ty))) return null;
 
-        var payload: ?SimpleMirCallArg = null;
+        var payload: ?SimpleMirResultConstructorPayload = null;
         var after_call = false;
         for (block.instructions) |instruction| {
             if (!after_call) {
@@ -3475,7 +3490,12 @@ const LlvmEmitter = struct {
             if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .binary and instruction.kind != .unary) continue;
             const source = instructionSourcePoint(instruction);
             if (sameMirSourceLocation(source, call_source)) continue;
-            const arg = self.simpleMirCallArgAt(function, fn_mir, source) orelse continue;
+            const arg: SimpleMirResultConstructorPayload = if (self.simpleMirCallArgAt(function, fn_mir, source)) |call_arg|
+                .{ .arg = call_arg }
+            else if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal|
+                .{ .enum_literal = literal }
+            else
+                continue;
             if (payload != null) return null;
             payload = arg;
         }
@@ -3483,6 +3503,13 @@ const LlvmEmitter = struct {
             .tag = constructor.tag,
             .result_fact = target_fact,
             .payload = payload orelse return null,
+        };
+    }
+
+    fn simpleMirResultConstructorPayloadTrapCount(payload: SimpleMirResultConstructorPayload) usize {
+        return switch (payload) {
+            .arg => |arg| simpleMirCallArgTrapCount(arg),
+            .enum_literal => 0,
         };
     }
 

@@ -3432,6 +3432,7 @@ test "lower-c rejects prebuilt MIR with missing target type facts" {
     const source =
         \\enum E { bad }
         \\fn make(value: u32) -> Result<u32, E> { return ok(value); }
+        \\fn make_err() -> Result<u32, E> { return err(.bad); }
     ;
     var parsed = try test_support.parseCheckedModule("c_missing_target_type_facts.mc", source);
     defer parsed.deinit();
