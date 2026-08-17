@@ -1664,6 +1664,10 @@ const LlvmEmitter = struct {
         if (fn_mir.return_ty != .void) return null;
         if (fn_mir.ownership_cleanup_plan.actions.len != 0 or fn_mir.ownership_cleanup_plan.cancellations.len != 0) return null;
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+        if (self.simpleMirConditionalEmptyVoidCalls(function, fn_mir)) |calls| {
+            if (calls.count == 1) return .{ .direct_call = calls.calls[0] };
+            return .{ .direct_calls = calls };
+        }
         if (self.simpleMirConditionalEmptyVoidBody(function, fn_mir)) return .empty;
         if (self.simpleMirConditionalVoidStatements(function, fn_mir)) |conditional| return .{ .conditional_statements = conditional };
         if (self.simpleMirConditionalVoidBody(function, fn_mir)) |conditional| return .{ .conditional_direct_calls = conditional };
@@ -1700,6 +1704,32 @@ const LlvmEmitter = struct {
         return simpleMirEntrySwitchBlockIsPure(function, entry) and
             simpleMirEmptyVoidBlock(function, fn_mir, then_block) and
             simpleMirEmptyVoidBlock(function, fn_mir, else_block);
+    }
+
+    fn simpleMirConditionalEmptyVoidCalls(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirDirectCalls {
+        if (fn_mir.blocks.len != 4 or fn_mir.pointer_provenance_facts.len != 0) return null;
+        const entry = fn_mir.blocks[0];
+        if (entry.terminator != .switch_ or entry.successors.len != 2) return null;
+        const prefix_calls = self.simpleMirPrefixVoidCallsBeforeSwitch(function, fn_mir, entry) orelse return null;
+        if (prefix_calls.count == 0) return null;
+        const condition = self.simpleMirSwitchConditionParam(function, fn_mir, entry) orelse return null;
+        switch (condition) {
+            .direct_call => return null,
+            else => {},
+        }
+        if (!self.simpleMirEntrySwitchBlockIsPureWithPrefixVoidCalls(function, fn_mir, entry)) return null;
+        const after_block = fn_mir.blocks[1];
+        if (after_block.terminator != .fallthrough or !simpleMirEmptyVoidBlock(function, fn_mir, after_block)) return null;
+        const then_index = entry.successors[0];
+        const else_index = entry.successors[1];
+        if (then_index >= fn_mir.blocks.len or else_index >= fn_mir.blocks.len) return null;
+        const then_block = fn_mir.blocks[then_index];
+        const else_block = fn_mir.blocks[else_index];
+        if (then_block.terminator != .jump or else_block.terminator != .jump) return null;
+        if (then_block.terminator.jump != 1 or else_block.terminator.jump != 1) return null;
+        if (!simpleMirEmptyVoidBlock(function, fn_mir, then_block) or !simpleMirEmptyVoidBlock(function, fn_mir, else_block)) return null;
+        if (fn_mir.trap_edges.len != simpleMirDirectCallsTrapCount(prefix_calls)) return null;
+        return prefix_calls;
     }
 
     fn simpleMirConditionalVoidStatements(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirConditionalVoidStatements {
@@ -3055,6 +3085,31 @@ const LlvmEmitter = struct {
             .binary => if (!std.mem.eql(u8, instruction.detail, "switch_subject")) return false,
             .expr => {
                 if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool")) continue;
+                if (mirBlockHasLocal(block, instruction.detail)) continue;
+                for (function.signature.params) |param| {
+                    if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
+                } else return false;
+            },
+            else => return false,
+        };
+        return true;
+    }
+
+    fn simpleMirEntrySwitchBlockIsPureWithPrefixVoidCalls(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block) bool {
+        const subject_index = simpleMirSwitchSubjectIndex(block) orelse return false;
+        for (block.instructions, 0..) |instruction, index| switch (instruction.kind) {
+            .param, .local, .target_type, .integer_literal_conversion => {},
+            .assign => if (!mirBlockHasLocal(block, instruction.detail)) return false,
+            .binary => if (!std.mem.eql(u8, instruction.detail, "switch_subject")) return false,
+            .call => {
+                if (index > subject_index) return false;
+                const source = instructionSourcePoint(instruction);
+                if (!simpleMirDirectCallResultVoid(fn_mir, source)) return false;
+                if (self.simpleMirDirectCallAtSource(function, fn_mir, source) == null) return false;
+            },
+            .expr => {
+                if (std.mem.eql(u8, instruction.detail, "int") or std.mem.eql(u8, instruction.detail, "bool")) continue;
+                if (index < subject_index and mirBlockHasCall(block, instruction.detail)) continue;
                 if (mirBlockHasLocal(block, instruction.detail)) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) break;
