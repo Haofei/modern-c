@@ -1762,6 +1762,34 @@ test "lower-c emits char literal return from MIR without body fallback" {
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c emits local and assigned char literal returns from MIR without body fallback" {
+    const source =
+        \\fn local_char() -> u16 {
+        \\    let x: u16 = 'A';
+        \\    return x;
+        \\}
+        \\fn assigned_char() -> u16 {
+        \\    var x: u16 = 0;
+        \\    x = 'B';
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_assigned_char_literal_return.mc", source, &output);
+
+    const local_body = try cFunctionBody(output.items, "static uint16_t local_char(void)");
+    try expectContains(local_body, "return 65;");
+    try expectNotContains(local_body, "uint16_t x");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static uint16_t assigned_char(void)");
+    try expectContains(assigned_body, "return 66;");
+    try expectNotContains(assigned_body, "uint16_t x");
+    try expectNotContains(assigned_body, "x =");
+    try expectNotContains(assigned_body, "mc_tmp");
+}
+
 test "lower-c emits logical-not returns from MIR without body fallback" {
     const source =
         \\fn not_param(flag: bool) -> bool {

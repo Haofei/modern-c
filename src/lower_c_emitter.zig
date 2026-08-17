@@ -4340,6 +4340,7 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirArgAt(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirArg {
+        if (self.simpleMirCharIntegerLiteralAtSource(fn_mir, source)) |literal| return .{ .integer_literal = literal };
         for (fn_mir.integer_facts) |fact| {
             if (sameMirSourceLocation(fact.source, source)) return .{ .integer_literal = fact.literal };
         }
@@ -4357,6 +4358,16 @@ pub const CEmitter = struct {
                     if (self.simpleMirLocalValueArg(function, fn_mir, block, instruction.detail, source)) |arg| return arg;
                 }
             }
+        }
+        return null;
+    }
+
+    fn simpleMirCharIntegerLiteralAtSource(self: *CEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?[]const u8 {
+        _ = simpleMirTargetTypeFactKindAt(fn_mir, .char_literal, source) orelse return null;
+        for (fn_mir.integer_facts) |fact| {
+            if (!sameMirSourceLocation(fact.source, source)) continue;
+            const value = numeric.parseCharLiteral(fact.literal) orelse return null;
+            return std.fmt.allocPrint(self.scratch.allocator(), "{d}", .{value}) catch null;
         }
         return null;
     }

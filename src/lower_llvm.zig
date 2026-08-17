@@ -4625,6 +4625,7 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirArgAt(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirArg {
+        if (self.simpleMirCharIntegerLiteralAtSource(fn_mir, source)) |literal| return .{ .integer_literal = literal };
         for (fn_mir.integer_facts) |fact| {
             if (sameMirSourceLocation(fact.source, source)) return .{ .integer_literal = fact.literal };
         }
@@ -4642,6 +4643,15 @@ const LlvmEmitter = struct {
                     if (self.simpleMirLocalValueArg(function, fn_mir, block, instruction.detail, source)) |arg| return arg;
                 }
             }
+        }
+        return null;
+    }
+
+    fn simpleMirCharIntegerLiteralAtSource(self: *LlvmEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?[]const u8 {
+        _ = simpleMirTargetTypeFactKindAt(fn_mir, .char_literal, source) orelse return null;
+        for (fn_mir.integer_facts) |fact| {
+            if (!sameMirSourceLocation(fact.source, source)) continue;
+            return charLiteralValue(self.scratch.allocator(), fact.literal) catch null;
         }
         return null;
     }

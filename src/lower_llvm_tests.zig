@@ -3453,6 +3453,33 @@ test "LLVM target-typed char literals require MIR facts" {
     }
 }
 
+test "LLVM local and assigned char literal returns lower without body fallback" {
+    const source =
+        \\fn local_char() -> u16 {
+        \\    let x: u16 = 'A';
+        \\    return x;
+        \\}
+        \\fn assigned_char() -> u16 {
+        \\    var x: u16 = 0;
+        \\    x = 'B';
+        \\    return x;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_local_assigned_char_literal_return.mc", source, &output);
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i16 @local_char");
+    try expectContains(local_body, "ret i16 65");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i16 @assigned_char");
+    try expectContains(assigned_body, "ret i16 66");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+}
+
 fn clearPointerProvenanceFactsForFunction(module_mir: *mir.Module, name: []const u8) !void {
     for (module_mir.functions) |*function| {
         if (!std.mem.eql(u8, function.name, name)) continue;
