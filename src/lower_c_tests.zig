@@ -109,6 +109,8 @@ test "lower-c nullable narrowing with long identifiers never falls back to const
 
 test "lower-c MIR conditional fast path uses only the switch subject expression" {
     const source =
+        \\global g: u32 = 0;
+        \\extern fn hit(value: u32) -> void;
         \\fn choose_cmp(a: i32, b: i32) -> i32 {
         \\    if (a < b) {
         \\        return 1;
@@ -172,6 +174,18 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
         \\        return 0;
         \\    }
         \\}
+        \\fn choose_store_then_return(flag: bool, x: u32) -> u32 {
+        \\    if (flag) {
+        \\        g = x;
+        \\    }
+        \\    return x;
+        \\}
+        \\fn choose_call_then_return(flag: bool, x: u32) -> u32 {
+        \\    if (flag) {
+        \\        hit(x);
+        \\    }
+        \\    return x;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -220,6 +234,24 @@ test "lower-c MIR conditional fast path uses only the switch subject expression"
     try expectContains(literal_body, "return 0;");
     try expectNotContains(literal_body, "bool c =");
     try expectNotContains(literal_body, "switch");
+
+    const store_return_body = try cFunctionBody(output.items, "static uint32_t choose_store_then_return(bool flag, uint32_t x)");
+    const store_if = std.mem.indexOf(u8, store_return_body, "if (flag)") orelse return error.TestUnexpectedResult;
+    const store_stmt = std.mem.indexOf(u8, store_return_body, "mc_race_store_u32(&g, (uint32_t)x);") orelse return error.TestUnexpectedResult;
+    const store_return = std.mem.indexOf(u8, store_return_body, "return x;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(store_if < store_stmt);
+    try std.testing.expect(store_stmt < store_return);
+    try expectNotContains(store_return_body, "switch");
+    try expectNotContains(store_return_body, "mc_tmp");
+
+    const call_return_body = try cFunctionBody(output.items, "static uint32_t choose_call_then_return(bool flag, uint32_t x)");
+    const call_if = std.mem.indexOf(u8, call_return_body, "if (flag)") orelse return error.TestUnexpectedResult;
+    const call_stmt = std.mem.indexOf(u8, call_return_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    const call_return = std.mem.indexOf(u8, call_return_body, "return x;") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(call_if < call_stmt);
+    try std.testing.expect(call_stmt < call_return);
+    try expectNotContains(call_return_body, "switch");
+    try expectNotContains(call_return_body, "mc_tmp");
 }
 
 test "lower-c emits simple void conditional direct calls from MIR" {

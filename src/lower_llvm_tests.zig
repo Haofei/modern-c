@@ -89,6 +89,8 @@ test "LLVM struct literal fields evaluate in lexical source order" {
 
 test "LLVM MIR conditional fast path uses only the switch subject expression" {
     const source =
+        \\global g: u32 = 0;
+        \\extern fn hit(value: u32) -> void;
         \\fn choose_cmp(a: i32, b: i32) -> i32 {
         \\    if (a < b) {
         \\        return 1;
@@ -152,6 +154,18 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
         \\        return 0;
         \\    }
         \\}
+        \\fn choose_store_then_return(flag: bool, x: u32) -> u32 {
+        \\    if (flag) {
+        \\        g = x;
+        \\    }
+        \\    return x;
+        \\}
+        \\fn choose_call_then_return(flag: bool, x: u32) -> u32 {
+        \\    if (flag) {
+        \\        hit(x);
+        \\    }
+        \\    return x;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -203,6 +217,24 @@ test "LLVM MIR conditional fast path uses only the switch subject expression" {
     try expectNotContains(literal_body, "alloca");
     try expectNotContains(literal_body, "store");
     try expectNotContains(literal_body, "switch");
+
+    const store_return_body = try llvmFunctionBody(output.items, "define internal i32 @choose_store_then_return");
+    const store_branch = std.mem.indexOf(u8, store_return_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const store_stmt = std.mem.indexOf(u8, store_return_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const store_return = std.mem.indexOf(u8, store_return_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(store_branch < store_stmt);
+    try std.testing.expect(store_stmt < store_return);
+    try expectNotContains(store_return_body, "switch");
+    try expectNotContains(store_return_body, "alloca");
+
+    const call_return_body = try llvmFunctionBody(output.items, "define internal i32 @choose_call_then_return");
+    const call_branch = std.mem.indexOf(u8, call_return_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const call_stmt = std.mem.indexOf(u8, call_return_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    const call_return = std.mem.indexOf(u8, call_return_body, "ret i32 %x") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(call_branch < call_stmt);
+    try std.testing.expect(call_stmt < call_return);
+    try expectNotContains(call_return_body, "switch");
+    try expectNotContains(call_return_body, "alloca");
 }
 
 test "LLVM emits simple void conditional direct calls from MIR" {
