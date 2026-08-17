@@ -1915,6 +1915,30 @@ test "lower-c preserves MIR void calls before nullable none returns" {
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c emits loop nullable none returns from MIR without body fallback" {
+    const source =
+        \\extern fn hit(value: i32) -> void;
+        \\fn loop_then_none(flag: bool) -> ?u32 {
+        \\    while flag {
+        \\        hit(9);
+        \\    }
+        \\    return null;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_loop_nullable_none_return.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static mc_opt_u32 loop_then_none(bool flag)");
+    const loop = std.mem.indexOf(u8, body, "while (flag)") orelse return error.TestUnexpectedResult;
+    const hit = std.mem.indexOf(u8, body, "hit(9);") orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, body, "return (mc_opt_u32){ .present = false };") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(loop < hit);
+    try std.testing.expect(hit < ret);
+    try expectNotContains(body, "switch");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c emits enum literal returns from MIR without body fallback" {
     const source =
         \\enum Color {
