@@ -1715,6 +1715,55 @@ test "lower-c emits checked unary returns from MIR without body fallback" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "lower-c emits logical-not returns from MIR without body fallback" {
+    const source =
+        \\fn not_param(flag: bool) -> bool {
+        \\    return !flag;
+        \\}
+        \\fn local_not(flag: bool) -> bool {
+        \\    let out: bool = !flag;
+        \\    return out;
+        \\}
+        \\fn assigned_not(flag: bool) -> bool {
+        \\    var out: bool = false;
+        \\    out = !flag;
+        \\    return out;
+        \\}
+        \\fn choose_not(flag: bool, other: bool) -> bool {
+        \\    if (flag) {
+        \\        return !other;
+        \\    } else {
+        \\        return !flag;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_logical_not_returns.mc", source, &output);
+
+    const not_body = try cFunctionBody(output.items, "static bool not_param(bool flag)");
+    try expectContains(not_body, "return !flag;");
+    try expectNotContains(not_body, "mc_tmp");
+
+    const local_body = try cFunctionBody(output.items, "static bool local_not(bool flag)");
+    try expectContains(local_body, "return !flag;");
+    try expectNotContains(local_body, "bool out");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const assigned_body = try cFunctionBody(output.items, "static bool assigned_not(bool flag)");
+    try expectContains(assigned_body, "return !flag;");
+    try expectNotContains(assigned_body, "bool out");
+    try expectNotContains(assigned_body, "out =");
+    try expectNotContains(assigned_body, "mc_tmp");
+
+    const choose_body = try cFunctionBody(output.items, "static bool choose_not(bool flag, bool other)");
+    try expectContains(choose_body, "if (flag) {");
+    try expectContains(choose_body, "return !other;");
+    try expectContains(choose_body, "return !flag;");
+    try expectNotContains(choose_body, "mc_tmp");
+    try expectNotContains(choose_body, "switch");
+}
+
 test "lower-c preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;

@@ -1854,6 +1854,60 @@ test "LLVM emits checked unary returns from MIR without body fallback" {
     try expectNotContains(choose_body, "switch");
 }
 
+test "LLVM emits logical-not returns from MIR without body fallback" {
+    const source =
+        \\fn not_param(flag: bool) -> bool {
+        \\    return !flag;
+        \\}
+        \\fn local_not(flag: bool) -> bool {
+        \\    let out: bool = !flag;
+        \\    return out;
+        \\}
+        \\fn assigned_not(flag: bool) -> bool {
+        \\    var out: bool = false;
+        \\    out = !flag;
+        \\    return out;
+        \\}
+        \\fn choose_not(flag: bool, other: bool) -> bool {
+        \\    if (flag) {
+        \\        return !other;
+        \\    } else {
+        \\        return !flag;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_logical_not_returns.mc", source, &output);
+
+    const not_body = try llvmFunctionBody(output.items, "define internal i1 @not_param");
+    try expectContains(not_body, "xor i1 %flag, true");
+    try expectContains(not_body, "ret i1 %t");
+    try expectNotContains(not_body, "alloca");
+    try expectNotContains(not_body, "store");
+
+    const local_body = try llvmFunctionBody(output.items, "define internal i1 @local_not");
+    try expectContains(local_body, "xor i1 %flag, true");
+    try expectContains(local_body, "ret i1 %t");
+    try expectNotContains(local_body, "alloca");
+    try expectNotContains(local_body, "store");
+
+    const assigned_body = try llvmFunctionBody(output.items, "define internal i1 @assigned_not");
+    try expectContains(assigned_body, "xor i1 %flag, true");
+    try expectContains(assigned_body, "ret i1 %t");
+    try expectNotContains(assigned_body, "alloca");
+    try expectNotContains(assigned_body, "store");
+
+    const choose_body = try llvmFunctionBody(output.items, "define internal i1 @choose_not");
+    try expectContains(choose_body, "br i1 %flag");
+    try expectContains(choose_body, "xor i1 %other, true");
+    try expectContains(choose_body, "xor i1 %flag, true");
+    try expectContains(choose_body, "ret i1 %t");
+    try expectNotContains(choose_body, "alloca");
+    try expectNotContains(choose_body, "store");
+    try expectNotContains(choose_body, "switch");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
