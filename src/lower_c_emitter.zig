@@ -1291,6 +1291,10 @@ pub const CEmitter = struct {
             name: []const u8,
             inverted: bool = false,
         },
+        param_field: struct {
+            field: SimpleMirParamField,
+            inverted: bool = false,
+        },
         bool_literal: bool,
         direct_call: SimpleMirNestedCall,
         compare_binary: SimpleMirCompareBinary,
@@ -2239,6 +2243,12 @@ pub const CEmitter = struct {
                         for (function.signature.params) |param| {
                             if (std.mem.eql(u8, operand.detail, param.name.text)) return .{ .param = .{ .name = param.name.text, .inverted = true } };
                         }
+                        if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(operand))) |arg| {
+                            return switch (arg) {
+                                .param_field => |field| .{ .param_field = .{ .field = field, .inverted = true } },
+                                else => null,
+                            };
+                        }
                         return null;
                     }
                     return null;
@@ -2263,6 +2273,7 @@ pub const CEmitter = struct {
                     }
                     if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction))) |arg| {
                         return switch (arg) {
+                            .param_field => |field| .{ .param_field = .{ .field = field } },
                             .bool_literal => |value| .{ .bool_literal = value },
                             else => null,
                         };
@@ -2292,6 +2303,12 @@ pub const CEmitter = struct {
                         for (function.signature.params) |param| {
                             if (std.mem.eql(u8, operand.detail, param.name.text)) return .{ .param = .{ .name = param.name.text, .inverted = true } };
                         }
+                        if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(operand))) |arg| {
+                            return switch (arg) {
+                                .param_field => |field| .{ .param_field = .{ .field = field, .inverted = true } },
+                                else => null,
+                            };
+                        }
                         return null;
                     }
                     return null;
@@ -2316,6 +2333,7 @@ pub const CEmitter = struct {
                     }
                     if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction))) |arg| {
                         return switch (arg) {
+                            .param_field => |field| .{ .param_field = .{ .field = field } },
                             .bool_literal => |value| .{ .bool_literal = value },
                             else => null,
                         };
@@ -2338,12 +2356,14 @@ pub const CEmitter = struct {
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = .{ .name = name, .inverted = true } },
+                .param_field => |field| .{ .param_field = .{ .field = field, .inverted = true } },
                 else => null,
             };
         }
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = .{ .name = name } },
+                .param_field => |field| .{ .param_field = .{ .field = field } },
                 .bool_literal => |value| .{ .bool_literal = value },
                 else => null,
             };
@@ -2363,6 +2383,10 @@ pub const CEmitter = struct {
             .param => |param| {
                 if (param.inverted) try self.out.appendSlice(self.allocator, "!");
                 try self.out.appendSlice(self.allocator, try self.cIdent(param.name));
+            },
+            .param_field => |param_field| {
+                if (param_field.inverted) try self.out.appendSlice(self.allocator, "!");
+                try self.emitSimpleMirArg(.{ .param_field = param_field.field });
             },
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
             .direct_call => |call| try self.emitSimpleMirNestedCall(call),

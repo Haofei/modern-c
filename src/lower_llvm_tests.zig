@@ -1152,6 +1152,30 @@ test "LLVM emits conditional struct parameter field returns from MIR" {
     try expectNotContains(body, "store");
 }
 
+test "LLVM emits conditional boolean struct field conditions from MIR" {
+    const source =
+        \\struct Flags { ok: bool, other: bool }
+        \\fn choose(f: Flags) -> bool {
+        \\    if (f.ok) {
+        \\        return f.other;
+        \\    } else {
+        \\        return false;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_conditional_param_bool_field.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i1 @choose");
+    try expectContains(body, "extractvalue { i1, i1 } %f, 0");
+    try expectContains(body, "br i1 %t");
+    try expectContains(body, "extractvalue { i1, i1 } %f, 1");
+    try expectContains(body, "ret i1 0");
+    try expectNotContains(body, "alloca");
+    try expectNotContains(body, "store");
+}
+
 test "LLVM emits struct parameter field call arguments from MIR" {
     const source =
         \\struct Pair { a: u32, b: u32 }

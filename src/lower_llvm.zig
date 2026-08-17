@@ -1353,6 +1353,10 @@ const LlvmEmitter = struct {
             name: []const u8,
             inverted: bool = false,
         },
+        param_field: struct {
+            field: SimpleMirParamField,
+            inverted: bool = false,
+        },
         bool_literal: bool,
         direct_call: SimpleMirNestedCall,
         compare_binary: SimpleMirCompareBinary,
@@ -1589,10 +1593,7 @@ const LlvmEmitter = struct {
                     const else_label = try self.nextLabel("if_else");
                     const done_label = try self.nextLabel("if_done");
                     const condition = try self.emitSimpleMirCondition(conditional.condition, sig_facts.name.span);
-                    const inverted = switch (conditional.condition) {
-                        .param => |param| param.inverted,
-                        .bool_literal, .direct_call, .compare_binary => false,
-                    };
+                    const inverted = simpleMirConditionInverted(conditional.condition);
                     const true_label = if (inverted) else_label else then_label;
                     const false_label = if (inverted) then_label else else_label;
                     try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, true_label, false_label, try self.debugCallSuffix(), then_label });
@@ -1607,10 +1608,7 @@ const LlvmEmitter = struct {
                     const body_label = try self.nextLabel("while_body");
                     const after_label = try self.nextLabel("while_after");
                     const condition = try self.emitSimpleMirCondition(loop.condition, sig_facts.name.span);
-                    const inverted = switch (loop.condition) {
-                        .param => |param| param.inverted,
-                        .bool_literal, .direct_call, .compare_binary => false,
-                    };
+                    const inverted = simpleMirConditionInverted(loop.condition);
                     const body_target = if (inverted) after_label else body_label;
                     const after_target = if (inverted) body_label else after_label;
                     try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, body_target, after_target, try self.debugCallSuffix(), body_label });
@@ -1633,10 +1631,7 @@ const LlvmEmitter = struct {
                     const else_label = try self.nextLabel("if_else");
                     const done_label = try self.nextLabel("if_done");
                     const condition = try self.emitSimpleMirCondition(conditional.condition, sig_facts.name.span);
-                    const inverted = switch (conditional.condition) {
-                        .param => |param| param.inverted,
-                        .bool_literal, .direct_call, .compare_binary => false,
-                    };
+                    const inverted = simpleMirConditionInverted(conditional.condition);
                     const true_label = if (inverted) else_label else then_label;
                     const false_label = if (inverted) then_label else else_label;
                     try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, true_label, false_label, try self.debugCallSuffix(), then_label });
@@ -1654,10 +1649,7 @@ const LlvmEmitter = struct {
             const done_label = try self.nextLabel("if_done");
             try self.emitSimpleMirDirectCalls(conditional.prefix_calls, sig_facts.name.span);
             const condition = try self.emitSimpleMirCondition(conditional.condition, sig_facts.name.span);
-            const inverted = switch (conditional.condition) {
-                .param => |param| param.inverted,
-                .bool_literal, .direct_call, .compare_binary => false,
-            };
+            const inverted = simpleMirConditionInverted(conditional.condition);
             const true_label = if (inverted) else_label else then_label;
             const false_label = if (inverted) then_label else else_label;
             try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, true_label, false_label, try self.debugCallSuffix(), then_label });
@@ -1698,10 +1690,7 @@ const LlvmEmitter = struct {
             const else_label = try self.nextLabel("if_else");
             try self.emitSimpleMirDirectCalls(conditional.prefix_calls, sig_facts.name.span);
             const condition = try self.emitSimpleMirCondition(conditional.condition, sig_facts.name.span);
-            const inverted = switch (conditional.condition) {
-                .param => |param| param.inverted,
-                .bool_literal, .direct_call, .compare_binary => false,
-            };
+            const inverted = simpleMirConditionInverted(conditional.condition);
             const true_label = if (inverted) else_label else then_label;
             const false_label = if (inverted) then_label else else_label;
             try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, true_label, false_label, try self.debugCallSuffix(), then_label });
@@ -1712,10 +1701,7 @@ const LlvmEmitter = struct {
             const body_label = try self.nextLabel("while_body");
             const after_label = try self.nextLabel("while_after");
             const condition = try self.emitSimpleMirCondition(loop.condition, sig_facts.name.span);
-            const inverted = switch (loop.condition) {
-                .param => |param| param.inverted,
-                .bool_literal, .direct_call, .compare_binary => false,
-            };
+            const inverted = simpleMirConditionInverted(loop.condition);
             const body_target = if (inverted) after_label else body_label;
             const after_target = if (inverted) body_label else after_label;
             try self.out.print(self.allocator, "  br i1 {s}, label %{s}, label %{s}{s}\n{s}:\n", .{ condition, body_target, after_target, try self.debugCallSuffix(), body_label });
@@ -2324,6 +2310,12 @@ const LlvmEmitter = struct {
                         for (function.signature.params) |param| {
                             if (std.mem.eql(u8, operand.detail, param.name.text)) return .{ .param = .{ .name = param.name.text, .inverted = true } };
                         }
+                        if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(operand))) |arg| {
+                            return switch (arg) {
+                                .param_field => |field| .{ .param_field = .{ .field = field, .inverted = true } },
+                                else => null,
+                            };
+                        }
                         return null;
                     }
                     return null;
@@ -2348,6 +2340,7 @@ const LlvmEmitter = struct {
                     }
                     if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction))) |arg| {
                         return switch (arg) {
+                            .param_field => |field| .{ .param_field = .{ .field = field } },
                             .bool_literal => |value| .{ .bool_literal = value },
                             else => null,
                         };
@@ -2377,6 +2370,12 @@ const LlvmEmitter = struct {
                         for (function.signature.params) |param| {
                             if (std.mem.eql(u8, operand.detail, param.name.text)) return .{ .param = .{ .name = param.name.text, .inverted = true } };
                         }
+                        if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(operand))) |arg| {
+                            return switch (arg) {
+                                .param_field => |field| .{ .param_field = .{ .field = field, .inverted = true } },
+                                else => null,
+                            };
+                        }
                         return null;
                     }
                     return null;
@@ -2401,6 +2400,7 @@ const LlvmEmitter = struct {
                     }
                     if (self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction))) |arg| {
                         return switch (arg) {
+                            .param_field => |field| .{ .param_field = .{ .field = field } },
                             .bool_literal => |value| .{ .bool_literal = value },
                             else => null,
                         };
@@ -2423,12 +2423,14 @@ const LlvmEmitter = struct {
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = .{ .name = name, .inverted = true } },
+                .param_field => |field| .{ .param_field = .{ .field = field, .inverted = true } },
                 else => null,
             };
         }
         if (self.simpleMirArgAt(function, fn_mir, init_source)) |arg| {
             return switch (arg) {
                 .param => |name| .{ .param = .{ .name = name } },
+                .param_field => |field| .{ .param_field = .{ .field = field } },
                 .bool_literal => |value| .{ .bool_literal = value },
                 else => null,
             };
@@ -2446,6 +2448,7 @@ const LlvmEmitter = struct {
     fn emitSimpleMirCondition(self: *LlvmEmitter, condition: SimpleMirCondition, span: diagnostics.Span) ![]const u8 {
         return switch (condition) {
             .param => |param| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{param.name}),
+            .param_field => |param_field| try self.emitSimpleMirParamFieldValue(param_field.field, span),
             .bool_literal => |value| if (value) "1" else "0",
             .direct_call => |call| blk: {
                 const tmp = try self.nextTemp();
@@ -2453,6 +2456,14 @@ const LlvmEmitter = struct {
                 break :blk tmp;
             },
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary, span),
+        };
+    }
+
+    fn simpleMirConditionInverted(condition: SimpleMirCondition) bool {
+        return switch (condition) {
+            .param => |param| param.inverted,
+            .param_field => |param_field| param_field.inverted,
+            .bool_literal, .direct_call, .compare_binary => false,
         };
     }
 

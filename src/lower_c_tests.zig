@@ -1131,6 +1131,29 @@ test "lower-c emits conditional struct parameter field returns from MIR" {
     try expectNotContains(body, "switch");
 }
 
+test "lower-c emits conditional boolean struct field conditions from MIR" {
+    const source =
+        \\struct Flags { ok: bool, other: bool }
+        \\fn choose(f: Flags) -> bool {
+        \\    if (f.ok) {
+        \\        return f.other;
+        \\    } else {
+        \\        return false;
+        \\    }
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTest("c_mir_conditional_param_bool_field.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static bool choose(Flags f)");
+    try expectContains(body, "if (f.ok)");
+    try expectContains(body, "return f.other;");
+    try expectContains(body, "return false;");
+    try expectNotContains(body, "switch");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c emits struct parameter field call arguments from MIR" {
     const source =
         \\struct Pair { a: u32, b: u32 }
