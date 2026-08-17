@@ -258,6 +258,15 @@ test "lower-c emits simple void conditional direct calls from MIR" {
         \\    }
         \\    hit(8);
         \\}
+        \\fn choose_void_two_suffix(flag: bool, x: i32) -> void {
+        \\    if (flag) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\    hit(x);
+        \\    hit(x);
+        \\}
         \\fn choose_void_no_else(flag: bool) -> void {
         \\    if (flag) {
         \\        hit(5);
@@ -342,6 +351,19 @@ test "lower-c emits simple void conditional direct calls from MIR" {
     try std.testing.expect(else_call_index < suffix_index);
     try expectNotContains(suffix_body, "switch");
     try expectNotContains(suffix_body, "mc_tmp");
+
+    const two_suffix_body = try cFunctionBody(output.items, "static void choose_void_two_suffix(bool flag, int32_t x)");
+    const two_suffix_if = std.mem.indexOf(u8, two_suffix_body, "if (flag)") orelse return error.TestUnexpectedResult;
+    const two_suffix_then = std.mem.indexOf(u8, two_suffix_body, "hit(1);") orelse return error.TestUnexpectedResult;
+    const two_suffix_else = std.mem.indexOf(u8, two_suffix_body, "hit(0);") orelse return error.TestUnexpectedResult;
+    const two_suffix_first = std.mem.indexOf(u8, two_suffix_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    const two_suffix_second = std.mem.lastIndexOf(u8, two_suffix_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(two_suffix_if < two_suffix_then);
+    try std.testing.expect(two_suffix_then < two_suffix_first);
+    try std.testing.expect(two_suffix_else < two_suffix_first);
+    try std.testing.expect(two_suffix_first < two_suffix_second);
+    try expectNotContains(two_suffix_body, "switch");
+    try expectNotContains(two_suffix_body, "mc_tmp");
 
     const no_else_body = try cFunctionBody(output.items, "static void choose_void_no_else(bool flag)");
     try expectContains(no_else_body, "if (flag)");
@@ -647,6 +669,13 @@ test "lower-c emits simple global stores from MIR" {
         \\    }
         \\    hit(x);
         \\}
+        \\fn if_store_two_suffix(flag: bool, x: u32) {
+        \\    if (flag) {
+        \\        g = x;
+        \\    }
+        \\    hit(x);
+        \\    hit(x);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -751,6 +780,17 @@ test "lower-c emits simple global stores from MIR" {
     try std.testing.expect(store_index < second_hit);
     try expectNotContains(call_if_call_body, "switch");
     try expectNotContains(call_if_call_body, "mc_tmp");
+
+    const two_suffix_store_body = try cFunctionBody(output.items, "static void if_store_two_suffix(bool flag, uint32_t x)");
+    const two_suffix_if = std.mem.indexOf(u8, two_suffix_store_body, "if (flag) {") orelse return error.TestUnexpectedResult;
+    const two_suffix_store = std.mem.indexOf(u8, two_suffix_store_body, "mc_race_store_u32(&g, (uint32_t)x);") orelse return error.TestUnexpectedResult;
+    const two_suffix_first = std.mem.indexOf(u8, two_suffix_store_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    const two_suffix_second = std.mem.lastIndexOf(u8, two_suffix_store_body, "hit(x);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(two_suffix_if < two_suffix_store);
+    try std.testing.expect(two_suffix_store < two_suffix_first);
+    try std.testing.expect(two_suffix_first < two_suffix_second);
+    try expectNotContains(two_suffix_store_body, "switch");
+    try expectNotContains(two_suffix_store_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before simple returns" {

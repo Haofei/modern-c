@@ -241,6 +241,15 @@ test "LLVM emits simple void conditional direct calls from MIR" {
         \\    }
         \\    hit(8);
         \\}
+        \\fn choose_void_two_suffix(flag: bool, x: i32) -> void {
+        \\    if (flag) {
+        \\        hit(1);
+        \\    } else {
+        \\        hit(0);
+        \\    }
+        \\    hit(x);
+        \\    hit(x);
+        \\}
         \\fn choose_void_no_else(flag: bool) -> void {
         \\    if (flag) {
         \\        hit(5);
@@ -326,6 +335,19 @@ test "LLVM emits simple void conditional direct calls from MIR" {
     try std.testing.expect(else_call_index < suffix_index);
     try expectNotContains(suffix_body, "switch");
     try expectNotContains(suffix_body, "alloca");
+
+    const two_suffix_body = try llvmFunctionBody(output.items, "define internal void @choose_void_two_suffix");
+    const two_suffix_branch = std.mem.indexOf(u8, two_suffix_body, "br i1 %flag, label %bb_if_then") orelse return error.TestUnexpectedResult;
+    const two_suffix_then = std.mem.indexOf(u8, two_suffix_body, "call void @hit(i32 1)") orelse return error.TestUnexpectedResult;
+    const two_suffix_else = std.mem.indexOf(u8, two_suffix_body, "call void @hit(i32 0)") orelse return error.TestUnexpectedResult;
+    const two_suffix_first = std.mem.indexOf(u8, two_suffix_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    const two_suffix_second = std.mem.lastIndexOf(u8, two_suffix_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(two_suffix_branch < two_suffix_then);
+    try std.testing.expect(two_suffix_then < two_suffix_first);
+    try std.testing.expect(two_suffix_else < two_suffix_first);
+    try std.testing.expect(two_suffix_first < two_suffix_second);
+    try expectNotContains(two_suffix_body, "switch");
+    try expectNotContains(two_suffix_body, "alloca");
 
     const no_else_body = try llvmFunctionBody(output.items, "define internal void @choose_void_no_else");
     try expectContains(no_else_body, "br i1 %flag, label %bb_if_then");
@@ -650,6 +672,13 @@ test "LLVM emits simple global stores from MIR" {
         \\    }
         \\    hit(x);
         \\}
+        \\fn if_store_two_suffix(flag: bool, x: u32) {
+        \\    if (flag) {
+        \\        g = x;
+        \\    }
+        \\    hit(x);
+        \\    hit(x);
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -761,6 +790,17 @@ test "LLVM emits simple global stores from MIR" {
     try std.testing.expect(store_index < second_call);
     try expectNotContains(call_if_call_body, "switch");
     try expectNotContains(call_if_call_body, "alloca");
+
+    const two_suffix_store_body = try llvmFunctionBody(output.items, "define internal void @if_store_two_suffix");
+    const two_suffix_branch = std.mem.indexOf(u8, two_suffix_store_body, "br i1 %flag") orelse return error.TestUnexpectedResult;
+    const two_suffix_store = std.mem.indexOf(u8, two_suffix_store_body, "store atomic i32 %x, ptr @g unordered, align 4") orelse return error.TestUnexpectedResult;
+    const two_suffix_first = std.mem.indexOf(u8, two_suffix_store_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    const two_suffix_second = std.mem.lastIndexOf(u8, two_suffix_store_body, "call void @hit(i32 %x)") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(two_suffix_branch < two_suffix_store);
+    try std.testing.expect(two_suffix_store < two_suffix_first);
+    try std.testing.expect(two_suffix_first < two_suffix_second);
+    try expectNotContains(two_suffix_store_body, "switch");
+    try expectNotContains(two_suffix_store_body, "alloca");
 }
 
 test "LLVM preserves MIR void calls before simple returns" {
