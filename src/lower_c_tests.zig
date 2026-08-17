@@ -561,6 +561,11 @@ test "lower-c emits simple global stores from MIR" {
         \\fn store_call(x: u32) {
         \\    g = id(x);
         \\}
+        \\fn store_many(x: u32, input: bool) {
+        \\    g = x;
+        \\    h = g;
+        \\    flag = !input;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -599,6 +604,12 @@ test "lower-c emits simple global stores from MIR" {
     const call_body = try cFunctionBody(output.items, "static void store_call(uint32_t x)");
     try expectContains(call_body, "mc_race_store_u32(&g, (uint32_t)id(x));");
     try expectNotContains(call_body, "mc_tmp");
+
+    const many_body = try cFunctionBody(output.items, "static void store_many(uint32_t x, bool input)");
+    try expectContains(many_body, "mc_race_store_u32(&g, (uint32_t)x);");
+    try expectContains(many_body, "mc_race_store_u32(&h, (uint32_t)((uint32_t)mc_race_load_u32(&g)));");
+    try expectContains(many_body, "mc_race_store_bool(&flag, (bool)!input);");
+    try expectNotContains(many_body, "mc_tmp");
 }
 
 test "lower-c preserves MIR void calls before simple returns" {

@@ -564,6 +564,11 @@ test "LLVM emits simple global stores from MIR" {
         \\fn store_call(x: u32) {
         \\    g = id(x);
         \\}
+        \\fn store_many(x: u32, input: bool) {
+        \\    g = x;
+        \\    h = g;
+        \\    flag = !input;
+        \\}
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
@@ -610,6 +615,14 @@ test "LLVM emits simple global stores from MIR" {
     try expectContains(call_body, "store atomic i32 %t");
     try expectContains(call_body, "ptr @g unordered, align 4");
     try expectNotContains(call_body, "alloca");
+
+    const many_body = try llvmFunctionBody(output.items, "define internal void @store_many");
+    try expectContains(many_body, "store atomic i32 %x, ptr @g unordered, align 4");
+    try expectContains(many_body, "load atomic i32, ptr @g unordered, align 4");
+    try expectContains(many_body, "ptr @h unordered, align 4");
+    try expectContains(many_body, "xor i1 %input, true");
+    try expectContains(many_body, "ptr @flag unordered, align 1");
+    try expectNotContains(many_body, "alloca");
 }
 
 test "LLVM preserves MIR void calls before simple returns" {
