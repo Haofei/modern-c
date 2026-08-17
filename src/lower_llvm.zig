@@ -1387,6 +1387,7 @@ const LlvmEmitter = struct {
 
     const SimpleMirCallArg = union(enum) {
         param: []const u8,
+        param_field: SimpleMirParamField,
         integer_literal: []const u8,
         bool_literal: bool,
         direct_call: SimpleMirNestedCall,
@@ -1538,9 +1539,7 @@ const LlvmEmitter = struct {
                 .void => try self.emitReturnVoid(return_span),
                 .param => |name| try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}), return_span),
                 .param_field => |field| {
-                    const tmp = try self.nextTemp();
-                    const param_ty = type_bridge.simpleNameType(field.struct_name, return_span);
-                    try self.out.print(self.allocator, "  {s} = extractvalue {s} %{s}, {d}{s}\n", .{ tmp, try self.llvmType(param_ty), field.param_name, field.field_index, try self.debugCallSuffix() });
+                    const tmp = try self.emitSimpleMirParamFieldValue(field, return_span);
                     try self.emitReturnValue(ret_ty, tmp, return_span);
                 },
                 .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, return_span),
@@ -2526,9 +2525,7 @@ const LlvmEmitter = struct {
         switch (value) {
             .param => |name| try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}), span),
             .param_field => |field| {
-                const tmp = try self.nextTemp();
-                const param_ty = type_bridge.simpleNameType(field.struct_name, span);
-                try self.out.print(self.allocator, "  {s} = extractvalue {s} %{s}, {d}{s}\n", .{ tmp, try self.llvmType(param_ty), field.param_name, field.field_index, try self.debugCallSuffix() });
+                const tmp = try self.emitSimpleMirParamFieldValue(field, span);
                 try self.emitReturnValue(ret_ty, tmp, span);
             },
             .integer_literal => |literal| try self.emitReturnValue(ret_ty, literal, span),
@@ -2744,6 +2741,7 @@ const LlvmEmitter = struct {
     fn simpleMirCallArgValue(self: *LlvmEmitter, arg: SimpleMirCallArg, span: diagnostics.Span) ![]const u8 {
         return switch (arg) {
             .param => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
+            .param_field => |field| try self.emitSimpleMirParamFieldValue(field, span),
             .integer_literal => |literal| literal,
             .bool_literal => |value| if (value) "1" else "0",
             .direct_call => |call| blk: {
@@ -2756,6 +2754,13 @@ const LlvmEmitter = struct {
             .logical_not => |operand| try self.emitSimpleMirLogicalNot(operand, span),
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary, span),
         };
+    }
+
+    fn emitSimpleMirParamFieldValue(self: *LlvmEmitter, field: SimpleMirParamField, span: diagnostics.Span) ![]const u8 {
+        const tmp = try self.nextTemp();
+        const param_ty = type_bridge.simpleNameType(field.struct_name, span);
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} %{s}, {d}{s}\n", .{ tmp, try self.llvmType(param_ty), field.param_name, field.field_index, try self.debugCallSuffix() });
+        return tmp;
     }
 
     fn emitSimpleMirDirectCall(self: *LlvmEmitter, call: SimpleMirDirectCall, result: ?[]const u8, span: diagnostics.Span) !void {
@@ -3014,6 +3019,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirLocalCallArgAt(function, fn_mir, source)) |arg| return arg;
+        if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
         if (self.simpleMirNestedCallAtSource(function, fn_mir, source)) |call| {
             if (self.simpleMirNestedCallReturnsValue(call)) return .{ .direct_call = call };
         }

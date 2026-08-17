@@ -1324,6 +1324,7 @@ pub const CEmitter = struct {
 
     const SimpleMirCallArg = union(enum) {
         param: []const u8,
+        param_field: SimpleMirParamField,
         integer_literal: []const u8,
         bool_literal: bool,
         direct_call: SimpleMirNestedCall,
@@ -2604,6 +2605,7 @@ pub const CEmitter = struct {
     fn emitSimpleMirCallArg(self: *CEmitter, arg: SimpleMirCallArg) !void {
         switch (arg) {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
+            .param_field => |field| try self.out.print(self.allocator, "{s}.{s}", .{ try self.cIdent(field.param_name), try self.cIdent(field.field_name) }),
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
             .direct_call => |call| try self.emitSimpleMirNestedCall(call),
@@ -2862,6 +2864,7 @@ pub const CEmitter = struct {
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirLocalCallArgAt(function, fn_mir, source)) |arg| return arg;
+        if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
         if (self.simpleMirNestedCallAtSource(function, fn_mir, source)) |call| {
             if (self.simpleMirNestedCallReturnsValue(call)) return .{ .direct_call = call };
         }

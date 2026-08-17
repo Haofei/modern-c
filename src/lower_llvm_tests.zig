@@ -1152,6 +1152,36 @@ test "LLVM emits conditional struct parameter field returns from MIR" {
     try expectNotContains(body, "store");
 }
 
+test "LLVM emits struct parameter field call arguments from MIR" {
+    const source =
+        \\struct Pair { a: u32, b: u32 }
+        \\extern fn make(x: u32) -> u32;
+        \\extern fn hit(x: u32) -> void;
+        \\fn call_field(p: Pair) -> u32 {
+        \\    return make(p.a);
+        \\}
+        \\fn void_field(p: Pair) -> void {
+        \\    hit(p.b);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_mir_param_field_call_args.mc", source, &output);
+
+    const call_body = try llvmFunctionBody(output.items, "define internal i32 @call_field");
+    try expectContains(call_body, "extractvalue { i32, i32 } %p, 0");
+    try expectContains(call_body, "call i32 @make(i32 %t");
+    try expectContains(call_body, "ret i32 %t");
+    try expectNotContains(call_body, "alloca");
+    try expectNotContains(call_body, "store");
+
+    const void_body = try llvmFunctionBody(output.items, "define internal void @void_field");
+    try expectContains(void_body, "extractvalue { i32, i32 } %p, 1");
+    try expectContains(void_body, "call void @hit(i32 %t");
+    try expectNotContains(void_body, "alloca");
+    try expectNotContains(void_body, "store");
+}
+
 test "LLVM preserves MIR void calls before direct-call returns" {
     const source =
         \\extern fn hit(value: i32) -> void;
