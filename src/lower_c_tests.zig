@@ -2537,6 +2537,23 @@ test "lower-c preserves MIR void calls before direct-call returns" {
     try expectNotContains(side_then_local_call_add_body, "mc_tmp");
 }
 
+test "lower-c emits enum literal direct-call arguments from MIR without body fallback" {
+    const source =
+        \\enum Mode: u8 { read = 1, write = 2 }
+        \\extern fn sink(mode: Mode) -> Mode;
+        \\fn pass() -> Mode {
+        \\    return sink(.write);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_direct_call_argument.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static Mode pass(void)");
+    try expectContains(body, "return sink(Mode_write);");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c emits local global returns from MIR" {
     const source =
         \\global g: u32 = 0;
@@ -16885,7 +16902,7 @@ test "lower-c emits target-typed enum literals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "global_mode = Mode_read") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return Mode_read;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode mode = Mode_write;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode mc_tmp0 = Mode_read;\n    return sink(mc_tmp0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return sink(Mode_read);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mode == Mode_read") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Mode)Mode_write);") != null);
 }

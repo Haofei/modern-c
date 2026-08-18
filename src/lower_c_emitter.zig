@@ -1406,6 +1406,7 @@ pub const CEmitter = struct {
         integer_literal: []const u8,
         float_literal: SimpleMirFloatLiteral,
         bool_literal: bool,
+        enum_literal: SimpleMirEnumLiteral,
         global_load: []const u8,
         direct_call: SimpleMirNestedCall,
         checked_binary: SimpleMirCheckedBinary,
@@ -1422,6 +1423,7 @@ pub const CEmitter = struct {
 
     const SimpleMirDirectCall = struct {
         callee: []const u8,
+        source: mir.SourcePoint,
         args: [max_simple_mir_call_args]SimpleMirCallArg = undefined,
         arg_count: usize = 0,
     };
@@ -2011,7 +2013,7 @@ pub const CEmitter = struct {
         if (self.simpleMirWrappingBinaryReturn(function, fn_mir, block, value_id)) |binary| return .{ .wrapping_binary = binary };
         if (self.simpleMirUncheckedBinaryReturn(function, fn_mir, block, value_id)) |binary| return .{ .wrapping_binary = binary };
         if (self.simpleMirDirectCall(function, fn_mir, value_id)) |call| {
-            if (fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call)) return .{ .direct_call = call };
+            if (fn_mir.trap_edges.len == simpleMirDirectCallReturnTrapCount(fn_mir, call)) return .{ .direct_call = call };
         }
         if (self.simpleMirResultConstructorReturn(function, fn_mir, block, value_id)) |constructor| {
             if (fn_mir.trap_edges.len == simpleMirResultConstructorPayloadTrapCount(constructor.payload)) return .{ .result_constructor = constructor };
@@ -3542,7 +3544,7 @@ pub const CEmitter = struct {
 
     fn simpleMirReturnAllowsTrapBlocks(self: *const CEmitter, fn_mir: mir.Function, ret: SimpleMirReturn) bool {
         return switch (ret) {
-            .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallTrapCount(call),
+            .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallReturnTrapCount(fn_mir, call),
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
             .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
             .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirArgUsesParamField(unary.operand)),
@@ -3608,6 +3610,10 @@ pub const CEmitter = struct {
         var count: usize = 0;
         for (call.args[0..call.arg_count]) |arg| count += simpleMirCallArgTrapCount(arg);
         return count;
+    }
+
+    fn simpleMirDirectCallReturnTrapCount(fn_mir: mir.Function, call: SimpleMirDirectCall) usize {
+        return simpleMirDirectCallTrapCount(call) + simpleMirRepresentationTrapCountAt(fn_mir, call.source);
     }
 
     fn simpleMirDirectCallsTrapCount(calls: SimpleMirDirectCalls) usize {
@@ -3733,6 +3739,7 @@ pub const CEmitter = struct {
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .float_literal => |literal| try self.emitSimpleMirFloatLiteral(literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
+            .enum_literal => |literal| try self.out.print(self.allocator, "{s}_{s}", .{ literal.enum_name, literal.case_name }),
             .global_load => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
             .direct_call => |call| try self.emitSimpleMirNestedCall(call),
             .checked_binary => |binary| {
@@ -3986,7 +3993,7 @@ pub const CEmitter = struct {
             return null;
         };
         var arg_count: usize = 0;
-        var call: SimpleMirDirectCall = .{ .callee = callee };
+        var call: SimpleMirDirectCall = .{ .callee = callee, .source = call_source };
         var seen_args = [_]bool{false} ** max_simple_mir_call_args;
         var saw_result = false;
         for (fn_mir.target_type_facts) |fact| {
@@ -4204,6 +4211,7 @@ pub const CEmitter = struct {
         if (self.simpleMirCompareBinaryAtSource(function, fn_mir, source)) |binary| return .{ .compare_binary = binary };
         if (self.simpleMirLogicalNotAtSource(function, fn_mir, source)) |arg| return .{ .logical_not = arg };
         if (self.simpleMirLocalCallArgAt(function, fn_mir, source)) |arg| return arg;
+        if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal| return .{ .enum_literal = literal };
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
         if (self.simpleMirGlobalAtSource(function, fn_mir, source)) |name| return .{ .global_load = name };
         if (self.simpleMirNestedCallAtSource(function, fn_mir, source)) |call| {
@@ -5133,6 +5141,16 @@ pub const CEmitter = struct {
             if (edge.kind == .IntegerOverflow and edge.source == .checked_arithmetic and edge.line == source.line and edge.column == source.column) return true;
         }
         return false;
+    }
+
+    fn simpleMirRepresentationTrapCountAt(fn_mir: mir.Function, source: mir.SourcePoint) usize {
+        var count: usize = 0;
+        for (fn_mir.trap_edges) |edge| {
+            if (edge.kind == .InvalidRepresentation and edge.source == .representation_check and edge.line == source.line and edge.column == source.column) {
+                count += 1;
+            }
+        }
+        return count;
     }
 
     fn mirHasDivideByZeroTrapAt(fn_mir: mir.Function, source: mir.SourcePoint) bool {

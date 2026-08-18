@@ -3318,6 +3318,25 @@ test "LLVM preserves MIR void calls before direct-call returns" {
     try expectNotContains(side_then_local_call_add_body, "store");
 }
 
+test "LLVM emits enum literal direct-call arguments from MIR without body fallback" {
+    const source =
+        \\enum Mode: u8 { read = 1, write = 2 }
+        \\extern fn sink(mode: Mode) -> Mode;
+        \\fn pass() -> Mode {
+        \\    return sink(.write);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_direct_call_argument.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i8 @pass");
+    try expectContains(body, "call i8 @sink(i8 2)");
+    try expectContains(body, "ret i8 %t");
+    try expectNotContains(body, "alloca");
+    try expectNotContains(body, "store");
+}
+
 test "LLVM emits local global returns from MIR" {
     const source =
         \\global g: u32 = 0;
