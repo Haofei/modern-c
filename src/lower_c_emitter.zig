@@ -3603,6 +3603,7 @@ pub const CEmitter = struct {
             .struct_literal => |literal| fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal),
             .array_literal => |literal| fn_mir.trap_edges.len == simpleMirArrayLiteralTrapCount(literal),
             .aggregate_return_pointer_load => fn_mir.trap_edges.len == 1,
+            .global_address => fn_mir.trap_edges.len <= 1,
             .enum_literal => fn_mir.trap_edges.len >= 1 and self.noFunctionBodyFallbacksAvailable(),
             else => false,
         };
@@ -4812,6 +4813,9 @@ pub const CEmitter = struct {
                 if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
                 return .{ .global_load = name };
             }
+            if (self.simpleMirLocalInitAddressOfSource(fn_mir, local_name)) |address_source| {
+                if (self.simpleMirGlobalAddressAtValueSource(fn_mir, address_source)) |name| return .{ .global_address = name };
+            }
             const inferred = simpleMirInferredLocalFactAt(fn_mir, local_name, init_source) orelse return null;
             const result = simpleMirTargetTypeFactKindAt(fn_mir, .expression_result, init_source) orelse return null;
             if (!type_bridge.sameTypeSyntax(self.resolveAliasType(inferred.target_ty), self.resolveAliasType(result.target_ty))) return null;
@@ -4845,6 +4849,9 @@ pub const CEmitter = struct {
         }
         if (self.simpleMirArrayLiteralAtSource(function, fn_mir, init_source)) |literal| {
             if (fn_mir.trap_edges.len == simpleMirArrayLiteralTrapCount(literal)) return .{ .array_literal = literal };
+        }
+        if (self.simpleMirLocalInitAddressOfSource(fn_mir, local_name)) |address_source| {
+            if (self.simpleMirGlobalAddressAtValueSource(fn_mir, address_source)) |name| return .{ .global_address = name };
         }
         if (!simpleMirNoTrap(fn_mir)) return null;
         if (self.simpleMirNestedCallAtSource(function, fn_mir, init_source)) |call| return .{ .nested_call = call };
@@ -5019,6 +5026,32 @@ pub const CEmitter = struct {
 
     fn simpleMirLocalInitSource(self: *CEmitter, fn_mir: mir.Function, local_name: []const u8) ?mir.SourcePoint {
         return self.simpleMirLocalInitSourceInBlock(fn_mir.blocks[0], local_name);
+    }
+
+    fn simpleMirLocalInitAddressOfSource(self: *CEmitter, fn_mir: mir.Function, local_name: []const u8) ?mir.SourcePoint {
+        return self.simpleMirLocalInitAddressOfSourceInBlock(fn_mir.blocks[0], local_name);
+    }
+
+    fn simpleMirLocalInitAddressOfSourceInBlock(_: *CEmitter, block: mir.Block, local_name: []const u8) ?mir.SourcePoint {
+        var after_local = false;
+        for (block.instructions) |instruction| {
+            if (!after_local) {
+                after_local = instruction.kind == .local and std.mem.eql(u8, instruction.detail, local_name);
+                continue;
+            }
+            switch (instruction.kind) {
+                .target_type => continue,
+                .representation_check => {
+                    if (instruction.value_id) |value_id| {
+                        if (std.mem.eql(u8, value_id, "address_of")) return instructionSourcePoint(instruction);
+                    }
+                    return null;
+                },
+                .expr, .return_value => return null,
+                else => return null,
+            }
+        }
+        return null;
     }
 
     fn simpleMirLocalInitSourceInBlock(_: *CEmitter, block: mir.Block, local_name: []const u8) ?mir.SourcePoint {
