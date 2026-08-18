@@ -1526,6 +1526,7 @@ const LlvmEmitter = struct {
     const SimpleMirVoidStatement = union(enum) {
         direct_call: SimpleMirDirectCall,
         global_store: SimpleMirGlobalStore,
+        param_field_store: SimpleMirParamFieldStore,
     };
 
     const SimpleMirVoidStatements = struct {
@@ -1549,6 +1550,15 @@ const LlvmEmitter = struct {
         null_literal,
         struct_literal: SimpleMirStructLiteralReturn,
         result_constructor: SimpleMirResultConstructorReturn,
+    };
+
+    const SimpleMirParamFieldStore = struct {
+        param_name: []const u8,
+        field_name: []const u8,
+        field_index: usize,
+        struct_name: []const u8,
+        value: SimpleMirArg,
+        source: mir.SourcePoint,
     };
 
     const SimpleMirCheckedBinary = struct {
@@ -2083,7 +2093,6 @@ const LlvmEmitter = struct {
     fn simpleMirAggregateReturnPointerLoad(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, ret: mir.Instruction) ?SimpleMirAggregateReturnPointerLoad {
         if (!std.mem.eql(u8, ret.value_id orelse return null, "deref")) return null;
         const load_instruction = self.simpleMirReturnedPointerFieldLoad(block) orelse return null;
-        if (!simpleMirDirectFieldPath(load_instruction.detail)) return null;
         const source = instructionSourcePoint(load_instruction);
         const local_name = self.simpleMirAggregateBaseLocalAtSource(block, source) orelse return null;
         const init_source = self.simpleMirLocalInitSourceInBlock(block, local_name) orelse return null;
@@ -2132,10 +2141,6 @@ const LlvmEmitter = struct {
             candidate = instruction.detail;
         }
         return candidate;
-    }
-
-    fn simpleMirDirectFieldPath(field_path: []const u8) bool {
-        return std.mem.indexOfAny(u8, field_path, ".[") == null;
     }
 
     fn simpleMirWrappingBinaryAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint, expected_type_name: []const u8) ?SimpleMirWrappingBinary {
@@ -2401,6 +2406,22 @@ const LlvmEmitter = struct {
 
     fn simpleMirExprCouldBeParamField(self: *LlvmEmitter, function: anytype, block: mir.Block, field_name: []const u8, source: mir.SourcePoint) bool {
         return self.simpleMirParamFieldAtSource(function, block, source, field_name, null) != null;
+    }
+
+    fn simpleMirExprCouldBePointerParamField(self: *LlvmEmitter, function: anytype, block: mir.Block, field_name: []const u8, source: mir.SourcePoint) bool {
+        for (function.signature.params) |param| {
+            if (!simpleMirBlockHasExprAt(block, param.name.text, source)) continue;
+            const pointer = switch (self.resolveAliasType(param.ty).kind) {
+                .pointer => |pointer| pointer,
+                else => continue,
+            };
+            const struct_name = type_bridge.typeName(self.resolveAliasType(pointer.child.*)) orelse continue;
+            const struct_decl = self.struct_types.get(struct_name) orelse continue;
+            for (struct_decl.fields) |field| {
+                if (std.mem.eql(u8, field.name.text, field_name)) return true;
+            }
+        }
+        return false;
     }
 
     fn simpleMirParamFieldValueAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirParamField {
@@ -2677,6 +2698,7 @@ const LlvmEmitter = struct {
     fn simpleMirVoidStatementsInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, require_global_store: bool) ?SimpleMirVoidStatements {
         var result: SimpleMirVoidStatements = .{};
         var has_global_store = false;
+        var has_emitted_store = false;
         for (block.instructions) |instruction| {
             if (instruction.kind == .call) {
                 const source = instructionSourcePoint(instruction);
@@ -2687,6 +2709,13 @@ const LlvmEmitter = struct {
             } else if (instruction.kind == .assign and !mirFunctionHasLocal(fn_mir, instruction.detail)) {
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) return null;
+                }
+                if (self.simpleMirPointerParamFieldStore(function, fn_mir, block, instruction)) |store| {
+                    if (result.count >= max_simple_mir_void_statements) return null;
+                    result.statements[result.count] = .{ .param_field_store = store };
+                    result.count += 1;
+                    has_emitted_store = true;
+                    continue;
                 }
                 if (!self.global_types.contains(instruction.detail)) return null;
                 if (result.count >= max_simple_mir_void_statements) return null;
@@ -2699,9 +2728,10 @@ const LlvmEmitter = struct {
                 } };
                 result.count += 1;
                 has_global_store = true;
+                has_emitted_store = true;
             }
         }
-        if (require_global_store and !has_global_store) return null;
+        if (require_global_store and !has_global_store and !has_emitted_store) return null;
         return result;
     }
 
@@ -2714,7 +2744,7 @@ const LlvmEmitter = struct {
                     stores.count += 1;
                 }
             },
-            .direct_call => {},
+            .direct_call, .param_field_store => {},
         };
         return stores;
     }
@@ -2724,8 +2754,61 @@ const LlvmEmitter = struct {
         for (statements.statements[0..statements.count]) |statement| switch (statement) {
             .direct_call => |call| count += simpleMirDirectCallTrapCount(call),
             .global_store => {},
+            .param_field_store => count += 1,
         };
         return count;
+    }
+
+    fn simpleMirPointerParamFieldStore(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, assign: mir.Instruction) ?SimpleMirParamFieldStore {
+        if (!self.noFunctionBodyFallbacksAvailable()) return null;
+        const source = instructionSourcePoint(assign);
+        const value_source = simpleMirPointerFieldAssignmentValueSource(block, assign) orelse return null;
+        const value = self.simpleMirArgAt(function, fn_mir, value_source) orelse return null;
+        for (function.signature.params) |param| {
+            if (!simpleMirBlockHasExprAt(block, param.name.text, source)) continue;
+            const pointer = switch (self.resolveAliasType(param.ty).kind) {
+                .pointer => |pointer| pointer,
+                else => continue,
+            };
+            if (pointer.mutability != .mut) continue;
+            const struct_name = typeName(self.resolveAliasType(pointer.child.*)) orelse continue;
+            const struct_decl = self.struct_types.get(struct_name) orelse continue;
+            for (struct_decl.fields, 0..) |field, field_index| {
+                if (!std.mem.eql(u8, field.name.text, assign.detail)) continue;
+                const field_type_name = typeName(self.resolveAliasType(field.ty)) orelse return null;
+                if (!std.mem.eql(u8, field_type_name, assign.result_ty.name())) return null;
+                return .{
+                    .param_name = param.name.text,
+                    .field_name = field.name.text,
+                    .field_index = field_index,
+                    .struct_name = struct_name,
+                    .value = value,
+                    .source = source,
+                };
+            }
+        }
+        return null;
+    }
+
+    fn simpleMirPointerFieldAssignmentValueSource(block: mir.Block, assign: mir.Instruction) ?mir.SourcePoint {
+        const assign_source = instructionSourcePoint(assign);
+        var after_assign = false;
+        for (block.instructions) |instruction| {
+            if (!after_assign) {
+                after_assign = instruction.kind == .assign and sameMirSourceLocation(instructionSourcePoint(instruction), assign_source) and std.mem.eql(u8, instruction.detail, assign.detail);
+                continue;
+            }
+            switch (instruction.kind) {
+                .target_type, .typed_load, .representation_check, .representation_use => continue,
+                .expr, .integer_literal_conversion, .binary, .unary, .call => {
+                    const source = instructionSourcePoint(instruction);
+                    if (sameMirSourceLocation(source, assign_source)) continue;
+                    return source;
+                },
+                else => return null,
+            }
+        }
+        return null;
     }
 
     fn simpleMirGlobalStoreValueAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, store_name: []const u8, value_source: mir.SourcePoint) ?SimpleMirGlobalStoreValue {
@@ -2797,6 +2880,7 @@ const LlvmEmitter = struct {
                         self.simpleMirFloatLiteralAtSource(fn_mir, source) == null) return false;
                     continue;
                 }
+                if (self.simpleMirPointerParamFieldStore(function, fn_mir, block, instruction) != null) continue;
                 if (!self.global_types.contains(instruction.detail)) return false;
             },
             .binary => {
@@ -2839,6 +2923,7 @@ const LlvmEmitter = struct {
                     if (mirBlockHasLocal(block, instruction.detail)) continue;
                     if (mirBlockHasCall(block, instruction.detail)) continue;
                     if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
+                    if (self.noFunctionBodyFallbacksAvailable() and self.simpleMirExprCouldBePointerParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                     if (self.global_types.contains(instruction.detail)) continue;
                     return false;
                 }
@@ -3379,6 +3464,23 @@ const LlvmEmitter = struct {
                 const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{store.name});
                 try self.emitOrdinaryStore(global_ty, try self.llvmType(global_ty), try self.simpleMirGlobalStoreValue(store.value, global_ty, span), ptr, true);
             },
+            .param_field_store => |store| {
+                const span = spanFromMirSourcePoint(store.source);
+                return_span = span;
+                const struct_decl = self.struct_types.get(store.struct_name) orelse return error.UnsupportedLlvmEmission;
+                if (store.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
+                const field_ty = struct_decl.fields[store.field_index].ty;
+                const field_ptr = try self.nextTemp();
+                const struct_ty = type_bridge.simpleNameType(store.struct_name, span);
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr %{s}, i32 0, i32 {d}{s}\n", .{
+                    field_ptr,
+                    try self.llvmType(struct_ty),
+                    store.param_name,
+                    store.field_index,
+                    try self.debugCallSuffix(),
+                });
+                try self.emitOrdinaryStore(field_ty, try self.llvmType(field_ty), try self.simpleMirArgValue(store.value, span), field_ptr, false);
+            },
         };
         return return_span;
     }
@@ -3784,14 +3886,64 @@ const LlvmEmitter = struct {
 
     fn emitSimpleMirAggregateReturnPointerLoad(self: *LlvmEmitter, load: SimpleMirAggregateReturnPointerLoad, span: diagnostics.Span) ![]const u8 {
         const callee_sig = self.fn_sigs.get(load.call.callee) orelse return error.UnsupportedLlvmEmission;
-        const struct_decl = self.structDeclForType(callee_sig.ret) orelse return error.UnsupportedLlvmEmission;
-        const field_index = structFieldIndex(struct_decl, load.fact.field_path) orelse return error.UnsupportedLlvmEmission;
+        const extract_path = try self.aggregateReturnPointerExtractPath(callee_sig.ret, load.fact.field_path);
         try self.emitMirAggregateReturnPointerFactConsumedComment(load.fact);
         const aggregate = try self.nextTemp();
         try self.emitSimpleMirDirectCall(load.call, aggregate, span);
         const ptr = try self.nextTemp();
-        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}, {d}{s}\n", .{ ptr, try self.llvmType(callee_sig.ret), aggregate, field_index, try self.debugCallSuffix() });
+        try self.out.print(self.allocator, "  {s} = extractvalue {s} {s}", .{ ptr, try self.llvmType(callee_sig.ret), aggregate });
+        for (extract_path) |field_index| try self.out.print(self.allocator, ", {d}", .{field_index});
+        try self.out.print(self.allocator, "{s}\n", .{try self.debugCallSuffix()});
         return self.emitSimpleMirScalarAtomicLoad(load.pointee_ty, ptr);
+    }
+
+    fn aggregateReturnPointerExtractPath(self: *LlvmEmitter, root_ty: anytype, field_path: []const u8) ![]const usize {
+        var indices: std.ArrayList(usize) = .empty;
+        errdefer indices.deinit(self.scratch.allocator());
+        var ty = root_ty;
+        var index: usize = 0;
+        while (index < field_path.len) {
+            const field_start = index;
+            if (field_start >= field_path.len or !isSimpleMirFieldPathIdentStart(field_path[field_start])) return error.UnsupportedLlvmEmission;
+            index += 1;
+            while (index < field_path.len and isSimpleMirFieldPathIdentContinue(field_path[index])) : (index += 1) {}
+            const field_name = field_path[field_start..index];
+            const struct_decl = self.structDeclForType(ty) orelse return error.UnsupportedLlvmEmission;
+            const field_index = structFieldIndex(struct_decl, field_name) orelse return error.UnsupportedLlvmEmission;
+            try indices.append(self.scratch.allocator(), field_index);
+            ty = struct_decl.fields[field_index].ty;
+
+            while (index < field_path.len and field_path[index] == '[') {
+                index += 1;
+                const element_start = index;
+                while (index < field_path.len and std.ascii.isDigit(field_path[index])) : (index += 1) {}
+                if (index == element_start or index >= field_path.len or field_path[index] != ']') return error.UnsupportedLlvmEmission;
+                const element_index = std.fmt.parseUnsigned(usize, field_path[element_start..index], 10) catch return error.UnsupportedLlvmEmission;
+                index += 1;
+                const array = switch (self.resolveAliasType(ty).kind) {
+                    .array => |array| array,
+                    else => return error.UnsupportedLlvmEmission,
+                };
+                const len = self.arrayLenValue(array.len) orelse return error.UnsupportedLlvmEmission;
+                if (element_index >= len) return error.UnsupportedLlvmEmission;
+                try indices.append(self.scratch.allocator(), element_index);
+                ty = array.child.*;
+            }
+
+            if (index == field_path.len) break;
+            if (field_path[index] != '.') return error.UnsupportedLlvmEmission;
+            index += 1;
+        }
+        if (indices.items.len == 0) return error.UnsupportedLlvmEmission;
+        return try indices.toOwnedSlice(self.scratch.allocator());
+    }
+
+    fn isSimpleMirFieldPathIdentStart(ch: u8) bool {
+        return std.ascii.isAlphabetic(ch) or ch == '_';
+    }
+
+    fn isSimpleMirFieldPathIdentContinue(ch: u8) bool {
+        return isSimpleMirFieldPathIdentStart(ch) or std.ascii.isDigit(ch);
     }
 
     fn emitSimpleMirScalarAtomicLoad(self: *LlvmEmitter, ty: mir.ValueType, ptr: []const u8) ![]const u8 {

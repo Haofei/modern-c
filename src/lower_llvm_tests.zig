@@ -9770,6 +9770,22 @@ test "LLVM aggregate-return bounded call prefixes are MIR-owned" {
     try expectNotContains(missing_local_call_body, "load i32, ptr %");
 }
 
+test "LLVM lowers pointer parameter field stores without body fallback" {
+    const source =
+        \\struct Cell { value: u32 }
+        \\fn store_cell(cell: *mut Cell) -> void {
+        \\    cell.*.value = 7;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_pointer_param_field_store.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal void @store_cell");
+    try expectContains(body, "getelementptr { i32 }, ptr %cell, i32 0, i32 0");
+    try expectContains(body, "store i32 7, ptr %");
+}
+
 test "LLVM consumes MIR aggregate-return pointer-array element facts" {
     const source =
         \\global shared_counter: u32 = 0;

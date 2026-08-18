@@ -8257,6 +8257,21 @@ test "lower-c aggregate-return bounded call prefixes are MIR-owned" {
     try expectContains(missing_local_call_body, "mc_race_load_u32");
 }
 
+test "lower-c lowers pointer parameter field stores without body fallback" {
+    const source =
+        \\struct Cell { value: u32 }
+        \\fn store_cell(cell: *mut Cell) -> void {
+        \\    cell.*.value = 7;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_pointer_param_field_store.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static void store_cell(Cell * cell)");
+    try expectContains(body, "cell->value = 7;");
+}
+
 test "lower-c consumes MIR aggregate-return pointer-array element facts" {
     const source =
         \\global shared_counter: u32 = 0;
