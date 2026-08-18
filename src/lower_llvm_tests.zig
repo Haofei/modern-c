@@ -3357,6 +3357,23 @@ test "LLVM emits enum literal compare operands from MIR without body fallback" {
     try expectNotContains(body, "store");
 }
 
+test "LLVM emits enum literal explicit casts from MIR without body fallback" {
+    const source =
+        \\enum Mode: u8 { read = 1, write = 2 }
+        \\fn cast_mode() -> Mode {
+        \\    return .write as Mode;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_literal_explicit_cast.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i8 @cast_mode");
+    try expectContains(body, "ret i8 2");
+    try expectNotContains(body, "alloca");
+    try expectNotContains(body, "store");
+}
+
 test "LLVM emits local global returns from MIR" {
     const source =
         \\global g: u32 = 0;
@@ -4294,7 +4311,7 @@ test "LLVM consumes enum-literal target type facts across contexts" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_enum_target_type_facts.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_target_type_facts.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@global_mode = internal global i8 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "ret i8 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@sink(i8 2)") != null);

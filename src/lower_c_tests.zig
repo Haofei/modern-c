@@ -2572,6 +2572,22 @@ test "lower-c emits enum literal compare operands from MIR without body fallback
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c emits enum literal explicit casts from MIR without body fallback" {
+    const source =
+        \\enum Mode: u8 { read = 1, write = 2 }
+        \\fn cast_mode() -> Mode {
+        \\    return .write as Mode;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_literal_explicit_cast.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static Mode cast_mode(void)");
+    try expectContains(body, "return ((Mode)(Mode_write));");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c emits local global returns from MIR" {
     const source =
         \\global g: u32 = 0;
@@ -16911,7 +16927,7 @@ test "lower-c emits target-typed enum literals" {
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCTest("emit_c_enum_literals.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_target_type_facts.mc", source, &output);
 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "typedef uint8_t Mode;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode_read = 1") != null);
@@ -16919,10 +16935,10 @@ test "lower-c emits target-typed enum literals" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "uint32_t sink(Mode mode);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "global_mode = Mode_read") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return Mode_read;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "Mode mode = Mode_write;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return Mode_write;") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return sink(Mode_read);") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mode == Mode_read") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Mode)Mode_write);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return ((Mode)(Mode_write));") != null);
 }
 
 test "lower-c emits optional pointer if-let" {

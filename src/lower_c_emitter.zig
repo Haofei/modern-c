@@ -4994,7 +4994,7 @@ pub const CEmitter = struct {
             for (block.instructions) |instruction| {
                 if (instruction.kind != .expr) continue;
                 if (!sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
-                return self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, source);
+                if (self.simpleMirEnumLiteralAtSource(fn_mir, instruction.detail, source)) |literal| return literal;
             }
         }
         return null;
