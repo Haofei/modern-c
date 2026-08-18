@@ -8345,6 +8345,26 @@ test "lower-c lowers pointer parameter field stores without body fallback" {
     try expectContains(body, "cell->value = 7;");
 }
 
+test "lower-c emits global address direct-call args from MIR without body fallback" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn consume_ptr(ptr: *mut u32) -> u32 {
+        \\    return 7;
+        \\}
+        \\
+        \\fn use_global_address_arg() -> u32 {
+        \\    return consume_ptr(&shared_counter);
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_global_address_call_arg.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uint32_t use_global_address_arg(void)");
+    try expectContains(body, "return consume_ptr(&shared_counter);");
+}
+
 test "lower-c consumes MIR aggregate-return pointer-array element facts" {
     const source =
         \\global shared_counter: u32 = 0;

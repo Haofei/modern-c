@@ -1410,6 +1410,7 @@ pub const CEmitter = struct {
         bool_literal: bool,
         enum_literal: SimpleMirEnumLiteral,
         global_load: []const u8,
+        global_address: []const u8,
         direct_call: SimpleMirNestedCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -3812,6 +3813,7 @@ pub const CEmitter = struct {
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
             .enum_literal => |literal| try self.out.print(self.allocator, "{s}_{s}", .{ literal.enum_name, literal.case_name }),
             .global_load => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
+            .global_address => |name| try self.out.print(self.allocator, "&{s}", .{try self.cIdent(name)}),
             .direct_call => |call| try self.emitSimpleMirNestedCall(call),
             .checked_binary => |binary| {
                 const helper = try self.checkedHelperName(binary.op, binary.type_name);
@@ -3991,7 +3993,12 @@ pub const CEmitter = struct {
                 continue;
             }
             if (instruction.kind == .return_value or instruction.kind == .local) break;
-            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
+            if (instruction.kind != .expr and
+                instruction.kind != .integer_literal_conversion and
+                instruction.kind != .binary and
+                instruction.kind != .unary and
+                instruction.kind != .representation_check and
+                instruction.kind != .representation_use) continue;
             const arg_source = instructionSourcePoint(instruction);
             if (last_operand_source) |last| {
                 if (sameMirSourceLocation(last, arg_source)) continue;
@@ -4125,7 +4132,12 @@ pub const CEmitter = struct {
             }
             if (instruction.kind == .return_value) break;
             if (instruction.kind == .call) break;
-            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
+            if (instruction.kind != .expr and
+                instruction.kind != .integer_literal_conversion and
+                instruction.kind != .binary and
+                instruction.kind != .unary and
+                instruction.kind != .representation_check and
+                instruction.kind != .representation_use) continue;
             const arg_source = instructionSourcePoint(instruction);
             const fact = self.simpleMirDirectCallArgumentFactAt(fn_mir, callee, arg_source) orelse continue;
             const arg_index = fact.target_index orelse return null;
@@ -4328,6 +4340,7 @@ pub const CEmitter = struct {
         if (self.simpleMirLocalCallArgAt(function, fn_mir, source)) |arg| return arg;
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal| return .{ .enum_literal = literal };
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
+        if (self.simpleMirGlobalAddressAtValueSource(fn_mir, source)) |name| return .{ .global_address = name };
         if (self.simpleMirGlobalAtSource(function, fn_mir, source)) |name| return .{ .global_load = name };
         if (self.simpleMirNestedCallAtSource(function, fn_mir, source)) |call| {
             if (self.simpleMirNestedCallReturnsValue(call)) return .{ .direct_call = call };
@@ -4950,6 +4963,39 @@ pub const CEmitter = struct {
                 }
                 if (mirFunctionHasLocal(fn_mir, instruction.detail)) return null;
                 if (self.globals.contains(instruction.detail)) return instruction.detail;
+            }
+        }
+        return null;
+    }
+
+    fn simpleMirGlobalAddressAtValueSource(self: *CEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?[]const u8 {
+        var pointer_fact: ?mir.TargetTypeFact = null;
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind != .expression_result) continue;
+            if (!sameMirSourceLocation(fact.source, source)) continue;
+            switch (self.resolveAliasType(fact.target_ty).kind) {
+                .pointer => {},
+                else => return null,
+            }
+            pointer_fact = fact;
+            break;
+        }
+        const fact = pointer_fact orelse return null;
+        const pointer = switch (self.resolveAliasType(fact.target_ty).kind) {
+            .pointer => |pointer| pointer,
+            else => return null,
+        };
+        for (fn_mir.blocks) |block| {
+            for (block.instructions) |instruction| {
+                if (instruction.kind != .expr) continue;
+                const expr_source = instructionSourcePoint(instruction);
+                if (expr_source.line != source.line or expr_source.column != source.column + 1) continue;
+                if (mirFunctionHasLocal(fn_mir, instruction.detail)) return null;
+                const name = if (self.globals.contains(instruction.detail)) instruction.detail else return null;
+                const global_info = self.globals.get(name) orelse return null;
+                const global_ty = global_info.source_ty orelse return null;
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(global_ty))) return null;
+                return name;
             }
         }
         return null;

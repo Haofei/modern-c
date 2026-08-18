@@ -9842,6 +9842,26 @@ test "LLVM lowers pointer parameter field stores without body fallback" {
     try expectContains(body, "store i32 7, ptr %");
 }
 
+test "LLVM emits global address direct-call args from MIR without body fallback" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn consume_ptr(ptr: *mut u32) -> u32 {
+        \\    return 7;
+        \\}
+        \\
+        \\fn use_global_address_arg() -> u32 {
+        \\    return consume_ptr(&shared_counter);
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_global_address_call_arg.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @use_global_address_arg");
+    try expectContains(body, "call i32 @consume_ptr(ptr @shared_counter)");
+}
+
 test "LLVM consumes MIR aggregate-return pointer-array element facts" {
     const source =
         \\global shared_counter: u32 = 0;
