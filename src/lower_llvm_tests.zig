@@ -9861,6 +9861,24 @@ test "LLVM admits direct-return checked arithmetic in normal emit without losing
     try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
 }
 
+test "LLVM admits bare pointer param return past its elided nonnull check" {
+    // `return p` for a pointer param renders `ret ptr %p`; the nonnull
+    // representation check is statically elided (a bare param return never
+    // narrows), so the fast path admits it — matching the fallback with no trap.
+    const source =
+        \\fn ret_ptr(p: *mut u32) -> *mut u32 { return p; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_bare_ptr_return.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal ptr @ret_ptr");
+    try expectContains(body, "ret ptr %p");
+    // No trap block emitted, and fast-path (no param dbg.value).
+    try std.testing.expect(std.mem.indexOf(u8, body, "mc_trap_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
+}
+
 test "LLVM emits global address direct-call args from MIR without body fallback" {
     const source =
         \\global shared_counter: u32 = 0;

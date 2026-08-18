@@ -10345,6 +10345,34 @@ test "lower-c admits direct-return checked arithmetic in normal emit, folding-le
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_add_u32(a, 1);") == null);
 }
 
+test "lower-c admits bare pointer param return past its elided nonnull check, folded stays on fallback" {
+    // `return p` for a pointer param carries a nonnull representation-check trap
+    // the fallback elides to `return p;`. The fast path admits it (a bare param
+    // return never narrows, so it is sound with or without the check). A folded
+    // `let q = p; return q;` must stay on the fallback (keeps the `let`'s local
+    // + source map + inferred-local fail-closed).
+    const source =
+        \\fn ret_ptr(p: *mut u32) -> *mut u32 { return p; }
+        \\fn folded(p: *mut u32) -> *mut u32 { let q: *mut u32 = p; return q; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "ptr.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    try expectContains(output.items, "return p;");
+    // Folded case: fallback materializes the local rather than folding it away.
+    try expectContains(output.items, "uint32_t * q = p;");
+}
+
 test "lower-c source map records defer cleanup spans" {
     const source =
         \\extern fn close_resource() -> void;

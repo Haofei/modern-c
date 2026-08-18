@@ -2000,7 +2000,15 @@ pub const CEmitter = struct {
         if (ret.result_ty == .void or std.mem.eql(u8, ret.detail, "void")) return if (simpleMirNoTrap(fn_mir)) .void else null;
         const value_id = ret.value_id orelse return null;
         for (function.signature.params) |param| {
-            if (std.mem.eql(u8, value_id, param.name.text)) return if (simpleMirNoTrap(fn_mir)) .{ .param = param.name.text } else null;
+            // A bare `return p` renders `return p;` regardless of trap edges: the
+            // only trap a bare param return can carry is a `nonnull_pointer`
+            // representation check, which the fallback statically elides (a bare
+            // param return never narrows — nullable and non-null both emit
+            // `return p;`). So admit it even with such an (elided) trap edge.
+            if (std.mem.eql(u8, value_id, param.name.text)) {
+                if (simpleMirNoTrap(fn_mir) or simpleMirAllTrapEdgesRepresentationChecks(fn_mir)) return .{ .param = param.name.text };
+                return null;
+            }
         }
         if (self.simpleMirParamFieldReturn(function, block, ret, value_id)) |field| return if (simpleMirNoTrap(fn_mir)) .{ .param_field = field } else null;
         if (self.globals.contains(value_id)) return if (simpleMirNoTrap(fn_mir)) .{ .global_load = value_id } else null;
@@ -2484,6 +2492,19 @@ pub const CEmitter = struct {
 
     fn simpleMirNoTrap(fn_mir: mir.Function) bool {
         return fn_mir.blocks.len == 1 and fn_mir.trap_edges.len == 0;
+    }
+
+    // True when the function has trap edges and every one is a representation
+    // check (e.g. `nonnull_pointer`). Such checks on a value that already holds
+    // the right representation — as a bare `return p` does — are statically
+    // satisfied and elided by codegen, so a shape rendered without emitting them
+    // stays byte-identical to the fallback.
+    fn simpleMirAllTrapEdgesRepresentationChecks(fn_mir: mir.Function) bool {
+        if (fn_mir.trap_edges.len == 0) return false;
+        for (fn_mir.trap_edges) |edge| {
+            if (edge.source != .representation_check) return false;
+        }
+        return true;
     }
 
     fn simpleMirVoidBody(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirVoidBody {
@@ -3596,6 +3617,12 @@ pub const CEmitter = struct {
 
     fn simpleMirReturnAllowsTrapBlocks(self: *const CEmitter, fn_mir: mir.Function, ret: SimpleMirReturn) bool {
         return switch (ret) {
+            // A bare param return emits `return p;` and never emits a trap; its
+            // only trap edge is the elided nonnull representation check. Exclude
+            // folded-local returns (`let x = p; return x;`, which reach `.param`
+            // via simpleMirLocalInitReturn): those must stay on the fallback that
+            // keeps the `let`'s source map and the inferred-local fail-closed check.
+            .param => simpleMirAllTrapEdgesRepresentationChecks(fn_mir) and !simpleMirEntryBlockFoldsLocal(fn_mir),
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallReturnTrapCount(fn_mir, call),
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
             .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or (simpleMirCheckedBinaryOperandsSimple(binary) and !simpleMirEntryBlockFoldsLocal(fn_mir))),
