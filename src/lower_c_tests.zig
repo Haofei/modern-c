@@ -10316,6 +10316,35 @@ test "lower-c source map records source spans and generated C lines" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mir_block=\"mir:add_one:block:") != null);
 }
 
+test "lower-c admits direct-return checked arithmetic in normal emit, folding-let stays on fallback" {
+    // A direct `return <checked op of simple operands>` folds no source construct,
+    // so the MIR fast path loses no source-map fidelity and is admitted even when a
+    // body fallback is available (fallback available = normal emit). A `let`-folding
+    // body keeps its per-construct source map by staying on the fallback (emitted as
+    // a temp before the return), so it must NOT take the inline fast-path form.
+    const source =
+        \\fn sub_params(a: u32, b: u32) -> u32 { return b - a; }
+        \\fn folded(a: u32) -> u32 { let y: u32 = a + 1; return y; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "arith.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    // Direct return: inline fast-path form.
+    try expectContains(output.items, "return mc_checked_sub_u32(b, a);");
+    // Folding let: fallback keeps the intermediate local, so it is NOT the inline form.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "return mc_checked_add_u32(a, 1);") == null);
+}
+
 test "lower-c source map records defer cleanup spans" {
     const source =
         \\extern fn close_resource() -> void;

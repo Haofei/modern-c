@@ -9842,6 +9842,25 @@ test "LLVM lowers pointer parameter field stores without body fallback" {
     try expectContains(body, "store i32 7, ptr %");
 }
 
+test "LLVM admits direct-return checked arithmetic in normal emit without losing source fidelity" {
+    // Symmetric to the C backend: a direct `return <checked op of simple operands>`
+    // folds no source construct, so the fast path is admitted even with a body
+    // fallback available (normal emit). The admitted function carries the checked
+    // intrinsic directly and — like every fast-path function — omits the param
+    // `llvm.dbg.value` that the AST fallback would emit.
+    const source =
+        \\fn sub_params(a: u32, b: u32) -> u32 { return b - a; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_direct_checked_return.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @sub_params");
+    try expectContains(body, "@llvm.usub.with.overflow.i32(i32 %b, i32 %a)");
+    // Fast-path admission (not the fallback, which emits param dbg.value).
+    try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
+}
+
 test "LLVM emits global address direct-call args from MIR without body fallback" {
     const source =
         \\global shared_counter: u32 = 0;

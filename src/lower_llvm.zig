@@ -3569,8 +3569,8 @@ const LlvmEmitter = struct {
         return switch (ret) {
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallReturnTrapCount(fn_mir, call),
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
-            .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
-            .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirArgUsesParamField(unary.operand)),
+            .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or (simpleMirCheckedBinaryOperandsSimple(binary) and !simpleMirEntryBlockFoldsLocal(fn_mir))),
+            .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or (simpleMirArgIsSimpleReturnOperand(unary.operand) and !simpleMirEntryBlockFoldsLocal(fn_mir))),
             .compare_binary => |binary| fn_mir.trap_edges.len == simpleMirCompareBinaryTrapCount(binary),
             .plain_float_binary => fn_mir.trap_edges.len == 0,
             .explicit_cast_return => |cast| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(cast.operand),
@@ -3592,15 +3592,32 @@ const LlvmEmitter = struct {
         return instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary or instruction.kind == .return_value;
     }
 
-    fn simpleMirCheckedBinaryUsesParamField(binary: SimpleMirCheckedBinary) bool {
-        return simpleMirArgUsesParamField(binary.left) or simpleMirArgUsesParamField(binary.right);
+    fn simpleMirCheckedBinaryOperandsSimple(binary: SimpleMirCheckedBinary) bool {
+        return simpleMirArgIsSimpleReturnOperand(binary.left) and simpleMirArgIsSimpleReturnOperand(binary.right);
     }
 
-    fn simpleMirArgUsesParamField(arg: SimpleMirArg) bool {
+    // A checked-arith operand the MIR fast path renders the same as the AST
+    // fallback. Every SimpleMirArg is such a resolved simple operand (param /
+    // param field / literal); the exhaustive switch forces a decision if a
+    // non-trivial variant is added.
+    fn simpleMirArgIsSimpleReturnOperand(arg: SimpleMirArg) bool {
         return switch (arg) {
-            .param_field => true,
-            else => false,
+            .param, .param_field, .integer_literal, .float_literal, .bool_literal, .enum_literal => true,
         };
+    }
+
+    // A `.local` in the entry block means the fast path folded a `let` into the
+    // returned expression (e.g. `let y = a + b; return y` -> `return a + b`),
+    // which drops that construct's source-map / `#line` entry. Direct-return
+    // shapes (no folded local) lose no source-map fidelity, so only those are
+    // admitted in normal emit; let-folding functions stay on the fallback that
+    // still emits their per-construct source map.
+    fn simpleMirEntryBlockFoldsLocal(fn_mir: mir.Function) bool {
+        if (fn_mir.blocks.len == 0) return false;
+        for (fn_mir.blocks[0].instructions) |instruction| {
+            if (instruction.kind == .local) return true;
+        }
+        return false;
     }
 
     fn simpleMirCallArgTrapCount(arg: SimpleMirCallArg) usize {
