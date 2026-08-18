@@ -4292,7 +4292,7 @@ test "LLVM consumes f32 and f64 literal target type facts" {
     ;
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_float_target_type_facts.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_float_target_type_facts.mc", source, &output);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@small = internal global float") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "@wide = internal global double") != null);
     try std.testing.expect(std.mem.indexOf(u8, output.items, "fmul float") != null);

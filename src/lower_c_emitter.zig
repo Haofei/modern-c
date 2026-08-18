@@ -1202,6 +1202,7 @@ pub const CEmitter = struct {
         explicit_cast_return: SimpleMirExplicitCastReturn,
         conversion_return: SimpleMirConversionReturn,
         wrapping_binary: SimpleMirWrappingBinary,
+        plain_float_binary: SimpleMirPlainFloatBinary,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
@@ -1508,6 +1509,13 @@ pub const CEmitter = struct {
         right: SimpleMirArg,
     };
 
+    const SimpleMirPlainFloatBinary = struct {
+        op: []const u8,
+        target_fact: mir.TargetTypeFact,
+        left: SimpleMirArg,
+        right: SimpleMirArg,
+    };
+
     const SimpleMirFloatLiteral = struct {
         literal: []const u8,
         target_type_name: []const u8,
@@ -1673,6 +1681,11 @@ pub const CEmitter = struct {
                     }
                     try self.out.appendSlice(self.allocator, "return ");
                     try self.emitSimpleMirWrappingBinaryExpr(binary);
+                    try self.out.appendSlice(self.allocator, ";\n");
+                },
+                .plain_float_binary => |binary| {
+                    try self.out.appendSlice(self.allocator, "return ");
+                    try self.emitSimpleMirPlainFloatBinaryExpr(binary);
                     try self.out.appendSlice(self.allocator, ";\n");
                 },
                 .struct_literal => |literal| {
@@ -2038,6 +2051,7 @@ pub const CEmitter = struct {
             if (self.simpleMirArrayLiteralReturn(function, fn_mir, block)) |literal| return .{ .array_literal = literal };
         }
         if (std.mem.eql(u8, value_id, "binary")) {
+            if (self.simpleMirPlainFloatBinaryAtReturn(function, fn_mir)) |binary| return .{ .plain_float_binary = binary };
             if (self.simpleMirCheckedBinaryAtReturn(function, fn_mir)) |binary| return .{ .checked_binary = binary };
             if (self.simpleMirCompareBinaryAtReturn(function, fn_mir)) |binary| return .{ .compare_binary = binary };
         }
@@ -2058,6 +2072,15 @@ pub const CEmitter = struct {
         const return_ty = function.signature.transitionalReturnType() orelse return null;
         const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
         return self.simpleMirWrappingBinaryAtSource(function, fn_mir, call_source, expected_type_name);
+    }
+
+    fn simpleMirPlainFloatBinaryAtReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirPlainFloatBinary {
+        return self.simpleMirPlainFloatBinaryAtSource(function, fn_mir, blk: {
+            for (fn_mir.blocks[0].instructions) |instruction| {
+                if (instruction.kind == .binary) break :blk instructionSourcePoint(instruction);
+            }
+            return null;
+        });
     }
 
     fn simpleMirAggregateReturnPointerLoad(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, ret: mir.Instruction) ?SimpleMirAggregateReturnPointerLoad {
@@ -2899,7 +2922,8 @@ pub const CEmitter = struct {
             },
             .binary => {
                 const source = instructionSourcePoint(instruction);
-                if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
+                if (self.simpleMirPlainFloatBinaryAtSource(function, fn_mir, source) == null and
+                    self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
                     self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return false;
             },
             .unary => {
@@ -3561,6 +3585,7 @@ pub const CEmitter = struct {
             .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
             .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirArgUsesParamField(unary.operand)),
             .compare_binary => |binary| fn_mir.trap_edges.len == simpleMirCompareBinaryTrapCount(binary),
+            .plain_float_binary => fn_mir.trap_edges.len == 0,
             .explicit_cast_return => |cast| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(cast.operand),
             .conversion_return => |conversion| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(conversion.operand),
             .struct_literal => |literal| fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal),
@@ -3768,6 +3793,16 @@ pub const CEmitter = struct {
         try self.out.appendSlice(self.allocator, ")");
     }
 
+    fn emitSimpleMirPlainFloatBinaryExpr(self: *CEmitter, binary: SimpleMirPlainFloatBinary) !void {
+        _ = binary.target_fact;
+        const op = try simpleMirCFloatBinaryOp(binary.op);
+        try self.out.appendSlice(self.allocator, "(");
+        try self.emitSimpleMirArg(binary.left);
+        try self.out.print(self.allocator, " {s} ", .{op});
+        try self.emitSimpleMirArg(binary.right);
+        try self.out.appendSlice(self.allocator, ")");
+    }
+
     fn emitSimpleMirCallArg(self: *CEmitter, arg: SimpleMirCallArg) !void {
         switch (arg) {
             .param => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
@@ -3888,6 +3923,44 @@ pub const CEmitter = struct {
         }
         if (count != 2) return null;
         return .{ .op = binary_instr.detail, .type_name = target_name, .left = operands[0], .right = operands[1] };
+    }
+
+    fn simpleMirPlainFloatBinaryAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirPlainFloatBinary {
+        if (!simpleMirNoTrap(fn_mir)) return null;
+        const block, const binary_instr = blk: {
+            for (fn_mir.blocks) |block| for (block.instructions) |instruction| {
+                if (instruction.kind == .binary and sameMirSourceLocation(instructionSourcePoint(instruction), source)) break :blk .{ block, instruction };
+            };
+            return null;
+        };
+        if (!simpleMirFloatBinaryOpSupported(binary_instr.detail)) return null;
+        const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, source) orelse return null;
+        const target_name = typeName(self.resolveAliasType(target_fact.target_ty)) orelse return null;
+        if (!std.mem.eql(u8, target_name, "f32") and !std.mem.eql(u8, target_name, "f64")) return null;
+        var operands: [2]SimpleMirArg = undefined;
+        var count: usize = 0;
+        var after_binary = false;
+        var last_operand_source: ?mir.SourcePoint = null;
+        for (block.instructions) |instruction| {
+            if (!after_binary) {
+                after_binary = instruction.kind == .binary and sameMirSourceLocation(instructionSourcePoint(instruction), source);
+                continue;
+            }
+            if (instruction.kind == .return_value or instruction.kind == .local) break;
+            if (instruction.kind != .expr) continue;
+            const arg_source = instructionSourcePoint(instruction);
+            if (last_operand_source) |last| {
+                if (sameMirSourceLocation(last, arg_source)) continue;
+            }
+            const arg = self.simpleMirArgAt(function, fn_mir, arg_source) orelse return null;
+            if (count >= operands.len) return null;
+            operands[count] = arg;
+            last_operand_source = arg_source;
+            count += 1;
+            if (count == operands.len) break;
+        }
+        if (count != 2) return null;
+        return .{ .op = binary_instr.detail, .target_fact = target_fact, .left = operands[0], .right = operands[1] };
     }
 
     fn simpleMirCompareBinaryAtReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirCompareBinary {
@@ -4478,7 +4551,8 @@ pub const CEmitter = struct {
                 .binary => {
                     if (std.mem.eql(u8, instruction.detail, "switch_subject")) continue;
                     const source = instructionSourcePoint(instruction);
-                    if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
+                    if (self.simpleMirPlainFloatBinaryAtSource(function, fn_mir, source) == null and
+                        self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
                         self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return null;
                 },
                 .unary => {
@@ -4555,7 +4629,8 @@ pub const CEmitter = struct {
                 .binary => {
                     if (std.mem.eql(u8, instruction.detail, "switch_subject")) continue;
                     const source = instructionSourcePoint(instruction);
-                    if (self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
+                    if (self.simpleMirPlainFloatBinaryAtSource(function, fn_mir, source) == null and
+                        self.simpleMirCheckedBinaryAtSource(function, fn_mir, source) == null and
                         self.simpleMirCompareBinaryAtSource(function, fn_mir, source) == null) return null;
                 },
                 .unary => {
@@ -5171,6 +5246,18 @@ pub const CEmitter = struct {
 
     fn simpleMirCompareOpSupported(op: []const u8) bool {
         return std.mem.eql(u8, op, "eq") or std.mem.eql(u8, op, "ne") or std.mem.eql(u8, op, "lt") or std.mem.eql(u8, op, "le") or std.mem.eql(u8, op, "gt") or std.mem.eql(u8, op, "ge");
+    }
+
+    fn simpleMirFloatBinaryOpSupported(op: []const u8) bool {
+        return std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul") or std.mem.eql(u8, op, "div");
+    }
+
+    fn simpleMirCFloatBinaryOp(op: []const u8) ![]const u8 {
+        if (std.mem.eql(u8, op, "add")) return "+";
+        if (std.mem.eql(u8, op, "sub")) return "-";
+        if (std.mem.eql(u8, op, "mul")) return "*";
+        if (std.mem.eql(u8, op, "div")) return "/";
+        return error.UnsupportedCEmission;
     }
 
     fn simpleMirCCompareOp(op: []const u8) ![]const u8 {

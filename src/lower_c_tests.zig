@@ -2045,6 +2045,28 @@ test "lower-c emits float literal returns from MIR without body fallback" {
     try expectNotContains(less_body, "mc_tmp");
 }
 
+test "lower-c emits plain float binary returns from MIR without body fallback" {
+    const source =
+        \\fn product() -> f32 {
+        \\    return 1.7 * 2.3;
+        \\}
+        \\fn quotient() -> f64 {
+        \\    return 4.0 / 2.0;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_plain_float_binary_returns.mc", source, &output);
+
+    const product_body = try cFunctionBody(output.items, "static float product(void)");
+    try expectContains(product_body, "return (1.7f * 2.3f);");
+    try expectNotContains(product_body, "mc_tmp");
+
+    const quotient_body = try cFunctionBody(output.items, "static double quotient(void)");
+    try expectContains(quotient_body, "return (4.0 / 2.0);");
+    try expectNotContains(quotient_body, "mc_tmp");
+}
+
 test "lower-c emits local and assigned char literal returns from MIR without body fallback" {
     const source =
         \\fn local_char() -> u16 {
