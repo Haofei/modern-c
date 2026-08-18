@@ -8365,6 +8365,22 @@ test "lower-c emits global address direct-call args from MIR without body fallba
     try expectContains(body, "return consume_ptr(&shared_counter);");
 }
 
+test "lower-c emits global address returns from MIR without body fallback" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn returned_global_pointer() -> *mut u32 {
+        \\    return &shared_counter;
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_global_address_return.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uint32_t * returned_global_pointer(void)");
+    try expectContains(body, "return &shared_counter;");
+}
+
 test "lower-c consumes MIR aggregate-return pointer-array element facts" {
     const source =
         \\global shared_counter: u32 = 0;

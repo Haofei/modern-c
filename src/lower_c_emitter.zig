@@ -1196,6 +1196,7 @@ pub const CEmitter = struct {
         enum_literal: SimpleMirEnumLiteral,
         null_literal: SimpleMirNullLiteral,
         global_load: []const u8,
+        global_address: []const u8,
         nested_call: SimpleMirNestedCall,
         direct_call: SimpleMirDirectCall,
         result_constructor: SimpleMirResultConstructorReturn,
@@ -1616,6 +1617,7 @@ pub const CEmitter = struct {
                     try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission);
                     try self.out.appendSlice(self.allocator, ";\n");
                 },
+                .global_address => |name| try self.out.print(self.allocator, "return &{s};\n", .{try self.cIdent(name)}),
                 .nested_call => |call| {
                     try self.out.appendSlice(self.allocator, "return ");
                     try self.emitSimpleMirNestedCall(call);
@@ -1997,6 +1999,9 @@ pub const CEmitter = struct {
         }
         if (self.simpleMirParamFieldReturn(function, block, ret, value_id)) |field| return if (simpleMirNoTrap(fn_mir)) .{ .param_field = field } else null;
         if (self.globals.contains(value_id)) return if (simpleMirNoTrap(fn_mir)) .{ .global_load = value_id } else null;
+        if (simpleMirReturnValueSource(block, value_id)) |source| {
+            if (self.simpleMirGlobalAddressAtValueSource(fn_mir, source)) |name| return if (simpleMirNoTrap(fn_mir)) .{ .global_address = name } else null;
+        }
         if (std.mem.eql(u8, value_id, "int")) {
             const source = simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret);
             for (fn_mir.integer_facts) |fact| {
@@ -4990,11 +4995,16 @@ pub const CEmitter = struct {
                 if (instruction.kind != .expr) continue;
                 const expr_source = instructionSourcePoint(instruction);
                 if (expr_source.line != source.line or expr_source.column != source.column + 1) continue;
-                if (mirFunctionHasLocal(fn_mir, instruction.detail)) return null;
-                const name = if (self.globals.contains(instruction.detail)) instruction.detail else return null;
+                const name = if (self.globals.contains(instruction.detail)) instruction.detail else {
+                    return null;
+                };
                 const global_info = self.globals.get(name) orelse return null;
-                const global_ty = global_info.source_ty orelse return null;
-                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(global_ty))) return null;
+                const global_ty = global_info.source_ty orelse {
+                    return null;
+                };
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(global_ty))) {
+                    return null;
+                }
                 return name;
             }
         }
@@ -5475,9 +5485,13 @@ pub const CEmitter = struct {
         var source: ?mir.SourcePoint = null;
         for (block.instructions) |instruction| {
             if (instruction.kind == .return_value) break;
-            if (instruction.kind != .expr) continue;
-            if (!std.mem.eql(u8, instruction.detail, value_id)) continue;
-            source = instructionSourcePoint(instruction);
+            if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, value_id)) {
+                source = instructionSourcePoint(instruction);
+                continue;
+            }
+            if (instruction.value_id) |instruction_value| {
+                if (std.mem.eql(u8, instruction_value, value_id)) source = instructionSourcePoint(instruction);
+            }
         }
         return source;
     }

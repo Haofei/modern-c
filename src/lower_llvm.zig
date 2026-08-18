@@ -1258,6 +1258,7 @@ const LlvmEmitter = struct {
         enum_literal: SimpleMirEnumLiteral,
         null_literal,
         global_load: []const u8,
+        global_address: []const u8,
         nested_call: SimpleMirNestedCall,
         direct_call: SimpleMirDirectCall,
         result_constructor: SimpleMirResultConstructorReturn,
@@ -1724,6 +1725,7 @@ const LlvmEmitter = struct {
                     const value = try self.emitSimpleMirGlobalLoad(name, ret_ty);
                     try self.emitReturnValue(ret_ty, value, return_span);
                 },
+                .global_address => |name| try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{name}), return_span),
                 .nested_call => |call| {
                     const tmp = try self.nextTemp();
                     try self.emitSimpleMirNestedCall(call, tmp, return_span);
@@ -2037,6 +2039,9 @@ const LlvmEmitter = struct {
         }
         if (self.simpleMirParamFieldReturn(function, block, ret, value_id)) |field| return if (simpleMirNoTrap(fn_mir)) .{ .param_field = field } else null;
         if (self.global_types.contains(value_id)) return if (simpleMirNoTrap(fn_mir)) .{ .global_load = value_id } else null;
+        if (simpleMirReturnValueSource(block, value_id)) |source| {
+            if (self.simpleMirGlobalAddressAtValueSource(fn_mir, source)) |name| return if (simpleMirNoTrap(fn_mir)) .{ .global_address = name } else null;
+        }
         if (std.mem.eql(u8, value_id, "int")) {
             const source = simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret);
             for (fn_mir.integer_facts) |fact| {
@@ -5265,7 +5270,6 @@ const LlvmEmitter = struct {
                 if (instruction.kind != .expr) continue;
                 const expr_source = instructionSourcePoint(instruction);
                 if (expr_source.line != source.line or expr_source.column != source.column + 1) continue;
-                if (mirFunctionHasLocal(fn_mir, instruction.detail)) return null;
                 const name = if (self.global_types.contains(instruction.detail)) instruction.detail else return null;
                 const global_ty = self.global_types.get(name) orelse return null;
                 if (!type_bridge.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(global_ty))) return null;
@@ -5743,9 +5747,13 @@ const LlvmEmitter = struct {
         var source: ?mir.SourcePoint = null;
         for (block.instructions) |instruction| {
             if (instruction.kind == .return_value) break;
-            if (instruction.kind != .expr) continue;
-            if (!std.mem.eql(u8, instruction.detail, value_id)) continue;
-            source = instructionSourcePoint(instruction);
+            if (instruction.kind == .expr and std.mem.eql(u8, instruction.detail, value_id)) {
+                source = instructionSourcePoint(instruction);
+                continue;
+            }
+            if (instruction.value_id) |instruction_value| {
+                if (std.mem.eql(u8, instruction_value, value_id)) source = instructionSourcePoint(instruction);
+            }
         }
         return source;
     }
