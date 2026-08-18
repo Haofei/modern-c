@@ -1405,13 +1405,13 @@ const LlvmEmitter = struct {
         integer_literal: []const u8,
         float_literal: SimpleMirFloatLiteral,
         bool_literal: bool,
+        enum_literal: SimpleMirEnumLiteral,
         global_load: []const u8,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
-        enum_literal: SimpleMirEnumLiteral,
         null_literal,
         struct_literal: SimpleMirStructLiteralReturn,
         array_literal: SimpleMirArrayLiteralReturn,
@@ -1458,6 +1458,7 @@ const LlvmEmitter = struct {
         integer_literal: []const u8,
         float_literal: SimpleMirFloatLiteral,
         bool_literal: bool,
+        enum_literal: SimpleMirEnumLiteral,
     };
 
     const SimpleMirCallArg = union(enum) {
@@ -1586,6 +1587,12 @@ const LlvmEmitter = struct {
         operand_fact: mir.TargetTypeFact,
         left: SimpleMirArg,
         right: SimpleMirArg,
+        representation_check: ?SimpleMirEnumRepresentationCheck = null,
+    };
+
+    const SimpleMirEnumRepresentationCheck = struct {
+        enum_name: []const u8,
+        subject: SimpleMirArg,
     };
 
     const SimpleMirWrappingBinary = struct {
@@ -1722,6 +1729,7 @@ const LlvmEmitter = struct {
                     try self.emitReturnValue(ret_ty, value, return_span);
                 },
                 .compare_binary => |binary| {
+                    try self.emitSimpleMirCompareRepresentationCheck(binary, return_span);
                     const value = try self.emitSimpleMirCompareBinary(binary, return_span);
                     try self.emitReturnValue(ret_ty, value, return_span);
                 },
@@ -3306,6 +3314,7 @@ const LlvmEmitter = struct {
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
                 .float_literal => |literal| .{ .float_literal = literal },
+                .enum_literal => |literal| .{ .enum_literal = literal },
             };
         }
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| return .{ .enum_literal = literal };
@@ -3360,6 +3369,7 @@ const LlvmEmitter = struct {
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
             .float_literal => |literal| .{ .float_literal = literal },
+            .enum_literal => |literal| .{ .enum_literal = literal },
         };
     }
 
@@ -3511,6 +3521,7 @@ const LlvmEmitter = struct {
             .checked_binary => |binary| simpleMirCheckedBinaryTrapCount(binary),
             .checked_unary => 1,
             .direct_call => |call| simpleMirDirectCallTrapCount(call),
+            .compare_binary => |binary| simpleMirCompareBinaryTrapCount(binary),
             else => 0,
         };
     }
@@ -3521,6 +3532,7 @@ const LlvmEmitter = struct {
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
             .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
             .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirArgUsesParamField(unary.operand)),
+            .compare_binary => |binary| fn_mir.trap_edges.len == simpleMirCompareBinaryTrapCount(binary),
             .explicit_cast_return => |cast| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(cast.operand),
             .conversion_return => |conversion| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(conversion.operand),
             .struct_literal => |literal| fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal),
@@ -3593,6 +3605,24 @@ const LlvmEmitter = struct {
         var count: usize = 0;
         for (calls.calls[0..calls.count]) |call| count += simpleMirDirectCallTrapCount(call);
         return count;
+    }
+
+    fn simpleMirCompareBinaryTrapCount(binary: SimpleMirCompareBinary) usize {
+        return if (binary.representation_check != null) 1 else 0;
+    }
+
+    fn emitSimpleMirCompareRepresentationCheck(self: *LlvmEmitter, binary: SimpleMirCompareBinary, span: diagnostics.Span) !void {
+        const check = binary.representation_check orelse return;
+        const enum_decl = self.enum_types.get(check.enum_name) orelse return error.UnsupportedLlvmEmission;
+        const subject = try self.simpleMirArgValue(check.subject, span);
+        const subject_ty = try self.llvmType(simpleType(span, check.enum_name));
+        const trap_label = try self.nextLabel("repr_trap");
+        const ok_label = try self.nextLabel("repr_ok");
+        try self.out.print(self.allocator, "  switch {s} {s}, label %{s} [\n", .{ subject_ty, subject, trap_label });
+        for (enum_decl.cases) |case| {
+            try self.out.print(self.allocator, "    {s} {s}, label %{s}\n", .{ subject_ty, try self.enumCaseValueByName(enum_decl, case.name.text), ok_label });
+        }
+        try self.out.print(self.allocator, "  ]{s}\n{s}:\n  call void @mc_trap_InvalidRepresentation(){s}\n  unreachable\n{s}:\n", .{ try self.debugCallSuffix(), trap_label, try self.debugCallSuffix(), ok_label });
     }
 
     fn simpleMirAssignedValueInBlock(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, local_name: []const u8) ?SimpleMirConditionalValue {
@@ -3858,6 +3888,10 @@ const LlvmEmitter = struct {
             .integer_literal => |literal| literal,
             .float_literal => |literal| try self.simpleMirFloatLiteralValue(literal),
             .bool_literal => |value| if (value) "1" else "0",
+            .enum_literal => |literal| blk: {
+                const enum_decl = self.enum_types.get(literal.enum_name) orelse return error.UnsupportedLlvmEmission;
+                break :blk try self.enumCaseValueByName(enum_decl, literal.case_name);
+            },
         };
     }
 
@@ -4153,6 +4187,7 @@ const LlvmEmitter = struct {
         if (!simpleMirCompareOpSupported(binary_instr.detail)) return null;
         var operands: [2]SimpleMirArg = undefined;
         var operand_fact: ?mir.TargetTypeFact = null;
+        var representation_check: ?SimpleMirEnumRepresentationCheck = null;
         var count: usize = 0;
         var after_binary = false;
         var last_operand_source: ?mir.SourcePoint = null;
@@ -4171,12 +4206,17 @@ const LlvmEmitter = struct {
             if (count >= operands.len) return null;
             operands[count] = arg;
             operand_fact = operand_fact orelse self.simpleMirOperandTargetTypeFactAt(fn_mir, arg_source);
+            if (representation_check == null and simpleMirRepresentationTrapCountAt(fn_mir, arg_source) == 1) {
+                const fact = self.simpleMirOperandTargetTypeFactAt(fn_mir, arg_source) orelse return null;
+                const enum_decl = self.enumDeclForType(fact.target_ty) orelse return null;
+                representation_check = .{ .enum_name = enum_decl.name.text, .subject = arg };
+            }
             last_operand_source = arg_source;
             count += 1;
             if (count == operands.len) break;
         }
         if (count != 2) return null;
-        return .{ .op = binary_instr.detail, .operand_fact = operand_fact orelse return null, .left = operands[0], .right = operands[1] };
+        return .{ .op = binary_instr.detail, .operand_fact = operand_fact orelse return null, .left = operands[0], .right = operands[1], .representation_check = representation_check };
     }
 
     fn simpleMirLogicalNotAtReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirArg {
@@ -4490,6 +4530,7 @@ const LlvmEmitter = struct {
             .integer_literal => |literal| .{ .integer_literal = literal },
             .float_literal => |literal| .{ .float_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
+            .enum_literal => |literal| .{ .enum_literal = literal },
         };
     }
 
@@ -4959,6 +5000,7 @@ const LlvmEmitter = struct {
                     .integer_literal => |literal| .{ .integer_literal = literal },
                     .float_literal => |literal| .{ .float_literal = literal },
                     .bool_literal => |value| .{ .bool_literal = value },
+                    .enum_literal => |literal| .{ .enum_literal = literal },
                 };
             }
             return null;
@@ -4996,6 +5038,7 @@ const LlvmEmitter = struct {
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .float_literal => |literal| .{ .float_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
+                .enum_literal => |literal| .{ .enum_literal = literal },
             };
         }
         return null;
@@ -5061,6 +5104,7 @@ const LlvmEmitter = struct {
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .float_literal => |literal| .{ .float_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
+                .enum_literal => |literal| .{ .enum_literal = literal },
             };
         }
         return null;
@@ -5145,6 +5189,7 @@ const LlvmEmitter = struct {
     fn simpleMirArgAt(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirArg {
         if (self.simpleMirCharIntegerLiteralAtSource(fn_mir, source)) |literal| return .{ .integer_literal = literal };
         if (self.simpleMirFloatLiteralAtSource(fn_mir, source)) |literal| return .{ .float_literal = literal };
+        if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal| return .{ .enum_literal = literal };
         for (fn_mir.integer_facts) |fact| {
             if (sameMirSourceLocation(fact.source, source)) return .{ .integer_literal = fact.literal };
         }

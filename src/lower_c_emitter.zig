@@ -1347,13 +1347,13 @@ pub const CEmitter = struct {
         integer_literal: []const u8,
         float_literal: SimpleMirFloatLiteral,
         bool_literal: bool,
+        enum_literal: SimpleMirEnumLiteral,
         global_load: []const u8,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
         compare_binary: SimpleMirCompareBinary,
         logical_not: SimpleMirArg,
-        enum_literal: SimpleMirEnumLiteral,
         null_literal: SimpleMirNullLiteral,
         struct_literal: SimpleMirStructLiteralReturn,
         array_literal: SimpleMirArrayLiteralReturn,
@@ -1398,6 +1398,7 @@ pub const CEmitter = struct {
         integer_literal: []const u8,
         float_literal: SimpleMirFloatLiteral,
         bool_literal: bool,
+        enum_literal: SimpleMirEnumLiteral,
     };
 
     const SimpleMirCallArg = union(enum) {
@@ -1522,6 +1523,12 @@ pub const CEmitter = struct {
         op: []const u8,
         left: SimpleMirArg,
         right: SimpleMirArg,
+        representation_check: ?SimpleMirEnumRepresentationCheck = null,
+    };
+
+    const SimpleMirEnumRepresentationCheck = struct {
+        enum_name: []const u8,
+        subject: SimpleMirArg,
     };
 
     const SimpleMirWrappingBinary = struct {
@@ -1620,6 +1627,8 @@ pub const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, ");\n");
                 },
                 .compare_binary => |binary| {
+                    try self.emitSimpleMirCompareRepresentationCheck(binary);
+                    try self.writeIndent();
                     try self.out.appendSlice(self.allocator, "return ");
                     try self.emitSimpleMirCompareBinary(binary);
                     try self.out.appendSlice(self.allocator, ";\n");
@@ -3303,6 +3312,7 @@ pub const CEmitter = struct {
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
                 .float_literal => |literal| .{ .float_literal = literal },
+                .enum_literal => |literal| .{ .enum_literal = literal },
             };
         }
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, simpleMirReturnValueSource(block, value_id) orelse instructionSourcePoint(ret))) |literal| return .{ .enum_literal = literal };
@@ -3357,6 +3367,7 @@ pub const CEmitter = struct {
             .integer_literal => |literal| .{ .integer_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
             .float_literal => |literal| .{ .float_literal = literal },
+            .enum_literal => |literal| .{ .enum_literal = literal },
         };
     }
 
@@ -3538,6 +3549,7 @@ pub const CEmitter = struct {
             .checked_binary => |binary| simpleMirCheckedBinaryTrapCount(binary),
             .checked_unary => 1,
             .direct_call => |call| simpleMirDirectCallTrapCount(call),
+            .compare_binary => |binary| simpleMirCompareBinaryTrapCount(binary),
             else => 0,
         };
     }
@@ -3548,6 +3560,7 @@ pub const CEmitter = struct {
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
             .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or simpleMirCheckedBinaryUsesParamField(binary)),
             .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or simpleMirArgUsesParamField(unary.operand)),
+            .compare_binary => |binary| fn_mir.trap_edges.len == simpleMirCompareBinaryTrapCount(binary),
             .explicit_cast_return => |cast| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(cast.operand),
             .conversion_return => |conversion| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(conversion.operand),
             .struct_literal => |literal| fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal),
@@ -3622,6 +3635,28 @@ pub const CEmitter = struct {
         return count;
     }
 
+    fn simpleMirCompareBinaryTrapCount(binary: SimpleMirCompareBinary) usize {
+        return if (binary.representation_check != null) 1 else 0;
+    }
+
+    fn emitSimpleMirCompareRepresentationCheck(self: *CEmitter, binary: SimpleMirCompareBinary) !void {
+        const check = binary.representation_check orelse return;
+        const enum_decl = self.enums.get(check.enum_name) orelse return error.UnsupportedCEmission;
+        try self.out.appendSlice(self.allocator, "switch ((int)(");
+        try self.emitSimpleMirArg(check.subject);
+        try self.out.appendSlice(self.allocator, ")) {\n");
+        self.indent += 1;
+        for (enum_decl.cases) |case| {
+            try self.writeIndent();
+            try self.out.print(self.allocator, "case {s}_{s}: break;\n", .{ check.enum_name, case.name.text });
+        }
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "default: mc_trap_InvalidRepresentation();\n");
+        self.indent -= 1;
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "}\n");
+    }
+
     fn emitSimpleMirCompareBinary(self: *CEmitter, binary: SimpleMirCompareBinary) !void {
         try self.out.appendSlice(self.allocator, "(");
         try self.emitSimpleMirArg(binary.left);
@@ -3637,6 +3672,7 @@ pub const CEmitter = struct {
             .integer_literal => |literal| try self.out.appendSlice(self.allocator, literal),
             .float_literal => |literal| try self.emitSimpleMirFloatLiteral(literal),
             .bool_literal => |value| try self.out.appendSlice(self.allocator, if (value) "true" else "false"),
+            .enum_literal => |literal| try self.out.print(self.allocator, "{s}_{s}", .{ literal.enum_name, literal.case_name }),
         }
     }
 
@@ -3872,6 +3908,7 @@ pub const CEmitter = struct {
         };
         if (!simpleMirCompareOpSupported(binary_instr.detail)) return null;
         var operands: [2]SimpleMirArg = undefined;
+        var representation_check: ?SimpleMirEnumRepresentationCheck = null;
         var count: usize = 0;
         var after_binary = false;
         var last_operand_source: ?mir.SourcePoint = null;
@@ -3889,12 +3926,17 @@ pub const CEmitter = struct {
             const arg = self.simpleMirArgAt(function, fn_mir, arg_source) orelse return null;
             if (count >= operands.len) return null;
             operands[count] = arg;
+            if (representation_check == null and simpleMirRepresentationTrapCountAt(fn_mir, arg_source) == 1) {
+                const fact = self.simpleMirOperandTargetTypeFactAt(fn_mir, arg_source) orelse return null;
+                const enum_name = self.enumNameForType(fact.target_ty) orelse return null;
+                representation_check = .{ .enum_name = enum_name, .subject = arg };
+            }
             last_operand_source = arg_source;
             count += 1;
             if (count == operands.len) break;
         }
         if (count != 2) return null;
-        return .{ .op = binary_instr.detail, .left = operands[0], .right = operands[1] };
+        return .{ .op = binary_instr.detail, .left = operands[0], .right = operands[1], .representation_check = representation_check };
     }
 
     fn simpleMirLogicalNotAtReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirArg {
@@ -4223,6 +4265,7 @@ pub const CEmitter = struct {
             .integer_literal => |literal| .{ .integer_literal = literal },
             .float_literal => |literal| .{ .float_literal = literal },
             .bool_literal => |value| .{ .bool_literal = value },
+            .enum_literal => |literal| .{ .enum_literal = literal },
         };
     }
 
@@ -4680,6 +4723,7 @@ pub const CEmitter = struct {
                     .integer_literal => |literal| .{ .integer_literal = literal },
                     .float_literal => |literal| .{ .float_literal = literal },
                     .bool_literal => |value| .{ .bool_literal = value },
+                    .enum_literal => |literal| .{ .enum_literal = literal },
                 };
             }
             return null;
@@ -4717,6 +4761,7 @@ pub const CEmitter = struct {
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .float_literal => |literal| .{ .float_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
+                .enum_literal => |literal| .{ .enum_literal = literal },
             };
         }
         return null;
@@ -4782,6 +4827,7 @@ pub const CEmitter = struct {
                 .integer_literal => |literal| .{ .integer_literal = literal },
                 .float_literal => |literal| .{ .float_literal = literal },
                 .bool_literal => |value| .{ .bool_literal = value },
+                .enum_literal => |literal| .{ .enum_literal = literal },
             };
         }
         return null;
@@ -4859,6 +4905,7 @@ pub const CEmitter = struct {
     fn simpleMirArgAt(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?SimpleMirArg {
         if (self.simpleMirCharIntegerLiteralAtSource(fn_mir, source)) |literal| return .{ .integer_literal = literal };
         if (self.simpleMirFloatLiteralAtSource(fn_mir, source)) |literal| return .{ .float_literal = literal };
+        if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal| return .{ .enum_literal = literal };
         for (fn_mir.integer_facts) |fact| {
             if (sameMirSourceLocation(fact.source, source)) return .{ .integer_literal = fact.literal };
         }
@@ -5151,6 +5198,17 @@ pub const CEmitter = struct {
             }
         }
         return count;
+    }
+
+    fn simpleMirOperandTargetTypeFactAt(self: *CEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?mir.TargetTypeFact {
+        _ = self;
+        var bool_fact: ?mir.TargetTypeFact = null;
+        for (fn_mir.target_type_facts) |fact| {
+            if (fact.kind != .expression_result or !sameMirSourceLocation(fact.source, source)) continue;
+            if (fact.result_ty != .bool) return fact;
+            bool_fact = bool_fact orelse fact;
+        }
+        return bool_fact;
     }
 
     fn mirHasDivideByZeroTrapAt(fn_mir: mir.Function, source: mir.SourcePoint) bool {

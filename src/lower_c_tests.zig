@@ -2554,6 +2554,24 @@ test "lower-c emits enum literal direct-call arguments from MIR without body fal
     try expectNotContains(body, "mc_tmp");
 }
 
+test "lower-c emits enum literal compare operands from MIR without body fallback" {
+    const source =
+        \\enum Mode: u8 { read = 1, write = 2 }
+        \\fn is_read(mode: Mode) -> bool {
+        \\    return mode == .read;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_enum_literal_compare_operands.mc", source, &output);
+
+    const body = try cFunctionBody(output.items, "static bool is_read(Mode mode)");
+    try expectContains(body, "switch ((int)(mode))");
+    try expectContains(body, "default: mc_trap_InvalidRepresentation();");
+    try expectContains(body, "return (mode == Mode_read);");
+    try expectNotContains(body, "mc_tmp");
+}
+
 test "lower-c emits local global returns from MIR" {
     const source =
         \\global g: u32 = 0;

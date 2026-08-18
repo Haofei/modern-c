@@ -3337,6 +3337,26 @@ test "LLVM emits enum literal direct-call arguments from MIR without body fallba
     try expectNotContains(body, "store");
 }
 
+test "LLVM emits enum literal compare operands from MIR without body fallback" {
+    const source =
+        \\enum Mode: u8 { read = 1, write = 2 }
+        \\fn is_read(mode: Mode) -> bool {
+        \\    return mode == .read;
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_enum_literal_compare_operands.mc", source, &output);
+
+    const body = try llvmFunctionBody(output.items, "define internal i1 @is_read");
+    try expectContains(body, "switch i8 %mode");
+    try expectContains(body, "call void @mc_trap_InvalidRepresentation()");
+    try expectContains(body, "icmp eq i8 %mode, 1");
+    try expectContains(body, "ret i1 %t");
+    try expectNotContains(body, "alloca");
+    try expectNotContains(body, "store");
+}
+
 test "LLVM emits local global returns from MIR" {
     const source =
         \\global g: u32 = 0;
