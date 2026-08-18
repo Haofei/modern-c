@@ -13,6 +13,7 @@ const switch_lower = @import("switch_lower.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_source_bridge = @import("mir_source_bridge.zig");
+const fallback_census = @import("fallback_census.zig");
 const numeric = @import("numeric.zig");
 const type_bridge = @import("type_bridge.zig");
 
@@ -811,10 +812,13 @@ const LlvmEmitter = struct {
             if (function.signature.is_extern) continue;
             const render_attrs = function.render_attrs;
             if (try self.emitSimpleMirFunction(function, fn_mir, render_attrs)) {
+                fallback_census.record(.llvm, .admitted, self.source_path, fn_mir);
                 continue;
             } else if (self.function_bodies.legacyFunctionBody(fn_mir.name)) |body| {
+                fallback_census.record(.llvm, .fallback, self.source_path, fn_mir);
                 try self.emitFunction(function, body, render_attrs);
             } else {
+                fallback_census.record(.llvm, .unsupported, self.source_path, fn_mir);
                 return error.UnsupportedLlvmEmission;
             }
         }

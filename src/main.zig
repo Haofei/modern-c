@@ -22,6 +22,10 @@ const lower_c = @import("lower_c.zig");
 // per-function `lower_cov.hit(...)` probes into split lower_c*/lower_llvm* modules
 // in an isolated temporary checkout before building the instrumented compiler.
 const lower_cov = @import("lower_cov.zig");
+// Function-body fallback census. Zero-cost unless the `MC_FALLBACK_CENSUS` env
+// var is set; `tools/toolchain/fallback-census.sh` runs an ordinary `mcc emit-c`
+// over a corpus with it armed, then aggregates the per-invocation JSONL.
+const fallback_census = @import("fallback_census.zig");
 const lower_llvm = @import("lower_llvm.zig");
 const mir = @import("mir.zig");
 const module_parser = @import("module_parser.zig");
@@ -168,6 +172,9 @@ fn runMain(init: std.process.Init) !void {
     // the MC_LOWER_COV env var). Placed first so it covers all `try`/error returns.
     lower_cov.init(init.io, init.environ_map.get("MC_LOWER_COV"));
     defer lower_cov.dump();
+    // Fallback census (no-op unless MC_FALLBACK_CENSUS names an output path).
+    fallback_census.init(init.io, init.environ_map.get("MC_FALLBACK_CENSUS"));
+    defer fallback_census.dump();
 
     var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
     defer args.deinit();
