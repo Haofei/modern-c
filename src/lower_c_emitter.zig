@@ -1208,6 +1208,7 @@ pub const CEmitter = struct {
         logical_not: SimpleMirArg,
         struct_literal: SimpleMirStructLiteralReturn,
         array_literal: SimpleMirArrayLiteralReturn,
+        aggregate_return_pointer_load: SimpleMirAggregateReturnPointerLoad,
     };
 
     const SimpleMirVoidBody = union(enum) {
@@ -1362,6 +1363,12 @@ pub const CEmitter = struct {
         param_name: []const u8,
         field_name: []const u8,
         field_index: usize,
+    };
+
+    const SimpleMirAggregateReturnPointerLoad = struct {
+        call: SimpleMirDirectCall,
+        fact: mir.AggregateReturnPointerFact,
+        pointee_ty: mir.ValueType,
     };
 
     const max_simple_mir_call_args = 8;
@@ -1522,6 +1529,10 @@ pub const CEmitter = struct {
         const simple_return = self.simpleMirReturn(function, fn_mir);
         const simple_return_prefix_calls = if (simple_trap == null) blk: {
             if (simple_return) |ret| {
+                switch (ret) {
+                    .aggregate_return_pointer_load => break :blk SimpleMirDirectCalls{},
+                    else => {},
+                }
                 break :blk self.simpleMirPrefixVoidCallsBeforeReturn(function, fn_mir, self.simpleMirReturnAllowsTrapBlocks(fn_mir, ret)) orelse return false;
             }
             break :blk null;
@@ -1652,6 +1663,13 @@ pub const CEmitter = struct {
                 .array_literal => |literal| {
                     try self.out.appendSlice(self.allocator, "return ");
                     try self.emitSimpleMirArrayLiteral(literal);
+                    try self.out.appendSlice(self.allocator, ";\n");
+                },
+                .aggregate_return_pointer_load => |load| {
+                    try self.emitMirAggregateReturnPointerFactConsumedComment(load.fact);
+                    try self.writeIndent();
+                    try self.out.appendSlice(self.allocator, "return ");
+                    try self.emitSimpleMirAggregateReturnPointerLoad(load);
                     try self.out.appendSlice(self.allocator, ";\n");
                 },
             }
@@ -1933,8 +1951,11 @@ pub const CEmitter = struct {
         for (fn_mir.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
         const block = fn_mir.blocks[0];
         if (block.terminator != .return_) return null;
-        if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
         const ret = simpleMirReturnInstruction(block) orelse return null;
+        if (self.simpleMirAggregateReturnPointerLoad(function, fn_mir, block, ret)) |load| {
+            return .{ .aggregate_return_pointer_load = load };
+        }
+        if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
         if (ret.result_ty == .void or std.mem.eql(u8, ret.detail, "void")) return if (simpleMirNoTrap(fn_mir)) .void else null;
         const value_id = ret.value_id orelse return null;
         for (function.signature.params) |param| {
@@ -2017,6 +2038,72 @@ pub const CEmitter = struct {
         const return_ty = function.signature.transitionalReturnType() orelse return null;
         const expected_type_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
         return self.simpleMirWrappingBinaryAtSource(function, fn_mir, call_source, expected_type_name);
+    }
+
+    fn simpleMirAggregateReturnPointerLoad(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, ret: mir.Instruction) ?SimpleMirAggregateReturnPointerLoad {
+        if (!std.mem.eql(u8, ret.value_id orelse return null, "deref")) return null;
+        const load_instruction = self.simpleMirReturnedPointerFieldLoad(block) orelse return null;
+        if (!simpleMirDirectFieldPath(load_instruction.detail)) return null;
+        const source = instructionSourcePoint(load_instruction);
+        const local_name = self.simpleMirAggregateBaseLocalAtSource(block, source) orelse return null;
+        const init_source = self.simpleMirLocalInitSourceInBlock(block, local_name) orelse return null;
+        const call = self.simpleMirDirectCallAtSource(function, fn_mir, init_source) orelse return null;
+        if (!self.mirOwnsAggregateReturnSummary(call.callee)) return null;
+        const fact = self.simpleMirAggregateReturnPointerFact(call.callee, load_instruction.detail) orelse return null;
+        if (fact.provenance != .global_storage) return null;
+        return .{
+            .call = call,
+            .fact = fact,
+            .pointee_ty = ret.result_ty,
+        };
+    }
+
+    fn simpleMirReturnedPointerFieldLoad(self: *CEmitter, block: mir.Block) ?mir.Instruction {
+        _ = self;
+        var candidate: ?mir.Instruction = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .return_value) break;
+            if (instruction.kind == .typed_load) {
+                candidate = instruction;
+                continue;
+            }
+            if (instruction.kind == .representation_use and std.mem.eql(u8, instruction.detail, "deref_base")) {
+                if (candidate) |load| {
+                    if (std.mem.eql(u8, load.value_id orelse "", instruction.value_id orelse "") and
+                        sameMirSourceLocation(instructionSourcePoint(load), instructionSourcePoint(instruction)))
+                    {
+                        return load;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    fn simpleMirAggregateBaseLocalAtSource(self: *CEmitter, block: mir.Block, source: mir.SourcePoint) ?[]const u8 {
+        _ = self;
+        var candidate: ?[]const u8 = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .return_value) break;
+            if (!sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+            if (instruction.kind != .expr) continue;
+            if (!mirBlockHasLocal(block, instruction.detail)) continue;
+            candidate = instruction.detail;
+        }
+        return candidate;
+    }
+
+    fn simpleMirAggregateReturnPointerFact(self: *CEmitter, callee: []const u8, field_path: []const u8) ?mir.AggregateReturnPointerFact {
+        for (self.mir_module.aggregate_return_pointer_facts) |fact| {
+            if (!std.mem.eql(u8, fact.callee, callee)) continue;
+            if (!std.mem.eql(u8, fact.field_path, field_path)) continue;
+            return fact;
+        }
+        return null;
+    }
+
+    fn simpleMirDirectFieldPath(field_path: []const u8) bool {
+        return std.mem.indexOfAny(u8, field_path, ".[") == null;
     }
 
     fn simpleMirWrappingBinaryAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint, expected_type_name: []const u8) ?SimpleMirWrappingBinary {
@@ -2165,7 +2252,7 @@ pub const CEmitter = struct {
             while (scan_index < block.instructions.len) : (scan_index += 1) {
                 const instruction = block.instructions[scan_index];
                 if (instruction.kind == .return_value) return null;
-                if (instruction.kind == .target_type or instruction.kind == .integer_literal_conversion) continue;
+                if (instruction.kind == .target_type or instruction.kind == .integer_literal_conversion or instruction.kind == .representation_check or instruction.kind == .representation_use) continue;
                 if (instruction.kind != .expr and instruction.kind != .call and instruction.kind != .binary and instruction.kind != .unary) return null;
                 if ((instruction.kind == .call or instruction.kind == .binary or instruction.kind == .unary) and !self.noFunctionBodyFallbacksAvailable()) return null;
                 const value_source = instructionSourcePoint(instruction);
@@ -3331,6 +3418,7 @@ pub const CEmitter = struct {
             .conversion_return => |conversion| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(conversion.operand),
             .struct_literal => |literal| fn_mir.trap_edges.len == simpleMirStructLiteralTrapCount(literal),
             .array_literal => |literal| fn_mir.trap_edges.len == simpleMirArrayLiteralTrapCount(literal),
+            .aggregate_return_pointer_load => fn_mir.trap_edges.len == 1,
             .enum_literal => fn_mir.trap_edges.len >= 1 and self.noFunctionBodyFallbacksAvailable(),
             else => false,
         };
@@ -3535,6 +3623,32 @@ pub const CEmitter = struct {
             },
             .compare_binary => |binary| try self.emitSimpleMirCompareBinary(binary),
         }
+    }
+
+    fn emitSimpleMirAggregateReturnPointerLoad(self: *CEmitter, load: SimpleMirAggregateReturnPointerLoad) !void {
+        const scalar = simpleMirScalarCInfo(load.pointee_ty) orelse return error.UnsupportedCEmission;
+        try self.out.print(self.allocator, "(({s})mc_race_load_{s}(", .{ scalar.c_type, scalar.race_type_name });
+        try self.out.appendSlice(self.allocator, "(");
+        try self.emitSimpleMirDirectCall(load.call);
+        try self.out.print(self.allocator, ").{s}))", .{try self.cIdent(load.fact.field_path)});
+    }
+
+    const SimpleMirScalarCInfo = struct {
+        c_type: []const u8,
+        race_type_name: []const u8,
+    };
+
+    fn simpleMirScalarCInfo(ty: mir.ValueType) ?SimpleMirScalarCInfo {
+        const name = ty.name();
+        for (lower_c_shape.race_scalar_helpers) |helper| {
+            if (std.mem.eql(u8, helper.name, name)) {
+                return .{
+                    .c_type = helper.c_type,
+                    .race_type_name = helper.name,
+                };
+            }
+        }
+        return null;
     }
 
     fn emitSimpleMirDirectCall(self: *CEmitter, call: SimpleMirDirectCall) !void {

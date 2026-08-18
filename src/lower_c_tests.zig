@@ -8170,7 +8170,7 @@ test "lower-c consumes MIR aggregate-return pointer facts and fails closed when 
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendCheckedCTest("c_aggregate_return_mir_fact.mc", source, &output);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_aggregate_return_pointer_fact.mc", source, &output);
     try expectContains(output.items, "/* mir aggregate_return_pointer consumed caller=use_returned_holder callee=returned_holder field=ptr provenance=global_storage");
 
     var missing_output: std.ArrayList(u8) = .empty;

@@ -9673,7 +9673,7 @@ test "LLVM aggregate-return pointer facts are MIR-owned and fail closed when abs
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);
-    try appendLlvmTest("llvm_aggregate_return_mir_fact.mc", source, &output);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_aggregate_return_pointer_fact.mc", source, &output);
     const body = try llvmFunctionBody(output.items, "define internal i32 @use_direct_holder");
     try expectContains(body, "; mir aggregate_return_pointer consumed caller=use_direct_holder callee=direct_holder field=ptr provenance=global_storage");
     try expectContains(body, "load atomic i32, ptr %");
