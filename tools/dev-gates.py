@@ -214,6 +214,14 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         (
+            "docs/review-goal-status.json",
+            "tools/toolchain/review-goal-status-test.py",
+        ),
+        ("review-goal-status-test",),
+        "active review goal status changes need the review goal status gate",
+    ),
+    Rule(
+        (
             "tools/toolchain/architecture-boundary-inventory.py",
             "src/backend.zig",
             "src/backend_cleanup.zig",

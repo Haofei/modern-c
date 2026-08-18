@@ -212,6 +212,8 @@ def main() -> None:
     assert_route(module, ["docs/lowering-coverage.md"], ["lowering-coverage-inventory-test", "lowering-coverage"], ["git diff --check"])
     assert_gates(module, ["tools/toolchain/semantic-facts-inventory.py"], ["semantic-facts-inventory-test"])
     assert_gates(module, ["tools/toolchain/architecture-boundary-inventory.py"], ["architecture-boundary-inventory-test"])
+    assert_gates(module, ["tools/toolchain/review-goal-status-test.py"], ["review-goal-status-test"])
+    assert_gates(module, ["docs/review-goal-status.json"], ["review-goal-status-test"])
     assert_gates_include(module, ["src/backend.zig"], ["architecture-boundary-inventory-test"])
     assert_gates_include(module, ["src/lower_c_emitter.zig"], ["architecture-boundary-inventory-test"])
     assert_gates_include(module, ["src/lower_llvm.zig"], ["architecture-boundary-inventory-test"])

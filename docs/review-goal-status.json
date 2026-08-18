@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "source_of_truth": "docs/review-goal-status.json",
+  "purpose": "Machine-readable status for the active review goals: close codegen AST body fallback first, then Typed HIR/CheckedProgram and real module graph.",
+  "policy": {
+    "scope": "language/compiler architecture only",
+    "not_scope": "production readiness, kernel productization, package registry, LSP product work",
+    "completion_rule": "A goal may move to complete only when the evidence anchors prove the requested end state, not merely when tests pass."
+  },
+  "goals": [
+    {
+      "id": "function-body-fallback",
+      "priority": "P0",
+      "status": "incomplete",
+      "requested_end_state": "FunctionArtifact/body fallback is no longer an AST body ingress for codegen; codegen is driven by VerifiedProgram/MIR typed facts.",
+      "current_evidence": [
+        {
+          "file": "src/declaration_artifact_fallbacks.zig",
+          "needle": "pub const FunctionBodyFallbackArtifact = struct",
+          "expected_count_while_incomplete": 1
+        },
+        {
+          "file": "src/declaration_artifact_fallbacks.zig",
+          "needle": "syntax: ast.Block",
+          "expected_count_while_incomplete": 1
+        },
+        {
+          "file": "docs/codegen-ingress-migration.json",
+          "needle": "\"function_body_fallbacks: []const FunctionBodyFallbackArtifact\": 2",
+          "expected_count_while_incomplete": 1
+        }
+      ]
+    },
+    {
+      "id": "typed-hir-checked-program",
+      "priority": "P1",
+      "status": "incomplete",
+      "requested_end_state": "A canonical Typed HIR / CheckedProgram exists as a real semantic representation, not only inspection HIR.",
+      "current_evidence": [
+        {
+          "file": "src/hir_inspection.zig",
+          "needle": "inspection",
+          "expected_min_count_while_incomplete": 1
+        },
+        {
+          "file": "src/compiler_session.zig",
+          "needle": "pub const CheckedModule = struct",
+          "expected_count_while_incomplete": 1
+        }
+      ]
+    },
+    {
+      "id": "real-module-graph",
+      "priority": "P1",
+      "status": "incomplete",
+      "requested_end_state": "The loader no longer compiles through textual inclusion/combined source; semantic identity is per-file/per-module.",
+      "current_evidence": [
+        {
+          "file": "src/loader.zig",
+          "needle": "combined",
+          "expected_min_count_while_incomplete": 1
+        },
+        {
+          "file": "src/module_parser.zig",
+          "needle": "flattened",
+          "expected_min_count_while_incomplete": 1
+        },
+        {
+          "file": "src/compiler_session.zig",
+          "needle": "decls_slice: []ast.Decl",
+          "expected_min_count_while_incomplete": 1
+        }
+      ]
+    }
+  ]
+}
