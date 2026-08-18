@@ -8381,6 +8381,23 @@ test "lower-c emits global address returns from MIR without body fallback" {
     try expectContains(body, "return &shared_counter;");
 }
 
+test "lower-c emits conditional global address returns from MIR without body fallback" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn branched_global_pointer(flag: bool) -> *mut u32 {
+        \\    if flag { return &shared_counter; } else { return &shared_counter; }
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_conditional_global_address_return.mc", source, &output);
+    const body = try cFunctionBody(output.items, "static uint32_t * branched_global_pointer(bool flag)");
+    try expectContains(body, "if (flag) {");
+    try expectContains(body, "return &shared_counter;");
+}
+
 test "lower-c consumes MIR aggregate-return pointer-array element facts" {
     const source =
         \\global shared_counter: u32 = 0;

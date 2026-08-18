@@ -1409,6 +1409,7 @@ const LlvmEmitter = struct {
         bool_literal: bool,
         enum_literal: SimpleMirEnumLiteral,
         global_load: []const u8,
+        global_address: []const u8,
         direct_call: SimpleMirDirectCall,
         checked_binary: SimpleMirCheckedBinary,
         checked_unary: SimpleMirCheckedUnary,
@@ -3325,6 +3326,9 @@ const LlvmEmitter = struct {
             return self.simpleMirLocalValueInBlock(function, fn_mir, block, value_id);
         }
         if (self.global_types.contains(value_id)) return .{ .global_load = value_id };
+        if (simpleMirReturnValueSource(block, value_id)) |source| {
+            if (self.simpleMirGlobalAddressAtValueSource(fn_mir, source)) |name| return .{ .global_address = name };
+        }
         var literal_source: ?mir.SourcePoint = null;
         if (std.mem.eql(u8, value_id, "int") or std.mem.eql(u8, value_id, "bool") or std.mem.eql(u8, value_id, "char") or std.mem.eql(u8, value_id, "float")) {
             for (block.instructions) |instruction| {
@@ -3391,6 +3395,7 @@ const LlvmEmitter = struct {
         if (self.simpleMirEnumLiteralValueAtSource(fn_mir, source)) |literal| return .{ .enum_literal = literal };
         if (simpleMirNullLiteralAtSource(fn_mir, source)) return .null_literal;
         if (self.simpleMirParamFieldValueAtSource(function, fn_mir, source)) |field| return .{ .param_field = field };
+        if (self.simpleMirGlobalAddressAtValueSource(fn_mir, source)) |name| return .{ .global_address = name };
         if (self.simpleMirGlobalAtSource(function, fn_mir, source)) |name| return .{ .global_load = name };
         return switch (self.simpleMirArgAt(function, fn_mir, source) orelse return null) {
             .param => |name| .{ .param = name },
@@ -3449,6 +3454,7 @@ const LlvmEmitter = struct {
                 const value_name = try self.emitSimpleMirGlobalLoad(name, ret_ty);
                 try self.emitReturnValue(ret_ty, value_name, span);
             },
+            .global_address => |name| try self.emitReturnValue(ret_ty, try std.fmt.allocPrint(self.scratch.allocator(), "@{s}", .{name}), span),
             .direct_call => |call| {
                 const tmp = try self.nextTemp();
                 try self.emitSimpleMirDirectCall(call, tmp, span);

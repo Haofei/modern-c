@@ -9878,6 +9878,22 @@ test "LLVM emits global address returns from MIR without body fallback" {
     try expectContains(body, "ret ptr @shared_counter");
 }
 
+test "LLVM emits conditional global address returns from MIR without body fallback" {
+    const source =
+        \\global shared_counter: u32 = 0;
+        \\
+        \\fn branched_global_pointer(flag: bool) -> *mut u32 {
+        \\    if flag { return &shared_counter; } else { return &shared_counter; }
+        \\}
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_conditional_global_address_return.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal ptr @branched_global_pointer");
+    try expectContains(body, "ret ptr @shared_counter");
+}
+
 test "LLVM consumes MIR aggregate-return pointer-array element facts" {
     const source =
         \\global shared_counter: u32 = 0;
