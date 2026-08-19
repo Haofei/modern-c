@@ -9913,6 +9913,22 @@ test "LLVM admits unsigned wrap binary returns from MIR (i32)" {
     try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
 }
 
+test "LLVM admits plain unary returns from MIR (bitwise not, wrapping negate)" {
+    const source =
+        \\fn bnot(a: u32) -> u32 { return ~a; }
+        \\fn wneg(a: wrap<u32>) -> wrap<u32> { return -a; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_plain_unary.mc", source, &output);
+    const bnot = try llvmFunctionBody(output.items, "define internal i32 @bnot");
+    try expectContains(bnot, "xor i32 %a, -1");
+    try std.testing.expect(std.mem.indexOf(u8, bnot, "llvm.dbg.value") == null);
+    const wneg = try llvmFunctionBody(output.items, "define internal i32 @wneg");
+    try expectContains(wneg, "sub i32 0, %a");
+}
+
 test "LLVM emits global address direct-call args from MIR without body fallback" {
     const source =
         \\global shared_counter: u32 = 0;

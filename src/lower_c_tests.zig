@@ -10429,6 +10429,29 @@ test "lower-c admits unsigned wrap binary returns from MIR (u32/u64); u8 stays o
     try expectContains(output.items, "(unsigned int)");
 }
 
+test "lower-c admits plain unary returns from MIR (bitwise not, wrapping negate)" {
+    // `~a` and wrapping `-a` never trap, so they lower from MIR as `op(operand)`.
+    const source =
+        \\fn bnot(a: u32) -> u32 { return ~a; }
+        \\fn wneg(a: wrap<u32>) -> wrap<u32> { return -a; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "unary.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    try expectContains(output.items, "return ~(a);");
+    try expectContains(output.items, "return -(a);");
+}
+
 test "lower-c source map records defer cleanup spans" {
     const source =
         \\extern fn close_resource() -> void;

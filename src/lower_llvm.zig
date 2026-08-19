@@ -1278,6 +1278,14 @@ const LlvmEmitter = struct {
         array_literal: SimpleMirArrayLiteralReturn,
         aggregate_return_pointer_load: SimpleMirAggregateReturnPointerLoad,
         scalar_deref_load: SimpleMirScalarDerefLoad,
+        plain_unary: SimpleMirPlainUnary,
+    };
+
+    // `return ~a` (bitwise not → `xor -1`) / `return -a` (wrapping negate →
+    // `sub 0`). `op_c` is "~" or "-".
+    const SimpleMirPlainUnary = struct {
+        op_c: []const u8,
+        operand: SimpleMirArg,
     };
 
     // `return p.*` for a scalar pointee of a bare param pointer `p`, lowered
@@ -1804,6 +1812,17 @@ const LlvmEmitter = struct {
                     const value = try self.emitSimpleMirScalarAtomicLoad(load.pointee_ty, ptr);
                     try self.emitReturnValue(ret_ty, value, return_span);
                 },
+                .plain_unary => |unary| {
+                    const llvm_ty = try self.llvmType(ret_ty);
+                    const operand = try self.simpleMirArgValue(unary.operand, return_span);
+                    const result = try self.nextTemp();
+                    if (std.mem.eql(u8, unary.op_c, "~")) {
+                        try self.out.print(self.allocator, "  {s} = xor {s} {s}, -1\n", .{ result, llvm_ty, operand });
+                    } else {
+                        try self.out.print(self.allocator, "  {s} = sub {s} 0, {s}\n", .{ result, llvm_ty, operand });
+                    }
+                    try self.emitReturnValue(ret_ty, result, return_span);
+                },
             }
         } else if (simple_void_body) |body| {
             switch (body) {
@@ -2136,6 +2155,7 @@ const LlvmEmitter = struct {
                 if (self.simpleMirFoldedNegatedIntegerLiteral(unary)) |literal| return .{ .checked_integer_literal = literal };
                 return .{ .checked_unary = unary };
             }
+            if (self.simpleMirPlainUnaryReturn(function, fn_mir)) |unary| return .{ .plain_unary = unary };
         }
         if (self.simpleMirAssignmentReturn(function, fn_mir, value_id)) |assigned| return assigned;
         if (self.simpleMirLocalInitReturn(function, fn_mir, value_id)) |local_init| return local_init;
@@ -3640,6 +3660,7 @@ const LlvmEmitter = struct {
             // The scalar deref's only trap is the elided nonnull representation
             // check; the recognizer already excluded folded locals and sanitizers.
             .scalar_deref_load => simpleMirAllTrapEdgesRepresentationChecks(fn_mir),
+            .plain_unary => fn_mir.trap_edges.len == 0,
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallReturnTrapCount(fn_mir, call),
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
             .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or (simpleMirCheckedBinaryOperandsSimple(binary) and !simpleMirEntryBlockFoldsLocal(fn_mir))),
@@ -4489,6 +4510,41 @@ const LlvmEmitter = struct {
             if (instruction.kind == .return_value or instruction.kind == .local) break;
             if (instruction.kind != .expr) continue;
             return self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction));
+        }
+        return null;
+    }
+
+    // `return ~a` (bitwise not → `xor -1`) / `return -a` (wrapping negate →
+    // `sub 0`). Non-trapping only (signed negate traps → excluded), no folded local.
+    fn simpleMirPlainUnaryReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirPlainUnary {
+        if (!simpleMirNoTrap(fn_mir)) return null;
+        if (simpleMirEntryBlockFoldsLocal(fn_mir)) return null;
+        const block = fn_mir.blocks[0];
+        var unary_instr: ?mir.Instruction = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .unary) {
+                unary_instr = instruction;
+                break;
+            }
+        }
+        const ui = unary_instr orelse return null;
+        const op_c: []const u8 = if (std.mem.eql(u8, ui.detail, "bit_not"))
+            "~"
+        else if (std.mem.eql(u8, ui.detail, "neg"))
+            "-"
+        else
+            return null;
+        const source = instructionSourcePoint(ui);
+        var after_unary = false;
+        for (block.instructions) |instruction| {
+            if (!after_unary) {
+                after_unary = instruction.kind == .unary and sameMirSourceLocation(instructionSourcePoint(instruction), source);
+                continue;
+            }
+            if (instruction.kind == .return_value or instruction.kind == .local) break;
+            if (instruction.kind != .expr) continue;
+            const operand = self.simpleMirArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse return null;
+            return .{ .op_c = op_c, .operand = operand };
         }
         return null;
     }
