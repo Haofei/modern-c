@@ -10475,6 +10475,37 @@ test "lower-c admits single nested-call argument returns inline" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_tmp0 = f()") == null);
 }
 
+test "lower-c admits multi-arg call with one nested call and pure leaves" {
+    // A single nested call plus pure-leaf args (param / literal) has no
+    // evaluation-order ambiguity, so it inlines. Two nested calls in one arg
+    // list stay on the fallback (sequenced through temps).
+    const source =
+        \\extern fn f() -> u32;
+        \\extern fn k() -> u32;
+        \\extern fn g2(a: u32, b: u32) -> u32;
+        \\fn one_call(b: u32) -> u32 { return g2(f(), b); }
+        \\fn one_call_lit() -> u32 { return g2(f(), 4096); }
+        \\fn two_calls() -> u32 { return g2(f(), k()); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mg.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    try expectContains(output.items, "return g2(f(), b);");
+    try expectContains(output.items, "return g2(f(), 4096);");
+    // Two nested calls must be sequenced through temps, not inlined.
+    try expectContains(output.items, "return g2(mc_tmp");
+}
+
 test "lower-c admits unsigned wrap binary returns from MIR (u32/u64); u8 stays on fallback" {
     // `wrap<T>` is always unsigned; for a u32/u64 result the wrapping `a + b`
     // renders as a plain `(a + b)` with no promotion, so it lowers from MIR. u8

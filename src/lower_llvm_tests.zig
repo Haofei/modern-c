@@ -9943,6 +9943,21 @@ test "LLVM admits single nested-call argument returns inline" {
     try expectContains(body, "call i32 @g(i32 %");
 }
 
+test "LLVM admits multi-arg call with one nested call and pure leaves" {
+    const source =
+        \\extern fn f() -> u32;
+        \\extern fn g2(a: u32, b: u32) -> u32;
+        \\fn one_call(b: u32) -> u32 { return g2(f(), b); }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_multi_arg.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @one_call");
+    try expectContains(body, "call i32 @f()");
+    try expectContains(body, "call i32 @g2(i32 %");
+}
+
 test "LLVM admits unsigned wrap binary returns from MIR (i32)" {
     // `return a + b` for `wrap<u32>` lowers to a plain integer `add i32`.
     const source =

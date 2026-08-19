@@ -4460,9 +4460,36 @@ pub const CEmitter = struct {
         for (seen_args[0..arg_count]) |seen| if (!seen) return null;
         call.arg_count = arg_count;
         if (arg_count > 1) {
-            for (call.args[0..arg_count]) |arg| if (simpleMirCallArgHasDirectCall(arg)) return null;
+            // Argument evaluation order is unspecified in C, so a call whose args
+            // contain more than one side-effecting sub-call could observe a
+            // different order than MC's left-to-right semantics — decline it (the
+            // fallback sequences those through temps). A single nested call is
+            // safe iff every *other* arg is a pure leaf (param/literal): only one
+            // call is sequenced, and pure leaves have no observable order.
+            var nested_calls: usize = 0;
+            for (call.args[0..arg_count]) |arg| {
+                if (simpleMirCallArgHasDirectCall(arg)) nested_calls += 1;
+            }
+            if (nested_calls > 1) return null;
+            if (nested_calls == 1) {
+                for (call.args[0..arg_count]) |arg| {
+                    if (simpleMirCallArgHasDirectCall(arg)) continue;
+                    if (!simpleMirCallArgIsPureLeaf(arg)) return null;
+                }
+            }
         }
         return call;
+    }
+
+    // A call argument with no observable evaluation-order dependence on a
+    // sibling call: params and compile-time literals only. Deliberately
+    // conservative — excludes field/global reads (a sibling call could mutate
+    // them) and any trap-bearing sub-expression.
+    fn simpleMirCallArgIsPureLeaf(arg: SimpleMirCallArg) bool {
+        return switch (arg) {
+            .param, .integer_literal, .float_literal, .bool_literal, .enum_literal => true,
+            else => false,
+        };
     }
 
     fn simpleMirResultConstructorReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirResultConstructorReturn {

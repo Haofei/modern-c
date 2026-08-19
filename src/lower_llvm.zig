@@ -4754,9 +4754,33 @@ const LlvmEmitter = struct {
         for (seen_args[0..arg_count]) |seen| if (!seen) return null;
         call.arg_count = arg_count;
         if (arg_count > 1) {
-            for (call.args[0..arg_count]) |arg| if (simpleMirCallArgHasDirectCall(arg)) return null;
+            // Argument evaluation order is unspecified, so more than one nested
+            // side-effecting sub-call could reorder against MC's left-to-right
+            // semantics — decline (the fallback sequences them through temps). A
+            // single nested call is safe iff every other arg is a pure leaf.
+            var nested_calls: usize = 0;
+            for (call.args[0..arg_count]) |arg| {
+                if (simpleMirCallArgHasDirectCall(arg)) nested_calls += 1;
+            }
+            if (nested_calls > 1) return null;
+            if (nested_calls == 1) {
+                for (call.args[0..arg_count]) |arg| {
+                    if (simpleMirCallArgHasDirectCall(arg)) continue;
+                    if (!simpleMirCallArgIsPureLeaf(arg)) return null;
+                }
+            }
         }
         return call;
+    }
+
+    // A call argument with no observable evaluation-order dependence on a
+    // sibling call: params and compile-time literals only. Conservative —
+    // excludes field/global reads and any trap-bearing sub-expression.
+    fn simpleMirCallArgIsPureLeaf(arg: SimpleMirCallArg) bool {
+        return switch (arg) {
+            .param, .integer_literal, .float_literal, .bool_literal, .enum_literal => true,
+            else => false,
+        };
     }
 
     fn simpleMirResultConstructorReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, value_id: []const u8) ?SimpleMirResultConstructorReturn {
