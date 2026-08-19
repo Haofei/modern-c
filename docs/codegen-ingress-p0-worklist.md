@@ -13,6 +13,28 @@ the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. On the test corpus ~20–28% of distinct
 functions are fast-path admitted; the rest still ingest the AST body.
 
+### Census snapshot (C, 2026-08-19, after 12 families incl. nested-call)
+
+1609 distinct functions, **429 admitted (26.7%)**, 1180 fallback. Remaining
+fallbacks ranked by family (term / ret / blocks / traps):
+
+| n | %fb | family | examples | remaining blocker |
+|---|---|---|---|---|
+| 205 | 17% | return `<ident>` 1 blk 0 trap | round_up_to_page, region_holds | local-computed / multi-statement → **emit primitive** (see below) |
+| 138 | 12% | return `<ident>` 2 blk 1 trap | frame_base, slice_of_struct | same + a bounds/repr trap |
+| 82 | 7% | return `<ident>` 3-4 blk 2+ trap | pr_len, nested_index | same, more control flow |
+| 74 | 6% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
+| 43 | 4% | return binary 2 blk 1 trap | pa_is_aligned, counter_differs | richer compare operand: `(a%a)==0` (checked), `load(p)!=x` (atomic) |
+| 36 | 3% | return binary 1 blk 0 trap | sat_mul, ordered_bitwise_return, bool_and | ordering-sensitive (`next()&next()`) or short-circuit (`&&`) or sat-domain |
+| 30+ | — | switch/branch/loop 5+ blk | pa_align_down, loop_condition | control-flow families → large |
+
+Every remaining bucket is now either **large** (a new emission primitive for the
+local/multi-statement `<ident>` returns, ~36% of fallbacks; or statement-level
+builtin/void lowering) or **medium-with-risk** (widening compare/binary operands
+to carry checked-arith or atomic-load sub-expressions — real evaluation-order and
+trap-counting hazards, the same class that produced two miscompiles this session).
+The clean recognizer-only wins are exhausted.
+
 ## The fidelity-safe admission method (established, must be preserved)
 
 The MIR fast path is a **deliberately simplified emission with lower fidelity**
