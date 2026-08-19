@@ -10402,6 +10402,27 @@ test "lower-c admits scalar deref returns from MIR; optional-pointee derefs stay
     try expectContains(opt_body, "mc_race_load_bool");
 }
 
+test "lower-c admits address-typed scalar deref returns from MIR" {
+    // `return p.*` for `*PAddr` loads through the usize representation.
+    const source =
+        \\fn deref_pa(p: *PAddr) -> PAddr { return p.*; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "dpa.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    try expectContains(output.items, "return ((uintptr_t)mc_race_load_usize(p));");
+}
+
 test "lower-c admits unsigned wrap binary returns from MIR (u32/u64); u8 stays on fallback" {
     // `wrap<T>` is always unsigned; for a u32/u64 result the wrapping `a + b`
     // renders as a plain `(a + b)` with no promotion, so it lowers from MIR. u8

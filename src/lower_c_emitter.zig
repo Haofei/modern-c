@@ -1740,7 +1740,7 @@ pub const CEmitter = struct {
                     try self.out.appendSlice(self.allocator, ";\n");
                 },
                 .scalar_deref_load => |load| {
-                    const scalar = simpleMirScalarCInfo(load.pointee_ty) orelse return error.UnsupportedCEmission;
+                    const scalar = simpleMirScalarLikeCInfo(load.pointee_ty) orelse return error.UnsupportedCEmission;
                     try self.out.print(self.allocator, "return (({s})mc_race_load_{s}({s}));\n", .{ scalar.c_type, scalar.race_type_name, try self.cIdent(load.param_name) });
                 },
                 .scalar_field_load => |load| {
@@ -2209,7 +2209,7 @@ pub const CEmitter = struct {
         // (which needs a tag+value load, not a single scalar load).
         const return_ty = function.signature.transitionalReturnType() orelse return null;
         const return_ty_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
-        var is_plain_scalar = false;
+        var is_plain_scalar = type_bridge.isOpaqueAddressTypeName(return_ty_name);
         for (lower_c_shape.race_scalar_helpers) |helper| {
             if (std.mem.eql(u8, helper.name, return_ty_name)) {
                 is_plain_scalar = true;
@@ -2217,7 +2217,7 @@ pub const CEmitter = struct {
             }
         }
         if (!is_plain_scalar) return null;
-        if (simpleMirScalarCInfo(ret.result_ty) == null) return null;
+        if (simpleMirScalarLikeCInfo(ret.result_ty) == null) return null;
         if (simpleMirEntryBlockFoldsLocal(fn_mir)) return null;
         const load = self.simpleMirReturnedPointerFieldLoad(block) orelse return null;
         const ptr_id = load.value_id orelse return null;

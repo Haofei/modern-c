@@ -9898,6 +9898,20 @@ test "LLVM admits scalar deref returns from MIR; optional-pointee derefs stay on
     try expectContains(opt, "load atomic i8");
 }
 
+test "LLVM admits address-typed scalar deref returns from MIR" {
+    // `return p.*` for `*PAddr` (repr i64): `load atomic i64` + `ret i64`.
+    const source =
+        \\fn deref_pa(p: *PAddr) -> PAddr { return p.*; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_addr_deref.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i64 @deref_pa");
+    try expectContains(body, "load atomic i64, ptr %p unordered");
+    try expectContains(body, "ret i64 %");
+}
+
 test "LLVM admits unsigned wrap binary returns from MIR (i32)" {
     // `return a + b` for `wrap<u32>` lowers to a plain integer `add i32`.
     const source =

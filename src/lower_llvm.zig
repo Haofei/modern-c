@@ -2249,7 +2249,7 @@ const LlvmEmitter = struct {
     fn simpleMirScalarDerefLoadReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, ret: mir.Instruction) ?SimpleMirScalarDerefLoad {
         if (self.ksan or self.msan or self.csan) return null;
         if (!std.mem.eql(u8, ret.value_id orelse return null, "deref")) return null;
-        if (simpleMirScalarLlvmInfo(ret.result_ty) == null) return null;
+        if (simpleMirScalarLikeLlvmInfo(ret.result_ty) == null) return null;
         const return_ty = function.signature.transitionalReturnType() orelse return null;
         const return_ty_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
         if (!std.mem.eql(u8, return_ty_name, ret.result_ty.name())) return null;
