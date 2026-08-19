@@ -10402,6 +10402,33 @@ test "lower-c admits scalar deref returns from MIR; optional-pointee derefs stay
     try expectContains(opt_body, "mc_race_load_bool");
 }
 
+test "lower-c admits unsigned wrap binary returns from MIR (u32/u64); u8 stays on fallback" {
+    // `wrap<T>` is always unsigned; for a u32/u64 result the wrapping `a + b`
+    // renders as a plain `(a + b)` with no promotion, so it lowers from MIR. u8
+    // promotes to int and gets `(unsigned int)` casts, so it stays on the fallback.
+    const source =
+        \\fn u_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> { return a + b; }
+        \\fn u8_add(a: wrap<u8>, b: wrap<u8>) -> wrap<u8> { return a + b; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "wrap.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    // u32: inline fast-path form.
+    try expectContains(output.items, "return (a + b);");
+    // u8: fallback with the C integer-promotion casts.
+    try expectContains(output.items, "(unsigned int)");
+}
+
 test "lower-c source map records defer cleanup spans" {
     const source =
         \\extern fn close_resource() -> void;

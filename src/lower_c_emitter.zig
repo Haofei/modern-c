@@ -2087,6 +2087,7 @@ pub const CEmitter = struct {
         }
         if (std.mem.eql(u8, value_id, "binary")) {
             if (self.simpleMirPlainFloatBinaryAtReturn(function, fn_mir)) |binary| return .{ .plain_float_binary = binary };
+            if (self.simpleMirPlainUnsignedBinaryReturn(function, fn_mir)) |binary| return .{ .plain_float_binary = binary };
             if (self.simpleMirCheckedBinaryAtReturn(function, fn_mir)) |binary| return .{ .checked_binary = binary };
             if (self.simpleMirCompareBinaryAtReturn(function, fn_mir)) |binary| return .{ .compare_binary = binary };
         }
@@ -4085,6 +4086,59 @@ pub const CEmitter = struct {
         }
         if (count != 2) return null;
         return .{ .op = binary_instr.detail, .target_fact = target_fact, .left = operands[0], .right = operands[1] };
+    }
+
+    // `return a + b` (also `-`, `*`) for unsigned integer wrap arithmetic. `wrap<T>`
+    // is always unsigned, and for a u32/u64/usize result the C rendering is a plain
+    // `(a op b)` with no integer-promotion casts (unlike u8/u16), so it matches the
+    // fallback. No trap (wrapping add/sub/mul never trap → simpleMirNoTrap holds),
+    // no folded local. Reuses SimpleMirPlainFloatBinary — the render is identical.
+    fn simpleMirPlainUnsignedBinaryReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirPlainFloatBinary {
+        if (!simpleMirNoTrap(fn_mir)) return null;
+        if (simpleMirEntryBlockFoldsLocal(fn_mir)) return null;
+        const block = fn_mir.blocks[0];
+        var binary_instr: ?mir.Instruction = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .binary) {
+                binary_instr = instruction;
+                break;
+            }
+        }
+        const bi = binary_instr orelse return null;
+        const op = bi.detail;
+        if (!(std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul"))) return null;
+        const source = instructionSourcePoint(bi);
+        const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, source) orelse return null;
+        // `wrap<T>` records its domain type ("wrap") in the fact, so gate on the
+        // lowered C type: uint32_t/uint64_t undergo no C integer promotion, so a
+        // plain `(a op b)` matches the fallback. u8/u16 (which promote to int and
+        // get `(unsigned int)` casts) are excluded and stay on the fallback.
+        const c_type = self.cTypeFor(target_fact.target_ty, .typedef_name) catch return null;
+        if (!(std.mem.eql(u8, c_type, "uint32_t") or std.mem.eql(u8, c_type, "uint64_t"))) return null;
+        var operands: [2]SimpleMirArg = undefined;
+        var count: usize = 0;
+        var after_binary = false;
+        var last_operand_source: ?mir.SourcePoint = null;
+        for (block.instructions) |instruction| {
+            if (!after_binary) {
+                after_binary = instruction.kind == .binary and sameMirSourceLocation(instructionSourcePoint(instruction), source);
+                continue;
+            }
+            if (instruction.kind == .return_value or instruction.kind == .local) break;
+            if (instruction.kind != .expr) continue;
+            const arg_source = instructionSourcePoint(instruction);
+            if (last_operand_source) |last| {
+                if (sameMirSourceLocation(last, arg_source)) continue;
+            }
+            const arg = self.simpleMirArgAt(function, fn_mir, arg_source) orelse return null;
+            if (count >= operands.len) return null;
+            operands[count] = arg;
+            last_operand_source = arg_source;
+            count += 1;
+            if (count == operands.len) break;
+        }
+        if (count != 2) return null;
+        return .{ .op = op, .target_fact = target_fact, .left = operands[0], .right = operands[1] };
     }
 
     fn simpleMirCompareBinaryAtReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirCompareBinary {

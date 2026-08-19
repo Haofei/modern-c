@@ -9898,6 +9898,21 @@ test "LLVM admits scalar deref returns from MIR; optional-pointee derefs stay on
     try expectContains(opt, "load atomic i8");
 }
 
+test "LLVM admits unsigned wrap binary returns from MIR (i32)" {
+    // `return a + b` for `wrap<u32>` lowers to a plain integer `add i32`.
+    const source =
+        \\fn u_add(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> { return a + b; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_wrap_binary.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @u_add");
+    try expectContains(body, "add i32 %a, %b");
+    // Fast-path admission (not the fallback, which emits param dbg.value).
+    try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
+}
+
 test "LLVM emits global address direct-call args from MIR without body fallback" {
     const source =
         \\global shared_counter: u32 = 0;

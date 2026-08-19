@@ -2126,6 +2126,7 @@ const LlvmEmitter = struct {
         }
         if (std.mem.eql(u8, value_id, "binary")) {
             if (self.simpleMirPlainFloatBinaryAtReturn(function, fn_mir)) |binary| return .{ .plain_float_binary = binary };
+            if (self.simpleMirPlainUnsignedBinaryReturn(function, fn_mir)) |binary| return .{ .plain_float_binary = binary };
             if (self.simpleMirCheckedBinaryAtReturn(function, fn_mir)) |binary| return .{ .checked_binary = binary };
             if (self.simpleMirCompareBinaryAtReturn(function, fn_mir)) |binary| return .{ .compare_binary = binary };
         }
@@ -3924,12 +3925,23 @@ const LlvmEmitter = struct {
 
     fn emitSimpleMirPlainFloatBinary(self: *LlvmEmitter, binary: SimpleMirPlainFloatBinary, span: diagnostics.Span) ![]const u8 {
         const ty = binary.target_fact.target_ty;
-        if (!lower_llvm_shape.isFloatTypeOf(&self.type_aliases, ty)) return error.UnsupportedLlvmEmission;
         const llvm_ty = try self.llvmType(ty);
-        const op = try simpleMirLlvmFloatBinaryOp(binary.op);
         const left = try self.simpleMirArgValue(binary.left, span);
         const right = try self.simpleMirArgValue(binary.right, span);
+        // Reused for unsigned integer wrap arithmetic too (see
+        // simpleMirPlainUnsignedBinaryReturn): float uses fadd/…, integer add/….
+        const op = if (lower_llvm_shape.isFloatTypeOf(&self.type_aliases, ty))
+            try simpleMirLlvmFloatBinaryOp(binary.op)
+        else
+            try simpleMirLlvmIntBinaryOp(binary.op);
         return self.emitPlainBinaryValues(op, llvm_ty, left, right);
+    }
+
+    fn simpleMirLlvmIntBinaryOp(op: []const u8) ![]const u8 {
+        if (std.mem.eql(u8, op, "add")) return "add";
+        if (std.mem.eql(u8, op, "sub")) return "sub";
+        if (std.mem.eql(u8, op, "mul")) return "mul";
+        return error.UnsupportedLlvmEmission;
     }
 
     fn emitSimpleMirCompareBinary(self: *LlvmEmitter, binary: SimpleMirCompareBinary, span: diagnostics.Span) ![]const u8 {
@@ -4344,6 +4356,55 @@ const LlvmEmitter = struct {
         }
         if (count != 2) return null;
         return .{ .op = binary_instr.detail, .target_fact = target_fact, .left = operands[0], .right = operands[1] };
+    }
+
+    // `return a + b` (also `-`, `*`) for unsigned integer wrap arithmetic. `wrap<T>`
+    // is always unsigned; gated to an i32/i64 result to match the C backend's
+    // uint32_t/uint64_t admission (parity). No trap, no folded local. Reuses
+    // SimpleMirPlainFloatBinary — emitSimpleMirPlainFloatBinary emits integer ops
+    // for a non-float type.
+    fn simpleMirPlainUnsignedBinaryReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirPlainFloatBinary {
+        if (!simpleMirNoTrap(fn_mir)) return null;
+        if (simpleMirEntryBlockFoldsLocal(fn_mir)) return null;
+        const block = fn_mir.blocks[0];
+        var binary_instr: ?mir.Instruction = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .binary) {
+                binary_instr = instruction;
+                break;
+            }
+        }
+        const bi = binary_instr orelse return null;
+        const op = bi.detail;
+        if (!(std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul"))) return null;
+        const source = instructionSourcePoint(bi);
+        const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, source) orelse return null;
+        const llvm_ty = self.llvmType(target_fact.target_ty) catch return null;
+        if (!(std.mem.eql(u8, llvm_ty, "i32") or std.mem.eql(u8, llvm_ty, "i64"))) return null;
+        var operands: [2]SimpleMirArg = undefined;
+        var count: usize = 0;
+        var after_binary = false;
+        var last_operand_source: ?mir.SourcePoint = null;
+        for (block.instructions) |instruction| {
+            if (!after_binary) {
+                after_binary = instruction.kind == .binary and sameMirSourceLocation(instructionSourcePoint(instruction), source);
+                continue;
+            }
+            if (instruction.kind == .return_value or instruction.kind == .local) break;
+            if (instruction.kind != .expr) continue;
+            const arg_source = instructionSourcePoint(instruction);
+            if (last_operand_source) |last| {
+                if (sameMirSourceLocation(last, arg_source)) continue;
+            }
+            const arg = self.simpleMirArgAt(function, fn_mir, arg_source) orelse return null;
+            if (count >= operands.len) return null;
+            operands[count] = arg;
+            last_operand_source = arg_source;
+            count += 1;
+            if (count == operands.len) break;
+        }
+        if (count != 2) return null;
+        return .{ .op = op, .target_fact = target_fact, .left = operands[0], .right = operands[1] };
     }
 
     fn simpleMirCompareBinaryAtReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function) ?SimpleMirCompareBinary {
