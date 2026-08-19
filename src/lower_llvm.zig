@@ -2276,7 +2276,7 @@ const LlvmEmitter = struct {
         if (self.ksan or self.msan or self.csan) return null;
         if (simpleMirEntryBlockFoldsLocal(fn_mir)) return null;
         const field_name = ret.value_id orelse return null;
-        if (simpleMirScalarLlvmInfo(ret.result_ty) == null) return null;
+        if (simpleMirScalarLikeLlvmInfo(ret.result_ty) == null) return null;
         var ptr_param: ?[]const u8 = null;
         for (block.instructions) |instruction| {
             if (instruction.kind == .return_value) break;
@@ -4230,7 +4230,7 @@ const LlvmEmitter = struct {
     }
 
     fn emitSimpleMirScalarAtomicLoad(self: *LlvmEmitter, ty: mir.ValueType, ptr: []const u8) ![]const u8 {
-        const info = simpleMirScalarLlvmInfo(ty) orelse return error.UnsupportedLlvmEmission;
+        const info = simpleMirScalarLikeLlvmInfo(ty) orelse return error.UnsupportedLlvmEmission;
         const result = try self.nextTemp();
         if (std.mem.eql(u8, info.name, "bool")) {
             try self.out.print(self.allocator, "  {s} = load atomic i8, ptr {s} unordered, align 1{s}\n", .{ result, ptr, try self.debugCallSuffix() });
@@ -4258,6 +4258,16 @@ const LlvmEmitter = struct {
         if (std.mem.eql(u8, name, "usize") or std.mem.eql(u8, name, "isize")) return .{ .name = name, .llvm_type = "i64", .alignment = 8 };
         if (std.mem.eql(u8, name, "f32")) return .{ .name = name, .llvm_type = "float", .alignment = 4 };
         if (std.mem.eql(u8, name, "f64")) return .{ .name = name, .llvm_type = "double", .alignment = 8 };
+        return null;
+    }
+
+    // Like simpleMirScalarLlvmInfo but also resolves the opaque address types
+    // (PAddr/VAddr/DmaAddr) to their i64 representation. A superset used by the
+    // load helper + pointer-field load; the deref/aggregate gates stay on the
+    // scalar-only info so only the field-load path opts into address types.
+    fn simpleMirScalarLikeLlvmInfo(ty: mir.ValueType) ?SimpleMirScalarLlvmInfo {
+        if (simpleMirScalarLlvmInfo(ty)) |info| return info;
+        if (type_bridge.isOpaqueAddressTypeName(ty.name())) return .{ .name = "usize", .llvm_type = "i64", .alignment = 8 };
         return null;
     }
 

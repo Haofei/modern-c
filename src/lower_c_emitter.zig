@@ -1744,7 +1744,7 @@ pub const CEmitter = struct {
                     try self.out.print(self.allocator, "return (({s})mc_race_load_{s}({s}));\n", .{ scalar.c_type, scalar.race_type_name, try self.cIdent(load.param_name) });
                 },
                 .scalar_field_load => |load| {
-                    const scalar = simpleMirScalarCInfo(load.field_ty) orelse return error.UnsupportedCEmission;
+                    const scalar = simpleMirScalarLikeCInfo(load.field_ty) orelse return error.UnsupportedCEmission;
                     try self.out.print(self.allocator, "return (({s})mc_race_load_{s}(&({s}->{s})));\n", .{ scalar.c_type, scalar.race_type_name, try self.cIdent(load.param_name), try self.cIdent(load.field_name) });
                 },
                 .plain_unary => |unary| {
@@ -2242,7 +2242,7 @@ pub const CEmitter = struct {
         if (self.ksan or self.msan or self.csan) return null;
         if (simpleMirEntryBlockFoldsLocal(fn_mir)) return null;
         const field_name = ret.value_id orelse return null;
-        if (simpleMirScalarCInfo(ret.result_ty) == null) return null;
+        if (simpleMirScalarLikeCInfo(ret.result_ty) == null) return null;
         var ptr_param: ?[]const u8 = null;
         for (block.instructions) |instruction| {
             if (instruction.kind == .return_value) break;
@@ -4052,6 +4052,15 @@ pub const CEmitter = struct {
                 };
             }
         }
+        return null;
+    }
+
+    // Like simpleMirScalarCInfo but also resolves the opaque address types
+    // (PAddr/VAddr/DmaAddr): C type uintptr_t, loaded as their usize
+    // representation. Used only by the pointer-field/deref load path.
+    fn simpleMirScalarLikeCInfo(ty: mir.ValueType) ?SimpleMirScalarCInfo {
+        if (simpleMirScalarCInfo(ty)) |info| return info;
+        if (type_bridge.isOpaqueAddressTypeName(ty.name())) return .{ .c_type = "uintptr_t", .race_type_name = "usize" };
         return null;
     }
 

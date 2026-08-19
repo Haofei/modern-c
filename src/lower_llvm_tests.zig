@@ -9959,6 +9959,22 @@ test "LLVM admits scalar pointer-field-load returns from MIR" {
     try expectContains(body, "unordered");
 }
 
+test "LLVM admits address-typed pointer-field-load returns from MIR" {
+    // `return r.start` for an opaque address field (PAddr, i64): GEP + load i64.
+    const source =
+        \\struct PhysRange { start: PAddr, len: usize }
+        \\fn pr_start(r: *PhysRange) -> PAddr { return r.start; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_addr_field.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i64 @pr_start");
+    try expectContains(body, "getelementptr { i64, i64 }, ptr %r, i64 0, i32 0");
+    try expectContains(body, "load atomic i64, ptr %");
+    try expectContains(body, "ret i64 %");
+}
+
 test "LLVM admits phys address-constructor returns from MIR" {
     // `phys(v)` (usize -> PAddr, both i64) is a no-op cast: `ret i64 %v`.
     const source =
