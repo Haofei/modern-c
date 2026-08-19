@@ -4175,7 +4175,7 @@ pub const CEmitter = struct {
         }
         const bi = binary_instr orelse return null;
         const op = bi.detail;
-        if (!(std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul"))) return null;
+        if (!simpleMirPlainUnsignedBinaryOp(op)) return null;
         const source = instructionSourcePoint(bi);
         const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, source) orelse return null;
         // `wrap<T>` records its domain type ("wrap") in the fact, so gate on the
@@ -5665,7 +5665,18 @@ pub const CEmitter = struct {
         if (std.mem.eql(u8, op, "sub")) return "-";
         if (std.mem.eql(u8, op, "mul")) return "*";
         if (std.mem.eql(u8, op, "div")) return "/";
+        if (std.mem.eql(u8, op, "bit_and")) return "&";
+        if (std.mem.eql(u8, op, "bit_or")) return "|";
+        if (std.mem.eql(u8, op, "bit_xor")) return "^";
         return error.UnsupportedCEmission;
+    }
+
+    // Plain (non-trapping) unsigned integer binary ops that render as `(a op b)`
+    // for a u32/u64 result: arithmetic add/sub/mul (wrapping) and bitwise
+    // and/or/xor. Division/shift/etc. are excluded (they trap or promote).
+    fn simpleMirPlainUnsignedBinaryOp(op: []const u8) bool {
+        return std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul") or
+            std.mem.eql(u8, op, "bit_and") or std.mem.eql(u8, op, "bit_or") or std.mem.eql(u8, op, "bit_xor");
     }
 
     fn simpleMirCCompareOp(op: []const u8) ![]const u8 {

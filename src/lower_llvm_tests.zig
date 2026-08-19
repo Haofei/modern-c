@@ -9913,6 +9913,19 @@ test "LLVM admits unsigned wrap binary returns from MIR (i32)" {
     try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
 }
 
+test "LLVM admits plain unsigned bitwise binary returns from MIR (and/or/xor)" {
+    const source =
+        \\fn u_and(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> { return a & b; }
+        \\fn u_xor(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> { return a ^ b; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_bitwise.mc", source, &output);
+    try expectContains(try llvmFunctionBody(output.items, "define internal i32 @u_and"), "and i32 %a, %b");
+    try expectContains(try llvmFunctionBody(output.items, "define internal i32 @u_xor"), "xor i32 %a, %b");
+}
+
 test "LLVM admits plain unary returns from MIR (bitwise not, wrapping negate)" {
     const source =
         \\fn bnot(a: u32) -> u32 { return ~a; }

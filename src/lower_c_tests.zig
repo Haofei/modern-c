@@ -10429,6 +10429,30 @@ test "lower-c admits unsigned wrap binary returns from MIR (u32/u64); u8 stays o
     try expectContains(output.items, "(unsigned int)");
 }
 
+test "lower-c admits plain unsigned bitwise binary returns from MIR (and/or/xor)" {
+    const source =
+        \\fn u_and(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> { return a & b; }
+        \\fn u_or(a: wrap<u64>, b: wrap<u64>) -> wrap<u64> { return a | b; }
+        \\fn u_xor(a: wrap<u32>, b: wrap<u32>) -> wrap<u32> { return a ^ b; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "bit.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    try expectContains(output.items, "return (a & b);");
+    try expectContains(output.items, "return (a | b);");
+    try expectContains(output.items, "return (a ^ b);");
+}
+
 test "lower-c admits plain unary returns from MIR (bitwise not, wrapping negate)" {
     // `~a` and wrapping `-a` never trap, so they lower from MIR as `op(operand)`.
     const source =

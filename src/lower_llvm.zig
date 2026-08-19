@@ -4022,7 +4022,15 @@ const LlvmEmitter = struct {
         if (std.mem.eql(u8, op, "add")) return "add";
         if (std.mem.eql(u8, op, "sub")) return "sub";
         if (std.mem.eql(u8, op, "mul")) return "mul";
+        if (std.mem.eql(u8, op, "bit_and")) return "and";
+        if (std.mem.eql(u8, op, "bit_or")) return "or";
+        if (std.mem.eql(u8, op, "bit_xor")) return "xor";
         return error.UnsupportedLlvmEmission;
+    }
+
+    fn simpleMirPlainUnsignedBinaryOp(op: []const u8) bool {
+        return std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul") or
+            std.mem.eql(u8, op, "bit_and") or std.mem.eql(u8, op, "bit_or") or std.mem.eql(u8, op, "bit_xor");
     }
 
     fn emitSimpleMirCompareBinary(self: *LlvmEmitter, binary: SimpleMirCompareBinary, span: diagnostics.Span) ![]const u8 {
@@ -4459,7 +4467,7 @@ const LlvmEmitter = struct {
         }
         const bi = binary_instr orelse return null;
         const op = bi.detail;
-        if (!(std.mem.eql(u8, op, "add") or std.mem.eql(u8, op, "sub") or std.mem.eql(u8, op, "mul"))) return null;
+        if (!simpleMirPlainUnsignedBinaryOp(op)) return null;
         const source = instructionSourcePoint(bi);
         const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, source) orelse return null;
         const llvm_ty = self.llvmType(target_fact.target_ty) catch return null;
