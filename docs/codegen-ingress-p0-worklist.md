@@ -35,18 +35,42 @@ an admitted function. Then Docker m0 regenerates emit-snapshots.
 
 ## Remaining families, by tractability
 
+### Closed this migration (direct-return / direct-void, all both-backend)
+
+Each was a recognizer family + gate case + render case, validated identically
+(both shards green, emitted C/LLVM compile under clang, source map has no
+`generated_c_line=0`, soundness/parity probes). Two real bugs were caught by
+that discipline before commit: an `?u32`-deref miscompile (a single load that
+dropped the optional tag) and an LLVM pointer-`icmp` render break.
+
+| Family | Example | Commit |
+|---|---|---|
+| Direct-return checked arithmetic | `pa_diff`, `wrap_add` | `71b3299d` |
+| Bare param return past elided nonnull | `return p` (`p: *u32`) | (session) |
+| Scalar deref of param ptr | `return p.*` | (session) |
+| Plain unsigned binary (add/sub/mul/and/or/xor) | `return a + b` | (session) |
+| Plain unary | `return -a`, `return !b` | (session) |
+| Pointer-field load | `return s.next` | (session) |
+| Address constructor (`phys`) | `return phys(v)` → `uintptr_t` | (session) |
+| Bitwise binary | `return a & b` | (session) |
+| Address-typed field / deref | `PAddr`/`VAddr` field & `*p` | (session) |
+| Pointer comparison | `return a == b` (ptr params) | `8591552e` |
+
+### Remaining families, by tractability
+
 | Family | Example | Blocker | Effort |
 |---|---|---|---|
-| Direct-return checked arithmetic | `pa_diff`, `wrap_add` | (none — clean gate-widen) | **DONE** `71b3299d` |
-| Direct-return `typed_load` (deref of param ptr) | `pr_start` = `return p.*` | recognizer coverage; likely fidelity-safe | small–medium |
-| Builtin / `call_target` returns | `bitcast`, `phys`, `bitcast_float_to_bits` | fast path emits single `return <expr>;`; bitcast needs addressable temps + `__builtin_memcpy` — **statement-level** emission the return path can't do | **large** (extend fast path to statement-level builtin lowering) |
-| Builtin / `call_target` void bodies | `store_release`, atomics | same statement-level/builtin gap | **large** |
-| Folded-`let` families | `let y=x+1; return y` | fast path drops per-construct source map | **large** — needs the source map derived from MIR source points (so folded output keeps fidelity), not from `#line` matching |
+| Builtin / `call_target` returns | `bitcast`, `bitcast_float_to_bits` | fast path emits single `return <expr>;`; bitcast needs addressable temps + `__builtin_memcpy` — **statement-level** emission the return path can't do | **large** |
+| Builtin / `call_target` void bodies | `store_release`, atomics | same statement-level/builtin gap (plain void calls already admitted) | **large** |
+| Checked-operand comparison | `return (a+b) == b` | `SimpleMirCompareBinary` operands are `SimpleMirArg` (no `checked_binary` variant); needs a richer operand type | **medium** |
+| Multi-statement returns | `let x = f(); return g(x)` | fast path emits one expression; genuine (non-folded) lets can be admitted with full fidelity but need statement-prefix emission on the return path | **medium–large** (highest-count family, ~182) |
+| Folded-`let` families | `let y=x+1; return y` | fast path drops per-construct source map | **large** — needs the source map derived from MIR source points, not `#line` matching |
 
-The single common thread of the biggest remaining chunk is **`call_target`
-(builtins)** — `bitcast`/`phys`/`store_release`/atomics fall back in *both*
-return and void-body shapes. Plain function-call returns/voids are already
-admitted; only builtin (`call_target`) ones fall back.
+The remaining chunk is no longer recognizer-shaped: it needs the fast path
+extended to **statement-level** emission (multi-statement returns, builtin/void
+bodies) and, for folded-`let`, a source-map-derived-from-MIR change. Plain
+function-call returns/voids are already admitted; only builtin (`call_target`)
+ones fall back.
 
 ## Honest bottom line
 
