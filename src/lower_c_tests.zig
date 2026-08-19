@@ -10373,6 +10373,35 @@ test "lower-c admits bare pointer param return past its elided nonnull check, fo
     try expectContains(output.items, "uint32_t * q = p;");
 }
 
+test "lower-c admits scalar deref returns from MIR; optional-pointee derefs stay on fallback" {
+    // `return p.*` for a plain scalar pointee lowers through the race-tolerant
+    // load. An optional pointee (`?u32`) needs a tag+value load, so it must NOT
+    // take this single-scalar fast path — the MIR return records the payload type
+    // `u32` for it too, so admission is gated on the DECLARED return type.
+    const source =
+        \\fn read_u32(p: *u32) -> u32 { return p.*; }
+        \\fn read_opt(p: *mut ?u32) -> ?u32 { return p.*; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "deref.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    // Plain scalar deref: single race load, correct payload cast.
+    try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(p));");
+    // Optional deref (fallback): loads the tag bool too — never a single scalar load.
+    const opt_body = try cFunctionBody(output.items, "static mc_opt_u32 read_opt(mc_opt_u32 * p)");
+    try expectContains(opt_body, "mc_race_load_bool");
+}
+
 test "lower-c source map records defer cleanup spans" {
     const source =
         \\extern fn close_resource() -> void;

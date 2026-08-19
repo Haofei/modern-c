@@ -1277,6 +1277,15 @@ const LlvmEmitter = struct {
         struct_literal: SimpleMirStructLiteralReturn,
         array_literal: SimpleMirArrayLiteralReturn,
         aggregate_return_pointer_load: SimpleMirAggregateReturnPointerLoad,
+        scalar_deref_load: SimpleMirScalarDerefLoad,
+    };
+
+    // `return p.*` for a scalar pointee of a bare param pointer `p`, lowered
+    // through the unordered atomic load (matching the fallback's default,
+    // conservative-provenance rendering).
+    const SimpleMirScalarDerefLoad = struct {
+        param_name: []const u8,
+        pointee_ty: mir.ValueType,
     };
 
     const SimpleMirVoidBody = union(enum) {
@@ -1790,6 +1799,11 @@ const LlvmEmitter = struct {
                     const value = try self.emitSimpleMirAggregateReturnPointerLoad(load, return_span);
                     try self.emitReturnValue(ret_ty, value, return_span);
                 },
+                .scalar_deref_load => |load| {
+                    const ptr = try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{load.param_name});
+                    const value = try self.emitSimpleMirScalarAtomicLoad(load.pointee_ty, ptr);
+                    try self.emitReturnValue(ret_ty, value, return_span);
+                },
             }
         } else if (simple_void_body) |body| {
             switch (body) {
@@ -2037,6 +2051,9 @@ const LlvmEmitter = struct {
             return .{ .aggregate_return_pointer_load = load };
         }
         if (!self.blockOnlyContainsSimpleMirReturnInstructions(function, fn_mir)) return null;
+        if (self.simpleMirScalarDerefLoadReturn(function, fn_mir, block, ret)) |load| {
+            return .{ .scalar_deref_load = load };
+        }
         if (ret.result_ty == .void or std.mem.eql(u8, ret.detail, "void")) return if (simpleMirNoTrap(fn_mir)) .void else null;
         const value_id = ret.value_id orelse return null;
         for (function.signature.params) |param| {
@@ -2178,6 +2195,34 @@ const LlvmEmitter = struct {
             }
         }
         return null;
+    }
+
+    // `return p.*` for a scalar pointee of a bare param pointer. Gated narrowly
+    // for soundness: no sanitizer profile; the DECLARED return type equals the
+    // MIR result_ty name (so an optional `?u32` — whose result_ty records the
+    // payload `u32` — is excluded, since it needs a tag+value load); `p` is a
+    // bare param with no recorded provenance (conservative unordered load, as
+    // the fallback emits); and no folded local (source-map fidelity).
+    fn simpleMirScalarDerefLoadReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, ret: mir.Instruction) ?SimpleMirScalarDerefLoad {
+        if (self.ksan or self.msan or self.csan) return null;
+        if (!std.mem.eql(u8, ret.value_id orelse return null, "deref")) return null;
+        if (simpleMirScalarLlvmInfo(ret.result_ty) == null) return null;
+        const return_ty = function.signature.transitionalReturnType() orelse return null;
+        const return_ty_name = type_bridge.typeName(self.resolveAliasType(return_ty)) orelse return null;
+        if (!std.mem.eql(u8, return_ty_name, ret.result_ty.name())) return null;
+        if (simpleMirEntryBlockFoldsLocal(fn_mir)) return null;
+        const load = self.simpleMirReturnedPointerFieldLoad(block) orelse return null;
+        const ptr_id = load.value_id orelse return null;
+        var is_param = false;
+        for (function.signature.params) |param| {
+            if (std.mem.eql(u8, param.name.text, ptr_id)) {
+                is_param = true;
+                break;
+            }
+        }
+        if (!is_param) return null;
+        if (self.pointer_local_provenance.get(ptr_id) != null) return null;
+        return .{ .param_name = ptr_id, .pointee_ty = ret.result_ty };
     }
 
     fn simpleMirAggregateBaseLocalAtSource(self: *LlvmEmitter, block: mir.Block, source: mir.SourcePoint) ?[]const u8 {
@@ -3591,6 +3636,9 @@ const LlvmEmitter = struct {
             // folded-local returns (via simpleMirLocalInitReturn) — those keep
             // their `let` source map + inferred-local fail-closed on the fallback.
             .param => simpleMirAllTrapEdgesRepresentationChecks(fn_mir) and !simpleMirEntryBlockFoldsLocal(fn_mir),
+            // The scalar deref's only trap is the elided nonnull representation
+            // check; the recognizer already excluded folded locals and sanitizers.
+            .scalar_deref_load => simpleMirAllTrapEdgesRepresentationChecks(fn_mir),
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallReturnTrapCount(fn_mir, call),
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
             .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or (simpleMirCheckedBinaryOperandsSimple(binary) and !simpleMirEntryBlockFoldsLocal(fn_mir))),

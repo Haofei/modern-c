@@ -9879,6 +9879,25 @@ test "LLVM admits bare pointer param return past its elided nonnull check" {
     try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
 }
 
+test "LLVM admits scalar deref returns from MIR; optional-pointee derefs stay on fallback" {
+    // `return p.*` for a plain scalar pointee lowers to an unordered atomic load.
+    // An optional pointee needs a tag+value load, so it must stay on the fallback.
+    const source =
+        \\fn read_i32(p: *i32) -> i32 { return p.*; }
+        \\fn read_opt(p: *mut ?u32) -> ?u32 { return p.*; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_scalar_deref_return.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @read_i32");
+    try expectContains(body, "load atomic i32, ptr %p unordered");
+    try expectContains(body, "ret i32 ");
+    // Optional deref (fallback): loads the tag (i8) too — never a single i32 load.
+    const opt = try llvmFunctionBody(output.items, "@read_opt");
+    try expectContains(opt, "load atomic i8");
+}
+
 test "LLVM emits global address direct-call args from MIR without body fallback" {
     const source =
         \\global shared_counter: u32 = 0;
