@@ -9926,6 +9926,23 @@ test "LLVM admits pointer comparison returns from MIR past elided nonnull checks
     try std.testing.expect(std.mem.indexOf(u8, body, "mc_trap_") == null);
 }
 
+test "LLVM admits single nested-call argument returns inline" {
+    // `return g(f())`: the inner call is emitted once and fed to the outer call
+    // (f before g), no ordering ambiguity.
+    const source =
+        \\extern fn f() -> u32;
+        \\extern fn g(x: u32) -> u32;
+        \\fn direct() -> u32 { return g(f()); }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_nested_call.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i32 @direct");
+    try expectContains(body, "call i32 @f()");
+    try expectContains(body, "call i32 @g(i32 %");
+}
+
 test "LLVM admits unsigned wrap binary returns from MIR (i32)" {
     // `return a + b` for `wrap<u32>` lowers to a plain integer `add i32`.
     const source =

@@ -10445,6 +10445,36 @@ test "lower-c admits pointer comparison returns from MIR past elided nonnull che
     try expectContains(output.items, "return (a == b);");
 }
 
+test "lower-c admits single nested-call argument returns inline" {
+    // `return g(f())` has one call chain (f then g) — no argument-ordering
+    // ambiguity — so it inlines to `return g(f());` with no sequencing temp.
+    // `return g(h(x))` (one nesting level, leaf arg) likewise inlines.
+    const source =
+        \\extern fn f() -> u32;
+        \\extern fn h(x: u32) -> u32;
+        \\extern fn g(x: u32) -> u32;
+        \\fn direct() -> u32 { return g(f()); }
+        \\fn np(x: u32) -> u32 { return g(h(x)); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "nest.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    try expectContains(output.items, "return g(f());");
+    try expectContains(output.items, "return g(h(x));");
+    // The inlined inner call must not be sequenced through a temp.
+    try std.testing.expect(std.mem.indexOf(u8, output.items, "mc_tmp0 = f()") == null);
+}
+
 test "lower-c admits unsigned wrap binary returns from MIR (u32/u64); u8 stays on fallback" {
     // `wrap<T>` is always unsigned; for a u32/u64 result the wrapping `a + b`
     // renders as a plain `(a + b)` with no promotion, so it lowers from MIR. u8

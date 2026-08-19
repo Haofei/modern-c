@@ -4724,7 +4724,14 @@ const LlvmEmitter = struct {
                 continue;
             }
             if (instruction.kind == .return_value) break;
-            if (instruction.kind == .call) break;
+            if (instruction.kind == .call) {
+                // A nested-call argument (`g(f())`) appears as its own call at
+                // the argument's source; it is the outer call's arg, inlined,
+                // not a separate statement — skip it and let the arg expr below
+                // pick it up via simpleMirCallArgAt.
+                if (self.simpleMirDirectCallArgumentFactAt(fn_mir, callee, instructionSourcePoint(instruction)) != null) continue;
+                break;
+            }
             if (instruction.kind != .expr and
                 instruction.kind != .integer_literal_conversion and
                 instruction.kind != .binary and
@@ -5066,6 +5073,11 @@ const LlvmEmitter = struct {
         const ret = simpleMirReturnInstruction(block) orelse return null;
         const return_value_id = ret.value_id;
         var saw_return_value_call = false;
+        // Callee of the call that directly produces the return value (the `g` in
+        // `return g(f())`), captured when we walk past it below. Only a nested
+        // call that is *this* callee's own argument may be skipped as inlined.
+        var return_call_callee: ?[]const u8 = null;
+        const folds_local = simpleMirEntryBlockFoldsLocal(fn_mir);
         for (block.instructions) |instruction| {
             if (instruction.kind == .return_value) return calls;
             if (instruction.kind != .call) continue;
@@ -5074,7 +5086,18 @@ const LlvmEmitter = struct {
                 if (return_value_id) |value_id| {
                     if (self.simpleMirCallFeedsReturnValue(fn_mir, block, source, value_id)) {
                         saw_return_value_call = true;
+                        return_call_callee = instruction.detail;
                         continue;
+                    }
+                }
+                // A non-void call at an argument slot of the return call (`f` in
+                // `return g(f())`) is inlined into that argument, not a prefix
+                // statement — skip it. Gated to the return call's own callee and
+                // to functions with no folded local, so it cannot admit
+                // ordering-sensitive or reassigned-local shapes.
+                if (!folds_local) {
+                    if (return_call_callee) |callee| {
+                        if (self.simpleMirDirectCallArgumentFactAt(fn_mir, callee, source) != null) continue;
                     }
                 }
                 return null;
