@@ -3759,7 +3759,12 @@ pub const CEmitter = struct {
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
             .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or (simpleMirCheckedBinaryOperandsSimple(binary) and !simpleMirEntryBlockFoldsLocal(fn_mir))),
             .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or (simpleMirArgIsSimpleReturnOperand(unary.operand) and !simpleMirEntryBlockFoldsLocal(fn_mir))),
-            .compare_binary => |binary| fn_mir.trap_edges.len == simpleMirCompareBinaryTrapCount(binary),
+            // A comparison whose only extra trap edges are elided nonnull
+            // representation checks (e.g. `a == b` on two pointer params) renders
+            // as `(a == b)` with no trap, like a bare param return. Admit it past
+            // those checks; exclude folded locals for source-map fidelity.
+            .compare_binary => |binary| fn_mir.trap_edges.len == simpleMirCompareBinaryTrapCount(binary) or
+                (simpleMirAllTrapEdgesRepresentationChecks(fn_mir) and !simpleMirEntryBlockFoldsLocal(fn_mir)),
             .plain_float_binary => fn_mir.trap_edges.len == 0,
             .explicit_cast_return => |cast| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(cast.operand),
             .conversion_return => |conversion| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(conversion.operand),
@@ -4262,8 +4267,14 @@ pub const CEmitter = struct {
             operands[count] = arg;
             if (representation_check == null and simpleMirRepresentationTrapCountAt(fn_mir, arg_source) == 1) {
                 const fact = self.simpleMirOperandTargetTypeFactAt(fn_mir, arg_source) orelse return null;
-                const enum_name = self.enumNameForType(fact.target_ty) orelse return null;
-                representation_check = .{ .enum_name = enum_name, .subject = arg };
+                if (self.enumNameForType(fact.target_ty)) |enum_name| {
+                    representation_check = .{ .enum_name = enum_name, .subject = arg };
+                } else switch (self.resolveAliasType(fact.target_ty).kind) {
+                    // A pointer operand's nonnull check is elided in a comparison
+                    // (no deref), so skip it — the render is a plain `(a == b)`.
+                    .pointer => {},
+                    else => return null,
+                }
             }
             last_operand_source = arg_source;
             count += 1;

@@ -10423,6 +10423,28 @@ test "lower-c admits address-typed scalar deref returns from MIR" {
     try expectContains(output.items, "return ((uintptr_t)mc_race_load_usize(p));");
 }
 
+test "lower-c admits pointer comparison returns from MIR past elided nonnull checks" {
+    // `a == b` on pointer params carries elided nonnull representation checks;
+    // the comparison renders as `(a == b)` with no trap.
+    const source =
+        \\fn ptr_eq(a: *u32, b: *u32) -> bool { return a == b; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "cmp.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    try expectContains(output.items, "return (a == b);");
+}
+
 test "lower-c admits unsigned wrap binary returns from MIR (u32/u64); u8 stays on fallback" {
     // `wrap<T>` is always unsigned; for a u32/u64 result the wrapping `a + b`
     // renders as a plain `(a + b)` with no promotion, so it lowers from MIR. u8

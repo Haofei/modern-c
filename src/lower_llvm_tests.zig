@@ -9912,6 +9912,20 @@ test "LLVM admits address-typed scalar deref returns from MIR" {
     try expectContains(body, "ret i64 %");
 }
 
+test "LLVM admits pointer comparison returns from MIR past elided nonnull checks" {
+    // `a == b` on pointer params: `icmp eq ptr %a, %b`.
+    const source =
+        \\fn ptr_eq(a: *u32, b: *u32) -> bool { return a == b; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_ptr_cmp.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i1 @ptr_eq");
+    try expectContains(body, "icmp eq ptr %a, %b");
+    try std.testing.expect(std.mem.indexOf(u8, body, "mc_trap_") == null);
+}
+
 test "LLVM admits unsigned wrap binary returns from MIR (i32)" {
     // `return a + b` for `wrap<u32>` lowers to a plain integer `add i32`.
     const source =

@@ -3725,7 +3725,10 @@ const LlvmEmitter = struct {
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
             .checked_binary => |binary| fn_mir.trap_edges.len == simpleMirCheckedBinaryTrapCount(binary) and (self.noFunctionBodyFallbacksAvailable() or (simpleMirCheckedBinaryOperandsSimple(binary) and !simpleMirEntryBlockFoldsLocal(fn_mir))),
             .checked_unary => |unary| fn_mir.trap_edges.len == 1 and (self.noFunctionBodyFallbacksAvailable() or (simpleMirArgIsSimpleReturnOperand(unary.operand) and !simpleMirEntryBlockFoldsLocal(fn_mir))),
-            .compare_binary => |binary| fn_mir.trap_edges.len == simpleMirCompareBinaryTrapCount(binary),
+            // A comparison whose only extra traps are elided nonnull pointer
+            // checks (`a == b` on pointer params) renders as `icmp` with no trap.
+            .compare_binary => |binary| fn_mir.trap_edges.len == simpleMirCompareBinaryTrapCount(binary) or
+                (simpleMirAllTrapEdgesRepresentationChecks(fn_mir) and !simpleMirEntryBlockFoldsLocal(fn_mir)),
             .plain_float_binary => fn_mir.trap_edges.len == 0,
             .explicit_cast_return => |cast| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(cast.operand),
             .conversion_return => |conversion| fn_mir.trap_edges.len == simpleMirCallArgTrapCount(conversion.operand),
@@ -4037,11 +4040,17 @@ const LlvmEmitter = struct {
         const ty = binary.operand_fact.target_ty;
         const llvm_ty = try self.llvmType(ty);
         const is_float = lower_llvm_shape.isFloatTypeOf(&self.type_aliases, ty);
-        if (!is_float and !self.isBoolType(ty)) _ = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
+        const is_pointer = switch (self.resolveAliasType(ty).kind) {
+            .pointer => true,
+            else => false,
+        };
+        // Pointer comparisons are `icmp eq/ne ptr` (llvmType already yields "ptr").
+        if (is_pointer and !(std.mem.eql(u8, binary.op, "eq") or std.mem.eql(u8, binary.op, "ne"))) return error.UnsupportedLlvmEmission;
+        if (!is_float and !is_pointer and !self.isBoolType(ty)) _ = self.integerBitsOf(ty) orelse return error.UnsupportedLlvmEmission;
         const predicate = if (is_float)
             try simpleMirFloatComparePredicate(binary.op)
         else
-            try self.simpleMirComparePredicate(binary.op, self.isSignedIntegerType(ty));
+            try self.simpleMirComparePredicate(binary.op, !is_pointer and self.isSignedIntegerType(ty));
         const left = try self.simpleMirArgValue(binary.left, span);
         const right = try self.simpleMirArgValue(binary.right, span);
         const value = try self.nextTemp();
@@ -4553,8 +4562,13 @@ const LlvmEmitter = struct {
             operand_fact = operand_fact orelse self.simpleMirOperandTargetTypeFactAt(fn_mir, arg_source);
             if (representation_check == null and simpleMirRepresentationTrapCountAt(fn_mir, arg_source) == 1) {
                 const fact = self.simpleMirOperandTargetTypeFactAt(fn_mir, arg_source) orelse return null;
-                const enum_decl = self.enumDeclForType(fact.target_ty) orelse return null;
-                representation_check = .{ .enum_name = enum_decl.name.text, .subject = arg };
+                if (self.enumDeclForType(fact.target_ty)) |enum_decl| {
+                    representation_check = .{ .enum_name = enum_decl.name.text, .subject = arg };
+                } else switch (self.resolveAliasType(fact.target_ty).kind) {
+                    // A pointer operand's nonnull check is elided in a comparison.
+                    .pointer => {},
+                    else => return null,
+                }
             }
             last_operand_source = arg_source;
             count += 1;
