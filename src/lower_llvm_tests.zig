@@ -9946,6 +9946,21 @@ test "LLVM admits scalar pointer-field-load returns from MIR" {
     try expectContains(body, "unordered");
 }
 
+test "LLVM admits phys address-constructor returns from MIR" {
+    // `phys(v)` (usize -> PAddr, both i64) is a no-op cast: `ret i64 %v`.
+    const source =
+        \\fn to_pa(v: usize) -> PAddr { return phys(v); }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_phys.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i64 @to_pa");
+    try expectContains(body, "ret i64 %v");
+    // Fast-path admission (not the fallback, which emits param dbg.value).
+    try std.testing.expect(std.mem.indexOf(u8, body, "llvm.dbg.value") == null);
+}
+
 test "LLVM emits global address direct-call args from MIR without body fallback" {
     const source =
         \\global shared_counter: u32 = 0;

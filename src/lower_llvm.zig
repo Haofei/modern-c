@@ -2158,6 +2158,7 @@ const LlvmEmitter = struct {
             if (self.simpleMirExplicitCastReturn(function, fn_mir)) |cast| return .{ .explicit_cast_return = cast };
         }
         if (self.simpleMirConversionReturn(function, fn_mir, value_id)) |conversion| return .{ .conversion_return = conversion };
+        if (self.simpleMirAddressConstructorReturn(function, fn_mir, value_id)) |conversion| return .{ .conversion_return = conversion };
         if (std.mem.eql(u8, value_id, "struct_literal")) {
             if (self.simpleMirStructLiteralReturn(function, fn_mir, block)) |literal| return .{ .struct_literal = literal };
         }
@@ -4067,7 +4068,9 @@ const LlvmEmitter = struct {
 
     fn emitSimpleMirConversionReturn(self: *LlvmEmitter, conversion: SimpleMirConversionReturn, span: diagnostics.Span) ![]const u8 {
         switch (conversion.kind) {
-            .conversion_from, .conversion_wrap_from, .conversion_from_mod => {},
+            // `.phys` builds an opaque address type whose repr equals the source
+            // (usize -> PAddr, both i64), so castValue is a no-op — `ret i64 %v`.
+            .conversion_from, .conversion_wrap_from, .conversion_from_mod, .phys => {},
             else => return error.UnsupportedLlvmEmission,
         }
         const operand = try self.simpleMirCallArgValue(conversion.operand, span);
@@ -4798,6 +4801,43 @@ const LlvmEmitter = struct {
             return null;
         };
         return self.simpleMirConversionAtSource(function, fn_mir, call_source);
+    }
+
+    // `return phys(v)`: an opaque address-space constructor whose repr equals its
+    // operand (usize -> PAddr, both i64), so it lowers as a no-op cast. Reuses
+    // SimpleMirConversionReturn; gated to an i64 target so a struct shadowing the
+    // address type declines to the fallback.
+    fn simpleMirAddressConstructorReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, value_id: []const u8) ?SimpleMirConversionReturn {
+        if (!std.mem.eql(u8, value_id, "phys")) return null;
+        const block, const call_source = blk: {
+            for (fn_mir.blocks) |block| for (block.instructions) |instruction| {
+                if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, "phys")) break :blk .{ block, instructionSourcePoint(instruction) };
+            };
+            return null;
+        };
+        var is_phys = false;
+        for (fn_mir.call_target_facts) |fact| {
+            if (sameMirSourceLocation(fact.source, call_source) and fact.kind == .phys) {
+                is_phys = true;
+                break;
+            }
+        }
+        if (!is_phys) return null;
+        const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, call_source) orelse return null;
+        const llvm_ty = self.llvmType(target_fact.target_ty) catch return null;
+        if (!std.mem.eql(u8, llvm_ty, "i64")) return null;
+        var after_call = false;
+        for (block.instructions) |instruction| {
+            if (!after_call) {
+                after_call = instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source);
+                continue;
+            }
+            if (instruction.kind == .return_value or instruction.kind == .call) break;
+            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
+            const operand = self.simpleMirCallArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse continue;
+            return .{ .kind = .phys, .source_fact = target_fact, .target_fact = target_fact, .operand = operand };
+        }
+        return null;
     }
 
     fn simpleMirConversionAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint) ?SimpleMirConversionReturn {

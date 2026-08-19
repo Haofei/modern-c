@@ -2108,6 +2108,7 @@ pub const CEmitter = struct {
             if (self.simpleMirExplicitCastReturn(function, fn_mir)) |cast| return .{ .explicit_cast_return = cast };
         }
         if (self.simpleMirConversionReturn(function, fn_mir, value_id)) |conversion| return .{ .conversion_return = conversion };
+        if (self.simpleMirAddressConstructorReturn(function, fn_mir, value_id)) |conversion| return .{ .conversion_return = conversion };
         if (std.mem.eql(u8, value_id, "struct_literal")) {
             if (self.simpleMirStructLiteralReturn(function, fn_mir, block)) |literal| return .{ .struct_literal = literal };
         }
@@ -4535,6 +4536,48 @@ pub const CEmitter = struct {
             return null;
         };
         return self.simpleMirConversionAtSource(function, fn_mir, call_source);
+    }
+
+    // `return phys(v)`: an address-space constructor (usize -> PAddr) whose C
+    // representation is transparent, so it renders as the same `((repr)(v))` cast
+    // the numeric-conversion path emits. Unlike `as` conversions it carries no
+    // conversion_source/target facts, so it needs its own recognizer, but reuses
+    // SimpleMirConversionReturn (the render only reads the target fact + operand).
+    fn simpleMirAddressConstructorReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, value_id: []const u8) ?SimpleMirConversionReturn {
+        if (!std.mem.eql(u8, value_id, "phys")) return null;
+        const block, const call_source = blk: {
+            for (fn_mir.blocks) |block| for (block.instructions) |instruction| {
+                if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, "phys")) break :blk .{ block, instructionSourcePoint(instruction) };
+            };
+            return null;
+        };
+        var is_phys = false;
+        for (fn_mir.call_target_facts) |fact| {
+            if (sameMirSourceLocation(fact.source, call_source) and fact.kind == .phys) {
+                is_phys = true;
+                break;
+            }
+        }
+        if (!is_phys) return null;
+        const target_fact = self.simpleMirTargetTypeFactAt(fn_mir, call_source) orelse return null;
+        // phys builds an opaque address type whose C representation is uintptr_t;
+        // the render is `((uintptr_t)(v))`. Gate on that exact C type so a
+        // (pathological) user struct shadowing the address type declines to the
+        // fallback rather than emitting an invalid `((StructName)(v))` cast.
+        const c_type = self.cTypeFor(target_fact.target_ty, .typedef_name) catch return null;
+        if (!std.mem.eql(u8, c_type, "uintptr_t")) return null;
+        var after_call = false;
+        for (block.instructions) |instruction| {
+            if (!after_call) {
+                after_call = instruction.kind == .call and sameMirSourceLocation(instructionSourcePoint(instruction), call_source);
+                continue;
+            }
+            if (instruction.kind == .return_value or instruction.kind == .call) break;
+            if (instruction.kind != .expr and instruction.kind != .integer_literal_conversion and instruction.kind != .binary and instruction.kind != .unary) continue;
+            const operand = self.simpleMirCallArgAt(function, fn_mir, instructionSourcePoint(instruction)) orelse continue;
+            return .{ .kind = .phys, .source_fact = target_fact, .target_fact = target_fact, .operand = operand };
+        }
+        return null;
     }
 
     fn simpleMirConversionAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint) ?SimpleMirConversionReturn {

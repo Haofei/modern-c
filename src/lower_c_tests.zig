@@ -10481,6 +10481,28 @@ test "lower-c admits scalar pointer-field-load returns from MIR; optional field 
     try expectContains(opt_body, "mc_race_load_bool");
 }
 
+test "lower-c admits phys address-constructor returns from MIR" {
+    // `phys(v)` builds the opaque PAddr (repr uintptr_t), so it lowers as the
+    // same transparent `((uintptr_t)(v))` cast the conversion path emits.
+    const source =
+        \\fn to_pa(v: usize) -> PAddr { return phys(v); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "phys.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    try expectContains(output.items, "return ((uintptr_t)(v));");
+}
+
 test "lower-c source map records defer cleanup spans" {
     const source =
         \\extern fn close_resource() -> void;
