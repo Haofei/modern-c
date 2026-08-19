@@ -9929,6 +9929,23 @@ test "LLVM admits plain unary returns from MIR (bitwise not, wrapping negate)" {
     try expectContains(wneg, "sub i32 0, %a");
 }
 
+test "LLVM admits scalar pointer-field-load returns from MIR" {
+    // `return r.a` lowers to a getelementptr for the field, then an unordered
+    // atomic load.
+    const source =
+        \\struct S { a: u32, b: u64 }
+        \\fn get_b(r: *S) -> u64 { return r.b; }
+    ;
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTest("llvm_scalar_field_load.mc", source, &output);
+    const body = try llvmFunctionBody(output.items, "define internal i64 @get_b");
+    try expectContains(body, "getelementptr { i32, i64 }, ptr %r, i64 0, i32 1");
+    try expectContains(body, "load atomic i64, ptr %");
+    try expectContains(body, "unordered");
+}
+
 test "LLVM emits global address direct-call args from MIR without body fallback" {
     const source =
         \\global shared_counter: u32 = 0;

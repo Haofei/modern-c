@@ -10452,6 +10452,35 @@ test "lower-c admits plain unary returns from MIR (bitwise not, wrapping negate)
     try expectContains(output.items, "return -(a);");
 }
 
+test "lower-c admits scalar pointer-field-load returns from MIR; optional field stays on fallback" {
+    // `return r.a` for a scalar field of a pointer param's pointee struct lowers
+    // through the race-tolerant load of &(r->a). An optional field needs a
+    // tag+value load, so it stays on the fallback.
+    const source =
+        \\struct S { a: u32 }
+        \\fn get_a(r: *S) -> u32 { return r.a; }
+        \\struct T { o: ?u32 }
+        \\fn get_opt(r: *T) -> ?u32 { return r.o; }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "field.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCDeclsTest(std.testing.allocator, module.decls, &output);
+
+    try expectContains(output.items, "return ((uint32_t)mc_race_load_u32(&(r->a)));");
+    // Optional field (fallback): loads the tag bool too.
+    const opt_body = try cFunctionBody(output.items, "static mc_opt_u32 get_opt(T * r)");
+    try expectContains(opt_body, "mc_race_load_bool");
+}
+
 test "lower-c source map records defer cleanup spans" {
     const source =
         \\extern fn close_resource() -> void;

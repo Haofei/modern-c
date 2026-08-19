@@ -1278,7 +1278,18 @@ const LlvmEmitter = struct {
         array_literal: SimpleMirArrayLiteralReturn,
         aggregate_return_pointer_load: SimpleMirAggregateReturnPointerLoad,
         scalar_deref_load: SimpleMirScalarDerefLoad,
+        scalar_field_load: SimpleMirScalarFieldLoad,
         plain_unary: SimpleMirPlainUnary,
+    };
+
+    // `return r.a` for a scalar field of the struct a bare param pointer `r`
+    // points at: `getelementptr <struct>, ptr %r, i64 0, i32 <field_index>` then
+    // an unordered atomic load.
+    const SimpleMirScalarFieldLoad = struct {
+        param_name: []const u8,
+        struct_ty: ast_bridge.TypeExpr,
+        field_index: usize,
+        field_ty: mir.ValueType,
     };
 
     // `return ~a` (bitwise not → `xor -1`) / `return -a` (wrapping negate →
@@ -1812,6 +1823,13 @@ const LlvmEmitter = struct {
                     const value = try self.emitSimpleMirScalarAtomicLoad(load.pointee_ty, ptr);
                     try self.emitReturnValue(ret_ty, value, return_span);
                 },
+                .scalar_field_load => |load| {
+                    const struct_llvm_ty = try self.llvmType(load.struct_ty);
+                    const gep = try self.nextTemp();
+                    try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr %{s}, i64 0, i32 {d}\n", .{ gep, struct_llvm_ty, load.param_name, load.field_index });
+                    const value = try self.emitSimpleMirScalarAtomicLoad(load.field_ty, gep);
+                    try self.emitReturnValue(ret_ty, value, return_span);
+                },
                 .plain_unary => |unary| {
                     const llvm_ty = try self.llvmType(ret_ty);
                     const operand = try self.simpleMirArgValue(unary.operand, return_span);
@@ -2073,6 +2091,9 @@ const LlvmEmitter = struct {
         if (self.simpleMirScalarDerefLoadReturn(function, fn_mir, block, ret)) |load| {
             return .{ .scalar_deref_load = load };
         }
+        if (self.simpleMirScalarFieldLoadReturn(function, fn_mir, block, ret)) |load| {
+            return .{ .scalar_field_load = load };
+        }
         if (ret.result_ty == .void or std.mem.eql(u8, ret.detail, "void")) return if (simpleMirNoTrap(fn_mir)) .void else null;
         const value_id = ret.value_id orelse return null;
         for (function.signature.params) |param| {
@@ -2244,6 +2265,43 @@ const LlvmEmitter = struct {
         if (!is_param) return null;
         if (self.pointer_local_provenance.get(ptr_id) != null) return null;
         return .{ .param_name = ptr_id, .pointee_ty = ret.result_ty };
+    }
+
+    // `return r.a` for a scalar field of the pointee struct of a bare param
+    // pointer. Same narrow gating as the scalar deref; the declared field type
+    // must equal the MIR result_ty name (excludes an optional field, which needs
+    // a tag+value load). Resolves the field index for the GEP up front.
+    fn simpleMirScalarFieldLoadReturn(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, ret: mir.Instruction) ?SimpleMirScalarFieldLoad {
+        if (self.ksan or self.msan or self.csan) return null;
+        if (simpleMirEntryBlockFoldsLocal(fn_mir)) return null;
+        const field_name = ret.value_id orelse return null;
+        if (simpleMirScalarLlvmInfo(ret.result_ty) == null) return null;
+        var ptr_param: ?[]const u8 = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .return_value) break;
+            if (instruction.kind == .typed_load) ptr_param = instruction.value_id;
+        }
+        const param_name = ptr_param orelse return null;
+        if (self.pointer_local_provenance.get(param_name) != null) return null;
+        for (function.signature.params) |param| {
+            if (!std.mem.eql(u8, param.name.text, param_name)) continue;
+            const pointer = switch (self.resolveAliasType(param.ty).kind) {
+                .pointer => |pointer| pointer,
+                else => return null,
+            };
+            const struct_ty = self.resolveAliasType(pointer.child.*);
+            const struct_name = type_bridge.typeName(struct_ty) orelse return null;
+            const struct_decl = self.struct_types.get(struct_name) orelse return null;
+            for (struct_decl.fields) |field| {
+                if (!std.mem.eql(u8, field.name.text, field_name)) continue;
+                const field_type_name = type_bridge.typeName(self.resolveAliasType(field.ty)) orelse return null;
+                if (!std.mem.eql(u8, field_type_name, ret.result_ty.name())) return null;
+                const field_index = lower_llvm_query.structFieldIndex(struct_decl, field_name) orelse return null;
+                return .{ .param_name = param_name, .struct_ty = struct_ty, .field_index = field_index, .field_ty = ret.result_ty };
+            }
+            return null;
+        }
+        return null;
     }
 
     fn simpleMirAggregateBaseLocalAtSource(self: *LlvmEmitter, block: mir.Block, source: mir.SourcePoint) ?[]const u8 {
@@ -3660,6 +3718,7 @@ const LlvmEmitter = struct {
             // The scalar deref's only trap is the elided nonnull representation
             // check; the recognizer already excluded folded locals and sanitizers.
             .scalar_deref_load => simpleMirAllTrapEdgesRepresentationChecks(fn_mir),
+            .scalar_field_load => simpleMirAllTrapEdgesRepresentationChecks(fn_mir),
             .plain_unary => fn_mir.trap_edges.len == 0,
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallReturnTrapCount(fn_mir, call),
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
@@ -5678,6 +5737,7 @@ const LlvmEmitter = struct {
                     if (mirBlockHasLocal(block, instruction.detail)) continue;
                     if (mirBlockHasCall(block, instruction.detail)) continue;
                     if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
+                    if (self.simpleMirExprCouldBePointerParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                     if (self.global_types.contains(instruction.detail)) continue;
                     return false;
                 }

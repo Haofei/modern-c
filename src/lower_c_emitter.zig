@@ -1216,7 +1216,16 @@ pub const CEmitter = struct {
         array_literal: SimpleMirArrayLiteralReturn,
         aggregate_return_pointer_load: SimpleMirAggregateReturnPointerLoad,
         scalar_deref_load: SimpleMirScalarDerefLoad,
+        scalar_field_load: SimpleMirScalarFieldLoad,
         plain_unary: SimpleMirPlainUnary,
+    };
+
+    // `return r.a` for a scalar field `a` of the struct a bare param pointer `r`
+    // points at, lowered through the race-tolerant load of `&(r->a)`.
+    const SimpleMirScalarFieldLoad = struct {
+        param_name: []const u8,
+        field_name: []const u8,
+        field_ty: mir.ValueType,
     };
 
     // `return ~a` / `return -a` for a non-trapping unary op (bitwise not; wrapping
@@ -1734,6 +1743,10 @@ pub const CEmitter = struct {
                     const scalar = simpleMirScalarCInfo(load.pointee_ty) orelse return error.UnsupportedCEmission;
                     try self.out.print(self.allocator, "return (({s})mc_race_load_{s}({s}));\n", .{ scalar.c_type, scalar.race_type_name, try self.cIdent(load.param_name) });
                 },
+                .scalar_field_load => |load| {
+                    const scalar = simpleMirScalarCInfo(load.field_ty) orelse return error.UnsupportedCEmission;
+                    try self.out.print(self.allocator, "return (({s})mc_race_load_{s}(&({s}->{s})));\n", .{ scalar.c_type, scalar.race_type_name, try self.cIdent(load.param_name), try self.cIdent(load.field_name) });
+                },
                 .plain_unary => |unary| {
                     try self.out.print(self.allocator, "return {s}(", .{unary.op_c});
                     try self.emitSimpleMirArg(unary.operand);
@@ -2026,6 +2039,9 @@ pub const CEmitter = struct {
         if (self.simpleMirScalarDerefLoadReturn(function, fn_mir, block, ret)) |load| {
             return .{ .scalar_deref_load = load };
         }
+        if (self.simpleMirScalarFieldLoadReturn(function, fn_mir, block, ret)) |load| {
+            return .{ .scalar_field_load = load };
+        }
         if (ret.result_ty == .void or std.mem.eql(u8, ret.detail, "void")) return if (simpleMirNoTrap(fn_mir)) .void else null;
         const value_id = ret.value_id orelse return null;
         for (function.signature.params) |param| {
@@ -2214,6 +2230,42 @@ pub const CEmitter = struct {
         if (!is_param) return null;
         if (self.mir_pointer_local_provenance.get(ptr_id) != null) return null;
         return .{ .param_name = ptr_id, .pointee_ty = ret.result_ty };
+    }
+
+    // `return r.a` for a scalar field of the struct a bare param pointer `r`
+    // points at. Same narrow gating as the scalar deref: no sanitizer, no
+    // provenance, no folded local; and the DECLARED field type must equal the
+    // MIR result_ty name so an optional field (whose result_ty records only the
+    // payload) is excluded — it needs a tag+value load, not a single scalar load.
+    fn simpleMirScalarFieldLoadReturn(self: *CEmitter, function: anytype, fn_mir: mir.Function, block: mir.Block, ret: mir.Instruction) ?SimpleMirScalarFieldLoad {
+        if (self.ksan or self.msan or self.csan) return null;
+        if (simpleMirEntryBlockFoldsLocal(fn_mir)) return null;
+        const field_name = ret.value_id orelse return null;
+        if (simpleMirScalarCInfo(ret.result_ty) == null) return null;
+        var ptr_param: ?[]const u8 = null;
+        for (block.instructions) |instruction| {
+            if (instruction.kind == .return_value) break;
+            if (instruction.kind == .typed_load) ptr_param = instruction.value_id;
+        }
+        const param_name = ptr_param orelse return null;
+        if (self.mir_pointer_local_provenance.get(param_name) != null) return null;
+        for (function.signature.params) |param| {
+            if (!std.mem.eql(u8, param.name.text, param_name)) continue;
+            const pointer = switch (self.resolveAliasType(param.ty).kind) {
+                .pointer => |pointer| pointer,
+                else => return null,
+            };
+            const struct_name = type_bridge.typeName(self.resolveAliasType(pointer.child.*)) orelse return null;
+            const struct_decl = self.structs.get(struct_name) orelse return null;
+            for (struct_decl.fields) |field| {
+                if (!std.mem.eql(u8, field.name.text, field_name)) continue;
+                const field_type_name = type_bridge.typeName(self.resolveAliasType(field.ty)) orelse return null;
+                if (!std.mem.eql(u8, field_type_name, ret.result_ty.name())) return null;
+                return .{ .param_name = param_name, .field_name = field_name, .field_ty = ret.result_ty };
+            }
+            return null;
+        }
+        return null;
     }
 
     fn simpleMirAggregateBaseLocalAtSource(self: *CEmitter, block: mir.Block, source: mir.SourcePoint) ?[]const u8 {
@@ -3700,6 +3752,7 @@ pub const CEmitter = struct {
             // The scalar deref's only trap is the elided nonnull representation
             // check; the recognizer already excluded folded locals and sanitizers.
             .scalar_deref_load => simpleMirAllTrapEdgesRepresentationChecks(fn_mir),
+            .scalar_field_load => simpleMirAllTrapEdgesRepresentationChecks(fn_mir),
             .plain_unary => fn_mir.trap_edges.len == 0,
             .direct_call => |call| fn_mir.trap_edges.len == simpleMirDirectCallReturnTrapCount(fn_mir, call),
             .checked_integer_literal => fn_mir.trap_edges.len == 1,
@@ -5413,6 +5466,7 @@ pub const CEmitter = struct {
                     if (mirBlockHasLocal(block, instruction.detail)) continue;
                     if (mirBlockHasCall(block, instruction.detail)) continue;
                     if (self.simpleMirExprCouldBeParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
+                    if (self.simpleMirExprCouldBePointerParamField(function, block, instruction.detail, instructionSourcePoint(instruction))) continue;
                     if (self.globals.contains(instruction.detail)) continue;
                     return false;
                 }
