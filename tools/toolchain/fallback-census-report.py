@@ -21,6 +21,8 @@ import collections
 import json
 import sys
 
+STATUS_RANK = {"admitted": 0, "fallback": 1, "unsupported": 2}
+
 
 def blocks_bucket(n):
     if n <= 1:
@@ -67,13 +69,8 @@ def signature(rec):
     )
 
 
-def bar(frac, width=24):
-    filled = int(round(frac * width))
-    return "#" * filled + "." * (width - filled)
-
-
-def report_backend(backend, recs):
-    # De-dup by signature; keep the first record for detail fields.
+def summarize_backend(recs):
+    """Return de-duplicated headline counts for one backend."""
     seen = {}
     status_of = {}
     for r in recs:
@@ -83,14 +80,45 @@ def report_backend(backend, recs):
         # A function that ever fell back is a fallback (any root proves the gap).
         st = r.get("status", "")
         prev = status_of.get(sig)
-        rank = {"admitted": 0, "fallback": 1, "unsupported": 2}
-        if prev is None or rank.get(st, 0) > rank.get(prev, 0):
+        if prev is None or STATUS_RANK.get(st, 0) > STATUS_RANK.get(prev, 0):
             status_of[sig] = st
 
     total = len(seen)
     admitted = sum(1 for s in status_of.values() if s == "admitted")
     fallback = sum(1 for s in status_of.values() if s == "fallback")
     unsupported = sum(1 for s in status_of.values() if s == "unsupported")
+    admission_bps = (admitted * 10000 // total) if total else 0
+    return {
+        "total": total,
+        "admitted": admitted,
+        "fallback": fallback,
+        "unsupported": unsupported,
+        "admission_bps": admission_bps,
+        "seen": seen,
+        "status_of": status_of,
+    }
+
+
+def summarize_by_backend(path):
+    by_backend = collections.defaultdict(list)
+    for rec in load(path):
+        by_backend[rec.get("backend", "?")].append(rec)
+    return {backend: summarize_backend(recs) for backend, recs in by_backend.items()}
+
+
+def bar(frac, width=24):
+    filled = int(round(frac * width))
+    return "#" * filled + "." * (width - filled)
+
+
+def report_backend(backend, recs):
+    summary = summarize_backend(recs)
+    seen = summary["seen"]
+    status_of = summary["status_of"]
+    total = summary["total"]
+    admitted = summary["admitted"]
+    fallback = summary["fallback"]
+    unsupported = summary["unsupported"]
     not_admitted = fallback + unsupported
 
     print("=" * 78)

@@ -10075,7 +10075,7 @@ test "LLVM emits global address returns from MIR without body fallback" {
         \\global shared_counter: u32 = 0;
         \\
         \\fn returned_global_pointer() -> *mut u32 {
-        \\    return &shared_counter;
+        \\    return & shared_counter;
         \\}
     ;
 

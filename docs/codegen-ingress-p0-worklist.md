@@ -55,6 +55,23 @@ test-shard-lower-llvm` green; emitted C/LLVM compile under `clang`
 (`/opt/homebrew/opt/llvm/bin`); `mcc emit-map` shows no `generated_c_line=0` for
 an admitted function. Then Docker m0 regenerates emit-snapshots.
 
+## Ratchet gate
+
+`zig build fallback-census-ratchet-test` runs
+`tools/toolchain/fallback-census.sh --check` over the explicit C/LLVM-positive
+`tools/toolchain/fallback-census-roots.txt` corpus. Unlike the broad report mode,
+check mode fails on any compile error, timeout, or crash; it does not use `|| true`
+to turn a failed root into a successful gate. The checked-in baseline is
+`tools/toolchain/fallback-census-baseline.tsv`:
+
+| Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
+|---|---:|---:|---:|---:|---:|
+| C | 152 | 54 | 98 | 0 | 3552 |
+| LLVM | 152 | 54 | 98 | 0 | 3552 |
+
+New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
+in that baseline when the checked corpus improves.
+
 ## Remaining families, by tractability
 
 ### Closed this migration (direct-return / direct-void, all both-backend)

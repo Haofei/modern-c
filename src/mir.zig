@@ -196,6 +196,34 @@ pub fn deferCleanupRefAtSource(function: Function, source: SourcePoint) ?DeferCl
     return null;
 }
 
+pub fn spanIdAtSource(function: Function, source: SourcePoint) ?SpanId {
+    for (function.span_identities) |identity| {
+        if (!sourcePointEquivalent(identity.source, source)) continue;
+        return identity.id;
+    }
+    return null;
+}
+
+pub fn sourcePointForSpanId(function: Function, typed_span_id: SpanId) ?SourcePoint {
+    if (!typed_span_id.isValid() or typed_span_id.index() >= function.span_identities.len) return null;
+    return function.span_identities[typed_span_id.index()].source;
+}
+
+pub fn instructionMatchesSpanId(function: Function, instruction: Instruction, typed_span_id: SpanId) bool {
+    if (sourcePointForSpanId(function, typed_span_id) == null) return false;
+    return instruction.typed_span_id.isValid() and instruction.typed_span_id.eql(typed_span_id);
+}
+
+pub fn targetTypeFactMatchesSpanId(function: Function, fact: TargetTypeFact, typed_span_id: SpanId) bool {
+    if (sourcePointForSpanId(function, typed_span_id) == null) return false;
+    return fact.typed_span_id.isValid() and fact.typed_span_id.eql(typed_span_id);
+}
+
+pub fn callTargetFactMatchesSpanId(function: Function, fact: CallTargetFact, typed_span_id: SpanId) bool {
+    if (sourcePointForSpanId(function, typed_span_id) == null) return false;
+    return fact.typed_span_id.isValid() and fact.typed_span_id.eql(typed_span_id);
+}
+
 pub fn deferCleanupRefValid(function: Function, ref: DeferCleanupRef) bool {
     if (!ref.block_id.isValid() or ref.block_id.index() >= function.blocks.len) return false;
     const block = function.blocks[ref.block_id.index()];
@@ -664,6 +692,7 @@ pub const RepresentationFact = mir_model.RepresentationFact;
 pub const TypeOwnershipKind = mir_model.TypeOwnershipKind;
 pub const TypeOwnershipFact = mir_model.TypeOwnershipFact;
 pub const SymbolIdentity = mir_model.SymbolIdentity;
+pub const SourceIdentity = mir_model.SourceIdentity;
 pub const SpanIdentity = mir_model.SpanIdentity;
 pub const TypeIdentity = mir_model.TypeIdentity;
 pub const ValueIdentity = mir_model.ValueIdentity;
@@ -827,6 +856,10 @@ fn declFromBuildItem(item: anytype) ast.Decl {
     return if (@hasField(@TypeOf(item), "decl")) item.decl else item;
 }
 
+fn fileIdFromBuildItem(item: anytype) ?u32 {
+    return if (@hasField(@TypeOf(item), "file_id")) @intFromEnum(item.file_id) else null;
+}
+
 pub fn buildOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, options: BuildOptions) !Module {
     return buildOptFromDeclItems(allocator, decls, options);
 }
@@ -925,6 +958,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
 
     var symbol_ids = std.StringHashMap(SymbolId).init(allocator);
     defer symbol_ids.deinit();
+    var source_ids = std.AutoHashMap(u32, SourceId).init(allocator);
+    defer source_ids.deinit();
 
     const drop_glue_facts = try collectDropGlueFacts(allocator, decl_items, &ast_structs, &aliases, &symbol_ids);
     errdefer allocator.free(drop_glue_facts);
@@ -939,6 +974,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
 
     for (decl_items) |item| {
         const decl = declFromBuildItem(item);
+        const typed_source_id = if (fileIdFromBuildItem(item)) |file_id| try internSourceId(&source_ids, file_id) else SourceId.invalid;
         switch (decl.kind) {
             .global_decl => |global| {
                 if (global.ty) |ty| {
@@ -951,6 +987,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                             var function = try builder.finish();
                             errdefer freeFunction(allocator, function);
                             function.typed_symbol_id = try internSymbolId(&symbol_ids, function.name);
+                            function.typed_source_id = typed_source_id;
                             try functions.append(allocator, function);
                         }
                     }
@@ -966,6 +1003,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                         var function = try builder.finish();
                         errdefer freeFunction(allocator, function);
                         function.typed_symbol_id = try internSymbolId(&symbol_ids, function.name);
+                        function.typed_source_id = typed_source_id;
                         try functions.append(allocator, function);
                     }
                 } else if (std.meta.activeTag(decl.kind) == .extern_fn) {
@@ -973,6 +1011,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
                     try functions.append(allocator, .{
                         .name = fn_decl.name.text,
                         .typed_symbol_id = typed_symbol_id,
+                        .typed_source_id = typed_source_id,
                         .return_ty = if (fn_decl.return_type) |ty| valueTypeFromTypeAlias(ty, &enums, &structs, &packed_bits, &aliases) else .void,
                         .param_count = fn_decl.params.len,
                         .is_extern = true,
@@ -1006,6 +1045,8 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
 
     const symbol_identities = try buildSymbolIdentities(allocator, &symbol_ids);
     errdefer allocator.free(symbol_identities);
+    const source_identities = try buildSourceIdentities(allocator, &source_ids);
+    errdefer allocator.free(source_identities);
     const functions_slice = try functions.toOwnedSlice(allocator);
     errdefer {
         for (functions_slice) |function| freeFunction(allocator, function);
@@ -1015,6 +1056,7 @@ fn buildOptFromDeclItems(allocator: std.mem.Allocator, decl_items: anytype, opti
     var built_module: Module = .{
         .allocator = allocator,
         .symbol_identities = symbol_identities,
+        .source_identities = source_identities,
         .functions = functions_slice,
         .drop_glue_facts = drop_glue_facts,
         .type_ownership_facts = type_ownership_facts,
@@ -1040,6 +1082,24 @@ fn internSymbolId(symbol_ids: *std.StringHashMap(SymbolId), spelling: []const u8
         entry.value_ptr.* = SymbolId.fromIndex(symbol_ids.count() - 1);
     }
     return entry.value_ptr.*;
+}
+
+fn internSourceId(source_ids: *std.AutoHashMap(u32, SourceId), file_id: u32) !SourceId {
+    const entry = try source_ids.getOrPut(file_id);
+    if (!entry.found_existing) {
+        entry.value_ptr.* = SourceId.fromIndex(source_ids.count() - 1);
+    }
+    return entry.value_ptr.*;
+}
+
+fn buildSourceIdentities(allocator: std.mem.Allocator, source_ids: *std.AutoHashMap(u32, SourceId)) ![]SourceIdentity {
+    const identities = try allocator.alloc(SourceIdentity, source_ids.count());
+    var it = source_ids.iterator();
+    while (it.next()) |entry| {
+        const id = entry.value_ptr.*;
+        identities[id.index()] = .{ .id = id, .file_id = entry.key_ptr.* };
+    }
+    return identities;
 }
 
 fn collectDropGlueFacts(
@@ -1455,8 +1515,8 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
         for (function.call_target_facts) |fact| {
             try out.print(
                 allocator,
-                "mir call_target_fact fn={s} kind={s} result_type={s} recorded=true line={} column={}\n",
-                .{ function.name, @tagName(fact.kind), fact.result_ty.name(), fact.source.line, fact.source.column },
+                "mir call_target_fact fn={s} kind={s} result_type={s} recorded=true line={} column={} typed_span_id={}\n",
+                .{ function.name, @tagName(fact.kind), fact.result_ty.name(), fact.source.line, fact.source.column, if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize) },
             );
         }
         for (function.target_type_facts) |fact| {
@@ -1725,6 +1785,7 @@ pub fn verifyOptFromDecls(allocator: std.mem.Allocator, decls: []ast.Decl, repor
 
 pub fn verifyBuiltMir(mir: Module, reporter: *diagnostics.Reporter) !void {
     verifyModuleSymbolIdentities(mir, reporter);
+    verifyModuleSourceIdentities(mir, reporter);
     for (mir.functions) |function| {
         verifyFunctionCfg(function, reporter);
         verifyFunctionInstructionIdentities(function, reporter);
@@ -1941,6 +2002,30 @@ fn verifyModuleSymbolIdentities(module: Module, reporter: *diagnostics.Reporter)
     }
 }
 
+fn verifyModuleSourceIdentities(module: Module, reporter: *diagnostics.Reporter) void {
+    var malformed = false;
+    for (module.source_identities, 0..) |identity, index| {
+        if (!identity.id.isValid() or identity.id.index() != index) malformed = true;
+        for (module.source_identities[0..index]) |prior| {
+            if (prior.id.eql(identity.id) or prior.file_id == identity.file_id) malformed = true;
+        }
+    }
+    for (module.functions) |function| {
+        if (!function.typed_source_id.isValid()) {
+            if (module.source_identities.len != 0) malformed = true;
+            continue;
+        }
+        if (function.typed_source_id.index() >= module.source_identities.len) malformed = true;
+    }
+    if (malformed) {
+        reporter.err(
+            sourcePointSpan(.{ .line = 1, .column = 1 }),
+            "E_MIR_SOURCE_ID: MIR verifier found malformed per-file source identity",
+            .{},
+        );
+    }
+}
+
 fn verifyFunctionInstructionIdentities(function: Function, reporter: *diagnostics.Reporter) void {
     for (function.blocks) |block| {
         for (block.instructions) |instruction| {
@@ -2112,6 +2197,7 @@ pub fn validateCallTargetFactsForLowering(module: Module) error{InvalidMirCallTa
             if (!matchingCallTargetFactsAgreeAtSource(function, instruction)) return error.InvalidMirCallTargetFacts;
         };
         for (function.call_target_facts) |fact| {
+            if (!callTargetFactTypedIdentityValid(function, fact)) return error.InvalidMirCallTargetFacts;
             const instruction_count = countMatchingCallTargetInstructions(function, fact);
             if (instruction_count == 0 or instruction_count != countMatchingCallTargetFactsForFact(function, fact)) return error.InvalidMirCallTargetFacts;
         }
@@ -3152,6 +3238,14 @@ fn matchingCallTargetFactsAgreeAtSource(function: Function, instruction: Instruc
         }
     }
     return first != null;
+}
+
+fn callTargetFactTypedIdentityValid(function: Function, fact: CallTargetFact) bool {
+    if (!fact.typed_span_id.isValid()) return false;
+    const span_index = fact.typed_span_id.index();
+    if (span_index >= function.span_identities.len) return false;
+    const source = function.span_identities[span_index].source;
+    return sourcePointEquivalent(source, fact.source);
 }
 
 fn functionHasMatchingIntegerFact(function: Function, instruction: Instruction) bool {
@@ -8473,10 +8567,12 @@ const FunctionBuilder = struct {
     }
 
     fn addCallTargetFact(self: *FunctionBuilder, kind: CallTargetKind, result_ty: ValueType, span: ast.Span) !void {
+        const source = SourcePoint{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
         try self.call_target_facts.append(self.allocator, .{
             .kind = kind,
             .result_ty = result_ty,
-            .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
+            .typed_span_id = try self.internSpanId(source),
+            .source = source,
         });
     }
 
@@ -8776,6 +8872,20 @@ const FunctionBuilder = struct {
             else => return,
         }
         const ty = (try self.expressionResultTypeExpr(expr)) orelse return;
+        switch (expr.kind) {
+            .address_of => |target| if (directIdentName(target.*)) |owner| {
+                try self.appendOwnedTargetTypeFact(
+                    .expression_result,
+                    ty,
+                    valueTypeFromTypeAlias(ty, self.enums, self.structs, self.packed_bits, self.aliases),
+                    expr.span,
+                    owner,
+                    null,
+                );
+                return;
+            },
+            else => {},
+        }
         try self.appendTargetTypeFact(
             .expression_result,
             ty,

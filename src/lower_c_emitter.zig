@@ -5355,9 +5355,10 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirGlobalAtSource(self: *CEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?[]const u8 {
+        const typed_span_id = mir.spanIdAtSource(fn_mir, source) orelse return null;
         for (fn_mir.blocks) |block| {
             for (block.instructions) |instruction| {
-                if (instruction.kind != .expr or !sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                if (instruction.kind != .expr or !mir.instructionMatchesSpanId(fn_mir, instruction, typed_span_id)) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) return null;
                 }
@@ -5369,10 +5370,11 @@ pub const CEmitter = struct {
     }
 
     fn simpleMirGlobalAddressAtValueSource(self: *CEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?[]const u8 {
+        const typed_span_id = mir.spanIdAtSource(fn_mir, source) orelse return null;
         var pointer_fact: ?mir.TargetTypeFact = null;
         for (fn_mir.target_type_facts) |fact| {
             if (fact.kind != .expression_result) continue;
-            if (!sameMirSourceLocation(fact.source, source)) continue;
+            if (!mir.targetTypeFactMatchesSpanId(fn_mir, fact, typed_span_id)) continue;
             switch (self.resolveAliasType(fact.target_ty).kind) {
                 .pointer => {},
                 else => return null,
@@ -5385,25 +5387,14 @@ pub const CEmitter = struct {
             .pointer => |pointer| pointer,
             else => return null,
         };
-        for (fn_mir.blocks) |block| {
-            for (block.instructions) |instruction| {
-                if (instruction.kind != .expr) continue;
-                const expr_source = instructionSourcePoint(instruction);
-                if (expr_source.line != source.line or expr_source.column != source.column + 1) continue;
-                const name = if (self.globals.contains(instruction.detail)) instruction.detail else {
-                    return null;
-                };
-                const global_info = self.globals.get(name) orelse return null;
-                const global_ty = global_info.source_ty orelse {
-                    return null;
-                };
-                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(global_ty))) {
-                    return null;
-                }
-                return name;
-            }
+        const name = fact.target_owner orelse return null;
+        if (!fact.typed_target_owner_id.isValid() or !self.globals.contains(name)) return null;
+        const global_info = self.globals.get(name) orelse return null;
+        const global_ty = global_info.source_ty orelse return null;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(global_ty))) {
+            return null;
         }
-        return null;
+        return name;
     }
 
     fn simpleMirLocalInitSource(self: *CEmitter, fn_mir: mir.Function, local_name: []const u8) ?mir.SourcePoint {

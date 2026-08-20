@@ -206,6 +206,20 @@ RULES: tuple[Rule, ...] = (
     ),
     Rule(
         (
+            "tools/toolchain/fallback-census.sh",
+            "tools/toolchain/fallback-census-report.py",
+            "tools/toolchain/fallback-census-ratchet.py",
+            "tools/toolchain/fallback-census-baseline.tsv",
+            "tools/toolchain/fallback-census-roots.txt",
+            "tools/toolchain/codegen-ingress-migration-test.py",
+            "docs/codegen-ingress-migration.json",
+            "docs/codegen-ingress-p0-worklist.md",
+        ),
+        ("codegen-ingress-migration-test", "fallback-census-ratchet-test"),
+        "function-body fallback census changes need the codegen ingress manifest and admission ratchet gate",
+    ),
+    Rule(
+        (
             "tools/toolchain/semantic-facts-inventory.py",
             "docs/typed-semantic-facts.md",
         ),

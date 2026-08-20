@@ -6,6 +6,7 @@ const parser = @import("parser.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
+const module_parser = @import("module_parser.zig");
 const test_support = @import("test_support.zig");
 
 const Block = mir.Block;
@@ -18,6 +19,7 @@ const PointerProvenance = mir.PointerProvenance;
 const PointerProvenanceInvalidationReason = mir.PointerProvenanceInvalidationReason;
 const RangeFact = mir.RangeFact;
 const SourcePoint = mir.SourcePoint;
+const SourceId = mir.SourceId;
 const SpanId = mir.SpanId;
 const TrapEdge = mir.TrapEdge;
 const TrapKind = mir.TrapKind;
@@ -25,6 +27,68 @@ const SymbolId = mir.SymbolId;
 const TypeId = mir.TypeId;
 const ValueId = mir.ValueId;
 const ValueType = mir.ValueType;
+
+test "MIR carries resolved per-file source identity into verified functions" {
+    const first_source = "fn first() -> u32 { return 1; }\n";
+    const second_source = "fn second() -> u32 { return 2; }\n";
+
+    var first_reporter = diagnostics.Reporter.init(std.testing.allocator, "first.mc", first_source);
+    defer first_reporter.deinit();
+    var second_reporter = diagnostics.Reporter.init(std.testing.allocator, "second.mc", second_source);
+    defer second_reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var first_parser = parser.Parser.init(first_source, &first_reporter);
+    const first_module = try first_parser.parseModule(arena.allocator());
+    defer first_module.deinit(arena.allocator());
+    var second_parser = parser.Parser.init(second_source, &second_reporter);
+    const second_module = try second_parser.parseModule(arena.allocator());
+    defer second_module.deinit(arena.allocator());
+    try std.testing.expect(!first_reporter.has_errors);
+    try std.testing.expect(!second_reporter.has_errors);
+
+    const resolved = [_]module_parser.ResolvedDecl{
+        .{ .file_id = @enumFromInt(7), .decl = first_module.decls[0] },
+        .{ .file_id = @enumFromInt(3), .decl = second_module.decls[0] },
+    };
+    var module_mir = try mir.buildOptFromResolvedDecls(std.testing.allocator, &resolved, .{});
+    defer module_mir.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), module_mir.source_identities.len);
+    try std.testing.expectEqual(@as(u32, 7), module_mir.source_identities[0].file_id);
+    try std.testing.expectEqual(@as(u32, 3), module_mir.source_identities[1].file_id);
+    const first = functionByName(module_mir, "first") orelse return error.TestUnexpectedResult;
+    const second = functionByName(module_mir, "second") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first.typed_source_id.eql(SourceId.fromIndex(0)));
+    try std.testing.expect(second.typed_source_id.eql(SourceId.fromIndex(1)));
+    try mir.verifyBuiltMir(module_mir, &first_reporter);
+    try std.testing.expect(!first_reporter.has_errors);
+}
+
+test "MIR verifier rejects per-file source identity drift" {
+    // DIAGNOSTIC_UNIT: E_MIR_SOURCE_ID
+    const source = "fn main() -> u32 { return 1; }\n";
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "source_identity_drift.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+
+    const resolved = [_]module_parser.ResolvedDecl{
+        .{ .file_id = @enumFromInt(9), .decl = module.decls[0] },
+    };
+    var module_mir = try mir.buildOptFromResolvedDecls(std.testing.allocator, &resolved, .{});
+    defer module_mir.deinit();
+    module_mir.functions[0].typed_source_id = SourceId.fromIndex(4096);
+
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "source_identity_drift.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(module_mir, &verifier_reporter);
+    try std.testing.expect(verifier_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_SOURCE_ID") != null);
+}
 
 test "MIR block model carries typed block identity" {
     const source =
@@ -456,6 +520,71 @@ test "MIR facts view keeps typed lookup and module fallback separate" {
         .typed_result_ty = result_fact.typed_result_ty,
         .target_index = result_fact.target_index,
     }) == null);
+}
+
+test "MIR exposes generic typed span identity matching for codegen facts" {
+    const source =
+        \\extern fn close_a(value: u32) -> void;
+        \\
+        \\fn direct_call(x: u32) -> void {
+        \\    close_a(x);
+        \\}
+        \\
+        \\fn call_target() -> void {
+        \\    fence.release();
+        \\}
+    ;
+
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_generic_typed_span_identity.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var module_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer module_mir.deinit();
+
+    const direct_fn = functionByName(module_mir, "direct_call").?;
+    const direct_call = callInstructionByDetail(direct_fn, "close_a") orelse return error.TestUnexpectedResult;
+    const direct_result = targetTypeFactByKind(direct_fn, .direct_call_result) orelse return error.TestUnexpectedResult;
+    const direct_arg = targetTypeFactByKind(direct_fn, .direct_call_argument) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(direct_call.typed_span_id.isValid());
+    try std.testing.expect(direct_result.typed_span_id.isValid());
+    try std.testing.expect(direct_arg.typed_span_id.isValid());
+
+    const direct_call_source = mir.sourcePointForSpanId(direct_fn, direct_call.typed_span_id) orelse return error.TestUnexpectedResult;
+    try std.testing.expect((mir.spanIdAtSource(direct_fn, direct_call_source) orelse return error.TestUnexpectedResult).eql(direct_call.typed_span_id));
+    try std.testing.expect(mir.instructionMatchesSpanId(direct_fn, direct_call, direct_call.typed_span_id));
+    try std.testing.expect(mir.targetTypeFactMatchesSpanId(direct_fn, direct_result, direct_result.typed_span_id));
+    try std.testing.expect(mir.targetTypeFactMatchesSpanId(direct_fn, direct_arg, direct_arg.typed_span_id));
+
+    var drifted_instruction = direct_call;
+    drifted_instruction.line += 100;
+    drifted_instruction.column += 100;
+    try std.testing.expect(mir.instructionMatchesSpanId(direct_fn, drifted_instruction, direct_call.typed_span_id));
+
+    var drifted_result = direct_result;
+    drifted_result.source.line += 100;
+    drifted_result.source.column += 100;
+    try std.testing.expect(mir.targetTypeFactMatchesSpanId(direct_fn, drifted_result, direct_result.typed_span_id));
+    try std.testing.expect(mir.spanIdAtSource(direct_fn, drifted_result.source) == null);
+
+    const call_target_fn = functionByName(module_mir, "call_target").?;
+    const call_target_fact = if (call_target_fn.call_target_facts.len == 1) call_target_fn.call_target_facts[0] else return error.TestUnexpectedResult;
+    try std.testing.expect(call_target_fact.typed_span_id.isValid());
+    const db = mir_facts_view.MirFactsView.init();
+    try std.testing.expect(std.meta.eql(call_target_fact, db.callTargetFactById(&call_target_fn, .{
+        .kind = .fence_release,
+        .typed_span_id = call_target_fact.typed_span_id,
+    }).?));
+    try std.testing.expect(mir.callTargetFactMatchesSpanId(call_target_fn, call_target_fact, call_target_fact.typed_span_id));
+    var drifted_call_target = call_target_fact;
+    drifted_call_target.source.line += 100;
+    drifted_call_target.source.column += 100;
+    try std.testing.expect(mir.callTargetFactMatchesSpanId(call_target_fn, drifted_call_target, call_target_fact.typed_span_id));
 }
 
 test "MIR verifier rejects target owner instruction identity drift" {

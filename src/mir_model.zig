@@ -369,6 +369,7 @@ pub const CallTargetKind = enum {
 pub const CallTargetFact = struct {
     kind: CallTargetKind,
     result_ty: ValueType,
+    typed_span_id: SpanId = .invalid,
     source: SourcePoint,
 };
 
@@ -797,6 +798,11 @@ pub const SymbolIdentity = struct {
     spelling: []const u8,
 };
 
+pub const SourceIdentity = struct {
+    id: SourceId,
+    file_id: u32,
+};
+
 pub const SpanIdentity = struct {
     id: SpanId,
     source: SourcePoint,
@@ -835,6 +841,7 @@ pub const FfiParamContract = struct {
 pub const Function = struct {
     name: []const u8,
     typed_symbol_id: SymbolId = .invalid,
+    typed_source_id: SourceId = .invalid,
     return_ty: ValueType,
     // Signature obligations are produced once as typed MIR facts. Consumers
     // must not reconstruct them by rescanning source declarations.
@@ -880,6 +887,7 @@ pub const Function = struct {
 pub const Module = struct {
     allocator: std.mem.Allocator,
     symbol_identities: []SymbolIdentity = &.{},
+    source_identities: []SourceIdentity = &.{},
     functions: []Function,
     drop_glue_facts: []DropGlueFact = &.{},
     type_ownership_facts: []TypeOwnershipFact = &.{},
@@ -928,6 +936,7 @@ pub const Module = struct {
             self.allocator.free(function.elided_bounds);
         }
         if (self.symbol_identities.len != 0) self.allocator.free(self.symbol_identities);
+        if (self.source_identities.len != 0) self.allocator.free(self.source_identities);
         self.allocator.free(self.functions);
         if (self.drop_glue_facts.len != 0) self.allocator.free(self.drop_glue_facts);
         if (self.type_ownership_facts.len != 0) self.allocator.free(self.type_ownership_facts);

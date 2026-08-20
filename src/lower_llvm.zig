@@ -5636,9 +5636,10 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirGlobalAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, source: mir.SourcePoint) ?[]const u8 {
+        const typed_span_id = mir.spanIdAtSource(fn_mir, source) orelse return null;
         for (fn_mir.blocks) |block| {
             for (block.instructions) |instruction| {
-                if (instruction.kind != .expr or !sameMirSourceLocation(instructionSourcePoint(instruction), source)) continue;
+                if (instruction.kind != .expr or !mir.instructionMatchesSpanId(fn_mir, instruction, typed_span_id)) continue;
                 for (function.signature.params) |param| {
                     if (std.mem.eql(u8, instruction.detail, param.name.text)) return null;
                 }
@@ -5650,10 +5651,11 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirGlobalAddressAtValueSource(self: *LlvmEmitter, fn_mir: mir.Function, source: mir.SourcePoint) ?[]const u8 {
+        const typed_span_id = mir.spanIdAtSource(fn_mir, source) orelse return null;
         var pointer_fact: ?mir.TargetTypeFact = null;
         for (fn_mir.target_type_facts) |fact| {
             if (fact.kind != .expression_result) continue;
-            if (!sameMirSourceLocation(fact.source, source)) continue;
+            if (!mir.targetTypeFactMatchesSpanId(fn_mir, fact, typed_span_id)) continue;
             switch (self.resolveAliasType(fact.target_ty).kind) {
                 .pointer => {},
                 else => return null,
@@ -5666,18 +5668,11 @@ const LlvmEmitter = struct {
             .pointer => |pointer| pointer,
             else => return null,
         };
-        for (fn_mir.blocks) |block| {
-            for (block.instructions) |instruction| {
-                if (instruction.kind != .expr) continue;
-                const expr_source = instructionSourcePoint(instruction);
-                if (expr_source.line != source.line or expr_source.column != source.column + 1) continue;
-                const name = if (self.global_types.contains(instruction.detail)) instruction.detail else return null;
-                const global_ty = self.global_types.get(name) orelse return null;
-                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(global_ty))) return null;
-                return name;
-            }
-        }
-        return null;
+        const name = fact.target_owner orelse return null;
+        if (!fact.typed_target_owner_id.isValid() or !self.global_types.contains(name)) return null;
+        const global_ty = self.global_types.get(name) orelse return null;
+        if (!type_bridge.sameTypeSyntax(self.resolveAliasType(pointer.child.*), self.resolveAliasType(global_ty))) return null;
+        return name;
     }
 
     fn emitSimpleMirGlobalLoad(self: *LlvmEmitter, name: []const u8, expected_ty: anytype) ![]const u8 {

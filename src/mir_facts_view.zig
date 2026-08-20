@@ -16,6 +16,11 @@ pub const TargetTypeLookupKey = struct {
     target_index: ?usize = null,
 };
 
+pub const CallTargetLookupKey = struct {
+    kind: mir.CallTargetKind,
+    typed_span_id: mir.SpanId,
+};
+
 pub const TargetTypeFactQuery = struct {
     kind: mir.TargetTypeKind,
     source: mir.SourcePoint,
@@ -86,6 +91,15 @@ pub const MirFactsView = struct {
     pub fn targetTypeFactById(self: MirFactsView, current: *const mir.Function, key: TargetTypeLookupKey) ?mir.TargetTypeFact {
         _ = self;
         return targetTypeFactInFunctionById(current, key);
+    }
+
+    /// Returns a call-target fact by verified typed span identity in `current`.
+    ///
+    /// This is the typed-identity equivalent of the source-spanned call-target
+    /// helpers below.  It deliberately has no line/column fallback.
+    pub fn callTargetFactById(self: MirFactsView, current: *const mir.Function, key: CallTargetLookupKey) ?mir.CallTargetFact {
+        _ = self;
+        return callTargetFactInFunctionById(current, key);
     }
 
     pub fn firstCallTargetKindAt(self: MirFactsView, current: ?*const mir.Function, source: mir.SourcePoint) ?mir.CallTargetKind {
@@ -210,6 +224,25 @@ fn targetTypeFactInFunctionById(function: *const mir.Function, key: TargetTypeLo
         return fact;
     }
     return null;
+}
+
+fn callTargetFactInFunctionById(function: *const mir.Function, key: CallTargetLookupKey) ?mir.CallTargetFact {
+    if (!key.typed_span_id.isValid()) return null;
+    for (function.call_target_facts) |fact| {
+        if (fact.kind != key.kind) continue;
+        if (!fact.typed_span_id.eql(key.typed_span_id)) continue;
+        if (!callTargetTypedIdentityIsValid(function, fact)) return null;
+        return fact;
+    }
+    return null;
+}
+
+fn callTargetTypedIdentityIsValid(function: *const mir.Function, fact: mir.CallTargetFact) bool {
+    if (!fact.typed_span_id.isValid()) return false;
+    const span_index = fact.typed_span_id.index();
+    if (span_index >= function.span_identities.len) return false;
+    const source = function.span_identities[span_index].source;
+    return sourcePointExactMatches(source, fact.source);
 }
 
 fn typedIdentityIsValid(function: *const mir.Function, fact: mir.TargetTypeFact) bool {
