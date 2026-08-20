@@ -2559,6 +2559,39 @@ test "lower-c preserves MIR void calls before direct-call returns" {
     try expectNotContains(side_then_local_call_add_body, "mc_tmp");
 }
 
+test "lower-c emits local-init call feeding return call from MIR without body fallback" {
+    const source =
+        \\extern fn make_count(seed: u32) -> u32;
+        \\extern fn use_count(value: u32) -> u32;
+        \\extern fn use_count_with_seed(value: u32, seed: u32) -> u32;
+        \\fn local_call_arg(seed: u32) -> u32 {
+        \\    let count: u32 = make_count(seed);
+        \\    return use_count(count);
+        \\}
+        \\fn local_call_arg_with_leaf(seed: u32) -> u32 {
+        \\    let count: u32 = make_count(seed);
+        \\    return use_count_with_seed(count, seed);
+        \\}
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_local_init_call_feeds_return_call.mc", source, &output);
+
+    const local_body = try cFunctionBody(output.items, "static uint32_t local_call_arg(uint32_t seed)");
+    const init = std.mem.indexOf(u8, local_body, "uint32_t count = make_count(seed);") orelse return error.TestUnexpectedResult;
+    const ret = std.mem.indexOf(u8, local_body, "return use_count(count);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(init < ret);
+    try expectNotContains(local_body, "return use_count(make_count(seed));");
+    try expectNotContains(local_body, "mc_tmp");
+
+    const leaf_body = try cFunctionBody(output.items, "static uint32_t local_call_arg_with_leaf(uint32_t seed)");
+    const leaf_init = std.mem.indexOf(u8, leaf_body, "uint32_t count = make_count(seed);") orelse return error.TestUnexpectedResult;
+    const leaf_ret = std.mem.indexOf(u8, leaf_body, "return use_count_with_seed(count, seed);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(leaf_init < leaf_ret);
+    try expectNotContains(leaf_body, "return use_count_with_seed(make_count(seed), seed);");
+    try expectNotContains(leaf_body, "mc_tmp");
+}
+
 test "lower-c emits enum literal direct-call arguments from MIR without body fallback" {
     const source =
         \\enum Mode: u8 { read = 1, write = 2 }

@@ -4688,14 +4688,31 @@ const LlvmEmitter = struct {
     }
 
     fn simpleMirDirectCall(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, callee: []const u8) ?SimpleMirDirectCall {
-        return self.simpleMirDirectCallAtSource(function, fn_mir, blk: {
+        var first_source: ?mir.SourcePoint = null;
+        const return_source: ?mir.SourcePoint = blk: {
             for (fn_mir.blocks) |block| {
+                const ret = simpleMirReturnInstruction(block);
                 for (block.instructions) |instruction| {
-                    if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, callee)) break :blk instructionSourcePoint(instruction);
+                    if (instruction.kind != .call or !std.mem.eql(u8, instruction.detail, callee)) continue;
+                    const source = instructionSourcePoint(instruction);
+                    if (first_source == null) first_source = source;
+                    if (ret) |return_instruction| {
+                        if (return_instruction.value_id) |value_id| {
+                            if (std.mem.eql(u8, value_id, callee)) {
+                                if (simpleMirReturnValueSource(block, value_id)) |value_source| {
+                                    if (sameMirSourceLocation(source, value_source)) break :blk source;
+                                    continue;
+                                }
+                            }
+                            if (std.mem.eql(u8, value_id, callee) and self.simpleMirCallFeedsReturnValue(fn_mir, block, source, value_id)) break :blk source;
+                        }
+                    }
                 }
             }
-            return null;
-        });
+            break :blk null;
+        };
+        const call_source = return_source orelse first_source orelse return null;
+        return self.simpleMirDirectCallAtSource(function, fn_mir, call_source);
     }
 
     fn simpleMirDirectCallAtSource(self: *LlvmEmitter, function: anytype, fn_mir: mir.Function, call_source: mir.SourcePoint) ?SimpleMirDirectCall {
@@ -5124,6 +5141,7 @@ const LlvmEmitter = struct {
                         if (self.simpleMirDirectCallArgumentFactAt(fn_mir, callee, source) != null) continue;
                     }
                 }
+                if (self.simpleMirCallFeedsLaterDirectCallArg(function, fn_mir, block, source)) continue;
                 return null;
             }
             if (saw_return_value_call) return null;
@@ -5183,6 +5201,9 @@ const LlvmEmitter = struct {
             }
         }
         if (mirBlockHasCall(block, value_id)) {
+            if (simpleMirReturnValueSource(block, value_id)) |return_source| {
+                return sameMirSourceLocation(source, return_source);
+            }
             for (block.instructions) |instruction| {
                 if (instruction.kind == .call and std.mem.eql(u8, instruction.detail, value_id)) {
                     return sameMirSourceLocation(instructionSourcePoint(instruction), source);

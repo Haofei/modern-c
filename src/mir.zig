@@ -6090,7 +6090,7 @@ const FunctionBuilder = struct {
                     }
                 }
                 for (local.names) |name| {
-                    try self.addInstr(.local, name.text, ty, stmt.span);
+                    try self.addInstrWithValue(.local, name.text, ty, stmt.span, name.text);
                     try self.local_types.put(name.text, ty);
                     if (ty_expr) |local_ty| try self.local_type_exprs.put(name.text, local_ty);
                     try self.addLocalOwnershipEvent(.storage_live, name.text, stmt.span);
@@ -7285,7 +7285,7 @@ const FunctionBuilder = struct {
                         try self.addRuntimeRepresentationCheck(ty, expr.span, exprText(expr));
                     }
                 }
-                try self.addInstr(.expr, exprText(expr), ty, expr.span);
+                try self.addInstrWithValue(.expr, exprText(expr), ty, expr.span, exprText(expr));
             },
             .int_literal => {
                 if (integerLiteralFitsTarget(self.assignment_target_ty, expr)) {

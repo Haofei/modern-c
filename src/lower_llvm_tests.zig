@@ -3235,6 +3235,10 @@ test "LLVM preserves MIR void calls before direct-call returns" {
         \\    let x: i32 = make(a);
         \\    return x;
         \\}
+        \\fn return_call_local_call_arg(a: i32) -> i32 {
+        \\    let x: i32 = make(a);
+        \\    return make(x);
+        \\}
         \\fn return_assigned_call(a: i32) -> i32 {
         \\    var x: i32 = 0;
         \\    x = make(a);
@@ -3285,6 +3289,15 @@ test "LLVM preserves MIR void calls before direct-call returns" {
     try expectContains(local_call_body, "ret i32 %t");
     try expectNotContains(local_call_body, "alloca");
     try expectNotContains(local_call_body, "store");
+
+    const local_call_arg_body = try llvmFunctionBody(output.items, "define internal i32 @return_call_local_call_arg");
+    const first_local_call = std.mem.indexOf(u8, local_call_arg_body, "call i32 @make(i32 %a)") orelse return error.TestUnexpectedResult;
+    const second_local_call = std.mem.lastIndexOf(u8, local_call_arg_body, "call i32 @make(i32 %t") orelse return error.TestUnexpectedResult;
+    const local_call_arg_ret = std.mem.indexOf(u8, local_call_arg_body, "ret i32 %t") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first_local_call < second_local_call);
+    try std.testing.expect(second_local_call < local_call_arg_ret);
+    try expectNotContains(local_call_arg_body, "alloca");
+    try expectNotContains(local_call_arg_body, "store");
 
     const assigned_call_body = try llvmFunctionBody(output.items, "define internal i32 @return_assigned_call");
     try expectContains(assigned_call_body, "call i32 @make(i32 %a)");

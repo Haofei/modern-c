@@ -2869,6 +2869,24 @@ test "MIR owns inferred local direct call types" {
     const fact = targetTypeFactByKind(function, .inferred_local) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("count", fact.target_owner.?);
     try std.testing.expectEqualStrings("u64", fact.target_ty.kind.name.text);
+    var local_value_id: ?ValueId = null;
+    var found_typed_local_use = false;
+    for (function.blocks) |block| {
+        for (block.instructions) |instruction| {
+            if (!std.mem.eql(u8, instruction.detail, "count")) continue;
+            if (instruction.kind == .local) {
+                local_value_id = instruction.typed_value_id orelse return error.TestUnexpectedResult;
+                try std.testing.expect(local_value_id.?.isValid());
+                try std.testing.expectEqualStrings("count", function.value_identities[local_value_id.?.index()].spelling);
+            } else if (instruction.kind == .expr) {
+                const use_value_id = instruction.typed_value_id orelse return error.TestUnexpectedResult;
+                if (local_value_id) |expected| try std.testing.expect(use_value_id.eql(expected));
+                found_typed_local_use = true;
+            }
+        }
+    }
+    try std.testing.expect(local_value_id != null);
+    try std.testing.expect(found_typed_local_use);
     try mir.validateTargetTypeFactsForLowering(typed_mir);
 }
 

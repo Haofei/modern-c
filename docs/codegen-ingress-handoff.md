@@ -6,7 +6,7 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Written
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active, incremental, the only goal advanced.
-  C fast-path admission is at **26.7%** (429/1609 functions); the other 73% still
+  C fast-path admission is at **26.9%** (433/1609 functions); the other 73% still
   ingest the transitional AST body. Multi-week to finish (it is re-implementing
   full function-body emission on MIR).
 - **P1 `typed-hir-checked-program`** — frozen. Double-write scaffold seeded in
@@ -55,12 +55,13 @@ Method per slice (never skip): a recognizer + a gate case + a render case in
 - soundness/parity probes for the specific shape.
 Then Docker `m0` regenerates emit-snapshots (host skips LLVM/qemu gates).
 
-Families closed (13, both backends): checked arithmetic; bare param past elided
+Families closed (14, both backends): checked arithmetic; bare param past elided
 nonnull; scalar deref `return p.*`; plain unsigned binary (add/sub/mul/and/or/xor,
 u32/u64); plain unary; pointer-field load; `phys` address constructor; bitwise;
 address-typed (PAddr/VAddr) field + deref; pointer comparison `return a==b`;
 single nested-call arg `return g(f())` (first structural slice, `db2f7f5f`);
-multi-arg with one nested call + pure-leaf args `return g2(f(), b)` (`127e06d7`).
+multi-arg with one nested call + pure-leaf args `return g2(f(), b)` (`127e06d7`);
+single-local call chains `let x = f(); return g(x)` (current batch).
 
 Tooling: `src/fallback_census.zig` + `tools/toolchain/fallback-census.{sh,py}` —
 armed by `MC_FALLBACK_CENSUS=<path>`, hooks the real admission branch in each
@@ -81,66 +82,14 @@ Worklist: `docs/codegen-ingress-p0-worklist.md` (has the current census snapshot
 All three were caught by unit/regression tests (esp. the eval-order test below)
 BEFORE commit. **Never ship a codegen slice without these probes.**
 
-## THE NEXT TASK (fully diagnosed, ready to resume)
+## Next work
 
-Biggest remaining bucket (census: **205 fns, 17% of fallbacks**, plus the 138+82
-related): `return <ident>` local-computed / multi-statement returns, e.g.
+The first local-declaration statement primitive is complete for the strict
+single-local call chain `let x = f(); return g(x)`. It preserves two evaluations
+and source order, uses the local's typed `ValueId`, and does not fold `f()` into
+the return expression. The broad C census gained four admitted functions.
 
-```
-fn le1() -> u32 { let x = f(); return g(x); }
-fn round_up_to_page(addr: usize) -> usize {
-    let aligned: PAddr = pa_align_up(pa(addr), 4096);
-    return pa_value(aligned);
-}
-```
-
-These need a **local-declaration emission primitive**: emit `<ctype> x = <init>;`
-as a real C/LLVM statement (fidelity-preserving), then `return <expr using x>;`,
-with references to `x` rendered **by name** (not folded to its init — folding
-drops the `let`'s source map, which is why the fold path is gated out by
-`simpleMirEntryBlockFoldsLocal`, and naively folding would double-call `f()`).
-
-### Design that was in progress (reverted; rebuild from here)
-
-A self-contained recognizer + emission branch, NOT touching the ~15 call sites of
-`simpleMirEntryBlockFoldsLocal`:
-
-1. `CEmitter.emitted_local: ?[]const u8 = null` field. While building the return,
-   set it to the local name; references to it in `simpleMirArgAt` /
-   `simpleMirCallArgAt` (add a guard **before** the existing local-fold at
-   `simpleMirArgAt`'s `simpleMirLocalValueArg` call, ~line 5474) return
-   `.param = name` so they render as the identifier.
-2. Recognizer `simpleMirLocalDeclCallReturn(function, fn_mir)`: require
-   `blocks.len == 1`, `trap_edges.len == 0`, exactly one `.local` (name `x`);
-   `init_source = simpleMirLocalInitSource(fn_mir, x)`; `init_call =
-   simpleMirDirectCallAtSource(init_source)`; **x's C type =
-   `cTypeFor(self.functions.get(init_call.callee).?.return_type.?, .typedef_name)`**
-   (this is the clean type-resolution answer — locals have no TypeExpr, but the
-   init callee's declared return type is x's type); build the return call with
-   `self.emitted_local = x` set so `x` renders by name; require the return call
-   references `x`; check `trap_edges.len == simpleMirDirectCallReturnTrapCount`.
-3. Emission branch: `<ctype> x = <init_call>;` (line directive from the local's
-   source) then `return <return_call>;` (line directive from the return source).
-
-### THE BLOCKER that stopped it (this is the crux — read before resuming)
-
-`simpleMirReturn` runs BEFORE any new recognizer and already matches `le1` as the
-**folded** `.direct_call = g(f())` (its arg recognizer `simpleMirLocalCallArgAt`
-folds `x`→`f()`). That non-null `simple_return` then hits
-`simpleMirPrefixVoidCallsBeforeReturn`, which returns null for le1 (f is non-void,
-doesn't feed the return, and `folds_local` is true so the nested-arg skip is
-gated off), so `emitSimpleMirFunction` **returns false at that point**
-(`... orelse return false`, ~line 1611) and never reaches the new recognizer.
-
-**Fix**: compute `simple_local_decl_call` EARLY — right after `simple_assert`,
-BEFORE `simple_return` — and gate `simple_return` (and its prefix-calls block)
-on `simple_local_decl_call == null`. The new recognizer is strict (single local +
-call init + call return using the local), so it declines every shape
-`simpleMirReturn` should still handle; trying it first is safe. Then add the LLVM
-parallel and the same validation (both shards, clang, `emit-map` source-map
-check, and confirm no double-call of the init).
-
-### After that, remaining buckets (all large or medium-with-risk)
+Remaining buckets are all large or medium-with-risk:
 
 - Builtin/void bodies (`store_release`, atomics, `bitcast`): statement-level
   builtin lowering (addressable temps + `__builtin_memcpy`). Large.
