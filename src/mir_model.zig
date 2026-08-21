@@ -167,6 +167,13 @@ pub const Instruction = struct {
     // source maps, while this ID names the callee occurrence shared by
     // call-result/argument/callee-signature facts.
     typed_callee_span_id: SpanId = .invalid,
+    typed_operand_value_id: ValueId = .invalid,
+    // Indirect calls may name a canonical callee storage root. A missing root
+    // keeps the call outside shared mechanical lowering; a field index records
+    // the one admitted projection without reconstructing it from source text.
+    typed_callee_root_value_id: ValueId = .invalid,
+    typed_callee_root_span_id: SpanId = .invalid,
+    callee_field_index: ?usize = null,
     line: usize,
     column: usize,
     source_offset: usize = 0,
@@ -500,6 +507,7 @@ pub const TargetTypeKind = enum {
     byte_view_result,
     discard_argument,
     indirect_call_callee,
+    indirect_call_argument,
     loop_condition,
     switch_subject,
     if_let_subject,
@@ -527,6 +535,10 @@ pub const TargetTypeFact = struct {
     result_ty: ValueType,
     typed_result_ty: TypeId = .invalid,
     typed_span_id: SpanId = .invalid,
+    // Only indirect-call argument facts use this second span identity. It
+    // binds an argument occurrence to one exact callee occurrence.
+    typed_callee_span_id: SpanId = .invalid,
+    typed_operand_value_id: ValueId = .invalid,
     aggregate_construction: ?AggregateConstructionKind = null,
     target_index: ?usize = null,
     target_owner: ?[]const u8 = null,

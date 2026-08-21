@@ -1669,11 +1669,15 @@ const LlvmEmitter = struct {
         const simple_conditional_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
         const simple_enum_switch_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
         const simple_loop_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        const statement_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
+        const indirect_call_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
+            mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)
+        else
+            null;
+        const statement_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null and statement_plan == null) return false;
 
         const sig_facts = function.signature;
         const ret_ty = sig_facts.transitionalReturnType() orelse simpleType(sig_facts.name.span, "void");
@@ -1739,6 +1743,8 @@ const LlvmEmitter = struct {
                 try self.emitTrapBranch(condition, cont, trap, trap, cont, "Assert");
             }
             try self.emitReturnVoid(span);
+        } else if (indirect_call_return_plan) |plan| {
+            try self.emitMirIndirectCallReturnPlan(plan);
         } else if (statement_plan) |plan| {
             try self.emitMirStatementPlan(function, fn_mir, plan);
         } else if (simple_return) |ret| {
@@ -3775,6 +3781,48 @@ const LlvmEmitter = struct {
             },
         };
         try self.emitReturnVoid(last_span);
+    }
+
+    fn emitMirIndirectCallReturnPlan(self: *LlvmEmitter, plan: mir_statement_plan.IndirectCallReturnPlan) !void {
+        const signature = switch (plan.callee_fact.target_ty.kind) {
+            .fn_pointer => |signature| signature,
+            else => return error.UnsupportedLlvmEmission,
+        };
+        if (signature.params.len != plan.argument_count) return error.UnsupportedLlvmEmission;
+        const callee = try self.emitMirIndirectCallee(plan.callee, plan.callee_fact.target_ty);
+        const span = spanFromMirSourcePoint(plan.location.source);
+        const result = try self.nextTemp();
+        try self.out.print(self.allocator, "  {s} = call {s} {s}(", .{ result, try self.llvmType(signature.ret.*), callee });
+        for (plan.arguments[0..plan.argument_count], 0..) |argument, index| {
+            if (index != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.print(self.allocator, "{s} %{s}", .{ try self.llvmType(argument.type_fact.target_ty), argument.name });
+        }
+        try self.out.print(self.allocator, "){s}\n", .{try self.debugCallSuffix()});
+        try self.emitReturnValue(signature.ret.*, result, span);
+    }
+
+    fn emitMirIndirectCallee(self: *LlvmEmitter, callee: mir_statement_plan.IndirectCallee, callee_ty: ast_bridge.TypeExpr) ![]const u8 {
+        return switch (callee) {
+            .parameter => |name| try std.fmt.allocPrint(self.scratch.allocator(), "%{s}", .{name}),
+            .global => |name| try self.emitSimpleMirGlobalLoad(name, callee_ty),
+            .global_field => |field| blk: {
+                const global_ty = self.global_types.get(field.root_name) orelse return error.UnsupportedLlvmEmission;
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(global_ty), self.resolveAliasType(field.root_type_fact.target_ty))) return error.UnsupportedLlvmEmission;
+                const struct_decl = self.structDeclForType(field.root_type_fact.target_ty) orelse return error.UnsupportedLlvmEmission;
+                if (field.field_index >= struct_decl.fields.len) return error.UnsupportedLlvmEmission;
+                const declared_field = struct_decl.fields[field.field_index];
+                if (!std.mem.eql(u8, declared_field.name.text, field.field_name)) return error.UnsupportedLlvmEmission;
+                if (!type_bridge.sameTypeSyntax(self.resolveAliasType(declared_field.ty), self.resolveAliasType(callee_ty))) return error.UnsupportedLlvmEmission;
+                const field_ptr = try self.nextTemp();
+                try self.out.print(self.allocator, "  {s} = getelementptr {s}, ptr @{s}, i64 0, i32 {d}\n", .{
+                    field_ptr,
+                    try self.llvmType(field.root_type_fact.target_ty),
+                    field.root_name,
+                    field.field_index,
+                });
+                break :blk try self.emitOrdinaryLoad(declared_field.ty, field_ptr, !(self.global_is_const.get(field.root_name) orelse false));
+            },
+        };
     }
 
     fn emitSimpleMirVoidStatements(self: *LlvmEmitter, statements: SimpleMirVoidStatements, default_span: diagnostics.Span) !diagnostics.Span {

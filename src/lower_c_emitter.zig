@@ -1615,11 +1615,15 @@ pub const CEmitter = struct {
         const simple_conditional_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null) self.simpleMirConditionalReturn(function, fn_mir) else null;
         const simple_enum_switch_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null) self.simpleMirEnumSwitchReturn(function, fn_mir) else null;
         const simple_loop_return = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null) self.simpleMirLoopReturn(function, fn_mir) else null;
-        const statement_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
+        const indirect_call_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null)
+            mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)
+        else
+            null;
+        const statement_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null and statement_plan == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1640,6 +1644,8 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, "if (!(");
             try self.emitSimpleMirCondition(assert_body.condition);
             try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
+        } else if (indirect_call_return_plan) |plan| {
+            try self.emitMirIndirectCallReturnPlan(plan);
         } else if (statement_plan) |plan| {
             try self.emitMirStatementPlan(function, fn_mir, plan);
         } else if (simple_return) |ret| {
@@ -3798,6 +3804,38 @@ pub const CEmitter = struct {
                 try self.out.print(self.allocator, "{s}();\n", .{try self.cIdent(call.callee_name)});
             },
         };
+    }
+
+    fn emitMirIndirectCallReturnPlan(self: *CEmitter, plan: mir_statement_plan.IndirectCallReturnPlan) !void {
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.location.source));
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "return ");
+        try self.emitMirIndirectCallee(plan.callee);
+        try self.out.append(self.allocator, '(');
+        for (plan.arguments[0..plan.argument_count], 0..) |argument, index| {
+            if (index != 0) try self.out.appendSlice(self.allocator, ", ");
+            try self.out.appendSlice(self.allocator, try self.cIdent(argument.name));
+        }
+        try self.out.appendSlice(self.allocator, ");\n");
+    }
+
+    fn emitMirIndirectCallee(self: *CEmitter, callee: mir_statement_plan.IndirectCallee) !void {
+        switch (callee) {
+            .parameter => |name| try self.out.appendSlice(self.allocator, try self.cIdent(name)),
+            .global => |name| try appendGlobalLoadExpr(self.allocator, self.out, name, self.globals.get(name) orelse return error.UnsupportedCEmission),
+            .global_field => |field| {
+                const struct_name = self.structTypeNameFromType(field.root_type_fact.target_ty) orelse return error.UnsupportedCEmission;
+                const struct_decl = self.structs.get(struct_name) orelse return error.UnsupportedCEmission;
+                if (field.field_index >= struct_decl.fields.len) return error.UnsupportedCEmission;
+                const declared_field = struct_decl.fields[field.field_index];
+                if (!std.mem.eql(u8, declared_field.name.text, field.field_name)) return error.UnsupportedCEmission;
+                const access_name = try std.fmt.allocPrint(self.scratch.allocator(), "{s}.{s}", .{
+                    try self.cIdent(field.root_name),
+                    try self.cIdent(field.field_name),
+                });
+                try appendGlobalLoadExpr(self.allocator, self.out, access_name, try self.globalInfoFromType(declared_field.ty));
+            },
+        }
     }
 
     fn emitSimpleMirVoidStatements(self: *CEmitter, statements: SimpleMirVoidStatements) !void {

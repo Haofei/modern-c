@@ -1,11 +1,14 @@
 const std = @import("std");
+const ast = @import("ast.zig");
 const mir = @import("mir.zig");
+const type_syntax = @import("type_syntax.zig");
 
 /// A deliberately small, backend-neutral execution plan for straight-line
 /// void functions.  It is the first shared replacement for C/LLVM AST body
 /// recognizers: admission and statement order are decided once from checked
 /// MIR, while each backend only encodes the admitted operations.
 pub const max_statements = 8;
+pub const max_arguments = 8;
 
 pub const Location = struct {
     span_id: mir.SpanId,
@@ -37,6 +40,88 @@ pub const Plan = struct {
     statements: [max_statements]Statement = undefined,
     count: usize = 0,
 };
+
+pub const IndirectArgument = struct {
+    index: usize,
+    value_id: mir.ValueId,
+    name: []const u8,
+    type_fact: mir.TargetTypeFact,
+};
+
+pub const IndirectCallee = union(enum) {
+    parameter: []const u8,
+    global: []const u8,
+    global_field: struct {
+        root_name: []const u8,
+        field_name: []const u8,
+        field_index: usize,
+        root_type_fact: mir.TargetTypeFact,
+    },
+};
+
+pub const IndirectCallReturnPlan = struct {
+    location: Location,
+    callee: IndirectCallee,
+    callee_fact: mir.TargetTypeFact,
+    arguments: [max_arguments]IndirectArgument = undefined,
+    argument_count: usize = 0,
+};
+
+/// Admit a single value-producing function-pointer call whose result is
+/// returned immediately. Arguments are typed/indexed MIR facts and, in this
+/// first slice, must be direct parameter values. The callee may be a parameter,
+/// a global function-pointer object, or one field of a global struct object.
+pub fn buildSingleBlockIndirectCallReturn(function: mir.Function) ?IndirectCallReturnPlan {
+    if (function.return_ty == .void or function.blocks.len != 1) return null;
+    if (function.trap_edges.len != 0 or function.pointer_provenance_facts.len != 0 or function.representation_facts.len != 0) return null;
+    if (function.ownership_cleanup_plan.actions.len != 0 or function.ownership_cleanup_plan.cancellations.len != 0) return null;
+    for (function.cleanup_cfg.edges) |edge| if (edge.actions.len != 0) return null;
+
+    const block = function.blocks[0];
+    if (block.terminator != .return_ or block.successors.len != 0) return null;
+
+    var call_instruction: ?mir.Instruction = null;
+    var return_instruction: ?mir.Instruction = null;
+    for (block.instructions) |instruction| switch (instruction.kind) {
+        .param, .target_type, .expr => {},
+        .indirect_call => {
+            if (call_instruction != null) return null;
+            call_instruction = instruction;
+        },
+        .return_value => {
+            if (return_instruction != null) return null;
+            return_instruction = instruction;
+        },
+        else => return null,
+    };
+
+    const call = call_instruction orelse return null;
+    const returned = return_instruction orelse return null;
+    if (!call.typed_callee_span_id.isValid() or !call.typed_callee_root_value_id.isValid() or !call.typed_callee_root_span_id.isValid()) return null;
+    if (call.target_owner == null or call.typed_target_owner_id == null) return null;
+    if (call.result_ty == .void or !sameRepresentationType(call.result_ty, returned.result_ty) or !sameRepresentationType(call.result_ty, function.return_ty)) return null;
+    const returned_value_id = returned.typed_value_id orelse return null;
+    const call_value_id = call.typed_value_id orelse return null;
+    if (!returned_value_id.eql(call_value_id)) return null;
+
+    const location = locationFromInstruction(call);
+    const callee_fact = targetFactAt(function, .indirect_call_callee, location, null) orelse return null;
+    const signature = switch (callee_fact.target_ty.kind) {
+        .fn_pointer => |signature| signature,
+        else => return null,
+    };
+    if (typeNameIsVoid(signature.ret.*) or signature.params.len > max_arguments or signature.params.len == 0) return null;
+    if (!sameRepresentationType(callee_fact.result_ty, .value)) return null;
+
+    var plan: IndirectCallReturnPlan = .{
+        .location = location,
+        .callee = undefined,
+        .callee_fact = callee_fact,
+    };
+    if (!collectIndirectArguments(function, call, signature.params, &plan)) return null;
+    plan.callee = indirectCalleePlan(function, call) orelse return null;
+    return plan;
+}
 
 /// Admit only the initial statement-plan slice:
 ///
@@ -213,6 +298,94 @@ fn validateLocalUses(plan: Plan) bool {
     };
     for (used[0..local_count]) |was_used| if (!was_used) return false;
     return true;
+}
+
+fn collectIndirectArguments(function: mir.Function, call: mir.Instruction, params: []const ast.TypeExpr, plan: *IndirectCallReturnPlan) bool {
+    var seen = [_]bool{false} ** max_arguments;
+    const owner = call.target_owner orelse return false;
+    const owner_id = call.typed_target_owner_id orelse return false;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != .indirect_call_argument) continue;
+        if (!fact.typed_callee_span_id.eql(call.typed_callee_span_id)) continue;
+        if (!std.mem.eql(u8, fact.target_owner orelse "", owner) or !fact.typed_target_owner_id.eql(owner_id)) continue;
+        const index = fact.target_index orelse return false;
+        if (index >= params.len or index >= max_arguments or seen[index]) return false;
+        if (!type_syntax.sameTypeSyntax(fact.target_ty, params[index])) return false;
+        const operand_name = valueIdentityName(function, fact.typed_operand_value_id) orelse return false;
+        const param_ty = parameterType(function, operand_name) orelse return false;
+        if (!sameRepresentationType(param_ty, fact.result_ty)) return false;
+        if (!hasOperandInstruction(function, fact)) return false;
+        plan.arguments[index] = .{
+            .index = index,
+            .value_id = fact.typed_operand_value_id,
+            .name = operand_name,
+            .type_fact = fact,
+        };
+        seen[index] = true;
+        plan.argument_count += 1;
+    }
+    if (plan.argument_count != params.len) return false;
+    for (seen[0..params.len]) |present| if (!present) return false;
+    return true;
+}
+
+fn indirectCalleePlan(function: mir.Function, call: mir.Instruction) ?IndirectCallee {
+    const root_name = valueIdentityName(function, call.typed_callee_root_value_id) orelse return null;
+    const root_is_parameter = parameterType(function, root_name) != null;
+    if (call.callee_field_index) |field_index| {
+        if (root_is_parameter) return null;
+        const root_type_fact = targetFactBySpan(function, .expression_result, call.typed_callee_root_span_id) orelse return null;
+        return .{ .global_field = .{
+            .root_name = root_name,
+            .field_name = call.detail,
+            .field_index = field_index,
+            .root_type_fact = root_type_fact,
+        } };
+    }
+    if (root_is_parameter) return .{ .parameter = root_name };
+    return .{ .global = root_name };
+}
+
+fn targetFactBySpan(function: mir.Function, kind: mir.TargetTypeKind, span_id: mir.SpanId) ?mir.TargetTypeFact {
+    if (!span_id.isValid()) return null;
+    var found: ?mir.TargetTypeFact = null;
+    for (function.target_type_facts) |fact| {
+        if (fact.kind != kind or !fact.typed_span_id.eql(span_id)) continue;
+        if (found != null) return null;
+        found = fact;
+    }
+    return found;
+}
+
+fn hasOperandInstruction(function: mir.Function, fact: mir.TargetTypeFact) bool {
+    var found = false;
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind != .expr) continue;
+        const value_id = instruction.typed_value_id orelse continue;
+        if (!instruction.typed_span_id.eql(fact.typed_span_id) or !value_id.eql(fact.typed_operand_value_id)) continue;
+        if (!sameRepresentationType(instruction.result_ty, fact.result_ty)) return false;
+        if (found) return false;
+        found = true;
+    };
+    return found;
+}
+
+fn parameterType(function: mir.Function, name: []const u8) ?mir.ValueType {
+    for (function.blocks) |block| for (block.instructions) |instruction| {
+        if (instruction.kind == .param and std.mem.eql(u8, instruction.detail, name)) return instruction.result_ty;
+    };
+    return null;
+}
+
+fn valueIdentityName(function: mir.Function, id: mir.ValueId) ?[]const u8 {
+    if (!id.isValid()) return null;
+    for (function.value_identities) |identity| if (identity.id.eql(id)) return identity.spelling;
+    return null;
+}
+
+fn sameRepresentationType(left: mir.ValueType, right: mir.ValueType) bool {
+    return std.meta.activeTag(left) == std.meta.activeTag(right) and
+        std.mem.eql(u8, left.name(), right.name());
 }
 
 fn typeNameIsVoid(ty: anytype) bool {

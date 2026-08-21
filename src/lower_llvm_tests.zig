@@ -3674,6 +3674,39 @@ test "LLVM zero-argument function-pointer calls lower from MIR without body fall
     try expectNotContains(local_body, "load ptr");
 }
 
+test "LLVM typed indirect call returns lower from MIR without body fallback" {
+    const source =
+        \\fn add(left: u32, right: u32) -> u32 { return left + right; }
+        \\global default_op: fn(u32, u32) -> u32 = add;
+        \\struct BinOp { combine: fn(u32, u32) -> u32 }
+        \\global default_box: BinOp = .{ .combine = add };
+        \\fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 { return op(x, y); }
+        \\fn global_op_call(x: u32, y: u32) -> u32 { return default_op(x, y); }
+        \\fn global_box_call(x: u32, y: u32) -> u32 { return default_box.combine(x, y); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_typed_indirect_call_returns.mc", source, &output);
+
+    const param_body = try llvmFunctionBody(output.items, "define internal i32 @apply");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, param_body, "call i32 %op(i32 %x, i32 %y)"));
+    try expectContains(param_body, "ret i32");
+    try expectNotContains(param_body, "alloca");
+
+    const global_body = try llvmFunctionBody(output.items, "define internal i32 @global_op_call");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, global_body, "load atomic ptr, ptr @default_op unordered"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, global_body, "call i32 %"));
+    try expectContains(global_body, "ret i32");
+    try expectNotContains(global_body, "alloca");
+
+    const field_body = try llvmFunctionBody(output.items, "define internal i32 @global_box_call");
+    try expectContains(field_body, "getelementptr { ptr }, ptr @default_box, i64 0, i32 0");
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, field_body, "load atomic ptr"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, field_body, "call i32 %"));
+    try expectContains(field_body, "ret i32");
+    try expectNotContains(field_body, "alloca");
+}
+
 fn appendLlvmTest(source_name: []const u8, source: []const u8, output: *std.ArrayList(u8)) !void {
     var parsed = try test_support.parseModule(source_name, source);
     defer parsed.deinit();

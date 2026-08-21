@@ -1,12 +1,12 @@
 # Codegen-ingress migration — handoff
 
 Handoff for the three review goals in `docs/review-goal-status.json`. Updated
-2026-08-20 after the typed binary arithmetic-domain slice.
+2026-08-21 after the typed indirect-call return slice.
 
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active, incremental, the only goal advanced.
-  The current strict ratchet corpus admits **62/160 C** and **63/160 LLVM**
+  The current strict ratchet corpus admits **68/160 C** and **69/160 LLVM**
   functions. The last completed broad snapshot before this slice was C
   439/1611; broad report mode is intentionally best-effort and is not a gate.
 - **P1 `typed-hir-checked-program`** — frozen. Double-write scaffold seeded in
@@ -83,15 +83,18 @@ armed by `MC_FALLBACK_CENSUS=<path>`, hooks the real admission branch in each
 backend's `emitFunctionDefinitions`, dumps JSONL, ranks remaining fallbacks.
 Worklist: `docs/codegen-ingress-p0-worklist.md` (has the current census snapshot).
 
-The first backend-neutral statement slice now lives in
+The first backend-neutral statement slice lives in
 `src/mir_statement_plan.zig`. It admits a one-block, no-trap, no-cleanup void
 body containing a discarded direct-call result or a zero-argument ordinary
 function-pointer call through a parameter/local. The local form keeps
 `entry_of()` and `entry()` as two ordered statements. Calls carry a separate
 `typed_callee_span_id`, so plan/fact association uses an opaque SpanId without
 changing the enclosing expression span used by diagnostics and source maps.
-Do not extend this slice to closure or argument-bearing indirect calls until
-MIR records explicit indexed indirect operands.
+The same module now owns a typed plan for a value-producing function-pointer
+call returned immediately. MIR records indexed `indirect_call_argument` facts
+plus the canonical callee root and optional field projection; both backends
+consume the shared admission result for parameter, global, and global-field
+callees. Closures and non-leaf arguments remain fail-closed.
 
 ### Six correctness defects were caught by the discipline (learn from these)
 
@@ -126,7 +129,7 @@ single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
 source order, uses the local's typed `ValueId`, and does not fold the initializer
 into the return expression. C can also preserve one nested initializer call;
 the last completed broad snapshot was C 439/1611 and LLVM 414/1530, while the
-current strict corpus is C 65/160 and LLVM 66/160. The exact-root soundness gate
+current strict corpus is C 68/160 and LLVM 69/160. The exact-root soundness gate
 deliberately returned three previously over-broad admissions per backend to
 fallback.
 

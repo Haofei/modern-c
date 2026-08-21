@@ -1450,6 +1450,15 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                         .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_callee_span_id.index() },
                     );
                 }
+                if (instruction.typed_callee_root_value_id.isValid()) {
+                    const field_index = if (instruction.callee_field_index) |index| try std.fmt.allocPrint(allocator, "{}", .{index}) else "none";
+                    defer if (instruction.callee_field_index != null) allocator.free(field_index);
+                    try out.print(
+                        allocator,
+                        "mir indirect_callee_place fn={s} block={} root_value_id={} root_span_id={} owner_id={} field_index={s}\n",
+                        .{ function.name, block.id, instruction.typed_callee_root_value_id.index(), instruction.typed_callee_root_span_id.index(), instruction.typed_target_owner_id.?.index(), field_index },
+                    );
+                }
             }
         }
         for (function.trap_edges) |edge| {
@@ -1533,7 +1542,7 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
             const aggregate_construction = if (fact.aggregate_construction) |kind| @tagName(kind) else "none";
             try out.print(
                 allocator,
-                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} aggregate_construction={s} target_owner={s} target_index={s} recorded=true line={} column={} typed_result_ty_id={} typed_span_id={} typed_target_owner_id={}\n",
+                "mir target_type_fact fn={s} kind={s} target_type={s} result_type={s} aggregate_construction={s} target_owner={s} target_index={s} recorded=true line={} column={} typed_result_ty_id={} typed_span_id={} typed_callee_span_id={} typed_operand_value_id={} typed_target_owner_id={}\n",
                 .{
                     function.name,
                     @tagName(fact.kind),
@@ -1546,6 +1555,8 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                     fact.source.column,
                     if (fact.typed_result_ty.isValid()) fact.typed_result_ty.index() else std.math.maxInt(usize),
                     if (fact.typed_span_id.isValid()) fact.typed_span_id.index() else std.math.maxInt(usize),
+                    if (fact.typed_callee_span_id.isValid()) fact.typed_callee_span_id.index() else std.math.maxInt(usize),
+                    if (fact.typed_operand_value_id.isValid()) fact.typed_operand_value_id.index() else std.math.maxInt(usize),
                     if (fact.typed_target_owner_id.isValid()) fact.typed_target_owner_id.index() else std.math.maxInt(usize),
                 },
             );
@@ -2060,10 +2071,25 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         const source = function.span_identities[index].source;
         if (source.line != instruction.line or source.column != instruction.column or source.offset != instruction.source_offset or source.len != instruction.source_len) return false;
     }
-    if (instruction.kind == .call or instruction.kind == .indirect_call) {
+    const is_indirect_argument = instruction.kind == .target_type and std.mem.eql(u8, instruction.detail, @tagName(TargetTypeKind.indirect_call_argument));
+    if (instruction.kind == .call or instruction.kind == .indirect_call or is_indirect_argument) {
         if (!instruction.typed_callee_span_id.isValid()) return false;
         if (instruction.typed_callee_span_id.index() >= function.span_identities.len) return false;
     } else if (instruction.typed_callee_span_id.isValid()) {
+        return false;
+    }
+    if (is_indirect_argument) {
+        if (!instruction.typed_operand_value_id.isValid()) return false;
+        if (instruction.typed_operand_value_id.index() >= function.value_identities.len) return false;
+    } else if (instruction.typed_operand_value_id.isValid()) {
+        return false;
+    }
+    if (instruction.kind == .indirect_call and instruction.typed_callee_root_value_id.isValid()) {
+        if (!instruction.typed_callee_root_span_id.isValid()) return false;
+        if (instruction.typed_callee_root_value_id.index() >= function.value_identities.len) return false;
+        if (instruction.typed_callee_root_span_id.index() >= function.span_identities.len) return false;
+        if (instruction.target_owner == null or instruction.typed_target_owner_id == null) return false;
+    } else if (instruction.typed_callee_root_value_id.isValid() or instruction.typed_callee_root_span_id.isValid() or instruction.callee_field_index != null) {
         return false;
     }
     if (instruction.typed_value_id) |value_id| {
@@ -2987,6 +3013,7 @@ fn targetTypeFactFamilyValid(fact: TargetTypeFact) bool {
     return switch (fact.kind) {
         .if_let_subject => isResultOrNullableTargetType(fact.result_ty),
         .try_operand => isResultOrNullableTargetType(fact.result_ty),
+        .indirect_call_argument => fact.target_index != null and fact.target_owner != null and fact.typed_callee_span_id.isValid(),
         else => true,
     };
 }
@@ -3013,6 +3040,17 @@ fn targetTypeFactTypedIdentitiesValid(function: Function, fact: TargetTypeFact) 
     if (span_index >= function.span_identities.len) return false;
     const source = function.span_identities[span_index].source;
     if (source.line != fact.source.line or source.column != fact.source.column or source.offset != fact.source.offset or source.len != fact.source.len) return false;
+
+    if (fact.kind == .indirect_call_argument) {
+        if (!fact.typed_callee_span_id.isValid()) return false;
+        if (fact.typed_callee_span_id.index() >= function.span_identities.len) return false;
+        if (!fact.typed_operand_value_id.isValid()) return false;
+        if (fact.typed_operand_value_id.index() >= function.value_identities.len) return false;
+    } else if (fact.typed_callee_span_id.isValid()) {
+        return false;
+    } else if (fact.typed_operand_value_id.isValid()) {
+        return false;
+    }
 
     if (fact.target_owner) |owner| {
         if (!fact.typed_target_owner_id.isValid()) return false;
@@ -3072,6 +3110,22 @@ fn targetTypeInstructionSpansCompatible(left: Instruction, right: Instruction) b
     return !right.typed_span_id.isValid();
 }
 
+fn targetTypeTypedCalleeSpanCompatible(instruction: Instruction, fact: TargetTypeFact) bool {
+    if (fact.kind != .indirect_call_argument) {
+        return !fact.typed_callee_span_id.isValid() and !instruction.typed_callee_span_id.isValid() and !fact.typed_operand_value_id.isValid() and !instruction.typed_operand_value_id.isValid();
+    }
+    return fact.typed_callee_span_id.isValid() and instruction.typed_callee_span_id.isValid() and fact.typed_callee_span_id.eql(instruction.typed_callee_span_id) and
+        fact.typed_operand_value_id.isValid() and instruction.typed_operand_value_id.isValid() and fact.typed_operand_value_id.eql(instruction.typed_operand_value_id);
+}
+
+fn targetTypeInstructionCalleeSpansCompatible(left: Instruction, right: Instruction, kind: TargetTypeKind) bool {
+    if (kind != .indirect_call_argument) {
+        return !left.typed_callee_span_id.isValid() and !right.typed_callee_span_id.isValid() and !left.typed_operand_value_id.isValid() and !right.typed_operand_value_id.isValid();
+    }
+    return left.typed_callee_span_id.isValid() and right.typed_callee_span_id.isValid() and left.typed_callee_span_id.eql(right.typed_callee_span_id) and
+        left.typed_operand_value_id.isValid() and right.typed_operand_value_id.isValid() and left.typed_operand_value_id.eql(right.typed_operand_value_id);
+}
+
 fn targetTypeSourceMatches(kind: TargetTypeKind, fact: TargetTypeFact, instruction: Instruction) bool {
     if (fact.source.line != instruction.line or fact.source.column != instruction.column) return false;
     return kind != .expression_result or (fact.source.offset == instruction.source_offset and fact.source.len == instruction.source_len);
@@ -3095,6 +3149,7 @@ fn hasStaleTargetTypeFact(function: Function, kind: TargetTypeKind, instruction:
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
+        if (!targetTypeTypedCalleeSpanCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) return true;
@@ -3117,6 +3172,7 @@ fn countMatchingTargetTypeFacts(function: Function, kind: TargetTypeKind, instru
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
+        if (!targetTypeTypedCalleeSpanCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
@@ -3134,6 +3190,7 @@ fn countMatchingTargetTypeInstructions(function: Function, fact: TargetTypeFact)
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
+        if (!targetTypeTypedCalleeSpanCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (targetTypeSourceMatches(kind, fact, instruction)) count += 1;
@@ -3150,6 +3207,7 @@ fn countMatchingTargetTypeInstructionsForInstruction(function: Function, kind: T
         if (!optionalTextEql(instruction.target_owner, target.target_owner)) continue;
         if (!targetTypeInstructionOwnersCompatible(instruction, target)) continue;
         if (!targetTypeInstructionSpansCompatible(instruction, target)) continue;
+        if (!targetTypeInstructionCalleeSpansCompatible(instruction, target, kind)) continue;
         if (!sameRepresentationValueType(instruction.result_ty, target.result_ty)) continue;
         if (!targetTypeInstructionsSyntaxMatch(target, instruction)) continue;
         if (targetTypeInstructionSourceMatches(kind, target, instruction)) count += 1;
@@ -3166,6 +3224,8 @@ fn countMatchingTargetTypeFactsForFact(function: Function, target: TargetTypeFac
         if (!fact.typed_target_owner_id.eql(target.typed_target_owner_id)) continue;
         if (!fact.typed_result_ty.eql(target.typed_result_ty)) continue;
         if (!fact.typed_span_id.eql(target.typed_span_id)) continue;
+        if (!fact.typed_callee_span_id.eql(target.typed_callee_span_id)) continue;
+        if (!fact.typed_operand_value_id.eql(target.typed_operand_value_id)) continue;
         if (!sameRepresentationValueType(fact.result_ty, target.result_ty)) continue;
         if (fact.source.line == target.source.line and fact.source.column == target.source.column and (target.kind != .expression_result or (fact.source.offset == target.source.offset and fact.source.len == target.source.len))) count += 1;
     }
@@ -3181,6 +3241,7 @@ fn matchingTargetTypeFactsAgree(function: Function, kind: TargetTypeKind, instru
         if (!targetTypeTypedOwnerCompatible(instruction, fact)) continue;
         if (!targetTypeTypedResultCompatible(instruction, fact)) continue;
         if (!targetTypeTypedSpanCompatible(instruction, fact)) continue;
+        if (!targetTypeTypedCalleeSpanCompatible(instruction, fact)) continue;
         if (!sameRepresentationValueType(fact.result_ty, instruction.result_ty)) continue;
         if (!targetTypeSyntaxMatches(fact, instruction)) continue;
         if (!targetTypeSourceMatches(kind, fact, instruction)) continue;
@@ -7618,6 +7679,10 @@ const FunctionBuilder = struct {
                             .len = node.callee.*.span.len,
                         });
                 }
+                const indirect_callee_place_recorded = if (instr_kind == .indirect_call)
+                    try self.recordIndirectCalleePlace(node.callee.*)
+                else
+                    false;
                 if (direct_call) try self.addDropGlueCallOwnershipEvent(callee_name, node, expr.span);
                 if (direct_decl_summary) |summary| {
                     const result_ty = summary.return_type_expr orelse ast_query.simpleNameType("void", node.callee.*.span);
@@ -7675,6 +7740,16 @@ const FunctionBuilder = struct {
                 }
                 if (indirect_call_target) |target| {
                     try self.appendTargetTypeFact(.indirect_call_callee, target.callee_type_expr, target.callee_ty, node.callee.*.span);
+                    const all_args_are_direct_values = for (node.args) |arg| {
+                        if (directIdentName(arg) == null) break false;
+                    } else true;
+                    if (indirect_callee_place_recorded and node.args.len == target.params.len and all_args_are_direct_values) {
+                        const callee_place = exprText(node.callee.*);
+                        const callee_span_id = try self.internSpanId(sourcePointFromSpan(node.callee.*.span));
+                        for (node.args, target.params, 0..) |arg, param_ty, index| {
+                            try self.appendIndirectCallArgumentFact(param_ty, arg.span, directIdentName(arg).?, callee_place, callee_span_id, index);
+                        }
+                    }
                 }
                 if (reduceCallKind(node.callee.*)) |kind| {
                     const fact_kind: CallTargetKind = switch (kind) {
@@ -9124,6 +9199,17 @@ const FunctionBuilder = struct {
             .typed_target_owner_id = typed_target_owner_id,
             .source = .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len },
         });
+    }
+
+    fn appendIndirectCallArgumentFact(self: *FunctionBuilder, target_ty: ast.TypeExpr, span: ast.Span, operand_name: []const u8, callee_place: []const u8, callee_span_id: SpanId, index: usize) !void {
+        const result_ty = valueTypeFromTypeAlias(target_ty, self.enums, self.structs, self.packed_bits, self.aliases);
+        try self.appendOwnedTargetTypeFact(.indirect_call_argument, target_ty, result_ty, span, callee_place, index);
+        const operand_id = try self.internValueId(operand_name);
+        const instructions = &self.blocks.items[self.current].instructions;
+        instructions.items[instructions.items.len - 1].typed_callee_span_id = callee_span_id;
+        instructions.items[instructions.items.len - 1].typed_operand_value_id = operand_id;
+        self.target_type_facts.items[self.target_type_facts.items.len - 1].typed_callee_span_id = callee_span_id;
+        self.target_type_facts.items[self.target_type_facts.items.len - 1].typed_operand_value_id = operand_id;
     }
 
     fn valueOptionalPayloadTargetType(self: *FunctionBuilder, target_ty: ast.TypeExpr, result_ty: ValueType) ?ast.TypeExpr {
@@ -11838,6 +11924,7 @@ const FunctionBuilder = struct {
     const IndirectCallTarget = struct {
         callee_type_expr: ast.TypeExpr,
         callee_ty: ValueType,
+        params: []const ast.TypeExpr,
         result_type_expr: ast.TypeExpr,
         result_ty: ValueType,
     };
@@ -11846,17 +11933,57 @@ const FunctionBuilder = struct {
         if (call.type_args.len != 0) return null;
         const callee_type_expr = self.typeExprForExpr(call.callee.*) orelse return null;
         const resolved = aggregateTargetTypeAlias(callee_type_expr, self.aliases);
-        const result_type_expr = switch (resolved.kind) {
-            .fn_pointer => |signature| signature.ret.*,
-            .closure_type => |signature| signature.ret.*,
-            else => return null,
+        const callee_ty = valueTypeFromTypeAlias(callee_type_expr, self.enums, self.structs, self.packed_bits, self.aliases);
+        return switch (resolved.kind) {
+            .fn_pointer => |signature| .{
+                .callee_type_expr = callee_type_expr,
+                .callee_ty = callee_ty,
+                .params = signature.params,
+                .result_type_expr = signature.ret.*,
+                .result_ty = valueTypeFromTypeAlias(signature.ret.*, self.enums, self.structs, self.packed_bits, self.aliases),
+            },
+            .closure_type => |signature| .{
+                .callee_type_expr = callee_type_expr,
+                .callee_ty = callee_ty,
+                .params = signature.params,
+                .result_type_expr = signature.ret.*,
+                .result_ty = valueTypeFromTypeAlias(signature.ret.*, self.enums, self.structs, self.packed_bits, self.aliases),
+            },
+            else => null,
         };
-        return .{
-            .callee_type_expr = callee_type_expr,
-            .callee_ty = valueTypeFromTypeAlias(callee_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
-            .result_type_expr = result_type_expr,
-            .result_ty = valueTypeFromTypeAlias(result_type_expr, self.enums, self.structs, self.packed_bits, self.aliases),
+    }
+
+    fn recordIndirectCalleePlace(self: *FunctionBuilder, callee: ast.Expr) !bool {
+        const place = exprText(callee);
+        const owner_id = try self.internTargetOwnerId(place);
+        const root_name, const root_span, const field_index = switch (callee.kind) {
+            .ident => |ident| .{ ident.text, callee.span, @as(?usize, null) },
+            .member => |member| blk: {
+                const root = directIdentName(member.base.*) orelse return false;
+                const base_ty = self.typeExprForExpr(member.base.*) orelse return false;
+                const struct_name = structTypeNameAlias(base_ty, self.aliases) orelse return false;
+                const summary = self.structs.get(struct_name) orelse return false;
+                var index: ?usize = null;
+                for (summary.fields, 0..) |field, candidate| {
+                    if (std.mem.eql(u8, field.name.text, member.name.text)) {
+                        index = candidate;
+                        break;
+                    }
+                }
+                break :blk .{ root, member.base.*.span, index orelse return false };
+            },
+            else => return false,
         };
+        const root_id = try self.internValueId(root_name);
+        const root_span_id = try self.internSpanId(sourcePointFromSpan(root_span));
+        const instructions = &self.blocks.items[self.current].instructions;
+        const instruction = &instructions.items[instructions.items.len - 1];
+        instruction.target_owner = place;
+        instruction.typed_target_owner_id = owner_id;
+        instruction.typed_callee_root_value_id = root_id;
+        instruction.typed_callee_root_span_id = root_span_id;
+        instruction.callee_field_index = field_index;
+        return true;
     }
 
     fn exprType(self: *FunctionBuilder, expr: ast.Expr) ValueType {

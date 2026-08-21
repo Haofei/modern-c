@@ -6,6 +6,7 @@ const parser = @import("parser.zig");
 const mir = @import("mir.zig");
 const mir_ownership_authority = @import("mir_ownership_authority.zig");
 const mir_facts_view = @import("mir_facts_view.zig");
+const mir_statement_plan = @import("mir_statement_plan.zig");
 const module_parser = @import("module_parser.zig");
 const test_support = @import("test_support.zig");
 
@@ -3104,6 +3105,54 @@ test "MIR owns indirect function-pointer and closure callee signatures" {
         }) == null);
     }
     try mir.validateTargetTypeFactsForLowering(typed_mir);
+}
+
+test "MIR plans typed indirect call arguments and canonical callee roots" {
+    const source =
+        \\fn add(left: u32, right: u32) -> u32 { return left + right; }
+        \\global default_op: fn(u32, u32) -> u32 = add;
+        \\struct BinOp { combine: fn(u32, u32) -> u32 }
+        \\global default_box: BinOp = .{ .combine = add };
+        \\fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 { return op(x, y); }
+        \\fn global_op_call(x: u32, y: u32) -> u32 { return default_op(x, y); }
+        \\fn global_box_call(x: u32, y: u32) -> u32 { return default_box.combine(x, y); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_indirect_call_plan.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer typed_mir.deinit();
+    for ([_][]const u8{ "apply", "global_op_call", "global_box_call" }) |name| {
+        const function = functionByName(typed_mir, name).?;
+        try std.testing.expectEqual(@as(usize, 2), countTargetTypeFactsByKind(function, .indirect_call_argument));
+        const plan = mir_statement_plan.buildSingleBlockIndirectCallReturn(function) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 2), plan.argument_count);
+        try std.testing.expectEqual(@as(usize, 0), plan.arguments[0].index);
+        try std.testing.expectEqual(@as(usize, 1), plan.arguments[1].index);
+        try std.testing.expectEqualStrings("x", plan.arguments[0].name);
+        try std.testing.expectEqualStrings("y", plan.arguments[1].name);
+    }
+    try mir.validateTargetTypeFactsForLowering(typed_mir);
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, typed_mir, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir indirect_callee_place fn=apply block=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir indirect_callee_place fn=global_box_call block=0") != null);
+
+    const apply_mut = functionByNameMut(&typed_mir, "apply").?;
+    for (apply_mut.target_type_facts) |*fact| {
+        if (fact.kind != .indirect_call_argument or fact.target_index != 0) continue;
+        fact.typed_operand_value_id = ValueId.fromIndex(4096);
+        break;
+    } else return error.TestUnexpectedResult;
+    try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 }
 
 test "MIR owns explicit cast source types for call results" {

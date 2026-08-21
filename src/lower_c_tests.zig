@@ -2999,6 +2999,33 @@ test "lower-c runtime hook suppression uses VerifiedProgram runtime hook facts" 
     try expectContains(output.items, "MC_WEAK void mc_csan_read");
 }
 
+test "lower-c typed indirect call returns lower from MIR without body fallback" {
+    const source =
+        \\fn add(left: u32, right: u32) -> u32 { return left + right; }
+        \\global default_op: fn(u32, u32) -> u32 = add;
+        \\struct BinOp { combine: fn(u32, u32) -> u32 }
+        \\global default_box: BinOp = .{ .combine = add };
+        \\fn apply(op: fn(u32, u32) -> u32, x: u32, y: u32) -> u32 { return op(x, y); }
+        \\fn global_op_call(x: u32, y: u32) -> u32 { return default_op(x, y); }
+        \\fn global_box_call(x: u32, y: u32) -> u32 { return default_box.combine(x, y); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_typed_indirect_call_returns.mc", source, &output);
+
+    const param_body = try cFunctionBody(output.items, "static uint32_t apply(");
+    try expectContains(param_body, "return op(x, y);");
+    try expectNotContains(param_body, "mc_tmp");
+
+    const global_body = try cFunctionBody(output.items, "static uint32_t global_op_call(");
+    try expectContains(global_body, "__atomic_load_n(&default_op, __ATOMIC_RELAXED))(x, y)");
+    try expectNotContains(global_body, "mc_tmp");
+
+    const field_body = try cFunctionBody(output.items, "static uint32_t global_box_call(");
+    try expectContains(field_body, "__atomic_load_n(&default_box.combine, __ATOMIC_RELAXED))(x, y)");
+    try expectNotContains(field_body, "mc_tmp");
+}
+
 test "lower-c value optional pointer derefs lower race-tolerantly" {
     const source =
         \\struct Point { x: u32, y: u32 }

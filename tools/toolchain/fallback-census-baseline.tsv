@@ -2,5 +2,5 @@
 # Corpus: tools/toolchain/fallback-census-roots.txt, run through both emit-c and emit-llvm.
 # Policy: total/admitted/admission_bps may increase, fallback/unsupported may decrease.
 backend	total_min	admitted_min	fallback_max	unsupported_max	admission_bps_min
-c	160	65	95	0	4062
-llvm	160	66	94	0	4125
+c	160	68	92	0	4250
+llvm	160	69	91	0	4312
