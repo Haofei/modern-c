@@ -2564,6 +2564,7 @@ test "lower-c emits local-init call feeding return call from MIR without body fa
         \\extern fn make_count(seed: u32) -> u32;
         \\extern fn use_count(value: u32) -> u32;
         \\extern fn use_count_with_seed(value: u32, seed: u32) -> u32;
+        \\extern fn align_count(value: u32, amount: u32) -> u32;
         \\fn local_call_arg(seed: u32) -> u32 {
         \\    let count: u32 = make_count(seed);
         \\    return use_count(count);
@@ -2571,6 +2572,10 @@ test "lower-c emits local-init call feeding return call from MIR without body fa
         \\fn local_call_arg_with_leaf(seed: u32) -> u32 {
         \\    let count: u32 = make_count(seed);
         \\    return use_count_with_seed(count, seed);
+        \\}
+        \\fn local_nested_init_call_arg(seed: u32) -> u32 {
+        \\    let count: u32 = align_count(make_count(seed), 4096);
+        \\    return use_count(count);
         \\}
     ;
     var output: std.ArrayList(u8) = .empty;
@@ -2590,6 +2595,12 @@ test "lower-c emits local-init call feeding return call from MIR without body fa
     try std.testing.expect(leaf_init < leaf_ret);
     try expectNotContains(leaf_body, "return use_count_with_seed(make_count(seed), seed);");
     try expectNotContains(leaf_body, "mc_tmp");
+
+    const nested_body = try cFunctionBody(output.items, "static uint32_t local_nested_init_call_arg(uint32_t seed)");
+    const nested_init = std.mem.indexOf(u8, nested_body, "uint32_t count = align_count(make_count(seed), 4096);") orelse return error.TestUnexpectedResult;
+    const nested_ret = std.mem.indexOf(u8, nested_body, "return use_count(count);") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(nested_init < nested_ret);
+    try expectNotContains(nested_body, "mc_tmp");
 }
 
 test "lower-c emits enum literal direct-call arguments from MIR without body fallback" {

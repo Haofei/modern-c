@@ -6,7 +6,7 @@ Handoff for the three review goals in `docs/review-goal-status.json`. Written
 ## TL;DR
 
 - **P0 `function-body-fallback`** — active, incremental, the only goal advanced.
-  C fast-path admission is at **26.9%** (433/1609 functions); the other 73% still
+  C fast-path admission is at **27.0%** (434/1609 functions); the other 73% still
   ingest the transitional AST body. Multi-week to finish (it is re-implementing
   full function-body emission on MIR).
 - **P1 `typed-hir-checked-program`** — frozen. Double-write scaffold seeded in
@@ -61,7 +61,11 @@ u32/u64); plain unary; pointer-field load; `phys` address constructor; bitwise;
 address-typed (PAddr/VAddr) field + deref; pointer comparison `return a==b`;
 single nested-call arg `return g(f())` (first structural slice, `db2f7f5f`);
 multi-arg with one nested call + pure-leaf args `return g2(f(), b)` (`127e06d7`);
-single-local call chains `let x = f(); return g(x)` (current batch).
+single-local call chains `let x = f(); return g(x)`; C additionally accepts a
+nested initializer call such as `let x = f(g(a), b); return h(x)` without
+folding away the local statement. LLVM deliberately remains fallback for this
+last shape until a shared statement/value representation can express it without
+adding another backend-only union variant.
 
 Tooling: `src/fallback_census.zig` + `tools/toolchain/fallback-census.{sh,py}` —
 armed by `MC_FALLBACK_CENSUS=<path>`, hooks the real admission branch in each
@@ -85,9 +89,10 @@ BEFORE commit. **Never ship a codegen slice without these probes.**
 ## Next work
 
 The first local-declaration statement primitive is complete for the strict
-single-local call chain `let x = f(); return g(x)`. It preserves two evaluations
-and source order, uses the local's typed `ValueId`, and does not fold `f()` into
-the return expression. The broad C census gained four admitted functions.
+single-local call chain `let x = f(); return g(x)`. It preserves evaluations and
+source order, uses the local's typed `ValueId`, and does not fold the initializer
+into the return expression. C can also preserve one nested initializer call;
+the broad C census is now 434/1609 admitted.
 
 Remaining buckets are all large or medium-with-risk:
 

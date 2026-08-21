@@ -5237,18 +5237,24 @@ pub const CEmitter = struct {
         if (simpleMirBlockAssignsLocal(block, local_name)) return null;
         const init_source = self.simpleMirLocalInitSourceInBlock(block, local_name) orelse return null;
         if (sameMirSourceLocation(init_source, return_source)) return null;
+        const init_call = self.simpleMirDirectCallAtSource(function, fn_mir, init_source) orelse return null;
+        const return_call = self.simpleMirDirectCallAtSourceWithLocalArg(function, fn_mir, return_source, local_name, local_value_id) orelse return null;
 
-        var call_count: usize = 0;
+        var top_level_call_count: usize = 0;
         for (block.instructions) |instruction| {
             if (instruction.kind != .call) continue;
             const source = instructionSourcePoint(instruction);
-            if (!sameMirSourceLocation(source, init_source) and !sameMirSourceLocation(source, return_source)) return null;
-            call_count += 1;
+            if (sameMirSourceLocation(source, init_source) or sameMirSourceLocation(source, return_source)) {
+                top_level_call_count += 1;
+                continue;
+            }
+            if (self.simpleMirDirectCallArgumentFactAt(fn_mir, init_call.callee, source) != null) continue;
+            if (self.simpleMirDirectCallArgumentFactAt(fn_mir, return_call.callee, source) != null) continue;
+            if (self.simpleMirCallFeedsLaterDirectCallArg(function, fn_mir, block, source)) continue;
+            return null;
         }
-        if (call_count != 2) return null;
+        if (top_level_call_count != 2) return null;
 
-        const init_call = self.simpleMirDirectCallAtSource(function, fn_mir, init_source) orelse return null;
-        const return_call = self.simpleMirDirectCallAtSourceWithLocalArg(function, fn_mir, return_source, local_name, local_value_id) orelse return null;
         const init_result = simpleMirTargetTypeFactKindAt(fn_mir, .direct_call_result, init_source) orelse return null;
         if (fn_mir.trap_edges.len != simpleMirDirectCallTrapCount(init_call) + simpleMirDirectCallTrapCount(return_call)) return null;
         return .{

@@ -13,14 +13,14 @@ the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. On the test corpus ~20–28% of distinct
 functions are fast-path admitted; the rest still ingest the AST body.
 
-### Census snapshot (C, 2026-08-20, after local call-chain admission)
+### Census snapshot (C, 2026-08-20, after nested local call-chain admission)
 
-1609 distinct functions, **433 admitted (26.9%)**, 1176 fallback. Remaining
+1609 distinct functions, **434 admitted (27.0%)**, 1175 fallback. Remaining
 fallbacks ranked by family (term / ret / blocks / traps):
 
 | n | %fb | family | examples | remaining blocker |
 |---|---|---|---|---|
-| 201 | 17% | return `<ident>` 1 blk 0 trap | round_up_to_page, region_holds | remaining local-computed / multi-statement forms |
+| 200 | 17% | return `<ident>` 1 blk 0 trap | region_holds, nested | remaining local-computed / multi-statement forms |
 | 138 | 12% | return `<ident>` 2 blk 1 trap | frame_base, slice_of_struct | same + a bounds/repr trap |
 | 82 | 7% | return `<ident>` 3-4 blk 2+ trap | pr_len, nested_index | same, more control flow |
 | 74 | 6% | fallthrough void 1 blk 0 trap | call_literal, store_release | builtin/atomic void body → statement-level |
@@ -95,6 +95,7 @@ dropped the optional tag) and an LLVM pointer-`icmp` render break.
 | Address-typed field / deref | `PAddr`/`VAddr` field & `*p` | (session) |
 | Pointer comparison | `return a == b` (ptr params) | `8591552e` |
 | Local call chain | `let x = f(); return g(x)` | (current batch) |
+| Nested local call initializer (C) | `let x = f(g(a), b); return h(x)` | (current batch) |
 
 ### Remaining families, by tractability
 
@@ -103,7 +104,7 @@ dropped the optional tag) and an LLVM pointer-`icmp` render break.
 | Builtin / `call_target` returns | `bitcast`, `bitcast_float_to_bits` | fast path emits single `return <expr>;`; bitcast needs addressable temps + `__builtin_memcpy` — **statement-level** emission the return path can't do | **large** |
 | Builtin / `call_target` void bodies | `store_release`, atomics | same statement-level/builtin gap (plain void calls already admitted) | **large** |
 | Checked-operand comparison | `return (a+b) == b` | `SimpleMirCompareBinary` operands are `SimpleMirArg` (no `checked_binary` variant); needs a richer operand type | **medium** |
-| Remaining multi-statement returns | locals initialized by non-call expressions, multiple locals, assignments, traps | the first statement-prefix primitive now covers `let x = f(); return g(x)`; remaining shapes need a general MIR statement sequence | **large** |
+| Remaining multi-statement returns | locals initialized by non-call expressions, multiple locals, assignments, traps | C now also covers one nested call inside the initializer; LLVM and the remaining shapes need a general MIR statement/value sequence | **large** |
 | Folded-`let` families | `let y=x+1; return y` | fast path drops per-construct source map | **large** — needs the source map derived from MIR source points, not `#line` matching |
 
 The remaining chunk is no longer recognizer-shaped: it needs the fast path
