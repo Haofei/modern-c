@@ -11,7 +11,7 @@ head-of-distribution, not by blind shape enumeration.
 `tools/toolchain/fallback-census.sh` (recorder: `src/fallback_census.zig`) hooks
 the real admission branch in each backend's `emitFunctionDefinitions` and ranks
 which function shapes still fall back. The strict ratchet corpus currently
-admits 42.5% of C functions and 43.1% of LLVM functions; the rest still ingest
+admits 44.4% of C functions and 45.0% of LLVM functions; the rest still ingest
 the AST body.
 
 ### Last completed broad census snapshot (C, 2026-08-20, before typed binary domain admission)
@@ -69,8 +69,8 @@ to turn a failed root into a successful gate. The checked-in baseline is
 
 | Backend | Total min | Admitted min | Fallback max | Unsupported max | Admission bps min |
 |---|---:|---:|---:|---:|---:|
-| C | 160 | 68 | 92 | 0 | 4250 |
-| LLVM | 160 | 69 | 91 | 0 | 4312 |
+| C | 160 | 71 | 89 | 0 | 4437 |
+| LLVM | 160 | 72 | 88 | 0 | 4500 |
 
 New MIR admissions should increase `admitted_min` and/or lower `fallback_max`
 in that baseline when the checked corpus improves.
@@ -103,6 +103,7 @@ typed-unary operand-descendant bugs before commit.
 | Leaf-operand typed binary domain calls | `wrapping.add`, serial before/after/distance, counter delta; indexed roots keyed by owner-qualified `typed_call_operand` facts | (current batch) |
 | Shared straight-line statement plan | discarded non-void call; zero-argument function-pointer call through param/local | (current batch) |
 | Typed indirect call return plan | `return op(x,y)`, global function-pointer, global struct-field function-pointer | (current batch) |
+| Pure logical return tree | `return a && b`, `return !a || (b && c)`; MIR owns typed operand edges | (current batch) |
 
 ### Remaining families, by tractability
 
@@ -114,7 +115,9 @@ typed-unary operand-descendant bugs before commit.
 | Remaining multi-statement returns | locals initialized by non-call expressions, multiple locals, assignments, traps | C now also covers one nested call inside the initializer; LLVM and the remaining shapes need a general MIR statement/value sequence | **large** |
 | Folded-`let` families | `let y=x+1; return y` | fast path drops per-construct source map | **large** — needs the source map derived from MIR source points, not `#line` matching |
 
-The remaining chunk is no longer mostly recognizer-shaped. The shared
+The remaining chunk is no longer mostly recognizer-shaped. Pure boolean
+parameter trees now use explicit operator operand `SpanId` edges and one shared
+plan; neither backend reconstructs their shape from source. The shared
 statement-level plan admits discarded non-void calls and zero-argument
 function-pointer calls through params or one direct-call-initialized local. A
 second shared plan admits value-producing indirect calls returned immediately;

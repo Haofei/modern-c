@@ -169,6 +169,13 @@ pub fn sourcePointFromSpan(span: ast.Span) SourcePoint {
     return .{ .line = span.line, .column = span.column, .offset = span.offset, .len = span.len };
 }
 
+fn canonicalOperatorOperand(expr: ast.Expr) ast.Expr {
+    return switch (expr.kind) {
+        .grouped => |inner| canonicalOperatorOperand(inner.*),
+        else => expr,
+    };
+}
+
 pub const DeferCleanupRef = struct {
     block_id: BlockId,
     instruction_index: usize,
@@ -1450,6 +1457,17 @@ pub fn appendDumpFromMir(allocator: std.mem.Allocator, module_mir: Module, out: 
                         .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_callee_span_id.index() },
                     );
                 }
+                if (instruction.typed_left_operand_span_id.isValid()) {
+                    const right_id = if (instruction.typed_right_operand_span_id.isValid())
+                        instruction.typed_right_operand_span_id.index()
+                    else
+                        std.math.maxInt(usize);
+                    try out.print(
+                        allocator,
+                        "mir operand_identity fn={s} block={} kind={s} detail={s} left_span_id={} right_span_id={}\n",
+                        .{ function.name, block.id, @tagName(instruction.kind), instruction.detail, instruction.typed_left_operand_span_id.index(), right_id },
+                    );
+                }
                 if (instruction.typed_callee_root_value_id.isValid()) {
                     const field_index = if (instruction.callee_field_index) |index| try std.fmt.allocPrint(allocator, "{}", .{index}) else "none";
                     defer if (instruction.callee_field_index != null) allocator.free(field_index);
@@ -2070,6 +2088,22 @@ fn instructionTypedIdentitiesValid(function: Function, instruction: Instruction)
         if (index >= function.span_identities.len) return false;
         const source = function.span_identities[index].source;
         if (source.line != instruction.line or source.column != instruction.column or source.offset != instruction.source_offset or source.len != instruction.source_len) return false;
+    }
+    const requires_operand_identity = (instruction.kind == .unary and std.mem.eql(u8, instruction.detail, "logical_not")) or
+        (instruction.kind == .binary and (std.mem.eql(u8, instruction.detail, "logical_and") or std.mem.eql(u8, instruction.detail, "logical_or")));
+    if (requires_operand_identity and !instruction.typed_left_operand_span_id.isValid()) return false;
+    if (instruction.kind == .binary and requires_operand_identity and !instruction.typed_right_operand_span_id.isValid()) return false;
+    if (instruction.typed_left_operand_span_id.isValid()) {
+        if (instruction.kind != .unary and instruction.kind != .binary) return false;
+        if (instruction.typed_left_operand_span_id.index() >= function.span_identities.len) return false;
+        if (instruction.kind == .binary) {
+            if (!instruction.typed_right_operand_span_id.isValid()) return false;
+            if (instruction.typed_right_operand_span_id.index() >= function.span_identities.len) return false;
+        } else if (instruction.typed_right_operand_span_id.isValid()) {
+            return false;
+        }
+    } else if (instruction.typed_right_operand_span_id.isValid()) {
+        return false;
     }
     const is_indirect_argument = instruction.kind == .target_type and std.mem.eql(u8, instruction.detail, @tagName(TargetTypeKind.indirect_call_argument));
     if (instruction.kind == .call or instruction.kind == .indirect_call or is_indirect_argument) {
@@ -7499,6 +7533,8 @@ const FunctionBuilder = struct {
             .block => |block| _ = try self.buildBlock(block),
             .unary => |node| {
                 try self.addInstr(.unary, @tagName(node.op), .value, expr.span);
+                self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1].typed_left_operand_span_id =
+                    try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.expr.*).span));
                 try self.addUnaryOperatorChecks(node, expr.span);
                 if (node.op == .bit_not and self.exprType(node.expr.*) == .address) {
                     try self.addInstr(.address_operation, @tagName(node.op), self.exprType(node.expr.*), expr.span);
@@ -7514,6 +7550,9 @@ const FunctionBuilder = struct {
             },
             .binary => |node| {
                 try self.addInstr(.binary, @tagName(node.op), .value, expr.span);
+                const instruction = &self.blocks.items[self.current].instructions.items[self.blocks.items[self.current].instructions.items.len - 1];
+                instruction.typed_left_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.left.*).span));
+                instruction.typed_right_operand_span_id = try self.internSpanId(sourcePointFromSpan(canonicalOperatorOperand(node.right.*).span));
                 try self.addBinaryOperatorChecks(node, expr.span);
                 if (binaryChecksAddressClass(node.op) and (self.exprType(node.left.*) == .address or self.exprType(node.right.*) == .address)) {
                     try self.addInstr(.address_operation, @tagName(node.op), .value, expr.span);

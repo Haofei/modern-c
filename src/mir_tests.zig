@@ -3155,6 +3155,58 @@ test "MIR plans typed indirect call arguments and canonical callee roots" {
     try std.testing.expectError(error.InvalidMirTargetTypeFacts, mir.validateTargetTypeFactsForLowering(typed_mir));
 }
 
+test "MIR plans pure logical returns from typed operand identities" {
+    // DIAGNOSTIC_UNIT: E_MIR_IDENTITY
+    const source =
+        \\fn bool_and(a: bool, b: bool) -> bool { return a && b; }
+        \\fn bool_or(a: bool, b: bool) -> bool { return a || b; }
+        \\fn nested_bool(a: bool, b: bool, c: bool) -> bool { return !a || (b && c); }
+    ;
+    var reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_logical_return_plan.mc", source);
+    defer reporter.deinit();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var p = parser.Parser.init(source, &reporter);
+    const module = try p.parseModule(arena.allocator());
+    defer module.deinit(arena.allocator());
+    try std.testing.expect(!reporter.has_errors);
+
+    var typed_mir = try mir.buildFromDecls(std.testing.allocator, module.decls);
+    defer typed_mir.deinit();
+    for ([_][]const u8{ "bool_and", "bool_or" }) |name| {
+        const function = functionByName(typed_mir, name).?;
+        const plan = mir_statement_plan.buildSingleBlockLogicalReturn(function) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 3), plan.count);
+        switch (plan.nodes[plan.root].operation) {
+            .logical_and, .logical_or => {},
+            else => return error.TestUnexpectedResult,
+        }
+    }
+    const nested = mir_statement_plan.buildSingleBlockLogicalReturn(functionByName(typed_mir, "nested_bool").?) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 6), nested.count);
+    switch (nested.nodes[nested.root].operation) {
+        .logical_or => {},
+        else => return error.TestUnexpectedResult,
+    }
+
+    var dump: std.ArrayList(u8) = .empty;
+    defer dump.deinit(std.testing.allocator);
+    try mir.appendDumpFromMir(std.testing.allocator, typed_mir, &dump);
+    try std.testing.expect(std.mem.indexOf(u8, dump.items, "mir operand_identity fn=nested_bool") != null);
+
+    const bool_and = functionByNameMut(&typed_mir, "bool_and").?;
+    for (bool_and.blocks[0].instructions) |*instruction| {
+        if (instruction.kind != .binary or !std.mem.eql(u8, instruction.detail, "logical_and")) continue;
+        instruction.typed_left_operand_span_id = .invalid;
+        break;
+    } else return error.TestUnexpectedResult;
+    var verifier_reporter = diagnostics.Reporter.init(std.testing.allocator, "mir_logical_return_plan.mc", source);
+    defer verifier_reporter.deinit();
+    try mir.verifyBuiltMir(typed_mir, &verifier_reporter);
+    try std.testing.expect(verifier_reporter.has_errors);
+    try std.testing.expect(std.mem.indexOf(u8, verifier_reporter.diagnostics.items[0].message, "E_MIR_IDENTITY") != null);
+}
+
 test "MIR owns explicit cast source types for call results" {
     const source =
         \\fn byte() -> u8 { return 7; }

@@ -163,6 +163,12 @@ pub const Instruction = struct {
     contract_region_id: ?usize = null,
     typed_value_id: ?ValueId = null,
     typed_span_id: SpanId = .invalid,
+    // Expression operators name their canonical operand occurrences directly.
+    // These identities let shared MIR plans recover evaluation trees without
+    // source offsets, relative columns, or backend AST queries. Unary
+    // operators use only the left operand; binary operators use both.
+    typed_left_operand_span_id: SpanId = .invalid,
+    typed_right_operand_span_id: SpanId = .invalid,
     // Calls retain their enclosing expression span above for diagnostics and
     // source maps, while this ID names the callee occurrence shared by
     // call-result/argument/callee-signature facts.

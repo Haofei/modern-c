@@ -7517,6 +7517,23 @@ test "LLVM logical-not inferred local lowers without function body fallback" {
     try std.testing.expect(std.mem.indexOf(u8, output.items, "xor i1 %enabled, true") != null);
 }
 
+test "LLVM logical return tree lowers without function body fallback" {
+    const source =
+        \\fn bool_and(a: bool, b: bool) -> bool { return a && b; }
+        \\fn bool_or(a: bool, b: bool) -> bool { return a || b; }
+        \\fn nested_bool(a: bool, b: bool, c: bool) -> bool { return !a || (b && c); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendLlvmTestNoFunctionBodyFallback("llvm_mir_logical_return_tree.mc", source, &output);
+    try expectContains(try llvmFunctionBody(output.items, "define internal i1 @bool_and"), "and i1 %a, %b");
+    try expectContains(try llvmFunctionBody(output.items, "define internal i1 @bool_or"), "or i1 %a, %b");
+    const nested = try llvmFunctionBody(output.items, "define internal i1 @nested_bool");
+    try expectContains(nested, "xor i1 %a, true");
+    try expectContains(nested, "and i1 %b, %c");
+    try expectContains(nested, "or i1 %t");
+}
+
 test "LLVM compare inferred local lowers without function body fallback" {
     const source =
         \\fn compare_local(left: u64, right: u64) -> bool {

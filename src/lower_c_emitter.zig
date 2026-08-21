@@ -1619,11 +1619,15 @@ pub const CEmitter = struct {
             mir_statement_plan.buildSingleBlockIndirectCallReturn(fn_mir)
         else
             null;
-        const statement_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
+        const logical_return_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null)
+            mir_statement_plan.buildSingleBlockLogicalReturn(fn_mir)
+        else
+            null;
+        const statement_plan = if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null and logical_return_plan == null)
             mir_statement_plan.buildSingleBlockVoid(fn_mir)
         else
             null;
-        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null and statement_plan == null) return false;
+        if (simple_trap == null and simple_assert == null and simple_return == null and simple_void_body == null and simple_conditional_statement_return == null and simple_conditional_return == null and simple_enum_switch_return == null and simple_loop_return == null and indirect_call_return_plan == null and logical_return_plan == null and statement_plan == null) return false;
 
         try self.writeLineDirective(function.signature.name.span);
         try self.emitFunctionSignature(function.signature, !function.signature.exported, false);
@@ -1646,6 +1650,8 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, ")) mc_trap_Assert();\n");
         } else if (indirect_call_return_plan) |plan| {
             try self.emitMirIndirectCallReturnPlan(plan);
+        } else if (logical_return_plan) |plan| {
+            try self.emitMirLogicalReturnPlan(plan);
         } else if (statement_plan) |plan| {
             try self.emitMirStatementPlan(function, fn_mir, plan);
         } else if (simple_return) |ret| {
@@ -3817,6 +3823,40 @@ pub const CEmitter = struct {
             try self.out.appendSlice(self.allocator, try self.cIdent(argument.name));
         }
         try self.out.appendSlice(self.allocator, ");\n");
+    }
+
+    fn emitMirLogicalReturnPlan(self: *CEmitter, plan: mir_statement_plan.LogicalReturnPlan) !void {
+        try self.writeLineDirective(spanFromMirSourcePoint(plan.location.source));
+        try self.writeIndent();
+        try self.out.appendSlice(self.allocator, "return ");
+        try self.emitMirLogicalNode(plan, plan.root);
+        try self.out.appendSlice(self.allocator, ";\n");
+    }
+
+    fn emitMirLogicalNode(self: *CEmitter, plan: mir_statement_plan.LogicalReturnPlan, index: usize) !void {
+        if (index >= plan.count) return error.UnsupportedCEmission;
+        switch (plan.nodes[index].operation) {
+            .parameter => |parameter| try self.out.appendSlice(self.allocator, try self.cIdent(parameter.name)),
+            .logical_not => |operand| {
+                try self.out.appendSlice(self.allocator, "(!");
+                try self.emitMirLogicalNode(plan, operand);
+                try self.out.append(self.allocator, ')');
+            },
+            .logical_and => |binary| {
+                try self.out.append(self.allocator, '(');
+                try self.emitMirLogicalNode(plan, binary.left);
+                try self.out.appendSlice(self.allocator, " && ");
+                try self.emitMirLogicalNode(plan, binary.right);
+                try self.out.append(self.allocator, ')');
+            },
+            .logical_or => |binary| {
+                try self.out.append(self.allocator, '(');
+                try self.emitMirLogicalNode(plan, binary.left);
+                try self.out.appendSlice(self.allocator, " || ");
+                try self.emitMirLogicalNode(plan, binary.right);
+                try self.out.append(self.allocator, ')');
+            },
+        }
     }
 
     fn emitMirIndirectCallee(self: *CEmitter, callee: mir_statement_plan.IndirectCallee) !void {

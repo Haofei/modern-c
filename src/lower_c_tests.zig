@@ -6147,6 +6147,20 @@ test "lower-c logical-not inferred local lowers without function body fallback" 
     try std.testing.expect(std.mem.indexOf(u8, output.items, "return !enabled;") != null);
 }
 
+test "lower-c logical return tree lowers without function body fallback" {
+    const source =
+        \\fn bool_and(a: bool, b: bool) -> bool { return a && b; }
+        \\fn bool_or(a: bool, b: bool) -> bool { return a || b; }
+        \\fn nested_bool(a: bool, b: bool, c: bool) -> bool { return !a || (b && c); }
+    ;
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(std.testing.allocator);
+    try appendCheckedCTestNoFunctionBodyFallback("c_mir_logical_return_tree.mc", source, &output);
+    try expectContains(try cFunctionBody(output.items, "static bool bool_and(bool a, bool b)"), "return (a && b);");
+    try expectContains(try cFunctionBody(output.items, "static bool bool_or(bool a, bool b)"), "return (a || b);");
+    try expectContains(try cFunctionBody(output.items, "static bool nested_bool(bool a, bool b, bool c)"), "return ((!a) || (b && c));");
+}
+
 test "lower-c compare inferred local lowers without function body fallback" {
     const source =
         \\fn compare_local(left: u64, right: u64) -> bool {
